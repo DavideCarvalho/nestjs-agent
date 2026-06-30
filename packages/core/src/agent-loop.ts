@@ -5,6 +5,12 @@ import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ToolRegistry } from './tool-registry.js';
+import {
+  publishAgentMessage,
+  publishAgentRunFinished,
+  publishAgentRunStarted,
+  publishAgentToolCall,
+} from './diagnostics.js';
 import type {
   AgentRunInput,
   Decision,
@@ -95,6 +101,16 @@ export async function runAgentLoop(
 
   const writer = await hooks.openSink();
   let lastText = '';
+  let steps = 0;
+  let totalInput = 0;
+  let totalOutput = 0;
+
+  publishAgentRunStarted({
+    runId: hooks.runId,
+    threadId: input.threadId,
+    actorId: input.actor.id,
+    ...(persona !== undefined ? { persona: persona.id } : {}),
+  });
 
   // NOTE: no try/finally around the loop. A durable runner suspends by THROWING through the
   // stack at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on
@@ -128,7 +144,16 @@ export async function runAgentLoop(
         );
       }
 
+      steps += 1;
+      totalInput += turn.usage.inputTokens;
+      totalOutput += turn.usage.outputTokens;
       lastText = turn.text;
+      publishAgentMessage({
+        runId: hooks.runId,
+        threadId: input.threadId,
+        role: 'assistant',
+        textLength: turn.text.length,
+      });
       const assistant = await hooks.step(`persist:assistant:${i}`, () =>
         deps.store.appendMessage({
           threadId: input.threadId,
@@ -192,6 +217,12 @@ export async function runAgentLoop(
               output: { rejected: true, reason: decision.reason ?? 'rejected by user' },
               error: 'rejected',
             });
+            publishAgentToolCall({
+              runId: hooks.runId,
+              toolName: call.name,
+              toolType,
+              status: 'rejected',
+            });
             continue;
           }
         } else {
@@ -220,12 +251,24 @@ export async function runAgentLoop(
             }),
           );
           results.push({ id: call.id, name: call.name, output });
+          publishAgentToolCall({
+            runId: hooks.runId,
+            toolName: call.name,
+            toolType,
+            status: 'executed',
+          });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           await hooks.step(`persist:toolfail:${call.id}`, () =>
             deps.store.updateToolCall({ toolCallId: call.id, status: 'failed', error: message }),
           );
           results.push({ id: call.id, name: call.name, output: null, error: message });
+          publishAgentToolCall({
+            runId: hooks.runId,
+            toolName: call.name,
+            toolType,
+            status: 'failed',
+          });
         }
       }
 
@@ -240,5 +283,12 @@ export async function runAgentLoop(
   }
 
   await writer.end();
+  publishAgentRunFinished({
+    runId: hooks.runId,
+    threadId: input.threadId,
+    steps,
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
+  });
   return { text: lastText };
 }
