@@ -1,0 +1,39 @@
+{
+  "name": "@dudousxd/nestjs-agent-telescope",
+  "version": "0.1.0",
+  "description": "nestjs-agent telescope extension — an 'Agent' dashboard tab",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dudousxd/nestjs-diagnostics": "0.6.1"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-telescope": ">=1.15.0"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-telescope": "1.15.0",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3"
+  }
+}

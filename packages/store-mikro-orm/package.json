@@ -1,0 +1,45 @@
+{
+  "name": "@dudousxd/nestjs-agent-store-mikro-orm",
+  "version": "0.1.0",
+  "description": "nestjs-agent MikroORM agent store (threads, messages, tool calls, usage)",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@mikro-orm/core": "^6.0.0 || ^7.0.0",
+    "@mikro-orm/nestjs": "^6.0.0 || ^7.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@mikro-orm/core": "7.1.4",
+    "@mikro-orm/sqlite": "7.1.4",
+    "@mikro-orm/nestjs": "7.0.2",
+    "@nestjs/common": "11.1.26",
+    "reflect-metadata": "0.2.2",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,54 @@
+import type {
+  MessageRole,
+  MessageUsage,
+  ToolCallRequest,
+  ToolResult,
+} from '@dudousxd/nestjs-agent-core';
+import { EntitySchema } from '@mikro-orm/core';
+import { AgentThread } from './agent-thread.entity';
+
+/**
+ * One stored message in a thread. The model-facing extras (`toolCalls`/`toolResults`/
+ * `followUps`/`usage`) are folded into nullable JSON columns so a single row round-trips
+ * to a {@link import('@dudousxd/nestjs-agent-core').StoredMessage}.
+ */
+export class AgentMessage {
+  id!: string;
+  thread!: AgentThread;
+  role!: MessageRole;
+  content!: string;
+  toolCalls?: ToolCallRequest[] | null;
+  toolResults?: ToolResult[] | null;
+  followUps?: string[] | null;
+  usage?: MessageUsage | null;
+  persona?: string | null;
+  createdAt!: Date;
+}
+
+/** Builds the `agent_message` schema. `thread` cascades on delete (§5). */
+export function agentMessageSchema(collation?: string): EntitySchema<AgentMessage> {
+  const str = collation !== undefined ? { collation } : {};
+  return new EntitySchema<AgentMessage>({
+    class: AgentMessage,
+    tableName: 'agent_message',
+    indexes: [{ name: 'agent_message_thread_created_idx', properties: ['thread', 'createdAt'] }],
+    properties: {
+      id: { type: 'string', primary: true, ...str },
+      thread: {
+        kind: 'm:1',
+        entity: () => AgentThread,
+        deleteRule: 'cascade',
+        fieldName: 'thread_id',
+        ...str,
+      },
+      role: { type: 'string', ...str },
+      content: { type: 'text', ...str },
+      toolCalls: { type: 'json', nullable: true, fieldName: 'tool_calls' },
+      toolResults: { type: 'json', nullable: true, fieldName: 'tool_results' },
+      followUps: { type: 'json', nullable: true, fieldName: 'follow_ups' },
+      usage: { type: 'json', nullable: true },
+      persona: { type: 'string', nullable: true, ...str },
+      createdAt: { type: 'datetime', fieldName: 'created_at' },
+    },
+  });
+}
