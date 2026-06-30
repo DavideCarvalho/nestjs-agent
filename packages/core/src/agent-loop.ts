@@ -61,6 +61,17 @@ export class QuotaExceededError extends Error {
   }
 }
 
+/** An `agent`-kind tool's input is `{ task }` by convention; fall back to a JSON dump. */
+function extractTask(input: unknown): string {
+  if (typeof input === 'object' && input !== null && 'task' in input) {
+    const task = (input as { task: unknown }).task;
+    if (typeof task === 'string') {
+      return task;
+    }
+  }
+  return JSON.stringify(input);
+}
+
 function deriveTitle(userText: string): string {
   const trimmed = userText.trim().replace(/\s+/g, ' ');
   return trimmed.length > 60 ? `${trimmed.slice(0, 57)}...` : trimmed || 'New chat';
@@ -195,20 +206,37 @@ export async function runAgentLoop(
           ...(persona !== undefined ? { persona } : {}),
           ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
           ...(deps.host !== undefined ? { host: deps.host } : {}),
-          ...(hooks.runAgent !== undefined
-            ? {
-                runAgent: (agentName: string, task: string) => {
-                  publishAgentDelegated({
-                    runId: hooks.runId,
-                    toAgent: agentName,
-                    ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
-                  });
-                  // biome-ignore lint/style/noNonNullAssertion: guarded by the spread condition
-                  return hooks.runAgent!(agentName, task);
-                },
-              }
-            : {}),
         };
+
+        // Delegation: an `agent`-kind tool runs another agent. Handled at the LOOP level (not in a
+        // step) because the durable runner maps it to `ctx.child`, a ctx-level suspend point.
+        if (toolType === 'agent') {
+          const targetAgent = spec?.targetAgent ?? call.name;
+          const task = extractTask(call.input);
+          await hooks.step(`persist:toolcall:${call.id}`, () =>
+            deps.store.recordToolCall({
+              toolCallId: call.id,
+              messageId: assistant.id,
+              toolName: call.name,
+              toolType: 'read',
+              input: call.input,
+              status: 'auto_executed',
+            }),
+          );
+          publishAgentDelegated({
+            runId: hooks.runId,
+            toAgent: targetAgent,
+            ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
+          });
+          const sub = hooks.runAgent
+            ? await hooks.runAgent(targetAgent, task)
+            : { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
+          await hooks.step(`persist:toolexec:${call.id}`, () =>
+            deps.store.updateToolCall({ toolCallId: call.id, status: 'executed', output: sub }),
+          );
+          results.push({ id: call.id, name: call.name, output: sub });
+          continue;
+        }
 
         if (toolType === 'action') {
           await hooks.step(`persist:toolcall:${call.id}`, () =>

@@ -27,8 +27,14 @@ function buildRegistry(): ToolRegistry {
     { execute: async (input: { key: string }) => ({ purged: input.key }) },
   );
   reg.register(
-    { name: 'askSub', kind: 'read', description: 'delegate', inputSchema: z.object({ q: z.string() }) },
-    { execute: async (input: { q: string }, ctx) => ctx.runAgent?.('sub-agent', input.q) ?? { text: 'no delegate' } },
+    {
+      name: 'askSub',
+      kind: 'agent',
+      targetAgent: 'sub-agent',
+      description: 'delegate to the sub-agent',
+      inputSchema: z.object({ task: z.string() }),
+    },
+    { execute: async () => ({ text: 'unused — agent-kind tools are loop-handled' }) },
   );
   return reg;
 }
@@ -140,7 +146,7 @@ describe('runAgentLoop', () => {
 
     const script: FakeScript = (_args, turnIndex) =>
       turnIndex === 0
-        ? { text: 'asking the sub-agent', toolCall: { name: 'askSub', input: { q: 'how many bases?' } } }
+        ? { text: 'asking the sub-agent', toolCall: { name: 'askSub', input: { task: 'how many bases?' } } }
         : { text: 'the sub-agent said hi' };
 
     try {

@@ -7,14 +7,22 @@ export interface Actor {
   tenantRef?: string;
 }
 
-export type ToolKind = 'read' | 'action';
+export type ToolKind = 'read' | 'action' | 'agent';
 
-/** Declared shape of a tool. `action` tools never auto-execute — they require HITL approval. */
+/**
+ * Declared shape of a tool.
+ *  - `read`   auto-executes.
+ *  - `action` never auto-executes — requires HITL approval.
+ *  - `agent`  delegates to another named agent (durable: a child workflow; inline: a nested loop),
+ *             handled at the loop level — NOT via a handler. Carries `targetAgent`.
+ */
 export interface ToolSpec {
   name: string;
   kind: ToolKind;
   description: string;
   inputSchema: ZodType;
+  /** For `kind: 'agent'` — the name of the agent to delegate to. */
+  targetAgent?: string;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
@@ -116,6 +124,8 @@ export interface AgentDefinition {
   systemPrompt?: string;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
   tools?: string[];
+  /** Names of other agents this agent may delegate to (auto-registered as `agent`-kind tools). */
+  delegatesTo?: string[];
   personas?: Persona[];
   defaultPersona?: string;
   modelId?: string;
