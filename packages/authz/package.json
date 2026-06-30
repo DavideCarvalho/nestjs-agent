@@ -1,0 +1,44 @@
+{
+  "name": "@dudousxd/nestjs-agent-authz",
+  "version": "0.1.0",
+  "description": "nestjs-agent authz adapter — plug @dudousxd/nestjs-authz into tool authorization",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-authz": "~0.6.3",
+    "@nestjs/common": "^10.0.0 || ^11.0.0"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-authz": "0.6.3",
+    "@nestjs/common": "11.1.6",
+    "reflect-metadata": "0.2.2",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3",
+    "zod": "3.25.76"
+  }
+}
