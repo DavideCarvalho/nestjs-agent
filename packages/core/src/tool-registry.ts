@@ -1,0 +1,99 @@
+import type { RolesPolicy } from './spi/roles-policy.js';
+import type { AiToolCtx, ToolHandler } from './spi/tool.js';
+import type { Actor, ToolDefinition, ToolSpec } from './types.js';
+import { filterToolsByRole, personaFilterTools } from './personas.js';
+
+/** Thrown when an actor invokes a tool their role is not allowed. */
+export class ToolForbiddenError extends Error {
+  constructor(public readonly toolName: string) {
+    super(`Tool "${toolName}" is not allowed for this role`);
+    this.name = 'ToolForbiddenError';
+  }
+}
+
+/** Thrown when a tool is invoked that was never registered. */
+export class ToolNotFoundError extends Error {
+  constructor(public readonly toolName: string) {
+    super(`Tool "${toolName}" is not registered`);
+    this.name = 'ToolNotFoundError';
+  }
+}
+
+interface Entry {
+  spec: ToolSpec;
+  handler: ToolHandler;
+}
+
+/**
+ * Holds every registered tool and gates invocation.
+ *
+ * Note: `definitionsFor` returns NEUTRAL definitions (no `execute`). The agent loop runs
+ * each tool itself as a (durable) step — so even read tools are not auto-executed by the
+ * model. `action` tools additionally require HITL approval before the loop runs them.
+ */
+export class ToolRegistry {
+  private readonly entries = new Map<string, Entry>();
+
+  register(spec: ToolSpec, handler: ToolHandler): void {
+    this.entries.set(spec.name, { spec, handler });
+  }
+
+  has(name: string): boolean {
+    return this.entries.has(name);
+  }
+
+  spec(name: string): ToolSpec | undefined {
+    return this.entries.get(name)?.spec;
+  }
+
+  allSpecs(): ToolSpec[] {
+    return [...this.entries.values()].map((entry) => entry.spec);
+  }
+
+  /** The tools to offer the model for this actor+persona, after the two filter layers. */
+  definitionsFor(
+    actor: Actor,
+    policy: RolesPolicy,
+    allowedTools?: string[],
+  ): ToolDefinition[] {
+    const roleScoped = filterToolsByRole(this.allSpecs(), actor, policy);
+    const personaScoped = personaFilterTools(roleScoped, allowedTools);
+    return personaScoped.map((spec) => ({
+      name: spec.name,
+      kind: spec.kind,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+    }));
+  }
+
+  /** Run a tool. Re-checks the role (defense-in-depth) and re-parses the input via Zod. */
+  async invoke(
+    name: string,
+    input: unknown,
+    ctx: AiToolCtx,
+    policy: RolesPolicy,
+  ): Promise<unknown> {
+    const entry = this.entries.get(name);
+    if (entry === undefined) {
+      throw new ToolNotFoundError(name);
+    }
+    if (!policy.can(ctx.actor, entry.spec)) {
+      throw new ToolForbiddenError(name);
+    }
+    const parsed = entry.spec.inputSchema.parse(input);
+    return entry.handler.execute(parsed, ctx);
+  }
+}
+
+/** Default gate: actor.role must be in spec.roles (defaulting to ADMIN-only). */
+export class DefaultRolesPolicy implements RolesPolicy {
+  constructor(private readonly defaultRoles: string[] = ['ADMIN']) {}
+
+  can(actor: Actor, tool: ToolSpec): boolean {
+    const allowed = tool.roles ?? this.defaultRoles;
+    if (actor.role === undefined) {
+      return false;
+    }
+    return allowed.includes(actor.role);
+  }
+}

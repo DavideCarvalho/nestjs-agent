@@ -1,0 +1,35 @@
+{
+  "name": "nestjs-agent-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Governed, durable-backed AI agent (chat + tool-calling) for NestJS",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "packageManager": "pnpm@11.5.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "vitest run",
+    "test:db": "vitest run --config vitest.db.config.ts",
+    "test:watch": "vitest",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "changeset": "changeset",
+    "version-packages": "changeset version && biome check --write .",
+    "release": "pnpm --filter './packages/*' build && changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@changesets/cli": "^2.31.0",
+    "@swc/core": "1.15.41",
+    "@types/node": "22.19.20",
+    "reflect-metadata": "0.2.2",
+    "turbo": "2.9.17",
+    "typescript": "5.9.3",
+    "unplugin-swc": "1.5.9",
+    "vitest": "2.1.9"
+  }
+}

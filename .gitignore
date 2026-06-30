@@ -1,0 +1,8 @@
+node_modules
+dist
+*.log
+.turbo
+coverage
+generated
+*.sqlite
+*.sqlite3
