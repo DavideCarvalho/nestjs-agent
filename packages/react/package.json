@@ -5,7 +5,7 @@
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": ["**/*.css", "./dist/markdown.js", "./dist/markdown.cjs"],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,6 +19,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./markdown": {
+      "import": {
+        "types": "./dist/markdown.d.ts",
+        "default": "./dist/markdown.js"
+      },
+      "require": {
+        "types": "./dist/markdown.d.cts",
+        "default": "./dist/markdown.cjs"
+      }
     }
   },
   "files": ["dist"],
@@ -31,20 +41,58 @@
   },
   "peerDependencies": {
     "@ai-sdk/react": "^3.0.0",
+    "@streamdown/code": "^1.1.1",
+    "@streamdown/math": "^1.0.2",
+    "@streamdown/mermaid": "^1.0.2",
     "ai": "^6.0.0",
-    "react": ">=18"
+    "katex": "^0.16.45",
+    "prism-react-renderer": "^2.4.1",
+    "react": ">=18",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "streamdown": "^2.5.0",
+    "unist-util-visit": "^5.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@streamdown/code": { "optional": true },
+    "@streamdown/math": { "optional": true },
+    "@streamdown/mermaid": { "optional": true },
+    "katex": { "optional": true },
+    "prism-react-renderer": { "optional": true },
+    "react-markdown": { "optional": true },
+    "rehype-katex": { "optional": true },
+    "rehype-sanitize": { "optional": true },
+    "remark-gfm": { "optional": true },
+    "remark-math": { "optional": true },
+    "streamdown": { "optional": true },
+    "unist-util-visit": { "optional": true }
   },
   "devDependencies": {
     "@ai-sdk/react": "3.0.170",
+    "@streamdown/code": "1.1.1",
+    "@streamdown/math": "1.0.2",
+    "@streamdown/mermaid": "1.0.2",
     "@testing-library/dom": "10.4.0",
     "@testing-library/react": "16.3.0",
     "@types/react": "19.2.5",
     "ai": "6.0.168",
     "jsdom": "26.1.0",
+    "katex": "0.16.45",
+    "prism-react-renderer": "2.4.1",
     "react": "19.2.5",
     "react-dom": "19.2.5",
+    "react-markdown": "10.1.0",
+    "rehype-katex": "7.0.1",
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0",
+    "streamdown": "2.5.0",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
+    "unist-util-visit": "5.1.0",
     "vitest": "2.1.9"
   }
 }
