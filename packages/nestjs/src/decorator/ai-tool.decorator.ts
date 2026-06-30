@@ -12,6 +12,12 @@ export interface AiToolOptions {
   input: ZodType;
   /** Roles allowed to invoke. Omit to inherit the module's default roles. */
   roles?: string[];
+  /**
+   * Authz ability checked by an ability-aware RolesPolicy (e.g. `AgentAuthzModule`'s
+   * `AuthzRolesPolicy` → `gate.forUser(actor).allows(ability)`). Ignored by the default
+   * role-based policy, which uses `roles`.
+   */
+  ability?: string;
 }
 
 /**
