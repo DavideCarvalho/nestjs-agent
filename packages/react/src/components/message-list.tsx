@@ -3,7 +3,9 @@ import React, { useState } from 'react';
 import {
   MessageItem,
   type MessageItemClassNames,
+  type MessageUsageInfo,
   type RenderTextFn,
+  type RenderToolGroupFn,
   type RenderToolPartFn,
 } from './message-item.js';
 
@@ -29,7 +31,19 @@ export interface MessageListProps {
   messages: UIMessage[];
   status: ChatStatus;
   renderToolPart?: RenderToolPartFn;
+  renderToolGroup?: RenderToolGroupFn;
   renderText?: RenderTextFn;
+  /** When set, every message gets a "Fork" affordance calling back with its id. */
+  onFork?: (uiMessageId: string) => void | Promise<void>;
+  /** User messages get an inline edit-and-resubmit affordance. */
+  editable?: boolean;
+  onEditSubmit?: (uiMessageId: string, newText: string) => void | Promise<void>;
+  /** The last assistant message gets a "Regenerate" affordance. */
+  regeneratable?: boolean;
+  onRegenerate?: (uiMessageId: string) => void | Promise<void>;
+  /** Per-message resolvers for the usage line and the persisted timestamp. */
+  getUsage?: (message: UIMessage) => MessageUsageInfo | null;
+  getCreatedAt?: (message: UIMessage) => string | null;
   /** Shown (with example/follow-up chips) when idle and empty. */
   emptyState?: React.ReactNode;
   /** Node rendered while waiting for the first assistant token. */
@@ -53,7 +67,15 @@ export function MessageList({
   messages,
   status,
   renderToolPart,
+  renderToolGroup,
   renderText,
+  onFork,
+  editable,
+  onEditSubmit,
+  regeneratable,
+  onRegenerate,
+  getUsage,
+  getCreatedAt,
   emptyState,
   typingIndicator,
   followUps,
@@ -109,16 +131,25 @@ export function MessageList({
       ) : null}
       {visibleMessages.map((message, index) => {
         const absoluteIndex = visibleStart + index;
+        const isLastAssistant = absoluteIndex === lastAssistantIndex;
+        const usage = getUsage?.(message) ?? null;
+        const createdAt = getCreatedAt?.(message) ?? null;
         return (
           <MessageItem
             key={message.id}
             message={message}
             {...(renderToolPart ? { renderToolPart } : {})}
+            {...(renderToolGroup ? { renderToolGroup } : {})}
             {...(renderText ? { renderText } : {})}
             {...(classNames?.message ? { classNames: classNames.message } : {})}
-            isStreaming={
-              status === 'streaming' && absoluteIndex === lastAssistantIndex
-            }
+            {...(onFork ? { onFork } : {})}
+            {...(editable ? { editable } : {})}
+            {...(onEditSubmit ? { onEditSubmit: (text: string) => onEditSubmit(message.id, text) } : {})}
+            {...(regeneratable && isLastAssistant ? { regeneratable } : {})}
+            {...(onRegenerate ? { onRegenerate: () => onRegenerate(message.id) } : {})}
+            {...(usage !== null ? { usage } : {})}
+            {...(createdAt !== null ? { createdAt } : {})}
+            isStreaming={status === 'streaming' && isLastAssistant}
           />
         );
       })}

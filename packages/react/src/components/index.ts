@@ -1,11 +1,14 @@
 export { ChatInput, type ChatInputProps } from './chat-input.js';
 export {
+  type AnyToolUIPart,
+  formatRelativeTime,
   MessageItem,
   type MessageItemClassNames,
   type MessageItemProps,
+  type MessageUsageInfo,
   type RenderTextFn,
+  type RenderToolGroupFn,
   type RenderToolPartFn,
-  type ToolUIPart,
 } from './message-item.js';
 export {
   type ChatStatus,
