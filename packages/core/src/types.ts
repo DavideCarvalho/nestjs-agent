@@ -93,6 +93,8 @@ export interface AgentRunInput {
   persona?: Persona;
   pageContext?: PageContext;
   isRegenerate?: boolean;
+  /** YYYY-MM-DD stamped by the runner so quota/day stays deterministic under durable replay. */
+  day?: string;
 }
 
 export interface ThreadSummary {

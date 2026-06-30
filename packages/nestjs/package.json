@@ -1,0 +1,72 @@
+{
+  "name": "@dudousxd/nestjs-agent",
+  "version": "0.1.0",
+  "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./durable": {
+      "import": {
+        "types": "./dist/durable/index.d.ts",
+        "default": "./dist/durable/index.js"
+      },
+      "require": {
+        "types": "./dist/durable/index.d.cts",
+        "default": "./dist/durable/index.cjs"
+      }
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "@nestjs/core": "^10.0.0 || ^11.0.0",
+    "@dudousxd/nestjs-durable": ">=0.26.0",
+    "@dudousxd/nestjs-durable-core": ">=0.45.0",
+    "reflect-metadata": "^0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@dudousxd/nestjs-durable": { "optional": true },
+    "@dudousxd/nestjs-durable-core": { "optional": true }
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@dudousxd/durable-worker": "0.5.0",
+    "@dudousxd/nestjs-context": "0.2.0",
+    "@dudousxd/nestjs-durable": "0.26.0",
+    "@dudousxd/nestjs-durable-core": "0.45.0",
+    "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.0",
+    "@nestjs/common": "11.1.6",
+    "@nestjs/core": "11.1.6",
+    "@nestjs/platform-express": "11.1.6",
+    "@nestjs/testing": "11.1.6",
+    "@types/express": "5.0.0",
+    "@types/supertest": "6.0.2",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.1",
+    "supertest": "7.0.0",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3",
+    "zod": "3.25.76"
+  }
+}
