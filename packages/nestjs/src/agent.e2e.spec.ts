@@ -3,6 +3,7 @@ import {
   type FakeScript,
   InMemoryAgentStore,
 } from '@dudousxd/nestjs-agent-testing';
+import type { AgentDefinition, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 import { Injectable } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -29,7 +30,26 @@ class PurgeCacheTool {
   }
 }
 
-async function buildApp(script: FakeScript) {
+@AiTool({
+  name: 'abilityTool',
+  kind: 'read',
+  description: 'ability-gated',
+  input: z.object({}),
+  ability: 'cache.purge',
+})
+@Injectable()
+class AbilityTool {
+  async execute() {
+    return { ok: true };
+  }
+}
+
+interface BuildOptions {
+  rolesPolicy?: RolesPolicy;
+  features?: AgentDefinition[];
+}
+
+async function buildApp(script: FakeScript, options: BuildOptions = {}) {
   const store = new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -38,9 +58,11 @@ async function buildApp(script: FakeScript) {
         store,
         modelId: 'fake-1',
         systemPrompt: 'test agent',
+        ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
       }),
+      ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
     ],
-    providers: [GetWeatherTool, PurgeCacheTool],
+    providers: [GetWeatherTool, PurgeCacheTool, AbilityTool],
   }).compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   await app.init();
@@ -102,5 +124,60 @@ describe('AgentModule (inline)', () => {
     const streamed = await collected;
     expect(streamed).toContain('purged ok');
     expect(built.store.toolCallRows()[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
+  });
+
+  it('orchestrator delegates to a sub-agent via a synthesized agent tool', async () => {
+    const script: FakeScript = (args, turnIndex) => {
+      const lastUser =
+        [...args.messages].reverse().find((m) => m.role === 'user' && m.content)?.content?.toLowerCase() ??
+        '';
+      if (turnIndex === 0) {
+        if (lastUser.includes('delegate')) {
+          return { text: 'delegating', toolCall: { name: 'ask_sub', input: { task: 'weather please' } } };
+        }
+        if (lastUser.includes('weather')) {
+          return { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } };
+        }
+        return { text: 'no tool' };
+      }
+      const results = (args.messages.at(-1)?.toolResults ?? []).map((result) => result.output);
+      return { text: `done: ${JSON.stringify(results)}` };
+    };
+    const built = await buildApp(script, {
+      features: [
+        { name: 'orch', systemPrompt: 'orchestrator', delegatesTo: ['sub'] },
+        { name: 'sub', systemPrompt: 'sub', tools: ['getWeather'] },
+      ],
+    });
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', role: 'ADMIN' },
+      message: 'delegate this',
+      agentName: 'orch',
+    });
+    const streamed = await collect(built.service.subscribe(runId));
+
+    expect(streamed).toContain('done:');
+    const rows = built.store.toolCallRows();
+    // the sub-agent actually ran getWeather (on its own thread; the store is shared)
+    expect(rows.some((row) => row.toolName === 'getWeather' && row.status === 'executed')).toBe(true);
+    // the orchestrator recorded the delegation as an `agent`-kind tool call
+    expect(rows.some((row) => row.toolName === 'ask_sub')).toBe(true);
+  });
+
+  it("passes a tool's @AiTool ability through to the RolesPolicy", async () => {
+    const seen: { name: string; ability?: string }[] = [];
+    const recordingPolicy: RolesPolicy = {
+      can: (_actor, tool) => {
+        seen.push({ name: tool.name, ...(tool.ability !== undefined ? { ability: tool.ability } : {}) });
+        return true;
+      },
+    };
+    const built = await buildApp(() => ({ text: 'noop' }), { rolesPolicy: recordingPolicy });
+    app = built.app;
+    const { runId } = await built.service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'hi' });
+    await collect(built.service.subscribe(runId));
+
+    expect(seen.find((tool) => tool.name === 'abilityTool')?.ability).toBe('cache.purge');
   });
 });
