@@ -1,13 +1,16 @@
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { Actor, ToolSpec } from './types.js';
 
-/** First filter layer: drop tools the actor's role may not invoke. */
-export function filterToolsByRole(
+/** First filter layer: drop tools the actor's role may not invoke. `can` may be async (authz). */
+export async function filterToolsByRole(
   tools: ToolSpec[],
   actor: Actor,
   policy: RolesPolicy,
-): ToolSpec[] {
-  return tools.filter((tool) => policy.can(actor, tool));
+): Promise<ToolSpec[]> {
+  const checked = await Promise.all(
+    tools.map(async (tool) => ({ tool, allowed: await policy.can(actor, tool) })),
+  );
+  return checked.filter((entry) => entry.allowed).map((entry) => entry.tool);
 }
 
 /** Second filter layer: if the persona pins an allow-list, keep only those tool names. */

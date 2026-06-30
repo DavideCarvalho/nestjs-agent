@@ -35,19 +35,19 @@ describe('ToolRegistry', () => {
     return reg;
   }
 
-  it('offers neutral definitions for an allowed actor (no execute leaks)', () => {
-    const defs = registry().definitionsFor({ id: 'u1', role: 'ADMIN' }, policy);
+  it('offers neutral definitions for an allowed actor (no execute leaks)', async () => {
+    const defs = await registry().definitionsFor({ id: 'u1', role: 'ADMIN' }, policy);
     expect(defs.map((d) => d.name).sort()).toEqual(['getWeather', 'purgeCache']);
     expect(defs.every((d) => !('execute' in d))).toBe(true);
   });
 
-  it('filters out tools the role may not use', () => {
-    const defs = registry().definitionsFor({ id: 'u2', role: 'GUEST' }, policy);
+  it('filters out tools the role may not use', async () => {
+    const defs = await registry().definitionsFor({ id: 'u2', role: 'GUEST' }, policy);
     expect(defs).toHaveLength(0);
   });
 
-  it('applies the persona allow-list on top of role filtering', () => {
-    const defs = registry().definitionsFor({ id: 'u1', role: 'ADMIN' }, policy, ['getWeather']);
+  it('applies the persona allow-list on top of role filtering', async () => {
+    const defs = await registry().definitionsFor({ id: 'u1', role: 'ADMIN' }, policy, ['getWeather']);
     expect(defs.map((d) => d.name)).toEqual(['getWeather']);
   });
 

@@ -124,7 +124,7 @@ export async function runAgentLoop(
   // the throw propagates to the engine, and the resumed replay reaches the end() below.
   {
     for (let i = 0; i < maxSteps; i += 1) {
-      const tools = deps.registry.definitionsFor(
+      const tools = await deps.registry.definitionsFor(
         input.actor,
         deps.rolesPolicy,
         persona?.allowedTools,

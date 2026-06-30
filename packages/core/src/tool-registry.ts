@@ -51,12 +51,12 @@ export class ToolRegistry {
   }
 
   /** The tools to offer the model for this actor+persona, after the two filter layers. */
-  definitionsFor(
+  async definitionsFor(
     actor: Actor,
     policy: RolesPolicy,
     allowedTools?: string[],
-  ): ToolDefinition[] {
-    const roleScoped = filterToolsByRole(this.allSpecs(), actor, policy);
+  ): Promise<ToolDefinition[]> {
+    const roleScoped = await filterToolsByRole(this.allSpecs(), actor, policy);
     const personaScoped = personaFilterTools(roleScoped, allowedTools);
     return personaScoped.map((spec) => ({
       name: spec.name,
@@ -77,7 +77,7 @@ export class ToolRegistry {
     if (entry === undefined) {
       throw new ToolNotFoundError(name);
     }
-    if (!policy.can(ctx.actor, entry.spec)) {
+    if (!(await policy.can(ctx.actor, entry.spec))) {
       throw new ToolForbiddenError(name);
     }
     const parsed = entry.spec.inputSchema.parse(input);

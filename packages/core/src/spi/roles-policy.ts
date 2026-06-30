@@ -6,5 +6,6 @@ import type { Actor, ToolSpec } from '../types.js';
  * or any custom gate here.
  */
 export interface RolesPolicy {
-  can(actor: Actor, tool: ToolSpec): boolean;
+  /** May return a promise — an authz Gate (`gate.forUser(actor).allows(...)`) is async. */
+  can(actor: Actor, tool: ToolSpec): boolean | Promise<boolean>;
 }
