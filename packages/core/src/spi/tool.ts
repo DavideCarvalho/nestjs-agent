@@ -13,6 +13,12 @@ export interface AiToolCtx {
   actor: Actor;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
+  /**
+   * Delegate to another named agent and await its answer. Present only when the host wired
+   * multi-agent support; under durable it runs the sub-agent as a child workflow, inline it runs
+   * a nested loop. A tool uses this to build an orchestrator that talks to other agents.
+   */
+  runAgent?: (agentName: string, task: string) => Promise<{ text: string }>;
 }
 
 /** A tool implementation. `I` is the parsed (Zod-validated) input. */

@@ -6,6 +6,7 @@ import type { AiToolCtx } from './spi/tool.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ToolRegistry } from './tool-registry.js';
 import {
+  publishAgentDelegated,
   publishAgentMessage,
   publishAgentRunFinished,
   publishAgentRunStarted,
@@ -40,6 +41,11 @@ export interface AgentLoopHooks {
   openSink(): SinkWriter | Promise<SinkWriter>;
   /** HITL gate for an action tool. Inline resolves a pending promise; durable awaits a signal. */
   awaitApproval(call: ToolCallRequest, ctx: AiToolCtx): Promise<Decision>;
+  /**
+   * Run another named agent and return its answer. Provided only when the host wired multi-agent
+   * support (durable → child workflow, inline → nested loop). Exposed to tools as `ctx.runAgent`.
+   */
+  runAgent?(agentName: string, task: string): Promise<{ text: string }>;
   /**
    * Checkpoint wrapper. Inline = call fn directly; durable = ctx.step(name, fn).
    * EVERY side-effect and control-flow read goes through this so durable replay returns
@@ -189,6 +195,19 @@ export async function runAgentLoop(
           ...(persona !== undefined ? { persona } : {}),
           ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
           ...(deps.host !== undefined ? { host: deps.host } : {}),
+          ...(hooks.runAgent !== undefined
+            ? {
+                runAgent: (agentName: string, task: string) => {
+                  publishAgentDelegated({
+                    runId: hooks.runId,
+                    toAgent: agentName,
+                    ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
+                  });
+                  // biome-ignore lint/style/noNonNullAssertion: guarded by the spread condition
+                  return hooks.runAgent!(agentName, task);
+                },
+              }
+            : {}),
         };
 
         if (toolType === 'action') {

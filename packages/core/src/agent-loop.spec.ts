@@ -26,6 +26,10 @@ function buildRegistry(): ToolRegistry {
     { name: 'purgeCache', kind: 'action', description: 'purge', inputSchema: z.object({ key: z.string() }) },
     { execute: async (input: { key: string }) => ({ purged: input.key }) },
   );
+  reg.register(
+    { name: 'askSub', kind: 'read', description: 'delegate', inputSchema: z.object({ q: z.string() }) },
+    { execute: async (input: { q: string }, ctx) => ctx.runAgent?.('sub-agent', input.q) ?? { text: 'no delegate' } },
+  );
   return reg;
 }
 
@@ -42,6 +46,7 @@ async function run(
   script: FakeScript,
   decide: (id: string) => Decision = () => ({ approved: true }),
   quota?: InMemoryQuotaStore,
+  runAgent?: (agentName: string, task: string) => Promise<{ text: string }>,
 ) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
@@ -63,6 +68,7 @@ async function run(
     openSink: () => sink.open(runId),
     awaitApproval: async (call) => decide(call.id),
     step: (_name, fn) => fn(),
+    ...(runAgent !== undefined ? { runAgent } : {}),
   };
 
   const result = await runAgentLoop(deps, { threadId: thread.id, actor: { id: 'u1', role: 'ADMIN' }, userText: 'hi' }, hooks);
@@ -122,5 +128,32 @@ describe('runAgentLoop', () => {
     await expect(run(() => ({ text: 'x' }), () => ({ approved: true }), quota)).rejects.toThrow(
       /quota/i,
     );
+  });
+
+  it('delegates to a sub-agent via ctx.runAgent and emits agent.delegated', async () => {
+    const { subscribe, unsubscribe } = await import('node:diagnostics_channel');
+    const { channelName } = await import('@dudousxd/nestjs-diagnostics');
+    const delegations: unknown[] = [];
+    const channel = channelName('agent', 'delegated');
+    const handler = (message: unknown) => delegations.push(message);
+    subscribe(channel, handler);
+
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'asking the sub-agent', toolCall: { name: 'askSub', input: { q: 'how many bases?' } } }
+        : { text: 'the sub-agent said hi' };
+
+    try {
+      const { result, store } = await run(script, () => ({ approved: true }), undefined, async () => ({
+        text: 'sub-agent answer: 42',
+      }));
+      expect(result.text).toBe('the sub-agent said hi');
+      expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'askSub', status: 'executed' });
+      expect(store.toolCallRows()[0]?.output).toEqual({ text: 'sub-agent answer: 42' });
+      expect(delegations).toHaveLength(1);
+      expect(delegations[0]).toMatchObject({ payload: { toAgent: 'sub-agent' } });
+    } finally {
+      unsubscribe(channel, handler);
+    }
   });
 });

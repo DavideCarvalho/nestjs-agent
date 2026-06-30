@@ -17,6 +17,12 @@ export interface ToolSpec {
   inputSchema: ZodType;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
+  /**
+   * An authorization ability name (e.g. 'cache.purge'). Consumed by an ability-aware RolesPolicy
+   * such as the `@dudousxd/nestjs-agent-authz` Gate adapter. Apps that don't use authz ignore it
+   * and rely on `roles` instead — both live on the same SPI, so neither is required.
+   */
+  ability?: string;
 }
 
 /** What the model is told a tool looks like (no handler, no host types). */
@@ -95,6 +101,25 @@ export interface AgentRunInput {
   isRegenerate?: boolean;
   /** YYYY-MM-DD stamped by the runner so quota/day stays deterministic under durable replay. */
   day?: string;
+  /** Which named agent runs this turn. Omitted → the default/single agent. */
+  agentName?: string;
+}
+
+/**
+ * A named agent: its prompt, the tools it may use, and its personas. Multiple definitions are
+ * registered via `AgentModule.forFeature([...])`; an orchestrator delegates to others through
+ * `ctx.runAgent(name, task)`. Model/store/sink/governance are shared from the module unless
+ * overridden here.
+ */
+export interface AgentDefinition {
+  name: string;
+  systemPrompt?: string;
+  /** Allow-list of tool names this agent may use (subset of all registered tools). */
+  tools?: string[];
+  personas?: Persona[];
+  defaultPersona?: string;
+  modelId?: string;
+  maxSteps?: number;
 }
 
 export interface ThreadSummary {

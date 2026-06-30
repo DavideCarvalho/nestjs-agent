@@ -32,6 +32,11 @@ export interface AgentRunFinished {
   inputTokens: number;
   outputTokens: number;
 }
+export interface AgentDelegated {
+  runId: string;
+  fromAgent?: string;
+  toAgent: string;
+}
 
 /** Declaration-merge so `emit('agent', ...)` and telescope infer the agent payloads. */
 declare module '@dudousxd/nestjs-diagnostics' {
@@ -42,6 +47,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'tool-call': AgentToolCallEvent;
       'quota.exceeded': AgentQuotaExceeded;
       'run.finished': AgentRunFinished;
+      delegated: AgentDelegated;
     };
   }
 }
@@ -60,4 +66,7 @@ export function publishAgentQuotaExceeded(payload: AgentQuotaExceeded): void {
 }
 export function publishAgentRunFinished(payload: AgentRunFinished): void {
   emit('agent', 'run.finished', payload);
+}
+export function publishAgentDelegated(payload: AgentDelegated): void {
+  emit('agent', 'delegated', payload);
 }

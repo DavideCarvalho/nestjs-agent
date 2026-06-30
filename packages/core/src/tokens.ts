@@ -17,3 +17,4 @@ export const AGENT_MODEL = Symbol.for('@dudousxd/nestjs-agent:model');
 export const AGENT_ROLES_POLICY = Symbol.for('@dudousxd/nestjs-agent:roles-policy');
 export const AGENT_QUOTA_STORE = Symbol.for('@dudousxd/nestjs-agent:quota-store');
 export const AGENT_TOOL_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:tool-registry');
+export const AGENT_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:agent-registry');
