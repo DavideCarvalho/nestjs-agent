@@ -1,12 +1,16 @@
 import {
   AGENT_OPTIONS,
+  AGENT_REGISTRY,
   AGENT_TOOL_REGISTRY,
+  type AgentRegistry,
   type ToolHandler,
   type ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService } from '@nestjs/core';
+import { z } from 'zod';
 import type { AgentModuleOptions } from '../agent.options.js';
+import { delegateToolName } from '../agent-deps.factory.js';
 import { readAiToolMetadata } from '../decorator/ai-tool.decorator.js';
 
 /** Walks every provider at boot and registers `@AiTool` classes into the shared registry. */
@@ -17,6 +21,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
   constructor(
     private readonly discovery: DiscoveryService,
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
+    @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
     @Inject(AGENT_OPTIONS) private readonly options: AgentModuleOptions,
   ) {}
 
@@ -49,6 +54,32 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       );
       count += 1;
     }
-    this.logger.log(`registered ${count} AI tool(s)`);
+
+    // Synthesize an `agent`-kind delegate tool for each agent->agent edge declared via `delegatesTo`.
+    let delegates = 0;
+    for (const definition of this.agents.list()) {
+      for (const target of definition.delegatesTo ?? []) {
+        const name = delegateToolName(target);
+        if (this.registry.has(name)) {
+          continue;
+        }
+        const targetDefinition = this.agents.get(target);
+        this.registry.register(
+          {
+            name,
+            kind: 'agent',
+            targetAgent: target,
+            description:
+              `Delegate a task to the "${target}" agent and get its answer.` +
+              (targetDefinition?.systemPrompt ? ` It is: ${targetDefinition.systemPrompt}` : ''),
+            inputSchema: z.object({ task: z.string() }),
+          },
+          // Loop-handled (kind 'agent'); the handler is never called.
+          { execute: async () => ({}) },
+        );
+        delegates += 1;
+      }
+    }
+    this.logger.log(`registered ${count} AI tool(s) and ${delegates} delegate tool(s)`);
   }
 }

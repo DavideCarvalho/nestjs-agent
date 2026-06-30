@@ -2,23 +2,20 @@ import {
   AGENT_MODEL,
   AGENT_OPTIONS,
   AGENT_QUOTA_STORE,
+  AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
   AGENT_RUNNER,
   AGENT_SINK,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
-  type AgentStore,
+  type AgentDefinition,
+  AgentRegistry,
   DefaultRolesPolicy,
-  type ModelProvider,
-  type Persona,
-  type QuotaStore,
-  type RolesPolicy,
-  type TokenStreamSink,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Global, Module, type Provider } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
-import { AGENT_DEPS, type AgentDeps } from './agent-deps.js';
+import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { ChatController } from './controller/chat.controller.js';
@@ -29,37 +26,32 @@ import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 
-function buildDeps(
-  options: AgentModuleOptions,
-  registry: ToolRegistry,
-  sink: TokenStreamSink,
-  rolesPolicy: RolesPolicy,
-  model: ModelProvider,
-  store: AgentStore,
-  quota: QuotaStore | undefined,
-): AgentDeps {
-  const personas = new Map<string, Persona>();
-  for (const persona of options.personas ?? []) {
-    personas.set(persona.id, persona);
-  }
+const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
+
+/** The implicit single agent, built from the module options. forFeature adds more named agents. */
+function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
   return {
-    model,
-    store,
-    registry,
-    rolesPolicy,
-    sink,
+    name: options.defaultAgent ?? 'default',
+    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
     modelId: options.modelId,
-    systemPrompt: options.systemPrompt ?? 'You are a helpful assistant.',
-    maxSteps: options.maxSteps ?? 8,
-    personas,
-    defaultPersona: options.defaultPersona ?? 'default',
-    ...(quota !== undefined ? { quota } : {}),
+    ...(options.personas !== undefined ? { personas: options.personas } : {}),
+    ...(options.defaultPersona !== undefined ? { defaultPersona: options.defaultPersona } : {}),
+    ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
   };
 }
 
 function sharedProviders(durable: boolean): Provider[] {
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
+    {
+      provide: AGENT_REGISTRY,
+      useFactory: (options: AgentModuleOptions) => {
+        const registry = new AgentRegistry();
+        registry.register(defaultDefinition(options));
+        return registry;
+      },
+      inject: [AGENT_OPTIONS],
+    },
     {
       provide: AGENT_SINK,
       useFactory: (options: AgentModuleOptions) => options.sink ?? new InProcessTokenStreamSink(),
@@ -78,24 +70,11 @@ function sharedProviders(durable: boolean): Provider[] {
       useFactory: (o: AgentModuleOptions) => o.quota,
       inject: [AGENT_OPTIONS],
     },
-    {
-      provide: AGENT_DEPS,
-      useFactory: buildDeps,
-      inject: [
-        AGENT_OPTIONS,
-        AGENT_TOOL_REGISTRY,
-        AGENT_SINK,
-        AGENT_ROLES_POLICY,
-        AGENT_MODEL,
-        AGENT_STORE,
-        AGENT_QUOTA_STORE,
-      ],
-    },
+    AgentDepsFactory,
     AiToolDiscoveryService,
     InlineAgentRunner,
     AgentService,
   ];
-  // When durable, AgentDurableModule (from '@dudousxd/nestjs-agent/durable') binds AGENT_RUNNER.
   if (!durable) {
     providers.push({ provide: AGENT_RUNNER, useExisting: InlineAgentRunner });
   }
@@ -105,12 +84,13 @@ function sharedProviders(durable: boolean): Provider[] {
 const EXPORTS = [
   AGENT_OPTIONS,
   AGENT_TOOL_REGISTRY,
+  AGENT_REGISTRY,
   AGENT_SINK,
   AGENT_ROLES_POLICY,
   AGENT_MODEL,
   AGENT_STORE,
   AGENT_QUOTA_STORE,
-  AGENT_DEPS,
+  AgentDepsFactory,
   AgentService,
   InlineAgentRunner,
 ];
@@ -123,7 +103,10 @@ export class AgentModule {
       module: AgentModule,
       imports: [DiscoveryModule],
       controllers: [ChatController, ThreadsController, ToolCallController, QuotaController],
-      providers: [{ provide: AGENT_OPTIONS, useValue: options }, ...sharedProviders(options.durable ?? false)],
+      providers: [
+        { provide: AGENT_OPTIONS, useValue: options },
+        ...sharedProviders(options.durable ?? false),
+      ],
       exports: EXPORTS,
     };
   }
@@ -139,11 +122,28 @@ export class AgentModule {
           useFactory: options.useFactory,
           inject: (options.inject as never[]) ?? [],
         },
-        // Durability is decided at runtime here; controllers always mount and AGENT_RUNNER is
-        // bound to the inline runner unless AgentDurableModule rebinds it.
         ...sharedProviders(false),
       ],
       exports: EXPORTS,
+    };
+  }
+
+  /** Register additional named agents (an orchestrator + its sub-agents). */
+  static forFeature(definitions: AgentDefinition[]): DynamicModule {
+    return {
+      module: AgentModule,
+      providers: [
+        {
+          provide: FEATURE_INIT,
+          useFactory: (registry: AgentRegistry) => {
+            for (const definition of definitions) {
+              registry.register(definition);
+            }
+            return true;
+          },
+          inject: [AGENT_REGISTRY],
+        },
+      ],
     };
   }
 }

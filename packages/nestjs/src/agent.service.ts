@@ -1,6 +1,5 @@
 import {
   AGENT_RUNNER,
-  AGENT_SINK,
   AGENT_STORE,
   type Actor,
   type AgentRunInput,
@@ -10,15 +9,16 @@ import {
   type Persona,
   type ThreadDetail,
   type ThreadSummary,
-  type TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable } from '@nestjs/common';
-import { AGENT_DEPS, type AgentDeps, utcDay } from './agent-deps.js';
+import { AgentDepsFactory } from './agent-deps.factory.js';
+import { utcDay } from './agent-deps.js';
 
 export interface ChatParams {
   actor: Actor;
   message: string;
   threadId?: string;
+  agentName?: string;
   personaId?: string;
   pageContext?: PageContext;
 }
@@ -29,26 +29,27 @@ export class AgentService {
   constructor(
     @Inject(AGENT_RUNNER) private readonly runner: AgentRunner,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
-    @Inject(AGENT_DEPS) private readonly deps: AgentDeps,
+    private readonly deps: AgentDepsFactory,
   ) {}
 
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
+    const agentName = params.agentName ?? this.deps.defaultAgentName();
     let threadId = params.threadId;
     if (threadId === undefined) {
       const created = await this.store.createThread({
         actor: params.actor,
-        persona: params.personaId ?? this.deps.defaultPersona,
+        persona: params.personaId ?? this.deps.forAgent(agentName).defaultPersona,
       });
       threadId = created.id;
     }
 
-    const persona = this.resolvePersona(params.personaId);
+    const persona = this.resolvePersona(agentName, params.personaId);
     const input: AgentRunInput = {
       threadId,
       actor: params.actor,
       userText: params.message,
       day: utcDay(),
+      agentName,
       ...(persona !== undefined ? { persona } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
     };
@@ -59,7 +60,7 @@ export class AgentService {
   }
 
   subscribe(runId: string): AsyncIterable<Uint8Array> {
-    return this.sink.subscribe(runId);
+    return this.deps.forAgent().sink.subscribe(runId);
   }
 
   approve(runId: string, toolCallId: string): Promise<void> {
@@ -77,12 +78,13 @@ export class AgentService {
     return this.runner.cancel(runId);
   }
 
-  resolvePersona(id?: string): Persona | undefined {
-    return this.deps.personas.get(id ?? this.deps.defaultPersona);
+  resolvePersona(agentName?: string, id?: string): Persona | undefined {
+    const deps = this.deps.forAgent(agentName);
+    return deps.personas.get(id ?? deps.defaultPersona);
   }
 
-  personaCatalog(): { id: string; label: string }[] {
-    return [...this.deps.personas.values()].map((persona) => ({
+  personaCatalog(agentName?: string): { id: string; label: string }[] {
+    return [...this.deps.forAgent(agentName).personas.values()].map((persona) => ({
       id: persona.id,
       label: persona.label,
     }));

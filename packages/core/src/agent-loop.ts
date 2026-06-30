@@ -33,6 +33,20 @@ export interface AgentLoopDeps {
   maxSteps?: number;
   /** Optional host handle threaded to tool ctx (e.g. an ORM EntityManager). */
   host?: unknown;
+  /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
+  toolAllowList?: string[];
+}
+
+/** Intersect two allow-lists where `undefined` means "no restriction". */
+function intersectAllow(a?: string[], b?: string[]): string[] | undefined {
+  if (a === undefined) {
+    return b;
+  }
+  if (b === undefined) {
+    return a;
+  }
+  const second = new Set(b);
+  return a.filter((name) => second.has(name));
 }
 
 export interface AgentLoopHooks {
@@ -138,7 +152,7 @@ export async function runAgentLoop(
       const tools = await deps.registry.definitionsFor(
         input.actor,
         deps.rolesPolicy,
-        persona?.allowedTools,
+        intersectAllow(persona?.allowedTools, deps.toolAllowList),
       );
 
       const turn = await hooks.step(`llm:${i}`, () =>

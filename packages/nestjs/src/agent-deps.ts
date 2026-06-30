@@ -21,10 +21,9 @@ export interface AgentDeps {
   maxSteps: number;
   personas: Map<string, Persona>;
   defaultPersona: string;
+  /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
+  toolAllowList?: string[];
 }
-
-/** Internal bundle token shared between the inline runner, durable workflow, and service. */
-export const AGENT_DEPS = Symbol.for('@dudousxd/nestjs-agent:deps');
 
 export function utcDay(date = new Date()): string {
   return date.toISOString().slice(0, 10);

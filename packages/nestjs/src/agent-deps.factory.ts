@@ -1,0 +1,82 @@
+import {
+  AGENT_MODEL,
+  AGENT_QUOTA_STORE,
+  AGENT_REGISTRY,
+  AGENT_ROLES_POLICY,
+  AGENT_SINK,
+  AGENT_STORE,
+  AGENT_TOOL_REGISTRY,
+  type AgentDefinition,
+  AgentRegistry,
+  type AgentStore,
+  type ModelProvider,
+  type Persona,
+  type QuotaStore,
+  type RolesPolicy,
+  type TokenStreamSink,
+  ToolRegistry,
+} from '@dudousxd/nestjs-agent-core';
+import { Inject, Injectable } from '@nestjs/common';
+import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
+import type { AgentModuleOptions } from './agent.options.js';
+import type { AgentDeps } from './agent-deps.js';
+
+/** The synthesized `agent`-kind tool name an orchestrator uses to delegate to `target`. */
+export function delegateToolName(target: string): string {
+  return `ask_${target.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+}
+
+/** Builds the per-agent loop deps. The single-agent case is just the `default` definition. */
+@Injectable()
+export class AgentDepsFactory {
+  constructor(
+    @Inject(AGENT_OPTIONS) private readonly options: AgentModuleOptions,
+    @Inject(AGENT_MODEL) private readonly model: ModelProvider,
+    @Inject(AGENT_STORE) private readonly store: AgentStore,
+    @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
+    @Inject(AGENT_ROLES_POLICY) private readonly rolesPolicy: RolesPolicy,
+    @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
+    @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
+    @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
+  ) {}
+
+  defaultAgentName(): string {
+    return this.options.defaultAgent ?? 'default';
+  }
+
+  private effectiveTools(definition: AgentDefinition | undefined): string[] | undefined {
+    if (definition === undefined) {
+      return undefined;
+    }
+    const delegated = (definition.delegatesTo ?? []).map(delegateToolName);
+    if (definition.tools === undefined && delegated.length === 0) {
+      return undefined; // no restriction
+    }
+    return [...(definition.tools ?? []), ...delegated];
+  }
+
+  forAgent(agentName?: string): AgentDeps {
+    const name = agentName ?? this.defaultAgentName();
+    const definition = this.agents.get(name);
+    const personas = new Map<string, Persona>();
+    for (const persona of definition?.personas ?? this.options.personas ?? []) {
+      personas.set(persona.id, persona);
+    }
+    const toolAllowList = this.effectiveTools(definition);
+    return {
+      model: this.model,
+      store: this.store,
+      sink: this.sink,
+      rolesPolicy: this.rolesPolicy,
+      registry: this.registry,
+      modelId: definition?.modelId ?? this.options.modelId,
+      systemPrompt:
+        definition?.systemPrompt ?? this.options.systemPrompt ?? 'You are a helpful assistant.',
+      maxSteps: definition?.maxSteps ?? this.options.maxSteps ?? 8,
+      personas,
+      defaultPersona: definition?.defaultPersona ?? this.options.defaultPersona ?? 'default',
+      ...(this.quota !== undefined ? { quota: this.quota } : {}),
+      ...(toolAllowList !== undefined ? { toolAllowList } : {}),
+    };
+  }
+}

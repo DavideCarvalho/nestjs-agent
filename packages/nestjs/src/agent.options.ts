@@ -30,6 +30,8 @@ export interface AgentModuleOptions {
   defaultPersona?: string;
   /** Max model↔tool iterations per turn. Defaults to 8. */
   maxSteps?: number;
+  /** Name of the implicit single agent built from these options. Defaults to `'default'`. */
+  defaultAgent?: string;
   /**
    * Run each turn as a durable workflow instead of in-process. Requires importing
    * `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` and a configured `DurableModule`.
