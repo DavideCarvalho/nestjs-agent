@@ -1,4 +1,5 @@
 import {
+  AGENT_DEPS_FACTORY,
   AGENT_STORE,
   type Actor,
   type AgentLoopHooks,
@@ -10,7 +11,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { type AgentDeps, utcDay } from '../agent-deps.js';
-import { AgentDepsFactory } from '../agent-deps.factory.js';
+import type { AgentDepsFactory } from '../agent-deps.factory.js';
 
 /**
  * Runs the agent turn in-process. HITL approval resolves a pending promise keyed by
@@ -23,7 +24,7 @@ export class InlineAgentRunner implements AgentRunner {
   private readonly pending = new Map<string, (decision: Decision) => void>();
 
   constructor(
-    private readonly factory: AgentDepsFactory,
+    @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
   ) {}
 

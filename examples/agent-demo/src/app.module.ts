@@ -25,6 +25,21 @@ import { PurgeCacheTool } from './tools/purge-cache.tool.js';
       ],
       durable: true,
     }),
+    // Multi-agent: an orchestrator that delegates to a focused sub-agent. The orchestrator can only
+    // reach `weather-analyst` (via the synthesized `ask_weather_analyst` tool); the sub-agent can
+    // only use `getWeather`. Each delegation is a durable child run AND a `delegated` diagnostics event.
+    AgentModule.forFeature([
+      {
+        name: 'ops-orchestrator',
+        systemPrompt: 'You coordinate specialists. Delegate weather questions to weather-analyst.',
+        delegatesTo: ['weather-analyst'],
+      },
+      {
+        name: 'weather-analyst',
+        systemPrompt: 'You answer weather questions using the getWeather tool.',
+        tools: ['getWeather'],
+      },
+    ]),
     AgentDurableModule,
   ],
   providers: [GetWeatherTool, PurgeCacheTool, AgentDiagnosticsConsole],

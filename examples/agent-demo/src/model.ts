@@ -11,6 +11,13 @@ const script: FakeScript = (args, turnIndex) => {
     '';
 
   if (turnIndex === 0) {
+    if (lastUser.includes('event') || lastUser.includes('outdoor')) {
+      // The orchestrator turn: hand the weather question to the specialist sub-agent.
+      return {
+        text: 'This needs a weather check — delegating to the weather analyst.',
+        toolCall: { name: 'ask_weather_analyst', input: { task: 'What is the weather in Recife?' } },
+      };
+    }
     if (lastUser.includes('weather')) {
       const city = /weather in ([a-z\s]+)/i.exec(lastUser)?.[1]?.trim() ?? 'Recife';
       return {

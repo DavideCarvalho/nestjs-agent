@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import { AgentDiagnosticsConsole } from './diagnostics-console.js';
 
 const BASE = 'http://localhost:3000';
 const HEADERS = { 'content-type': 'application/json', 'x-actor-id': 'davi', 'x-actor-role': 'ADMIN' };
@@ -59,11 +60,12 @@ async function consumeStream(
 async function chat(
   message: string,
   handlers: { onMeta?: (meta: Meta) => void; onDelta?: (delta: string) => void },
+  agent?: string,
 ): Promise<void> {
   const res = await fetch(`${BASE}/agent/chat`, {
     method: 'POST',
     headers: HEADERS,
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, ...(agent !== undefined ? { agent } : {}) }),
   });
   await consumeStream(res, handlers);
 }
@@ -118,6 +120,17 @@ async function run(): Promise<void> {
   await streaming;
   process.stdout.write('\n');
 
+  console.log('\n══════════════════════════════════════════════════════════════');
+  console.log(' Scenario 3 — multi-agent (orchestrator delegates to a sub-agent)');
+  console.log('══════════════════════════════════════════════════════════════');
+  process.stdout.write(' user>      Plan an outdoor event in Recife\n assistant> ');
+  await chat(
+    'Plan an outdoor event in Recife',
+    { onDelta: (d) => process.stdout.write(d) },
+    'ops-orchestrator',
+  );
+  process.stdout.write('\n');
+
   const quota = (await (await fetch(`${BASE}/agent/quota/today`, { headers: HEADERS })).json()) as {
     usedTokens: number;
   };
@@ -133,6 +146,15 @@ async function bootstrap(): Promise<void> {
   await app.listen(3000);
   try {
     await run();
+    // What the app DERIVED from the diagnostics channel — metrics + the orchestration graph.
+    const summary = app.get(AgentDiagnosticsConsole).summary();
+    console.log('──────────────────────────────────────────────────────────────');
+    console.log(' diagnostics (derived by the app, not instrumented in the lib):');
+    console.log(`   event counts: ${JSON.stringify(summary.counts)}`);
+    console.log(
+      `   orchestration graph: ${summary.delegations.map((d) => `${d.from}→${d.to}`).join(', ') || '(none)'}`,
+    );
+    console.log('──────────────────────────────────────────────────────────────\n');
   } finally {
     await app.close();
   }

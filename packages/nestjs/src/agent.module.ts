@@ -1,4 +1,5 @@
 import {
+  AGENT_DEPS_FACTORY,
   AGENT_MODEL,
   AGENT_OPTIONS,
   AGENT_QUOTA_STORE,
@@ -71,6 +72,7 @@ function sharedProviders(durable: boolean): Provider[] {
       inject: [AGENT_OPTIONS],
     },
     AgentDepsFactory,
+    { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
     AiToolDiscoveryService,
     InlineAgentRunner,
     AgentService,
@@ -90,6 +92,7 @@ const EXPORTS = [
   AGENT_MODEL,
   AGENT_STORE,
   AGENT_QUOTA_STORE,
+  AGENT_DEPS_FACTORY,
   AgentDepsFactory,
   AgentService,
   InlineAgentRunner,
@@ -101,6 +104,7 @@ export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     return {
       module: AgentModule,
+      global: true,
       imports: [DiscoveryModule],
       controllers: [ChatController, ThreadsController, ToolCallController, QuotaController],
       providers: [
@@ -114,6 +118,7 @@ export class AgentModule {
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
     return {
       module: AgentModule,
+      global: true,
       imports: [DiscoveryModule, ...((options.imports as DynamicModule['imports']) ?? [])],
       controllers: [ChatController, ThreadsController, ToolCallController, QuotaController],
       providers: [

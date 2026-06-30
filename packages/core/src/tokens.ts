@@ -18,3 +18,6 @@ export const AGENT_ROLES_POLICY = Symbol.for('@dudousxd/nestjs-agent:roles-polic
 export const AGENT_QUOTA_STORE = Symbol.for('@dudousxd/nestjs-agent:quota-store');
 export const AGENT_TOOL_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:tool-registry');
 export const AGENT_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:agent-registry');
+// Per-agent deps factory. A Symbol.for token (not the class) so DI survives tsup's dual
+// index/durable bundles, which each get their own copy of the AgentDepsFactory class.
+export const AGENT_DEPS_FACTORY = Symbol.for('@dudousxd/nestjs-agent:deps-factory');

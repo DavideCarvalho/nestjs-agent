@@ -1,4 +1,5 @@
 import {
+  AGENT_DEPS_FACTORY,
   AGENT_RUNNER,
   AGENT_STORE,
   type Actor,
@@ -11,7 +12,7 @@ import {
   type ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable } from '@nestjs/common';
-import { AgentDepsFactory } from './agent-deps.factory.js';
+import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 
 export interface ChatParams {
@@ -29,7 +30,7 @@ export class AgentService {
   constructor(
     @Inject(AGENT_RUNNER) private readonly runner: AgentRunner,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    private readonly deps: AgentDepsFactory,
+    @Inject(AGENT_DEPS_FACTORY) private readonly deps: AgentDepsFactory,
   ) {}
 
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
