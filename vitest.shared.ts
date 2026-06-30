@@ -10,6 +10,7 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-core': pkg('core'),
   '@dudousxd/nestjs-agent-testing': pkg('testing'),
   '@dudousxd/nestjs-agent-store-mikro-orm': pkg('store-mikro-orm'),
+  '@dudousxd/nestjs-agent-store-drizzle': pkg('store-drizzle'),
   '@dudousxd/nestjs-agent-transport-redis': pkg('transport-redis'),
   '@dudousxd/nestjs-agent-data': pkg('data'),
   '@dudousxd/nestjs-agent-authz': pkg('authz'),
