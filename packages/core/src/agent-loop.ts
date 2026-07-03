@@ -172,6 +172,11 @@ export async function runAgentLoop(
     actorId: input.actor.id,
     ...(persona !== undefined ? { persona: persona.id } : {}),
   });
+
+  // NOTE: no try/finally around this loop. A durable runner suspends by THROWING through the stack
+  // at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on every suspend
+  // and prematurely close the live stream. We only end on normal completion — the throw propagates
+  // to the engine, and the resumed replay reaches the writer.end() below.
   for (let i = 0; i < maxSteps; i += 1) {
     const tools = await deps.registry.definitionsFor(
       input.actor,

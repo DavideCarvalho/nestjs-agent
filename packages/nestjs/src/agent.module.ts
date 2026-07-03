@@ -36,19 +36,13 @@ const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
 /** Default route prefix the controllers mount under. */
 const DEFAULT_PATH = 'agent';
 
-/** The implicit single agent, built from `options.defaultAgent`. forFeature adds more named agents. */
+/**
+ * The implicit single agent, built from `options.defaultAgent`. `DefaultAgentOptions` is exactly an
+ * `AgentDefinition` with `name` optional, so we just default the name and spread the rest. forFeature
+ * adds more named agents.
+ */
 function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
-  const agent = options.defaultAgent;
-  return {
-    name: agent?.name ?? 'default',
-    ...(agent?.systemPrompt !== undefined ? { systemPrompt: agent.systemPrompt } : {}),
-    ...(agent?.modelId !== undefined ? { modelId: agent.modelId } : {}),
-    ...(agent?.tools !== undefined ? { tools: agent.tools } : {}),
-    ...(agent?.delegatesTo !== undefined ? { delegatesTo: agent.delegatesTo } : {}),
-    ...(agent?.personas !== undefined ? { personas: agent.personas } : {}),
-    ...(agent?.defaultPersona !== undefined ? { defaultPersona: agent.defaultPersona } : {}),
-    ...(agent?.maxSteps !== undefined ? { maxSteps: agent.maxSteps } : {}),
-  };
+  return { name: 'default', ...options.defaultAgent };
 }
 
 function sharedProviders(durable: boolean): Provider[] {
