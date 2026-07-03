@@ -1,6 +1,6 @@
 # nestjs-agent — pre-1.0 public API design
 
-**Status:** designed 2026-07-03. Nothing is published yet, so every change here is a free breaking change; the goal is to freeze an OSS-quality surface before the first npm release.
+**Status:** designed 2026-07-03, **implemented 2026-07-03** — all 11 findings landed across 6 commits (Actor.roles[], ActorResolver SPI, PromptBuilder, provider modelId + route path + defaultAgent + ToolKind split, durable-missing guard + docs, Standard Schema). Build 10/10, typecheck 13/13, 70 unit + 2 db tests green. Nothing is published yet, so every change here was a free breaking change; the goal was to freeze an OSS-quality surface before the first npm release.
 
 **Goal:** harden the public API of `@dudousxd/nestjs-agent` and its satellites so a third-party app can adopt it without hitting footguns, hardcoded assumptions, or leaky internals. Resolves 11 audit findings; the flip admin-ai migration is the reference consumer.
 
