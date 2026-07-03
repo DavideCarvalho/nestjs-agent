@@ -18,8 +18,8 @@ import type { ModelProvider, AgentStore, ToolSpec, RolesPolicy } from '@dudousxd
 
 ## Key types
 
-- `ToolSpec` — `{ name, kind: 'read' | 'action' | 'agent', description, inputSchema, roles?, ability?, targetAgent? }`
-- `AgentDefinition` — a named agent (`systemPrompt`, `tools`, `delegatesTo`, `personas`, …) for multi-agent setups
+- `ToolSpec` — `{ name, kind: 'read' | 'action' | 'agent', description, inputSchema, roles?, ability?, targetAgent? }`. `inputSchema` is a [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType); the loop validates via `~standard.validate`, throwing `ToolInputInvalidError` on failure.
+- `AgentDefinition` — a named agent (`systemPrompt` string | `PromptBuilder`, `tools`, `delegatesTo`, `personas`, …) for multi-agent setups
 - `RolesPolicy.can(actor, tool): boolean | Promise<boolean>` — the tool authorization seam
 - `runAgentLoop(deps, input, hooks)` — the loop; the NestJS package drives it from both runners
 

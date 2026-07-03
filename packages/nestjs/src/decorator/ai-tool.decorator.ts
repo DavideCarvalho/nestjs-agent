@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import type { ZodType } from 'zod';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 export const AI_TOOL_METADATA = Symbol('nestjs-agent:ai-tool');
 
@@ -11,8 +11,11 @@ export interface AiToolOptions {
    */
   kind: 'read' | 'action';
   description: string;
-  /** Zod schema for the tool input — validated before the handler runs. */
-  input: ZodType;
+  /**
+   * Input schema as a [Standard Schema](https://standardschema.dev) — Zod, Valibot, or ArkType.
+   * Validated before the handler runs.
+   */
+  input: StandardSchemaV1;
   /** Roles allowed to invoke. Omit to inherit the module's default roles. */
   roles?: string[];
   /**

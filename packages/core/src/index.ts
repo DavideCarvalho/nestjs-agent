@@ -15,6 +15,7 @@ export {
   DefaultRolesPolicy,
   ToolForbiddenError,
   ToolNotFoundError,
+  ToolInputInvalidError,
 } from './tool-registry.js';
 export {
   runAgentLoop,

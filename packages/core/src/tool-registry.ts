@@ -1,3 +1,4 @@
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { AiToolCtx, ToolHandler } from './spi/tool.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
@@ -16,6 +17,17 @@ export class ToolNotFoundError extends Error {
   constructor(public readonly toolName: string) {
     super(`Tool "${toolName}" is not registered`);
     this.name = 'ToolNotFoundError';
+  }
+}
+
+/** Thrown when a tool's input fails its Standard Schema validation. */
+export class ToolInputInvalidError extends Error {
+  constructor(
+    public readonly toolName: string,
+    public readonly issues: readonly StandardSchemaV1.Issue[],
+  ) {
+    super(`Invalid input for tool "${toolName}": ${issues.map((issue) => issue.message).join('; ')}`);
+    this.name = 'ToolInputInvalidError';
   }
 }
 
@@ -80,8 +92,11 @@ export class ToolRegistry {
     if (!(await policy.can(ctx.actor, entry.spec))) {
       throw new ToolForbiddenError(name);
     }
-    const parsed = entry.spec.inputSchema.parse(input);
-    return entry.handler.execute(parsed, ctx);
+    const validation = await entry.spec.inputSchema['~standard'].validate(input);
+    if (validation.issues !== undefined) {
+      throw new ToolInputInvalidError(name, validation.issues);
+    }
+    return entry.handler.execute(validation.value, ctx);
   }
 }
 

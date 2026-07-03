@@ -1,12 +1,28 @@
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   DefaultRolesPolicy,
   ToolForbiddenError,
+  ToolInputInvalidError,
   ToolRegistry,
   type Actor,
   type AiToolCtx,
 } from './index.js';
+
+/** A hand-rolled Standard Schema (no Zod) — proves the registry is validation-library-agnostic. */
+const upperCityValibotLike: StandardSchemaV1<{ city: string }, { city: string }> = {
+  '~standard': {
+    version: 1,
+    vendor: 'handmade',
+    validate(value) {
+      if (typeof value === 'object' && value !== null && typeof (value as { city?: unknown }).city === 'string') {
+        return { value: { city: (value as { city: string }).city.toUpperCase() } };
+      }
+      return { issues: [{ message: 'city must be a string' }] };
+    },
+  },
+};
 
 function ctxFor(actor: Actor): AiToolCtx {
   return {
@@ -61,9 +77,24 @@ describe('ToolRegistry', () => {
     ).rejects.toBeInstanceOf(ToolForbiddenError);
   });
 
-  it('throws on invalid input', async () => {
+  it('throws ToolInputInvalidError (with issues) on invalid input', async () => {
     await expect(
       registry().invoke('getWeather', { city: 123 }, ctxFor({ id: 'u1', roles: ['ADMIN'] }), policy),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(ToolInputInvalidError);
+  });
+
+  it('validates via any Standard Schema (not just Zod) and passes the parsed value', async () => {
+    const reg = new ToolRegistry();
+    reg.register(
+      { name: 'echoCity', kind: 'read', description: 'echo', inputSchema: upperCityValibotLike },
+      { execute: async (input: { city: string }) => input },
+    );
+    const out = await reg.invoke('echoCity', { city: 'recife' }, ctxFor({ id: 'u1', roles: ['ADMIN'] }), policy);
+    // the schema uppercased the input, proving `~standard.validate`'s value (not the raw input) is used
+    expect(out).toEqual({ city: 'RECIFE' });
+
+    await expect(
+      reg.invoke('echoCity', { city: 42 }, ctxFor({ id: 'u1', roles: ['ADMIN'] }), policy),
+    ).rejects.toBeInstanceOf(ToolInputInvalidError);
   });
 });

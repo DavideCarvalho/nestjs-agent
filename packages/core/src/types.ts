@@ -1,4 +1,4 @@
-import type { ZodType } from 'zod';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
 export interface Actor {
@@ -21,7 +21,12 @@ export interface ToolSpec {
   name: string;
   kind: ToolKind;
   description: string;
-  inputSchema: ZodType;
+  /**
+   * Input schema as a [Standard Schema](https://standardschema.dev) — validation-agnostic, so
+   * Zod, Valibot, or ArkType all work. The loop validates input via `~standard.validate` before
+   * running the handler, and providers convert it to the model's tool-parameter JSON schema.
+   */
+  inputSchema: StandardSchemaV1;
   /** For `kind: 'agent'` — the name of the agent to delegate to. */
   targetAgent?: string;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
@@ -39,7 +44,7 @@ export interface ToolDefinition {
   name: string;
   kind: ToolKind;
   description: string;
-  inputSchema: ZodType;
+  inputSchema: StandardSchemaV1;
 }
 
 /** A tool call the model asked for during a turn. */

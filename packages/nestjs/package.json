@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@standard-schema/spec": "1.1.0",
     "zod": "3.25.76"
   },
   "peerDependencies": {

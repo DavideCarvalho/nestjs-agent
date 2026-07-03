@@ -136,9 +136,9 @@ importers:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.6.1
         version: 0.6.1(@nestjs/common@11.1.26(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@11.1.6)(reflect-metadata@0.2.2)
-      zod:
-        specifier: 3.25.76
-        version: 3.25.76
+      '@standard-schema/spec':
+        specifier: 1.1.0
+        version: 1.1.0
     devDependencies:
       tsup:
         specifier: 8.3.5
@@ -146,6 +146,9 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
 
   packages/data:
     dependencies:
@@ -171,6 +174,9 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
+      '@standard-schema/spec':
+        specifier: 1.1.0
+        version: 1.1.0
       zod:
         specifier: 3.25.76
         version: 3.25.76
