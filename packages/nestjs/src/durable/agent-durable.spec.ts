@@ -55,6 +55,23 @@ async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string> {
   return out;
 }
 
+describe('durable wiring', () => {
+  it('throws a clear error when durable:true but AgentDurableModule is missing', async () => {
+    const build = Test.createTestingModule({
+      imports: [
+        DurableModule.forRoot({ store: new InMemoryStateStore() }),
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'x' })),
+          store: new InMemoryAgentStore(),
+          durable: true,
+          // AgentDurableModule intentionally NOT imported
+        }),
+      ],
+    }).compile();
+    await expect(build).rejects.toThrow(/requires importing AgentDurableModule/);
+  });
+});
+
 describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
   it('runs a no-tool turn as a durable run and streams it', async () => {
     const { moduleRef, service, workflows, store } = await buildDurableApp(() => ({ text: 'hello durable' }));

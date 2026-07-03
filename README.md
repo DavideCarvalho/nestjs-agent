@@ -40,17 +40,23 @@ pnpm add @dudousxd/nestjs-agent-store-mikro-orm @dudousxd/nestjs-durable
 Register the module, then declare tools as ordinary injectables with `@AiTool`.
 
 ```ts
-import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
 
 @Module({
   imports: [
     AgentModule.forRoot({
+      // --- infrastructure ---
       model: myModelProvider,          // a Vercel AI SDK wrapper (ModelProvider SPI)
       store: myAgentStore,             // e.g. the MikroORM store
-      modelId: 'claude-sonnet-4-6',
-      systemPrompt: 'You are a helpful ops assistant.',
       defaultRoles: ['ADMIN'],         // roles a tool requires when its own `roles` is omitted
+      actorResolver: new HeaderActorResolver(), // who's calling — see "Identity" below
+      // path: 'agent',                // route prefix (default 'agent')
       // durable: true,                // run each turn as the durable `agent.run` workflow
+      // --- the default agent (optional) ---
+      defaultAgent: {
+        systemPrompt: 'You are a helpful ops assistant.',
+        // modelId: 'claude-sonnet-4-6', // optional accounting label; the provider can report its own
+      },
     }),
   ],
   providers: [GetWeatherTool, PurgeCacheTool],
@@ -75,8 +81,7 @@ export class GetWeatherTool implements ToolHandler<{ city: string }> {
 }
 ```
 
-The module mounts SSE + REST endpoints under `/agent` (actor identity via the `x-actor-id` /
-`x-actor-role` / `x-tenant-ref` request headers):
+The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 
 | Method & path | Purpose |
 |---|---|
@@ -86,6 +91,16 @@ The module mounts SSE + REST endpoints under `/agent` (actor identity via the `x
 | `POST /agent/tool-call/approve` · `/reject` | Human-in-the-loop decision for an `action` tool |
 | `GET /agent/threads` · `/:id` · `DELETE /:id` · `POST /:id/fork-from/:messageId` | Thread history |
 | `GET /agent/threads/personas/catalog` · `GET /agent/quota/today` | Personas & quota |
+
+### Identity (`ActorResolver`)
+
+The agent never invents a caller. Every request's actor — `{ id, roles?, tenantRef? }` — comes
+from an `ActorResolver` you configure; tool authorization is a set-intersection of the actor's
+`roles` against each tool's. There's **no insecure default**: omit `actorResolver` and every request
+throws until you wire one. The shipped `HeaderActorResolver` reads `x-actor-id` /
+`x-actor-role` (comma-separated → `roles`) / `x-tenant-ref` and is only safe behind a trusted gateway
+that strips and re-sets those headers; production apps typically implement `ActorResolver` over a
+verified session/JWT instead.
 
 ### Human-in-the-loop & durability
 
@@ -118,10 +133,14 @@ gets its own system prompt, model, and tool allow-list (intersected with the per
 
 ## Authorization
 
-By default a tool is gated by **roles** (`@AiTool({ roles: [...] })`, falling back to the module's
-`defaultRoles`). To gate by **abilities** through [`@dudousxd/nestjs-authz`](https://github.com/DavideCarvalho/aviary),
-add `AgentAuthzModule` and give tools an `ability` — it's checked with `gate.forUser(actor).allows(ability)`;
-tools without an `ability` fall back to the role policy, so non-authz apps are unaffected.
+A tool declares **one** of two gates — `roles` or `ability`:
+
+- **`roles`** (built-in policy): `@AiTool({ roles: ['ADMIN'] })` — the actor passes if any of its
+  `roles` intersects the tool's. Omit `roles` and the tool falls back to the module's `defaultRoles`.
+- **`ability`** (delegated to an ability-aware policy): `@AiTool({ ability: 'cache.purge' })` — checked
+  by [`@dudousxd/nestjs-authz`](https://github.com/DavideCarvalho/aviary) via
+  `gate.forUser(actor).allows(ability)` once you add `AgentAuthzModule`. Tools without an `ability`
+  fall back to the role policy, so non-authz apps are unaffected.
 
 ```ts
 @Module({ imports: [AuthzModule.forRoot(/* … */), AgentAuthzModule.forRoot()] })
@@ -158,7 +177,7 @@ plus threads, personas, quota, cancel, and HITL approve/reject. The components a
 syntax-highlighted code, Mermaid) you can drop into the `renderText` slot.
 
 ```tsx
-const chat = useAgentChat({ baseUrl: '/agent', getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.role }) });
+const chat = useAgentChat({ baseUrl: '/agent', getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.roles.join(',') }) });
 ```
 
 ## Observability (diagnostics)

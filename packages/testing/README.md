@@ -33,11 +33,12 @@ AgentModule.forRoot({
   model: new FakeModelProvider(script),
   store: new InMemoryAgentStore(),
   quota: new InMemoryQuotaStore(200_000),
-  modelId: 'fake-1',
+  actorResolver: new HeaderActorResolver(),
+  defaultAgent: { modelId: 'fake-1' },
 });
 ```
 
-`InMemoryAgentStore` also exposes inspection helpers (e.g. `toolCallRows()`) for assertions.
+`InMemoryAgentStore` also exposes inspection helpers (`toolCallRows()`, `usageRows()`) for assertions.
 
 ## License
 

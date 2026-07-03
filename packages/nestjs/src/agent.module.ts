@@ -1,6 +1,7 @@
 import {
   AGENT_ACTOR_RESOLVER,
   AGENT_DEPS_FACTORY,
+  AGENT_DURABLE_RUNNER,
   AGENT_MODEL,
   AGENT_OPTIONS,
   AGENT_QUOTA_STORE,
@@ -12,6 +13,7 @@ import {
   AGENT_TOOL_REGISTRY,
   type AgentDefinition,
   AgentRegistry,
+  type AgentRunner,
   DefaultRolesPolicy,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
@@ -91,7 +93,23 @@ function sharedProviders(durable: boolean): Provider[] {
     InlineAgentRunner,
     AgentService,
   ];
-  if (!durable) {
+  if (durable) {
+    // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
+    // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
+    providers.push({
+      provide: AGENT_RUNNER,
+      useFactory: (durableRunner: AgentRunner | undefined) => {
+        if (durableRunner === undefined) {
+          throw new Error(
+            'AgentModule.forRoot({ durable: true }) requires importing AgentDurableModule from ' +
+              "'@dudousxd/nestjs-agent/durable' (alongside a configured DurableModule). It was not found.",
+          );
+        }
+        return durableRunner;
+      },
+      inject: [{ token: AGENT_DURABLE_RUNNER, optional: true }],
+    });
+  } else {
     providers.push({ provide: AGENT_RUNNER, useExisting: InlineAgentRunner });
   }
   return providers;

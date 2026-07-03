@@ -19,7 +19,7 @@ pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
 ## Use
 
 ```ts
-import { AgentModule, AiTool, type ToolHandler } from '@dudousxd/nestjs-agent';
+import { AgentModule, AiTool, HeaderActorResolver, type ToolHandler } from '@dudousxd/nestjs-agent';
 import { z } from 'zod';
 
 @AiTool({ name: 'getWeather', kind: 'read', description: 'Current weather.', input: z.object({ city: z.string() }) })
@@ -28,7 +28,10 @@ export class GetWeatherTool implements ToolHandler<{ city: string }> {
 }
 
 @Module({
-  imports: [AgentModule.forRoot({ model, store, modelId: 'claude-sonnet-4-6', systemPrompt: '…' })],
+  imports: [AgentModule.forRoot({
+    model, store, actorResolver: new HeaderActorResolver(),
+    defaultAgent: { systemPrompt: '…', modelId: 'claude-sonnet-4-6' },
+  })],
   providers: [GetWeatherTool],
 })
 export class AppModule {}

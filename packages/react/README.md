@@ -21,7 +21,7 @@ import { useAgentChat, MessageList, ChatInput } from '@dudousxd/nestjs-agent-rea
 function Chat() {
   const chat = useAgentChat({
     baseUrl: '/agent',
-    getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.role }),
+    getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.roles.join(',') }),
   });
   return (
     <>
