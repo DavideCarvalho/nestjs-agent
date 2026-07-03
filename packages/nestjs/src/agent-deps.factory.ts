@@ -16,10 +16,10 @@ import {
   type TokenStreamSink,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable } from '@nestjs/common';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
-import type { AgentModuleOptions } from './agent.options.js';
+import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
+import type { AgentModuleOptions } from './agent.options.js';
 
 /** The synthesized `agent`-kind tool name an orchestrator uses to delegate to `target`. */
 export function delegateToolName(target: string): string {

@@ -55,9 +55,7 @@ export function ChatInput({
     onFinalTranscript: (text) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      setValue((prev) =>
-        prev.length === 0 ? trimmed : `${prev.trimEnd()} ${trimmed}`,
-      );
+      setValue((prev) => (prev.length === 0 ? trimmed : `${prev.trimEnd()} ${trimmed}`));
       setInterim('');
     },
     onInterimTranscript: (text) => setInterim(text),
@@ -108,9 +106,7 @@ export function ChatInput({
           setValue(event.target.value);
         }}
         onKeyDown={handleKeyDown}
-        placeholder={
-          placeholder ?? 'Ask something (Enter to send, Shift+Enter for newline)'
-        }
+        placeholder={placeholder ?? 'Ask something (Enter to send, Shift+Enter for newline)'}
       />
       <button
         type="button"

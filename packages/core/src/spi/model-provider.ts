@@ -1,9 +1,4 @@
-import type {
-  MessageUsage,
-  ModelMessage,
-  ToolCallRequest,
-  ToolDefinition,
-} from '../types.js';
+import type { MessageUsage, ModelMessage, ToolCallRequest, ToolDefinition } from '../types.js';
 import type { SinkWriter } from './token-stream-sink.js';
 
 export interface ModelTurnArgs {

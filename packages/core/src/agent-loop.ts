@@ -1,10 +1,3 @@
-import type { ModelProvider } from './spi/model-provider.js';
-import type { QuotaStore } from './spi/quota-store.js';
-import type { RolesPolicy } from './spi/roles-policy.js';
-import type { SinkWriter } from './spi/token-stream-sink.js';
-import type { AiToolCtx } from './spi/tool.js';
-import type { AgentStore } from './spi/agent-store.js';
-import type { ToolRegistry } from './tool-registry.js';
 import {
   publishAgentDelegated,
   publishAgentMessage,
@@ -12,6 +5,13 @@ import {
   publishAgentRunStarted,
   publishAgentToolCall,
 } from './diagnostics.js';
+import type { AgentStore } from './spi/agent-store.js';
+import type { ModelProvider } from './spi/model-provider.js';
+import type { QuotaStore } from './spi/quota-store.js';
+import type { RolesPolicy } from './spi/roles-policy.js';
+import type { SinkWriter } from './spi/token-stream-sink.js';
+import type { AiToolCtx } from './spi/tool.js';
+import type { ToolRegistry } from './tool-registry.js';
 import type {
   AgentRunInput,
   Decision,
@@ -83,10 +83,7 @@ export class QuotaExceededError extends Error {
 }
 
 /** Resolve a prompt that may be a flat string or a {@link PromptBuilder}. */
-async function resolvePrompt(
-  prompt: string | PromptBuilder,
-  ctx: PromptContext,
-): Promise<string> {
+async function resolvePrompt(prompt: string | PromptBuilder, ctx: PromptContext): Promise<string> {
   return typeof prompt === 'function' ? prompt(ctx) : prompt;
 }
 
@@ -95,10 +92,7 @@ async function resolvePrompt(
  * request selected a persona — resolve the persona prompt with that base as `basePrompt`, so a
  * persona builder can wrap the agent's base rather than discard it.
  */
-async function resolveSystemPrompt(
-  deps: AgentLoopDeps,
-  input: AgentRunInput,
-): Promise<string> {
+async function resolveSystemPrompt(deps: AgentLoopDeps, input: AgentRunInput): Promise<string> {
   const base: Omit<PromptContext, 'basePrompt'> = {
     actor: input.actor,
     ...(input.persona !== undefined ? { persona: input.persona } : {}),
@@ -178,205 +172,198 @@ export async function runAgentLoop(
     actorId: input.actor.id,
     ...(persona !== undefined ? { persona: persona.id } : {}),
   });
+  for (let i = 0; i < maxSteps; i += 1) {
+    const tools = await deps.registry.definitionsFor(
+      input.actor,
+      deps.rolesPolicy,
+      intersectAllow(persona?.allowedTools, deps.toolAllowList),
+    );
 
-  // NOTE: no try/finally around the loop. A durable runner suspends by THROWING through the
-  // stack at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on
-  // every suspend and prematurely close the live stream. We only end on normal completion —
-  // the throw propagates to the engine, and the resumed replay reaches the end() below.
-  {
-    for (let i = 0; i < maxSteps; i += 1) {
-      const tools = await deps.registry.definitionsFor(
-        input.actor,
-        deps.rolesPolicy,
-        intersectAllow(persona?.allowedTools, deps.toolAllowList),
-      );
+    const turn = await hooks.step(`llm:${i}`, () =>
+      deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+    );
 
-      const turn = await hooks.step(`llm:${i}`, () =>
-        deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+    await hooks.step(`persist:usage:${i}`, () =>
+      deps.store.recordUsage({
+        threadId: input.threadId,
+        actorRef: input.actor.id,
+        // provider-reported model wins over the configured fallback, so cost can't misattribute
+        modelId: turn.modelId ?? deps.modelId ?? 'unknown',
+        purpose: 'chat',
+        usage: turn.usage,
+      }),
+    );
+    if (deps.quota !== undefined) {
+      const quota = deps.quota;
+      await hooks.step(`quota:bump:${i}`, () =>
+        quota.bump(input.actor.id, deps.day, turn.usage.inputTokens + turn.usage.outputTokens),
       );
+    }
 
-      await hooks.step(`persist:usage:${i}`, () =>
-        deps.store.recordUsage({
-          threadId: input.threadId,
-          actorRef: input.actor.id,
-          // provider-reported model wins over the configured fallback, so cost can't misattribute
-          modelId: turn.modelId ?? deps.modelId ?? 'unknown',
-          purpose: 'chat',
-          usage: turn.usage,
-        }),
-      );
-      if (deps.quota !== undefined) {
-        const quota = deps.quota;
-        await hooks.step(`quota:bump:${i}`, () =>
-          quota.bump(input.actor.id, deps.day, turn.usage.inputTokens + turn.usage.outputTokens),
+    steps += 1;
+    totalInput += turn.usage.inputTokens;
+    totalOutput += turn.usage.outputTokens;
+    lastText = turn.text;
+    publishAgentMessage({
+      runId: hooks.runId,
+      threadId: input.threadId,
+      role: 'assistant',
+      textLength: turn.text.length,
+    });
+    const assistant = await hooks.step(`persist:assistant:${i}`, () =>
+      deps.store.appendMessage({
+        threadId: input.threadId,
+        role: 'assistant',
+        content: turn.text,
+        usage: turn.usage,
+        ...(persona !== undefined ? { persona: persona.id } : {}),
+        ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
+      }),
+    );
+    modelMessages.push({
+      role: 'assistant',
+      content: turn.text,
+      ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
+    });
+
+    if (turn.toolCalls.length === 0) {
+      break;
+    }
+
+    const results: ToolResult[] = [];
+    for (const call of turn.toolCalls) {
+      const spec = deps.registry.spec(call.name);
+      const toolType = spec?.kind ?? 'read';
+      const ctx: AiToolCtx = {
+        actorId: input.actor.id,
+        threadId: input.threadId,
+        runId: hooks.runId,
+        requestId: hooks.runId,
+        actor: input.actor,
+        ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
+        ...(persona !== undefined ? { persona } : {}),
+        ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+        ...(deps.host !== undefined ? { host: deps.host } : {}),
+      };
+
+      // Delegation: an `agent`-kind tool runs another agent. Handled at the LOOP level (not in a
+      // step) because the durable runner maps it to `ctx.child`, a ctx-level suspend point.
+      if (toolType === 'agent') {
+        const targetAgent = spec?.targetAgent ?? call.name;
+        const task = extractTask(call.input);
+        await hooks.step(`persist:toolcall:${call.id}`, () =>
+          deps.store.recordToolCall({
+            toolCallId: call.id,
+            messageId: assistant.id,
+            toolName: call.name,
+            toolType: 'read',
+            input: call.input,
+            status: 'auto_executed',
+          }),
+        );
+        publishAgentDelegated({
+          runId: hooks.runId,
+          toAgent: targetAgent,
+          ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
+        });
+        const sub = hooks.runAgent
+          ? await hooks.runAgent(targetAgent, task)
+          : { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
+        await hooks.step(`persist:toolexec:${call.id}`, () =>
+          deps.store.updateToolCall({ toolCallId: call.id, status: 'executed', output: sub }),
+        );
+        results.push({ id: call.id, name: call.name, output: sub });
+        continue;
+      }
+
+      if (toolType === 'action') {
+        await hooks.step(`persist:toolcall:${call.id}`, () =>
+          deps.store.recordToolCall({
+            toolCallId: call.id,
+            messageId: assistant.id,
+            toolName: call.name,
+            toolType: 'action',
+            input: call.input,
+            status: 'pending_approval',
+          }),
+        );
+        const decision = await hooks.awaitApproval(call, ctx);
+        if (!decision.approved) {
+          await hooks.step(`persist:toolreject:${call.id}`, () =>
+            deps.store.updateToolCall({
+              toolCallId: call.id,
+              status: 'rejected',
+              ...(decision.reason !== undefined ? { error: decision.reason } : {}),
+            }),
+          );
+          results.push({
+            id: call.id,
+            name: call.name,
+            output: { rejected: true, reason: decision.reason ?? 'rejected by user' },
+            error: 'rejected',
+          });
+          publishAgentToolCall({
+            runId: hooks.runId,
+            toolName: call.name,
+            toolType,
+            status: 'rejected',
+          });
+          continue;
+        }
+      } else {
+        await hooks.step(`persist:toolcall:${call.id}`, () =>
+          deps.store.recordToolCall({
+            toolCallId: call.id,
+            messageId: assistant.id,
+            toolName: call.name,
+            toolType: 'read',
+            input: call.input,
+            status: 'auto_executed',
+          }),
         );
       }
 
-      steps += 1;
-      totalInput += turn.usage.inputTokens;
-      totalOutput += turn.usage.outputTokens;
-      lastText = turn.text;
-      publishAgentMessage({
-        runId: hooks.runId,
-        threadId: input.threadId,
-        role: 'assistant',
-        textLength: turn.text.length,
-      });
-      const assistant = await hooks.step(`persist:assistant:${i}`, () =>
-        deps.store.appendMessage({
-          threadId: input.threadId,
-          role: 'assistant',
-          content: turn.text,
-          usage: turn.usage,
-          ...(persona !== undefined ? { persona: persona.id } : {}),
-          ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
-        }),
-      );
-      modelMessages.push({
-        role: 'assistant',
-        content: turn.text,
-        ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
-      });
-
-      if (turn.toolCalls.length === 0) {
-        break;
-      }
-
-      const results: ToolResult[] = [];
-      for (const call of turn.toolCalls) {
-        const spec = deps.registry.spec(call.name);
-        const toolType = spec?.kind ?? 'read';
-        const ctx: AiToolCtx = {
-          actorId: input.actor.id,
-          threadId: input.threadId,
-          runId: hooks.runId,
-          requestId: hooks.runId,
-          actor: input.actor,
-          ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
-          ...(persona !== undefined ? { persona } : {}),
-          ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
-          ...(deps.host !== undefined ? { host: deps.host } : {}),
-        };
-
-        // Delegation: an `agent`-kind tool runs another agent. Handled at the LOOP level (not in a
-        // step) because the durable runner maps it to `ctx.child`, a ctx-level suspend point.
-        if (toolType === 'agent') {
-          const targetAgent = spec?.targetAgent ?? call.name;
-          const task = extractTask(call.input);
-          await hooks.step(`persist:toolcall:${call.id}`, () =>
-            deps.store.recordToolCall({
-              toolCallId: call.id,
-              messageId: assistant.id,
-              toolName: call.name,
-              toolType: 'read',
-              input: call.input,
-              status: 'auto_executed',
-            }),
-          );
-          publishAgentDelegated({
-            runId: hooks.runId,
-            toAgent: targetAgent,
-            ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
-          });
-          const sub = hooks.runAgent
-            ? await hooks.runAgent(targetAgent, task)
-            : { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
-          await hooks.step(`persist:toolexec:${call.id}`, () =>
-            deps.store.updateToolCall({ toolCallId: call.id, status: 'executed', output: sub }),
-          );
-          results.push({ id: call.id, name: call.name, output: sub });
-          continue;
-        }
-
-        if (toolType === 'action') {
-          await hooks.step(`persist:toolcall:${call.id}`, () =>
-            deps.store.recordToolCall({
-              toolCallId: call.id,
-              messageId: assistant.id,
-              toolName: call.name,
-              toolType: 'action',
-              input: call.input,
-              status: 'pending_approval',
-            }),
-          );
-          const decision = await hooks.awaitApproval(call, ctx);
-          if (!decision.approved) {
-            await hooks.step(`persist:toolreject:${call.id}`, () =>
-              deps.store.updateToolCall({
-                toolCallId: call.id,
-                status: 'rejected',
-                ...(decision.reason !== undefined ? { error: decision.reason } : {}),
-              }),
-            );
-            results.push({
-              id: call.id,
-              name: call.name,
-              output: { rejected: true, reason: decision.reason ?? 'rejected by user' },
-              error: 'rejected',
-            });
-            publishAgentToolCall({
-              runId: hooks.runId,
-              toolName: call.name,
-              toolType,
-              status: 'rejected',
-            });
-            continue;
-          }
-        } else {
-          await hooks.step(`persist:toolcall:${call.id}`, () =>
-            deps.store.recordToolCall({
-              toolCallId: call.id,
-              messageId: assistant.id,
-              toolName: call.name,
-              toolType: 'read',
-              input: call.input,
-              status: 'auto_executed',
-            }),
-          );
-        }
-
-        try {
-          const output = await hooks.step(`tool:${call.id}`, () =>
-            deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
-          );
-          await hooks.step(`persist:toolexec:${call.id}`, () =>
-            deps.store.updateToolCall({
-              toolCallId: call.id,
-              status: 'executed',
-              output,
-              ...(toolType === 'action' ? { executedByRef: input.actor.id } : {}),
-            }),
-          );
-          results.push({ id: call.id, name: call.name, output });
-          publishAgentToolCall({
-            runId: hooks.runId,
-            toolName: call.name,
-            toolType,
+      try {
+        const output = await hooks.step(`tool:${call.id}`, () =>
+          deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+        );
+        await hooks.step(`persist:toolexec:${call.id}`, () =>
+          deps.store.updateToolCall({
+            toolCallId: call.id,
             status: 'executed',
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          await hooks.step(`persist:toolfail:${call.id}`, () =>
-            deps.store.updateToolCall({ toolCallId: call.id, status: 'failed', error: message }),
-          );
-          results.push({ id: call.id, name: call.name, output: null, error: message });
-          publishAgentToolCall({
-            runId: hooks.runId,
-            toolName: call.name,
-            toolType,
-            status: 'failed',
-          });
-        }
+            output,
+            ...(toolType === 'action' ? { executedByRef: input.actor.id } : {}),
+          }),
+        );
+        results.push({ id: call.id, name: call.name, output });
+        publishAgentToolCall({
+          runId: hooks.runId,
+          toolName: call.name,
+          toolType,
+          status: 'executed',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await hooks.step(`persist:toolfail:${call.id}`, () =>
+          deps.store.updateToolCall({ toolCallId: call.id, status: 'failed', error: message }),
+        );
+        results.push({ id: call.id, name: call.name, output: null, error: message });
+        publishAgentToolCall({
+          runId: hooks.runId,
+          toolName: call.name,
+          toolType,
+          status: 'failed',
+        });
       }
-
-      modelMessages.push({ role: 'user', content: '', toolResults: results });
     }
 
-    if (thread !== null && (thread.title === '' || thread.title === 'New chat')) {
-      await hooks.step('persist:title', () =>
-        deps.store.setTitle(input.threadId, deriveTitle(input.userText)),
-      );
-    }
+    modelMessages.push({ role: 'user', content: '', toolResults: results });
+  }
+
+  if (thread !== null && (thread.title === '' || thread.title === 'New chat')) {
+    await hooks.step('persist:title', () =>
+      deps.store.setTitle(input.threadId, deriveTitle(input.userText)),
+    );
   }
 
   await writer.end();

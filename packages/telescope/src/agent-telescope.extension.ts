@@ -1,11 +1,11 @@
 import { defineTelescopeExtension } from '@dudousxd/nestjs-telescope';
+import { agentDashboard } from './agent-dashboard.js';
 import {
   agentRunsProvider,
+  agentTokensProvider,
   agentToolStatusProvider,
   agentToolsProvider,
-  agentTokensProvider,
 } from './agent-data-providers.js';
-import { agentDashboard } from './agent-dashboard.js';
 import { AgentTelescopeWatcher } from './agent-telescope.watcher.js';
 
 /**

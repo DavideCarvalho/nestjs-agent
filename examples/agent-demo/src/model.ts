@@ -7,15 +7,20 @@ import { FakeModelProvider, type FakeScript } from '@dudousxd/nestjs-agent-testi
  */
 const script: FakeScript = (args, turnIndex) => {
   const lastUser =
-    [...args.messages].reverse().find((m) => m.role === 'user' && m.content)?.content?.toLowerCase() ??
-    '';
+    [...args.messages]
+      .reverse()
+      .find((m) => m.role === 'user' && m.content)
+      ?.content?.toLowerCase() ?? '';
 
   if (turnIndex === 0) {
     if (lastUser.includes('event') || lastUser.includes('outdoor')) {
       // The orchestrator turn: hand the weather question to the specialist sub-agent.
       return {
         text: 'This needs a weather check — delegating to the weather analyst.',
-        toolCall: { name: 'ask_weather_analyst', input: { task: 'What is the weather in Recife?' } },
+        toolCall: {
+          name: 'ask_weather_analyst',
+          input: { task: 'What is the weather in Recife?' },
+        },
       };
     }
     if (lastUser.includes('weather')) {
@@ -31,7 +36,9 @@ const script: FakeScript = (args, turnIndex) => {
         toolCall: { name: 'purgeCache', input: { key: 'app-config' } },
       };
     }
-    return { text: `You said: "${lastUser}". I do not have a tool for that, but I'm here to help.` };
+    return {
+      text: `You said: "${lastUser}". I do not have a tool for that, but I'm here to help.`,
+    };
   }
 
   const toolResults = (args.messages[args.messages.length - 1]?.toolResults ?? []).map(

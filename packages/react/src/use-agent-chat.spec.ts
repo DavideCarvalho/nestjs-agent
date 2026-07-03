@@ -61,10 +61,7 @@ describe('useAgentChat', () => {
       const last = result.current.messages.at(-1);
       expect(last?.role).toBe('assistant');
       const text = (last?.parts ?? [])
-        .filter(
-          (part): part is { type: 'text'; text: string } =>
-            part.type === 'text',
-        )
+        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
         .map((part) => part.text)
         .join('');
       expect(text).toBe('Hello world');
@@ -77,9 +74,7 @@ describe('useAgentChat', () => {
       await result.current.approve({ toolCallId: 'tc-1' });
     });
 
-    const approveCall = calls.find((call) =>
-      call.url.endsWith('/agent/tool-call/approve'),
-    );
+    const approveCall = calls.find((call) => call.url.endsWith('/agent/tool-call/approve'));
     expect(approveCall).toBeDefined();
     expect(JSON.parse(String(approveCall?.init?.body))).toEqual({
       runId: 'run-1',
@@ -90,10 +85,7 @@ describe('useAgentChat', () => {
   it('sends only the latest user message text in the chat request body', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith('/agent/chat')) {
-        return sseResponse([
-          'data: {"delta":"ok"}\n\n',
-          'event: done\ndata: {}\n\n',
-        ]);
+        return sseResponse(['data: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
       }
       return jsonResponse();
     });
@@ -110,9 +102,7 @@ describe('useAgentChat', () => {
       await result.current.sendMessage({ text: 'how many users?' });
     });
 
-    const chatCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/agent/chat'),
-    );
+    const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/agent/chat'));
     expect(chatCall).toBeDefined();
     const body = JSON.parse(String((chatCall?.[1] as RequestInit).body));
     expect(body).toMatchObject({

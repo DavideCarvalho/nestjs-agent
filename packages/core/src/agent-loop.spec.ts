@@ -1,32 +1,42 @@
-import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
 import {
   FakeModelProvider,
+  type FakeScript,
   InMemoryAgentStore,
   InMemoryQuotaStore,
   InMemoryTokenStreamSink,
-  type FakeScript,
 } from '@dudousxd/nestjs-agent-testing';
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
-  DefaultRolesPolicy,
-  ToolRegistry,
-  runAgentLoop,
   type AgentLoopDeps,
   type AgentLoopHooks,
   type Decision,
+  DefaultRolesPolicy,
   type ModelProvider,
   type Persona,
   type PromptBuilder,
+  ToolRegistry,
+  runAgentLoop,
 } from './index.js';
 
 function buildRegistry(): ToolRegistry {
   const reg = new ToolRegistry();
   reg.register(
-    { name: 'getWeather', kind: 'read', description: 'weather', inputSchema: z.object({ city: z.string() }) },
+    {
+      name: 'getWeather',
+      kind: 'read',
+      description: 'weather',
+      inputSchema: z.object({ city: z.string() }),
+    },
     { execute: async (input: { city: string }) => ({ tempC: 21, city: input.city }) },
   );
   reg.register(
-    { name: 'purgeCache', kind: 'action', description: 'purge', inputSchema: z.object({ key: z.string() }) },
+    {
+      name: 'purgeCache',
+      kind: 'action',
+      description: 'purge',
+      inputSchema: z.object({ key: z.string() }),
+    },
     { execute: async (input: { key: string }) => ({ purged: input.key }) },
   );
   reg.register(
@@ -66,7 +76,10 @@ async function run(
 ) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
-  const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] }, persona: 'default' });
+  const thread = await store.createThread({
+    actor: { id: 'u1', roles: ['ADMIN'] },
+    persona: 'default',
+  });
   const runId = 'run-1';
 
   const deps: AgentLoopDeps = {
@@ -150,9 +163,13 @@ describe('runAgentLoop', () => {
 
   it('blocks when over quota', async () => {
     const quota = new InMemoryQuotaStore(0);
-    await expect(run(() => ({ text: 'x' }), () => ({ approved: true }), quota)).rejects.toThrow(
-      /quota/i,
-    );
+    await expect(
+      run(
+        () => ({ text: 'x' }),
+        () => ({ approved: true }),
+        quota,
+      ),
+    ).rejects.toThrow(/quota/i);
   });
 
   it('records the provider-reported modelId over the configured fallback', async () => {
@@ -177,9 +194,15 @@ describe('runAgentLoop', () => {
   it('resolves an agent-level PromptBuilder from the turn context', async () => {
     const builder: PromptBuilder = (ctx) => `dynamic prompt for ${ctx.actor.id}`;
     // the fake echoes back whatever system prompt it received, so we can assert resolution
-    const { result } = await run((args) => ({ text: args.system }), undefined, undefined, undefined, {
-      systemPrompt: builder,
-    });
+    const { result } = await run(
+      (args) => ({ text: args.system }),
+      undefined,
+      undefined,
+      undefined,
+      {
+        systemPrompt: builder,
+      },
+    );
     expect(result.text).toBe('dynamic prompt for u1');
   });
 
@@ -189,10 +212,16 @@ describe('runAgentLoop', () => {
       label: 'Analyst',
       systemPrompt: (ctx) => `${ctx.basePrompt}\n\nActing as analyst for ${ctx.actor.id}.`,
     };
-    const { result } = await run((args) => ({ text: args.system }), undefined, undefined, undefined, {
-      systemPrompt: 'Base agent prompt.',
-      persona,
-    });
+    const { result } = await run(
+      (args) => ({ text: args.system }),
+      undefined,
+      undefined,
+      undefined,
+      {
+        systemPrompt: 'Base agent prompt.',
+        persona,
+      },
+    );
     expect(result.text).toBe('Base agent prompt.\n\nActing as analyst for u1.');
   });
 
@@ -206,13 +235,21 @@ describe('runAgentLoop', () => {
 
     const script: FakeScript = (_args, turnIndex) =>
       turnIndex === 0
-        ? { text: 'asking the sub-agent', toolCall: { name: 'askSub', input: { task: 'how many bases?' } } }
+        ? {
+            text: 'asking the sub-agent',
+            toolCall: { name: 'askSub', input: { task: 'how many bases?' } },
+          }
         : { text: 'the sub-agent said hi' };
 
     try {
-      const { result, store } = await run(script, () => ({ approved: true }), undefined, async () => ({
-        text: 'sub-agent answer: 42',
-      }));
+      const { result, store } = await run(
+        script,
+        () => ({ approved: true }),
+        undefined,
+        async () => ({
+          text: 'sub-agent answer: 42',
+        }),
+      );
       expect(result.text).toBe('the sub-agent said hi');
       expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'askSub', status: 'executed' });
       expect(store.toolCallRows()[0]?.output).toEqual({ text: 'sub-agent answer: 42' });

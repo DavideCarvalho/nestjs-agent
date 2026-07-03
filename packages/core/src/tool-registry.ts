@@ -1,8 +1,8 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { filterToolsByRole, personaFilterTools } from './personas.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { AiToolCtx, ToolHandler } from './spi/tool.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
-import { filterToolsByRole, personaFilterTools } from './personas.js';
 
 /** Thrown when an actor invokes a tool their role is not allowed. */
 export class ToolForbiddenError extends Error {
@@ -26,7 +26,9 @@ export class ToolInputInvalidError extends Error {
     public readonly toolName: string,
     public readonly issues: readonly StandardSchemaV1.Issue[],
   ) {
-    super(`Invalid input for tool "${toolName}": ${issues.map((issue) => issue.message).join('; ')}`);
+    super(
+      `Invalid input for tool "${toolName}": ${issues.map((issue) => issue.message).join('; ')}`,
+    );
     this.name = 'ToolInputInvalidError';
   }
 }

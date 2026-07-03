@@ -4,7 +4,11 @@ import { AppModule } from './app.module.js';
 import { AgentDiagnosticsConsole } from './diagnostics-console.js';
 
 const BASE = 'http://localhost:3000';
-const HEADERS = { 'content-type': 'application/json', 'x-actor-id': 'davi', 'x-actor-role': 'ADMIN' };
+const HEADERS = {
+  'content-type': 'application/json',
+  'x-actor-id': 'davi',
+  'x-actor-role': 'ADMIN',
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -111,7 +115,9 @@ async function run(): Promise<void> {
   ).json()) as { messages: { role: string; toolCalls?: { id: string; name: string }[] }[] };
   const pending = findPendingToolCall(thread);
 
-  process.stdout.write(`\n [human]    run is suspended on a durable signal. approving "${pending?.name}" ...\n assistant> `);
+  process.stdout.write(
+    `\n [human]    run is suspended on a durable signal. approving "${pending?.name}" ...\n assistant> `,
+  );
   await fetch(`${BASE}/agent/tool-call/approve`, {
     method: 'POST',
     headers: HEADERS,
@@ -134,7 +140,9 @@ async function run(): Promise<void> {
   const quota = (await (await fetch(`${BASE}/agent/quota/today`, { headers: HEADERS })).json()) as {
     usedTokens: number;
   };
-  const threads = (await (await fetch(`${BASE}/agent/threads`, { headers: HEADERS })).json()) as unknown[];
+  const threads = (await (
+    await fetch(`${BASE}/agent/threads`, { headers: HEADERS })
+  ).json()) as unknown[];
   console.log('\n──────────────────────────────────────────────────────────────');
   console.log(` quota today: ${quota.usedTokens} tokens · threads: ${threads.length}`);
   console.log(' (the 📡 lines above are the aviary:agent:* diagnostics channel)');

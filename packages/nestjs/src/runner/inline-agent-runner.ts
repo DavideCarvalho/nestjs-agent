@@ -10,8 +10,8 @@ import {
   runAgentLoop,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { type AgentDeps, utcDay } from '../agent-deps.js';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
+import { type AgentDeps, utcDay } from '../agent-deps.js';
 
 /**
  * Runs the agent turn in-process. HITL approval resolves a pending promise keyed by
@@ -60,12 +60,7 @@ export class InlineAgentRunner implements AgentRunner {
     await writer.end();
   }
 
-  private topLevelHooks(
-    runId: string,
-    deps: AgentDeps,
-    actor: Actor,
-    day: string,
-  ): AgentLoopHooks {
+  private topLevelHooks(runId: string, deps: AgentDeps, actor: Actor, day: string): AgentLoopHooks {
     return {
       runId,
       openSink: () => deps.sink.open(runId),

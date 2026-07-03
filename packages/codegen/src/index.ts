@@ -15,7 +15,8 @@ export interface AgentCodegenOptions {
 // Wire shapes returned by the JSON endpoints (dates are ISO strings over the wire). The deeply
 // nested tool-call/usage payloads are intentionally loose — the typed surface that matters to a
 // frontend is the thread/message envelope; rich tool data flows through the React tool-part renderer.
-const USAGE = '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
+const USAGE =
+  '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
 const STORED_MESSAGE =
   '{ id: string; role: string; content: string; toolCalls?: Record<string, unknown>[]; ' +
   `toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;

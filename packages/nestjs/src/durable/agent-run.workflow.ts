@@ -10,8 +10,8 @@ import {
 import { Workflow } from '@dudousxd/nestjs-durable';
 import type { WorkflowCtx } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable } from '@nestjs/common';
-import { utcDay } from '../agent-deps.js';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
+import { utcDay } from '../agent-deps.js';
 
 /**
  * The agent turn AS a durable workflow. Each model/tool call is a checkpointed `ctx.step`, HITL is

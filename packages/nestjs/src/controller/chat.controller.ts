@@ -1,4 +1,8 @@
-import { AGENT_ACTOR_RESOLVER, type ActorResolver, type PageContext } from '@dudousxd/nestjs-agent-core';
+import {
+  AGENT_ACTOR_RESOLVER,
+  type ActorResolver,
+  type PageContext,
+} from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AgentService } from '../agent.service.js';

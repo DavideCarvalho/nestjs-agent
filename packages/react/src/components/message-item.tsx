@@ -1,9 +1,9 @@
 import {
   type DynamicToolUIPart,
-  isTextUIPart,
-  isToolUIPart,
   type ToolUIPart,
   type UIMessage,
+  isTextUIPart,
+  isToolUIPart,
 } from 'ai';
 import React, { useEffect, useRef, useState } from 'react';
 
@@ -113,7 +113,9 @@ export function MessageItem({
         </button>
       ) : null}
       {!isUser && usage ? <UsageInline usage={usage} className={classNames?.usage} /> : null}
-      {createdAt ? <TimestampInline createdAt={createdAt} className={classNames?.timestamp} /> : null}
+      {createdAt ? (
+        <TimestampInline createdAt={createdAt} className={classNames?.timestamp} />
+      ) : null}
     </div>
   );
 
@@ -139,7 +141,15 @@ export function MessageItem({
       data-role={message.role}
       data-streaming={isStreaming ? 'true' : undefined}
     >
-      <div>{renderParts(message, parts, { renderText, renderToolPart, renderToolGroup, classNames, isStreaming })}</div>
+      <div>
+        {renderParts(message, parts, {
+          renderText,
+          renderToolPart,
+          renderToolGroup,
+          classNames,
+          isStreaming,
+        })}
+      </div>
       {actionRow}
     </div>
   );
@@ -170,11 +180,15 @@ function renderParts(
     }
     const key = `${message.id}-tools-${toolGroupCounter++}`;
     if (ctx.renderToolGroup) {
-      blocks.push(<React.Fragment key={key}>{ctx.renderToolGroup(toolBuffer, key)}</React.Fragment>);
+      blocks.push(
+        <React.Fragment key={key}>{ctx.renderToolGroup(toolBuffer, key)}</React.Fragment>,
+      );
     } else if (ctx.renderToolPart) {
       for (const part of toolBuffer) {
         const partKey = `${message.id}-${part.toolCallId}`;
-        blocks.push(<React.Fragment key={partKey}>{ctx.renderToolPart(part, partKey)}</React.Fragment>);
+        blocks.push(
+          <React.Fragment key={partKey}>{ctx.renderToolPart(part, partKey)}</React.Fragment>,
+        );
       }
     }
     toolBuffer = [];
@@ -237,7 +251,9 @@ function EditableUserBubble({
   }
 
   if (!isEditing) {
-    const rootClass = [classNames?.root, classNames?.byRole?.user].filter((entry) => entry).join(' ');
+    const rootClass = [classNames?.root, classNames?.byRole?.user]
+      .filter((entry) => entry)
+      .join(' ');
     return (
       <div className={rootClass === '' ? undefined : rootClass} data-role="user">
         <div className={classNames?.text}>
@@ -320,7 +336,10 @@ function CopyButton({ text, className }: CopyButtonProps) {
   );
 }
 
-function UsageInline({ usage, className }: { usage: MessageUsageInfo; className?: string | undefined }) {
+function UsageInline({
+  usage,
+  className,
+}: { usage: MessageUsageInfo; className?: string | undefined }) {
   const total = usage.inputTokens + usage.outputTokens;
   return (
     <span
@@ -332,7 +351,10 @@ function UsageInline({ usage, className }: { usage: MessageUsageInfo; className?
   );
 }
 
-function TimestampInline({ createdAt, className }: { createdAt: string; className?: string | undefined }) {
+function TimestampInline({
+  createdAt,
+  className,
+}: { createdAt: string; className?: string | undefined }) {
   const parsed = new Date(createdAt);
   if (Number.isNaN(parsed.getTime())) {
     return null;

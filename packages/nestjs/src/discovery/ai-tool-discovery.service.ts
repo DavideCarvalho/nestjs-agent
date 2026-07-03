@@ -9,8 +9,8 @@ import {
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService } from '@nestjs/core';
 import { z } from 'zod';
-import type { AgentModuleOptions } from '../agent.options.js';
 import { delegateToolName } from '../agent-deps.factory.js';
+import type { AgentModuleOptions } from '../agent.options.js';
 import { readAiToolMetadata } from '../decorator/ai-tool.decorator.js';
 
 /** Walks every provider at boot and registers `@AiTool` classes into the shared registry. */
@@ -65,14 +65,18 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           continue;
         }
         const targetDefinition = this.agents.get(target);
+        // Only a flat string prompt is worth surfacing in the tool description; a PromptBuilder is
+        // per-request and would stringify to source, so skip it.
+        const targetBlurb =
+          typeof targetDefinition?.systemPrompt === 'string'
+            ? ` It is: ${targetDefinition.systemPrompt}`
+            : '';
         this.registry.register(
           {
             name,
             kind: 'agent',
             targetAgent: target,
-            description:
-              `Delegate a task to the "${target}" agent and get its answer.` +
-              (targetDefinition?.systemPrompt ? ` It is: ${targetDefinition.systemPrompt}` : ''),
+            description: `Delegate a task to the "${target}" agent and get its answer.${targetBlurb}`,
             inputSchema: z.object({ task: z.string() }),
           },
           // Loop-handled (kind 'agent'); the handler is never called.

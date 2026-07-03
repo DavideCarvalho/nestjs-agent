@@ -19,9 +19,7 @@ export interface AgentChatTransportOptions {
    * Resolved at request time — use for short-lived bearer tokens that
    * must not be captured once at construction. Merged over `headers`.
    */
-  getHeaders?: () =>
-    | Record<string, string>
-    | Promise<Record<string, string>>;
+  getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Forwarded to `fetch` so cookie-based auth/impersonation works. */
   credentials?: RequestCredentials;
   /** Named agent to run the turn (backend `agent` field). */
@@ -85,26 +83,19 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       ...((options.body as Record<string, unknown> | undefined) ?? {}),
       message,
     };
-    const response = await this.fetchImpl()(
-      `${this.baseUrl()}/agent/chat`,
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          ...(await this.resolveHeaders(options.headers)),
-        },
-        body: JSON.stringify(body),
-        ...(this.options.credentials !== undefined
-          ? { credentials: this.options.credentials }
-          : {}),
-        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        ...(await this.resolveHeaders(options.headers)),
       },
-    );
+      body: JSON.stringify(body),
+      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
+      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+    });
     if (!response.ok || !response.body) {
-      throw new Error(
-        `Agent chat request failed: ${response.status} ${response.statusText}`,
-      );
+      throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
     }
     this.captureHeaderMeta(response.headers);
     return this.toChunkStream(response.body);
@@ -132,9 +123,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     );
     if (response.status === 404) return null;
     if (!response.ok || !response.body) {
-      throw new Error(
-        `Agent stream reconnect failed: ${response.status} ${response.statusText}`,
-      );
+      throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
     }
     this.captureHeaderMeta(response.headers);
     return this.toChunkStream(response.body);
@@ -153,9 +142,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   ): Promise<Record<string, string>> {
     const dynamic = (await this.options.getHeaders?.()) ?? {};
     const extra =
-      perRequest instanceof Headers
-        ? Object.fromEntries(perRequest.entries())
-        : (perRequest ?? {});
+      perRequest instanceof Headers ? Object.fromEntries(perRequest.entries()) : (perRequest ?? {});
     return { ...this.options.headers, ...dynamic, ...extra };
   }
 
@@ -179,9 +166,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
    *  - `data: {"delta":"..."}`                       → `text-delta`
    *  - `event: done`  `data: {}`                     → terminates
    */
-  private toChunkStream(
-    source: ReadableStream<Uint8Array>,
-  ): ReadableStream<UIMessageChunk> {
+  private toChunkStream(source: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
     const reader = source.getReader();
     const decoder = new TextDecoder();
     const textId = `txt-${Math.random().toString(36).slice(2)}`;
@@ -242,8 +227,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         } catch (error) {
           controller.enqueue({
             type: 'error',
-            errorText:
-              error instanceof Error ? error.message : 'Agent stream error',
+            errorText: error instanceof Error ? error.message : 'Agent stream error',
           });
           controller.close();
         }

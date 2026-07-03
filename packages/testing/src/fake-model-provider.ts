@@ -1,8 +1,4 @@
-import type {
-  ModelProvider,
-  ModelTurnArgs,
-  ModelTurnResult,
-} from '@dudousxd/nestjs-agent-core';
+import type { ModelProvider, ModelTurnArgs, ModelTurnResult } from '@dudousxd/nestjs-agent-core';
 
 export interface FakeTurn {
   text: string;

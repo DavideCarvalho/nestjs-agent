@@ -1,9 +1,6 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 import { describe, expect, it } from 'vitest';
-import {
-  AgentChatTransport,
-  type AgentStreamMeta,
-} from './agent-chat-transport.js';
+import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
 
 function sseStream(frames: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -29,9 +26,7 @@ function fakeFetch(stream: ReadableStream<Uint8Array>): typeof fetch {
   return (async () => response) as unknown as typeof fetch;
 }
 
-async function collect(
-  stream: ReadableStream<UIMessageChunk>,
-): Promise<UIMessageChunk[]> {
+async function collect(stream: ReadableStream<UIMessageChunk>): Promise<UIMessageChunk[]> {
   const reader = stream.getReader();
   const out: UIMessageChunk[] = [];
   while (true) {

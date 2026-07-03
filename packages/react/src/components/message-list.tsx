@@ -92,8 +92,7 @@ export function MessageList({
 
   const lastMessage = messages.at(-1);
   const showTypingBubble =
-    (status === 'submitted' || status === 'streaming') &&
-    lastMessage?.role !== 'assistant';
+    (status === 'submitted' || status === 'streaming') && lastMessage?.role !== 'assistant';
 
   const showFollowUps =
     status === 'ready' &&
@@ -144,7 +143,9 @@ export function MessageList({
             {...(classNames?.message ? { classNames: classNames.message } : {})}
             {...(onFork ? { onFork } : {})}
             {...(editable ? { editable } : {})}
-            {...(onEditSubmit ? { onEditSubmit: (text: string) => onEditSubmit(message.id, text) } : {})}
+            {...(onEditSubmit
+              ? { onEditSubmit: (text: string) => onEditSubmit(message.id, text) }
+              : {})}
             {...(regeneratable && isLastAssistant ? { regeneratable } : {})}
             {...(onRegenerate ? { onRegenerate: () => onRegenerate(message.id) } : {})}
             {...(usage !== null ? { usage } : {})}
@@ -159,11 +160,7 @@ export function MessageList({
       {error && onRetry ? (
         <div className={classNames?.error}>
           <span>{error.message || "The assistant didn't respond."}</span>
-          <button
-            type="button"
-            className={classNames?.errorRetry}
-            onClick={() => void onRetry()}
-          >
+          <button type="button" className={classNames?.errorRetry} onClick={() => void onRetry()}>
             Retry
           </button>
         </div>

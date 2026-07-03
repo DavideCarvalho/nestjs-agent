@@ -5,7 +5,12 @@ export type {
   DefaultAgentOptions,
 } from './agent.options.js';
 export { AgentService, type ChatParams } from './agent.service.js';
-export { AiTool, type AiToolOptions, AI_TOOL_METADATA, readAiToolMetadata } from './decorator/ai-tool.decorator.js';
+export {
+  AiTool,
+  type AiToolOptions,
+  AI_TOOL_METADATA,
+  readAiToolMetadata,
+} from './decorator/ai-tool.decorator.js';
 export { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 export { InlineAgentRunner } from './runner/inline-agent-runner.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';

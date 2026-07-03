@@ -1,8 +1,4 @@
-import type {
-  Persona,
-  ThreadDetail,
-  ThreadSummary,
-} from '@dudousxd/nestjs-agent-core';
+import type { Persona, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 
 /** The trimmed persona shape returned by `/agent/threads/personas/catalog`. */
 export type PersonaCatalogEntry = Pick<Persona, 'id' | 'label'>;
@@ -21,9 +17,7 @@ export interface AgentClientOptions {
   /** Static headers merged into every request. */
   headers?: Record<string, string>;
   /** Resolved per request — for short-lived bearer tokens. */
-  getHeaders?: () =>
-    | Record<string, string>
-    | Promise<Record<string, string>>;
+  getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Forwarded to fetch so cookie auth works. */
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
@@ -42,17 +36,11 @@ export class AgentClient {
   }
 
   getThread(id: string): Promise<ThreadDetail> {
-    return this.request<ThreadDetail>(
-      'GET',
-      `/agent/threads/${encodeURIComponent(id)}`,
-    );
+    return this.request<ThreadDetail>('GET', `/agent/threads/${encodeURIComponent(id)}`);
   }
 
   deleteThread(id: string): Promise<void> {
-    return this.request<void>(
-      'DELETE',
-      `/agent/threads/${encodeURIComponent(id)}`,
-    );
+    return this.request<void>('DELETE', `/agent/threads/${encodeURIComponent(id)}`);
   }
 
   forkFromMessage(threadId: string, messageId: string): Promise<ThreadSummary> {
@@ -63,10 +51,7 @@ export class AgentClient {
   }
 
   getPersonaCatalog(): Promise<PersonaCatalogEntry[]> {
-    return this.request<PersonaCatalogEntry[]>(
-      'GET',
-      '/agent/threads/personas/catalog',
-    );
+    return this.request<PersonaCatalogEntry[]>('GET', '/agent/threads/personas/catalog');
   }
 
   getQuotaToday(): Promise<QuotaToday> {
@@ -74,10 +59,7 @@ export class AgentClient {
   }
 
   cancelStream(runId: string): Promise<CancelResult> {
-    return this.request<CancelResult>(
-      'POST',
-      `/agent/chat/${encodeURIComponent(runId)}/cancel`,
-    );
+    return this.request<CancelResult>('POST', `/agent/chat/${encodeURIComponent(runId)}/cancel`);
   }
 
   approveToolCall(input: {
@@ -95,11 +77,7 @@ export class AgentClient {
     return this.request<void>('POST', '/agent/tool-call/reject', input);
   }
 
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const fetchImpl = this.options.fetch ?? globalThis.fetch;
     const baseUrl = (this.options.baseUrl ?? '').replace(/\/$/, '');
     const dynamic = (await this.options.getHeaders?.()) ?? {};
@@ -112,9 +90,7 @@ export class AgentClient {
         ...dynamic,
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      ...(this.options.credentials !== undefined
-        ? { credentials: this.options.credentials }
-        : {}),
+      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
     });
     if (!response.ok) {
       throw new Error(

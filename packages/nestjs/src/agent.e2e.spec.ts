@@ -1,21 +1,26 @@
+import type { AgentDefinition, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
   InMemoryAgentStore,
 } from '@dudousxd/nestjs-agent-testing';
-import type { AgentDefinition, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 import { Injectable } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { z } from 'zod';
 import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { AgentModule } from './agent.module.js';
 import { AgentService } from './agent.service.js';
 import { AiTool } from './decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
 
-@AiTool({ name: 'getWeather', kind: 'read', description: 'weather', input: z.object({ city: z.string() }) })
+@AiTool({
+  name: 'getWeather',
+  kind: 'read',
+  description: 'weather',
+  input: z.object({ city: z.string() }),
+})
 @Injectable()
 class GetWeatherTool {
   async execute(input: { city: string }) {
@@ -23,7 +28,12 @@ class GetWeatherTool {
   }
 }
 
-@AiTool({ name: 'purgeCache', kind: 'action', description: 'purge', input: z.object({ key: z.string() }) })
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action',
+  description: 'purge',
+  input: z.object({ key: z.string() }),
+})
 @Injectable()
 class PurgeCacheTool {
   async execute(input: { key: string }) {
@@ -138,10 +148,16 @@ describe('AgentModule (inline)', () => {
         : { text: 'it is 21C' };
     const built = await buildApp(script);
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'weather?' });
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'weather?',
+    });
     const streamed = await collect(built.service.subscribe(runId));
     expect(streamed).toContain('it is 21C');
-    expect(built.store.toolCallRows()[0]).toMatchObject({ toolName: 'getWeather', status: 'executed' });
+    expect(built.store.toolCallRows()[0]).toMatchObject({
+      toolName: 'getWeather',
+      status: 'executed',
+    });
   });
 
   it('suspends an action tool until approved, then executes', async () => {
@@ -151,7 +167,10 @@ describe('AgentModule (inline)', () => {
         : { text: 'purged ok' };
     const built = await buildApp(script);
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'purge it' });
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'purge it',
+    });
 
     const collected = collect(built.service.subscribe(runId));
     // give the loop a tick to reach the approval gate, then approve the (deterministic) tool id
@@ -160,17 +179,25 @@ describe('AgentModule (inline)', () => {
 
     const streamed = await collected;
     expect(streamed).toContain('purged ok');
-    expect(built.store.toolCallRows()[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
+    expect(built.store.toolCallRows()[0]).toMatchObject({
+      toolName: 'purgeCache',
+      status: 'executed',
+    });
   });
 
   it('orchestrator delegates to a sub-agent via a synthesized agent tool', async () => {
     const script: FakeScript = (args, turnIndex) => {
       const lastUser =
-        [...args.messages].reverse().find((m) => m.role === 'user' && m.content)?.content?.toLowerCase() ??
-        '';
+        [...args.messages]
+          .reverse()
+          .find((m) => m.role === 'user' && m.content)
+          ?.content?.toLowerCase() ?? '';
       if (turnIndex === 0) {
         if (lastUser.includes('delegate')) {
-          return { text: 'delegating', toolCall: { name: 'ask_sub', input: { task: 'weather please' } } };
+          return {
+            text: 'delegating',
+            toolCall: { name: 'ask_sub', input: { task: 'weather please' } },
+          };
         }
         if (lastUser.includes('weather')) {
           return { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } };
@@ -197,7 +224,9 @@ describe('AgentModule (inline)', () => {
     expect(streamed).toContain('done:');
     const rows = built.store.toolCallRows();
     // the sub-agent actually ran getWeather (on its own thread; the store is shared)
-    expect(rows.some((row) => row.toolName === 'getWeather' && row.status === 'executed')).toBe(true);
+    expect(rows.some((row) => row.toolName === 'getWeather' && row.status === 'executed')).toBe(
+      true,
+    );
     // the orchestrator recorded the delegation as an `agent`-kind tool call
     expect(rows.some((row) => row.toolName === 'ask_sub')).toBe(true);
   });
@@ -206,13 +235,19 @@ describe('AgentModule (inline)', () => {
     const seen: { name: string; ability?: string }[] = [];
     const recordingPolicy: RolesPolicy = {
       can: (_actor, tool) => {
-        seen.push({ name: tool.name, ...(tool.ability !== undefined ? { ability: tool.ability } : {}) });
+        seen.push({
+          name: tool.name,
+          ...(tool.ability !== undefined ? { ability: tool.ability } : {}),
+        });
         return true;
       },
     };
     const built = await buildApp(() => ({ text: 'noop' }), { rolesPolicy: recordingPolicy });
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'hi' });
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
     await collect(built.service.subscribe(runId));
 
     expect(seen.find((tool) => tool.name === 'abilityTool')?.ability).toBe('cache.purge');

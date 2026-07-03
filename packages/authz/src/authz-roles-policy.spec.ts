@@ -11,7 +11,10 @@ import { AuthzRolesPolicy } from './authz-roles-policy.js';
  */
 function buildGate(): Gate {
   const gate = new Gate(new PolicyRegistry(), undefined);
-  gate.define('cache.purge', (user) => (user as { roles?: string[] }).roles?.includes('ADMIN') ?? false);
+  gate.define(
+    'cache.purge',
+    (user) => (user as { roles?: string[] }).roles?.includes('ADMIN') ?? false,
+  );
   return gate;
 }
 

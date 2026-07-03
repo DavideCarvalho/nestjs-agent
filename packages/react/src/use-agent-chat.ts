@@ -1,19 +1,9 @@
 import { useChat } from '@ai-sdk/react';
-import type {
-  ThreadDetail,
-  ThreadSummary,
-} from '@dudousxd/nestjs-agent-core';
+import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  AgentChatTransport,
-  type AgentStreamMeta,
-} from './agent-chat-transport.js';
-import {
-  AgentClient,
-  type PersonaCatalogEntry,
-  type QuotaToday,
-} from './client.js';
+import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
+import { AgentClient, type PersonaCatalogEntry, type QuotaToday } from './client.js';
 
 export interface UseAgentChatOptions {
   /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
@@ -21,9 +11,7 @@ export interface UseAgentChatOptions {
   /** Static headers merged into every request. */
   headers?: Record<string, string>;
   /** Resolved per request — for short-lived bearer tokens. */
-  getHeaders?: () =>
-    | Record<string, string>
-    | Promise<Record<string, string>>;
+  getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
   /** Forwarded to fetch so cookie auth/impersonation works. */
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
@@ -68,9 +56,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const latest = useRef(options);
   latest.current = options;
 
-  const [runId, setRunId] = useState<string | undefined>(
-    options.activeStreamId,
-  );
+  const [runId, setRunId] = useState<string | undefined>(options.activeStreamId);
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
 
@@ -78,9 +64,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     if (options.client) return options.client;
     return new AgentClient({
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-      ...(options.credentials !== undefined
-        ? { credentials: options.credentials }
-        : {}),
+      ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       getHeaders: async () => mergeHeaders(latest.current),
     });
@@ -94,9 +78,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     }
     return new AgentChatTransport({
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-      ...(options.credentials !== undefined
-        ? { credentials: options.credentials }
-        : {}),
+      ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
       getHeaders: async () => mergeHeaders(latest.current),
@@ -104,20 +86,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
         const current = latest.current;
         const pageContext = current.getPageContext?.() ?? null;
         return {
-          ...(current.threadId !== undefined
-            ? { threadId: current.threadId }
-            : {}),
-          ...(current.persona !== undefined
-            ? { persona: current.persona }
-            : {}),
+          ...(current.threadId !== undefined ? { threadId: current.threadId } : {}),
+          ...(current.persona !== undefined ? { persona: current.persona } : {}),
           ...(pageContext ? { pageContext } : {}),
         };
       },
       getResumeRunId: () => {
         const current = latest.current;
-        return current.hasActiveStream === true
-          ? current.activeStreamId
-          : undefined;
+        return current.hasActiveStream === true ? current.activeStreamId : undefined;
       },
       onMeta,
     });
@@ -128,9 +104,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     transport,
     resume: options.threadId !== undefined && options.hasActiveStream === true,
     ...(options.threadId !== undefined ? { id: options.threadId } : {}),
-    ...(options.initialMessages !== undefined
-      ? { messages: options.initialMessages }
-      : {}),
+    ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onFinish: () => {
       latest.current.onFinish?.();
     },
@@ -155,9 +129,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   );
 
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [personaCatalog, setPersonaCatalog] = useState<PersonaCatalogEntry[]>(
-    [],
-  );
+  const [personaCatalog, setPersonaCatalog] = useState<PersonaCatalogEntry[]>([]);
   const [quota, setQuota] = useState<QuotaToday | null>(null);
 
   const loadThreads = useCallback(async (): Promise<ThreadSummary[]> => {
@@ -185,9 +157,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     [client],
   );
 
-  const loadPersonaCatalog = useCallback(async (): Promise<
-    PersonaCatalogEntry[]
-  > => {
+  const loadPersonaCatalog = useCallback(async (): Promise<PersonaCatalogEntry[]> => {
     const catalog = await client.getPersonaCatalog();
     setPersonaCatalog(catalog);
     return catalog;
@@ -262,9 +232,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   };
 }
 
-async function mergeHeaders(
-  options: UseAgentChatOptions,
-): Promise<Record<string, string>> {
+async function mergeHeaders(options: UseAgentChatOptions): Promise<Record<string, string>> {
   const dynamic = (await options.getHeaders?.()) ?? {};
   return { ...options.headers, ...dynamic };
 }

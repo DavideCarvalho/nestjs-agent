@@ -21,7 +21,6 @@ import { type DynamicModule, Global, Module, type Provider } from '@nestjs/commo
 import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
-import { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
 import { AgentService } from './agent.service.js';
 import { ChatController } from './controller/chat.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
@@ -29,6 +28,7 @@ import { ThreadsController } from './controller/threads.controller.js';
 import { ToolCallController } from './controller/tool-call.controller.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
+import { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 
 const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
@@ -80,8 +80,16 @@ function sharedProviders(durable: boolean): Provider[] {
         options.actorResolver ?? new UnconfiguredActorResolver(),
       inject: [AGENT_OPTIONS],
     },
-    { provide: AGENT_MODEL, useFactory: (o: AgentModuleOptions) => o.model, inject: [AGENT_OPTIONS] },
-    { provide: AGENT_STORE, useFactory: (o: AgentModuleOptions) => o.store, inject: [AGENT_OPTIONS] },
+    {
+      provide: AGENT_MODEL,
+      useFactory: (o: AgentModuleOptions) => o.model,
+      inject: [AGENT_OPTIONS],
+    },
+    {
+      provide: AGENT_STORE,
+      useFactory: (o: AgentModuleOptions) => o.store,
+      inject: [AGENT_OPTIONS],
+    },
     {
       provide: AGENT_QUOTA_STORE,
       useFactory: (o: AgentModuleOptions) => o.quota,

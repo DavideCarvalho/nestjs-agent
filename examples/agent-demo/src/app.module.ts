@@ -1,6 +1,6 @@
 import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
-import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { InMemoryAgentStore, InMemoryQuotaStore } from '@dudousxd/nestjs-agent-testing';
+import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { DurableModule } from '@dudousxd/nestjs-durable';
 import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
 import { Module } from '@nestjs/common';
@@ -35,8 +35,9 @@ import { PurgeCacheTool } from './tools/purge-cache.tool.js';
             id: 'contextual',
             label: 'Contextual',
             systemPrompt: (ctx) =>
-              `You are a helpful ops assistant for ${ctx.actor.id}.` +
-              (ctx.pageContext?.kind ? ` They are viewing the "${ctx.pageContext.kind}" page.` : ''),
+              `You are a helpful ops assistant for ${ctx.actor.id}.${
+                ctx.pageContext?.kind ? ` They are viewing the "${ctx.pageContext.kind}" page.` : ''
+              }`,
           },
         ],
       },
