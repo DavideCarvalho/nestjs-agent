@@ -7,7 +7,8 @@ export { InlineAgentRunner } from './runner/inline-agent-runner.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
 export { type AgentDeps, utcDay } from './agent-deps.js';
 export { AgentDepsFactory, delegateToolName } from './agent-deps.factory.js';
-export { resolveActor } from './util/actor.js';
+export { HeaderActorResolver } from './resolver/header-actor-resolver.js';
+export { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
 
 // Re-export the core surface so consumers import tools/types from one place.
 export * from '@dudousxd/nestjs-agent-core';

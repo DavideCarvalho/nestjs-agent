@@ -1,4 +1,5 @@
 import type {
+  ActorResolver,
   AgentStore,
   ModelProvider,
   Persona,
@@ -16,6 +17,12 @@ export interface AgentModuleOptions {
   modelId: string;
   /** Live token transport. Defaults to a single-process in-memory sink. */
   sink?: TokenStreamSink;
+  /**
+   * Resolves the acting {@link ActorResolver} for each request (the identity seam). No default
+   * fabricates a caller — when omitted, every request throws until you provide a resolver (or the
+   * opt-in `HeaderActorResolver`). Required for anything beyond a throw-on-call placeholder.
+   */
+  actorResolver?: ActorResolver;
   /** Tool authorization gate. Defaults to role-in-`defaultRoles`. */
   rolesPolicy?: RolesPolicy;
   /** Default roles a tool requires when its `roles` is omitted. Defaults to `['ADMIN']`. */

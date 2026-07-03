@@ -1,4 +1,5 @@
 import {
+  AGENT_ACTOR_RESOLVER,
   AGENT_DEPS_FACTORY,
   AGENT_MODEL,
   AGENT_OPTIONS,
@@ -18,6 +19,7 @@ import { type DynamicModule, Global, Module, type Provider } from '@nestjs/commo
 import { DiscoveryModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
+import { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
 import { AgentService } from './agent.service.js';
 import { ChatController } from './controller/chat.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
@@ -64,6 +66,12 @@ function sharedProviders(durable: boolean): Provider[] {
         options.rolesPolicy ?? new DefaultRolesPolicy(options.defaultRoles),
       inject: [AGENT_OPTIONS],
     },
+    {
+      provide: AGENT_ACTOR_RESOLVER,
+      useFactory: (options: AgentModuleOptions) =>
+        options.actorResolver ?? new UnconfiguredActorResolver(),
+      inject: [AGENT_OPTIONS],
+    },
     { provide: AGENT_MODEL, useFactory: (o: AgentModuleOptions) => o.model, inject: [AGENT_OPTIONS] },
     { provide: AGENT_STORE, useFactory: (o: AgentModuleOptions) => o.store, inject: [AGENT_OPTIONS] },
     {
@@ -89,6 +97,7 @@ const EXPORTS = [
   AGENT_REGISTRY,
   AGENT_SINK,
   AGENT_ROLES_POLICY,
+  AGENT_ACTOR_RESOLVER,
   AGENT_MODEL,
   AGENT_STORE,
   AGENT_QUOTA_STORE,

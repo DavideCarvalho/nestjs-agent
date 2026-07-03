@@ -1,15 +1,19 @@
-import { Body, Controller, Delete, Get, Param, Post, Req } from '@nestjs/common';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
-import { resolveActor } from '../util/actor.js';
 
 @Controller('agent/threads')
 export class ThreadsController {
-  constructor(private readonly agent: AgentService) {}
+  constructor(
+    private readonly agent: AgentService,
+    @Inject(AGENT_ACTOR_RESOLVER) private readonly actorResolver: ActorResolver,
+  ) {}
 
   @Get()
-  list(@Req() req: Request) {
-    return this.agent.listThreads(resolveActor(req).id);
+  async list(@Req() req: Request) {
+    const actor = await this.actorResolver.resolve(req);
+    return this.agent.listThreads(actor.id);
   }
 
   @Get('personas/catalog')

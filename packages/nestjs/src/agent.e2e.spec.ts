@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AgentModule } from './agent.module.js';
 import { AgentService } from './agent.service.js';
 import { AiTool } from './decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
 
 @AiTool({ name: 'getWeather', kind: 'read', description: 'weather', input: z.object({ city: z.string() }) })
 @Injectable()
@@ -58,6 +59,7 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         store,
         modelId: 'fake-1',
         systemPrompt: 'test agent',
+        actorResolver: new HeaderActorResolver(),
         ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
       }),
       ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
@@ -88,10 +90,24 @@ describe('AgentModule (inline)', () => {
   it('streams a no-tool turn over SSE', async () => {
     const built = await buildApp(() => ({ text: 'hello over http' }));
     app = built.app;
-    const res = await request(app.getHttpServer()).post('/agent/chat').send({ message: 'hi' });
+    const res = await request(app.getHttpServer())
+      .post('/agent/chat')
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ message: 'hi' });
     expect(res.status).toBe(201);
     expect(res.text).toContain('hello over http');
     expect(res.text).toContain('event: done');
+  });
+
+  it('refuses a request whose actor cannot be resolved (no x-actor-id)', async () => {
+    const built = await buildApp(() => ({ text: 'never reached' }));
+    app = built.app;
+    const res = await request(app.getHttpServer()).post('/agent/chat').send({ message: 'hi' });
+    expect(res.status).toBe(500);
+    expect(res.text).not.toContain('never reached');
+    // nothing was persisted for a caller the resolver refused to identify
+    expect(built.store.toolCallRows()).toHaveLength(0);
   });
 
   it('auto-executes a read tool then answers', async () => {

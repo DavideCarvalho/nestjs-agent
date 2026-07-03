@@ -1,8 +1,7 @@
-import type { PageContext } from '@dudousxd/nestjs-agent-core';
-import { Body, Controller, Get, Param, Post, Req, Res } from '@nestjs/common';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver, type PageContext } from '@dudousxd/nestjs-agent-core';
+import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AgentService } from '../agent.service.js';
-import { resolveActor } from '../util/actor.js';
 
 interface ChatBody {
   message: string;
@@ -15,11 +14,14 @@ interface ChatBody {
 
 @Controller('agent')
 export class ChatController {
-  constructor(private readonly agent: AgentService) {}
+  constructor(
+    private readonly agent: AgentService,
+    @Inject(AGENT_ACTOR_RESOLVER) private readonly actorResolver: ActorResolver,
+  ) {}
 
   @Post('chat')
   async chat(@Req() req: Request, @Res() res: Response, @Body() body: ChatBody): Promise<void> {
-    const actor = resolveActor(req);
+    const actor = await this.actorResolver.resolve(req);
     const { runId, threadId } = await this.agent.chat({
       actor,
       message: body.message,

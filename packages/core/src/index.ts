@@ -7,6 +7,7 @@ export * from './spi/agent-store.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
 export * from './spi/agent-runner.js';
+export * from './spi/actor-resolver.js';
 export * from './personas.js';
 export { AgentRegistry } from './agent-registry.js';
 export {

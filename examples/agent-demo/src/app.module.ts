@@ -1,4 +1,4 @@
-import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
 import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { InMemoryAgentStore, InMemoryQuotaStore } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule } from '@dudousxd/nestjs-durable';
@@ -19,6 +19,8 @@ import { PurgeCacheTool } from './tools/purge-cache.tool.js';
       store: new InMemoryAgentStore(),
       quota: new InMemoryQuotaStore(200_000),
       modelId: 'fake-demo-1',
+      // Demo/gateway identity: trust x-actor-id / x-actor-role headers. Never fabricates a caller.
+      actorResolver: new HeaderActorResolver(),
       systemPrompt: 'You are a helpful ops assistant for the demo.',
       personas: [
         { id: 'default', label: 'Default', systemPrompt: 'You are a helpful ops assistant.' },
