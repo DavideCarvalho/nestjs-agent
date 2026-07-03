@@ -48,6 +48,7 @@ class AbilityTool {
 interface BuildOptions {
   rolesPolicy?: RolesPolicy;
   features?: AgentDefinition[];
+  path?: string;
 }
 
 async function buildApp(script: FakeScript, options: BuildOptions = {}) {
@@ -57,9 +58,9 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
       AgentModule.forRoot({
         model: new FakeModelProvider(script),
         store,
-        modelId: 'fake-1',
-        systemPrompt: 'test agent',
         actorResolver: new HeaderActorResolver(),
+        defaultAgent: { modelId: 'fake-1', systemPrompt: 'test agent' },
+        ...(options.path !== undefined ? { path: options.path } : {}),
         ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
       }),
       ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
@@ -108,6 +109,26 @@ describe('AgentModule (inline)', () => {
     expect(res.text).not.toContain('never reached');
     // nothing was persisted for a caller the resolver refused to identify
     expect(built.store.toolCallRows()).toHaveLength(0);
+  });
+
+  it('mounts the controllers under a configured route path', async () => {
+    const built = await buildApp(() => ({ text: 'hi from /ai' }), { path: 'ai' });
+    app = built.app;
+
+    const mounted = await request(app.getHttpServer())
+      .post('/ai/chat')
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ message: 'hi' });
+    expect(mounted.status).toBe(201);
+    expect(mounted.text).toContain('hi from /ai');
+
+    // the default '/agent' prefix no longer exists
+    const defaultPath = await request(app.getHttpServer())
+      .post('/agent/chat')
+      .set('x-actor-id', 'u1')
+      .send({ message: 'hi' });
+    expect(defaultPath.status).toBe(404);
   });
 
   it('auto-executes a read tool then answers', async () => {

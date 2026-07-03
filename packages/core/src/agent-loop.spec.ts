@@ -14,6 +14,7 @@ import {
   type AgentLoopDeps,
   type AgentLoopHooks,
   type Decision,
+  type ModelProvider,
   type Persona,
   type PromptBuilder,
 } from './index.js';
@@ -53,6 +54,7 @@ async function drain(sink: InMemoryTokenStreamSink, runId: string): Promise<stri
 interface RunOverrides {
   systemPrompt?: string | PromptBuilder;
   persona?: Persona;
+  model?: ModelProvider;
 }
 
 async function run(
@@ -68,7 +70,7 @@ async function run(
   const runId = 'run-1';
 
   const deps: AgentLoopDeps = {
-    model: new FakeModelProvider(script),
+    model: overrides.model ?? new FakeModelProvider(script),
     store,
     registry: buildRegistry(),
     rolesPolicy: new DefaultRolesPolicy(),
@@ -151,6 +153,25 @@ describe('runAgentLoop', () => {
     await expect(run(() => ({ text: 'x' }), () => ({ approved: true }), quota)).rejects.toThrow(
       /quota/i,
     );
+  });
+
+  it('records the provider-reported modelId over the configured fallback', async () => {
+    const reportingModel: ModelProvider = {
+      async runTurn(args) {
+        await args.sink.write(new TextEncoder().encode('done'));
+        return {
+          text: 'done',
+          toolCalls: [],
+          usage: { inputTokens: 1, outputTokens: 1 },
+          modelId: 'claude-real-42',
+        };
+      },
+    };
+    // deps.modelId fallback is 'fake-1'; the provider reports a different, authoritative id
+    const { store } = await run(() => ({ text: 'unused' }), undefined, undefined, undefined, {
+      model: reportingModel,
+    });
+    expect(store.usageRows()[0]?.modelId).toBe('claude-real-42');
   });
 
   it('resolves an agent-level PromptBuilder from the turn context', async () => {

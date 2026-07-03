@@ -30,9 +30,8 @@ async function buildDurableApp(script: FakeScript) {
       AgentModule.forRoot({
         model: new FakeModelProvider(script),
         store,
-        modelId: 'fake-1',
-        systemPrompt: 'durable test agent',
         durable: true,
+        defaultAgent: { modelId: 'fake-1', systemPrompt: 'durable test agent' },
       }),
       AgentDurableModule,
     ],

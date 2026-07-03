@@ -17,7 +17,8 @@ export interface AgentDeps {
   rolesPolicy: RolesPolicy;
   quota?: QuotaStore;
   sink: TokenStreamSink;
-  modelId: string;
+  /** Fallback accounting label; the provider's turn result overrides it when set. */
+  modelId?: string;
   systemPrompt: string | PromptBuilder;
   maxSteps: number;
   personas: Map<string, Persona>;

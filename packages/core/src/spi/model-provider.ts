@@ -20,6 +20,12 @@ export interface ModelTurnResult {
   text: string;
   toolCalls: ToolCallRequest[];
   usage: MessageUsage;
+  /**
+   * The model actually used this turn (e.g. `anthropic.claude-...`), recorded with usage for
+   * cost accounting. When set it wins over the module's configured `modelId`, so the accounting
+   * label can't silently drift from the runtime. Omit if the provider can't report one.
+   */
+  modelId?: string;
 }
 
 /**

@@ -41,7 +41,7 @@ export class AgentDepsFactory {
   ) {}
 
   defaultAgentName(): string {
-    return this.options.defaultAgent ?? 'default';
+    return this.options.defaultAgent?.name ?? 'default';
   }
 
   private effectiveTools(definition: AgentDefinition | undefined): string[] | undefined {
@@ -59,7 +59,7 @@ export class AgentDepsFactory {
     const name = agentName ?? this.defaultAgentName();
     const definition = this.agents.get(name);
     const personas = new Map<string, Persona>();
-    for (const persona of definition?.personas ?? this.options.personas ?? []) {
+    for (const persona of definition?.personas ?? []) {
       personas.set(persona.id, persona);
     }
     const toolAllowList = this.effectiveTools(definition);
@@ -69,12 +69,11 @@ export class AgentDepsFactory {
       sink: this.sink,
       rolesPolicy: this.rolesPolicy,
       registry: this.registry,
-      modelId: definition?.modelId ?? this.options.modelId,
-      systemPrompt:
-        definition?.systemPrompt ?? this.options.systemPrompt ?? 'You are a helpful assistant.',
-      maxSteps: definition?.maxSteps ?? this.options.maxSteps ?? 8,
+      systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',
+      maxSteps: definition?.maxSteps ?? 8,
       personas,
-      defaultPersona: definition?.defaultPersona ?? this.options.defaultPersona ?? 'default',
+      defaultPersona: definition?.defaultPersona ?? 'default',
+      ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
     };

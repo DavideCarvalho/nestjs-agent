@@ -32,6 +32,7 @@ interface UsageRow {
   actorRef: string;
   tokens: number;
   day: string;
+  modelId: string;
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
@@ -189,6 +190,7 @@ export class InMemoryAgentStore implements AgentStore {
       actorRef: input.actorRef,
       tokens: input.usage.inputTokens + input.usage.outputTokens,
       day,
+      modelId: input.modelId,
     });
   }
 
@@ -197,6 +199,15 @@ export class InMemoryAgentStore implements AgentStore {
       .filter((row) => row.actorRef === actorRef && row.day === day)
       .reduce((sum, row) => sum + row.tokens, 0);
     return { usedTokens };
+  }
+
+  /** Test helper: read the recorded usage rows (modelId + token totals). */
+  usageRows(): { actorRef: string; tokens: number; modelId: string }[] {
+    return this.usage.map((row) => ({
+      actorRef: row.actorRef,
+      tokens: row.tokens,
+      modelId: row.modelId,
+    }));
   }
 
   /** Test helper: read the recorded tool-call rows. */

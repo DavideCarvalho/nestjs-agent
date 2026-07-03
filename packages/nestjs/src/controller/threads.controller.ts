@@ -3,7 +3,7 @@ import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
-@Controller('agent/threads')
+@Controller('threads')
 export class ThreadsController {
   constructor(
     private readonly agent: AgentService,

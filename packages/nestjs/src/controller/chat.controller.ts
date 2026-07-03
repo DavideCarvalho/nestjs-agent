@@ -12,7 +12,7 @@ interface ChatBody {
   pageContext?: PageContext;
 }
 
-@Controller('agent')
+@Controller()
 export class ChatController {
   constructor(
     private readonly agent: AgentService,

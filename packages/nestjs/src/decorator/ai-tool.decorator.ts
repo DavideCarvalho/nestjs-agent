@@ -1,12 +1,15 @@
 import 'reflect-metadata';
-import type { ToolKind } from '@dudousxd/nestjs-agent-core';
 import type { ZodType } from 'zod';
 
 export const AI_TOOL_METADATA = Symbol('nestjs-agent:ai-tool');
 
 export interface AiToolOptions {
   name: string;
-  kind: ToolKind;
+  /**
+   * `read` auto-executes; `action` requires HITL approval. (Core's `ToolKind` also has `agent`
+   * for delegation, but that kind is synthesized from `delegatesTo` — never authored here.)
+   */
+  kind: 'read' | 'action';
   description: string;
   /** Zod schema for the tool input — validated before the handler runs. */
   input: ZodType;

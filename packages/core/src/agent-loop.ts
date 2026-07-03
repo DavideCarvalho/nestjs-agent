@@ -28,7 +28,11 @@ export interface AgentLoopDeps {
   registry: ToolRegistry;
   rolesPolicy: RolesPolicy;
   quota?: QuotaStore;
-  modelId: string;
+  /**
+   * Fallback accounting label when the provider's turn result doesn't report a `modelId`.
+   * Optional — a provider that reports its own model makes this unnecessary.
+   */
+  modelId?: string;
   /** Pre-computed (YYYY-MM-DD) so the loop body stays deterministic under durable replay. */
   day: string;
   /** The agent's base prompt. A flat string, or a {@link PromptBuilder} resolved per turn. */
@@ -195,7 +199,8 @@ export async function runAgentLoop(
         deps.store.recordUsage({
           threadId: input.threadId,
           actorRef: input.actor.id,
-          modelId: deps.modelId,
+          // provider-reported model wins over the configured fallback, so cost can't misattribute
+          modelId: turn.modelId ?? deps.modelId ?? 'unknown',
           purpose: 'chat',
           usage: turn.usage,
         }),

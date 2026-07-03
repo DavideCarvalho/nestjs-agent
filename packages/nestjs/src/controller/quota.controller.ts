@@ -3,7 +3,7 @@ import { Controller, Get, Inject, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
-@Controller('agent/quota')
+@Controller('quota')
 export class QuotaController {
   constructor(
     private readonly agent: AgentService,

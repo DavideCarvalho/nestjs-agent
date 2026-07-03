@@ -16,7 +16,7 @@ import {
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Global, Module, type Provider } from '@nestjs/common';
-import { DiscoveryModule } from '@nestjs/core';
+import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
 import { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
@@ -31,15 +31,21 @@ import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 
 const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
 
-/** The implicit single agent, built from the module options. forFeature adds more named agents. */
+/** Default route prefix the controllers mount under. */
+const DEFAULT_PATH = 'agent';
+
+/** The implicit single agent, built from `options.defaultAgent`. forFeature adds more named agents. */
 function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
+  const agent = options.defaultAgent;
   return {
-    name: options.defaultAgent ?? 'default',
-    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
-    modelId: options.modelId,
-    ...(options.personas !== undefined ? { personas: options.personas } : {}),
-    ...(options.defaultPersona !== undefined ? { defaultPersona: options.defaultPersona } : {}),
-    ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
+    name: agent?.name ?? 'default',
+    ...(agent?.systemPrompt !== undefined ? { systemPrompt: agent.systemPrompt } : {}),
+    ...(agent?.modelId !== undefined ? { modelId: agent.modelId } : {}),
+    ...(agent?.tools !== undefined ? { tools: agent.tools } : {}),
+    ...(agent?.delegatesTo !== undefined ? { delegatesTo: agent.delegatesTo } : {}),
+    ...(agent?.personas !== undefined ? { personas: agent.personas } : {}),
+    ...(agent?.defaultPersona !== undefined ? { defaultPersona: agent.defaultPersona } : {}),
+    ...(agent?.maxSteps !== undefined ? { maxSteps: agent.maxSteps } : {}),
   };
 }
 
@@ -107,15 +113,23 @@ const EXPORTS = [
   InlineAgentRunner,
 ];
 
+const CONTROLLERS = [ChatController, ThreadsController, ToolCallController, QuotaController];
+
+/** Mount the controllers under `path` (Nest applies the prefix to their relative routes). */
+function routerFor(path: string): DynamicModule {
+  return RouterModule.register([{ path, module: AgentModule }]);
+}
+
 @Global()
 @Module({})
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
+    const path = options.path ?? DEFAULT_PATH;
     return {
       module: AgentModule,
       global: true,
-      imports: [DiscoveryModule],
-      controllers: [ChatController, ThreadsController, ToolCallController, QuotaController],
+      imports: [DiscoveryModule, routerFor(path)],
+      controllers: CONTROLLERS,
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false),
@@ -125,11 +139,16 @@ export class AgentModule {
   }
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
+    const path = options.path ?? DEFAULT_PATH;
     return {
       module: AgentModule,
       global: true,
-      imports: [DiscoveryModule, ...((options.imports as DynamicModule['imports']) ?? [])],
-      controllers: [ChatController, ThreadsController, ToolCallController, QuotaController],
+      imports: [
+        DiscoveryModule,
+        routerFor(path),
+        ...((options.imports as DynamicModule['imports']) ?? []),
+      ],
+      controllers: CONTROLLERS,
       providers: [
         {
           provide: AGENT_OPTIONS,

@@ -9,7 +9,7 @@ interface RejectBody extends ApproveBody {
   reason?: string;
 }
 
-@Controller('agent/tool-call')
+@Controller('tool-call')
 export class ToolCallController {
   constructor(private readonly agent: AgentService) {}
 
