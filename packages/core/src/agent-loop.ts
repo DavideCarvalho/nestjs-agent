@@ -215,7 +215,6 @@ export async function runAgentLoop(
           runId: hooks.runId,
           requestId: hooks.runId,
           actor: input.actor,
-          ...(input.actor.role !== undefined ? { actorRole: input.actor.role } : {}),
           ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
           ...(persona !== undefined ? { persona } : {}),
           ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),

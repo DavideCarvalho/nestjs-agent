@@ -101,7 +101,7 @@ describe('AgentModule (inline)', () => {
         : { text: 'it is 21C' };
     const built = await buildApp(script);
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'weather?' });
+    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'weather?' });
     const streamed = await collect(built.service.subscribe(runId));
     expect(streamed).toContain('it is 21C');
     expect(built.store.toolCallRows()[0]).toMatchObject({ toolName: 'getWeather', status: 'executed' });
@@ -114,7 +114,7 @@ describe('AgentModule (inline)', () => {
         : { text: 'purged ok' };
     const built = await buildApp(script);
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'purge it' });
+    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'purge it' });
 
     const collected = collect(built.service.subscribe(runId));
     // give the loop a tick to reach the approval gate, then approve the (deterministic) tool id
@@ -151,7 +151,7 @@ describe('AgentModule (inline)', () => {
     });
     app = built.app;
     const { runId } = await built.service.chat({
-      actor: { id: 'u1', role: 'ADMIN' },
+      actor: { id: 'u1', roles: ['ADMIN'] },
       message: 'delegate this',
       agentName: 'orch',
     });
@@ -175,7 +175,7 @@ describe('AgentModule (inline)', () => {
     };
     const built = await buildApp(() => ({ text: 'noop' }), { rolesPolicy: recordingPolicy });
     app = built.app;
-    const { runId } = await built.service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'hi' });
+    const { runId } = await built.service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'hi' });
     await collect(built.service.subscribe(runId));
 
     expect(seen.find((tool) => tool.name === 'abilityTool')?.ability).toBe('cache.purge');

@@ -15,23 +15,27 @@ describe('GroupTableAccessPolicy', () => {
   });
 
   it('allows a role → group → table path', () => {
-    expect(policy.canAccess('ANALYST', 'vehicle')).toBe(true);
-    expect(policy.canAccess('ANALYST', 'unit_dictionary')).toBe(true);
+    expect(policy.canAccess(['ANALYST'], 'vehicle')).toBe(true);
+    expect(policy.canAccess(['ANALYST'], 'unit_dictionary')).toBe(true);
   });
 
-  it('denies a table in a group the role lacks', () => {
-    expect(policy.canAccess('ANALYST', 'billing')).toBe(false);
+  it('grants access if ANY of the caller roles allows the table', () => {
+    expect(policy.canAccess(['GHOST', 'ADMIN'], 'billing')).toBe(true);
+  });
+
+  it('denies a table in a group none of the roles has', () => {
+    expect(policy.canAccess(['ANALYST'], 'billing')).toBe(false);
   });
 
   it('denies an unclassified table (fail-closed)', () => {
-    expect(policy.canAccess('ANALYST', 'secret_table')).toBe(false);
+    expect(policy.canAccess(['ANALYST'], 'secret_table')).toBe(false);
   });
 
-  it('denies an undefined role (fail-closed)', () => {
-    expect(policy.canAccess(undefined, 'vehicle')).toBe(false);
+  it('denies an empty role set (fail-closed)', () => {
+    expect(policy.canAccess([], 'vehicle')).toBe(false);
   });
 
   it('denies an unknown role (fail-closed)', () => {
-    expect(policy.canAccess('GHOST', 'vehicle')).toBe(false);
+    expect(policy.canAccess(['GHOST'], 'vehicle')).toBe(false);
   });
 });

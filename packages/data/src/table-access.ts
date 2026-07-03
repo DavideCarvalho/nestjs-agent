@@ -6,8 +6,8 @@
  * Domain-agnostic: the host app supplies the role→group and group→table maps.
  */
 export interface TableAccessPolicy {
-  /** True iff `role` is permitted to read `table`. Fail-closed by contract. */
-  canAccess(role: string | undefined, table: string): boolean;
+  /** True iff any of the caller's `roles` is permitted to read `table`. Fail-closed by contract. */
+  canAccess(roles: readonly string[], table: string): boolean;
 }
 
 /** Inputs for {@link GroupTableAccessPolicy}: roles map to groups, groups to tables. */
@@ -27,9 +27,9 @@ export interface GroupTableAccessConfig {
  *   1. Every table is classified into a group (`tablesByGroup`).
  *   2. Every role lists the groups it can read (`roleGroups`).
  *
- * `canAccess(role, table)` is then "is the table's group in the role's group
- * list?". **Fail-closed:** an unclassified table, an unknown role, or an
- * undefined role is denied — a forgotten table never accidentally leaks.
+ * `canAccess(roles, table)` is then "is the table's group in ANY of the roles'
+ * group lists?". **Fail-closed:** an unclassified table, unknown roles, or an
+ * empty role set is denied — a forgotten table never accidentally leaks.
  */
 export class GroupTableAccessPolicy implements TableAccessPolicy {
   private readonly roleGroups: Record<string, string[]>;
@@ -40,15 +40,11 @@ export class GroupTableAccessPolicy implements TableAccessPolicy {
     this.tablesByGroup = config.tablesByGroup;
   }
 
-  canAccess(role: string | undefined, table: string): boolean {
-    if (role === undefined) return false;
-    const allowedGroups = this.roleGroups[role];
-    if (allowedGroups === undefined || allowedGroups.length === 0) return false;
-
+  canAccess(roles: readonly string[], table: string): boolean {
     const group = this.resolveGroup(table);
     if (group === undefined) return false;
 
-    return allowedGroups.includes(group);
+    return roles.some((role) => this.roleGroups[role]?.includes(group) ?? false);
   }
 
   /** Resolve a table to its group, or `undefined` if unclassified (fail-closed). */

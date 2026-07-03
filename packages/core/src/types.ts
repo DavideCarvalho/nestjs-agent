@@ -3,7 +3,8 @@ import type { ZodType } from 'zod';
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
 export interface Actor {
   id: string;
-  role?: string;
+  /** The caller's roles. Tool authorization is a set intersection against a tool's `roles`. */
+  roles?: string[];
   tenantRef?: string;
 }
 

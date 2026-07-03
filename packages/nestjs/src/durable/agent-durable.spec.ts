@@ -60,7 +60,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
   it('runs a no-tool turn as a durable run and streams it', async () => {
     const { moduleRef, service, workflows, store } = await buildDurableApp(() => ({ text: 'hello durable' }));
     try {
-      const { runId } = await service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'hi' });
+      const { runId } = await service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'hi' });
       const collected = collect(service.subscribe(runId));
       const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
       const streamed = await collected;
@@ -81,7 +81,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
         : { text: 'purged durably' };
     const { moduleRef, service, workflows, store } = await buildDurableApp(script);
     try {
-      const { runId } = await service.chat({ actor: { id: 'u1', role: 'ADMIN' }, message: 'purge it' });
+      const { runId } = await service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'purge it' });
       const collected = collect(service.subscribe(runId));
 
       await new Promise((resolve) => setTimeout(resolve, 50));

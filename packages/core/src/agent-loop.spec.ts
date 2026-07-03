@@ -56,7 +56,7 @@ async function run(
 ) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
-  const thread = await store.createThread({ actor: { id: 'u1', role: 'ADMIN' }, persona: 'default' });
+  const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] }, persona: 'default' });
   const runId = 'run-1';
 
   const deps: AgentLoopDeps = {
@@ -77,7 +77,7 @@ async function run(
     ...(runAgent !== undefined ? { runAgent } : {}),
   };
 
-  const result = await runAgentLoop(deps, { threadId: thread.id, actor: { id: 'u1', role: 'ADMIN' }, userText: 'hi' }, hooks);
+  const result = await runAgentLoop(deps, { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'hi' }, hooks);
   const streamed = await drain(sink, runId);
   const detail = await store.getThread(thread.id);
   return { result, streamed, store, detail };

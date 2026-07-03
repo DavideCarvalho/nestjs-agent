@@ -72,12 +72,12 @@ export function createExecuteSqlTool(deps: ExecuteSqlDeps): {
     async execute(input: ExecuteSqlInput, ctx: AiToolCtx): Promise<ExecuteSqlResult> {
       const { tables } = validator.validate(input.sql);
 
-      const forbidden = tables.filter((table) => !deps.tableAccess.canAccess(ctx.actorRole, table));
+      const roles = ctx.actor.roles ?? [];
+      const forbidden = tables.filter((table) => !deps.tableAccess.canAccess(roles, table));
       if (forbidden.length > 0) {
         const formatted = forbidden.map((table) => `\`${table}\``).join(', ');
-        throw new Error(
-          `Your role (${ctx.actorRole ?? 'unknown'}) is not allowed to query ${formatted}.`,
-        );
+        const rolesLabel = roles.length > 0 ? roles.join(', ') : 'none';
+        throw new Error(`Your roles (${rolesLabel}) are not allowed to query ${formatted}.`);
       }
 
       let sql = input.sql;

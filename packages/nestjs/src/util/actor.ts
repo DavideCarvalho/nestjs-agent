@@ -16,11 +16,14 @@ function header(req: HeaderBag, name: string): string | undefined {
  */
 export function resolveActor(req: HeaderBag): Actor {
   const id = header(req, 'x-actor-id') ?? 'demo-user';
-  const role = header(req, 'x-actor-role') ?? 'ADMIN';
+  const roles = (header(req, 'x-actor-role') ?? 'ADMIN')
+    .split(',')
+    .map((role) => role.trim())
+    .filter((role) => role.length > 0);
   const tenantRef = header(req, 'x-tenant-ref');
   return {
     id,
-    role,
+    roles,
     ...(tenantRef !== undefined ? { tenantRef } : {}),
   };
 }

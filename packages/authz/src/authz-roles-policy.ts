@@ -18,23 +18,23 @@ export interface AuthzRolesPolicyOptions {
 
 /**
  * The user object handed to `gate.forUser(...)`. The agent {@link Actor} only carries
- * `{ id, role? }`, which is exactly what authz's default {@link defaultRoleResolver}
- * (and any ad-hoc gate reading `user.role`) needs to resolve a role-based ability —
+ * `{ id, roles? }`, which is exactly what authz's default {@link defaultRoleResolver}
+ * (and any ad-hoc gate reading `user.roles`) needs to resolve a role-based ability —
  * so no host user entity is required.
  */
 export interface AuthzUser {
   id: string;
-  role?: string;
+  roles?: string[];
 }
 
 /**
  * Map an agent {@link Actor} onto the minimal user shape authz expects. authz's
- * `User` is `unknown`, and its default role resolver reads `user.role` / `user.roles`;
- * passing `{ id, role }` is enough for a role-based ability to resolve. `role` is only
+ * `User` is `unknown`, and its default role resolver reads `user.roles`; passing
+ * `{ id, roles }` is enough for a role-based ability to resolve. `roles` is only
  * attached when present (honors `exactOptionalPropertyTypes`).
  */
 export function userFromActor(actor: Actor): AuthzUser {
-  return { id: actor.id, ...(actor.role !== undefined ? { role: actor.role } : {}) };
+  return { id: actor.id, ...(actor.roles !== undefined ? { roles: actor.roles } : {}) };
 }
 
 /**

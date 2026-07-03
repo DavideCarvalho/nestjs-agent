@@ -6,17 +6,17 @@ import { AuthzRolesPolicy } from './authz-roles-policy.js';
 
 /**
  * A real authz {@link Gate} with one ad-hoc gate registered via `define`. The gate
- * reads `user.role` — exactly the shape `userFromActor` produces — so a role-based
+ * reads `user.roles` — exactly the shape `userFromActor` produces — so a role-based
  * ability resolves without any policy classes or RBAC tables.
  */
 function buildGate(): Gate {
   const gate = new Gate(new PolicyRegistry(), undefined);
-  gate.define('cache.purge', (user) => (user as { role?: string }).role === 'ADMIN');
+  gate.define('cache.purge', (user) => (user as { roles?: string[] }).roles?.includes('ADMIN') ?? false);
   return gate;
 }
 
-const admin: Actor = { id: 'u1', role: 'ADMIN' };
-const guest: Actor = { id: 'u2', role: 'GUEST' };
+const admin: Actor = { id: 'u1', roles: ['ADMIN'] };
+const guest: Actor = { id: 'u2', roles: ['GUEST'] };
 
 function tool(overrides: Partial<ToolSpec>): ToolSpec {
   return {

@@ -13,16 +13,15 @@ class FakeRunner implements QueryRunner {
   }
 }
 
-function ctx(overrides: Partial<AiToolCtx> = {}): AiToolCtx {
-  const actorRole = overrides.actorRole ?? 'ANALYST';
+function ctx(overrides: Partial<AiToolCtx> & { roles?: string[] } = {}): AiToolCtx {
+  const { roles, ...ctxOverrides } = overrides;
   return {
     actorId: 'actor-1',
-    actorRole,
     threadId: 'thread-1',
     runId: 'run-1',
     requestId: 'req-1',
-    actor: { id: 'actor-1', role: actorRole },
-    ...overrides,
+    actor: { id: 'actor-1', roles: roles ?? ['ANALYST'] },
+    ...ctxOverrides,
   };
 }
 

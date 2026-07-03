@@ -85,15 +85,12 @@ export class ToolRegistry {
   }
 }
 
-/** Default gate: actor.role must be in spec.roles (defaulting to ADMIN-only). */
+/** Default gate: one of the actor's roles must be in spec.roles (defaulting to ADMIN-only). */
 export class DefaultRolesPolicy implements RolesPolicy {
   constructor(private readonly defaultRoles: string[] = ['ADMIN']) {}
 
   can(actor: Actor, tool: ToolSpec): boolean {
     const allowed = tool.roles ?? this.defaultRoles;
-    if (actor.role === undefined) {
-      return false;
-    }
-    return allowed.includes(actor.role);
+    return (actor.roles ?? []).some((role) => allowed.includes(role));
   }
 }

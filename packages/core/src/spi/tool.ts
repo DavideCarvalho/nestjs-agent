@@ -3,7 +3,6 @@ import type { Actor, PageContext, Persona } from '../types.js';
 /** Per-invocation context handed to a tool handler. Host-supplied bits are optional. */
 export interface AiToolCtx {
   actorId: string;
-  actorRole?: string;
   tenantRef?: string;
   threadId: string;
   runId: string;
