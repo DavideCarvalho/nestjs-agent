@@ -2,6 +2,7 @@ import type {
   AgentStore,
   ModelProvider,
   Persona,
+  PromptBuilder,
   QuotaStore,
   RolesPolicy,
   TokenStreamSink,
@@ -17,7 +18,7 @@ export interface AgentDeps {
   quota?: QuotaStore;
   sink: TokenStreamSink;
   modelId: string;
-  systemPrompt: string;
+  systemPrompt: string | PromptBuilder;
   maxSteps: number;
   personas: Map<string, Persona>;
   defaultPersona: string;

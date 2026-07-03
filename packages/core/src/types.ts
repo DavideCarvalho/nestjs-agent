@@ -86,17 +86,37 @@ export interface ModelMessage {
   toolResults?: ToolResult[];
 }
 
-export interface Persona {
-  id: string;
-  label: string;
-  systemPrompt: string;
-  /** If set, only these tool names are offered (after role filtering). */
-  allowedTools?: string[];
-}
-
 export interface PageContext {
   kind?: string;
   [key: string]: unknown;
+}
+
+/**
+ * Inputs a {@link PromptBuilder} may use to compose the effective system prompt for a turn.
+ * `basePrompt` is the agent's own (already-resolved) base prompt, so a persona builder can wrap
+ * or extend it rather than replace it.
+ */
+export interface PromptContext {
+  actor: Actor;
+  persona?: Persona;
+  pageContext?: PageContext;
+  basePrompt: string;
+}
+
+/**
+ * A dynamic system prompt. Return a string (optionally async) built from the turn's context —
+ * e.g. injecting the actor, the current page, or a data-shape description. The loop resolves it
+ * once per turn from stable inputs (actor/persona/pageContext), so it stays replay-safe.
+ */
+export type PromptBuilder = (ctx: PromptContext) => string | Promise<string>;
+
+export interface Persona {
+  id: string;
+  label: string;
+  /** A flat prompt, or a {@link PromptBuilder} composed per request from {@link PromptContext}. */
+  systemPrompt: string | PromptBuilder;
+  /** If set, only these tool names are offered (after role filtering). */
+  allowedTools?: string[];
 }
 
 /** Everything needed to run one agent turn. */
@@ -122,7 +142,8 @@ export interface AgentRunInput {
  */
 export interface AgentDefinition {
   name: string;
-  systemPrompt?: string;
+  /** Base prompt for this agent. A flat string, or a {@link PromptBuilder} resolved per turn. */
+  systemPrompt?: string | PromptBuilder;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
   tools?: string[];
   /** Names of other agents this agent may delegate to (auto-registered as `agent`-kind tools). */

@@ -3,6 +3,7 @@ import type {
   AgentStore,
   ModelProvider,
   Persona,
+  PromptBuilder,
   QuotaStore,
   RolesPolicy,
   TokenStreamSink,
@@ -29,8 +30,11 @@ export interface AgentModuleOptions {
   defaultRoles?: string[];
   /** Daily token budget. Optional — omit to disable quotas. */
   quota?: QuotaStore;
-  /** Base system prompt used when a persona does not override it. */
-  systemPrompt?: string;
+  /**
+   * Base system prompt used when a persona does not override it. A flat string, or a
+   * {@link PromptBuilder} resolved per turn from the actor / persona / page context.
+   */
+  systemPrompt?: string | PromptBuilder;
   /** Available personas (id → prompt + tool allow-list). */
   personas?: Persona[];
   /** Persona id used when a request does not name one. Defaults to `'default'`. */

@@ -16,6 +16,8 @@ import type {
   AgentRunInput,
   Decision,
   ModelMessage,
+  PromptBuilder,
+  PromptContext,
   ToolCallRequest,
   ToolResult,
 } from './types.js';
@@ -29,7 +31,8 @@ export interface AgentLoopDeps {
   modelId: string;
   /** Pre-computed (YYYY-MM-DD) so the loop body stays deterministic under durable replay. */
   day: string;
-  systemPrompt: string;
+  /** The agent's base prompt. A flat string, or a {@link PromptBuilder} resolved per turn. */
+  systemPrompt: string | PromptBuilder;
   maxSteps?: number;
   /** Optional host handle threaded to tool ctx (e.g. an ORM EntityManager). */
   host?: unknown;
@@ -75,6 +78,35 @@ export class QuotaExceededError extends Error {
   }
 }
 
+/** Resolve a prompt that may be a flat string or a {@link PromptBuilder}. */
+async function resolvePrompt(
+  prompt: string | PromptBuilder,
+  ctx: PromptContext,
+): Promise<string> {
+  return typeof prompt === 'function' ? prompt(ctx) : prompt;
+}
+
+/**
+ * The effective system prompt for a turn: resolve the agent's base prompt first, then — if the
+ * request selected a persona — resolve the persona prompt with that base as `basePrompt`, so a
+ * persona builder can wrap the agent's base rather than discard it.
+ */
+async function resolveSystemPrompt(
+  deps: AgentLoopDeps,
+  input: AgentRunInput,
+): Promise<string> {
+  const base: Omit<PromptContext, 'basePrompt'> = {
+    actor: input.actor,
+    ...(input.persona !== undefined ? { persona: input.persona } : {}),
+    ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+  };
+  const basePrompt = await resolvePrompt(deps.systemPrompt, { ...base, basePrompt: '' });
+  if (input.persona === undefined) {
+    return basePrompt;
+  }
+  return resolvePrompt(input.persona.systemPrompt, { ...base, basePrompt });
+}
+
 /** An `agent`-kind tool's input is `{ task }` by convention; fall back to a JSON dump. */
 function extractTask(input: unknown): string {
   if (typeof input === 'object' && input !== null && 'task' in input) {
@@ -103,7 +135,7 @@ export async function runAgentLoop(
 ): Promise<{ text: string }> {
   const maxSteps = deps.maxSteps ?? 8;
   const persona = input.persona;
-  const system = persona?.systemPrompt ?? deps.systemPrompt;
+  const system = await resolveSystemPrompt(deps, input);
 
   if (deps.quota !== undefined) {
     const quota = deps.quota;

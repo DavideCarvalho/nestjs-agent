@@ -14,6 +14,8 @@ import {
   type AgentLoopDeps,
   type AgentLoopHooks,
   type Decision,
+  type Persona,
+  type PromptBuilder,
 } from './index.js';
 
 function buildRegistry(): ToolRegistry {
@@ -48,11 +50,17 @@ async function drain(sink: InMemoryTokenStreamSink, runId: string): Promise<stri
   return out;
 }
 
+interface RunOverrides {
+  systemPrompt?: string | PromptBuilder;
+  persona?: Persona;
+}
+
 async function run(
   script: FakeScript,
   decide: (id: string) => Decision = () => ({ approved: true }),
   quota?: InMemoryQuotaStore,
   runAgent?: (agentName: string, task: string) => Promise<{ text: string }>,
+  overrides: RunOverrides = {},
 ) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
@@ -66,7 +74,7 @@ async function run(
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
     day: '2026-06-30',
-    systemPrompt: 'You are a test agent.',
+    systemPrompt: overrides.systemPrompt ?? 'You are a test agent.',
     ...(quota !== undefined ? { quota } : {}),
   };
   const hooks: AgentLoopHooks = {
@@ -77,7 +85,16 @@ async function run(
     ...(runAgent !== undefined ? { runAgent } : {}),
   };
 
-  const result = await runAgentLoop(deps, { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'hi' }, hooks);
+  const result = await runAgentLoop(
+    deps,
+    {
+      threadId: thread.id,
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      userText: 'hi',
+      ...(overrides.persona !== undefined ? { persona: overrides.persona } : {}),
+    },
+    hooks,
+  );
   const streamed = await drain(sink, runId);
   const detail = await store.getThread(thread.id);
   return { result, streamed, store, detail };
@@ -134,6 +151,28 @@ describe('runAgentLoop', () => {
     await expect(run(() => ({ text: 'x' }), () => ({ approved: true }), quota)).rejects.toThrow(
       /quota/i,
     );
+  });
+
+  it('resolves an agent-level PromptBuilder from the turn context', async () => {
+    const builder: PromptBuilder = (ctx) => `dynamic prompt for ${ctx.actor.id}`;
+    // the fake echoes back whatever system prompt it received, so we can assert resolution
+    const { result } = await run((args) => ({ text: args.system }), undefined, undefined, undefined, {
+      systemPrompt: builder,
+    });
+    expect(result.text).toBe('dynamic prompt for u1');
+  });
+
+  it('lets a persona PromptBuilder wrap the agent base prompt', async () => {
+    const persona: Persona = {
+      id: 'analyst',
+      label: 'Analyst',
+      systemPrompt: (ctx) => `${ctx.basePrompt}\n\nActing as analyst for ${ctx.actor.id}.`,
+    };
+    const { result } = await run((args) => ({ text: args.system }), undefined, undefined, undefined, {
+      systemPrompt: 'Base agent prompt.',
+      persona,
+    });
+    expect(result.text).toBe('Base agent prompt.\n\nActing as analyst for u1.');
   });
 
   it('delegates to a sub-agent via ctx.runAgent and emits agent.delegated', async () => {

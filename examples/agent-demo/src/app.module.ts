@@ -24,6 +24,15 @@ import { PurgeCacheTool } from './tools/purge-cache.tool.js';
       systemPrompt: 'You are a helpful ops assistant for the demo.',
       personas: [
         { id: 'default', label: 'Default', systemPrompt: 'You are a helpful ops assistant.' },
+        {
+          // A dynamic persona: the prompt is composed per request from the turn context
+          // (here the acting user and the page they're on) instead of a flat string.
+          id: 'contextual',
+          label: 'Contextual',
+          systemPrompt: (ctx) =>
+            `You are a helpful ops assistant for ${ctx.actor.id}.` +
+            (ctx.pageContext?.kind ? ` They are viewing the "${ctx.pageContext.kind}" page.` : ''),
+        },
       ],
       durable: true,
     }),
