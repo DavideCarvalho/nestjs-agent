@@ -36,6 +36,8 @@ interface UsageRow {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
+  cacheWriteTokens?: number;
+  cacheReadTokens?: number;
   costUsd?: number;
   day: string;
   createdAt: string;
@@ -48,6 +50,10 @@ export interface GovernanceUsageRow {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
+  /** Subset of `inputTokens` written to the prompt cache this turn; undefined when not reported. */
+  cacheWriteTokens?: number;
+  /** Subset of `inputTokens` served from the prompt cache this turn; undefined when not reported. */
+  cacheReadTokens?: number;
   /** Provider-reported actual cost for the turn, when known; undefined → estimate from pricing. */
   costUsd?: number;
   day: string;
@@ -234,6 +240,12 @@ export class InMemoryAgentStore implements AgentStore {
       outputTokens: input.usage.outputTokens,
       day: createdAt.slice(0, 10),
       createdAt,
+      ...(input.usage.cacheWriteTokens !== undefined
+        ? { cacheWriteTokens: input.usage.cacheWriteTokens }
+        : {}),
+      ...(input.usage.cacheReadTokens !== undefined
+        ? { cacheReadTokens: input.usage.cacheReadTokens }
+        : {}),
       ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
     });
   }
@@ -264,6 +276,8 @@ export class InMemoryAgentStore implements AgentStore {
       outputTokens: row.outputTokens,
       day: row.day,
       createdAt: row.createdAt,
+      ...(row.cacheWriteTokens !== undefined ? { cacheWriteTokens: row.cacheWriteTokens } : {}),
+      ...(row.cacheReadTokens !== undefined ? { cacheReadTokens: row.cacheReadTokens } : {}),
       ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
     }));
   }

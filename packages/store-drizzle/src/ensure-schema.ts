@@ -62,6 +62,8 @@ const statements: string[] = [
     purpose TEXT NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER,
+    cache_read_tokens INTEGER,
     cost_usd REAL,
     created_at INTEGER NOT NULL
   )`,
@@ -72,6 +74,8 @@ const statements: string[] = [
     model_id TEXT NOT NULL,
     input_price_per_1m REAL NOT NULL,
     output_price_per_1m REAL NOT NULL,
+    cache_write_price_per_1m REAL,
+    cache_read_price_per_1m REAL,
     effective_from INTEGER NOT NULL,
     is_current INTEGER NOT NULL
   )`,

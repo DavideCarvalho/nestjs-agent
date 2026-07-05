@@ -182,6 +182,74 @@ describe('InMemoryGovernanceQueries', () => {
     expect(trend[0]?.costUsd).toBeCloseTo(5.5, 6);
   });
 
+  it('prices cache-write and cache-read tokens at their own rates, uncached remainder at input rate', async () => {
+    const store = new InMemoryAgentStore();
+    const today = new Date().toISOString().slice(0, 10);
+    const thread = await store.createThread({
+      actor: { id: 'alice' },
+      persona: 'default',
+      title: 'Cached chat',
+    });
+    // Of 1M input tokens, 200k were cache writes and 300k cache reads → 500k uncached.
+    // cost = 0.5*3 + 0.2*3.75 + 0.3*0.3 + 0.5*15 = 1.5 + 0.75 + 0.09 + 7.5 = 9.84
+    // (naive input*inputPrice would have charged 10.5).
+    await store.recordUsage({
+      threadId: thread.id,
+      actorRef: 'alice',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 500_000,
+        cacheWriteTokens: 200_000,
+        cacheReadTokens: 300_000,
+      },
+    });
+    const cachePricing: ReadonlyMap<string, InMemoryModelPrice> = new Map([
+      [
+        'gpt-x',
+        {
+          inputPricePer1m: 3,
+          outputPricePer1m: 15,
+          cacheWritePricePer1m: 3.75,
+          cacheReadPricePer1m: 0.3,
+        },
+      ],
+    ]);
+    const queries = new InMemoryGovernanceQueries(store, cachePricing);
+    const rows = await queries.spendByModel({ fromDay: today, toDay: today });
+    expect(rows[0]?.costUsd).toBeCloseTo(9.84, 6);
+    // input/output token columns are unchanged — cache tokens are a subset of inputTokens
+    expect(rows[0]?.inputTokens).toBe(1_000_000);
+    expect(rows[0]?.outputTokens).toBe(500_000);
+  });
+
+  it('falls back to the input rate for cache tokens when no cache price is configured', async () => {
+    const store = new InMemoryAgentStore();
+    const today = new Date().toISOString().slice(0, 10);
+    const thread = await store.createThread({
+      actor: { id: 'alice' },
+      persona: 'default',
+      title: 'Cached chat',
+    });
+    await store.recordUsage({
+      threadId: thread.id,
+      actorRef: 'alice',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 500_000,
+        cacheWriteTokens: 200_000,
+        cacheReadTokens: 300_000,
+      },
+    });
+    // no cache prices on gpt-x → all input-side tokens at 3 → 1*3 + 0.5*15 = 10.5
+    const queries = new InMemoryGovernanceQueries(store, pricing);
+    const rows = await queries.spendByModel({ fromDay: today, toDay: today });
+    expect(rows[0]?.costUsd).toBeCloseTo(10.5, 6);
+  });
+
   it('recentToolCalls resolves the thread id and caps at the limit', async () => {
     const { store } = await seed();
     const queries = new InMemoryGovernanceQueries(store, pricing);

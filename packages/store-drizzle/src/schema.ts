@@ -105,6 +105,10 @@ export const agentTokenUsage = sqliteTable(
     purpose: text('purpose').$type<UsagePurpose>().notNull(),
     inputTokens: integer('input_tokens').notNull(),
     outputTokens: integer('output_tokens').notNull(),
+    /** Subset of `inputTokens` written to the prompt cache this turn; null when not reported. */
+    cacheWriteTokens: integer('cache_write_tokens'),
+    /** Subset of `inputTokens` served from the prompt cache this turn; null when not reported. */
+    cacheReadTokens: integer('cache_read_tokens'),
     /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
     costUsd: real('cost_usd'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -118,6 +122,10 @@ export const agentModelPricing = sqliteTable('agent_model_pricing', {
   modelId: text('model_id').notNull(),
   inputPricePer1m: real('input_price_per_1m').notNull(),
   outputPricePer1m: real('output_price_per_1m').notNull(),
+  /** Per-1M price for cache-write input tokens; null → price them at the input rate. */
+  cacheWritePricePer1m: real('cache_write_price_per_1m'),
+  /** Per-1M price for cache-read input tokens; null → price them at the input rate. */
+  cacheReadPricePer1m: real('cache_read_price_per_1m'),
   effectiveFrom: integer('effective_from', { mode: 'timestamp_ms' }).notNull(),
   isCurrent: integer('is_current', { mode: 'boolean' }).notNull(),
 });

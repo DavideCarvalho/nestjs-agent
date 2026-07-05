@@ -257,6 +257,8 @@ export class DrizzleAgentStore implements AgentStore {
       purpose: input.purpose,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
+      cacheWriteTokens: input.usage.cacheWriteTokens ?? null,
+      cacheReadTokens: input.usage.cacheReadTokens ?? null,
       costUsd: input.costUsd ?? null,
       createdAt: new Date(),
     });

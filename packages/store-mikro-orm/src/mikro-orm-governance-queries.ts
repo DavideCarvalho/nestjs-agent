@@ -14,38 +14,42 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 
-/** The current per-1M token prices for one model. */
+/** The current per-1M token prices for one model; cache rates fall back to the input rate. */
 interface ModelPrice {
   inputPricePer1m: number;
   outputPricePer1m: number;
+  cacheWritePricePer1m?: number | null;
+  cacheReadPricePer1m?: number | null;
 }
 
 /**
- * `costUsd = inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m` against the
- * current pricing row for the model. An unpriced model contributes 0 (its tokens still count).
+ * Token-ledger estimate for one usage row against the current pricing row: the uncached input at the
+ * input rate, cache-write/cache-read tokens at their own rates (falling back to the input rate when
+ * unpriced), plus output at the output rate. An unpriced model contributes 0 (tokens still count).
+ * Cache token counts are subsets of `inputTokens`, so the uncached remainder is the difference.
  */
-function costForModel(
-  pricing: Map<string, ModelPrice>,
-  modelId: string,
-  inputTokens: number,
-  outputTokens: number,
-): number {
-  const price = pricing.get(modelId);
+function estimateFromTokens(pricing: Map<string, ModelPrice>, row: AgentTokenUsage): number {
+  const price = pricing.get(row.modelId);
   if (price === undefined) {
     return 0;
   }
+  const cacheWriteTokens = row.cacheWriteTokens ?? 0;
+  const cacheReadTokens = row.cacheReadTokens ?? 0;
+  const uncachedInputTokens = row.inputTokens - cacheWriteTokens - cacheReadTokens;
   return (
-    (inputTokens / 1_000_000) * price.inputPricePer1m +
-    (outputTokens / 1_000_000) * price.outputPricePer1m
+    (uncachedInputTokens / 1_000_000) * price.inputPricePer1m +
+    (cacheWriteTokens / 1_000_000) * (price.cacheWritePricePer1m ?? price.inputPricePer1m) +
+    (cacheReadTokens / 1_000_000) * (price.cacheReadPricePer1m ?? price.inputPricePer1m) +
+    (row.outputTokens / 1_000_000) * price.outputPricePer1m
   );
 }
 
 /**
  * The cost of one usage row: the provider-reported `costUsd` when present (gateways report real
- * spend), otherwise the token-ledger estimate against the current pricing row.
+ * spend), otherwise the cache-aware token estimate against the current pricing row.
  */
 function rowCost(pricing: Map<string, ModelPrice>, row: AgentTokenUsage): number {
-  return row.costUsd ?? costForModel(pricing, row.modelId, row.inputTokens, row.outputTokens);
+  return row.costUsd ?? estimateFromTokens(pricing, row);
 }
 
 /** Turns an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used by `quotaToday`. */
@@ -73,6 +77,8 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       pricing.set(row.modelId, {
         inputPricePer1m: row.inputPricePer1m,
         outputPricePer1m: row.outputPricePer1m,
+        cacheWritePricePer1m: row.cacheWritePricePer1m ?? null,
+        cacheReadPricePer1m: row.cacheReadPricePer1m ?? null,
       });
     }
     return pricing;

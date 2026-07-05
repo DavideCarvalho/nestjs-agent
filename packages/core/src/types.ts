@@ -63,8 +63,31 @@ export interface ToolResult {
 }
 
 export interface MessageUsage {
+  /**
+   * Total input (prompt) tokens for the turn — the whole input side, cached and uncached alike.
+   * `cacheWriteTokens` + `cacheReadTokens` are subsets of this count, not additions to it, so
+   * token totals and quota never change when a breakdown is present.
+   */
   inputTokens: number;
+  /** Total output (completion) tokens for the turn; `reasoningTokens` is a subset of this. */
   outputTokens: number;
+  /**
+   * How many of `inputTokens` were written to the prompt cache this turn (billed at a premium,
+   * ~1.25× base input). Undefined when the provider doesn't report caching. Refines the cost
+   * estimate only — priced by the pricing row's cache-write rate (falling back to the input rate).
+   */
+  cacheWriteTokens?: number;
+  /**
+   * How many of `inputTokens` were served from the prompt cache this turn (billed at a discount,
+   * ~0.1× base input). Undefined when the provider doesn't report caching.
+   */
+  cacheReadTokens?: number;
+  /**
+   * How many of `outputTokens` the model spent on reasoning/thinking. Observability only — reasoning
+   * tokens are billed at the output rate, so they don't change the cost estimate. Undefined for
+   * non-reasoning models or providers that don't report it.
+   */
+  reasoningTokens?: number;
 }
 
 export type UsagePurpose = 'chat' | 'title' | 'follow_ups' | 'summary';

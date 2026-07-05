@@ -328,3 +328,97 @@ describe('MikroOrmGovernanceQueries reported cost (sqlite)', () => {
     expect(points[0]?.costUsd).toBeCloseTo(5.5, 6);
   });
 });
+
+// A self-contained ORM exercising cache-aware pricing (cache-write/read rates + the input fallback).
+describe('MikroOrmGovernanceQueries cache pricing (sqlite)', () => {
+  let cacheOrm: MikroORM;
+  let cacheQueries: MikroOrmGovernanceQueries;
+  const cacheRange = { fromDay: '2026-07-06', toDay: '2026-07-06' };
+
+  beforeAll(async () => {
+    cacheOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(cacheOrm);
+    cacheQueries = new MikroOrmGovernanceQueries(cacheOrm.em);
+
+    const em = cacheOrm.em.fork();
+    const thread = em.create(AgentThread, {
+      id: 'thread-cache',
+      actorRef: 'dave',
+      title: 'Cache chat',
+      persona: 'default',
+      transient: false,
+      summaryMessageCount: 0,
+      createdAt: new Date('2026-07-06T09:00:00.000Z'),
+      updatedAt: new Date('2026-07-06T09:00:00.000Z'),
+    });
+    // priced: cache-write 3.75 (1.25×), cache-read 0.3 (0.1×); unpriced-cache model has no rates.
+    const cachePricing = em.create(AgentModelPricing, {
+      id: 'price-cache',
+      modelId: 'gpt-x',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+      cacheWritePricePer1m: 3.75,
+      cacheReadPricePer1m: 0.3,
+      effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+      isCurrent: true,
+    });
+    const noCachePricing = em.create(AgentModelPricing, {
+      id: 'price-nocache',
+      modelId: 'gpt-flat',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+      effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+      isCurrent: true,
+    });
+    // gpt-x: 1M input (200k write, 300k read → 500k uncached), 500k output →
+    //   0.5*3 + 0.2*3.75 + 0.3*0.3 + 0.5*15 = 9.84
+    const cachedUsage = em.create(AgentTokenUsage, {
+      id: 'usage-cache',
+      thread,
+      actorRef: 'dave',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      cacheWriteTokens: 200_000,
+      cacheReadTokens: 300_000,
+      createdAt: new Date('2026-07-06T09:05:00.000Z'),
+    });
+    // gpt-flat: same shape but no cache rates → all input at 3 → 1*3 + 0.5*15 = 10.5
+    const flatUsage = em.create(AgentTokenUsage, {
+      id: 'usage-flat',
+      thread,
+      actorRef: 'dave',
+      modelId: 'gpt-flat',
+      purpose: 'chat',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      cacheWriteTokens: 200_000,
+      cacheReadTokens: 300_000,
+      createdAt: new Date('2026-07-06T09:06:00.000Z'),
+    });
+    em.persist([thread, cachePricing, noCachePricing, cachedUsage, flatUsage]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await cacheOrm?.close(true);
+  });
+
+  it('prices cache-write/read at their own rates and the uncached remainder at the input rate', async () => {
+    const rows = await cacheQueries.spendByModel(cacheRange);
+    expect(rows.find((row) => row.modelId === 'gpt-x')?.costUsd).toBeCloseTo(9.84, 6);
+    // token columns unchanged — cache tokens are a subset of inputTokens
+    expect(rows.find((row) => row.modelId === 'gpt-x')?.inputTokens).toBe(1_000_000);
+  });
+
+  it('falls back to the input rate for cache tokens when the pricing row has no cache rates', async () => {
+    const rows = await cacheQueries.spendByModel(cacheRange);
+    expect(rows.find((row) => row.modelId === 'gpt-flat')?.costUsd).toBeCloseTo(10.5, 6);
+  });
+});

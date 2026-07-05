@@ -9,30 +9,37 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import type { GovernanceUsageRow, InMemoryAgentStore } from './in-memory-store.js';
 
-/** The current per-1M token prices for one model. */
+/** The current per-1M token prices for one model; cache rates fall back to the input rate. */
 export interface InMemoryModelPrice {
   inputPricePer1m: number;
   outputPricePer1m: number;
+  cacheWritePricePer1m?: number | null;
+  cacheReadPricePer1m?: number | null;
 }
 
 /**
- * `costUsd = inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m` from the
- * supplied pricing map. An unpriced model (missing from the map) contributes 0 — so the default
- * empty map yields 0 cost everywhere while still counting tokens.
+ * Token-ledger estimate for one usage row against the supplied pricing map: the uncached input at
+ * the input rate, cache-write/cache-read tokens at their own rates (falling back to the input rate
+ * when unpriced), plus output at the output rate. An unpriced model (missing from the map)
+ * contributes 0 — so the default empty map yields 0 cost everywhere while still counting tokens.
+ * Cache token counts are subsets of `inputTokens`, so the uncached remainder is the difference.
  */
-function costForModel(
+function estimateFromTokens(
   pricing: ReadonlyMap<string, InMemoryModelPrice>,
-  modelId: string,
-  inputTokens: number,
-  outputTokens: number,
+  row: GovernanceUsageRow,
 ): number {
-  const price = pricing.get(modelId);
+  const price = pricing.get(row.modelId);
   if (price === undefined) {
     return 0;
   }
+  const cacheWriteTokens = row.cacheWriteTokens ?? 0;
+  const cacheReadTokens = row.cacheReadTokens ?? 0;
+  const uncachedInputTokens = row.inputTokens - cacheWriteTokens - cacheReadTokens;
   return (
-    (inputTokens / 1_000_000) * price.inputPricePer1m +
-    (outputTokens / 1_000_000) * price.outputPricePer1m
+    (uncachedInputTokens / 1_000_000) * price.inputPricePer1m +
+    (cacheWriteTokens / 1_000_000) * (price.cacheWritePricePer1m ?? price.inputPricePer1m) +
+    (cacheReadTokens / 1_000_000) * (price.cacheReadPricePer1m ?? price.inputPricePer1m) +
+    (row.outputTokens / 1_000_000) * price.outputPricePer1m
   );
 }
 
@@ -52,11 +59,9 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     return day >= range.fromDay && day <= range.toDay;
   }
 
-  /** Provider-reported cost wins per row; otherwise estimate from tokens × pricing. */
+  /** Provider-reported cost wins per row; otherwise the cache-aware token estimate. */
   private rowCost(row: GovernanceUsageRow): number {
-    return (
-      row.costUsd ?? costForModel(this.pricing, row.modelId, row.inputTokens, row.outputTokens)
-    );
+    return row.costUsd ?? estimateFromTokens(this.pricing, row);
   }
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
