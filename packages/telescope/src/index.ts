@@ -7,3 +7,21 @@ export {
   agentToolsProvider,
   agentToolStatusProvider,
 } from './agent-data-providers.js';
+export {
+  agentActorSpendTableProvider,
+  agentModelSpendTableProvider,
+  agentSpendByActorProvider,
+  agentSpendByModelProvider,
+  agentSpendTotalProvider,
+  agentTokensTotalProvider,
+  agentUsageTrendProvider,
+  resolveRange,
+  shiftUtcDay,
+  toActorSpendRows,
+  toActorSpendSegments,
+  toModelSpendRows,
+  toModelSpendSegments,
+  totalCostUsd,
+  totalTokens,
+  toUsageTrendRows,
+} from './agent-governance-providers.js';

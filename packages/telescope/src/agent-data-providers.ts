@@ -87,7 +87,7 @@ export function agentToolStatusProvider(): DataProvider {
         const status = call.content?.status ?? 'unknown';
         counts.set(status, (counts.get(status) ?? 0) + 1);
       }
-      return { slices: [...counts.entries()].map(([label, value]) => ({ label, value })) };
+      return { segments: [...counts.entries()].map(([label, value]) => ({ label, value })) };
     },
   };
 }

@@ -26,6 +26,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-diagnostics": "0.6.1"
   },
   "peerDependencies": {
