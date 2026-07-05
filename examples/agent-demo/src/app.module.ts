@@ -1,23 +1,47 @@
-import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
-import { InMemoryAgentStore, InMemoryQuotaStore } from '@dudousxd/nestjs-agent-testing';
+import { AGENT_GOVERNANCE_QUERIES, AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+import {
+  InMemoryAgentStore,
+  InMemoryGovernanceQueries,
+  InMemoryQuotaStore,
+} from '@dudousxd/nestjs-agent-testing';
 import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { DurableModule } from '@dudousxd/nestjs-durable';
 import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { AgentDiagnosticsConsole } from './diagnostics-console.js';
 import { demoModel } from './model.js';
 import { GetWeatherTool } from './tools/get-weather.tool.js';
 import { PurgeCacheTool } from './tools/purge-cache.tool.js';
 
+// One shared store so the governance read-model sees exactly what the agent persists. A tiny pricing
+// map turns recorded tokens into non-zero $ spend in the /ai-gateway console.
+const demoStore = new InMemoryAgentStore();
+const demoGovernance = new InMemoryGovernanceQueries(
+  demoStore,
+  new Map([['fake-demo-1', { inputPricePer1m: 3, outputPricePer1m: 15 }]]),
+);
+
+/** Exposes the governance read-model globally so the dashboard (and telescope) can resolve it. */
+@Global()
+@Module({
+  providers: [{ provide: AGENT_GOVERNANCE_QUERIES, useValue: demoGovernance }],
+  exports: [AGENT_GOVERNANCE_QUERIES],
+})
+class DemoGovernanceModule {}
+
 @Module({
   imports: [
+    DemoGovernanceModule,
     // Durable engine, fully in-process (no Redis) via the default transport + in-memory state store.
     DurableModule.forRoot({ store: new InMemoryStateStore() }),
+    // The standalone AI-gateway governance console at /ai-gateway (JSON API at /ai-gateway/api).
+    AgentDashboardModule.forRoot(),
     // The agent — each turn runs as the durable `agent.run` workflow.
     AgentModule.forRoot({
       // --- infrastructure ---
       model: demoModel,
-      store: new InMemoryAgentStore(),
+      store: demoStore,
       quota: new InMemoryQuotaStore(200_000),
       // Demo/gateway identity: trust x-actor-id / x-actor-role headers. Never fabricates a caller.
       actorResolver: new HeaderActorResolver(),
