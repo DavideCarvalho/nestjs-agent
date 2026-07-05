@@ -20,19 +20,54 @@ interface ThreadRow extends ThreadSummary {
 interface ToolCallRow {
   toolCallId: string;
   messageId: string;
+  threadId: string;
   toolName: string;
   toolType: 'read' | 'action';
   input: unknown;
   output?: unknown;
   status: ToolCallStatus;
   error?: string;
+  createdAt: string;
 }
 
 interface UsageRow {
   actorRef: string;
-  tokens: number;
-  day: string;
+  threadId: string;
   modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  day: string;
+  createdAt: string;
+}
+
+/** A recorded usage row exposed to the governance read-model (input/output split + thread/day). */
+export interface GovernanceUsageRow {
+  actorRef: string;
+  threadId: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  day: string;
+  createdAt: string;
+}
+
+/** A recorded tool call exposed to the governance read-model (thread resolved, with timestamp). */
+export interface GovernanceToolCallRow {
+  toolCallId: string;
+  toolName: string;
+  toolType: 'read' | 'action';
+  status: ToolCallStatus;
+  threadId: string;
+  createdAt: string;
+}
+
+/** Thread metadata exposed to the governance read-model (title/actor/count/last activity). */
+export interface GovernanceThreadRow {
+  threadId: string;
+  title: string;
+  actorRef: string;
+  messageCount: number;
+  updatedAt: string;
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
@@ -163,10 +198,12 @@ export class InMemoryAgentStore implements AgentStore {
     this.toolCalls.set(input.toolCallId, {
       toolCallId: input.toolCallId,
       messageId: input.messageId,
+      threadId: this.threadIdForMessage(input.messageId) ?? '',
       toolName: input.toolName,
       toolType: input.toolType,
       input: input.input,
       status: input.status,
+      createdAt: this.now(),
     });
   }
 
@@ -185,19 +222,22 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {
-    const day = new Date().toISOString().slice(0, 10);
+    const createdAt = this.now();
     this.usage.push({
       actorRef: input.actorRef,
-      tokens: input.usage.inputTokens + input.usage.outputTokens,
-      day,
+      threadId: input.threadId,
       modelId: input.modelId,
+      inputTokens: input.usage.inputTokens,
+      outputTokens: input.usage.outputTokens,
+      day: createdAt.slice(0, 10),
+      createdAt,
     });
   }
 
   async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {
     const usedTokens = this.usage
       .filter((row) => row.actorRef === actorRef && row.day === day)
-      .reduce((sum, row) => sum + row.tokens, 0);
+      .reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
     return { usedTokens };
   }
 
@@ -205,9 +245,54 @@ export class InMemoryAgentStore implements AgentStore {
   usageRows(): { actorRef: string; tokens: number; modelId: string }[] {
     return this.usage.map((row) => ({
       actorRef: row.actorRef,
-      tokens: row.tokens,
+      tokens: row.inputTokens + row.outputTokens,
       modelId: row.modelId,
     }));
+  }
+
+  /** Governance read-model feed: recorded usage rows with the input/output split + thread/day. */
+  governanceUsage(): GovernanceUsageRow[] {
+    return this.usage.map((row) => ({
+      actorRef: row.actorRef,
+      threadId: row.threadId,
+      modelId: row.modelId,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      day: row.day,
+      createdAt: row.createdAt,
+    }));
+  }
+
+  /** Governance read-model feed: recorded tool calls with the resolved thread + timestamp. */
+  governanceToolCalls(): GovernanceToolCallRow[] {
+    return [...this.toolCalls.values()].map((row) => ({
+      toolCallId: row.toolCallId,
+      toolName: row.toolName,
+      toolType: row.toolType,
+      status: row.status,
+      threadId: row.threadId,
+      createdAt: row.createdAt,
+    }));
+  }
+
+  /** Governance read-model feed: thread metadata (title/actor/message count/last activity). */
+  governanceThreads(): GovernanceThreadRow[] {
+    return [...this.threads.values()].map((row) => ({
+      threadId: row.id,
+      title: row.title,
+      actorRef: row.actorRef,
+      messageCount: row.messages.length,
+      updatedAt: row.updatedAt,
+    }));
+  }
+
+  private threadIdForMessage(messageId: string): string | undefined {
+    for (const [threadId, row] of this.threads) {
+      if (row.messages.some((message) => message.id === messageId)) {
+        return threadId;
+      }
+    }
+    return undefined;
   }
 
   /** Test helper: read the recorded tool-call rows. */
