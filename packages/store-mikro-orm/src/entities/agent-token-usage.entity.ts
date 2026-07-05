@@ -12,6 +12,8 @@ export class AgentTokenUsage {
   purpose!: UsagePurpose;
   inputTokens!: number;
   outputTokens!: number;
+  /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
+  costUsd?: number | null;
   createdAt!: Date;
 }
 
@@ -39,6 +41,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       purpose: { type: 'string', ...str },
       inputTokens: { type: 'integer', fieldName: 'input_tokens' },
       outputTokens: { type: 'integer', fieldName: 'output_tokens' },
+      costUsd: { type: 'float', nullable: true, fieldName: 'cost_usd' },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
     },
   });

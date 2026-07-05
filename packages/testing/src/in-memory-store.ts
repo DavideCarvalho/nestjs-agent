@@ -36,6 +36,7 @@ interface UsageRow {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
+  costUsd?: number;
   day: string;
   createdAt: string;
 }
@@ -47,6 +48,8 @@ export interface GovernanceUsageRow {
   modelId: string;
   inputTokens: number;
   outputTokens: number;
+  /** Provider-reported actual cost for the turn, when known; undefined → estimate from pricing. */
+  costUsd?: number;
   day: string;
   createdAt: string;
 }
@@ -231,6 +234,7 @@ export class InMemoryAgentStore implements AgentStore {
       outputTokens: input.usage.outputTokens,
       day: createdAt.slice(0, 10),
       createdAt,
+      ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
     });
   }
 
@@ -260,6 +264,7 @@ export class InMemoryAgentStore implements AgentStore {
       outputTokens: row.outputTokens,
       day: row.day,
       createdAt: row.createdAt,
+      ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
     }));
   }
 

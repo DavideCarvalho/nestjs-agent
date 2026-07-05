@@ -105,6 +105,8 @@ export const agentTokenUsage = sqliteTable(
     purpose: text('purpose').$type<UsagePurpose>().notNull(),
     inputTokens: integer('input_tokens').notNull(),
     outputTokens: integer('output_tokens').notNull(),
+    /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
+    costUsd: real('cost_usd'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],

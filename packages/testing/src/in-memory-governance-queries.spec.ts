@@ -143,6 +143,45 @@ describe('InMemoryGovernanceQueries', () => {
     expect(rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0)).toBe(5_100_000);
   });
 
+  it('prefers the provider-reported cost over the pricing estimate, per row', async () => {
+    const store = new InMemoryAgentStore();
+    const today = new Date().toISOString().slice(0, 10);
+    const thread = await store.createThread({
+      actor: { id: 'alice' },
+      persona: 'default',
+      title: 'Gateway chat',
+    });
+    // gpt-x would estimate 1*3 + 0.5*15 = 10.5, but the gateway reported 4.2 — the report wins.
+    await store.recordUsage({
+      threadId: thread.id,
+      actorRef: 'alice',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 1_000_000, outputTokens: 500_000 },
+      costUsd: 4.2,
+    });
+    // an unpriced model that still reports a real cost — no longer collapses to 0.
+    await store.recordUsage({
+      threadId: thread.id,
+      actorRef: 'alice',
+      modelId: 'free-y',
+      purpose: 'chat',
+      usage: { inputTokens: 2_000_000, outputTokens: 1_000_000 },
+      costUsd: 1.3,
+    });
+    const queries = new InMemoryGovernanceQueries(store, pricing);
+
+    const byModel = await queries.spendByModel({ fromDay: today, toDay: today });
+    expect(byModel.find((row) => row.modelId === 'gpt-x')?.costUsd).toBeCloseTo(4.2, 6);
+    expect(byModel.find((row) => row.modelId === 'free-y')?.costUsd).toBeCloseTo(1.3, 6);
+
+    const byActor = await queries.spendByActor({ fromDay: today, toDay: today });
+    expect(byActor.find((row) => row.actorRef === 'alice')?.costUsd).toBeCloseTo(5.5, 6);
+
+    const trend = await queries.usageTrend({ fromDay: today, toDay: today });
+    expect(trend[0]?.costUsd).toBeCloseTo(5.5, 6);
+  });
+
   it('recentToolCalls resolves the thread id and caps at the limit', async () => {
     const { store } = await seed();
     const queries = new InMemoryGovernanceQueries(store, pricing);

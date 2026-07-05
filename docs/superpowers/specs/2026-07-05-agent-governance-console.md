@@ -51,7 +51,7 @@ export interface AgentGovernanceQueries {
 }
 ```
 
-**Cost:** `costUsd = inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m`, joined on the *current* pricing row per `modelId` (`AgentModelPricing.isCurrent`). Unknown model → cost 0 (usage still shown).
+**Cost (per row, reported wins):** `costUsd = COALESCE(reportedCostUsd, tokens × pricing)`, evaluated per usage row and then summed. When a gateway provider reports the actual spend for a turn — Vercel AI Gateway (`providerMetadata.gateway.cost`), OpenRouter (`total_cost`) — `ModelTurnResult.costUsd` carries it, the loop persists it to the nullable `agent_token_usage.cost_usd` column, and the read-model uses it verbatim. Otherwise it estimates from `inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 * outputPricePer1m` joined on the *current* pricing row per `modelId` (`AgentModelPricing.isCurrent`). A direct provider (Anthropic/OpenAI/Bedrock) reports only tokens, so the estimate stands; an unpriced model with no reported cost contributes 0 (usage still shown). Preferring the report per row is why prompt-cache pricing skew never reaches the numbers a gateway already priced.
 
 Implementations:
 - **store-mikro-orm** — QueryBuilder GROUP BY over `agent_token_usage` joined to `agent_model_pricing`; DB-tested via `*.db.spec.ts`.

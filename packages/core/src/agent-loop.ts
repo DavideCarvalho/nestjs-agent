@@ -196,6 +196,8 @@ export async function runAgentLoop(
         modelId: turn.modelId ?? deps.modelId ?? 'unknown',
         purpose: 'chat',
         usage: turn.usage,
+        // persist the provider's actual cost when reported; the read-model prefers it over pricing
+        ...(turn.costUsd !== undefined ? { costUsd: turn.costUsd } : {}),
       }),
     );
     if (deps.quota !== undefined) {

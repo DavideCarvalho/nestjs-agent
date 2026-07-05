@@ -252,6 +252,7 @@ export class MikroOrmAgentStore implements AgentStore {
       outputTokens: input.usage.outputTokens,
       createdAt: new Date(),
       ...(input.messageId !== undefined ? { messageId: input.messageId } : {}),
+      ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
     });
     em.persist(usage);
     await em.flush();

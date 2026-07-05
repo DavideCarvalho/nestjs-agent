@@ -43,6 +43,17 @@ function costForModel(
   );
 }
 
+/**
+ * The cost of one usage row: the provider-reported `costUsd` when present (gateways report real
+ * spend), otherwise the token-ledger estimate against the current pricing row.
+ */
+function rowCost(
+  pricing: Map<string, ModelPrice>,
+  row: typeof agentTokenUsage.$inferSelect,
+): number {
+  return row.costUsd ?? costForModel(pricing, row.modelId, row.inputTokens, row.outputTokens);
+}
+
 /** Turns an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used by `quotaToday`. */
 function dayBounds(range: GovernanceRange): { start: Date; end: Date } {
   return {
@@ -92,17 +103,19 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const rows = await this.usageInRange(range);
     const byModel = new Map<
       string,
-      { requests: number; inputTokens: number; outputTokens: number }
+      { requests: number; inputTokens: number; outputTokens: number; costUsd: number }
     >();
     for (const row of rows) {
       const bucket = byModel.get(row.modelId) ?? {
         requests: 0,
         inputTokens: 0,
         outputTokens: 0,
+        costUsd: 0,
       };
       bucket.requests += 1;
       bucket.inputTokens += row.inputTokens;
       bucket.outputTokens += row.outputTokens;
+      bucket.costUsd += rowCost(pricing, row);
       byModel.set(row.modelId, bucket);
     }
     const result: ModelSpendRow[] = [];
@@ -112,7 +125,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         requests: bucket.requests,
         inputTokens: bucket.inputTokens,
         outputTokens: bucket.outputTokens,
-        costUsd: costForModel(pricing, modelId, bucket.inputTokens, bucket.outputTokens),
+        costUsd: bucket.costUsd,
       });
     }
     result.sort(
@@ -129,7 +142,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       const bucket = byActor.get(row.actorRef) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
       bucket.requests += 1;
       bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += costForModel(pricing, row.modelId, row.inputTokens, row.outputTokens);
+      bucket.costUsd += rowCost(pricing, row);
       byActor.set(row.actorRef, bucket);
     }
     const result: ActorSpendRow[] = [];
@@ -155,7 +168,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       const day = row.createdAt.toISOString().slice(0, 10);
       const bucket = byDay.get(day) ?? { totalTokens: 0, costUsd: 0 };
       bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += costForModel(pricing, row.modelId, row.inputTokens, row.outputTokens);
+      bucket.costUsd += rowCost(pricing, row);
       byDay.set(day, bucket);
     }
     const result: UsageTrendPoint[] = [];

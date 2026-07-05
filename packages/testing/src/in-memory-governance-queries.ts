@@ -7,7 +7,7 @@ import type {
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
-import type { InMemoryAgentStore } from './in-memory-store.js';
+import type { GovernanceUsageRow, InMemoryAgentStore } from './in-memory-store.js';
 
 /** The current per-1M token prices for one model. */
 export interface InMemoryModelPrice {
@@ -52,10 +52,17 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     return day >= range.fromDay && day <= range.toDay;
   }
 
+  /** Provider-reported cost wins per row; otherwise estimate from tokens × pricing. */
+  private rowCost(row: GovernanceUsageRow): number {
+    return (
+      row.costUsd ?? costForModel(this.pricing, row.modelId, row.inputTokens, row.outputTokens)
+    );
+  }
+
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
     const byModel = new Map<
       string,
-      { requests: number; inputTokens: number; outputTokens: number }
+      { requests: number; inputTokens: number; outputTokens: number; costUsd: number }
     >();
     for (const row of this.store.governanceUsage()) {
       if (!this.inRange(row.day, range)) {
@@ -65,10 +72,12 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         requests: 0,
         inputTokens: 0,
         outputTokens: 0,
+        costUsd: 0,
       };
       bucket.requests += 1;
       bucket.inputTokens += row.inputTokens;
       bucket.outputTokens += row.outputTokens;
+      bucket.costUsd += this.rowCost(row);
       byModel.set(row.modelId, bucket);
     }
     const result: ModelSpendRow[] = [];
@@ -78,7 +87,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         requests: bucket.requests,
         inputTokens: bucket.inputTokens,
         outputTokens: bucket.outputTokens,
-        costUsd: costForModel(this.pricing, modelId, bucket.inputTokens, bucket.outputTokens),
+        costUsd: bucket.costUsd,
       });
     }
     result.sort(
@@ -96,7 +105,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       const bucket = byActor.get(row.actorRef) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
       bucket.requests += 1;
       bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += costForModel(this.pricing, row.modelId, row.inputTokens, row.outputTokens);
+      bucket.costUsd += this.rowCost(row);
       byActor.set(row.actorRef, bucket);
     }
     const result: ActorSpendRow[] = [];
@@ -122,7 +131,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       }
       const bucket = byDay.get(row.day) ?? { totalTokens: 0, costUsd: 0 };
       bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += costForModel(this.pricing, row.modelId, row.inputTokens, row.outputTokens);
+      bucket.costUsd += this.rowCost(row);
       byDay.set(row.day, bucket);
     }
     const result: UsageTrendPoint[] = [];

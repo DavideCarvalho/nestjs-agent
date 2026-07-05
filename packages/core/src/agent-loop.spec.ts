@@ -191,6 +191,30 @@ describe('runAgentLoop', () => {
     expect(store.usageRows()[0]?.modelId).toBe('claude-real-42');
   });
 
+  it('persists a provider-reported costUsd onto the usage row', async () => {
+    const gatewayModel: ModelProvider = {
+      async runTurn(args) {
+        await args.sink.write(new TextEncoder().encode('done'));
+        return {
+          text: 'done',
+          toolCalls: [],
+          usage: { inputTokens: 1, outputTokens: 1 },
+          // a gateway provider reports the actual spend for this turn
+          costUsd: 0.0042,
+        };
+      },
+    };
+    const { store } = await run(() => ({ text: 'unused' }), undefined, undefined, undefined, {
+      model: gatewayModel,
+    });
+    expect(store.governanceUsage()[0]?.costUsd).toBeCloseTo(0.0042, 6);
+  });
+
+  it('leaves costUsd unset when the provider reports only tokens', async () => {
+    const { store } = await run(() => ({ text: 'ok' }));
+    expect(store.governanceUsage()[0]?.costUsd).toBeUndefined();
+  });
+
   it('resolves an agent-level PromptBuilder from the turn context', async () => {
     const builder: PromptBuilder = (ctx) => `dynamic prompt for ${ctx.actor.id}`;
     // the fake echoes back whatever system prompt it received, so we can assert resolution

@@ -245,3 +245,86 @@ describe('MikroOrmGovernanceQueries (sqlite)', () => {
     expect(bob?.totalTokens).toBe(600_000);
   });
 });
+
+// A self-contained ORM so the reported-cost rows never perturb the shared-seed count assertions.
+describe('MikroOrmGovernanceQueries reported cost (sqlite)', () => {
+  let reportedOrm: MikroORM;
+  let reportedQueries: MikroOrmGovernanceQueries;
+  const reportedRange = { fromDay: '2026-07-05', toDay: '2026-07-05' };
+
+  beforeAll(async () => {
+    reportedOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(reportedOrm);
+    reportedQueries = new MikroOrmGovernanceQueries(reportedOrm.em);
+
+    const em = reportedOrm.em.fork();
+    const thread = em.create(AgentThread, {
+      id: 'thread-carol',
+      actorRef: 'carol',
+      title: 'Carol chat',
+      persona: 'default',
+      transient: false,
+      summaryMessageCount: 0,
+      createdAt: new Date('2026-07-05T09:00:00.000Z'),
+      updatedAt: new Date('2026-07-05T09:00:00.000Z'),
+    });
+    // gpt-x is priced 3/15 → estimate 1*3 + 0.5*15 = 10.5, but the gateway reported 4.2 (wins).
+    const pricing = em.create(AgentModelPricing, {
+      id: 'price-carol',
+      modelId: 'gpt-x',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+      effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+      isCurrent: true,
+    });
+    const priced = em.create(AgentTokenUsage, {
+      id: 'usage-reported-priced',
+      thread,
+      actorRef: 'carol',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      costUsd: 4.2,
+      createdAt: new Date('2026-07-05T09:05:00.000Z'),
+    });
+    // free-z is unpriced, yet still reports a real 1.3 — no longer collapses to 0.
+    const unpriced = em.create(AgentTokenUsage, {
+      id: 'usage-reported-unpriced',
+      thread,
+      actorRef: 'carol',
+      modelId: 'free-z',
+      purpose: 'chat',
+      inputTokens: 2_000_000,
+      outputTokens: 1_000_000,
+      costUsd: 1.3,
+      createdAt: new Date('2026-07-05T09:30:00.000Z'),
+    });
+    em.persist([thread, pricing, priced, unpriced]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await reportedOrm?.close(true);
+  });
+
+  it('spendByModel uses the reported cost for both priced and unpriced models', async () => {
+    const rows = await reportedQueries.spendByModel(reportedRange);
+    expect(rows.find((row) => row.modelId === 'gpt-x')?.costUsd).toBeCloseTo(4.2, 6);
+    expect(rows.find((row) => row.modelId === 'free-z')?.costUsd).toBeCloseTo(1.3, 6);
+  });
+
+  it('spendByActor and usageTrend sum the reported costs', async () => {
+    const byActor = await reportedQueries.spendByActor(reportedRange);
+    expect(byActor.find((row) => row.actorRef === 'carol')?.costUsd).toBeCloseTo(5.5, 6);
+
+    const points = await reportedQueries.usageTrend(reportedRange);
+    expect(points).toHaveLength(1);
+    expect(points[0]?.costUsd).toBeCloseTo(5.5, 6);
+  });
+});

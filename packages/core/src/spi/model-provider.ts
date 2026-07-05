@@ -21,6 +21,13 @@ export interface ModelTurnResult {
    * label can't silently drift from the runtime. Omit if the provider can't report one.
    */
   modelId?: string;
+  /**
+   * The ACTUAL USD cost of this turn, when the provider knows it — a gateway (Vercel AI Gateway
+   * `providerMetadata.gateway.cost`, OpenRouter `total_cost`) reports real spend; a direct provider
+   * (Anthropic/OpenAI/Bedrock) reports only tokens and leaves this undefined. When set, the
+   * governance read-model uses it verbatim; otherwise it estimates from tokens × the pricing table.
+   */
+  costUsd?: number;
 }
 
 /**

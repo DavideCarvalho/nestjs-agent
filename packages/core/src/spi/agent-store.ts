@@ -53,6 +53,8 @@ export interface RecordUsageInput {
   modelId: string;
   purpose: UsagePurpose;
   usage: MessageUsage;
+  /** Provider-reported actual USD cost for this turn, when known (gateways report it). */
+  costUsd?: number;
 }
 
 /** ORM-agnostic persistence. Refs are string ids; adapters may add real relations. */

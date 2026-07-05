@@ -62,6 +62,7 @@ const statements: string[] = [
     purpose TEXT NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
+    cost_usd REAL,
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS agent_token_usage_actor_created_idx

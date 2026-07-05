@@ -4,6 +4,8 @@ export interface FakeTurn {
   text: string;
   /** If set, the turn asks to call this tool instead of finishing. */
   toolCall?: { name: string; input: unknown };
+  /** If set, the turn reports an actual USD cost — as a gateway provider would. */
+  costUsd?: number;
 }
 
 /**
@@ -41,6 +43,7 @@ export class FakeModelProvider implements ModelProvider {
       text: turn.text,
       toolCalls,
       usage: { inputTokens: args.messages.length, outputTokens: turn.text.length },
+      ...(turn.costUsd !== undefined ? { costUsd: turn.costUsd } : {}),
     };
   }
 }
