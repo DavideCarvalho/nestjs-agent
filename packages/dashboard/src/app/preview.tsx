@@ -1,0 +1,75 @@
+import { type ReactNode, StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { ActorsSection } from './ActorsSection';
+import { LiveSection } from './LiveSection';
+import { ModelsSection } from './ModelsSection';
+import { RunsToolsSection } from './RunsToolsSection';
+import { SpendSection } from './SpendSection';
+import { LogoMark } from './icons';
+import {
+  MOCK_BUDGETS,
+  MOCK_LIVE_EVENTS,
+  MOCK_SPEND,
+  MOCK_THREADS,
+  MOCK_TOOL_CALLS,
+} from './mock-data';
+import './index.css';
+
+/**
+ * Standalone mock-data entry — no backend, no react-query. Renders every section stacked so the full
+ * console can be visually verified with `vite dev`/`vite preview` against `preview.html`.
+ */
+function Preview() {
+  return (
+    <div className="relative min-h-full">
+      <div className="app-bg" />
+      <div className="relative z-10 mx-auto max-w-[1180px] space-y-6 px-5 py-6">
+        <header className="flex items-center gap-2.5">
+          <div className="grid h-8 w-8 place-items-center rounded-lg border border-[var(--accent)]/40 bg-[var(--accent)]/10">
+            <LogoMark className="h-4 w-4 text-[var(--accent)]" />
+          </div>
+          <div className="leading-none">
+            <div className="text-sm font-semibold tracking-tight">AI gateway — preview</div>
+            <div className="mono text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]">
+              mock data · no backend
+            </div>
+          </div>
+        </header>
+
+        <Group label="Spend & usage">
+          <SpendSection overview={MOCK_SPEND} />
+        </Group>
+        <Group label="Models">
+          <ModelsSection rows={MOCK_SPEND.byModel} />
+        </Group>
+        <Group label="Actors & budgets">
+          <ActorsSection rows={MOCK_SPEND.byActor} budgets={MOCK_BUDGETS} />
+        </Group>
+        <Group label="Runs & tools">
+          <RunsToolsSection toolCalls={MOCK_TOOL_CALLS} threads={MOCK_THREADS} />
+        </Group>
+        <Group label="Live">
+          <LiveSection events={MOCK_LIVE_EVENTS} connected />
+        </Group>
+      </div>
+    </div>
+  );
+}
+
+function Group({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <h2 className="mono text-[11px] uppercase tracking-[0.2em] text-[var(--muted)]">{label}</h2>
+      {children}
+    </div>
+  );
+}
+
+const container = document.getElementById('root');
+if (container) {
+  createRoot(container).render(
+    <StrictMode>
+      <Preview />
+    </StrictMode>,
+  );
+}

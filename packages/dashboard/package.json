@@ -1,0 +1,63 @@
+{
+  "name": "@dudousxd/nestjs-agent-dashboard",
+  "version": "0.1.0",
+  "description": "Embedded AI-gateway governance console (spend, models, actors/budgets, runs/tools, live feed) for nestjs-agent — bundled React SPA served by NestJS",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/server/index.cjs",
+  "module": "./dist/server/index.js",
+  "types": "./dist/server/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/server/index.d.ts",
+        "default": "./dist/server/index.js"
+      },
+      "require": {
+        "types": "./dist/server/index.d.cts",
+        "default": "./dist/server/index.cjs"
+      }
+    },
+    "./client": {
+      "types": "./dist/client/agent-client.d.ts",
+      "import": "./dist/client/agent-client.js",
+      "default": "./dist/client/agent-client.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && tsup && tsc -p tsconfig.client.json",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.app.json --noEmit"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-agent-core": ">=0.1.0 <1.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "@nestjs/core": "^10.0.0 || ^11.0.0",
+    "rxjs": "^7.0.0"
+  },
+  "dependencies": {
+    "@dudousxd/nestjs-diagnostics": "0.6.1"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@nestjs/common": "11.1.6",
+    "@nestjs/core": "11.1.6",
+    "@swc/core": "1.15.41",
+    "@tanstack/react-query": "5.62.7",
+    "@types/react": "19.2.5",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.3.4",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.5.16",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.1",
+    "tailwindcss": "3.4.17",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
+  }
+}
