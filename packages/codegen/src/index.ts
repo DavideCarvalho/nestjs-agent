@@ -17,9 +17,7 @@ export interface AgentCodegenOptions {
 // frontend is the thread/message envelope; rich tool data flows through the React tool-part renderer.
 const USAGE =
   '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
-const STORED_MESSAGE =
-  '{ id: string; role: string; content: string; toolCalls?: Record<string, unknown>[]; ' +
-  `toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
+const STORED_MESSAGE = `{ id: string; role: string; content: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
 const THREAD_SUMMARY =
   '{ id: string; title: string; persona: string; pinnedAt?: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string }';

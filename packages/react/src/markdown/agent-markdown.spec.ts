@@ -7,9 +7,7 @@ import { AgentMarkdown } from './agent-markdown.js';
 describe('AgentMarkdown', () => {
   it('renders GFM markdown to formatted DOM without crashing', () => {
     const { container } = render(
-      createElement(AgentMarkdown, {
-        children: '# Title\n\nSome **bold** and a list:\n\n- one\n- two',
-      }),
+      createElement(AgentMarkdown, null, '# Title\n\nSome **bold** and a list:\n\n- one\n- two'),
     );
     // Streamdown renders a heading element and list items; assert structure + text survive.
     expect(container.querySelector('h1')?.textContent).toContain('Title');
@@ -18,9 +16,7 @@ describe('AgentMarkdown', () => {
   });
 
   it('renders a fenced code block', () => {
-    const { container } = render(
-      createElement(AgentMarkdown, { children: '```ts\nconst x = 1;\n```' }),
-    );
+    const { container } = render(createElement(AgentMarkdown, null, '```ts\nconst x = 1;\n```'));
     expect(container.querySelector('code')?.textContent).toContain('const x = 1;');
   });
 });

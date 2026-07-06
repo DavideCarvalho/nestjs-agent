@@ -60,6 +60,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
 
+  // Identity-stable: per-render config is read through `latest`.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   const client = useMemo(() => {
     if (options.client) return options.client;
     return new AgentClient({
@@ -68,10 +70,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       getHeaders: async () => mergeHeaders(latest.current),
     });
-    // Identity-stable: per-render config is read through `latest`.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   }, []);
 
+  // Identity-stable: per-render config is read through `latest`.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   const transport = useMemo(() => {
     function onMeta(meta: AgentStreamMeta): void {
       setRunId(meta.runId);
@@ -97,7 +99,6 @@ export function useAgentChat(options: UseAgentChatOptions) {
       },
       onMeta,
     });
-    // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   }, []);
 
   const chat = useChat({
