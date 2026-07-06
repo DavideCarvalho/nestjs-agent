@@ -82,7 +82,7 @@ export function createExecuteSqlTool(deps: ExecuteSqlDeps): {
 
       let sql = input.sql;
       if (deps.tenantScope) {
-        sql = deps.tenantScope.rewrite(sql, ctx.tenantRef);
+        sql = deps.tenantScope.rewrite(sql, ctx.actor.tenantRef);
       }
       sql = injectLimit(sql, maxRows);
 

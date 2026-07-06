@@ -13,6 +13,6 @@ import { z } from 'zod';
 @Injectable()
 export class PurgeCacheTool {
   async execute(input: { key: string }, ctx: AiToolCtx) {
-    return { purged: input.key, by: ctx.actorId, at: 'just now' };
+    return { purged: input.key, by: ctx.actor.id, at: 'just now' };
   }
 }

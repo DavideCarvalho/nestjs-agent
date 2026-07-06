@@ -1,15 +1,17 @@
 import type { Actor, PageContext, Persona } from '../types.js';
 
-/** Per-invocation context handed to a tool handler. Host-supplied bits are optional. */
+/**
+ * Per-invocation context handed to a tool handler. Host-supplied bits are optional. Identity lives
+ * on {@link AiToolCtx.actor} — read `ctx.actor.id` / `ctx.actor.tenantRef` (single source of truth;
+ * no denormalized copies).
+ */
 export interface AiToolCtx {
-  actorId: string;
-  tenantRef?: string;
+  actor: Actor;
   threadId: string;
   runId: string;
   requestId: string;
   persona?: Persona;
   pageContext?: PageContext;
-  actor: Actor;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
 }

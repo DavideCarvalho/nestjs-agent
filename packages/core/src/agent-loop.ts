@@ -242,12 +242,10 @@ export async function runAgentLoop(
       const spec = deps.registry.spec(call.name);
       const toolType = spec?.kind ?? 'read';
       const ctx: AiToolCtx = {
-        actorId: input.actor.id,
+        actor: input.actor,
         threadId: input.threadId,
         runId: hooks.runId,
         requestId: hooks.runId,
-        actor: input.actor,
-        ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
         ...(persona !== undefined ? { persona } : {}),
         ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
         ...(deps.host !== undefined ? { host: deps.host } : {}),
