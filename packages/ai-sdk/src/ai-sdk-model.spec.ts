@@ -1,0 +1,247 @@
+import type { ModelMessage, SinkWriter, ToolDefinition } from '@dudousxd/nestjs-agent-core';
+import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { aiSdkModel } from './ai-sdk-model.js';
+
+const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
+
+// Mock the SDK boundary: `tool`/`jsonSchema` are identity-ish so we can inspect what got passed,
+// and `streamText` is a spy whose return value each test controls.
+vi.mock('ai', () => ({
+  streamText: (args: unknown) => streamTextMock(args),
+  tool: (definition: unknown) => definition,
+  jsonSchema: (schema: unknown) => ({ jsonSchema: schema }),
+}));
+
+interface CollectingSink extends SinkWriter {
+  readonly written: string;
+}
+
+function createSink(): CollectingSink {
+  const decoder = new TextDecoder();
+  let written = '';
+  return {
+    write(chunk: Uint8Array) {
+      written += decoder.decode(chunk);
+    },
+    end() {},
+    get written() {
+      return written;
+    },
+  };
+}
+
+function noJsonSchemaTool(name: string): ToolDefinition {
+  const inputSchema: StandardSchemaV1 = {
+    '~standard': {
+      version: 1,
+      vendor: 'test',
+      validate: (value: unknown) => ({ value }),
+    },
+  };
+  return { name, kind: 'read', description: `${name} tool`, inputSchema };
+}
+
+function fakeStreamResult(overrides: Record<string, unknown> = {}) {
+  return {
+    fullStream: (async function* generate() {
+      yield { type: 'text-delta', id: '1', text: 'Hel' };
+      yield { type: 'reasoning-delta', id: 'r', text: 'thinking' };
+      yield { type: 'text-delta', id: '1', text: 'lo' };
+      yield { type: 'tool-call', toolCallId: 'call-1', toolName: 'search', input: { q: 'x' } };
+    })(),
+    toolCalls: Promise.resolve([{ toolCallId: 'call-1', toolName: 'search', input: { q: 'x' } }]),
+    usage: Promise.resolve({
+      inputTokens: 10,
+      outputTokens: 5,
+      inputTokenDetails: { cacheReadTokens: 4, cacheWriteTokens: 2 },
+      outputTokenDetails: { reasoningTokens: 3 },
+    }),
+    response: Promise.resolve({ modelId: 'openai/gpt-4o', id: 'resp-1', timestamp: new Date() }),
+    providerMetadata: Promise.resolve({ gateway: { cost: 0.0123 } }),
+    ...overrides,
+  };
+}
+
+describe('aiSdkModel', () => {
+  beforeEach(() => {
+    streamTextMock.mockReset();
+    streamTextMock.mockReturnValue(fakeStreamResult());
+  });
+
+  it('streams text deltas to the sink in order and accumulates the final text', async () => {
+    const sink = createSink();
+    const model = aiSdkModel('openai/gpt-4o');
+
+    const result = await model.runTurn({
+      system: 'you are helpful',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [],
+      sink,
+    });
+
+    // Only text deltas reach the sink (reasoning-delta is ignored), and in stream order.
+    expect(sink.written).toBe('Hello');
+    expect(result.text).toBe('Hello');
+  });
+
+  it('maps SDK tool calls to ToolCallRequest', async () => {
+    const result = await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(result.toolCalls).toEqual([{ id: 'call-1', name: 'search', input: { q: 'x' } }]);
+  });
+
+  it('maps SDK usage to MessageUsage including cache and reasoning breakdowns', async () => {
+    const result = await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(result.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 4,
+      cacheWriteTokens: 2,
+      reasoningTokens: 3,
+    });
+  });
+
+  it('surfaces a gateway-reported cost as costUsd and the response modelId', async () => {
+    const result = await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(result.costUsd).toBe(0.0123);
+    expect(result.modelId).toBe('openai/gpt-4o');
+  });
+
+  it('reads OpenRouter total_cost when there is no gateway cost', async () => {
+    streamTextMock.mockReturnValue(
+      fakeStreamResult({ providerMetadata: Promise.resolve({ openrouter: { total_cost: 0.5 } }) }),
+    );
+
+    const result = await aiSdkModel('openrouter/anthropic/claude').runTurn({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(result.costUsd).toBe(0.5);
+  });
+
+  it('omits costUsd when the provider reports no gateway/OpenRouter cost', async () => {
+    streamTextMock.mockReturnValue(
+      fakeStreamResult({ providerMetadata: Promise.resolve(undefined) }),
+    );
+
+    const result = await aiSdkModel('anthropic/claude').runTurn({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+
+    expect(result.costUsd).toBeUndefined();
+    expect('costUsd' in result).toBe(false);
+  });
+
+  it('passes tools to the SDK WITHOUT an execute function', async () => {
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [],
+      tools: [noJsonSchemaTool('search')],
+      sink: createSink(),
+    });
+
+    const call = streamTextMock.mock.calls[0]?.[0];
+    expect(call.tools.search).toBeDefined();
+    expect('execute' in call.tools.search).toBe(false);
+    expect(call.tools.search.description).toBe('search tool');
+  });
+
+  it('maps assistant tool-calls and tool-results into SDK messages', async () => {
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'ask' },
+      {
+        role: 'assistant',
+        content: 'let me check',
+        toolCalls: [{ id: 'c1', name: 'search', input: { q: 'x' } }],
+        toolResults: [{ id: 'c1', name: 'search', output: { hits: 2 } }],
+      },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'ask' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'let me check' },
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'x' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'search',
+            output: { type: 'text', value: '{"hits":2}' },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('passes a Standard Schema through directly when it carries the JSON Schema converter', async () => {
+    const inputSchema: StandardSchemaV1 & StandardJSONSchemaV1 = {
+      '~standard': {
+        version: 1,
+        vendor: 'test',
+        validate: (value: unknown) => ({ value }),
+        jsonschema: {
+          input: () => ({ type: 'object', properties: {} }),
+          output: () => ({ type: 'object', properties: {} }),
+        },
+      },
+    };
+    const converterSchema: ToolDefinition = {
+      name: 'lookup',
+      kind: 'read',
+      description: 'lookup tool',
+      inputSchema,
+    };
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [],
+      tools: [converterSchema],
+      sink: createSink(),
+    });
+
+    const call = streamTextMock.mock.calls[0]?.[0];
+    // Pass-through: the SDK receives the original standard schema, not a jsonSchema() wrapper.
+    expect(call.tools.lookup.inputSchema).toBe(converterSchema.inputSchema);
+  });
+});

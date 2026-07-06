@@ -100,6 +100,28 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  packages/ai-sdk:
+    dependencies:
+      '@standard-schema/spec':
+        specifier: 1.1.0
+        version: 1.1.0
+    devDependencies:
+      '@dudousxd/nestjs-agent-core':
+        specifier: workspace:*
+        version: link:../core
+      ai:
+        specifier: 6.0.168
+        version: 6.0.168(zod@3.25.76)
+      tsup:
+        specifier: 8.3.5
+        version: 8.3.5(@swc/core@1.15.41)(jiti@1.21.7)(postcss@8.5.16)(tsx@4.19.2)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.19.20)(jsdom@26.1.0)
+
   packages/authz:
     dependencies:
       '@dudousxd/nestjs-agent-core':
