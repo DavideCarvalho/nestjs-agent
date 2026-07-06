@@ -16,6 +16,10 @@ export interface DrizzleAgentStoreModuleOptions {
  * {@link AGENT_GOVERNANCE_QUERIES} (the read-model the dashboard/telescope surfaces consume). The
  * host app supplies an already-opened Drizzle db — this module never opens a connection itself.
  *
+ * The returned module is global, so {@link AGENT_STORE} and {@link AGENT_GOVERNANCE_QUERIES} are
+ * visible app-wide — `AgentModule` resolves the store without an explicit `store` option, and the
+ * dashboard/telescope resolve {@link AGENT_GOVERNANCE_QUERIES} without the host re-binding it.
+ *
  * ```ts
  * @Module({ imports: [DrizzleAgentStoreModule.forRoot({ db })] })
  * export class AppModule {}
@@ -26,6 +30,7 @@ export class DrizzleAgentStoreModule {
   static forRoot(options: DrizzleAgentStoreModuleOptions): DynamicModule {
     return {
       module: DrizzleAgentStoreModule,
+      global: true,
       providers: [
         { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db) },
         { provide: AGENT_STORE, useExisting: DrizzleAgentStore },

@@ -12,6 +12,10 @@ import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
  * {@link MikroOrmGovernanceQueries} to {@link AGENT_GOVERNANCE_QUERIES} (the read-model the
  * dashboard/telescope surfaces consume).
  *
+ * The returned module is global, so {@link AGENT_STORE} and {@link AGENT_GOVERNANCE_QUERIES} are
+ * visible app-wide — `AgentModule` resolves the store without an explicit `store` option, and the
+ * dashboard/telescope resolve {@link AGENT_GOVERNANCE_QUERIES} without the host re-binding it.
+ *
  * ```ts
  * @Module({ imports: [MikroOrmAgentStoreModule.forFeature()] })
  * export class AppModule {}
@@ -22,6 +26,7 @@ export class MikroOrmAgentStoreModule {
   static forFeature(): DynamicModule {
     return {
       module: MikroOrmAgentStoreModule,
+      global: true,
       imports: [MikroOrmModule.forFeature(AGENT_ENTITIES)],
       providers: [
         {
