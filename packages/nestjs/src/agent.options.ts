@@ -7,6 +7,7 @@ import type {
   RolesPolicy,
   TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
+import type { FunctionalTool } from './functional-tool.js';
 
 /**
  * The implicit default agent, configured inline on `forRoot`. It is an {@link AgentDefinition}
@@ -20,8 +21,12 @@ export interface AgentModuleOptions {
   // --- infrastructure ---
   /** The LLM provider (e.g. a Vercel AI SDK wrapper). Required. */
   model: ModelProvider;
-  /** Persistence adapter. Required. */
-  store: AgentStore;
+  /**
+   * Persistence adapter. Optional — omit it and import a store module (e.g.
+   * `MikroOrmAgentStoreModule.forFeature()`) that binds `AGENT_STORE` globally instead. When
+   * provided here it takes precedence within this module's scope.
+   */
+  store?: AgentStore;
   /** Live token transport. Defaults to a single-process in-memory sink. */
   sink?: TokenStreamSink;
   /** Daily token budget. Optional — omit to disable quotas. */
@@ -43,6 +48,12 @@ export interface AgentModuleOptions {
    * `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` and a configured `DurableModule`.
    */
   durable?: boolean;
+  /**
+   * Static functional tools (`{ spec, handler }`, e.g. from `createExecuteSqlTool`) to register at
+   * boot. For tools that need DI-resolved dependencies, use `provideAgentTool(factory, inject)` in a
+   * module's `providers` instead.
+   */
+  tools?: FunctionalTool[];
 
   // --- the default agent (optional) ---
   /**

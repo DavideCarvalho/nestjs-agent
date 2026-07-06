@@ -12,6 +12,11 @@ export {
   readAiToolMetadata,
 } from './decorator/ai-tool.decorator.js';
 export { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
+export {
+  provideAgentTool,
+  AGENT_TOOL_BRAND,
+  type FunctionalTool,
+} from './functional-tool.js';
 export { InlineAgentRunner } from './runner/inline-agent-runner.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
 export { type AgentDeps, utcDay } from './agent-deps.js';

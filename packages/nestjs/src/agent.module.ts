@@ -45,7 +45,12 @@ function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
   return { name: 'default', ...options.defaultAgent };
 }
 
-function sharedProviders(durable: boolean): Provider[] {
+/**
+ * The core wiring shared by `forRoot` / `forRootAsync`. `includeStore` controls whether we bind
+ * `AGENT_STORE` locally: when the host omits `options.store` we leave it unbound so a globally-bound
+ * store module (which binds `AGENT_STORE` app-wide) satisfies the dependency instead.
+ */
+function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
     {
@@ -80,11 +85,6 @@ function sharedProviders(durable: boolean): Provider[] {
       inject: [AGENT_OPTIONS],
     },
     {
-      provide: AGENT_STORE,
-      useFactory: (o: AgentModuleOptions) => o.store,
-      inject: [AGENT_OPTIONS],
-    },
-    {
       provide: AGENT_QUOTA_STORE,
       useFactory: (o: AgentModuleOptions) => o.quota,
       inject: [AGENT_OPTIONS],
@@ -95,6 +95,13 @@ function sharedProviders(durable: boolean): Provider[] {
     InlineAgentRunner,
     AgentService,
   ];
+  if (includeStore) {
+    providers.push({
+      provide: AGENT_STORE,
+      useFactory: (o: AgentModuleOptions) => o.store,
+      inject: [AGENT_OPTIONS],
+    });
+  }
   if (durable) {
     // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
     // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
@@ -117,21 +124,27 @@ function sharedProviders(durable: boolean): Provider[] {
   return providers;
 }
 
-const EXPORTS = [
-  AGENT_OPTIONS,
-  AGENT_TOOL_REGISTRY,
-  AGENT_REGISTRY,
-  AGENT_SINK,
-  AGENT_ROLES_POLICY,
-  AGENT_ACTOR_RESOLVER,
-  AGENT_MODEL,
-  AGENT_STORE,
-  AGENT_QUOTA_STORE,
-  AGENT_DEPS_FACTORY,
-  AgentDepsFactory,
-  AgentService,
-  InlineAgentRunner,
-];
+/**
+ * The module's public tokens. `AGENT_STORE` is only re-exported when we bind it locally — a module
+ * cannot export a token it neither provides nor imports (the store module binds it globally instead).
+ */
+function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']> {
+  return [
+    AGENT_OPTIONS,
+    AGENT_TOOL_REGISTRY,
+    AGENT_REGISTRY,
+    AGENT_SINK,
+    AGENT_ROLES_POLICY,
+    AGENT_ACTOR_RESOLVER,
+    AGENT_MODEL,
+    ...(includeStore ? [AGENT_STORE] : []),
+    AGENT_QUOTA_STORE,
+    AGENT_DEPS_FACTORY,
+    AgentDepsFactory,
+    AgentService,
+    InlineAgentRunner,
+  ];
+}
 
 const CONTROLLERS = [ChatController, ThreadsController, ToolCallController, QuotaController];
 
@@ -145,6 +158,8 @@ function routerFor(path: string): DynamicModule {
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
+    // Bind AGENT_STORE locally only when the host passes a store; otherwise defer to a global one.
+    const includeStore = options.store !== undefined;
     return {
       module: AgentModule,
       global: true,
@@ -152,9 +167,9 @@ export class AgentModule {
       controllers: CONTROLLERS,
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
-        ...sharedProviders(options.durable ?? false),
+        ...sharedProviders(options.durable ?? false, includeStore),
       ],
-      exports: EXPORTS,
+      exports: exportsFor(includeStore),
     };
   }
 
@@ -175,9 +190,11 @@ export class AgentModule {
           useFactory: options.useFactory,
           inject: (options.inject as never[]) ?? [],
         },
-        ...sharedProviders(false),
+        // The async factory resolves too late to inspect `store`, so we always bind AGENT_STORE here
+        // (its factory reads the resolved options). Omit-and-import-a-store-module is a `forRoot` path.
+        ...sharedProviders(false, true),
       ],
-      exports: EXPORTS,
+      exports: exportsFor(true),
     };
   }
 
