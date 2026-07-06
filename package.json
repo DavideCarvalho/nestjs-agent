@@ -5,6 +5,10 @@
   "description": "Governed, durable-backed AI agent (chat + tool-calling) for NestJS",
   "license": "MIT",
   "author": "Davide Carvalho",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git"
+  },
   "packageManager": "pnpm@11.5.0",
   "engines": {
     "node": ">=20"
@@ -23,6 +27,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "@changesets/changelog-github": "^0.5.1",
     "@changesets/cli": "^2.31.0",
     "@swc/core": "1.15.41",
     "@types/node": "22.19.20",

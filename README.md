@@ -1,6 +1,24 @@
+<p align="center">
+  <a href="https://davidecarvalho.github.io/aviary/docs/agent">
+    <img src="./.github/banner.svg" alt="@dudousxd/nestjs-agent — an Aviary library. Call sign: Magpie.">
+  </a>
+</p>
+
+<p align="center">
+  <b><a href="https://davidecarvalho.github.io/aviary/docs/agent">📖 Read the documentation</a></b>
+  &nbsp;·&nbsp; part of the <a href="https://davidecarvalho.github.io/aviary/"><b>Aviary</b></a> ecosystem for NestJS
+</p>
+
+---
+
 # `@dudousxd/nestjs-agent`
 
-> 🪺 Part of the [Aviary](https://davidecarvalho.github.io/aviary) — plug-n-play, fully-configurable NestJS libraries.
+[![CI](https://github.com/DavideCarvalho/nestjs-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/DavideCarvalho/nestjs-agent/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@dudousxd/nestjs-agent.svg)](https://www.npmjs.com/package/@dudousxd/nestjs-agent)
+[![npm downloads](https://img.shields.io/npm/dm/@dudousxd/nestjs-agent.svg)](https://www.npmjs.com/package/@dudousxd/nestjs-agent)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DavideCarvalho/nestjs-agent/blob/master/LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9+-blue.svg)](https://www.typescriptlang.org/)
+[![NestJS](https://img.shields.io/badge/NestJS-10%2B-e0234e.svg)](https://nestjs.com/)
 
 A **governed, durable-backed AI agent** for NestJS — the Laravel feel for building an in-app AI
 assistant. Chat + tool-calling + role/persona governance + token quota + cost tracking +
@@ -25,6 +43,7 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v6) + styling-agnostic chat components; optional `/markdown` subpath |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |
+| `@dudousxd/nestjs-agent-dashboard` | A standalone, mountable AI-gateway governance console (bundled React SPA + NestJS module) — no Telescope required |
 | `@dudousxd/nestjs-agent-testing` | In-memory store/sink + a deterministic fake model for offline tests/demos |
 
 ## Install
@@ -161,7 +180,8 @@ DB.
 ```ts
 import { createExecuteSqlTool, GroupTableAccessPolicy, TenantScopeRewriter } from '@dudousxd/nestjs-agent-data';
 
-const executeSql = createExecuteSqlTool({
+// returns a { spec, handler } pair — register it with the tool registry at bootstrap
+const { spec, handler } = createExecuteSqlTool({
   runner: { run: (sql) => readOnlyPool.query(sql) },           // you supply the pool
   tableAccess: new GroupTableAccessPolicy({ roleGroups, tablesByGroup }),
   tenantScope: new TenantScopeRewriter({ tenantColumn: 'tenant_id', scopedTables: ['orders'] }),
@@ -177,7 +197,8 @@ plus threads, personas, quota, cancel, and HITL approve/reject. The components a
 syntax-highlighted code, Mermaid) you can drop into the `renderText` slot.
 
 ```tsx
-const chat = useAgentChat({ baseUrl: '/agent', getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.roles.join(',') }) });
+// baseUrl is the origin (default '' = same origin); the transport appends '/agent/chat' itself
+const chat = useAgentChat({ getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.roles.join(',') }) });
 ```
 
 ## Observability (diagnostics)
@@ -187,12 +208,49 @@ The agent emits `aviary:agent:*` events (`run.started`, `message`, `tool-call`, 
 consumes them for a dashboard tab; any app can subscribe for its own metrics, alerts, or an
 orchestration graph — the library instruments nothing in your code.
 
+## Cost & governance
+
+Every turn writes a usage-ledger row (`agent_token_usage`); the read-model
+(`AgentGovernanceQueries`) rolls those up into spend per model, per actor, a usage trend, and recent
+tool-call / thread activity. Cost is resolved **per row**:
+
+```text
+costUsd = COALESCE(reportedCostUsd, cache-aware token estimate)
+```
+
+- **Provider-reported cost wins.** A gateway that knows the real spend of a turn — Vercel AI Gateway
+  (`providerMetadata.gateway.cost`), OpenRouter (`total_cost`) — reports it via `ModelTurnResult.costUsd`;
+  the loop persists it to the nullable `cost_usd` column and the read-model uses it verbatim. Direct
+  providers (Anthropic/OpenAI/Bedrock) report only tokens and fall through to the estimate.
+- **The fallback estimate is cache-aware.** `MessageUsage` carries `cacheWriteTokens` / `cacheReadTokens`
+  (subsets of `inputTokens`) and `reasoningTokens` (a subset of `outputTokens`, observability only).
+  `AgentModelPricing` has nullable `cacheWritePricePer1m` / `cacheReadPricePer1m` rates: the uncached
+  remainder is priced at the input rate, cache-write/read at their own rates (falling back to the input
+  rate when unset). Because the cache counts are subsets, token totals and quota never change — a pricing
+  table with no cache data reduces exactly to `input×inputPrice + output×outputPrice`.
+
+Surface it either way: **`@dudousxd/nestjs-agent-telescope`** adds governance sections to a Telescope
+install, or **`@dudousxd/nestjs-agent-dashboard`** mounts a standalone console (a bundled React SPA
+served by a NestJS module) at its own route with no Telescope dependency:
+
+```ts
+import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+
+@Module({ imports: [AgentDashboardModule.forRoot({ basePath: '/ai-gateway' })] })
+export class AppModule {}
+```
+
+Both read the same `AGENT_GOVERNANCE_QUERIES` read-model (bound by the store modules) and tail live
+tool-call / quota signals off the `aviary:agent:*` diagnostics channel.
+
 ## Example
 
-`examples/agent-demo` is a runnable, fully-offline proof (`pnpm demo`): a read tool auto-executing,
-an action tool suspending on a durable HITL signal and resuming on approval, and an orchestrator
-delegating to a sub-agent — all with the in-memory store + a deterministic fake model, no API key or
-Redis. See `docs/superpowers/specs/2026-06-30-nestjs-agent-design.md` for the design.
+`examples/agent-demo` is a runnable, fully-offline proof (`pnpm --filter agent-demo demo`): a read
+tool auto-executing, an action tool suspending on a durable HITL signal and resuming on approval, and
+an orchestrator delegating to a sub-agent — all with the in-memory store + a deterministic fake model,
+no API key or Redis. `pnpm --filter agent-demo start` boots the full NestJS app with the governance
+console mounted at `/ai-gateway`. See `docs/superpowers/specs/` for the API and governance-console
+design specs.
 
 ## Status
 
