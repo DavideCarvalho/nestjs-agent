@@ -185,17 +185,13 @@ export class AgentModule {
     return {
       module: AgentModule,
       global: true,
-      imports: [
-        DiscoveryModule,
-        routerFor(path),
-        ...((options.imports as DynamicModule['imports']) ?? []),
-      ],
+      imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
       controllers: CONTROLLERS,
       providers: [
         {
           provide: AGENT_OPTIONS,
           useFactory: options.useFactory,
-          inject: (options.inject as never[]) ?? [],
+          inject: options.inject ?? [],
         },
         // The async factory resolves too late to inspect `store`, so we always bind AGENT_STORE here
         // (its factory reads the resolved options). Omit-and-import-a-store-module is a `forRoot` path.

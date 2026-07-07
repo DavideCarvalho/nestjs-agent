@@ -164,6 +164,12 @@ export interface AgentRunInput {
    * increments it for each child run; the loop refuses to delegate past {@link MAX_DELEGATION_DEPTH}.
    */
   delegationDepth?: number;
+  /**
+   * Re-run the last exchange instead of adding a new message: the loop truncates everything after
+   * the thread's last user message and re-answers it (no `userText` is appended). Used by a
+   * "regenerate" button. `userText` is ignored when set.
+   */
+  regenerate?: boolean;
 }
 
 /**

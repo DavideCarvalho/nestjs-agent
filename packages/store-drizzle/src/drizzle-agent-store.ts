@@ -170,6 +170,14 @@ export class DrizzleAgentStore implements AgentStore {
     return row?.actorRef ?? null;
   }
 
+  async ownerOfActiveStream(runId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ actorRef: agentThread.actorRef })
+      .from(agentThread)
+      .where(and(eq(agentThread.activeStreamId, runId), isNull(agentThread.deletedAt)));
+    return thread?.actorRef ?? null;
+  }
+
   async setTitle(threadId: string, title: string): Promise<void> {
     await this.db
       .update(agentThread)

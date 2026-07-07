@@ -165,6 +165,15 @@ export class InMemoryAgentStore implements AgentStore {
     return this.threads.get(call.threadId)?.actorRef ?? null;
   }
 
+  async ownerOfActiveStream(runId: string): Promise<string | null> {
+    for (const row of this.threads.values()) {
+      if (row.activeStreamId === runId) {
+        return row.actorRef;
+      }
+    }
+    return null;
+  }
+
   async setTitle(threadId: string, title: string): Promise<void> {
     const row = this.threads.get(threadId);
     if (row !== undefined) {

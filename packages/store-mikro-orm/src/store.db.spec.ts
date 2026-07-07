@@ -7,6 +7,7 @@ import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
+import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
 
 let orm: MikroORM;
 let store: MikroOrmAgentStore;
@@ -149,5 +150,39 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(await store.getThread(thread.id)).toBeNull();
     const after = await store.listThreads('actor-1');
     expect(after.map((t) => t.id)).toEqual([fork.id]);
+  });
+
+  it('resolves the owning actorRef for an active stream by runId', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-stream' }, persona: 'default' });
+    await store.setActiveStream(thread.id, 'run-xyz');
+
+    expect(await store.ownerOfActiveStream('run-xyz')).toBe('actor-stream');
+    expect(await store.ownerOfActiveStream('missing')).toBeNull();
+  });
+
+  it('supersedes the current price row on upsert, keeping exactly one current row per model', async () => {
+    const pricingStore = new MikroOrmPricingStore(orm.em);
+
+    await pricingStore.upsertModelPrice({
+      modelId: 'm',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+    });
+    const firstPrices = await pricingStore.listCurrentPrices();
+    const first = firstPrices.filter((price) => price.modelId === 'm');
+    expect(first).toHaveLength(1);
+    expect(first[0]?.inputPricePer1m).toBe(3);
+    expect(first[0]?.outputPricePer1m).toBe(15);
+
+    await pricingStore.upsertModelPrice({
+      modelId: 'm',
+      inputPricePer1m: 4,
+      outputPricePer1m: 16,
+    });
+    const secondPrices = await pricingStore.listCurrentPrices();
+    const second = secondPrices.filter((price) => price.modelId === 'm');
+    expect(second).toHaveLength(1);
+    expect(second[0]?.inputPricePer1m).toBe(4);
+    expect(second[0]?.outputPricePer1m).toBe(16);
   });
 });

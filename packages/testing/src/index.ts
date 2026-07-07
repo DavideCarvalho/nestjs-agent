@@ -16,3 +16,4 @@ export {
 } from './in-memory-governance-queries.js';
 export { InMemoryTokenStreamSink } from './in-memory-sink.js';
 export { InMemoryQuotaStore } from './in-memory-quota.js';
+export { InMemoryPricingStore } from './in-memory-pricing-store.js';

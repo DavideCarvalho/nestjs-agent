@@ -63,6 +63,7 @@ export class AgentDepsFactory {
       personas.set(persona.id, persona);
     }
     const toolAllowList = this.effectiveTools(definition);
+    const followUpsCount = this.followUpsCount();
     return {
       model: this.model,
       store: this.store,
@@ -76,6 +77,22 @@ export class AgentDepsFactory {
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
+      ...(this.options.toolTimeoutMs !== undefined
+        ? { toolTimeoutMs: this.options.toolTimeoutMs }
+        : {}),
+      ...(followUpsCount !== undefined ? { followUpsCount } : {}),
     };
+  }
+
+  /** Normalize the `followUps` option (`true` → 3, `{ count }` → count) to a number, or undefined. */
+  private followUpsCount(): number | undefined {
+    const followUps = this.options.followUps;
+    if (followUps === true) {
+      return 3;
+    }
+    if (typeof followUps === 'object') {
+      return followUps.count;
+    }
+    return undefined;
   }
 }

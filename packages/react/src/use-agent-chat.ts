@@ -58,6 +58,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
 
+  // One-shot flag read (and cleared) by the transport's getBody so the next send carries
+  // `regenerate: true` — telling the backend to re-run the last exchange instead of appending.
+  const regenerateNext = useRef(false);
+
   // Identity-stable: per-render config is read through `latest`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   const client = useMemo(() => {
@@ -85,10 +89,13 @@ export function useAgentChat(options: UseAgentChatOptions) {
       getBody: () => {
         const current = latest.current;
         const pageContext = current.getPageContext?.() ?? null;
+        const regenerate = regenerateNext.current;
+        regenerateNext.current = false;
         return {
           ...(current.threadId !== undefined ? { threadId: current.threadId } : {}),
           ...(current.persona !== undefined ? { persona: current.persona } : {}),
           ...(pageContext ? { pageContext } : {}),
+          ...(regenerate ? { regenerate: true } : {}),
         };
       },
       getResumeRunId: () => latest.current.resumeRunId,
@@ -208,6 +215,13 @@ export function useAgentChat(options: UseAgentChatOptions) {
     [client],
   );
 
+  // Re-run the last exchange: flag the next request as a regenerate (so the backend truncates and
+  // re-answers instead of appending) and let the SDK re-issue it, dropping the last assistant turn.
+  const regenerate = useCallback((): void => {
+    regenerateNext.current = true;
+    void chatRef.current.regenerate();
+  }, []);
+
   return {
     ...chat,
     addToolResult,
@@ -225,6 +239,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
     cancel,
     approve,
     reject,
+    regenerate,
   };
 }
 

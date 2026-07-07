@@ -15,6 +15,8 @@ interface ChatBody {
   agent?: string;
   persona?: string;
   pageContext?: PageContext;
+  /** Re-run the last exchange on `threadId` instead of adding a new message. */
+  regenerate?: boolean;
 }
 
 @Controller()
@@ -34,6 +36,7 @@ export class ChatController {
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
       ...(body.persona !== undefined ? { personaId: body.persona } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
+      ...(body.regenerate === true ? { regenerate: true } : {}),
     });
     await this.pipe(res, runId, threadId);
   }
@@ -44,8 +47,9 @@ export class ChatController {
   }
 
   @Post('chat/:runId/cancel')
-  async cancel(@Param('runId') runId: string): Promise<{ aborted: boolean }> {
-    await this.agent.cancel(runId);
+  async cancel(@Req() req: Request, @Param('runId') runId: string): Promise<{ aborted: boolean }> {
+    const actor = await this.actorResolver.resolve(req);
+    await this.agent.cancel(actor, runId);
     return { aborted: true };
   }
 

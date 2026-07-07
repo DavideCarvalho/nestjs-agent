@@ -7,6 +7,7 @@ import type {
   RolesPolicy,
   TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
+import type { InjectionToken, ModuleMetadata, OptionalFactoryDependency } from '@nestjs/common';
 import type { FunctionalTool } from './functional-tool.js';
 
 /**
@@ -65,6 +66,17 @@ export interface AgentModuleOptions {
    * module's `providers` instead.
    */
   tools?: FunctionalTool[];
+  /**
+   * Per-tool execution timeout in ms. A tool that runs longer is aborted and recorded as failed (the
+   * model receives the timeout as its result and can adapt) instead of hanging the turn. Omit → none.
+   */
+  toolTimeoutMs?: number;
+  /**
+   * Suggest follow-up questions after the final turn. `true` → 3 suggestions; `{ count }` → that many.
+   * Costs one extra model call per turn (recorded as `follow_ups` usage), stored on the assistant
+   * message's `followUps`. Omit/`false` → disabled.
+   */
+  followUps?: boolean | { count: number };
 
   // --- the default agent (optional) ---
   /**
@@ -74,9 +86,8 @@ export interface AgentModuleOptions {
   defaultAgent?: DefaultAgentOptions;
 }
 
-export interface AgentModuleAsyncOptions {
-  imports?: unknown[];
-  inject?: unknown[];
+export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
+  inject?: Array<InjectionToken | OptionalFactoryDependency>;
   useFactory: (...args: never[]) => AgentModuleOptions | Promise<AgentModuleOptions>;
   /**
    * Route prefix the controllers mount under (default `'agent'`). Static routing metadata, so it

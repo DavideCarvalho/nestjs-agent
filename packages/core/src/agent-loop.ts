@@ -16,6 +16,7 @@ import type { ToolRegistry } from './tool-registry.js';
 import type {
   AgentRunInput,
   Decision,
+  MessageUsage,
   ModelMessage,
   PromptBuilder,
   PromptContext,
@@ -43,6 +44,18 @@ export interface AgentLoopDeps {
   host?: unknown;
   /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
   toolAllowList?: string[];
+  /**
+   * Per-tool execution timeout in ms. A tool that runs longer is aborted and recorded as failed
+   * (the model gets the timeout as its result and can adapt) rather than hanging the turn.
+   * Undefined → no timeout.
+   */
+  toolTimeoutMs?: number;
+  /**
+   * When set, after the final turn the loop makes one extra model call to propose up to this many
+   * short follow-up questions, stored on the assistant message's `followUps`. Costs an extra call
+   * (recorded as `follow_ups` usage). Undefined/0 → disabled.
+   */
+  followUpsCount?: number;
 }
 
 /** Intersect two allow-lists where `undefined` means "no restriction". */
@@ -128,6 +141,68 @@ function deriveTitle(userText: string): string {
   return trimmed.length > 60 ? `${trimmed.slice(0, 57)}...` : trimmed || 'New chat';
 }
 
+/** Thrown when a tool exceeds `toolTimeoutMs`; caught by the loop and recorded as a failed call. */
+class ToolTimeoutError extends Error {
+  constructor(toolName: string, ms: number) {
+    super(`Tool "${toolName}" exceeded its ${ms}ms timeout`);
+    this.name = 'ToolTimeoutError';
+  }
+}
+
+/** Reject if `work` doesn't settle within `ms`. The underlying work is left to finish on its own. */
+function withTimeout<T>(work: Promise<T>, ms: number, toolName: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ToolTimeoutError(toolName, ms)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** Best-effort parse of the follow-ups model reply: a bare JSON array, tolerating code fences/prose. */
+function parseFollowUps(text: string, count: number): string[] {
+  const source = text.match(/\[[\s\S]*\]/)?.[0] ?? text;
+  try {
+    const parsed: unknown = JSON.parse(source);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === 'string').slice(0, count);
+    }
+  } catch {
+    /* not JSON — no follow-ups this turn */
+  }
+  return [];
+}
+
+/**
+ * One extra, non-streamed model call that proposes short follow-up questions. Writes to a discarding
+ * sink so its tokens never reach the user's live stream; the reply is parsed as a JSON string array.
+ */
+async function generateFollowUps(
+  model: ModelProvider,
+  messages: ModelMessage[],
+  count: number,
+): Promise<{ followUps: string[]; usage: MessageUsage; modelId?: string }> {
+  const discard: SinkWriter = { write: () => {}, end: () => {}, fail: () => {} };
+  const turn = await model.runTurn({
+    system: `Based on the conversation so far, propose up to ${count} short, distinct follow-up questions the user is likely to ask next. Respond with ONLY a JSON array of strings — no prose, no code fences.`,
+    messages,
+    tools: [],
+    sink: discard,
+  });
+  return {
+    followUps: parseFollowUps(turn.text, count),
+    usage: turn.usage,
+    ...(turn.modelId !== undefined ? { modelId: turn.modelId } : {}),
+  };
+}
+
 /**
  * The provider-agnostic agent turn, reused by both the inline and durable runners.
  * It drives the model→tools→model iteration; the runner supplies the `step`/`awaitApproval`
@@ -155,14 +230,34 @@ export async function runAgentLoop(
     }
   }
 
-  await hooks.step('persist:user', () =>
-    deps.store.appendMessage({
-      threadId: input.threadId,
-      role: 'user',
-      content: input.userText,
-      ...(persona !== undefined ? { persona: persona.id } : {}),
-    }),
-  );
+  if (input.regenerate === true) {
+    // Re-run the last exchange: drop every message after the thread's last user message (keeping
+    // it), then answer it again. No new user message is appended.
+    await hooks.step('regenerate:truncate', async () => {
+      const existing = await deps.store.getThread(input.threadId);
+      const messages = existing?.messages ?? [];
+      let lastUserIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index]?.role === 'user') {
+          lastUserIndex = index;
+          break;
+        }
+      }
+      const firstDropped = messages[lastUserIndex + 1];
+      if (firstDropped !== undefined) {
+        await deps.store.truncateFrom(input.threadId, firstDropped.id);
+      }
+    });
+  } else {
+    await hooks.step('persist:user', () =>
+      deps.store.appendMessage({
+        threadId: input.threadId,
+        role: 'user',
+        content: input.userText,
+        ...(persona !== undefined ? { persona: persona.id } : {}),
+      }),
+    );
+  }
 
   const thread = await hooks.step('load:thread', () => deps.store.getThread(input.threadId));
   const modelMessages: ModelMessage[] = (thread?.messages ?? []).map((message) => ({
@@ -229,6 +324,34 @@ export async function runAgentLoop(
       role: 'assistant',
       textLength: turn.text.length,
     });
+
+    // A turn with no tool calls is the last one. Generate follow-up suggestions here (before the
+    // append) so they land on the final assistant message, and stop after.
+    const isFinalTurn = turn.toolCalls.length === 0;
+    let followUps: string[] | undefined;
+    if (isFinalTurn && deps.followUpsCount !== undefined && deps.followUpsCount > 0) {
+      const count = deps.followUpsCount;
+      const generated = await hooks.step(`followups:${i}`, () =>
+        generateFollowUps(
+          deps.model,
+          [...modelMessages, { role: 'assistant', content: turn.text }],
+          count,
+        ),
+      );
+      if (generated.followUps.length > 0) {
+        followUps = generated.followUps;
+      }
+      await hooks.step(`persist:usage:followups:${i}`, () =>
+        deps.store.recordUsage({
+          threadId: input.threadId,
+          actorRef: input.actor.id,
+          modelId: generated.modelId ?? deps.modelId ?? 'unknown',
+          purpose: 'follow_ups',
+          usage: generated.usage,
+        }),
+      );
+    }
+
     const assistant = await hooks.step(`persist:assistant:${i}`, () =>
       deps.store.appendMessage({
         threadId: input.threadId,
@@ -237,6 +360,7 @@ export async function runAgentLoop(
         usage: turn.usage,
         ...(persona !== undefined ? { persona: persona.id } : {}),
         ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
+        ...(followUps !== undefined ? { followUps } : {}),
       }),
     );
     modelMessages.push({
@@ -245,7 +369,7 @@ export async function runAgentLoop(
       ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
     });
 
-    if (turn.toolCalls.length === 0) {
+    if (isFinalTurn) {
       break;
     }
 
@@ -349,9 +473,13 @@ export async function runAgentLoop(
 
       const startedAt = Date.now();
       try {
-        const output = await hooks.step(`tool:${call.id}`, () =>
+        const invocation = hooks.step(`tool:${call.id}`, () =>
           deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
         );
+        const output =
+          deps.toolTimeoutMs !== undefined
+            ? await withTimeout(invocation, deps.toolTimeoutMs, call.name)
+            : await invocation;
         const executionMs = Date.now() - startedAt;
         await hooks.step(`persist:toolexec:${call.id}`, () =>
           deps.store.updateToolCall({

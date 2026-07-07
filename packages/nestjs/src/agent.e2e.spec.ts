@@ -56,11 +56,28 @@ class AbilityTool {
   }
 }
 
+@AiTool({
+  name: 'slowTool',
+  kind: 'read',
+  description: 'never resolves in time',
+  input: z.object({}),
+})
+@Injectable()
+class SlowTool {
+  async execute(): Promise<{ done: boolean }> {
+    // Far longer than any test's toolTimeoutMs, but short enough not to linger past the run.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    return { done: true };
+  }
+}
+
 interface BuildOptions {
   rolesPolicy?: RolesPolicy;
   features?: AgentDefinition[];
   path?: string;
   quota?: QuotaStore;
+  toolTimeoutMs?: number;
+  followUps?: boolean | { count: number };
 }
 
 async function buildApp(script: FakeScript, options: BuildOptions = {}) {
@@ -75,10 +92,12 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         ...(options.path !== undefined ? { path: options.path } : {}),
         ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
         ...(options.quota !== undefined ? { quota: options.quota } : {}),
+        ...(options.toolTimeoutMs !== undefined ? { toolTimeoutMs: options.toolTimeoutMs } : {}),
+        ...(options.followUps !== undefined ? { followUps: options.followUps } : {}),
       }),
       ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
     ],
-    providers: [GetWeatherTool, PurgeCacheTool, AbilityTool],
+    providers: [GetWeatherTool, PurgeCacheTool, AbilityTool, SlowTool],
   }).compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   await app.init();
@@ -289,6 +308,76 @@ describe('AgentModule (inline)', () => {
         features: [{ name: 'orchestrator', delegatesTo: ['ghost-agent'] }],
       }),
     ).rejects.toThrow(/not a registered agent/);
+  });
+
+  it('scopes cancel to the run owner (403 other, 404 unknown run)', async () => {
+    const built = await buildApp(() => ({ text: 'hi' }));
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'owner', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await expect(built.service.cancel({ id: 'intruder' }, runId)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(built.service.cancel({ id: 'owner' }, 'no-such-run')).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('regenerate re-runs the last exchange without appending a new user message', async () => {
+    const built = await buildApp((_args, turnIndex) => ({ text: `answer-${turnIndex}` }));
+    app = built.app;
+    const first = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'question',
+    });
+    await collect(built.service.subscribe(first.runId));
+
+    const again = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: '',
+      threadId: first.threadId,
+      regenerate: true,
+    });
+    await collect(built.service.subscribe(again.runId));
+
+    const detail = await built.service.getThread({ id: 'u1' }, first.threadId);
+    // Still exactly one user + one assistant — the assistant was replaced, not duplicated.
+    expect(detail?.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(detail?.messages[0]?.content).toBe('question');
+  });
+
+  it('generates follow-up suggestions on the final message when enabled', async () => {
+    const script: FakeScript = (args) =>
+      args.system.includes('follow-up') ? { text: '["Q1?", "Q2?"]' } : { text: 'the answer' };
+    const built = await buildApp(script, { followUps: { count: 2 } });
+    app = built.app;
+    const { runId, threadId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await collect(built.service.subscribe(runId));
+    const detail = await built.service.getThread({ id: 'u1' }, threadId);
+    const assistant = detail?.messages.find((message) => message.role === 'assistant');
+    expect(assistant?.followUps).toEqual(['Q1?', 'Q2?']);
+    expect(assistant?.content).toBe('the answer');
+  });
+
+  it('records a tool that exceeds toolTimeoutMs as failed instead of hanging', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'calling', toolCall: { name: 'slowTool', input: {} } }
+        : { text: 'gave up' };
+    const built = await buildApp(script, { toolTimeoutMs: 30 });
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'go',
+    });
+    await collect(built.service.subscribe(runId));
+    const slow = built.store.toolCallRows().find((row) => row.toolName === 'slowTool');
+    expect(slow?.status).toBe('failed');
   });
 
   it('orchestrator delegates to a sub-agent via a synthesized agent tool', async () => {

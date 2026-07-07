@@ -25,6 +25,10 @@ export interface AgentDeps {
   defaultPersona: string;
   /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
   toolAllowList?: string[];
+  /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
+  toolTimeoutMs?: number;
+  /** How many follow-up suggestions to generate after the final turn. Undefined/0 → off. */
+  followUpsCount?: number;
 }
 
 export function utcDay(date = new Date()): string {

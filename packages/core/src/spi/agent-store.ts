@@ -78,6 +78,12 @@ export interface AgentStore {
    * The authorization seam for HITL approve / reject: the caller must own the run they approve.
    */
   ownerOfToolCall(toolCallId: string): Promise<string | null>;
+  /**
+   * The `actorRef` that owns the thread currently streaming `runId` (its `activeStreamId`), or
+   * `null` if no thread is streaming it. The authorization seam for `cancel`: the caller must own
+   * the run they abort. Resolvable during the live window (a run cancel only matters while active).
+   */
+  ownerOfActiveStream(runId: string): Promise<string | null>;
 
   appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
   truncateFrom(threadId: string, messageId: string): Promise<void>;

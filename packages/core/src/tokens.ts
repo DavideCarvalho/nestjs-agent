@@ -27,6 +27,8 @@ export const AGENT_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:agent-registry'
 export const AGENT_ACTOR_RESOLVER = Symbol.for('@dudousxd/nestjs-agent:actor-resolver');
 /** The governance read-model (usage/spend/threads), consumed by the dashboard + telescope surfaces. */
 export const AGENT_GOVERNANCE_QUERIES = Symbol.for('@dudousxd/nestjs-agent:governance-queries');
+/** The pricing WRITE side (`AgentPricingStore`) — seeds/updates the per-model rates cost is priced against. */
+export const AGENT_PRICING_STORE = Symbol.for('@dudousxd/nestjs-agent:pricing-store');
 // Per-agent deps factory. A Symbol.for token (not the class) so DI survives tsup's dual
 // index/durable bundles, which each get their own copy of the AgentDepsFactory class.
 export const AGENT_DEPS_FACTORY = Symbol.for('@dudousxd/nestjs-agent:deps-factory');

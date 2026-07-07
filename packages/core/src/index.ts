@@ -6,6 +6,7 @@ export * from './spi/token-stream-sink.js';
 export * from './spi/agent-store.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
+export * from './spi/pricing-store.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
 export * from './spi/governance-queries.js';

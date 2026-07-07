@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
+import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import { ensureAgentSchema } from './ensure-schema.js';
 import { agentSchema, agentToolCall } from './schema.js';
 
@@ -152,5 +153,32 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     expect(await store.getThread(thread.id)).toBeNull();
     const after = await store.listThreads('actor-1');
     expect(after.map((t) => t.id)).toEqual([fork.id]);
+  });
+
+  it('resolves the owning actorRef of a thread streaming a run via ownerOfActiveStream', async () => {
+    const thread = await store.createThread({
+      actor: { id: 'actor-1' },
+      persona: 'default',
+      title: 'My chat',
+    });
+    await store.setActiveStream(thread.id, 'run-xyz');
+    expect(await store.ownerOfActiveStream('run-xyz')).toBe('actor-1');
+    expect(await store.ownerOfActiveStream('missing')).toBeNull();
+  });
+
+  it('upserts model prices, superseding the prior current row', async () => {
+    const pricingStore = new DrizzlePricingStore(db);
+
+    await pricingStore.upsertModelPrice({ modelId: 'm', inputPricePer1m: 3, outputPricePer1m: 15 });
+    const firstPrices = await pricingStore.listCurrentPrices();
+    const firstPrice = firstPrices.filter((price) => price.modelId === 'm');
+    expect(firstPrice).toHaveLength(1);
+    expect(firstPrice[0]?.inputPricePer1m).toBe(3);
+
+    await pricingStore.upsertModelPrice({ modelId: 'm', inputPricePer1m: 4, outputPricePer1m: 16 });
+    const secondPrices = await pricingStore.listCurrentPrices();
+    const secondPrice = secondPrices.filter((price) => price.modelId === 'm');
+    expect(secondPrice).toHaveLength(1);
+    expect(secondPrice[0]?.inputPricePer1m).toBe(4);
   });
 });

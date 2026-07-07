@@ -5,10 +5,12 @@ import {
   type AgentRunInput,
   type AgentStore,
   type Decision,
+  QuotaExceededError,
+  publishAgentRunFailed,
   runAgentLoop,
 } from '@dudousxd/nestjs-agent-core';
 import { Workflow } from '@dudousxd/nestjs-durable';
-import type { WorkflowCtx } from '@dudousxd/nestjs-durable-core';
+import { ContinueAsNew, type WorkflowCtx, WorkflowSuspended } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { utcDay } from '../agent-deps.js';
@@ -53,6 +55,23 @@ export class AgentRunWorkflow {
         });
       },
     };
-    return runAgentLoop({ ...deps, day }, input, hooks);
+    try {
+      return await runAgentLoop({ ...deps, day }, input, hooks);
+    } catch (error) {
+      // A suspend / continue-as-new is control flow, not a failure — let the engine handle it.
+      if (error instanceof WorkflowSuspended || error instanceof ContinueAsNew) {
+        throw error;
+      }
+      // A real failure (e.g. quota exceeded, which throws before the sink is even opened) would
+      // otherwise leave the HTTP subscriber hanging on a stream that never ends. Fail the sink with
+      // a typed terminal so the controller emits an `event: error` frame, then rethrow so the engine
+      // still records the run as failed.
+      const message = error instanceof Error ? error.message : String(error);
+      const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
+      publishAgentRunFailed({ runId: ctx.runId, code, message });
+      const writer = await deps.sink.open(ctx.runId);
+      await writer.fail({ code, message });
+      throw error;
+    }
   }
 }

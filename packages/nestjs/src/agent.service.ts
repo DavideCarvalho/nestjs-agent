@@ -11,7 +11,13 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
-import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 
@@ -22,6 +28,8 @@ export interface ChatParams {
   agentName?: string;
   personaId?: string;
   pageContext?: PageContext;
+  /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
+  regenerate?: boolean;
 }
 
 /** The orchestration facade the controllers call. */
@@ -37,11 +45,18 @@ export class AgentService {
     const agentName = params.agentName ?? this.deps.defaultAgentName();
     let threadId = params.threadId;
     if (threadId === undefined) {
+      if (params.regenerate === true) {
+        throw new BadRequestException('regenerate requires an existing threadId');
+      }
       const created = await this.store.createThread({
         actor: params.actor,
         persona: params.personaId ?? this.deps.forAgent(agentName).defaultPersona,
       });
       threadId = created.id;
+    } else if (params.regenerate === true) {
+      // Regenerate re-runs a run on an existing thread — gate it by ownership like the other
+      // thread-scoped actions so one actor can't rewind another's conversation.
+      await this.assertOwnsThread(params.actor, threadId);
     }
 
     const persona = this.resolvePersona(agentName, params.personaId);
@@ -51,6 +66,7 @@ export class AgentService {
       userText: params.message,
       day: utcDay(),
       agentName,
+      ...(params.regenerate === true ? { regenerate: true } : {}),
       ...(persona !== undefined ? { persona } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
     };
@@ -77,7 +93,8 @@ export class AgentService {
     });
   }
 
-  cancel(runId: string): Promise<void> {
+  async cancel(actor: Actor, runId: string): Promise<void> {
+    await this.assertOwnsActiveStream(actor, runId);
     return this.runner.cancel(runId);
   }
 
@@ -138,6 +155,17 @@ export class AgentService {
     }
     if (owner !== actor.id) {
       throw new ForbiddenException('tool call belongs to another actor');
+    }
+  }
+
+  /** Authorization seam for `cancel`: the caller must own the thread currently streaming this run. */
+  private async assertOwnsActiveStream(actor: Actor, runId: string): Promise<void> {
+    const owner = await this.store.ownerOfActiveStream(runId);
+    if (owner === null) {
+      throw new NotFoundException(`no active run ${runId}`);
+    }
+    if (owner !== actor.id) {
+      throw new ForbiddenException('run belongs to another actor');
     }
   }
 }
