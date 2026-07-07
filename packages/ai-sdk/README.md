@@ -2,7 +2,7 @@
 
 > 🪺 Part of the [Aviary](https://davidecarvalho.github.io/aviary) · a model adapter for [`@dudousxd/nestjs-agent`](https://www.npmjs.com/package/@dudousxd/nestjs-agent).
 
-Maps the [Vercel AI SDK](https://ai-sdk.dev) v6 to the core `ModelProvider` SPI so you write **zero
+Maps the [Vercel AI SDK](https://ai-sdk.dev) v7 to the core `ModelProvider` SPI so you write **zero
 provider code**. One call — `aiSdkModel(model)` — turns any AI SDK `LanguageModel` (a gateway string
 like `'openai/gpt-4o'`, or a provider model instance) into the `ModelProvider` the agent module runs.
 It is the first of a family of model adapters; core's `ModelProvider` stays the single seam.
@@ -22,7 +22,7 @@ import { AgentModule } from '@dudousxd/nestjs-agent';
 @Module({
   imports: [
     AgentModule.forRoot({
-      model: aiSdkModel('anthropic/claude-sonnet-4'), // any AI SDK v6 LanguageModel
+      model: aiSdkModel('anthropic/claude-sonnet-4'), // any AI SDK v7 LanguageModel
       modelId: 'anthropic/claude-sonnet-4',
     }),
   ],

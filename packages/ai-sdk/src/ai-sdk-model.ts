@@ -31,13 +31,13 @@ import type { ZodTypeAny } from 'zod';
 
 /**
  * Pass-through settings forwarded to the AI SDK `streamText` call (headers, temperature,
- * `maxOutputTokens`, `providerOptions`, …). `model`, `system`, `messages`, `tools`, and
+ * `maxOutputTokens`, `providerOptions`, …). `model`, `instructions`, `messages`, `tools`, and
  * `abortSignal` are owned by the adapter and always win over anything set here.
  */
 export type AiSdkModelOptions = CallSettings;
 
 /**
- * Adapt a Vercel AI SDK v6 `LanguageModel` to the core `ModelProvider` SPI so a host app writes
+ * Adapt a Vercel AI SDK v7 `LanguageModel` to the core `ModelProvider` SPI so a host app writes
  * zero provider code. Streams text deltas to `args.sink`, returns the assembled text, requested
  * tool calls, usage, and (when a gateway reports it) the real USD cost. It never executes tools —
  * tools are handed to the SDK WITHOUT an `execute` fn, so the SDK returns tool-calls for the agent
@@ -49,7 +49,7 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
       const result = streamText({
         ...opts,
         model,
-        system: args.system,
+        instructions: args.system,
         messages: mapMessages(args.messages),
         tools: mapTools(args.tools),
         ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
@@ -58,23 +58,23 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
       // Encode deltas to bytes for the live token sink, exactly as the reference fake provider does.
       const encoder = new TextEncoder();
       let text = '';
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         if (part.type === 'text-delta') {
           text += part.text;
           await args.sink.write(encoder.encode(part.text));
         }
       }
 
-      // The promise accessors resolve once `fullStream` is fully consumed above.
-      const [toolCalls, usage, response, providerMetadata] = await Promise.all([
+      // The promise accessors resolve once the stream is fully consumed above. `modelId` and the
+      // reported cost live on the final step (the top-level aliases are deprecated in AI SDK v7).
+      const [toolCalls, usage, finalStep] = await Promise.all([
         result.toolCalls,
         result.usage,
-        result.response,
-        result.providerMetadata,
+        result.finalStep,
       ]);
 
-      const modelId = response.modelId;
-      const costUsd = extractCostUsd(providerMetadata);
+      const modelId = finalStep.response.modelId;
+      const costUsd = extractCostUsd(finalStep.providerMetadata);
 
       return {
         text,
@@ -231,13 +231,14 @@ function mapToolCall(call: TypedToolCall<ToolSet>): ToolCallRequest {
 
 /**
  * Map SDK usage → core `MessageUsage`. Cache/reasoning breakdowns are optional and only added when
- * the provider reports them (conditional spread, never an `undefined` assignment). The `*Details`
- * objects prefer the current field names, falling back to the SDK's deprecated flat aliases.
+ * the provider reports them (conditional spread, never an `undefined` assignment). AI SDK v7 carries
+ * them on the `*Details` objects; the deprecated flat aliases (`cachedInputTokens`, `reasoningTokens`)
+ * were removed.
  */
 function mapUsage(usage: LanguageModelUsage): MessageUsage {
-  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens;
+  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens;
   const cacheWriteTokens = usage.inputTokenDetails?.cacheWriteTokens;
-  const reasoningTokens = usage.outputTokenDetails?.reasoningTokens ?? usage.reasoningTokens;
+  const reasoningTokens = usage.outputTokenDetails?.reasoningTokens;
   return {
     inputTokens: usage.inputTokens ?? 0,
     outputTokens: usage.outputTokens ?? 0,

@@ -48,7 +48,7 @@ interface AddToolResultArgs {
 
 /**
  * Generalized `useChat` wiring for the nestjs-agent backend. Wraps the
- * AI SDK v6 hook with `AgentChatTransport`, plus thread list/load/delete/
+ * AI SDK v7 hook with `AgentChatTransport`, plus thread list/load/delete/
  * fork, persona catalog, quota, cancel, and HITL approve/reject — all
  * driven through `AgentClient`. Mirrors flip's `useAdminChat`, generalized.
  */

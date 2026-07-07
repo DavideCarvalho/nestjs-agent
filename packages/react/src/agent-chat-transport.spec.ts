@@ -54,7 +54,7 @@ function sendArgs(): Parameters<ChatTransport<UIMessage>['sendMessages']>[0] {
 }
 
 describe('AgentChatTransport', () => {
-  it('parses meta + delta + done into a v6 UI-message chunk stream', async () => {
+  it('parses meta + delta + done into a v7 UI-message chunk stream', async () => {
     const captured: AgentStreamMeta[] = [];
     const transport = new AgentChatTransport({
       fetch: fakeFetch(

@@ -2,7 +2,7 @@
 
 > 🪺 Part of the [Aviary](https://davidecarvalho.github.io/aviary) · the React frontend for [`@dudousxd/nestjs-agent`](https://www.npmjs.com/package/@dudousxd/nestjs-agent).
 
-`useAgentChat` wraps the Vercel **AI SDK v6** `useChat` with a transport for the agent's `/agent/chat`
+`useAgentChat` wraps the Vercel **AI SDK v7** `useChat` with a transport for the agent's `/agent/chat`
 SSE, plus threads, personas, quota, cancel, and human-in-the-loop approve/reject. Ships styling-agnostic
 chat components (every action is a callback; all styling via `classNames`) and an optional rich-markdown
 subpath.

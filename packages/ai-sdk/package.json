@@ -1,7 +1,7 @@
 {
   "name": "@dudousxd/nestjs-agent-ai-sdk",
   "version": "0.1.0",
-  "description": "nestjs-agent Vercel AI SDK v6 adapter — maps streamText to the core ModelProvider SPI (aiSdkModel)",
+  "description": "nestjs-agent Vercel AI SDK v7 adapter — maps streamText to the core ModelProvider SPI (aiSdkModel)",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -30,11 +30,11 @@
   },
   "peerDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
-    "ai": "^6.0.0"
+    "ai": "^7.0.0"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
-    "ai": "6.0.168",
+    "ai": "7.0.16",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
     "vitest": "2.1.9",

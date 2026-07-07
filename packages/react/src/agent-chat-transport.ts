@@ -47,9 +47,9 @@ const HEADER_RUN_ID = 'x-agent-run-id';
 const HEADER_THREAD_ID = 'x-agent-thread-id';
 
 /**
- * AI SDK v6 `ChatTransport` for the nestjs-agent backend. POSTs
+ * AI SDK v7 `ChatTransport` for the nestjs-agent backend. POSTs
  * `/agent/chat`, parses the backend's `meta` + `{delta}` + `done` SSE
- * frames, and re-emits them as the v6 UI-message chunk stream
+ * frames, and re-emits them as the v7 UI-message chunk stream
  * (`start` → `text-start` → `text-delta`* → `text-end` → `finish`).
  *
  * The backend hydrates prior history from its store, so only the latest
@@ -160,7 +160,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   }
 
   /**
-   * Parse the backend's SSE byte stream and synthesize a valid v6
+   * Parse the backend's SSE byte stream and synthesize a valid v7
    * UI-message chunk stream. Recognized backend frames:
    *  - `event: meta`  `data: {"runId","threadId"}`  → records identity
    *  - `data: {"delta":"..."}`                       → `text-delta`

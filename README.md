@@ -40,7 +40,7 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres) |
 | `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
-| `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v6) + styling-agnostic chat components; optional `/markdown` subpath |
+| `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + styling-agnostic chat components; optional `/markdown` subpath |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |
 | `@dudousxd/nestjs-agent-dashboard` | A standalone, mountable AI-gateway governance console (bundled React SPA + NestJS module) — no Telescope required |
@@ -190,7 +190,7 @@ const { spec, handler } = createExecuteSqlTool({
 
 ## Frontend (`-react`)
 
-`useAgentChat` wraps the Vercel AI SDK v6 `useChat` with a transport for the `/agent/chat` SSE,
+`useAgentChat` wraps the Vercel AI SDK v7 `useChat` with a transport for the `/agent/chat` SSE,
 plus threads, personas, quota, cancel, and HITL approve/reject. The components are styling-agnostic
 (every action is a callback, all styling via `classNames`). The optional
 `@dudousxd/nestjs-agent-react/markdown` subpath ships a full streamdown renderer (GFM, KaTeX,

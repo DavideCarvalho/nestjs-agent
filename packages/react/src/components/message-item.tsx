@@ -63,7 +63,7 @@ export interface MessageItemProps {
 }
 
 /**
- * Styling-agnostic renderer for a single v6 `UIMessage`. Ports flip's full chat-item UX —
+ * Styling-agnostic renderer for a single v7 `UIMessage`. Ports flip's full chat-item UX —
  * copy, fork, regenerate, inline edit-and-resubmit, usage line, relative timestamp, and tool
  * grouping — but with ALL styling left to `classNames` and every action surfaced as a callback,
  * so no design-system / icon / date library is pulled in (relative time uses Intl.RelativeTimeFormat).

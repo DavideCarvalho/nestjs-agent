@@ -42,9 +42,18 @@ function noJsonSchemaTool(name: string): ToolDefinition {
   return { name, kind: 'read', description: `${name} tool`, inputSchema };
 }
 
+// AI SDK v7 moved `response`/`providerMetadata` off the top-level result onto the final step
+// (a promise). This mirrors that shape so the adapter reads `modelId`/cost from `finalStep`.
+function fakeFinalStep(providerMetadata: unknown) {
+  return Promise.resolve({
+    response: { modelId: 'openai/gpt-4o', id: 'resp-1', timestamp: new Date() },
+    providerMetadata,
+  });
+}
+
 function fakeStreamResult(overrides: Record<string, unknown> = {}) {
   return {
-    fullStream: (async function* generate() {
+    stream: (async function* generate() {
       yield { type: 'text-delta', id: '1', text: 'Hel' };
       yield { type: 'reasoning-delta', id: 'r', text: 'thinking' };
       yield { type: 'text-delta', id: '1', text: 'lo' };
@@ -57,8 +66,7 @@ function fakeStreamResult(overrides: Record<string, unknown> = {}) {
       inputTokenDetails: { cacheReadTokens: 4, cacheWriteTokens: 2 },
       outputTokenDetails: { reasoningTokens: 3 },
     }),
-    response: Promise.resolve({ modelId: 'openai/gpt-4o', id: 'resp-1', timestamp: new Date() }),
-    providerMetadata: Promise.resolve({ gateway: { cost: 0.0123 } }),
+    finalStep: fakeFinalStep({ gateway: { cost: 0.0123 } }),
     ...overrides,
   };
 }
@@ -127,7 +135,7 @@ describe('aiSdkModel', () => {
 
   it('reads OpenRouter total_cost when there is no gateway cost', async () => {
     streamTextMock.mockReturnValue(
-      fakeStreamResult({ providerMetadata: Promise.resolve({ openrouter: { total_cost: 0.5 } }) }),
+      fakeStreamResult({ finalStep: fakeFinalStep({ openrouter: { total_cost: 0.5 } }) }),
     );
 
     const result = await aiSdkModel('openrouter/anthropic/claude').runTurn({
@@ -141,9 +149,7 @@ describe('aiSdkModel', () => {
   });
 
   it('omits costUsd when the provider reports no gateway/OpenRouter cost', async () => {
-    streamTextMock.mockReturnValue(
-      fakeStreamResult({ providerMetadata: Promise.resolve(undefined) }),
-    );
+    streamTextMock.mockReturnValue(fakeStreamResult({ finalStep: fakeFinalStep(undefined) }));
 
     const result = await aiSdkModel('anthropic/claude').runTurn({
       system: '',
