@@ -13,7 +13,6 @@ import {
   type AssistantContent,
   type CallSettings,
   type FlexibleSchema,
-  type JSONSchema7,
   type JSONValue,
   type LanguageModel,
   type LanguageModelUsage,
@@ -28,6 +27,7 @@ import {
   streamText,
   tool,
 } from 'ai';
+import type { ZodTypeAny } from 'zod';
 
 /**
  * Pass-through settings forwarded to the AI SDK `streamText` call (headers, temperature,
@@ -179,32 +179,44 @@ function mapTools(tools: ToolDefinition[]): ToolSet {
 
 /**
  * Convert a core `StandardSchemaV1` into the schema the SDK feeds the model as tool parameters.
- * The SDK accepts a Standard Schema directly ONLY when it also implements the Standard JSON Schema
- * extension (`~standard.jsonschema`) — which Zod/Valibot/ArkType provide — because the SDK calls
- * that converter to derive the JSON schema. When the schema doesn't expose the converter we can't
- * derive a precise JSON schema, so we fall back to a permissive object schema; the agent loop still
- * validates the tool input against the real schema via `~standard.validate` before running it.
+ * The SDK's own `asSchema` derives a precise JSON schema from exactly two kinds of Standard Schema,
+ * so we hand those straight through and let it do the conversion:
+ *
+ *  - **Zod** (`~standard.vendor === 'zod'`) — the SDK runs zod-to-json-schema natively. Zod 3 does
+ *    NOT expose the Standard JSON Schema extension, so this vendor tag is the only way to recognise
+ *    it, and it's the common case (`@AiTool({ input: z.object(...) })`).
+ *  - **Standard JSON Schema** (`~standard.jsonSchema`) — Valibot, ArkType, and Zod 4 implement the
+ *    extension; the SDK calls its `input()` converter to derive the schema.
+ *
+ * Anything else is a bare Standard Schema the SDK can't introspect (its `asSchema` throws on one), so
+ * we degrade to a permissive object schema — the model loses the parameter shapes, but the agent loop
+ * still validates the tool input against the real schema via `~standard.validate` before running it.
  */
 function toSdkInputSchema(schema: StandardSchemaV1): FlexibleSchema<unknown> {
-  if (hasStandardJsonSchema(schema)) {
+  if (isZodSchema(schema) || hasStandardJsonSchema(schema)) {
     return schema;
   }
-  return jsonSchema(permissiveObjectSchema());
+  return jsonSchema({ type: 'object', properties: {}, additionalProperties: true });
 }
 
-function permissiveObjectSchema(): JSONSchema7 {
-  return { type: 'object', properties: {}, additionalProperties: true };
+/**
+ * True for a Zod schema. Zod tags its Standard Schema props with `vendor: 'zod'`, and its own type
+ * declares `~standard`, so this narrows to `ZodTypeAny` — a member of the SDK's `FlexibleSchema` —
+ * without a cast, letting the SDK convert it natively.
+ */
+function isZodSchema(schema: StandardSchemaV1): schema is ZodTypeAny {
+  return schema['~standard'].vendor === 'zod';
 }
 
-/** True when the schema carries the Standard JSON Schema converter the SDK needs to build params. */
+/** True when the schema carries the Standard JSON Schema converter (`~standard.jsonSchema.input`). */
 function hasStandardJsonSchema(
   schema: StandardSchemaV1,
 ): schema is StandardSchemaV1 & StandardJSONSchemaV1 {
   const standard = schema['~standard'];
-  if (!('jsonschema' in standard)) {
+  if (!('jsonSchema' in standard)) {
     return false;
   }
-  const converter = standard.jsonschema;
+  const converter = standard.jsonSchema;
   return (
     typeof converter === 'object' &&
     converter !== null &&

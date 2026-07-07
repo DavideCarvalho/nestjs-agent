@@ -220,7 +220,7 @@ describe('aiSdkModel', () => {
         version: 1,
         vendor: 'test',
         validate: (value: unknown) => ({ value }),
-        jsonschema: {
+        jsonSchema: {
           input: () => ({ type: 'object', properties: {} }),
           output: () => ({ type: 'object', properties: {} }),
         },
