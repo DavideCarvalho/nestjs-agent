@@ -67,6 +67,18 @@ export interface AgentStore {
   setTitle(threadId: string, title: string): Promise<void>;
   setActiveStream(threadId: string, runId: string | null): Promise<void>;
 
+  /**
+   * The `actorRef` that owns a thread, or `null` if no such thread exists. The authorization seam
+   * for thread-scoped endpoints (detail / delete / fork): the service compares this against the
+   * resolved caller before acting, so one actor can never read or mutate another's thread.
+   */
+  ownerOfThread(threadId: string): Promise<string | null>;
+  /**
+   * The `actorRef` that owns the thread a tool call belongs to, or `null` if the call is unknown.
+   * The authorization seam for HITL approve / reject: the caller must own the run they approve.
+   */
+  ownerOfToolCall(toolCallId: string): Promise<string | null>;
+
   appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
   truncateFrom(threadId: string, messageId: string): Promise<void>;
 

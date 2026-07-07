@@ -11,7 +11,7 @@ import {
   type ThreadDetail,
   type ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 
@@ -64,11 +64,13 @@ export class AgentService {
     return this.deps.forAgent().sink.subscribe(runId);
   }
 
-  approve(runId: string, toolCallId: string): Promise<void> {
+  async approve(actor: Actor, runId: string, toolCallId: string): Promise<void> {
+    await this.assertOwnsToolCall(actor, toolCallId);
     return this.runner.signal(runId, toolCallId, { approved: true });
   }
 
-  reject(runId: string, toolCallId: string, reason?: string): Promise<void> {
+  async reject(actor: Actor, runId: string, toolCallId: string, reason?: string): Promise<void> {
+    await this.assertOwnsToolCall(actor, toolCallId);
     return this.runner.signal(runId, toolCallId, {
       approved: false,
       ...(reason !== undefined ? { reason } : {}),
@@ -95,19 +97,47 @@ export class AgentService {
     return this.store.listThreads(actorRef);
   }
 
-  getThread(threadId: string): Promise<ThreadDetail | null> {
+  async getThread(actor: Actor, threadId: string): Promise<ThreadDetail | null> {
+    await this.assertOwnsThread(actor, threadId);
     return this.store.getThread(threadId);
   }
 
-  deleteThread(threadId: string): Promise<void> {
+  async deleteThread(actor: Actor, threadId: string): Promise<void> {
+    await this.assertOwnsThread(actor, threadId);
     return this.store.softDeleteThread(threadId);
   }
 
-  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+  async forkThread(actor: Actor, threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+    await this.assertOwnsThread(actor, threadId);
     return this.store.forkThread(threadId, fromMessageId);
   }
 
   async quotaToday(actorRef: string): Promise<{ usedTokens: number }> {
     return this.store.quotaToday(actorRef, utcDay());
+  }
+
+  /**
+   * Authorization seam for thread-scoped endpoints: the caller must own the thread. A missing
+   * thread is a 404; someone else's thread is a 403 — one actor never touches another's thread.
+   */
+  private async assertOwnsThread(actor: Actor, threadId: string): Promise<void> {
+    const owner = await this.store.ownerOfThread(threadId);
+    if (owner === null) {
+      throw new NotFoundException(`thread ${threadId} not found`);
+    }
+    if (owner !== actor.id) {
+      throw new ForbiddenException('thread belongs to another actor');
+    }
+  }
+
+  /** Authorization seam for HITL approve/reject: the caller must own the tool call's thread. */
+  private async assertOwnsToolCall(actor: Actor, toolCallId: string): Promise<void> {
+    const owner = await this.store.ownerOfToolCall(toolCallId);
+    if (owner === null) {
+      throw new NotFoundException(`tool call ${toolCallId} not found`);
+    }
+    if (owner !== actor.id) {
+      throw new ForbiddenException('tool call belongs to another actor');
+    }
   }
 }

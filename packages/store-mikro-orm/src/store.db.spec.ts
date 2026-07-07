@@ -88,6 +88,12 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(toolCall?.executedByRef).toBe('worker-1');
     expect(toolCall?.executedAt).toBeInstanceOf(Date);
 
+    // ownerOfThread / ownerOfToolCall resolve the owning actorRef for the authz checks
+    expect(await store.ownerOfThread(thread.id)).toBe('actor-1');
+    expect(await store.ownerOfToolCall('tc-1')).toBe('actor-1');
+    expect(await store.ownerOfThread('missing')).toBeNull();
+    expect(await store.ownerOfToolCall('missing')).toBeNull();
+
     // getThread → both messages in order, with tool-call data preserved
     const detail = await store.getThread(thread.id);
     expect(detail).not.toBeNull();

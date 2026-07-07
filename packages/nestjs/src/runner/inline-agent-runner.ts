@@ -7,6 +7,8 @@ import {
   type AgentRunner,
   type AgentStore,
   type Decision,
+  QuotaExceededError,
+  publishAgentRunFailed,
   runAgentLoop,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
@@ -35,11 +37,14 @@ export class InlineAgentRunner implements AgentRunner {
     const hooks = this.topLevelHooks(runId, deps, input.actor, day);
 
     void runAgentLoop({ ...deps, day }, input, hooks).catch(async (error) => {
-      this.logger.error(`agent run ${runId} failed: ${error?.message ?? error}`);
-      const writer = await deps.sink.open(runId);
       const message = error instanceof Error ? error.message : String(error);
-      await writer.write(new TextEncoder().encode(`\n[error] ${message}`));
-      await writer.end();
+      const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
+      this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
+      publishAgentRunFailed({ runId, code, message });
+      // Terminate the live stream with a typed failure so the transport emits an error frame
+      // instead of leaking the message as assistant text.
+      const writer = await deps.sink.open(runId);
+      await writer.fail({ code, message });
     });
 
     return { runId };
@@ -69,16 +74,17 @@ export class InlineAgentRunner implements AgentRunner {
           this.pending.set(`${runId}:${call.id}`, resolve);
         }),
       step: (_name, fn) => fn(),
-      runAgent: (agentName, task) => this.runNested(agentName, task, actor, day),
+      runAgent: (agentName, task) => this.runNested(agentName, task, actor, day, 1),
     };
   }
 
-  /** Delegate to another agent as a nested in-process run. */
+  /** Delegate to another agent as a nested in-process run at the given delegation depth. */
   private async runNested(
     agentName: string,
     task: string,
     actor: Actor,
     day: string,
+    depth: number,
   ): Promise<{ text: string }> {
     const subThread = await this.store.createThread({ actor, persona: 'default', transient: true });
     const runId = crypto.randomUUID();
@@ -92,11 +98,12 @@ export class InlineAgentRunner implements AgentRunner {
         reason: 'nested sub-agent cannot request human approval',
       }),
       step: (_name, fn) => fn(),
-      runAgent: (childName, childTask) => this.runNested(childName, childTask, actor, day),
+      runAgent: (childName, childTask) =>
+        this.runNested(childName, childTask, actor, day, depth + 1),
     };
     return runAgentLoop(
       { ...deps, day },
-      { threadId: subThread.id, actor, userText: task, agentName, day },
+      { threadId: subThread.id, actor, userText: task, agentName, day, delegationDepth: depth },
       hooks,
     );
   }

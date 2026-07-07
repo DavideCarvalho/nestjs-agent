@@ -27,7 +27,6 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
   ) {}
 
   onApplicationBootstrap(): void {
-    const defaultRoles = this.options.defaultRoles ?? ['ADMIN'];
     let count = 0;
     let functional = 0;
     for (const wrapper of this.discovery.getProviders()) {
@@ -57,7 +56,9 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           kind: meta.kind,
           description: meta.description,
           inputSchema: meta.input,
-          roles: meta.roles ?? defaultRoles,
+          // Leave roles unset when the tool didn't declare any — the RolesPolicy owns the default
+          // (its `defaultRoles`). Baking it in here too would leak it into custom policies.
+          ...(meta.roles !== undefined ? { roles: meta.roles } : {}),
           ...(meta.ability !== undefined ? { ability: meta.ability } : {}),
         },
         { execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx) },
@@ -76,15 +77,23 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     let delegates = 0;
     for (const definition of this.agents.list()) {
       for (const target of definition.delegatesTo ?? []) {
+        const targetDefinition = this.agents.get(target);
+        // A dangling `delegatesTo` (typo, or a sub-agent never registered via forFeature) would
+        // otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
+        // default agent at runtime — a privilege-escalation footgun. Fail the boot instead.
+        if (targetDefinition === undefined) {
+          throw new Error(
+            `Agent "${definition.name}" delegatesTo "${target}", which is not a registered agent. Register it via AgentModule.forFeature([...]) or fix the name.`,
+          );
+        }
         const name = delegateToolName(target);
         if (this.registry.has(name)) {
           continue;
         }
-        const targetDefinition = this.agents.get(target);
         // Only a flat string prompt is worth surfacing in the tool description; a PromptBuilder is
         // per-request and would stringify to source, so skip it.
         const targetBlurb =
-          typeof targetDefinition?.systemPrompt === 'string'
+          typeof targetDefinition.systemPrompt === 'string'
             ? ` It is: ${targetDefinition.systemPrompt}`
             : '';
         this.registry.register(

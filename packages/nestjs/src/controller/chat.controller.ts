@@ -1,6 +1,7 @@
 import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
+  AgentStreamError,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
@@ -58,10 +59,23 @@ export class ChatController {
     }
     res.write(`event: meta\ndata: ${JSON.stringify({ runId, threadId })}\n\n`);
     const decoder = new TextDecoder();
-    for await (const chunk of this.agent.subscribe(runId)) {
-      res.write(`data: ${JSON.stringify({ delta: decoder.decode(chunk) })}\n\n`);
+    try {
+      for await (const chunk of this.agent.subscribe(runId)) {
+        res.write(`data: ${JSON.stringify({ delta: decoder.decode(chunk) })}\n\n`);
+      }
+      res.write('event: done\ndata: {}\n\n');
+    } catch (error) {
+      // A run that failed terminates the sink with an AgentStreamError; surface it as a typed
+      // error frame so the client can render a failure state instead of parsing it as a token.
+      const payload =
+        error instanceof AgentStreamError
+          ? { code: error.code, message: error.message }
+          : {
+              code: 'run_failed',
+              message: error instanceof Error ? error.message : 'stream error',
+            };
+      res.write(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
     }
-    res.write('event: done\ndata: {}\n\n');
     res.end();
   }
 }

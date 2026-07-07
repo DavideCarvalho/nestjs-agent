@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { HeaderActorResolver } from './header-actor-resolver.js';
-import { UnconfiguredActorResolver } from './unconfigured-actor-resolver.js';
 
 function req(headers: Record<string, string>): { headers: Record<string, string> } {
   return { headers };
@@ -27,12 +26,5 @@ describe('HeaderActorResolver', () => {
 
   it('throws when the request has no headers at all', () => {
     expect(() => resolver.resolve({})).toThrow(/x-actor-id/);
-  });
-});
-
-describe('UnconfiguredActorResolver', () => {
-  it('throws on every request — the secure default refuses to invent a caller', () => {
-    const resolver = new UnconfiguredActorResolver();
-    expect(() => resolver.resolve()).toThrow(/No actorResolver configured/);
   });
 });

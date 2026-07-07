@@ -25,13 +25,11 @@ export interface UseAgentChatOptions {
   /** Persisted history to seed `useChat` with (consumed on mount only). */
   initialMessages?: UIMessage[];
   /**
-   * True when the thread row reports a non-null `activeStreamId` — i.e.
-   * there's a buffered stream to reconnect to. Gates the SDK's `resume`
-   * so a normal mount never fires a doomed resume GET.
+   * Run id of a buffered stream to reconnect to on mount — wire this to the thread's
+   * `activeStreamId`. Its presence both gates the SDK's `resume` and names the run, so a normal
+   * mount (no id) never fires a doomed resume GET. Omitted → no resume.
    */
-  hasActiveStream?: boolean;
-  /** Run id of the buffered stream to resume (the thread's activeStreamId). */
-  activeStreamId?: string;
+  resumeRunId?: string;
   /** Active persona id sent on every turn. */
   persona?: string;
   /** Read at every send to capture a page snapshot for the page-assistant. */
@@ -56,7 +54,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const latest = useRef(options);
   latest.current = options;
 
-  const [runId, setRunId] = useState<string | undefined>(options.activeStreamId);
+  const [runId, setRunId] = useState<string | undefined>(options.resumeRunId);
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
 
@@ -93,17 +91,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
           ...(pageContext ? { pageContext } : {}),
         };
       },
-      getResumeRunId: () => {
-        const current = latest.current;
-        return current.hasActiveStream === true ? current.activeStreamId : undefined;
-      },
+      getResumeRunId: () => latest.current.resumeRunId,
       onMeta,
     });
   }, []);
 
   const chat = useChat({
     transport,
-    resume: options.threadId !== undefined && options.hasActiveStream === true,
+    resume: options.resumeRunId !== undefined,
     ...(options.threadId !== undefined ? { id: options.threadId } : {}),
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onFinish: () => {

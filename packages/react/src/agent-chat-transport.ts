@@ -207,6 +207,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 finish();
                 return;
               }
+              if (frame.event === 'error') {
+                ensureStarted();
+                controller.enqueue({ type: 'error', errorText: parseErrorText(frame.data) });
+                controller.close();
+                return;
+              }
               if (frame.event === 'meta') {
                 const meta = parseMeta(frame.data);
                 if (meta) record(meta);
@@ -279,6 +285,25 @@ function parseMeta(data: string | undefined): AgentStreamMeta | null {
     /* malformed meta frame — ignore */
   }
   return null;
+}
+
+/** Pull a human-facing message out of the backend's `event: error` frame (`{code,message}`). */
+function parseErrorText(data: string | undefined): string {
+  if (!data) return 'Agent run failed';
+  try {
+    const parsed: unknown = JSON.parse(data);
+    if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      'message' in parsed &&
+      typeof parsed.message === 'string'
+    ) {
+      return parsed.message;
+    }
+  } catch {
+    /* malformed error frame — fall through to the default */
+  }
+  return 'Agent run failed';
 }
 
 function parseDelta(data: string): string | null {

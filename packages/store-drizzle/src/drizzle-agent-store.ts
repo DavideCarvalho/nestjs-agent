@@ -152,6 +152,24 @@ export class DrizzleAgentStore implements AgentStore {
     return this.toSummary(fork);
   }
 
+  async ownerOfThread(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ actorRef: agentThread.actorRef })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+    return thread?.actorRef ?? null;
+  }
+
+  async ownerOfToolCall(toolCallId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ actorRef: agentThread.actorRef })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .where(eq(agentToolCall.id, toolCallId));
+    return row?.actorRef ?? null;
+  }
+
   async setTitle(threadId: string, title: string): Promise<void> {
     await this.db
       .update(agentThread)

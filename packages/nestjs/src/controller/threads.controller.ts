@@ -1,5 +1,5 @@
 import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
-import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
@@ -22,18 +22,21 @@ export class ThreadsController {
   }
 
   @Get(':id')
-  detail(@Param('id') id: string) {
-    return this.agent.getThread(id);
+  async detail(@Req() req: Request, @Param('id') id: string) {
+    const actor = await this.actorResolver.resolve(req);
+    return this.agent.getThread(actor, id);
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<{ ok: boolean }> {
-    await this.agent.deleteThread(id);
+  async remove(@Req() req: Request, @Param('id') id: string): Promise<{ ok: boolean }> {
+    const actor = await this.actorResolver.resolve(req);
+    await this.agent.deleteThread(actor, id);
     return { ok: true };
   }
 
   @Post(':id/fork-from/:messageId')
-  fork(@Param('id') id: string, @Param('messageId') messageId: string) {
-    return this.agent.forkThread(id, messageId);
+  async fork(@Req() req: Request, @Param('id') id: string, @Param('messageId') messageId: string) {
+    const actor = await this.actorResolver.resolve(req);
+    return this.agent.forkThread(actor, id, messageId);
   }
 }

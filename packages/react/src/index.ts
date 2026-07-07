@@ -6,6 +6,7 @@ export {
 export {
   AgentClient,
   type AgentClientOptions,
+  AgentHttpError,
   type CancelResult,
   type PersonaCatalogEntry,
   type QuotaToday,

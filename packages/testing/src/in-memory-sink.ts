@@ -1,8 +1,14 @@
-import type { SinkWriter, TokenStreamSink } from '@dudousxd/nestjs-agent-core';
+import {
+  AgentStreamError,
+  type SinkWriter,
+  type StreamError,
+  type TokenStreamSink,
+} from '@dudousxd/nestjs-agent-core';
 
 interface RunBuffer {
   chunks: Uint8Array[];
   ended: boolean;
+  failure?: StreamError;
   notify: Set<() => void>;
 }
 
@@ -40,6 +46,11 @@ export class InMemoryTokenStreamSink implements TokenStreamSink {
         buf.ended = true;
         this.wake(buf);
       },
+      fail: (error: StreamError) => {
+        buf.failure = error;
+        buf.ended = true;
+        this.wake(buf);
+      },
     };
   }
 
@@ -55,6 +66,9 @@ export class InMemoryTokenStreamSink implements TokenStreamSink {
         }
       }
       if (buf.ended) {
+        if (buf.failure !== undefined) {
+          throw new AgentStreamError(buf.failure);
+        }
         return;
       }
       await new Promise<void>((resolve) => buf.notify.add(resolve));

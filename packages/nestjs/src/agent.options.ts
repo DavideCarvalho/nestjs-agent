@@ -29,18 +29,29 @@ export interface AgentModuleOptions {
   store?: AgentStore;
   /** Live token transport. Defaults to a single-process in-memory sink. */
   sink?: TokenStreamSink;
-  /** Daily token budget. Optional — omit to disable quotas. */
+  /**
+   * A {@link QuotaStore} for the daily token budget. Optional — omit (and omit `quotaLimitTokens`)
+   * to disable quotas. Provide this to plug a custom budget; for the common case use the simpler
+   * `quotaLimitTokens` instead, which binds the built-in ledger-backed store.
+   */
   quota?: QuotaStore;
+  /**
+   * Daily per-actor token budget, enforced against the persisted usage ledger by the built-in
+   * `LedgerQuotaStore`. A convenience over wiring a {@link QuotaStore} by hand — set this and quotas
+   * turn on with no extra store. Ignored when an explicit `quota` is provided. Omit to disable.
+   */
+  quotaLimitTokens?: number;
   /** Tool authorization gate. Defaults to role-in-`defaultRoles`. */
   rolesPolicy?: RolesPolicy;
   /** Default roles a tool requires when its `roles` is omitted. Defaults to `['ADMIN']`. */
   defaultRoles?: string[];
   /**
-   * Resolves the acting actor for each request (the identity seam). No default fabricates a
-   * caller — when omitted, every request throws until you provide a resolver (or the opt-in
-   * `HeaderActorResolver`). Required for anything beyond a throw-on-call placeholder.
+   * Resolves the acting actor for each request (the identity seam). Required — the agent NEVER
+   * fabricates a caller, so this is a compile-time obligation, not an optional with a throwing
+   * placeholder. Read your authenticated principal here (session / JWT / `nestjs-context`), or use
+   * the opt-in `HeaderActorResolver` for demos and header-trusting gateways.
    */
-  actorResolver?: ActorResolver;
+  actorResolver: ActorResolver;
   /** Route prefix the controllers mount under. Defaults to `'agent'` (→ `/agent/chat`, …). */
   path?: string;
   /**
@@ -72,4 +83,10 @@ export interface AgentModuleAsyncOptions {
    * lives here rather than in the async factory result (which resolves too late to mount routes).
    */
   path?: string;
+  /**
+   * Run each turn as a durable workflow. Static wiring metadata (which `AGENT_RUNNER` to bind), so
+   * it lives here rather than in the async factory result — the factory resolves too late to swap
+   * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
+   */
+  durable?: boolean;
 }

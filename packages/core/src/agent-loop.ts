@@ -1,6 +1,7 @@
 import {
   publishAgentDelegated,
   publishAgentMessage,
+  publishAgentQuotaExceeded,
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
@@ -82,6 +83,12 @@ export class QuotaExceededError extends Error {
   }
 }
 
+/**
+ * How deep agent→agent delegation may nest before the loop refuses further hops. A cap, not a
+ * tuning knob: it stops a mis-wired `delegatesTo` cycle (A→B→A) from spawning runs unbounded.
+ */
+export const MAX_DELEGATION_DEPTH = 5;
+
 /** Resolve a prompt that may be a flat string or a {@link PromptBuilder}. */
 async function resolvePrompt(prompt: string | PromptBuilder, ctx: PromptContext): Promise<string> {
   return typeof prompt === 'function' ? prompt(ctx) : prompt;
@@ -139,6 +146,11 @@ export async function runAgentLoop(
     const quota = deps.quota;
     const state = await hooks.step('quota:check', () => quota.check(input.actor.id, deps.day));
     if (!state.withinLimit) {
+      publishAgentQuotaExceeded({
+        actorId: input.actor.id,
+        usedTokens: state.usedTokens,
+        limitTokens: state.limitTokens,
+      });
       throw new QuotaExceededError();
     }
   }
@@ -266,14 +278,21 @@ export async function runAgentLoop(
             status: 'auto_executed',
           }),
         );
+        // Cap nesting so a mis-wired delegation cycle can't spawn runs without bound.
+        const overDepth = (input.delegationDepth ?? 0) >= MAX_DELEGATION_DEPTH;
         publishAgentDelegated({
           runId: hooks.runId,
           toAgent: targetAgent,
           ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
         });
-        const sub = hooks.runAgent
-          ? await hooks.runAgent(targetAgent, task)
-          : { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
+        let sub: { text: string };
+        if (overDepth) {
+          sub = { text: `(delegation depth limit of ${MAX_DELEGATION_DEPTH} reached)` };
+        } else if (hooks.runAgent) {
+          sub = await hooks.runAgent(targetAgent, task);
+        } else {
+          sub = { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
+        }
         await hooks.step(`persist:toolexec:${call.id}`, () =>
           deps.store.updateToolCall({ toolCallId: call.id, status: 'executed', output: sub }),
         );
@@ -328,15 +347,18 @@ export async function runAgentLoop(
         );
       }
 
+      const startedAt = Date.now();
       try {
         const output = await hooks.step(`tool:${call.id}`, () =>
           deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
         );
+        const executionMs = Date.now() - startedAt;
         await hooks.step(`persist:toolexec:${call.id}`, () =>
           deps.store.updateToolCall({
             toolCallId: call.id,
             status: 'executed',
             output,
+            executionMs,
             ...(toolType === 'action' ? { executedByRef: input.actor.id } : {}),
           }),
         );
@@ -346,11 +368,18 @@ export async function runAgentLoop(
           toolName: call.name,
           toolType,
           status: 'executed',
+          durationMs: executionMs,
         });
       } catch (error) {
+        const executionMs = Date.now() - startedAt;
         const message = error instanceof Error ? error.message : String(error);
         await hooks.step(`persist:toolfail:${call.id}`, () =>
-          deps.store.updateToolCall({ toolCallId: call.id, status: 'failed', error: message }),
+          deps.store.updateToolCall({
+            toolCallId: call.id,
+            status: 'failed',
+            error: message,
+            executionMs,
+          }),
         );
         results.push({ id: call.id, name: call.name, output: null, error: message });
         publishAgentToolCall({
@@ -358,6 +387,7 @@ export async function runAgentLoop(
           toolName: call.name,
           toolType,
           status: 'failed',
+          durationMs: executionMs,
         });
       }
     }

@@ -1,15 +1,25 @@
-import type { SinkWriter, TokenStreamSink } from '@dudousxd/nestjs-agent-core';
+import {
+  AgentStreamError,
+  type SinkWriter,
+  type StreamError,
+  type TokenStreamSink,
+} from '@dudousxd/nestjs-agent-core';
 
 interface RunBuffer {
   chunks: Uint8Array[];
   ended: boolean;
+  failure?: StreamError;
   notify: Set<() => void>;
 }
 
 /**
- * The default `TokenStreamSink`: buffers chunks per run in-process so a reconnecting
- * subscriber replays everything so far, then follows live. Good for a single replica; for
- * multi-replica deployments use `@dudousxd/nestjs-agent-transport-redis`.
+ * The default `TokenStreamSink`: buffers chunks per run in-process so a reconnecting subscriber
+ * replays everything so far, then follows live.
+ *
+ * Single-replica only. Because the buffer lives in one process's memory, a resume/reconnect that
+ * lands on a different replica than the one running the turn finds an empty buffer — the stream
+ * appears stalled. For multi-replica deployments, supply a shared-transport `TokenStreamSink`
+ * (e.g. Redis pub/sub keyed by runId) via `AgentModule.forRoot({ sink })`.
  */
 export class InProcessTokenStreamSink implements TokenStreamSink {
   private readonly runs = new Map<string, RunBuffer>();
@@ -41,6 +51,11 @@ export class InProcessTokenStreamSink implements TokenStreamSink {
         buf.ended = true;
         this.wake(buf);
       },
+      fail: (error: StreamError) => {
+        buf.failure = error;
+        buf.ended = true;
+        this.wake(buf);
+      },
     };
   }
 
@@ -56,6 +71,10 @@ export class InProcessTokenStreamSink implements TokenStreamSink {
         }
       }
       if (buf.ended) {
+        // Drain buffered chunks first, then raise the failure as a typed terminal.
+        if (buf.failure !== undefined) {
+          throw new AgentStreamError(buf.failure);
+        }
         return;
       }
       await new Promise<void>((resolve) => buf.notify.add(resolve));

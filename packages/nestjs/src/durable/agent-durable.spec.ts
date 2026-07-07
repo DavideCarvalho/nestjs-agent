@@ -114,7 +114,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
       const collected = collect(service.subscribe(runId));
 
       await new Promise((resolve) => setTimeout(resolve, 50));
-      await service.approve(runId, 'call-0-purgeCache');
+      await service.approve({ id: 'u1', roles: ['ADMIN'] }, runId, 'call-0-purgeCache');
 
       const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
       const streamed = await collected;

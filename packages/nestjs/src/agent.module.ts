@@ -14,6 +14,7 @@ import {
   type AgentDefinition,
   AgentRegistry,
   type AgentRunner,
+  type AgentStore,
   DefaultRolesPolicy,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
@@ -28,7 +29,7 @@ import { ThreadsController } from './controller/threads.controller.js';
 import { ToolCallController } from './controller/tool-call.controller.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
-import { UnconfiguredActorResolver } from './resolver/unconfigured-actor-resolver.js';
+import { LedgerQuotaStore } from './ledger-quota-store.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 
 const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
@@ -75,8 +76,7 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     },
     {
       provide: AGENT_ACTOR_RESOLVER,
-      useFactory: (options: AgentModuleOptions) =>
-        options.actorResolver ?? new UnconfiguredActorResolver(),
+      useFactory: (options: AgentModuleOptions) => options.actorResolver,
       inject: [AGENT_OPTIONS],
     },
     {
@@ -85,9 +85,16 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
       inject: [AGENT_OPTIONS],
     },
     {
+      // An explicit `quota` wins; otherwise `quotaLimitTokens` binds the built-in ledger-backed
+      // store; otherwise quotas are off (undefined). The ledger store reads the same usage rows
+      // the loop already writes, so enforcement needs no extra shared state across replicas.
       provide: AGENT_QUOTA_STORE,
-      useFactory: (o: AgentModuleOptions) => o.quota,
-      inject: [AGENT_OPTIONS],
+      useFactory: (o: AgentModuleOptions, store: AgentStore) =>
+        o.quota ??
+        (o.quotaLimitTokens !== undefined
+          ? new LedgerQuotaStore(store, o.quotaLimitTokens)
+          : undefined),
+      inject: [AGENT_OPTIONS, AGENT_STORE],
     },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
@@ -192,7 +199,7 @@ export class AgentModule {
         },
         // The async factory resolves too late to inspect `store`, so we always bind AGENT_STORE here
         // (its factory reads the resolved options). Omit-and-import-a-store-module is a `forRoot` path.
-        ...sharedProviders(false, true),
+        ...sharedProviders(options.durable ?? false, true),
       ],
       exports: exportsFor(true),
     };

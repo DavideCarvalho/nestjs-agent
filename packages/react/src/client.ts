@@ -3,6 +3,22 @@ import type { Persona, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agen
 /** The trimmed persona shape returned by `/agent/threads/personas/catalog`. */
 export type PersonaCatalogEntry = Pick<Persona, 'id' | 'label'>;
 
+/**
+ * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
+ * branch (e.g. 403 → "not your thread", 429 → quota) instead of string-matching a generic Error.
+ */
+export class AgentHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+    statusText: string,
+  ) {
+    super(`Agent request failed: ${method} ${path} → ${status} ${statusText}`);
+    this.name = 'AgentHttpError';
+  }
+}
+
 export interface QuotaToday {
   usedTokens: number;
 }
@@ -93,9 +109,7 @@ export class AgentClient {
       ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
     });
     if (!response.ok) {
-      throw new Error(
-        `Agent request failed: ${method} ${path} → ${response.status} ${response.statusText}`,
-      );
+      throw new AgentHttpError(response.status, method, path, response.statusText);
     }
     if (response.status === 204) return undefined as T;
     const text = await response.text();

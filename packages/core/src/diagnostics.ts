@@ -32,6 +32,12 @@ export interface AgentRunFinished {
   inputTokens: number;
   outputTokens: number;
 }
+export interface AgentRunFailed {
+  runId: string;
+  /** Stable failure slug, e.g. `quota_exceeded` or `run_failed`. */
+  code: string;
+  message: string;
+}
 export interface AgentDelegated {
   runId: string;
   fromAgent?: string;
@@ -47,6 +53,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'tool-call': AgentToolCallEvent;
       'quota.exceeded': AgentQuotaExceeded;
       'run.finished': AgentRunFinished;
+      'run.failed': AgentRunFailed;
       delegated: AgentDelegated;
     };
   }
@@ -66,6 +73,9 @@ export function publishAgentQuotaExceeded(payload: AgentQuotaExceeded): void {
 }
 export function publishAgentRunFinished(payload: AgentRunFinished): void {
   emit('agent', 'run.finished', payload);
+}
+export function publishAgentRunFailed(payload: AgentRunFailed): void {
+  emit('agent', 'run.failed', payload);
 }
 export function publishAgentDelegated(payload: AgentDelegated): void {
   emit('agent', 'delegated', payload);

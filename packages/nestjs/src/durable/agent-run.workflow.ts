@@ -49,6 +49,7 @@ export class AgentRunWorkflow {
           actor: input.actor,
           userText: task,
           day,
+          delegationDepth: (input.delegationDepth ?? 0) + 1,
         });
       },
     };

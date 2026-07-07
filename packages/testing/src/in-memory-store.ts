@@ -153,6 +153,18 @@ export class InMemoryAgentStore implements AgentStore {
     return this.toSummary(row);
   }
 
+  async ownerOfThread(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.actorRef ?? null;
+  }
+
+  async ownerOfToolCall(toolCallId: string): Promise<string | null> {
+    const call = this.toolCalls.get(toolCallId);
+    if (call === undefined) {
+      return null;
+    }
+    return this.threads.get(call.threadId)?.actorRef ?? null;
+  }
+
   async setTitle(threadId: string, title: string): Promise<void> {
     const row = this.threads.get(threadId);
     if (row !== undefined) {

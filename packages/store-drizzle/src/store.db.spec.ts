@@ -77,6 +77,12 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     const [toolCall] = await db.select().from(agentToolCall).where(eq(agentToolCall.id, 'tc-1'));
     expect(toolCall?.status).toBe('executed');
     expect(toolCall?.output).toEqual({ result: 'sunny' });
+
+    // ownerOfThread / ownerOfToolCall resolve the owning actorRef for the authz checks
+    expect(await store.ownerOfThread(thread.id)).toBe('actor-1');
+    expect(await store.ownerOfToolCall('tc-1')).toBe('actor-1');
+    expect(await store.ownerOfThread('missing')).toBeNull();
+    expect(await store.ownerOfToolCall('missing')).toBeNull();
     expect(toolCall?.executionMs).toBe(12);
     expect(toolCall?.executedByRef).toBe('worker-1');
     expect(toolCall?.executedAt).toBeInstanceOf(Date);

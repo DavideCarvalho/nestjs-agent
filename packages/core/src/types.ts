@@ -155,11 +155,15 @@ export interface AgentRunInput {
   userText: string;
   persona?: Persona;
   pageContext?: PageContext;
-  isRegenerate?: boolean;
   /** YYYY-MM-DD stamped by the runner so quota/day stays deterministic under durable replay. */
   day?: string;
   /** Which named agent runs this turn. Omitted → the default/single agent. */
   agentName?: string;
+  /**
+   * How many agent→agent delegations deep this run already is (0 for a top-level turn). The runner
+   * increments it for each child run; the loop refuses to delegate past {@link MAX_DELEGATION_DEPTH}.
+   */
+  delegationDepth?: number;
 }
 
 /**

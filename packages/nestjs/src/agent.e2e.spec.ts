@@ -1,10 +1,11 @@
-import type { AgentDefinition, RolesPolicy } from '@dudousxd/nestjs-agent-core';
+import type { AgentDefinition, QuotaStore, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
   InMemoryAgentStore,
+  InMemoryQuotaStore,
 } from '@dudousxd/nestjs-agent-testing';
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -59,6 +60,7 @@ interface BuildOptions {
   rolesPolicy?: RolesPolicy;
   features?: AgentDefinition[];
   path?: string;
+  quota?: QuotaStore;
 }
 
 async function buildApp(script: FakeScript, options: BuildOptions = {}) {
@@ -72,6 +74,7 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         defaultAgent: { modelId: 'fake-1', systemPrompt: 'test agent' },
         ...(options.path !== undefined ? { path: options.path } : {}),
         ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
+        ...(options.quota !== undefined ? { quota: options.quota } : {}),
       }),
       ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
     ],
@@ -175,7 +178,7 @@ describe('AgentModule (inline)', () => {
     const collected = collect(built.service.subscribe(runId));
     // give the loop a tick to reach the approval gate, then approve the (deterministic) tool id
     await new Promise((resolve) => setTimeout(resolve, 20));
-    await built.service.approve(runId, 'call-0-purgeCache');
+    await built.service.approve({ id: 'u1', roles: ['ADMIN'] }, runId, 'call-0-purgeCache');
 
     const streamed = await collected;
     expect(streamed).toContain('purged ok');
@@ -183,6 +186,109 @@ describe('AgentModule (inline)', () => {
       toolName: 'purgeCache',
       status: 'executed',
     });
+  });
+
+  it('refuses approve from an actor who does not own the tool call (403)', async () => {
+    const built = await buildApp((_a, i) =>
+      i === 0
+        ? { text: 'purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'ok' },
+    );
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'owner', roles: ['ADMIN'] },
+      message: 'go',
+    });
+    void collect(built.service.subscribe(runId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(
+      built.service.approve({ id: 'intruder', roles: ['ADMIN'] }, runId, 'call-0-purgeCache'),
+    ).rejects.toThrow(ForbiddenException);
+    // the owner can still approve their own run
+    await built.service.approve({ id: 'owner', roles: ['ADMIN'] }, runId, 'call-0-purgeCache');
+  });
+
+  it('scopes thread detail/delete to the owner (403 other, 404 missing)', async () => {
+    const built = await buildApp(() => ({ text: 'hi' }));
+    app = built.app;
+    const { threadId } = await built.service.chat({
+      actor: { id: 'owner', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await expect(built.service.getThread({ id: 'intruder' }, threadId)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(built.service.deleteThread({ id: 'intruder' }, threadId)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(built.service.getThread({ id: 'owner' }, 'no-such-thread')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(await built.service.getThread({ id: 'owner' }, threadId)).not.toBeNull();
+  });
+
+  it('HTTP: GET /threads/:id of another actor is 403', async () => {
+    const built = await buildApp(() => ({ text: 'hi' }));
+    app = built.app;
+    const { threadId } = await built.service.chat({
+      actor: { id: 'owner', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    const res = await request(app.getHttpServer())
+      .get(`/agent/threads/${threadId}`)
+      .set('x-actor-id', 'intruder')
+      .set('x-actor-role', 'ADMIN');
+    expect(res.status).toBe(403);
+  });
+
+  it('surfaces a quota-exceeded run as an event: error frame, not a done frame', async () => {
+    const built = await buildApp(() => ({ text: 'should not run' }), {
+      quota: new InMemoryQuotaStore(0),
+    });
+    app = built.app;
+    const res = await request(app.getHttpServer())
+      .post('/agent/chat')
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ message: 'hi' });
+    expect(res.text).toContain('event: error');
+    expect(res.text).toContain('quota_exceeded');
+    expect(res.text).not.toContain('event: done');
+  });
+
+  it('does not bake defaultRoles into a tool spec (a custom policy sees undefined roles)', async () => {
+    const seen: (string[] | undefined)[] = [];
+    const rolesPolicy: RolesPolicy = {
+      can: (_actor, tool) => {
+        seen.push(tool.roles);
+        return true;
+      },
+    };
+    const built = await buildApp(
+      (_a, i) =>
+        i === 0
+          ? { text: 'w', toolCall: { name: 'getWeather', input: { city: 'X' } } }
+          : { text: 'done' },
+      { rolesPolicy },
+    );
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'weather',
+    });
+    await collect(built.service.subscribe(runId));
+    // None of the test tools declare `roles`, so the policy must always receive undefined —
+    // the discovery layer no longer bakes the module's defaultRoles into every spec.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((roles) => roles === undefined)).toBe(true);
+  });
+
+  it('fails boot when an agent delegatesTo an unregistered agent', async () => {
+    await expect(
+      buildApp(() => ({ text: 'x' }), {
+        features: [{ name: 'orchestrator', delegatesTo: ['ghost-agent'] }],
+      }),
+    ).rejects.toThrow(/not a registered agent/);
   });
 
   it('orchestrator delegates to a sub-agent via a synthesized agent tool', async () => {
