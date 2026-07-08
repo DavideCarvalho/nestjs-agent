@@ -1,25 +1,14 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
-import type { EmbeddingProvider } from '@dudousxd/nestjs-agent-core';
-import type { ChunkOptions, VectorStore } from '@dudousxd/nestjs-agent-rag';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { publishRagMediaFailed } from './diagnostics.js';
 import { envelopePayload, isMediaAttachEvent, isMediaDeleteEvent } from './media-events.js';
 import { type MediaIngestJob, applyMediaIngestJob } from './media-ingest-job.js';
-import type { MediaIngestionDeps, ReadFile } from './media-ingestion.js';
-import { type TextExtractor, defaultTextExtractor } from './text-extractor.js';
+import type { MediaIngestionDeps } from './media-ingestion.js';
 
-export interface AgentMediaIngestionOptions {
-  /** Read a media file's bytes. Wire `(disk, path) => media.disk(disk).get(path)` — no media import. */
-  readFile: ReadFile;
-  embedder: EmbeddingProvider;
-  store: VectorStore;
+export interface AgentMediaIngestionOptions extends MediaIngestionDeps {
   /** Restrict ingestion to these media collections. Omit/empty = every collection. */
   collections?: string[];
-  /** Bytes → text. Default {@link defaultTextExtractor} (text/*, JSON, HTML). */
-  extractor?: TextExtractor;
-  chunk?: ChunkOptions;
-  maxBytes?: number;
   /**
    * Opt-in at-least-once. When set, attach/delete are handed to this queue instead of ingested
    * inline — wire it to a durable workflow that calls `applyMediaIngestJob(job, deps)`. Default:
@@ -38,7 +27,7 @@ export interface AgentMediaIngestionOptions {
 export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AgentMediaIngestionService.name);
   private readonly collections: Set<string> | null;
-  private readonly deps: MediaIngestionDeps;
+  private readonly config: MediaIngestionDeps;
   private readonly enqueue: ((job: MediaIngestJob) => void | Promise<void>) | undefined;
   private readonly inFlight = new Set<Promise<void>>();
   private teardowns: (() => void)[] = [];
@@ -48,14 +37,9 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       options.collections !== undefined && options.collections.length > 0
         ? new Set(options.collections)
         : null;
-    this.deps = {
-      readFile: options.readFile,
-      embedder: options.embedder,
-      store: options.store,
-      extractor: options.extractor ?? defaultTextExtractor(),
-      ...(options.chunk !== undefined ? { chunk: options.chunk } : {}),
-      ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-    };
+    // options *is* a MediaIngestionDeps (+ collections/enqueue) — pass it straight through; the
+    // pure functions default the extractor. No separate "resolved deps" shape to keep in sync.
+    this.config = options;
     this.enqueue = options.enqueue;
   }
 
@@ -106,7 +90,7 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       if (this.enqueue !== undefined) {
         await this.enqueue(job);
       } else {
-        await applyMediaIngestJob(job, this.deps);
+        await applyMediaIngestJob(job, this.config);
       }
     } catch (error) {
       const action = job.type === 'ingest' ? 'ingestion' : 'delete-sync';

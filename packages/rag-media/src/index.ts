@@ -10,7 +10,6 @@ export {
 export {
   type MediaAttachEvent,
   type MediaDeleteEvent,
-  envelopePayload,
   isMediaAttachEvent,
   isMediaDeleteEvent,
 } from './media-events.js';

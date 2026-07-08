@@ -11,7 +11,11 @@ import {
   publishRagMediaSkipped,
 } from './diagnostics.js';
 import type { MediaAttachEvent, MediaDeleteEvent } from './media-events.js';
-import { type TextExtractor, UnsupportedMimeTypeError } from './text-extractor.js';
+import {
+  type TextExtractor,
+  UnsupportedMimeTypeError,
+  defaultTextExtractor,
+} from './text-extractor.js';
 
 /** Read a media file's bytes from its disk. Host wires `(disk, path) => media.disk(disk).get(path)`. */
 export type ReadFile = (disk: string, path: string) => Promise<Buffer>;
@@ -19,11 +23,17 @@ export type ReadFile = (disk: string, path: string) => Promise<Buffer>;
 /** Default upper bound on a file we'll read into memory to ingest — 25 MB. */
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 
+/**
+ * Everything ingestion needs. The one config shape — {@link AgentMediaIngestionOptions} extends it,
+ * so the same object drives the module and a durable worker (no drift between them). Optionals are
+ * defaulted at the point of use, so a caller only ever supplies `readFile` / `embedder` / `store`.
+ */
 export interface MediaIngestionDeps {
   readFile: ReadFile;
   embedder: EmbeddingProvider;
   store: VectorStore;
-  extractor: TextExtractor;
+  /** Bytes → text. Default {@link defaultTextExtractor} (text/*, JSON, HTML). */
+  extractor?: TextExtractor;
   /** Chunking options forwarded to `chunkDocuments`. */
   chunk?: ChunkOptions;
   /** Skip (don't read) files larger than this many bytes. Default 25 MB. */
@@ -56,10 +66,11 @@ export async function ingestMediaFile(
     return { status: 'skipped', reason: 'too-large' };
   }
 
+  const extractor = deps.extractor ?? defaultTextExtractor();
   let text: string;
   try {
     const bytes = await deps.readFile(event.disk, event.path);
-    text = await deps.extractor.extract(bytes, event.mimeType);
+    text = await extractor.extract(bytes, event.mimeType);
   } catch (error) {
     if (error instanceof UnsupportedMimeTypeError) {
       publishRagMediaSkipped({

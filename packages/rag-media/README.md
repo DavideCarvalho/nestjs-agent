@@ -101,8 +101,8 @@ AgentMediaIngestionModule.forRoot({
   enqueue: (job) => durableQueue.add('media-rag', job), // { type: 'ingest' | 'remove', event }
 });
 
-// in the durable worker:
-await applyMediaIngestJob(job, { store, embedder, readFile, extractor: defaultTextExtractor() });
+// in the durable worker — pass the same config object you gave the module:
+await applyMediaIngestJob(job, { store, embedder, readFile });
 ```
 
 ## What it emits
