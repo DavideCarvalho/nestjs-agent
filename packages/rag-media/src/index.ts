@@ -28,6 +28,17 @@ export {
 } from './agent-media-ingestion.service.js';
 export { AgentMediaIngestionModule } from './media-ingestion.module.js';
 export {
+  type MediaIngestJob,
+  applyMediaIngestJob,
+} from './media-ingest-job.js';
+export {
+  type ReconcileQuery,
+  type MediaSource,
+  type MediaRagReconcilerDeps,
+  type ReconcileResult,
+  reconcileMediaRag,
+} from './media-rag-reconciler.js';
+export {
   type RagMediaIngestedPayload,
   type RagMediaRemovedPayload,
   type RagMediaSkippedPayload,

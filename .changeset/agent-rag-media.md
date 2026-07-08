@@ -17,13 +17,24 @@ one-line `readFile: (disk, path) => media.disk(disk).get(path)`.
   so PDF/DOCX are a `.register('application/pdf', parser)` away and `-rag` stays format-agnostic.
 - **`ingestMediaFile` / `removeMedia`** — the pure ingest/remove functions, exposed so a host can run
   ingestion inside a durable workflow if it wants.
+- **`reconcileMediaRag(query, deps)`** — drift repair. Diffs a `MediaSource` (the media records for an
+  owner/collection, your source of truth) against what's indexed, then ingests what's missing and
+  removes orphans. Fixes the gap events can't cover — a subscriber that was down, or a record deleted
+  straight in the DB. Safe to run on a schedule or at boot; only touches the difference.
+- **`enqueue` hook + `applyMediaIngestJob(job, deps)`** — opt-in at-least-once. Set `enqueue` and
+  attach/delete are handed to your durable queue instead of ingested inline; the worker calls
+  `applyMediaIngestJob`. Keeps durable optional — the package pulls in no durable dependency.
 - Emits `aviary:rag:media.*` diagnostics for observability.
 
-`@dudousxd/nestjs-agent-rag` gains two supporting pieces:
+`@dudousxd/nestjs-agent-rag` gains three supporting pieces:
 
 - **`VectorStore.remove(documentId)`** — deletes every chunk of a document (`${id}#*`). Implemented
   on all three stores (Memory / pgvector `DELETE … LIKE` / Redis `SCAN`+`DEL`). Beyond delete-sync it
   fixes a latent bug: re-ingesting a document that now yields *fewer* chunks used to leave the old
   tail orphaned, because `upsert` only overwrites matching ids.
+- **`VectorStore.listDocumentIds(filter?)`** — enumerates the distinct source-document ids indexed
+  (chunk ids collapsed via the new `documentIdOf` helper), optionally metadata-filtered. The
+  enumeration seam reconciliation diffs against. Implemented on all three stores (Memory / pgvector
+  `SELECT DISTINCT regexp_replace` / Redis paginated `FT.SEARCH … NOCONTENT`).
 - **`FilteredRetriever(base, filter)`** — a generic retriever combinator that ANDs a fixed metadata
   filter into every query. The owner/tenant-scoping primitive: `new FilteredRetriever(base, { ownerId })`.

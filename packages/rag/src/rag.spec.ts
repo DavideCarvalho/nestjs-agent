@@ -121,6 +121,25 @@ describe('MemoryVectorStore.remove', () => {
   });
 });
 
+describe('MemoryVectorStore.listDocumentIds', () => {
+  it('returns distinct document ids (chunks collapsed) filtered by metadata', async () => {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    await ingestDocuments(
+      [
+        { id: 'alice-1', text: 'a b c d e f g h', metadata: { owner: 'alice' } },
+        { id: 'alice-2', text: 'more of alice content here', metadata: { owner: 'alice' } },
+        { id: 'bob-1', text: 'bob content', metadata: { owner: 'bob' } },
+      ],
+      { embedder, store, chunkSize: 12, overlap: 0 },
+    );
+
+    const alice = await store.listDocumentIds({ owner: 'alice' });
+    expect(alice.sort()).toEqual(['alice-1', 'alice-2']);
+    expect(await store.listDocumentIds()).toHaveLength(3);
+  });
+});
+
 describe('FilteredRetriever', () => {
   async function ownerScopedStore() {
     const embedder = new FakeEmbeddingProvider();

@@ -84,4 +84,35 @@ describe('RedisVectorStore (real RediSearch)', () => {
     // `goner#0` shares the `gone` prefix but is a different document — the `#*` glob must spare it
     expect(ids).toContain('goner#0');
   });
+
+  it('listDocumentIds collapses chunks to distinct document ids and honors filters', async () => {
+    // unique tenant values so this test doesn't see rows the earlier TAG-filter test left in the
+    // shared index (which used tenant t1/t2)
+    await store.upsert([
+      {
+        id: 'ld-a#0',
+        text: 'doc a chunk zero',
+        embedding: [1, 0, 0],
+        metadata: { tenant: 'ld-t1' },
+      },
+      {
+        id: 'ld-a#1',
+        text: 'doc a chunk one',
+        embedding: [1, 0, 0],
+        metadata: { tenant: 'ld-t1' },
+      },
+      {
+        id: 'ld-b#0',
+        text: 'doc b chunk zero',
+        embedding: [1, 0, 0],
+        metadata: { tenant: 'ld-t2' },
+      },
+    ]);
+
+    expect(await store.listDocumentIds({ tenant: 'ld-t1' })).toEqual(['ld-a']);
+
+    const allIds = (await store.listDocumentIds()).sort();
+    expect(allIds).toContain('ld-a');
+    expect(allIds).toContain('ld-b');
+  });
 });

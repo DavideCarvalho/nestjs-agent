@@ -33,4 +33,16 @@ export interface VectorStore {
    * without a preceding `remove` leaves the old tail orphaned.
    */
   remove(documentId: string): Promise<void>;
+  /**
+   * List the distinct source-document ids currently indexed (chunk ids collapsed back to their
+   * document by stripping the trailing `#<n>`), optionally narrowed by a metadata `filter`. The
+   * enumeration seam for reconciliation: diff this against your source of truth to find documents to
+   * ingest (missing) or {@link VectorStore.remove remove} (orphaned).
+   */
+  listDocumentIds(filter?: Record<string, unknown>): Promise<string[]>;
+}
+
+/** Collapse a chunk id (`${documentId}#<n>`) back to its source document id. */
+export function documentIdOf(chunkId: string): string {
+  return chunkId.replace(/#\d+$/, '');
 }

@@ -4,6 +4,7 @@ export type {
   VectorSearchOptions,
   VectorStore,
 } from './vector-store.js';
+export { documentIdOf } from './vector-store.js';
 export { MemoryVectorStore } from './memory-vector-store.js';
 export {
   PgVectorStore,

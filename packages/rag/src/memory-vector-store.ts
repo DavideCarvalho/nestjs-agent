@@ -1,6 +1,11 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { matchesFilter } from './filter.js';
-import type { VectorRecord, VectorSearchOptions, VectorStore } from './vector-store.js';
+import {
+  type VectorRecord,
+  type VectorSearchOptions,
+  type VectorStore,
+  documentIdOf,
+} from './vector-store.js';
 
 /**
  * An in-process {@link VectorStore} — cosine similarity over a Map, no infra. The reference adapter
@@ -22,6 +27,17 @@ export class MemoryVectorStore implements VectorStore {
         this.records.delete(id);
       }
     }
+  }
+
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const record of this.records.values()) {
+      if (filter !== undefined && !matchesFilter(record.metadata, filter)) {
+        continue;
+      }
+      ids.add(documentIdOf(record.id));
+    }
+    return [...ids];
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

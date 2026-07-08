@@ -1,5 +1,10 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import type { VectorRecord, VectorSearchOptions, VectorStore } from './vector-store.js';
+import {
+  type VectorRecord,
+  type VectorSearchOptions,
+  type VectorStore,
+  documentIdOf,
+} from './vector-store.js';
 
 /**
  * The minimal Redis surface {@link RedisVectorStore} needs: send a raw command and get the reply.
@@ -134,6 +139,36 @@ export class RedisVectorStore implements VectorStore {
     }
   }
 
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const query = buildFilter(filter);
+    const documentIds = new Set<string>();
+    const batchSize = 1000;
+    let offset = 0;
+    for (;;) {
+      const reply = await this.client.sendCommand([
+        'FT.SEARCH',
+        this.index,
+        query,
+        'NOCONTENT',
+        'LIMIT',
+        String(offset),
+        String(batchSize),
+        'DIALECT',
+        '2',
+      ]);
+      const keys = parseSearchKeys(reply);
+      for (const key of keys) {
+        const rawId = key.startsWith(this.prefix) ? key.slice(this.prefix.length) : key;
+        documentIds.add(documentIdOf(rawId));
+      }
+      if (keys.length < batchSize) {
+        break;
+      }
+      offset += batchSize;
+    }
+    return [...documentIds];
+  }
+
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const query = `${buildFilter(options.filter)}=>[KNN ${options.topK} @embedding $BLOB AS vector_score]`;
     const reply = await this.client.sendCommand([
@@ -209,6 +244,28 @@ function parseScanReply(reply: unknown): { cursor: string; keys: string[] } {
     };
   }
   return { cursor: '0', keys: [] };
+}
+
+/**
+ * Parse an `FT.SEARCH ... NOCONTENT` reply into the list of document keys, tolerating both wire
+ * shapes: the RESP2 array `[total, key, key, …]` and node-redis's RESP3 object
+ * `{ results: [{ id }, …] }`.
+ */
+function parseSearchKeys(reply: unknown): string[] {
+  if (Array.isArray(reply)) {
+    const keys: string[] = [];
+    for (let index = 1; index < reply.length; index += 1) {
+      keys.push(toStr(reply[index]));
+    }
+    return keys;
+  }
+  if (typeof reply === 'object' && reply !== null && 'results' in reply) {
+    const results = (reply as { results: unknown }).results;
+    if (Array.isArray(results)) {
+      return results.map((result) => readId(result));
+    }
+  }
+  return [];
 }
 
 function toStr(value: unknown): string {

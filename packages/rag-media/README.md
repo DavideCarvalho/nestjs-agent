@@ -70,16 +70,39 @@ const extractor = defaultTextExtractor().register('application/pdf', async (byte
 AgentMediaIngestionModule.forRoot({ store, embedder, readFile, extractor });
 ```
 
-## Running ingestion durably
+## Keeping the index in sync
 
-`AgentMediaIngestionModule` ingests inline. For large files or at-least-once guarantees, both this
-library and nestjs-media are durable-backed — run the exposed pure function inside a workflow:
+Ingestion is event-driven, so it's eventual and best-effort — it covers the normal
+`MediaLibrary.attach()` / `delete()` path, but an event is missed if the process was down when it
+fired or a record was deleted straight in the DB. `reconcileMediaRag` repairs that drift: it diffs
+your source of truth against the index, ingests what's missing, and removes orphans. Cheap to run on
+a schedule or at boot — it only touches the difference.
 
 ```ts
-import { ingestMediaFile } from '@dudousxd/nestjs-agent-rag-media';
+import { reconcileMediaRag } from '@dudousxd/nestjs-agent-rag-media';
 
-// inside a @Workflow step, keyed off your own attach hook
-await ingestMediaFile(attachEvent, { readFile, embedder, store, extractor });
+await reconcileMediaRag(
+  { ownerType: 'user', ownerId: actor.id, collection: 'knowledge-base' },
+  { store, embedder, readFile, source: { listMedia: (q) => mediaLibrary.list(q.ownerType, q.ownerId, q.collection) } },
+);
+```
+
+## At-least-once ingestion
+
+`AgentMediaIngestionModule` ingests inline. For large files or an at-least-once guarantee, pass an
+`enqueue` hook — attach/delete are handed to your durable queue instead, and a worker replays them
+with `applyMediaIngestJob`. Durability stays opt-in; the package pulls in no durable dependency.
+
+```ts
+import { applyMediaIngestJob } from '@dudousxd/nestjs-agent-rag-media';
+
+AgentMediaIngestionModule.forRoot({
+  store, embedder, readFile,
+  enqueue: (job) => durableQueue.add('media-rag', job), // { type: 'ingest' | 'remove', event }
+});
+
+// in the durable worker:
+await applyMediaIngestJob(job, { store, embedder, readFile, extractor: defaultTextExtractor() });
 ```
 
 ## What it emits

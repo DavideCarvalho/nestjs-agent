@@ -75,4 +75,18 @@ describe('PgVectorStore (real pgvector)', () => {
     // `delta#0` must survive — LIKE `del#%` must not match a different document id
     expect(ids).toContain('delta#0');
   });
+
+  it('listDocumentIds() collapses chunk ids to distinct documents and filters by metadata', async () => {
+    await store.upsert([
+      { id: 'list-doc-a#0', text: 'a zero', embedding: [1, 0, 0], metadata: { owner: 'u1' } },
+      { id: 'list-doc-a#1', text: 'a one', embedding: [1, 0, 0], metadata: { owner: 'u1' } },
+      { id: 'list-doc-b#0', text: 'b zero', embedding: [1, 0, 0], metadata: { owner: 'u2' } },
+    ]);
+
+    expect(await store.listDocumentIds({ owner: 'u1' })).toEqual(['list-doc-a']);
+
+    const allIds = await store.listDocumentIds();
+    expect(allIds).toContain('list-doc-a');
+    expect(allIds).toContain('list-doc-b');
+  });
 });

@@ -81,6 +81,17 @@ export class PgVectorStore implements VectorStore {
     ]);
   }
 
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    const hasFilter = filter !== undefined && Object.keys(filter).length > 0;
+    const rows = await this.client.query<{ doc_id: string }>(
+      `SELECT DISTINCT regexp_replace(id, '#[0-9]+$', '') AS doc_id
+       FROM ${this.table}
+       ${hasFilter ? 'WHERE metadata @> $1::jsonb' : ''}`,
+      hasFilter ? [JSON.stringify(filter)] : [],
+    );
+    return rows.map((row) => row.doc_id);
+  }
+
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const vector = toVectorLiteral(embedding);
     const hasFilter = options.filter !== undefined && Object.keys(options.filter).length > 0;

@@ -5,6 +5,7 @@ import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { publishRagMediaFailed } from './diagnostics.js';
 import { envelopePayload, isMediaAttachEvent, isMediaDeleteEvent } from './media-events.js';
+import type { MediaIngestJob } from './media-ingest-job.js';
 import {
   type MediaIngestionDeps,
   type ReadFile,
@@ -24,6 +25,12 @@ export interface AgentMediaIngestionOptions {
   extractor?: TextExtractor;
   chunk?: ChunkOptions;
   maxBytes?: number;
+  /**
+   * Opt-in at-least-once. When set, attach/delete are handed to this queue instead of ingested
+   * inline — wire it to a durable workflow that calls `applyMediaIngestJob(job, deps)`. Default:
+   * inline ingestion.
+   */
+  enqueue?: (job: MediaIngestJob) => void | Promise<void>;
 }
 
 /**
@@ -37,6 +44,7 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
   private readonly logger = new Logger(AgentMediaIngestionService.name);
   private readonly collections: Set<string> | null;
   private readonly deps: MediaIngestionDeps;
+  private readonly enqueue: ((job: MediaIngestJob) => void | Promise<void>) | undefined;
   private readonly inFlight = new Set<Promise<void>>();
   private teardowns: (() => void)[] = [];
 
@@ -53,6 +61,7 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       ...(options.chunk !== undefined ? { chunk: options.chunk } : {}),
       ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
     };
+    this.enqueue = options.enqueue;
   }
 
   onModuleInit(): void {
@@ -82,7 +91,11 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       return;
     }
     try {
-      await ingestMediaFile(payload, this.deps);
+      if (this.enqueue !== undefined) {
+        await this.enqueue({ type: 'ingest', event: payload });
+      } else {
+        await ingestMediaFile(payload, this.deps);
+      }
     } catch (error) {
       const message = errorMessage(error);
       this.logger.error(`RAG ingestion failed for media ${payload.id}: ${message}`);
@@ -96,7 +109,11 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       return;
     }
     try {
-      await removeMedia(payload, { store: this.deps.store });
+      if (this.enqueue !== undefined) {
+        await this.enqueue({ type: 'remove', event: payload });
+      } else {
+        await removeMedia(payload, { store: this.deps.store });
+      }
     } catch (error) {
       const message = errorMessage(error);
       this.logger.error(`RAG delete-sync failed for media ${payload.id}: ${message}`);
