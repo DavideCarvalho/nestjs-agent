@@ -1,6 +1,7 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { matchesFilter } from './filter.js';
 import {
+  type IndexedDocument,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
@@ -28,15 +29,21 @@ export class MemoryVectorStore implements VectorStore {
     }
   }
 
-  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
-    const ids = new Set<string>();
+  async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
+    const documents = new Map<string, IndexedDocument>();
     for (const record of this.records.values()) {
       if (filter !== undefined && !matchesFilter(record.metadata, filter)) {
         continue;
       }
-      ids.add(documentIdOf(record.id));
+      const id = documentIdOf(record.id);
+      if (!documents.has(id)) {
+        documents.set(id, {
+          id,
+          ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+        });
+      }
     }
-    return [...ids];
+    return [...documents.values()];
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

@@ -85,7 +85,7 @@ describe('RedisVectorStore (real RediSearch)', () => {
     expect(ids).toContain('goner#0');
   });
 
-  it('listDocumentIds collapses chunks to distinct document ids and honors filters', async () => {
+  it('listDocuments collapses chunks to distinct documents with metadata, honoring filters', async () => {
     // unique tenant values so this test doesn't see rows the earlier TAG-filter test left in the
     // shared index (which used tenant t1/t2)
     await store.upsert([
@@ -109,9 +109,11 @@ describe('RedisVectorStore (real RediSearch)', () => {
       },
     ]);
 
-    expect(await store.listDocumentIds({ tenant: 'ld-t1' })).toEqual(['ld-a']);
+    const t1 = await store.listDocuments({ tenant: 'ld-t1' });
+    expect(t1.map((document) => document.id)).toEqual(['ld-a']);
+    expect(t1[0]?.metadata?.tenant).toBe('ld-t1');
 
-    const allIds = (await store.listDocumentIds()).sort();
+    const allIds = (await store.listDocuments()).map((document) => document.id).sort();
     expect(allIds).toContain('ld-a');
     expect(allIds).toContain('ld-b');
   });

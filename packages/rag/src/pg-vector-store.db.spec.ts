@@ -76,16 +76,18 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(ids).toContain('delta#0');
   });
 
-  it('listDocumentIds() collapses chunk ids to distinct documents and filters by metadata', async () => {
+  it('listDocuments() collapses chunk ids to distinct documents with metadata, filtered', async () => {
     await store.upsert([
       { id: 'list-doc-a#0', text: 'a zero', embedding: [1, 0, 0], metadata: { owner: 'u1' } },
       { id: 'list-doc-a#1', text: 'a one', embedding: [1, 0, 0], metadata: { owner: 'u1' } },
       { id: 'list-doc-b#0', text: 'b zero', embedding: [1, 0, 0], metadata: { owner: 'u2' } },
     ]);
 
-    expect(await store.listDocumentIds({ owner: 'u1' })).toEqual(['list-doc-a']);
+    const u1 = await store.listDocuments({ owner: 'u1' });
+    expect(u1.map((document) => document.id)).toEqual(['list-doc-a']);
+    expect(u1[0]?.metadata?.owner).toBe('u1');
 
-    const allIds = await store.listDocumentIds();
+    const allIds = (await store.listDocuments()).map((document) => document.id);
     expect(allIds).toContain('list-doc-a');
     expect(allIds).toContain('list-doc-b');
   });

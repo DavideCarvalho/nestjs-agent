@@ -1,5 +1,6 @@
 export { chunkText, type ChunkOptions } from './chunk.js';
 export type {
+  IndexedDocument,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,

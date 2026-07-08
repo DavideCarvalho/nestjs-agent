@@ -70,8 +70,9 @@ describe('reconcileMediaRag', () => {
     );
 
     expect(result.ingested).toEqual(['b']);
+    expect(result.reingested).toEqual([]);
     expect(result.removed).toEqual(['c']);
-    expect((await store.listDocumentIds()).sort()).toEqual(['a', 'b']);
+    expect((await store.listDocuments()).map((document) => document.id).sort()).toEqual(['a', 'b']);
   });
 
   it('is idempotent: a second run touches nothing', async () => {
@@ -96,7 +97,30 @@ describe('reconcileMediaRag', () => {
     await reconcileMediaRag(query, reconcilerDeps);
     const second = await reconcileMediaRag(query, reconcilerDeps);
 
-    expect(second).toEqual({ ingested: [], removed: [] });
-    expect((await store.listDocumentIds()).sort()).toEqual(['a', 'b']);
+    expect(second).toEqual({ ingested: [], reingested: [], removed: [] });
+    expect((await store.listDocuments()).map((document) => document.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('re-ingests a document whose content (size) changed under a stable id', async () => {
+    const files: Record<string, Buffer> = {
+      's3:docs/a.txt': Buffer.from('the original short body'),
+    };
+    const { deps, store } = buildDeps(files);
+    await ingestMediaFile(attachEvent({ id: 'a', path: 'docs/a.txt', size: 23 }), deps);
+
+    // the file was replaced (new bytes, new size) while nobody was listening
+    files['s3:docs/a.txt'] = Buffer.from('a completely different and much longer replacement body');
+    const changed = attachEvent({ id: 'a', path: 'docs/a.txt', size: 55 });
+    const source: MediaSource = { listMedia: async () => [changed] };
+
+    const result = await reconcileMediaRag(
+      { ownerType: 'user', ownerId: 'alice', collection: 'kb' },
+      { ...deps, source },
+    );
+
+    expect(result).toEqual({ ingested: [], reingested: ['a'], removed: [] });
+    const documents = await store.listDocuments();
+    expect(documents).toHaveLength(1);
+    expect(documents[0]?.metadata?.size).toBe(55);
   });
 });

@@ -1,5 +1,10 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import type { VectorRecord, VectorSearchOptions, VectorStore } from './vector-store.js';
+import type {
+  IndexedDocument,
+  VectorRecord,
+  VectorSearchOptions,
+  VectorStore,
+} from './vector-store.js';
 
 /**
  * The minimal Postgres surface {@link PgVectorStore} needs — adapt your own `pg` / `postgres.js`
@@ -80,15 +85,23 @@ export class PgVectorStore implements VectorStore {
     ]);
   }
 
-  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+  async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
     const hasFilter = filter !== undefined && Object.keys(filter).length > 0;
-    const rows = await this.client.query<{ doc_id: string }>(
-      `SELECT DISTINCT ${DOCUMENT_ID_FROM_CHUNK} AS doc_id
+    // DISTINCT ON collapses chunks to one row per document; all chunks share the doc's metadata.
+    const rows = await this.client.query<{
+      doc_id: string;
+      metadata: Record<string, unknown> | null;
+    }>(
+      `SELECT DISTINCT ON (${DOCUMENT_ID_FROM_CHUNK}) ${DOCUMENT_ID_FROM_CHUNK} AS doc_id, metadata
        FROM ${this.table}
-       ${hasFilter ? 'WHERE metadata @> $1::jsonb' : ''}`,
+       ${hasFilter ? 'WHERE metadata @> $1::jsonb' : ''}
+       ORDER BY ${DOCUMENT_ID_FROM_CHUNK}`,
       hasFilter ? [JSON.stringify(filter)] : [],
     );
-    return rows.map((row) => row.doc_id);
+    return rows.map((row) => ({
+      id: row.doc_id,
+      ...(row.metadata !== null ? { metadata: row.metadata } : {}),
+    }));
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
@@ -123,7 +136,7 @@ interface PgRow {
 /**
  * SQL that collapses a chunk id (`${documentId}#<n>`) back to its source document id — the pgvector
  * mirror of {@link import('./vector-store.js').documentIdOf}. Shared by `remove` and
- * `listDocumentIds` so both key on the exact same definition of "chunk belongs to document".
+ * `listDocuments` so both key on the exact same definition of "chunk belongs to document".
  */
 const DOCUMENT_ID_FROM_CHUNK = "regexp_replace(id, '#[0-9]+$', '')";
 

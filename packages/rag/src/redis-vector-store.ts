@@ -1,5 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import {
+  type IndexedDocument,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
@@ -139,34 +140,43 @@ export class RedisVectorStore implements VectorStore {
     }
   }
 
-  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+  async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
     const query = buildFilter(filter);
-    const documentIds = new Set<string>();
+    const documents = new Map<string, IndexedDocument>();
     const batchSize = 1000;
     let offset = 0;
     for (;;) {
+      // RETURN metadata_json (not NOCONTENT) so we can carry a representative chunk's metadata;
+      // parseSearchReply already yields prefix-stripped ids + parsed metadata for both RESP2/RESP3.
       const reply = await this.client.sendCommand([
         'FT.SEARCH',
         this.index,
         query,
-        'NOCONTENT',
+        'RETURN',
+        '1',
+        'metadata_json',
         'LIMIT',
         String(offset),
         String(batchSize),
         'DIALECT',
         '2',
       ]);
-      const keys = parseSearchKeys(reply);
-      for (const key of keys) {
-        const rawId = key.startsWith(this.prefix) ? key.slice(this.prefix.length) : key;
-        documentIds.add(documentIdOf(rawId));
+      const passages = parseSearchReply(reply, this.prefix);
+      for (const passage of passages) {
+        const id = documentIdOf(passage.id);
+        if (!documents.has(id)) {
+          documents.set(id, {
+            id,
+            ...(passage.metadata !== undefined ? { metadata: passage.metadata } : {}),
+          });
+        }
       }
-      if (keys.length < batchSize) {
+      if (passages.length < batchSize) {
         break;
       }
       offset += batchSize;
     }
-    return [...documentIds];
+    return [...documents.values()];
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
@@ -244,28 +254,6 @@ function parseScanReply(reply: unknown): { cursor: string; keys: string[] } {
     };
   }
   return { cursor: '0', keys: [] };
-}
-
-/**
- * Parse an `FT.SEARCH ... NOCONTENT` reply into the list of document keys, tolerating both wire
- * shapes: the RESP2 array `[total, key, key, …]` and node-redis's RESP3 object
- * `{ results: [{ id }, …] }`.
- */
-function parseSearchKeys(reply: unknown): string[] {
-  if (Array.isArray(reply)) {
-    const keys: string[] = [];
-    for (let index = 1; index < reply.length; index += 1) {
-      keys.push(toStr(reply[index]));
-    }
-    return keys;
-  }
-  if (typeof reply === 'object' && reply !== null && 'results' in reply) {
-    const results = (reply as { results: unknown }).results;
-    if (Array.isArray(results)) {
-      return results.map((result) => readId(result));
-    }
-  }
-  return [];
 }
 
 function toStr(value: unknown): string {

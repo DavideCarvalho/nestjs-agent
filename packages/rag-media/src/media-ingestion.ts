@@ -101,6 +101,9 @@ export async function ingestMediaFile(
           ownerType: event.ownerType,
           ownerId: event.ownerId,
           collection: event.collection,
+          // fingerprint the reconciler compares against the live media record to catch a content
+          // change a missed attach event would otherwise leave stale.
+          size: event.size,
         },
       },
     ],

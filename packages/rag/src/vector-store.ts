@@ -34,12 +34,19 @@ export interface VectorStore {
    */
   remove(documentId: string): Promise<void>;
   /**
-   * List the distinct source-document ids currently indexed (chunk ids collapsed back to their
-   * document by stripping the trailing `#<n>`), optionally narrowed by a metadata `filter`. The
-   * enumeration seam for reconciliation: diff this against your source of truth to find documents to
-   * ingest (missing) or {@link VectorStore.remove remove} (orphaned).
+   * List the distinct source documents currently indexed (chunk ids collapsed back to their document
+   * by stripping the trailing `#<n>`), each with a representative chunk's `metadata`, optionally
+   * narrowed by a metadata `filter`. The enumeration seam for reconciliation: diff this against your
+   * source of truth to find documents to ingest (missing), re-ingest (a stored fingerprint like
+   * `size` changed), or {@link VectorStore.remove remove} (orphaned).
    */
-  listDocumentIds(filter?: Record<string, unknown>): Promise<string[]>;
+  listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]>;
+}
+
+/** A distinct source document as seen by the index — its id plus a representative chunk's metadata. */
+export interface IndexedDocument {
+  id: string;
+  metadata?: Record<string, unknown>;
 }
 
 /** Collapse a chunk id (`${documentId}#<n>`) back to its source document id. */

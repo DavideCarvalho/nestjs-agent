@@ -121,8 +121,8 @@ describe('MemoryVectorStore.remove', () => {
   });
 });
 
-describe('MemoryVectorStore.listDocumentIds', () => {
-  it('returns distinct document ids (chunks collapsed) filtered by metadata', async () => {
+describe('MemoryVectorStore.listDocuments', () => {
+  it('returns distinct documents (chunks collapsed) with metadata, filtered by metadata', async () => {
     const embedder = new FakeEmbeddingProvider();
     const store = new MemoryVectorStore();
     await ingestDocuments(
@@ -134,9 +134,10 @@ describe('MemoryVectorStore.listDocumentIds', () => {
       { embedder, store, chunkSize: 12, overlap: 0 },
     );
 
-    const alice = await store.listDocumentIds({ owner: 'alice' });
-    expect(alice.sort()).toEqual(['alice-1', 'alice-2']);
-    expect(await store.listDocumentIds()).toHaveLength(3);
+    const alice = await store.listDocuments({ owner: 'alice' });
+    expect(alice.map((document) => document.id).sort()).toEqual(['alice-1', 'alice-2']);
+    expect(alice.every((document) => document.metadata?.owner === 'alice')).toBe(true);
+    expect(await store.listDocuments()).toHaveLength(3);
   });
 });
 
