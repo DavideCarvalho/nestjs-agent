@@ -67,7 +67,7 @@ describe('useAgentChat', () => {
       expect(text).toBe('Hello world');
     });
 
-    // runId surfaced from the meta frame drives HITL targeting.
+    // runId surfaces from the meta frame (for cancel / resume); HITL routes by tool-call id alone.
     await waitFor(() => expect(result.current.runId).toBe('run-1'));
 
     await act(async () => {
@@ -76,10 +76,7 @@ describe('useAgentChat', () => {
 
     const approveCall = calls.find((call) => call.url.endsWith('/agent/tool-call/approve'));
     expect(approveCall).toBeDefined();
-    expect(JSON.parse(String(approveCall?.init?.body))).toEqual({
-      runId: 'run-1',
-      toolCallId: 'tc-1',
-    });
+    expect(JSON.parse(String(approveCall?.init?.body))).toEqual({ toolCallId: 'tc-1' });
   });
 
   it('sends only the latest user message text in the chat request body', async () => {

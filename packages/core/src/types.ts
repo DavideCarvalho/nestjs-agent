@@ -165,6 +165,13 @@ export interface AgentRunInput {
    */
   delegationDepth?: number;
   /**
+   * When set, this run streams into ANOTHER run's sink instead of its own. A sub-agent run carries
+   * its top-level ancestor's runId here so its tokens (and its pending action-tool frames) land in
+   * the live stream the human is already watching — the only way a human can see, and therefore
+   * approve, a sub-agent's HITL action. Propagated unchanged down the delegation chain.
+   */
+  sinkRunId?: string;
+  /**
    * Re-run the last exchange instead of adding a new message: the loop truncates everything after
    * the thread's last user message and re-answers it (no `userText` is appended). Used by a
    * "regenerate" button. `userText` is ignored when set.

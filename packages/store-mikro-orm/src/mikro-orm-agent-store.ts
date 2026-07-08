@@ -157,6 +157,16 @@ export class MikroOrmAgentStore implements AgentStore {
     return toolCall.message.thread.actorRef;
   }
 
+  async runForToolCall(toolCallId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const toolCall = await em.findOne(
+      AgentToolCall,
+      { id: toolCallId },
+      { populate: ['message.thread'] },
+    );
+    return toolCall?.message.thread.activeStreamId ?? null;
+  }
+
   async ownerOfActiveStream(runId: string): Promise<string | null> {
     const em = this.em.fork();
     const thread = await em.findOne(

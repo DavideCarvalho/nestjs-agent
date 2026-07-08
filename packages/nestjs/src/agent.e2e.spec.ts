@@ -197,7 +197,7 @@ describe('AgentModule (inline)', () => {
     const collected = collect(built.service.subscribe(runId));
     // give the loop a tick to reach the approval gate, then approve the (deterministic) tool id
     await new Promise((resolve) => setTimeout(resolve, 20));
-    await built.service.approve({ id: 'u1', roles: ['ADMIN'] }, runId, 'call-0-purgeCache');
+    await built.service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
 
     const streamed = await collected;
     expect(streamed).toContain('purged ok');
@@ -221,10 +221,10 @@ describe('AgentModule (inline)', () => {
     void collect(built.service.subscribe(runId));
     await new Promise((resolve) => setTimeout(resolve, 20));
     await expect(
-      built.service.approve({ id: 'intruder', roles: ['ADMIN'] }, runId, 'call-0-purgeCache'),
+      built.service.approve({ id: 'intruder', roles: ['ADMIN'] }, 'call-0-purgeCache'),
     ).rejects.toThrow(ForbiddenException);
     // the owner can still approve their own run
-    await built.service.approve({ id: 'owner', roles: ['ADMIN'] }, runId, 'call-0-purgeCache');
+    await built.service.approve({ id: 'owner', roles: ['ADMIN'] }, 'call-0-purgeCache');
   });
 
   it('scopes thread detail/delete to the owner (403 other, 404 missing)', async () => {
@@ -424,6 +424,49 @@ describe('AgentModule (inline)', () => {
     );
     // the orchestrator recorded the delegation as an `agent`-kind tool call
     expect(rows.some((row) => row.toolName === 'ask_sub')).toBe(true);
+  });
+
+  it('surfaces a sub-agent action tool to the human and approves it by tool-call id', async () => {
+    const script: FakeScript = (args, turnIndex) => {
+      const isSub = args.system.includes('sub-worker');
+      if (isSub) {
+        return turnIndex === 0
+          ? { text: 'sub purging', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+          : { text: 'sub purged' };
+      }
+      return turnIndex === 0
+        ? { text: 'delegating', toolCall: { name: 'ask_sub', input: { task: 'purge please' } } }
+        : { text: 'orchestrator done' };
+    };
+    const built = await buildApp(script, {
+      features: [
+        { name: 'orch', systemPrompt: 'orchestrator', delegatesTo: ['sub'] },
+        { name: 'sub', systemPrompt: 'sub-worker', tools: ['purgeCache'] },
+      ],
+    });
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'delegate this',
+      agentName: 'orch',
+    });
+    // The sub-agent streams into the top-level run the human is watching.
+    const collected = collect(built.service.subscribe(runId));
+    // Let the orchestrator delegate and the sub-agent reach its approval gate.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Approve by tool-call id alone: the server derives the sub-agent's own run (which the client
+    // never sees) and routes the decision there — closing the sub-agent HITL loop.
+    await built.service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
+
+    const streamed = await collected;
+    // The sub-agent's output reached the human's stream (discovery)...
+    expect(streamed).toContain('sub purging');
+    // ...and the whole chain completed once its action was approved.
+    expect(streamed).toContain('orchestrator done');
+    const rows = built.store.toolCallRows();
+    expect(rows.some((row) => row.toolName === 'purgeCache' && row.status === 'executed')).toBe(
+      true,
+    );
   });
 
   it("passes a tool's @AiTool ability through to the RolesPolicy", async () => {

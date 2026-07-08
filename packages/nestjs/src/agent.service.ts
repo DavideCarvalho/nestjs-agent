@@ -80,13 +80,13 @@ export class AgentService {
     return this.deps.forAgent().sink.subscribe(runId);
   }
 
-  async approve(actor: Actor, runId: string, toolCallId: string): Promise<void> {
-    await this.assertOwnsToolCall(actor, toolCallId);
+  async approve(actor: Actor, toolCallId: string): Promise<void> {
+    const runId = await this.runForOwnedToolCall(actor, toolCallId);
     return this.runner.signal(runId, toolCallId, { approved: true });
   }
 
-  async reject(actor: Actor, runId: string, toolCallId: string, reason?: string): Promise<void> {
-    await this.assertOwnsToolCall(actor, toolCallId);
+  async reject(actor: Actor, toolCallId: string, reason?: string): Promise<void> {
+    const runId = await this.runForOwnedToolCall(actor, toolCallId);
     return this.runner.signal(runId, toolCallId, {
       approved: false,
       ...(reason !== undefined ? { reason } : {}),
@@ -147,8 +147,13 @@ export class AgentService {
     }
   }
 
-  /** Authorization seam for HITL approve/reject: the caller must own the tool call's thread. */
-  private async assertOwnsToolCall(actor: Actor, toolCallId: string): Promise<void> {
+  /**
+   * Authorization + routing seam for HITL approve/reject: assert the caller owns the tool call's
+   * thread, then resolve the run currently awaiting that call (its thread's active stream). That run
+   * is the sub-agent's own child run when the pending call belongs to a delegated agent — the client
+   * never knows or supplies a runId; it is derived here from the tool call alone.
+   */
+  private async runForOwnedToolCall(actor: Actor, toolCallId: string): Promise<string> {
     const owner = await this.store.ownerOfToolCall(toolCallId);
     if (owner === null) {
       throw new NotFoundException(`tool call ${toolCallId} not found`);
@@ -156,6 +161,11 @@ export class AgentService {
     if (owner !== actor.id) {
       throw new ForbiddenException('tool call belongs to another actor');
     }
+    const runId = await this.store.runForToolCall(toolCallId);
+    if (runId === null) {
+      throw new NotFoundException(`tool call ${toolCallId} has no active run to signal`);
+    }
+    return runId;
   }
 
   /** Authorization seam for `cancel`: the caller must own the thread currently streaming this run. */

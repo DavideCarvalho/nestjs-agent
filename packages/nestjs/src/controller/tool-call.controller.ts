@@ -4,7 +4,6 @@ import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
 interface ApproveBody {
-  runId: string;
   toolCallId: string;
 }
 interface RejectBody extends ApproveBody {
@@ -21,14 +20,14 @@ export class ToolCallController {
   @Post('approve')
   async approve(@Req() req: Request, @Body() body: ApproveBody): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.approve(actor, body.runId, body.toolCallId);
+    await this.agent.approve(actor, body.toolCallId);
     return { ok: true };
   }
 
   @Post('reject')
   async reject(@Req() req: Request, @Body() body: RejectBody): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.reject(actor, body.runId, body.toolCallId, body.reason);
+    await this.agent.reject(actor, body.toolCallId, body.reason);
     return { ok: true };
   }
 }

@@ -5,6 +5,7 @@ import type {
   PromptBuilder,
   QuotaStore,
   RolesPolicy,
+  SinkWriter,
   TokenStreamSink,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
@@ -33,4 +34,18 @@ export interface AgentDeps {
 
 export function utcDay(date = new Date()): string {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Wraps a parent run's sink writer for a sub-agent: `write` forwards (so the sub-agent's tokens and
+ * pending action-tool frames reach the human's live stream), but `end` / `fail` are swallowed — the
+ * top-level run owns the stream's lifecycle, so a finished/failed child must not close or error the
+ * shared stream out from under the parent that is still running.
+ */
+export function childSinkWriter(writer: SinkWriter): SinkWriter {
+  return {
+    write: (chunk) => writer.write(chunk),
+    end: async () => {},
+    fail: async () => {},
+  };
 }

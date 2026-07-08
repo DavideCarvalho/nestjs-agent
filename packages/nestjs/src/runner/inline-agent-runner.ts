@@ -13,12 +13,14 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
-import { type AgentDeps, utcDay } from '../agent-deps.js';
+import { type AgentDeps, childSinkWriter, utcDay } from '../agent-deps.js';
 
 /**
  * Runs the agent turn in-process. HITL approval resolves a pending promise keyed by
- * `runId:toolCallId`. Sub-agent delegation runs a nested loop (a nested sub-agent cannot prompt a
- * human, so its action tools are auto-declined). Single-replica only — durable is the scaled path.
+ * `runId:toolCallId`. Sub-agent delegation runs a nested loop that streams into the top-level run's
+ * sink (so a human sees it) and shares the same approval mechanism — a sub-agent's action tools go
+ * through the same human gate, keyed by the sub-agent's own runId. Single-replica only (the pending
+ * map is in-process); durable is the scaled path.
  */
 @Injectable()
 export class InlineAgentRunner implements AgentRunner {
@@ -74,36 +76,52 @@ export class InlineAgentRunner implements AgentRunner {
           this.pending.set(`${runId}:${call.id}`, resolve);
         }),
       step: (_name, fn) => fn(),
-      runAgent: (agentName, task) => this.runNested(agentName, task, actor, day, 1),
+      runAgent: (agentName, task) => this.runNested(agentName, task, actor, day, 1, runId),
     };
   }
 
-  /** Delegate to another agent as a nested in-process run at the given delegation depth. */
+  /**
+   * Delegate to another agent as a nested in-process run. The sub-agent streams into `sinkRunId`
+   * (the top-level run the human is watching) so its output and any pending action tool are visible,
+   * and its own approvals resolve through the shared pending map keyed by its own runId.
+   */
   private async runNested(
     agentName: string,
     task: string,
     actor: Actor,
     day: string,
     depth: number,
+    sinkRunId: string,
   ): Promise<{ text: string }> {
     const subThread = await this.store.createThread({ actor, persona: 'default', transient: true });
     const runId = crypto.randomUUID();
+    // Mark the subthread as streaming THIS sub-run so a human approval routes back here
+    // (runForToolCall → subthread.activeStreamId → this runId).
+    await this.store.setActiveStream(subThread.id, runId);
     const deps = this.factory.forAgent(agentName);
     const hooks: AgentLoopHooks = {
       runId,
-      openSink: () => deps.sink.open(runId),
-      // A nested sub-agent has no human to ask — decline action tools rather than hang.
-      awaitApproval: async () => ({
-        approved: false,
-        reason: 'nested sub-agent cannot request human approval',
-      }),
+      // Forward into the top-level stream; the top-level run owns end/fail on that shared sink.
+      openSink: async () => childSinkWriter(await deps.sink.open(sinkRunId)),
+      awaitApproval: (call) =>
+        new Promise<Decision>((resolve) => {
+          this.pending.set(`${runId}:${call.id}`, resolve);
+        }),
       step: (_name, fn) => fn(),
       runAgent: (childName, childTask) =>
-        this.runNested(childName, childTask, actor, day, depth + 1),
+        this.runNested(childName, childTask, actor, day, depth + 1, sinkRunId),
     };
     return runAgentLoop(
       { ...deps, day },
-      { threadId: subThread.id, actor, userText: task, agentName, day, delegationDepth: depth },
+      {
+        threadId: subThread.id,
+        actor,
+        userText: task,
+        agentName,
+        day,
+        delegationDepth: depth,
+        sinkRunId,
+      },
       hooks,
     );
   }

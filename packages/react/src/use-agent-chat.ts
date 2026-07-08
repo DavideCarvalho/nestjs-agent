@@ -187,11 +187,11 @@ export function useAgentChat(options: UseAgentChatOptions) {
     }
   }, [client]);
 
+  // Approve / reject route by tool-call id alone — the server derives the run awaiting it (which is
+  // the sub-agent's own run when the pending call belongs to a delegated agent), so no runId is sent.
   const approve = useCallback(
     async ({ toolCallId }: { toolCallId: string }): Promise<void> => {
-      const activeRunId = runIdRef.current;
-      if (!activeRunId) throw new Error('No active run to approve');
-      await client.approveToolCall({ runId: activeRunId, toolCallId });
+      await client.approveToolCall({ toolCallId });
     },
     [client],
   );
@@ -204,10 +204,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
       toolCallId: string;
       reason?: string;
     }): Promise<void> => {
-      const activeRunId = runIdRef.current;
-      if (!activeRunId) throw new Error('No active run to reject');
       await client.rejectToolCall({
-        runId: activeRunId,
         toolCallId,
         ...(reason !== undefined ? { reason } : {}),
       });

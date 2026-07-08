@@ -79,6 +79,14 @@ export interface AgentStore {
    */
   ownerOfToolCall(toolCallId: string): Promise<string | null>;
   /**
+   * The runId currently streaming the thread a tool call belongs to (its thread's `activeStreamId`),
+   * or `null` if the call or its active run is unknown. HITL approve / reject route the decision to
+   * THIS run, derived server-side from the tool call alone — so a decision reaches the exact run
+   * awaiting it, including a sub-agent's own child run, which the client never sees and could not
+   * name. No client-supplied runId is trusted (or needed).
+   */
+  runForToolCall(toolCallId: string): Promise<string | null>;
+  /**
    * The `actorRef` that owns the thread currently streaming `runId` (its `activeStreamId`), or
    * `null` if no thread is streaming it. The authorization seam for `cancel`: the caller must own
    * the run they abort. Resolvable during the live window (a run cancel only matters while active).
