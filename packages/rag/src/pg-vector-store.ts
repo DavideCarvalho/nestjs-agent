@@ -75,16 +75,15 @@ export class PgVectorStore implements VectorStore {
   }
 
   async remove(documentId: string): Promise<void> {
-    await this.client.query(`DELETE FROM ${this.table} WHERE id = $1 OR id LIKE $2 ESCAPE '\\'`, [
+    await this.client.query(`DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1`, [
       documentId,
-      `${escapeLike(documentId)}#%`,
     ]);
   }
 
   async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
     const hasFilter = filter !== undefined && Object.keys(filter).length > 0;
     const rows = await this.client.query<{ doc_id: string }>(
-      `SELECT DISTINCT regexp_replace(id, '#[0-9]+$', '') AS doc_id
+      `SELECT DISTINCT ${DOCUMENT_ID_FROM_CHUNK} AS doc_id
        FROM ${this.table}
        ${hasFilter ? 'WHERE metadata @> $1::jsonb' : ''}`,
       hasFilter ? [JSON.stringify(filter)] : [],
@@ -121,12 +120,14 @@ interface PgRow {
   score: number | string;
 }
 
+/**
+ * SQL that collapses a chunk id (`${documentId}#<n>`) back to its source document id — the pgvector
+ * mirror of {@link import('./vector-store.js').documentIdOf}. Shared by `remove` and
+ * `listDocumentIds` so both key on the exact same definition of "chunk belongs to document".
+ */
+const DOCUMENT_ID_FROM_CHUNK = "regexp_replace(id, '#[0-9]+$', '')";
+
 /** pgvector accepts a `'[1,2,3]'` text literal cast to `vector`. */
 function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(',')}]`;
-}
-
-/** Escape `LIKE` wildcards so a document id containing `%`/`_`/`\` matches its chunks literally. */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }

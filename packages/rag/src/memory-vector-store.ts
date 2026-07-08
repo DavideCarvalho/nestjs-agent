@@ -21,9 +21,8 @@ export class MemoryVectorStore implements VectorStore {
   }
 
   async remove(documentId: string): Promise<void> {
-    const chunkPrefix = `${documentId}#`;
     for (const id of this.records.keys()) {
-      if (id === documentId || id.startsWith(chunkPrefix)) {
+      if (documentIdOf(id) === documentId) {
         this.records.delete(id);
       }
     }
