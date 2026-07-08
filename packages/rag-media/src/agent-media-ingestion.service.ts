@@ -5,13 +5,8 @@ import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { publishRagMediaFailed } from './diagnostics.js';
 import { envelopePayload, isMediaAttachEvent, isMediaDeleteEvent } from './media-events.js';
-import type { MediaIngestJob } from './media-ingest-job.js';
-import {
-  type MediaIngestionDeps,
-  type ReadFile,
-  ingestMediaFile,
-  removeMedia,
-} from './media-ingestion.js';
+import { type MediaIngestJob, applyMediaIngestJob } from './media-ingest-job.js';
+import type { MediaIngestionDeps, ReadFile } from './media-ingestion.js';
 import { type TextExtractor, defaultTextExtractor } from './text-extractor.js';
 
 export interface AgentMediaIngestionOptions {
@@ -82,7 +77,7 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
     await Promise.allSettled([...this.inFlight]);
   }
 
-  /** Guard + collection-filter + ingest one attach. Public so a caller can await it directly. */
+  /** Guard + collection-filter + dispatch one attach. Public so a caller can await it directly. */
   async handleAttach(payload: unknown): Promise<void> {
     if (!isMediaAttachEvent(payload)) {
       return;
@@ -90,34 +85,34 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
     if (this.collections !== null && !this.collections.has(payload.collection)) {
       return;
     }
-    try {
-      if (this.enqueue !== undefined) {
-        await this.enqueue({ type: 'ingest', event: payload });
-      } else {
-        await ingestMediaFile(payload, this.deps);
-      }
-    } catch (error) {
-      const message = errorMessage(error);
-      this.logger.error(`RAG ingestion failed for media ${payload.id}: ${message}`);
-      publishRagMediaFailed({ mediaId: payload.id, error: message });
-    }
+    await this.dispatch({ type: 'ingest', event: payload });
   }
 
-  /** Guard + drop a deleted media's chunks. Public so a caller can await it directly. */
+  /** Guard + dispatch a delete. Public so a caller can await it directly. */
   async handleDelete(payload: unknown): Promise<void> {
     if (!isMediaDeleteEvent(payload)) {
       return;
     }
+    await this.dispatch({ type: 'remove', event: payload });
+  }
+
+  /**
+   * Route one job to the durable queue (when `enqueue` is set) or run it inline — a single error
+   * boundary, and the inline path is the very same `applyMediaIngestJob` a durable worker replays,
+   * so the two can't drift.
+   */
+  private async dispatch(job: MediaIngestJob): Promise<void> {
     try {
       if (this.enqueue !== undefined) {
-        await this.enqueue({ type: 'remove', event: payload });
+        await this.enqueue(job);
       } else {
-        await removeMedia(payload, { store: this.deps.store });
+        await applyMediaIngestJob(job, this.deps);
       }
     } catch (error) {
+      const action = job.type === 'ingest' ? 'ingestion' : 'delete-sync';
       const message = errorMessage(error);
-      this.logger.error(`RAG delete-sync failed for media ${payload.id}: ${message}`);
-      publishRagMediaFailed({ mediaId: payload.id, error: message });
+      this.logger.error(`RAG ${action} failed for media ${job.event.id}: ${message}`);
+      publishRagMediaFailed({ mediaId: job.event.id, error: message });
     }
   }
 
