@@ -38,9 +38,6 @@ export class DrizzleAgentStore implements AgentStore {
       title: input.title ?? 'New chat',
       persona: input.persona,
       transient: input.transient ?? false,
-      pinnedAt: null,
-      summary: null,
-      summaryMessageCount: 0,
       activeStreamId: null,
       createdAt: now,
       updatedAt: now,
@@ -124,9 +121,6 @@ export class DrizzleAgentStore implements AgentStore {
       title: source.title,
       persona: source.persona,
       transient: false,
-      pinnedAt: null,
-      summary: null,
-      summaryMessageCount: 0,
       activeStreamId: null,
       createdAt: now,
       updatedAt: now,
@@ -315,7 +309,6 @@ export class DrizzleAgentStore implements AgentStore {
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
-      ...(thread.pinnedAt != null ? { pinnedAt: thread.pinnedAt.toISOString() } : {}),
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }

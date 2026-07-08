@@ -33,7 +33,6 @@ export class MikroOrmAgentStore implements AgentStore {
       title: input.title ?? 'New chat',
       persona: input.persona,
       transient: input.transient ?? false,
-      summaryMessageCount: 0,
       createdAt: now,
       updatedAt: now,
       ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
@@ -110,7 +109,6 @@ export class MikroOrmAgentStore implements AgentStore {
       title: source.title,
       persona: source.persona,
       transient: false,
-      summaryMessageCount: 0,
       createdAt: now,
       updatedAt: now,
       ...(source.tenantRef != null ? { tenantRef: source.tenantRef } : {}),
@@ -317,7 +315,6 @@ export class MikroOrmAgentStore implements AgentStore {
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
-      ...(thread.pinnedAt != null ? { pinnedAt: thread.pinnedAt.toISOString() } : {}),
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }

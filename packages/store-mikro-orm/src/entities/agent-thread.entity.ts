@@ -11,9 +11,6 @@ export class AgentThread {
   title!: string;
   persona!: string;
   transient!: boolean;
-  pinnedAt?: Date | null;
-  summary?: string | null;
-  summaryMessageCount!: number;
   activeStreamId?: string | null;
   createdAt!: Date;
   updatedAt!: Date;
@@ -34,9 +31,6 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
       title: { type: 'string', ...str },
       persona: { type: 'string', default: 'default', ...str },
       transient: { type: 'boolean', default: false },
-      pinnedAt: { type: 'datetime', nullable: true, fieldName: 'pinned_at' },
-      summary: { type: 'text', nullable: true, ...str },
-      summaryMessageCount: { type: 'integer', default: 0, fieldName: 'summary_message_count' },
       activeStreamId: { type: 'string', nullable: true, fieldName: 'active_stream_id', ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
       updatedAt: { type: 'datetime', fieldName: 'updated_at' },

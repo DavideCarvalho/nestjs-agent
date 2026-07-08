@@ -19,7 +19,7 @@ const USAGE =
   '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
 const STORED_MESSAGE = `{ id: string; role: string; content: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
 const THREAD_SUMMARY =
-  '{ id: string; title: string; persona: string; pinnedAt?: string; transient: boolean; ' +
+  '{ id: string; title: string; persona: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string }';
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
 const PERSONA = '{ id: string; label: string }';

@@ -354,7 +354,6 @@ export class InMemoryAgentStore implements AgentStore {
       transient: row.transient,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-      ...(row.pinnedAt !== undefined ? { pinnedAt: row.pinnedAt } : {}),
       ...(last !== undefined ? { lastMessagePreview: last.content.slice(0, 120) } : {}),
     };
   }

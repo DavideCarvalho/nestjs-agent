@@ -90,7 +90,7 @@ export interface MessageUsage {
   reasoningTokens?: number;
 }
 
-export type UsagePurpose = 'chat' | 'title' | 'follow_ups' | 'summary';
+export type UsagePurpose = 'chat' | 'follow_ups';
 
 export interface QuotaState {
   usedTokens: number;
@@ -196,7 +196,6 @@ export interface ThreadSummary {
   id: string;
   title: string;
   persona: string;
-  pinnedAt?: string;
   transient: boolean;
   createdAt: string;
   updatedAt: string;
