@@ -10,8 +10,10 @@ export {
 export {
   type MediaAttachEvent,
   type MediaDeleteEvent,
+  type MediaConversionEvent,
   isMediaAttachEvent,
   isMediaDeleteEvent,
+  isMediaConversionEvent,
 } from './media-events.js';
 export {
   type MediaIngestionDeps,
@@ -23,6 +25,7 @@ export {
 } from './media-ingestion.js';
 export {
   type AgentMediaIngestionOptions,
+  type MediaConversionIngestion,
   AgentMediaIngestionService,
 } from './agent-media-ingestion.service.js';
 export { AgentMediaIngestionModule } from './media-ingestion.module.js';

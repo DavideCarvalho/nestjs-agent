@@ -70,6 +70,39 @@ const extractor = defaultTextExtractor().register('application/pdf', async (byte
 AgentMediaIngestionModule.forRoot({ store, embedder, readFile, extractor });
 ```
 
+## Ingesting conversions (PDF, OCR)
+
+Instead of parsing binary formats on the RAG side, let the media library's own conversion pipeline
+produce the text and ingest **that**. Point `conversions` at the conversion names you want; `resolve`
+maps the (bare) conversion event back to an ingestable descriptor — reuse the media record's `id` so
+the derived text shares the original's document id (delete-sync then covers it, and a skipped binary
+original never wipes it):
+
+```ts
+AgentMediaIngestionModule.forRoot({
+  store,
+  embedder,
+  readFile,
+  conversions: {
+    names: ['text'], // media conversion names to ingest; others ignored
+    resolve: async ({ id, path }) => {
+      const record = await mediaLibrary.find(id);
+      if (!record) return null;
+      return {
+        id, // same document id as the original
+        ownerType: record.ownerType,
+        ownerId: record.ownerId,
+        collection: record.collection,
+        disk: record.conversions.text.disk,
+        path, // the converted artifact
+        size: record.conversions.text.size,
+        mimeType: 'text/plain',
+      };
+    },
+  },
+});
+```
+
 ## Keeping the index in sync
 
 Ingestion is event-driven, so it's eventual and best-effort — it covers the normal

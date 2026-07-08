@@ -2,13 +2,41 @@ import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { publishRagMediaFailed } from './diagnostics.js';
-import { envelopePayload, isMediaAttachEvent, isMediaDeleteEvent } from './media-events.js';
+import {
+  type MediaAttachEvent,
+  type MediaConversionEvent,
+  envelopePayload,
+  isMediaAttachEvent,
+  isMediaConversionEvent,
+  isMediaDeleteEvent,
+} from './media-events.js';
 import { type MediaIngestJob, applyMediaIngestJob } from './media-ingest-job.js';
 import type { MediaIngestionDeps } from './media-ingestion.js';
+
+/**
+ * Ingest server-side conversions (PDF→text, OCR, …) instead of extracting from the original bytes —
+ * offloading heavy extraction to the media library's own pipeline. Bundled so `names` and `resolve`
+ * are co-required (you can't declare one without the other).
+ */
+export interface MediaConversionIngestion {
+  /** Conversion names to ingest (e.g. `['text']`); other conversions are ignored. */
+  names: string[];
+  /**
+   * Resolve a conversion event to an ingestable descriptor — owner/collection/disk from the media
+   * record plus the converted artifact's `path`/`mimeType`. Reuse the media record's `id` so the
+   * derived text shares the original's document id (delete-sync then covers both). Return `null` to
+   * skip.
+   */
+  resolve: (
+    event: MediaConversionEvent,
+  ) => MediaAttachEvent | null | Promise<MediaAttachEvent | null>;
+}
 
 export interface AgentMediaIngestionOptions extends MediaIngestionDeps {
   /** Restrict ingestion to these media collections. Omit/empty = every collection. */
   collections?: string[];
+  /** Also ingest matching server-side conversions (PDF→text, OCR, …). See {@link MediaConversionIngestion}. */
+  conversions?: MediaConversionIngestion;
   /**
    * Opt-in at-least-once. When set, attach/delete are handed to this queue instead of ingested
    * inline — wire it to a durable workflow that calls `applyMediaIngestJob(job, deps)`. Default:
@@ -27,6 +55,10 @@ export interface AgentMediaIngestionOptions extends MediaIngestionDeps {
 export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AgentMediaIngestionService.name);
   private readonly collections: Set<string> | null;
+  private readonly conversions: {
+    names: Set<string>;
+    resolve: MediaConversionIngestion['resolve'];
+  } | null;
   private readonly config: MediaIngestionDeps;
   private readonly enqueue: ((job: MediaIngestJob) => void | Promise<void>) | undefined;
   private readonly inFlight = new Set<Promise<void>>();
@@ -37,8 +69,12 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       options.collections !== undefined && options.collections.length > 0
         ? new Set(options.collections)
         : null;
-    // options *is* a MediaIngestionDeps (+ collections/enqueue) — pass it straight through; the
-    // pure functions default the extractor. No separate "resolved deps" shape to keep in sync.
+    this.conversions =
+      options.conversions !== undefined
+        ? { names: new Set(options.conversions.names), resolve: options.conversions.resolve }
+        : null;
+    // options *is* a MediaIngestionDeps (+ collections/conversions/enqueue) — pass it straight
+    // through; the pure functions default the extractor. No separate "resolved deps" to keep in sync.
     this.config = options;
     this.enqueue = options.enqueue;
   }
@@ -46,6 +82,9 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
   onModuleInit(): void {
     this.listen(channelName('media', 'attach'), (payload) => this.handleAttach(payload));
     this.listen(channelName('media', 'delete'), (payload) => this.handleDelete(payload));
+    if (this.conversions !== null) {
+      this.listen(channelName('media', 'conversion'), (payload) => this.handleConversion(payload));
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -61,15 +100,11 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
     await Promise.allSettled([...this.inFlight]);
   }
 
-  /** Guard + collection-filter + dispatch one attach. Public so a caller can await it directly. */
+  /** Guard + ingest one attach. Public so a caller can await it directly. */
   async handleAttach(payload: unknown): Promise<void> {
-    if (!isMediaAttachEvent(payload)) {
-      return;
+    if (isMediaAttachEvent(payload)) {
+      await this.ingestAttach(payload);
     }
-    if (this.collections !== null && !this.collections.has(payload.collection)) {
-      return;
-    }
-    await this.dispatch({ type: 'ingest', event: payload });
   }
 
   /** Guard + dispatch a delete. Public so a caller can await it directly. */
@@ -78,6 +113,32 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
       return;
     }
     await this.dispatch({ type: 'remove', event: payload });
+  }
+
+  /**
+   * Guard + resolve + ingest a finished conversion (PDF→text, OCR, …). The derived artifact is
+   * ingested under the media record's id — the same document as the original — so delete-sync covers
+   * it and a skipped original (unsupported binary) never wipes it. Public so a caller can await it.
+   */
+  async handleConversion(payload: unknown): Promise<void> {
+    if (this.conversions === null || !isMediaConversionEvent(payload)) {
+      return;
+    }
+    if (!this.conversions.names.has(payload.conversion)) {
+      return;
+    }
+    const event = await this.conversions.resolve(payload);
+    if (event !== null) {
+      await this.ingestAttach(event);
+    }
+  }
+
+  /** Collection-filter + dispatch an ingest — shared by attach and conversion. */
+  private async ingestAttach(event: MediaAttachEvent): Promise<void> {
+    if (this.collections !== null && !this.collections.has(event.collection)) {
+      return;
+    }
+    await this.dispatch({ type: 'ingest', event });
   }
 
   /**

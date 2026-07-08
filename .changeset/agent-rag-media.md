@@ -24,6 +24,10 @@ one-line `readFile: (disk, path) => media.disk(disk).get(path)`.
 - **`enqueue` hook + `applyMediaIngestJob(job, deps)`** — opt-in at-least-once. Set `enqueue` and
   attach/delete are handed to your durable queue instead of ingested inline; the worker calls
   `applyMediaIngestJob`. Keeps durable optional — the package pulls in no durable dependency.
+- **Conversion ingestion** — `conversions: { names, resolve }` subscribes to `aviary:media:conversion`
+  and ingests server-side derived artifacts (PDF→text, OCR) under the original's document id, so heavy
+  extraction is offloaded to the media pipeline and delete-sync still covers it. `resolve` maps the
+  bare conversion event back to an ingestable descriptor (owner/collection/disk from the record).
 - Emits `aviary:rag:media.*` diagnostics for observability.
 
 `@dudousxd/nestjs-agent-rag` gains three supporting pieces:

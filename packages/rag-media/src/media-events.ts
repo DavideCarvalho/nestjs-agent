@@ -27,6 +27,18 @@ export interface MediaDeleteEvent {
   ownerId: string;
 }
 
+/**
+ * Emitted on `aviary:media:conversion` when a server-side conversion (PDF→text, OCR, …) finishes.
+ * It carries only the media record `id`, the conversion `name`, and the derived artifact `path` — not
+ * the owner/collection/disk — so ingesting it needs a `resolve` seam back to the media record
+ * (see `AgentMediaIngestionOptions.conversions`).
+ */
+export interface MediaConversionEvent {
+  id: string;
+  conversion: string;
+  path: string;
+}
+
 /** The `@dudousxd/nestjs-diagnostics` envelope shape — the integration only reads `payload`. */
 interface DiagnosticEnvelope {
   payload: unknown;
@@ -67,4 +79,16 @@ export function isMediaDeleteEvent(payload: unknown): payload is MediaDeleteEven
   }
   const candidate = payload as Record<string, unknown>;
   return isNonEmptyString(candidate.id);
+}
+
+export function isMediaConversionEvent(payload: unknown): payload is MediaConversionEvent {
+  if (typeof payload !== 'object' || payload === null) {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return (
+    isNonEmptyString(candidate.id) &&
+    isNonEmptyString(candidate.conversion) &&
+    isNonEmptyString(candidate.path)
+  );
 }
