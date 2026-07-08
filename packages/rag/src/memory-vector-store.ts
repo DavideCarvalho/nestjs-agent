@@ -1,4 +1,5 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
+import { matchesFilter } from './filter.js';
 import type { VectorRecord, VectorSearchOptions, VectorStore } from './vector-store.js';
 
 /**
@@ -46,14 +47,4 @@ function cosineSimilarity(a: number[], b: number[]): number {
   }
   const denominator = Math.sqrt(normA) * Math.sqrt(normB);
   return denominator === 0 ? 0 : dot / denominator;
-}
-
-function matchesFilter(
-  metadata: Record<string, unknown> | undefined,
-  filter: Record<string, unknown>,
-): boolean {
-  if (metadata === undefined) {
-    return Object.keys(filter).length === 0;
-  }
-  return Object.entries(filter).every(([key, value]) => metadata[key] === value);
 }

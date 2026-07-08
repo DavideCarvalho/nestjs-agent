@@ -18,3 +18,4 @@ export { InMemoryTokenStreamSink } from './in-memory-sink.js';
 export { InMemoryQuotaStore } from './in-memory-quota.js';
 export { InMemoryPricingStore } from './in-memory-pricing-store.js';
 export { FakeEmbeddingProvider, type FakeEmbeddingOptions } from './fake-embedding-provider.js';
+export { FakeReranker } from './fake-reranker.js';

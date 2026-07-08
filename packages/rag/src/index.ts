@@ -10,8 +10,24 @@ export {
   type PgClient,
   type PgVectorStoreOptions,
 } from './pg-vector-store.js';
+export {
+  RedisVectorStore,
+  type RedisSearchClient,
+  type RedisVectorStoreOptions,
+} from './redis-vector-store.js';
 export { EmbeddingRetriever } from './embedding-retriever.js';
-export { ingestDocuments, type IngestDocument, type IngestOptions } from './ingest.js';
+export { KeywordRetriever, type KeywordRetrieverOptions } from './keyword-retriever.js';
+export { HybridRetriever, type HybridRetrieverOptions } from './hybrid-retriever.js';
+export { RerankingRetriever, type RerankingRetrieverOptions } from './reranking-retriever.js';
+export {
+  chunkDocuments,
+  ingestChunks,
+  ingestDocuments,
+  type ChunkRecord,
+  type IngestChunksOptions,
+  type IngestDocument,
+  type IngestOptions,
+} from './ingest.js';
 export {
   createRetrievalTool,
   type RetrievalTool,

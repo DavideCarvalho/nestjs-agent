@@ -9,6 +9,7 @@ export * from './spi/quota-store.js';
 export * from './spi/pricing-store.js';
 export * from './spi/retriever.js';
 export * from './spi/embedding-provider.js';
+export * from './spi/reranker.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
 export * from './spi/governance-queries.js';
