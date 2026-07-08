@@ -20,7 +20,9 @@
       }
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -30,6 +32,8 @@
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@testcontainers/redis": "12.0.4",
+    "ioredis": "5.11.1",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
