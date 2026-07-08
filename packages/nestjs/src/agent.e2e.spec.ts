@@ -1,4 +1,9 @@
-import type { AgentDefinition, QuotaStore, RolesPolicy } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentDefinition,
+  QuotaStore,
+  Retriever,
+  RolesPolicy,
+} from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -78,6 +83,7 @@ interface BuildOptions {
   quota?: QuotaStore;
   toolTimeoutMs?: number;
   followUps?: boolean | { count: number };
+  retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
 }
 
 async function buildApp(script: FakeScript, options: BuildOptions = {}) {
@@ -94,6 +100,7 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         ...(options.quota !== undefined ? { quota: options.quota } : {}),
         ...(options.toolTimeoutMs !== undefined ? { toolTimeoutMs: options.toolTimeoutMs } : {}),
         ...(options.followUps !== undefined ? { followUps: options.followUps } : {}),
+        ...(options.retrieval !== undefined ? { retrieval: options.retrieval } : {}),
       }),
       ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
     ],
@@ -467,6 +474,33 @@ describe('AgentModule (inline)', () => {
     expect(rows.some((row) => row.toolName === 'purgeCache' && row.status === 'executed')).toBe(
       true,
     );
+  });
+
+  it('inject-mode RAG augments the prompt and records a synthetic retrieval tool call', async () => {
+    const retriever: Retriever = {
+      retrieve: async () => [
+        { id: 'p1', text: 'The capital of France is Paris.', score: 0.9, source: 'geo/france' },
+      ],
+    };
+    // The fake model echoes whether the retrieved context reached its system prompt.
+    const script: FakeScript = (args) => ({
+      text: args.system.includes('capital of France is Paris') ? 'grounded answer' : 'no context',
+    });
+    const built = await buildApp(script, { retrieval: { mode: 'inject', retriever } });
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'what is the capital of france?',
+    });
+
+    const streamed = await collect(built.service.subscribe(runId));
+    expect(streamed).toContain('grounded answer');
+    // Retrieval persisted as a synthetic `retrieve` tool call (the citation surface), no schema change.
+    expect(
+      built.store
+        .toolCallRows()
+        .some((row) => row.toolName === 'retrieve' && row.status === 'executed'),
+    ).toBe(true);
   });
 
   it("passes a tool's @AiTool ability through to the RolesPolicy", async () => {

@@ -2,6 +2,7 @@ import {
   publishAgentDelegated,
   publishAgentMessage,
   publishAgentQuotaExceeded,
+  publishAgentRetrieved,
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
@@ -9,6 +10,7 @@ import {
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
 import type { QuotaStore } from './spi/quota-store.js';
+import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
@@ -56,6 +58,25 @@ export interface AgentLoopDeps {
    * (recorded as `follow_ups` usage). Undefined/0 → disabled.
    */
   followUpsCount?: number;
+  /**
+   * Enables always-on ("inject") RAG: before the turn, retrieve passages for the user message and
+   * augment the system prompt with them. Its presence IS inject mode — agentic (tool) retrieval sets
+   * no retriever here (it rides a normal `read` tool). Undefined → no injection.
+   */
+  retriever?: Retriever;
+  /** How many passages inject-mode retrieval requests. Undefined → 5. */
+  retrievalTopK?: number;
+}
+
+/** Renders retrieved passages as a numbered, citable context block for the system prompt. */
+function buildContextBlock(passages: Passage[]): string {
+  const items = passages
+    .map((passage, index) => {
+      const label = passage.source !== undefined ? ` (${passage.source})` : '';
+      return `[${index + 1}]${label} ${passage.text}`;
+    })
+    .join('\n\n');
+  return `<retrieved_context>\n${items}\n</retrieved_context>\nUse the retrieved context above to answer when relevant, and cite sources by their bracket number.`;
 }
 
 /** Intersect two allow-lists where `undefined` means "no restriction". */
@@ -215,7 +236,7 @@ export async function runAgentLoop(
 ): Promise<{ text: string }> {
   const maxSteps = deps.maxSteps ?? 8;
   const persona = input.persona;
-  const system = await resolveSystemPrompt(deps, input);
+  let system = await resolveSystemPrompt(deps, input);
 
   if (deps.quota !== undefined) {
     const quota = deps.quota;
@@ -279,6 +300,22 @@ export async function runAgentLoop(
     actorId: input.actor.id,
     ...(persona !== undefined ? { persona: persona.id } : {}),
   });
+
+  // Inject-mode RAG: retrieve once for the user message and fold the passages into the system prompt
+  // (a `ctx.step` so it's replay-cached under durable). Recorded below as a synthetic tool call on
+  // the first assistant message, so citations surface through the same machinery as agentic search.
+  let injectedPassages: Passage[] | undefined;
+  if (deps.retriever !== undefined) {
+    const retriever = deps.retriever;
+    const passages = await hooks.step('retrieve', () =>
+      retriever.retrieve(input.userText, { topK: deps.retrievalTopK ?? 5 }),
+    );
+    if (passages.length > 0) {
+      injectedPassages = passages;
+      system = `${system}\n\n${buildContextBlock(passages)}`;
+    }
+    publishAgentRetrieved({ runId: hooks.runId, query: input.userText, count: passages.length });
+  }
 
   // NOTE: no try/finally around this loop. A durable runner suspends by THROWING through the stack
   // at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on every suspend
@@ -368,6 +405,25 @@ export async function runAgentLoop(
       content: turn.text,
       ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
     });
+
+    // Record inject-mode retrieval as a synthetic auto-executed `retrieve` tool call on the assistant
+    // message it informed — so its passages persist and render as citations exactly like an agentic
+    // search would, without a new message field.
+    if (i === 0 && injectedPassages !== undefined) {
+      const passages = injectedPassages;
+      const toolCallId = `retrieve-${assistant.id}`;
+      await hooks.step(`persist:retrieval:${assistant.id}`, async () => {
+        await deps.store.recordToolCall({
+          toolCallId,
+          messageId: assistant.id,
+          toolName: 'retrieve',
+          toolType: 'read',
+          input: { query: input.userText },
+          status: 'auto_executed',
+        });
+        await deps.store.updateToolCall({ toolCallId, status: 'executed', output: { passages } });
+      });
+    }
 
     if (isFinalTurn) {
       break;

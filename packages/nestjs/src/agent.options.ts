@@ -4,6 +4,7 @@ import type {
   AgentStore,
   ModelProvider,
   QuotaStore,
+  Retriever,
   RolesPolicy,
   TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
@@ -77,6 +78,12 @@ export interface AgentModuleOptions {
    * message's `followUps`. Omit/`false` → disabled.
    */
   followUps?: boolean | { count: number };
+  /**
+   * Always-on ("inject") RAG: before each turn, retrieve passages for the user message and augment
+   * the system prompt with them. For agentic retrieval (the model decides when to search) DON'T set
+   * this — instead expose the tool: `provideAgentTool(createRetrievalTool(retriever))`. Omit → off.
+   */
+  retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
 
   // --- the default agent (optional) ---
   /**

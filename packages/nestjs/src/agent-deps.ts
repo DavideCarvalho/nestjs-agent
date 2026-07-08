@@ -4,6 +4,7 @@ import type {
   Persona,
   PromptBuilder,
   QuotaStore,
+  Retriever,
   RolesPolicy,
   SinkWriter,
   TokenStreamSink,
@@ -30,6 +31,10 @@ export interface AgentDeps {
   toolTimeoutMs?: number;
   /** How many follow-up suggestions to generate after the final turn. Undefined/0 → off. */
   followUpsCount?: number;
+  /** Inject-mode retriever (from `forRoot({ retrieval })`). Undefined → no prompt augmentation. */
+  retriever?: Retriever;
+  /** Passages inject-mode retrieval requests. Undefined → loop default (5). */
+  retrievalTopK?: number;
 }
 
 export function utcDay(date = new Date()): string {

@@ -43,6 +43,12 @@ export interface AgentDelegated {
   fromAgent?: string;
   toAgent: string;
 }
+export interface AgentRetrieved {
+  runId: string;
+  query: string;
+  /** How many passages the retriever returned. */
+  count: number;
+}
 
 /** Declaration-merge so `emit('agent', ...)` and telescope infer the agent payloads. */
 declare module '@dudousxd/nestjs-diagnostics' {
@@ -55,6 +61,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'run.finished': AgentRunFinished;
       'run.failed': AgentRunFailed;
       delegated: AgentDelegated;
+      retrieved: AgentRetrieved;
     };
   }
 }
@@ -79,4 +86,7 @@ export function publishAgentRunFailed(payload: AgentRunFailed): void {
 }
 export function publishAgentDelegated(payload: AgentDelegated): void {
   emit('agent', 'delegated', payload);
+}
+export function publishAgentRetrieved(payload: AgentRetrieved): void {
+  emit('agent', 'retrieved', payload);
 }

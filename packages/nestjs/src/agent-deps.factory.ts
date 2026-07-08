@@ -64,6 +64,7 @@ export class AgentDepsFactory {
     }
     const toolAllowList = this.effectiveTools(definition);
     const followUpsCount = this.followUpsCount();
+    const retrieval = this.options.retrieval;
     return {
       model: this.model,
       store: this.store,
@@ -81,6 +82,12 @@ export class AgentDepsFactory {
         ? { toolTimeoutMs: this.options.toolTimeoutMs }
         : {}),
       ...(followUpsCount !== undefined ? { followUpsCount } : {}),
+      ...(retrieval?.mode === 'inject'
+        ? {
+            retriever: retrieval.retriever,
+            ...(retrieval.topK !== undefined ? { retrievalTopK: retrieval.topK } : {}),
+          }
+        : {}),
     };
   }
 

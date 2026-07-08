@@ -29,6 +29,10 @@ export const AGENT_ACTOR_RESOLVER = Symbol.for('@dudousxd/nestjs-agent:actor-res
 export const AGENT_GOVERNANCE_QUERIES = Symbol.for('@dudousxd/nestjs-agent:governance-queries');
 /** The pricing WRITE side (`AgentPricingStore`) — seeds/updates the per-model rates cost is priced against. */
 export const AGENT_PRICING_STORE = Symbol.for('@dudousxd/nestjs-agent:pricing-store');
+/** The RAG retrieval seam (`Retriever`) — vector/keyword search behind the agentic tool or inject mode. */
+export const AGENT_RETRIEVER = Symbol.for('@dudousxd/nestjs-agent:retriever');
+/** The embedding provider (`EmbeddingProvider`) — text→vector for retrieval + ingestion. */
+export const AGENT_EMBEDDING_PROVIDER = Symbol.for('@dudousxd/nestjs-agent:embedding-provider');
 // Per-agent deps factory. A Symbol.for token (not the class) so DI survives tsup's dual
 // index/durable bundles, which each get their own copy of the AgentDepsFactory class.
 export const AGENT_DEPS_FACTORY = Symbol.for('@dudousxd/nestjs-agent:deps-factory');
