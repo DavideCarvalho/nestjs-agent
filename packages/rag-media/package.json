@@ -1,0 +1,49 @@
+{
+  "name": "@dudousxd/nestjs-agent-rag-media",
+  "version": "0.1.0",
+  "description": "Auto-ingest @dudousxd/nestjs-media uploads into agent RAG — extract, chunk, embed, index, owner-scoped, with delete kept in sync. Couples via the diagnostics channel, no hard media dependency",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-rag": "workspace:*",
+    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "reflect-metadata": "^0.2.0"
+  },
+  "dependencies": {
+    "@dudousxd/nestjs-diagnostics": "0.6.1"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-rag": "workspace:*",
+    "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@nestjs/common": "11.1.6",
+    "reflect-metadata": "0.2.2",
+    "tsup": "8.3.5",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

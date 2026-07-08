@@ -74,6 +74,13 @@ export class PgVectorStore implements VectorStore {
     }
   }
 
+  async remove(documentId: string): Promise<void> {
+    await this.client.query(`DELETE FROM ${this.table} WHERE id = $1 OR id LIKE $2 ESCAPE '\\'`, [
+      documentId,
+      `${escapeLike(documentId)}#%`,
+    ]);
+  }
+
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const vector = toVectorLiteral(embedding);
     const hasFilter = options.filter !== undefined && Object.keys(options.filter).length > 0;
@@ -106,4 +113,9 @@ interface PgRow {
 /** pgvector accepts a `'[1,2,3]'` text literal cast to `vector`. */
 function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(',')}]`;
+}
+
+/** Escape `LIKE` wildcards so a document id containing `%`/`_`/`\` matches its chunks literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }

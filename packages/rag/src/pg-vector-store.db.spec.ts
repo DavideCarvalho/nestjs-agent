@@ -56,4 +56,23 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(passages.every((passage) => passage.metadata?.tenant === 't1')).toBe(true);
     expect(passages.some((passage) => passage.id === 'x')).toBe(true);
   });
+
+  it('remove() deletes every chunk of a document and leaves siblings untouched', async () => {
+    await store.upsert([
+      { id: 'del#0', text: 'part zero', embedding: [1, 0, 0] },
+      { id: 'del#1', text: 'part one', embedding: [1, 0, 0] },
+      { id: 'del', text: 'bare id', embedding: [1, 0, 0] },
+      { id: 'delta#0', text: 'different document, shared prefix', embedding: [1, 0, 0] },
+    ]);
+
+    await store.remove('del');
+
+    const passages = await store.search([1, 0, 0], { topK: 50 });
+    const ids = passages.map((passage) => passage.id);
+    expect(ids).not.toContain('del#0');
+    expect(ids).not.toContain('del#1');
+    expect(ids).not.toContain('del');
+    // `delta#0` must survive — LIKE `del#%` must not match a different document id
+    expect(ids).toContain('delta#0');
+  });
 });

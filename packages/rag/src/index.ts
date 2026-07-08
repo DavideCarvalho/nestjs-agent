@@ -19,6 +19,7 @@ export { EmbeddingRetriever } from './embedding-retriever.js';
 export { KeywordRetriever, type KeywordRetrieverOptions } from './keyword-retriever.js';
 export { HybridRetriever, type HybridRetrieverOptions } from './hybrid-retriever.js';
 export { RerankingRetriever, type RerankingRetrieverOptions } from './reranking-retriever.js';
+export { FilteredRetriever } from './filtered-retriever.js';
 export {
   chunkDocuments,
   ingestChunks,

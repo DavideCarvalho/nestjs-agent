@@ -15,6 +15,15 @@ export class MemoryVectorStore implements VectorStore {
     }
   }
 
+  async remove(documentId: string): Promise<void> {
+    const chunkPrefix = `${documentId}#`;
+    for (const id of this.records.keys()) {
+      if (id === documentId || id.startsWith(chunkPrefix)) {
+        this.records.delete(id);
+      }
+    }
+  }
+
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const scored: Passage[] = [];
     for (const record of this.records.values()) {

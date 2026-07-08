@@ -110,6 +110,30 @@ export class RedisVectorStore implements VectorStore {
     }
   }
 
+  async remove(documentId: string): Promise<void> {
+    const keys = new Set<string>([`${this.prefix}${documentId}`]);
+    const pattern = `${this.prefix}${escapeGlob(documentId)}#*`;
+    let cursor = '0';
+    do {
+      const reply = await this.client.sendCommand([
+        'SCAN',
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        '256',
+      ]);
+      const page = parseScanReply(reply);
+      cursor = page.cursor;
+      for (const key of page.keys) {
+        keys.add(key);
+      }
+    } while (cursor !== '0');
+    if (keys.size > 0) {
+      await this.client.sendCommand(['DEL', ...keys]);
+    }
+  }
+
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const query = `${buildFilter(options.filter)}=>[KNN ${options.topK} @embedding $BLOB AS vector_score]`;
     const reply = await this.client.sendCommand([
@@ -158,6 +182,33 @@ function buildFilter(filter?: Record<string, unknown>): string {
 /** Escape RediSearch TAG punctuation so an id/tenant value matches literally. */
 function escapeTag(value: string): string {
   return value.replace(/[^a-zA-Z0-9_]/g, (char) => `\\${char}`);
+}
+
+/** Escape `SCAN MATCH` glob metacharacters so a document id matches its chunk keys literally. */
+function escapeGlob(value: string): string {
+  return value.replace(/[*?[\]\\]/g, (char) => `\\${char}`);
+}
+
+/**
+ * Parse a `SCAN` reply into `{ cursor, keys }`, tolerating both wire shapes: the RESP2 array
+ * `[cursor, [key, …]]` and node-redis's RESP3 object `{ cursor, keys }`.
+ */
+function parseScanReply(reply: unknown): { cursor: string; keys: string[] } {
+  if (Array.isArray(reply) && reply.length >= 2) {
+    const rawKeys = reply[1];
+    return {
+      cursor: toStr(reply[0]),
+      keys: Array.isArray(rawKeys) ? rawKeys.map(toStr) : [],
+    };
+  }
+  if (typeof reply === 'object' && reply !== null && 'cursor' in reply && 'keys' in reply) {
+    const { cursor, keys } = reply as { cursor: unknown; keys: unknown };
+    return {
+      cursor: toStr(cursor),
+      keys: Array.isArray(keys) ? keys.map(toStr) : [],
+    };
+  }
+  return { cursor: '0', keys: [] };
 }
 
 function toStr(value: unknown): string {

@@ -2,7 +2,8 @@ import { FakeEmbeddingProvider } from '@dudousxd/nestjs-agent-testing';
 import { describe, expect, it } from 'vitest';
 import { chunkText } from './chunk.js';
 import { EmbeddingRetriever } from './embedding-retriever.js';
-import { ingestDocuments } from './ingest.js';
+import { FilteredRetriever } from './filtered-retriever.js';
+import { chunkDocuments, ingestChunks, ingestDocuments } from './ingest.js';
 import { MemoryVectorStore } from './memory-vector-store.js';
 import { createRetrievalTool } from './retrieval-tool.js';
 
@@ -77,6 +78,78 @@ describe('ingest + retrieve (MemoryVectorStore + EmbeddingRetriever)', () => {
   ): ReturnType<EmbeddingRetriever['retrieve']> {
     return new EmbeddingRetriever(embedder, store).retrieve('version', { topK: 10 });
   }
+});
+
+describe('MemoryVectorStore.remove', () => {
+  it('drops every chunk of a document and nothing else', async () => {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    // small chunkSize so each doc becomes several chunks (ids `${id}#0`, `${id}#1`, …)
+    await ingestDocuments(
+      [
+        { id: 'keep', text: 'alpha beta gamma delta epsilon zeta eta theta' },
+        { id: 'drop', text: 'one two three four five six seven eight nine ten' },
+      ],
+      { embedder, store, chunkSize: 20, overlap: 0 },
+    );
+
+    await store.remove('drop');
+
+    const passages = await new EmbeddingRetriever(embedder, store).retrieve('anything', {
+      topK: 100,
+    });
+    expect(passages.length).toBeGreaterThan(0);
+    expect(passages.every((passage) => passage.id.startsWith('keep#'))).toBe(true);
+  });
+
+  it('leaves no orphan when a re-ingested document shrinks to fewer chunks', async () => {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    await ingestChunks(
+      chunkDocuments([{ id: 'd', text: 'aaa bbb ccc ddd eee fff' }], { chunkSize: 12, overlap: 0 }),
+      { embedder, store },
+    );
+    // re-ingest a much shorter version — remove first, then upsert
+    await store.remove('d');
+    await ingestChunks(chunkDocuments([{ id: 'd', text: 'tiny' }]), { embedder, store });
+
+    const passages = await new EmbeddingRetriever(embedder, store).retrieve('anything', {
+      topK: 100,
+    });
+    expect(passages).toHaveLength(1);
+    expect(passages[0]?.text).toBe('tiny');
+  });
+});
+
+describe('FilteredRetriever', () => {
+  async function ownerScopedStore() {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    await ingestDocuments(
+      [
+        { id: 'a-doc', text: 'shared topic sentence', metadata: { owner: 'alice' } },
+        { id: 'b-doc', text: 'shared topic sentence', metadata: { owner: 'bob' } },
+      ],
+      { embedder, store },
+    );
+    return { base: new EmbeddingRetriever(embedder, store) };
+  }
+
+  it('only returns passages matching the fixed owner filter', async () => {
+    const { base } = await ownerScopedStore();
+    const scoped = new FilteredRetriever(base, { owner: 'alice' });
+    const passages = await scoped.retrieve('shared topic', { topK: 10 });
+    expect(passages.length).toBeGreaterThan(0);
+    expect(passages.every((passage) => passage.metadata?.owner === 'alice')).toBe(true);
+  });
+
+  it('a caller cannot widen past the fixed scope', async () => {
+    const { base } = await ownerScopedStore();
+    const scoped = new FilteredRetriever(base, { owner: 'alice' });
+    // caller tries to override the owner — fixed filter wins
+    const passages = await scoped.retrieve('shared topic', { topK: 10, filter: { owner: 'bob' } });
+    expect(passages.every((passage) => passage.metadata?.owner === 'alice')).toBe(true);
+  });
 });
 
 describe('createRetrievalTool', () => {

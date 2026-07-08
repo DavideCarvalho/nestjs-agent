@@ -65,4 +65,23 @@ describe('RedisVectorStore (real RediSearch)', () => {
     expect(passages.some((passage) => passage.id === 'x')).toBe(true);
     expect(passages.every((passage) => passage.metadata?.tenant === 't1')).toBe(true);
   });
+
+  it('remove() SCANs and deletes every chunk of a document, sparing prefix-siblings', async () => {
+    await store.upsert([
+      { id: 'gone#0', text: 'part zero', embedding: [1, 0, 0] },
+      { id: 'gone#1', text: 'part one', embedding: [1, 0, 0] },
+      { id: 'gone', text: 'bare id', embedding: [1, 0, 0] },
+      { id: 'goner#0', text: 'different document, shared prefix', embedding: [1, 0, 0] },
+    ]);
+
+    await store.remove('gone');
+
+    const passages = await store.search([1, 0, 0], { topK: 50 });
+    const ids = passages.map((passage) => passage.id);
+    expect(ids).not.toContain('gone#0');
+    expect(ids).not.toContain('gone#1');
+    expect(ids).not.toContain('gone');
+    // `goner#0` shares the `gone` prefix but is a different document — the `#*` glob must spare it
+    expect(ids).toContain('goner#0');
+  });
 });
