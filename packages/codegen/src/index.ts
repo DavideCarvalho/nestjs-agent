@@ -12,16 +12,25 @@ export interface AgentCodegenOptions {
   name?: string;
 }
 
-// Wire shapes returned by the JSON endpoints (dates are ISO strings over the wire). The deeply
-// nested tool-call/usage payloads are intentionally loose — the typed surface that matters to a
-// frontend is the thread/message envelope; rich tool data flows through the React tool-part renderer.
+// Wire shapes returned by the JSON endpoints (dates are ISO strings over the wire).
+//
+// KEEP IN SYNC with the real `MessageUsage` / `StoredMessage` / `AgentCatalogEntry` in
+// `@dudousxd/nestjs-agent-core` — see `packages/core/src/types.ts`. These are hand-mirrored here
+// because the agent controllers live in `node_modules`, where the codegen's static AST discovery
+// can't read their return types, so a change to the core types must be reflected below by hand.
+//
+// The deeply nested tool-call payloads are intentionally loose (`Record<string, unknown>[]`) — the
+// typed surface that matters to a frontend is the thread/message envelope; rich tool data flows
+// through the React tool-part renderer.
 const USAGE =
-  '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
-const STORED_MESSAGE = `{ id: string; role: string; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
+  '{ inputTokens: number; outputTokens: number; cacheWriteTokens?: number; cacheReadTokens?: number; reasoningTokens?: number }';
+const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
 const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string }';
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
+/** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
+const AGENT_CATALOG_ENTRY = '{ name: string; description: string; isDefault?: boolean }';
 
 function route(
   method: string,
@@ -36,6 +45,11 @@ function route(
 function agentRoutes(base: string, ns: string): RouteDescriptor[] {
   const root = `${base}/agent`;
   return [
+    route('GET', `${root}/agents`, `${ns}.agents.list`, {
+      query: null,
+      body: null,
+      response: `${AGENT_CATALOG_ENTRY}[]`,
+    }),
     route('GET', `${root}/threads`, `${ns}.threads.list`, {
       query: null,
       body: null,
@@ -60,6 +74,30 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       `${root}/threads/:id/fork-from/:messageId`,
       `${ns}.threads.fork`,
       { query: null, body: null, response: THREAD_SUMMARY },
+      [
+        { name: 'id', source: 'path' },
+        { name: 'messageId', source: 'path' },
+      ],
+    ),
+    route(
+      'PATCH',
+      `${root}/threads/:id`,
+      `${ns}.threads.rename`,
+      { query: null, body: '{ title: string }', response: '{ ok: boolean }' },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route(
+      'POST',
+      `${root}/threads/:id/promote`,
+      `${ns}.threads.promote`,
+      { query: null, body: null, response: '{ ok: boolean }' },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route(
+      'DELETE',
+      `${root}/threads/:id/from/:messageId`,
+      `${ns}.threads.truncate`,
+      { query: null, body: null, response: '{ ok: boolean }' },
       [
         { name: 'id', source: 'path' },
         { name: 'messageId', source: 'path' },
@@ -92,9 +130,9 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
 
 /**
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
- * that emits the `@dudousxd/nestjs-agent` JSON REST routes (threads, tool-call approve/reject,
- * quota, cancel) into your generated `api.ts` — so they're available as a typed client / TanStack
- * hooks in your frontend.
+ * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
+ * rename/promote/fork/truncate, tool-call approve/reject, quota, cancel) into your generated
+ * `api.ts` — so they're available as a typed client / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static
  * AST discovery can't see them. The streaming `POST /agent/chat` + `GET /agent/chat/:runId/stream`
