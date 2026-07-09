@@ -6,7 +6,9 @@
     "outDir": "dist",
     "rootDir": "src",
     "strictPropertyInitialization": false,
-    "exactOptionalPropertyTypes": false
+    "exactOptionalPropertyTypes": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
   "include": ["src/**/*.ts"]
 }
