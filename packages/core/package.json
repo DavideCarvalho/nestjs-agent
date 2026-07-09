@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "nestjs-agent core — agent loop, tool registry, governance SPIs",
   "license": "MIT",
   "author": "Davide Carvalho",

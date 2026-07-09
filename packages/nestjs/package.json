@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
   "license": "MIT",
   "author": "Davide Carvalho",

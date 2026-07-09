@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-telescope",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "nestjs-agent telescope extension — an 'Agent' dashboard tab",
   "license": "MIT",
   "author": "Davide Carvalho",
