@@ -196,122 +196,96 @@ export function toUsageTrendRows(points: UsageTrendPoint[]): UsageTrendTableRow[
   }));
 }
 
-/** stat → authoritative total spend (USD) over the range. */
-export function agentSpendTotalProvider(): DataProvider {
+/**
+ * Build a governance `DataProvider` from a fetch + a format step. Every provider follows the same
+ * shape: resolve the read-model, run ONE query over the panel's range, then format the rows into the
+ * panel's result shape. When the host hasn't bound the read-model, `fetch` is skipped and `format`
+ * runs over `[]` — which is exactly the empty-but-valid shape each formatter already yields (0 for
+ * totals, `[]` for segments/rows), so the degraded case needs no special-casing.
+ */
+function governanceStatProvider<TRow>(
+  name: string,
+  fetch: (queries: AgentGovernanceQueries, range: GovernanceRange) => Promise<TRow[]>,
+  format: (rows: TRow[]) => unknown,
+): DataProvider {
   return {
-    name: 'agent.spend.totalCost',
+    name,
     async resolve(query, ctx) {
       const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { value: 0 };
-      }
-      const byModel = await queries.spendByModel(resolveRange(query));
-      return { value: totalCostUsd(byModel) };
+      const rows = queries ? await fetch(queries, resolveRange(query)) : [];
+      return format(rows);
     },
   };
+}
+
+/** stat → authoritative total spend (USD) over the range. */
+export function agentSpendTotalProvider(): DataProvider {
+  return governanceStatProvider(
+    'agent.spend.totalCost',
+    (queries, range) => queries.spendByModel(range),
+    (rows) => ({ value: totalCostUsd(rows) }),
+  );
 }
 
 /** stat → authoritative total tokens (input + output) over the range. */
 export function agentTokensTotalProvider(): DataProvider {
-  return {
-    name: 'agent.spend.totalTokens',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { value: 0 };
-      }
-      const byModel = await queries.spendByModel(resolveRange(query));
-      return { value: totalTokens(byModel) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.spend.totalTokens',
+    (queries, range) => queries.spendByModel(range),
+    (rows) => ({ value: totalTokens(rows) }),
+  );
 }
 
 /** breakdown → spend share per model. */
 export function agentSpendByModelProvider(): DataProvider {
-  return {
-    name: 'agent.spend.byModel',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { segments: [] };
-      }
-      const byModel = await queries.spendByModel(resolveRange(query));
-      return { segments: toModelSpendSegments(byModel) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.spend.byModel',
+    (queries, range) => queries.spendByModel(range),
+    (rows) => ({ segments: toModelSpendSegments(rows) }),
+  );
 }
 
 /** table → per-model requests / in+out tokens / cost. */
 export function agentModelSpendTableProvider(): DataProvider {
-  return {
-    name: 'agent.spend.byModelTable',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { rows: [] };
-      }
-      const byModel = await queries.spendByModel(resolveRange(query));
-      return { rows: toModelSpendRows(byModel) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.spend.byModelTable',
+    (queries, range) => queries.spendByModel(range),
+    (rows) => ({ rows: toModelSpendRows(rows) }),
+  );
 }
 
 /** timeseries → daily spend + tokens trend. */
 export function agentUsageTrendProvider(): DataProvider {
-  return {
-    name: 'agent.usage.trend',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { rows: [] };
-      }
-      const trend = await queries.usageTrend(resolveRange(query));
-      return { rows: toUsageTrendRows(trend) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.usage.trend',
+    (queries, range) => queries.usageTrend(range),
+    (points) => ({ rows: toUsageTrendRows(points) }),
+  );
 }
 
 /** table → spend per acting ref (user/tenant). */
 export function agentActorSpendTableProvider(): DataProvider {
-  return {
-    name: 'agent.spend.byActor',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { rows: [] };
-      }
-      const byActor = await queries.spendByActor(resolveRange(query));
-      return { rows: toActorSpendRows(byActor) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.spend.byActor',
+    (queries, range) => queries.spendByActor(range),
+    (rows) => ({ rows: toActorSpendRows(rows) }),
+  );
 }
 
 /** breakdown → spend share per actor. */
 export function agentSpendByActorProvider(): DataProvider {
-  return {
-    name: 'agent.spend.byActorShare',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { segments: [] };
-      }
-      const byActor = await queries.spendByActor(resolveRange(query));
-      return { segments: toActorSpendSegments(byActor) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.spend.byActorShare',
+    (queries, range) => queries.spendByActor(range),
+    (rows) => ({ segments: toActorSpendSegments(rows) }),
+  );
 }
 
 /** table → top threads by cost (title, actor, requests, tokens, cost). */
 export function agentTopThreadsTableProvider(): DataProvider {
-  return {
-    name: 'agent.threads.topSpend',
-    async resolve(query, ctx) {
-      const queries = resolveGovernanceQueries(ctx);
-      if (!queries) {
-        return { rows: [] };
-      }
-      const byThread = await queries.spendByThread(resolveRange(query), TOP_THREADS_LIMIT);
-      return { rows: toThreadSpendRows(byThread) };
-    },
-  };
+  return governanceStatProvider(
+    'agent.threads.topSpend',
+    (queries, range) => queries.spendByThread(range, TOP_THREADS_LIMIT),
+    (rows) => ({ rows: toThreadSpendRows(rows) }),
+  );
 }
