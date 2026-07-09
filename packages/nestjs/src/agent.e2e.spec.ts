@@ -13,8 +13,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from './agent.module.js';
 import { AgentService } from './agent.service.js';
-import { AiTool } from './decorator/ai-tool.decorator.js';
 import { Agent } from './decorator/agent.decorator.js';
+import { AiTool } from './decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
 
 @AiTool({
@@ -333,9 +333,9 @@ describe('AgentModule (inline)', () => {
     @Injectable()
     class OrchestratorAgent {}
 
-    await expect(
-      buildApp(() => ({ text: 'x' }), { agents: [OrchestratorAgent] }),
-    ).rejects.toThrow(/not a registered @Agent/);
+    await expect(buildApp(() => ({ text: 'x' }), { agents: [OrchestratorAgent] })).rejects.toThrow(
+      /not a registered @Agent/,
+    );
   });
 
   it('scopes cancel to the run owner (403 other, 404 unknown run)', async () => {

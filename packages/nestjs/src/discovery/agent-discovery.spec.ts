@@ -1,4 +1,5 @@
 import type { Actor, ModelTurnArgs } from '@dudousxd/nestjs-agent-core';
+import type { PromptContext } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Injectable } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -8,7 +9,6 @@ import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { SystemPrompt, SystemPromptContributor } from '../decorator/system-prompt.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
-import type { PromptContext } from '@dudousxd/nestjs-agent-core';
 
 @Injectable()
 class SchemaService {

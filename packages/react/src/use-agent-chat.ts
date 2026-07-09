@@ -156,6 +156,31 @@ export function useAgentChat(options: UseAgentChatOptions) {
     [client],
   );
 
+  const renameThread = useCallback(
+    async (id: string, title: string): Promise<void> => {
+      await client.renameThread(id, title);
+      setThreads((current) =>
+        current.map((thread) => (thread.id === id ? { ...thread, title } : thread)),
+      );
+    },
+    [client],
+  );
+
+  // A promoted thread was transient — invisible to `listThreads` — so refetch to bring it into view.
+  const promoteThread = useCallback(
+    async (id: string): Promise<void> => {
+      await client.promoteThread(id);
+      await loadThreads();
+    },
+    [client, loadThreads],
+  );
+
+  const truncateFromMessage = useCallback(
+    (threadId: string, messageId: string): Promise<void> =>
+      client.truncateFromMessage(threadId, messageId).then(() => undefined),
+    [client],
+  );
+
   const loadQuota = useCallback(async (): Promise<QuotaToday> => {
     const today = await client.getQuotaToday();
     setQuota(today);
@@ -219,6 +244,9 @@ export function useAgentChat(options: UseAgentChatOptions) {
     loadThread,
     deleteThread,
     forkThread,
+    renameThread,
+    promoteThread,
+    truncateFromMessage,
     quota,
     loadQuota,
     cancel,

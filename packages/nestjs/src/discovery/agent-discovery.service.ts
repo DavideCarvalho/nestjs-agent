@@ -86,7 +86,9 @@ export class AgentDiscoveryService implements OnModuleInit {
       if (Reflect.getMetadata(SYSTEM_PROMPT_CONTRIBUTOR_METADATA, prototype, name) === true) {
         const method = this.boundMethod(instance, name);
         if (method !== undefined) {
-          this.contributors.push((ctx: PromptContext) => method(ctx) as ReturnType<PromptContributor>);
+          this.contributors.push(
+            (ctx: PromptContext) => method(ctx) as ReturnType<PromptContributor>,
+          );
         }
       }
     }
@@ -115,6 +117,7 @@ export class AgentDiscoveryService implements OnModuleInit {
     if (typeof candidate !== 'function') {
       return undefined;
     }
-    return (ctx: PromptContext) => (candidate as (ctx: PromptContext) => unknown).call(instance, ctx);
+    return (ctx: PromptContext) =>
+      (candidate as (ctx: PromptContext) => unknown).call(instance, ctx);
   }
 }

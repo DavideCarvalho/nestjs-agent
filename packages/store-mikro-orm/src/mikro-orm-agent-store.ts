@@ -185,6 +185,16 @@ export class MikroOrmAgentStore implements AgentStore {
     }
   }
 
+  async promoteThread(threadId: string): Promise<void> {
+    const em = this.em.fork();
+    const thread = await em.findOne(AgentThread, { id: threadId });
+    if (thread?.transient) {
+      thread.transient = false;
+      thread.updatedAt = new Date();
+      await em.flush();
+    }
+  }
+
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
     const em = this.em.fork();
     const thread = await em.findOne(AgentThread, { id: threadId });
@@ -303,7 +313,10 @@ export class MikroOrmAgentStore implements AgentStore {
     await em.flush();
   }
 
-  async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {
+  async quotaToday(
+    actorRef: string,
+    day: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
     const em = this.em.fork();
     const start = new Date(`${day}T00:00:00.000Z`);
     const end = new Date(`${day}T23:59:59.999Z`);
@@ -312,7 +325,8 @@ export class MikroOrmAgentStore implements AgentStore {
       createdAt: { $gte: start, $lte: end },
     });
     const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    return { usedTokens };
+    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+    return { usedTokens, costUsd };
   }
 
   private toSummary(thread: AgentThread, lastContent?: string): ThreadSummary {

@@ -1,5 +1,6 @@
 import {
   AGENT_DEPS_FACTORY,
+  AGENT_QUOTA_STORE,
   AGENT_RUNNER,
   AGENT_STORE,
   type Actor,
@@ -7,6 +8,8 @@ import {
   type AgentRunner,
   type AgentStore,
   type PageContext,
+  type QuotaStore,
+  type QuotaView,
   type ThreadDetail,
   type ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
@@ -28,6 +31,11 @@ export interface ChatParams {
   pageContext?: PageContext;
   /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
   regenerate?: boolean;
+  /**
+   * When creating a thread (no `threadId`), start it transient — a scratch conversation hidden from
+   * the thread list until the caller promotes it. Ignored when `threadId` is set.
+   */
+  transient?: boolean;
 }
 
 /** The orchestration facade the controllers call. */
@@ -37,6 +45,7 @@ export class AgentService {
     @Inject(AGENT_RUNNER) private readonly runner: AgentRunner,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_DEPS_FACTORY) private readonly deps: AgentDepsFactory,
+    @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
   ) {}
 
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
@@ -46,7 +55,10 @@ export class AgentService {
       if (params.regenerate === true) {
         throw new BadRequestException('regenerate requires an existing threadId');
       }
-      const created = await this.store.createThread({ actor: params.actor });
+      const created = await this.store.createThread({
+        actor: params.actor,
+        ...(params.transient === true ? { transient: true } : {}),
+      });
       threadId = created.id;
     } else if (params.regenerate === true) {
       // Regenerate re-runs a run on an existing thread — gate it by ownership like the other
@@ -110,8 +122,51 @@ export class AgentService {
     return this.store.forkThread(threadId, fromMessageId);
   }
 
-  async quotaToday(actorRef: string): Promise<{ usedTokens: number }> {
-    return this.store.quotaToday(actorRef, utcDay());
+  async renameThread(actor: Actor, threadId: string, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (trimmed.length === 0) {
+      throw new BadRequestException('title must not be empty');
+    }
+    if (trimmed.length > 200) {
+      throw new BadRequestException('title must be at most 200 characters');
+    }
+    await this.assertOwnsThread(actor, threadId);
+    return this.store.setTitle(threadId, trimmed);
+  }
+
+  async promoteThread(actor: Actor, threadId: string): Promise<void> {
+    await this.assertOwnsThread(actor, threadId);
+    return this.store.promoteThread(threadId);
+  }
+
+  /**
+   * Drop a message and everything after it — the "edit and resend" / "delete from here" primitive.
+   * The client then sends a fresh turn on the truncated thread. Ownership-gated like the other
+   * thread-scoped mutations.
+   */
+  async truncateThreadFrom(actor: Actor, threadId: string, messageId: string): Promise<void> {
+    await this.assertOwnsThread(actor, threadId);
+    return this.store.truncateFrom(threadId, messageId);
+  }
+
+  /**
+   * The day's usage for the badge: tokens + summed USD cost from the store, and the configured
+   * limit from the quota store (null → unlimited). `withinLimit` comes from the quota store so it
+   * can never drift from what enforcement uses.
+   */
+  async quotaToday(actorRef: string): Promise<QuotaView> {
+    const day = utcDay();
+    const { usedTokens, costUsd } = await this.store.quotaToday(actorRef, day);
+    if (this.quota === undefined) {
+      return { usedTokens, costUsd, limitTokens: null, withinLimit: true };
+    }
+    const state = await this.quota.check(actorRef, day);
+    return {
+      usedTokens: state.usedTokens,
+      costUsd,
+      limitTokens: state.limitTokens,
+      withinLimit: state.withinLimit,
+    };
   }
 
   /**

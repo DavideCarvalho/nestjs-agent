@@ -188,6 +188,14 @@ export class InMemoryAgentStore implements AgentStore {
     }
   }
 
+  async promoteThread(threadId: string): Promise<void> {
+    const row = this.threads.get(threadId);
+    if (row?.transient) {
+      row.transient = false;
+      row.updatedAt = this.now();
+    }
+  }
+
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
     const row = this.threads.get(threadId);
     if (row !== undefined) {
@@ -279,11 +287,14 @@ export class InMemoryAgentStore implements AgentStore {
     });
   }
 
-  async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {
-    const usedTokens = this.usage
-      .filter((row) => row.actorRef === actorRef && row.day === day)
-      .reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    return { usedTokens };
+  async quotaToday(
+    actorRef: string,
+    day: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
+    const rows = this.usage.filter((row) => row.actorRef === actorRef && row.day === day);
+    const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
+    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+    return { usedTokens, costUsd };
   }
 
   /** Test helper: read the recorded usage rows (modelId + token totals). */

@@ -65,6 +65,12 @@ export interface AgentStore {
   softDeleteThread(threadId: string): Promise<void>;
   forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary>;
   setTitle(threadId: string, title: string): Promise<void>;
+  /**
+   * Promote a transient thread to a persistent one so it shows up in {@link listThreads}. A
+   * transient thread is a scratch conversation the caller has not chosen to keep; "saving" it
+   * clears the flag. Idempotent — promoting an already-persistent thread is a no-op.
+   */
+  promoteThread(threadId: string): Promise<void>;
   setActiveStream(threadId: string, runId: string | null): Promise<void>;
 
   /**
@@ -100,5 +106,10 @@ export interface AgentStore {
   updateToolCall(input: UpdateToolCallInput): Promise<void>;
 
   recordUsage(input: RecordUsageInput): Promise<void>;
-  quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }>;
+  /**
+   * The actor's spend for `day` (UTC): total tokens plus the summed provider-reported USD cost.
+   * `costUsd` is `0` when no turn on that day reported a cost (token-only providers). Feeds both
+   * quota enforcement (via {@link QuotaStore}) and the quota-today view.
+   */
+  quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number; costUsd: number }>;
 }

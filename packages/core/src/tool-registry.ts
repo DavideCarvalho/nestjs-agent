@@ -1,7 +1,7 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { filterToolsByAllowList, filterToolsByRole } from './tool-filters.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { AiToolCtx, ToolHandler } from './spi/tool.js';
+import { filterToolsByAllowList, filterToolsByRole } from './tool-filters.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
 
 /** Thrown when an actor invokes a tool their role is not allowed. */

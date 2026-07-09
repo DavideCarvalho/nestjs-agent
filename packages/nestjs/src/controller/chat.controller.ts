@@ -16,6 +16,8 @@ interface ChatBody {
   pageContext?: PageContext;
   /** Re-run the last exchange on `threadId` instead of adding a new message. */
   regenerate?: boolean;
+  /** Start a new thread transient (hidden from history until promoted). Ignored with `threadId`. */
+  transient?: boolean;
 }
 
 @Controller()
@@ -35,6 +37,7 @@ export class ChatController {
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
+      ...(body.transient === true ? { transient: true } : {}),
     });
     await this.pipe(res, runId, threadId);
   }

@@ -3,6 +3,7 @@
 import type { StoredMessage, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { agentSchemaSql } from './agent-schema-sql';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
@@ -121,11 +122,15 @@ describe('MikroOrmAgentStore (sqlite)', () => {
       modelId: 'model-x',
       purpose: 'chat',
       usage: { inputTokens: 20, outputTokens: 7 },
+      costUsd: 0.0125,
     });
     const quota = await store.quotaToday('actor-1', today);
     expect(quota.usedTokens).toBe(42);
+    // costUsd sums only the rows that reported a cost (the first recordUsage had none)
+    expect(quota.costUsd).toBeCloseTo(0.0125);
     const otherQuota = await store.quotaToday('actor-2', today);
     expect(otherQuota.usedTokens).toBe(0);
+    expect(otherQuota.costUsd).toBe(0);
 
     // forkThread copies the prefix up to and including the user message
     const fork = await store.forkThread(thread.id, userMessage.id);
@@ -161,6 +166,22 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(await store.ownerOfActiveStream('missing')).toBeNull();
   });
 
+  it('promotes a transient thread so it surfaces in listThreads', async () => {
+    const transient = await store.createThread({ actor: { id: 'actor-p' }, transient: true });
+    expect(transient.transient).toBe(true);
+    // a transient thread is hidden from history until promoted
+    expect(await store.listThreads('actor-p')).toHaveLength(0);
+
+    await store.promoteThread(transient.id);
+    const listed = await store.listThreads('actor-p');
+    expect(listed.map((t) => t.id)).toEqual([transient.id]);
+    expect(listed[0]?.transient).toBe(false);
+
+    // idempotent: promoting an already-persistent thread is a no-op
+    await store.promoteThread(transient.id);
+    expect(await store.listThreads('actor-p')).toHaveLength(1);
+  });
+
   it('supersedes the current price row on upsert, keeping exactly one current row per model', async () => {
     const pricingStore = new MikroOrmPricingStore(orm.em);
 
@@ -185,5 +206,49 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(second).toHaveLength(1);
     expect(second[0]?.inputPricePer1m).toBe(4);
     expect(second[0]?.outputPricePer1m).toBe(16);
+  });
+});
+
+describe('agentSchemaSql', () => {
+  it('renders create-only DDL for the five agent tables, applying `if not exists` to tables', async () => {
+    const statements = await agentSchemaSql(orm);
+    const joined = statements.join('\n');
+    for (const table of [
+      'agent_thread',
+      'agent_message',
+      'agent_tool_call',
+      'agent_token_usage',
+      'agent_model_pricing',
+    ]) {
+      expect(joined).toContain(table);
+    }
+    const creates = statements.filter((sql) => /^create table/i.test(sql));
+    expect(creates).toHaveLength(5);
+    // every create table is guarded; indexes stay plain (MySQL has no `create index if not exists`)
+    expect(creates.every((sql) => /^create table if not exists/i.test(sql))).toBe(true);
+    expect(statements.some((sql) => /^create index/i.test(sql))).toBe(true);
+  });
+
+  it('opts out of `if not exists` when asked, and the statements build a working schema', async () => {
+    const statements = await agentSchemaSql(orm, { ifNotExists: false });
+    expect(statements.every((sql) => !/if not exists/i.test(sql))).toBe(true);
+
+    // Apply the generated DDL against an isolated database and confirm the store works on it.
+    const fresh = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    try {
+      for (const sql of await agentSchemaSql(fresh, { ifNotExists: false })) {
+        await fresh.em.getConnection().execute(sql);
+      }
+      const freshStore = new MikroOrmAgentStore(fresh.em);
+      const thread = await freshStore.createThread({ actor: { id: 'a' }, title: 'built' });
+      expect((await freshStore.getThread(thread.id))?.title).toBe('built');
+    } finally {
+      await fresh.close(true);
+    }
   });
 });

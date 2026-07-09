@@ -1,4 +1,4 @@
-import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type { QuotaView, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
@@ -16,12 +16,15 @@ export class AgentHttpError extends Error {
   }
 }
 
-export interface QuotaToday {
-  usedTokens: number;
-}
+/** The quota-today read-model: usage, the configured limit (null → unlimited), and USD spend. */
+export type QuotaToday = QuotaView;
 
 export interface CancelResult {
   aborted: boolean;
+}
+
+export interface OkResult {
+  ok: boolean;
 }
 
 export interface AgentClientOptions {
@@ -60,6 +63,21 @@ export class AgentClient {
     return this.request<ThreadSummary>(
       'POST',
       `/agent/threads/${encodeURIComponent(threadId)}/fork-from/${encodeURIComponent(messageId)}`,
+    );
+  }
+
+  renameThread(id: string, title: string): Promise<OkResult> {
+    return this.request<OkResult>('PATCH', `/agent/threads/${encodeURIComponent(id)}`, { title });
+  }
+
+  promoteThread(id: string): Promise<OkResult> {
+    return this.request<OkResult>('POST', `/agent/threads/${encodeURIComponent(id)}/promote`);
+  }
+
+  truncateFromMessage(threadId: string, messageId: string): Promise<OkResult> {
+    return this.request<OkResult>(
+      'DELETE',
+      `/agent/threads/${encodeURIComponent(threadId)}/from/${encodeURIComponent(messageId)}`,
     );
   }
 

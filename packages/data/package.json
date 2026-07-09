@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-data",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "nestjs-agent data — governed read-only SQL satellite (single-SELECT validation, fail-closed table access, tenant scoping)",
   "license": "MIT",
   "author": "Davide Carvalho",

@@ -187,6 +187,13 @@ export class DrizzleAgentStore implements AgentStore {
       .where(eq(agentThread.id, threadId));
   }
 
+  async promoteThread(threadId: string): Promise<void> {
+    await this.db
+      .update(agentThread)
+      .set({ transient: false, updatedAt: new Date() })
+      .where(and(eq(agentThread.id, threadId), eq(agentThread.transient, true)));
+  }
+
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
     await this.db
       .update(agentThread)
@@ -292,7 +299,10 @@ export class DrizzleAgentStore implements AgentStore {
     });
   }
 
-  async quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number }> {
+  async quotaToday(
+    actorRef: string,
+    day: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
     const start = new Date(`${day}T00:00:00.000Z`);
     const end = new Date(`${day}T23:59:59.999Z`);
     const rows = await this.db
@@ -306,7 +316,8 @@ export class DrizzleAgentStore implements AgentStore {
         ),
       );
     const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    return { usedTokens };
+    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
+    return { usedTokens, costUsd };
   }
 
   private toSummary(thread: AgentThreadRow, lastContent?: string): ThreadSummary {

@@ -5,10 +5,10 @@ import {
   type Actor,
   type AiToolCtx,
   DefaultRolesPolicy,
-  filterToolsByAllowList,
   ToolForbiddenError,
   ToolInputInvalidError,
   ToolRegistry,
+  filterToolsByAllowList,
 } from './index.js';
 
 /** A hand-rolled Standard Schema (no Zod) — proves the registry is validation-library-agnostic. */
@@ -139,10 +139,11 @@ describe('filterToolsByAllowList', () => {
   const specs = registry().allSpecs();
 
   it('returns every tool unchanged when no allow-list is given', () => {
-    expect(filterToolsByAllowList(specs, undefined).map((spec) => spec.name).sort()).toEqual([
-      'getWeather',
-      'purgeCache',
-    ]);
+    expect(
+      filterToolsByAllowList(specs, undefined)
+        .map((spec) => spec.name)
+        .sort(),
+    ).toEqual(['getWeather', 'purgeCache']);
   });
 
   it('keeps only the named tools, in registry order, dropping unknown names', () => {

@@ -98,6 +98,19 @@ export interface QuotaState {
   withinLimit: boolean;
 }
 
+/**
+ * The read-model the quota-today endpoint returns to a client — a superset of {@link QuotaState}
+ * for rendering a usage badge. `limitTokens` is `null` when no quota is configured (unlimited, so
+ * `withinLimit` is always true); `costUsd` is the day's summed provider-reported USD spend (`0`
+ * when only tokens were reported).
+ */
+export interface QuotaView {
+  usedTokens: number;
+  limitTokens: number | null;
+  withinLimit: boolean;
+  costUsd: number;
+}
+
 /** A human decision on a pending action tool call. */
 export interface Decision {
   approved: boolean;

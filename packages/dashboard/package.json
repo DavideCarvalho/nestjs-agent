@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-dashboard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Embedded AI-gateway governance console (spend, models, actors/budgets, runs/tools, live feed) for nestjs-agent — bundled React SPA served by NestJS",
   "license": "MIT",
   "author": "Davide Carvalho",
