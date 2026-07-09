@@ -263,6 +263,58 @@ describe('InMemoryGovernanceQueries', () => {
     expect(await queries.recentToolCalls(1)).toHaveLength(1);
   });
 
+  it('spendByThread ranks threads highest cost first and caps at limit', async () => {
+    const store = new InMemoryAgentStore();
+    const today = new Date().toISOString().slice(0, 10);
+
+    const threadX = await store.createThread({ actor: { id: 'erin' }, title: 'Thread X' });
+    // thread-x: 1M/500k → 1*3 + 0.5*15 = 10.5
+    await store.recordUsage({
+      threadId: threadX.id,
+      actorRef: 'erin',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 1_000_000, outputTokens: 500_000 },
+    });
+
+    const threadY = await store.createThread({ actor: { id: 'erin' }, title: 'Thread Y' });
+    // thread-y: 500k/100k → 0.5*3 + 0.1*15 = 3.0
+    await store.recordUsage({
+      threadId: threadY.id,
+      actorRef: 'erin',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 500_000, outputTokens: 100_000 },
+    });
+
+    const threadZ = await store.createThread({ actor: { id: 'frank' }, title: 'Thread Z' });
+    // thread-z: 200k/100k → 0.2*3 + 0.1*15 = 2.1
+    await store.recordUsage({
+      threadId: threadZ.id,
+      actorRef: 'frank',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 200_000, outputTokens: 100_000 },
+    });
+
+    const queries = new InMemoryGovernanceQueries(store, pricing);
+    const range = { fromDay: today, toDay: today };
+
+    const rows = await queries.spendByThread(range, 10);
+    expect(rows.map((row) => row.threadId)).toEqual([threadX.id, threadY.id, threadZ.id]);
+    expect(rows[0]).toMatchObject({ title: 'Thread X', actorRef: 'erin', requests: 1 });
+    expect(rows[0]?.costUsd).toBeCloseTo(10.5, 6);
+    expect(rows[1]?.costUsd).toBeCloseTo(3.0, 6);
+    expect(rows[2]?.costUsd).toBeCloseTo(2.1, 6);
+
+    const capped = await queries.spendByThread(range, 2);
+    expect(capped.map((row) => row.threadId)).toEqual([threadX.id, threadY.id]);
+
+    const byActor = await queries.spendByActor(range);
+    expect(byActor.find((row) => row.actorRef === 'erin')?.threadCount).toBe(2);
+    expect(byActor.find((row) => row.actorRef === 'frank')?.threadCount).toBe(1);
+  });
+
   it('recentThreads rolls up message count + tokens per thread', async () => {
     const { store } = await seed();
     const queries = new InMemoryGovernanceQueries(store, pricing);

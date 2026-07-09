@@ -4,6 +4,7 @@ import type {
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
+  ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -102,15 +103,24 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
-    const byActor = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
+    const byActor = new Map<
+      string,
+      { requests: number; totalTokens: number; costUsd: number; threadIds: Set<string> }
+    >();
     for (const row of this.store.governanceUsage()) {
       if (!this.inRange(row.day, range)) {
         continue;
       }
-      const bucket = byActor.get(row.actorRef) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
+      const bucket = byActor.get(row.actorRef) ?? {
+        requests: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        threadIds: new Set<string>(),
+      };
       bucket.requests += 1;
       bucket.totalTokens += row.inputTokens + row.outputTokens;
       bucket.costUsd += this.rowCost(row);
+      bucket.threadIds.add(row.threadId);
       byActor.set(row.actorRef, bucket);
     }
     const result: ActorSpendRow[] = [];
@@ -120,12 +130,46 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         requests: bucket.requests,
         totalTokens: bucket.totalTokens,
         costUsd: bucket.costUsd,
+        threadCount: bucket.threadIds.size,
       });
     }
     result.sort(
       (left, right) => right.costUsd - left.costUsd || left.actorRef.localeCompare(right.actorRef),
     );
     return result;
+  }
+
+  async spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]> {
+    const threadsById = new Map(
+      this.store.governanceThreads().map((thread) => [thread.threadId, thread]),
+    );
+    const byThread = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
+    for (const row of this.store.governanceUsage()) {
+      if (!this.inRange(row.day, range)) {
+        continue;
+      }
+      const bucket = byThread.get(row.threadId) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
+      bucket.requests += 1;
+      bucket.totalTokens += row.inputTokens + row.outputTokens;
+      bucket.costUsd += this.rowCost(row);
+      byThread.set(row.threadId, bucket);
+    }
+    const result: ThreadSpendRow[] = [];
+    for (const [threadId, bucket] of byThread) {
+      const thread = threadsById.get(threadId);
+      result.push({
+        threadId,
+        title: thread?.title ?? '',
+        actorRef: thread?.actorRef ?? '',
+        requests: bucket.requests,
+        totalTokens: bucket.totalTokens,
+        costUsd: bucket.costUsd,
+      });
+    }
+    result.sort(
+      (left, right) => right.costUsd - left.costUsd || left.threadId.localeCompare(right.threadId),
+    );
+    return result.slice(0, limit);
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
