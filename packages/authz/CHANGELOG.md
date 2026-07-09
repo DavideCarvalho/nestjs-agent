@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-authz
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [ad8e446]
+  - @dudousxd/nestjs-agent-core@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes

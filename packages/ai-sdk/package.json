@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-ai-sdk",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "nestjs-agent Vercel AI SDK v7 adapter — maps streamText to the core ModelProvider SPI (aiSdkModel)",
   "license": "MIT",
   "author": "Davide Carvalho",

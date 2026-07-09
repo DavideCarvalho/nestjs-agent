@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-codegen",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "nestjs-codegen extension for @dudousxd/nestjs-agent — emits the /agent REST API into your generated client",
   "license": "MIT",
   "author": "Davide Carvalho",

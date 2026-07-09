@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-authz",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "nestjs-agent authz adapter — plug @dudousxd/nestjs-authz into tool authorization",
   "license": "MIT",
   "author": "Davide Carvalho",

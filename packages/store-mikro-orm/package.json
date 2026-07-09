@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-store-mikro-orm",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "nestjs-agent MikroORM agent store (threads, messages, tool calls, usage)",
   "license": "MIT",
   "author": "Davide Carvalho",
