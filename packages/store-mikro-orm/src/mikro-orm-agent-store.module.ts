@@ -3,13 +3,37 @@ import {
   AGENT_PRICING_STORE,
   AGENT_STORE,
 } from '@dudousxd/nestjs-agent-core';
-import { EntityManager } from '@mikro-orm/core';
+import { EntityManager, MikroORM } from '@mikro-orm/core';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
-import { type DynamicModule, Module } from '@nestjs/common';
+import {
+  type DynamicModule,
+  Module,
+  type OnApplicationBootstrap,
+  type Provider,
+} from '@nestjs/common';
+import { ensureAgentSchema } from './ensure-schema';
 import { AGENT_ENTITIES } from './entities';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
+
+export interface MikroOrmAgentStoreOptions {
+  /**
+   * Reconcile the agent tables at boot via the fingerprint-gated {@link ensureAgentSchema} (default
+   * `true`) — the "autoSchema" the store manages itself, like the durable/notifications stores. Set
+   * `false` when the host owns these tables through its own migrations instead.
+   */
+  autoSchema?: boolean;
+}
+
+/** Runs {@link ensureAgentSchema} once the app is up. Registered only when `autoSchema` is on. */
+class AgentSchemaInitializer implements OnApplicationBootstrap {
+  constructor(private readonly orm: MikroORM) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    await ensureAgentSchema(this.orm);
+  }
+}
 
 /**
  * Registers the MikroORM agent entities and binds {@link MikroOrmAgentStore} to the
@@ -23,6 +47,9 @@ import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
  * explicit `store` option, and the dashboard/telescope resolve {@link AGENT_GOVERNANCE_QUERIES} /
  * {@link AGENT_PRICING_STORE} without the host re-binding them.
  *
+ * By default the store reconciles its tables at boot (fingerprint-gated {@link ensureAgentSchema});
+ * pass `{ autoSchema: false }` when the host manages them via its own migrations.
+ *
  * ```ts
  * @Module({ imports: [MikroOrmAgentStoreModule.forFeature()] })
  * export class AppModule {}
@@ -30,12 +57,23 @@ import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
  */
 @Module({})
 export class MikroOrmAgentStoreModule {
-  static forFeature(): DynamicModule {
+  static forFeature(options: MikroOrmAgentStoreOptions = {}): DynamicModule {
+    const schemaProviders: Provider[] =
+      options.autoSchema === false
+        ? []
+        : [
+            {
+              provide: AgentSchemaInitializer,
+              useFactory: (orm: MikroORM) => new AgentSchemaInitializer(orm),
+              inject: [MikroORM],
+            },
+          ];
     return {
       module: MikroOrmAgentStoreModule,
       global: true,
       imports: [MikroOrmModule.forFeature(AGENT_ENTITIES)],
       providers: [
+        ...schemaProviders,
         {
           provide: MikroOrmAgentStore,
           useFactory: (em: EntityManager) => new MikroOrmAgentStore(em),

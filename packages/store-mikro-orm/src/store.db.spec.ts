@@ -209,6 +209,43 @@ describe('MikroOrmAgentStore (sqlite)', () => {
   });
 });
 
+describe('ensureAgentSchema (fingerprint-gated autoSchema)', () => {
+  it('creates the agent tables + marker on a fresh DB and no-ops on the second call', async () => {
+    const fresh = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    try {
+      await ensureAgentSchema(fresh);
+      // marker row written with the applied fingerprint
+      const first = await fresh.em
+        .getConnection()
+        .execute<{ fingerprint: string }[]>(
+          "select fingerprint from agent_schema_meta where id = 'agent'",
+        );
+      expect(first[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+      // the store works against the auto-created schema
+      const store = new MikroOrmAgentStore(fresh.em);
+      const thread = await store.createThread({ actor: { id: 'a' }, title: 'auto' });
+      expect((await store.getThread(thread.id))?.title).toBe('auto');
+
+      // second call is a no-op (fingerprint matches) — same marker, no throw from re-created indexes
+      await ensureAgentSchema(fresh);
+      const second = await fresh.em
+        .getConnection()
+        .execute<{ fingerprint: string }[]>(
+          "select fingerprint from agent_schema_meta where id = 'agent'",
+        );
+      expect(second[0]?.fingerprint).toBe(first[0]?.fingerprint);
+    } finally {
+      await fresh.close(true);
+    }
+  });
+});
+
 describe('agentSchemaSql', () => {
   it('renders create-only DDL for the five agent tables, applying `if not exists` to tables', async () => {
     const statements = await agentSchemaSql(orm);
