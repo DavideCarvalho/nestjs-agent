@@ -87,6 +87,23 @@ export function agentDashboard(): DashboardSpec {
         ],
       },
       {
+        title: 'Threads',
+        panels: [
+          {
+            kind: 'table',
+            title: 'Top threads by cost',
+            data: { provider: 'agent.threads.topSpend' },
+            columns: [
+              { key: 'title', label: 'Thread' },
+              { key: 'actorRef', label: 'Actor' },
+              { key: 'requests', label: 'Requests' },
+              { key: 'totalTokens', label: 'Tokens' },
+              { key: 'costUsd', label: 'Cost (USD)' },
+            ],
+          },
+        ],
+      },
+      {
         title: 'Tools',
         cols: 2,
         panels: [

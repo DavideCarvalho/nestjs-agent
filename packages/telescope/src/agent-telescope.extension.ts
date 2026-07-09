@@ -13,6 +13,7 @@ import {
   agentSpendByModelProvider,
   agentSpendTotalProvider,
   agentTokensTotalProvider,
+  agentTopThreadsTableProvider,
   agentUsageTrendProvider,
 } from './agent-governance-providers.js';
 import { AgentTelescopeWatcher } from './agent-telescope.watcher.js';
@@ -48,6 +49,7 @@ export function agentTelescopeExtension() {
       agentUsageTrendProvider(),
       agentActorSpendTableProvider(),
       agentSpendByActorProvider(),
+      agentTopThreadsTableProvider(),
     ],
   });
 }

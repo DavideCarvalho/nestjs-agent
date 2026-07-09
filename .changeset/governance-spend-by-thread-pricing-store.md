@@ -3,6 +3,8 @@
 "@dudousxd/nestjs-agent-store-mikro-orm": patch
 "@dudousxd/nestjs-agent-store-drizzle": patch
 "@dudousxd/nestjs-agent-testing": patch
+"@dudousxd/nestjs-agent-dashboard": patch
+"@dudousxd/nestjs-agent-telescope": patch
 ---
 
 Governance queries: add `spendByThread(range, limit)` (top threads by cost) and
@@ -11,3 +13,6 @@ Governance queries: add `spendByThread(range, limit)` (top threads by cost) and
 store modules accept a `pricingStore` option so a host can bind its own pricing
 table as the single source of cost truth for every governance surface. Default
 behavior (the store's own pricing table) is unchanged.
+
+The dashboard (`/ai-gateway`) and the Telescope Agent tab gain a "Top threads by
+cost" panel fed by `spendByThread`.

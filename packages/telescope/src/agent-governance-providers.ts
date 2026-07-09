@@ -3,6 +3,7 @@ import type {
   AgentGovernanceQueries,
   GovernanceRange,
   ModelSpendRow,
+  ThreadSpendRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_GOVERNANCE_QUERIES } from '@dudousxd/nestjs-agent-core';
@@ -47,6 +48,18 @@ interface ActorSpendTableRow {
   costUsd: number;
 }
 
+/** One row of the top-threads-by-cost table. */
+interface ThreadSpendTableRow {
+  title: string;
+  actorRef: string;
+  requests: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+/** Top threads by cost within the range, capped to this count. */
+const TOP_THREADS_LIMIT = 10;
+
 /** One point of the timeseries trend (Telescope core: `{ label } & Record<string, number>`). */
 interface UsageTrendTableRow {
   label: string;
@@ -64,6 +77,7 @@ function isGovernanceQueries(value: unknown): value is AgentGovernanceQueries {
     isRecord(value) &&
     typeof value.spendByModel === 'function' &&
     typeof value.spendByActor === 'function' &&
+    typeof value.spendByThread === 'function' &&
     typeof value.usageTrend === 'function' &&
     typeof value.recentToolCalls === 'function' &&
     typeof value.recentThreads === 'function'
@@ -148,6 +162,17 @@ export function toModelSpendRows(rows: ModelSpendRow[]): ModelSpendTableRow[] {
 /** Spend-by-actor as table rows. */
 export function toActorSpendRows(rows: ActorSpendRow[]): ActorSpendTableRow[] {
   return rows.map((row) => ({
+    actorRef: row.actorRef,
+    requests: row.requests,
+    totalTokens: row.totalTokens,
+    costUsd: roundCents(row.costUsd),
+  }));
+}
+
+/** Top-threads-by-cost as table rows. */
+export function toThreadSpendRows(rows: ThreadSpendRow[]): ThreadSpendTableRow[] {
+  return rows.map((row) => ({
+    title: row.title || row.threadId,
     actorRef: row.actorRef,
     requests: row.requests,
     totalTokens: row.totalTokens,
@@ -272,6 +297,21 @@ export function agentSpendByActorProvider(): DataProvider {
       }
       const byActor = await queries.spendByActor(resolveRange(query));
       return { segments: toActorSpendSegments(byActor) };
+    },
+  };
+}
+
+/** table → top threads by cost (title, actor, requests, tokens, cost). */
+export function agentTopThreadsTableProvider(): DataProvider {
+  return {
+    name: 'agent.threads.topSpend',
+    async resolve(query, ctx) {
+      const queries = resolveGovernanceQueries(ctx);
+      if (!queries) {
+        return { rows: [] };
+      }
+      const byThread = await queries.spendByThread(resolveRange(query), TOP_THREADS_LIMIT);
+      return { rows: toThreadSpendRows(byThread) };
     },
   };
 }

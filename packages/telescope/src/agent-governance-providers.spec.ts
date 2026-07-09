@@ -3,6 +3,7 @@ import type {
   AgentGovernanceQueries,
   GovernanceRange,
   ModelSpendRow,
+  ThreadSpendRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_GOVERNANCE_QUERIES } from '@dudousxd/nestjs-agent-core';
@@ -14,6 +15,7 @@ import {
   agentSpendByModelProvider,
   agentSpendTotalProvider,
   agentTokensTotalProvider,
+  agentTopThreadsTableProvider,
   agentUsageTrendProvider,
   resolveRange,
   shiftUtcDay,
@@ -21,6 +23,7 @@ import {
   toActorSpendSegments,
   toModelSpendRows,
   toModelSpendSegments,
+  toThreadSpendRows,
   toUsageTrendRows,
   totalCostUsd,
   totalTokens,
@@ -41,6 +44,18 @@ const TREND_POINTS: UsageTrendPoint[] = [
   { day: '2026-07-02', totalTokens: 300, costUsd: 0.004 },
 ];
 
+const THREAD_ROWS: ThreadSpendRow[] = [
+  {
+    threadId: 'th1',
+    title: 'Incident triage',
+    actorRef: 'user:1',
+    requests: 6,
+    totalTokens: 1_200,
+    costUsd: 0.9876,
+  },
+  { threadId: 'th2', title: '', actorRef: 'user:2', requests: 2, totalTokens: 300, costUsd: 0 },
+];
+
 /** A fully-implementing stub of the read-model; each method ignores its range and echoes fixtures. */
 function stubQueries(): AgentGovernanceQueries {
   return {
@@ -51,7 +66,7 @@ function stubQueries(): AgentGovernanceQueries {
       return ACTOR_ROWS;
     },
     async spendByThread(_range: GovernanceRange, _limit: number) {
-      return [];
+      return THREAD_ROWS;
     },
     async usageTrend(_range: GovernanceRange) {
       return TREND_POINTS;
@@ -112,6 +127,19 @@ describe('governance data-shaping', () => {
     expect(toActorSpendSegments(ACTOR_ROWS)).toEqual([{ label: 'user:1', value: 0.99 }]);
   });
 
+  it('shapes thread spend rows, falling back to threadId when title is blank', () => {
+    expect(toThreadSpendRows(THREAD_ROWS)).toEqual([
+      {
+        title: 'Incident triage',
+        actorRef: 'user:1',
+        requests: 6,
+        totalTokens: 1_200,
+        costUsd: 0.99,
+      },
+      { title: 'th2', actorRef: 'user:2', requests: 2, totalTokens: 300, costUsd: 0 },
+    ]);
+  });
+
   it('maps the usage trend to label-keyed timeseries rows', () => {
     expect(toUsageTrendRows(TREND_POINTS)).toEqual([
       { label: '2026-07-01', costUsd: 1.24, totalTokens: 1_500 },
@@ -164,6 +192,9 @@ describe('governance providers', () => {
     await expect(agentActorSpendTableProvider().resolve({}, ctx)).resolves.toEqual({
       rows: toActorSpendRows(ACTOR_ROWS),
     });
+    await expect(agentTopThreadsTableProvider().resolve({}, ctx)).resolves.toEqual({
+      rows: toThreadSpendRows(THREAD_ROWS),
+    });
   });
 
   it('degrade to empty-but-valid shapes when the host has not bound the read-model', async () => {
@@ -174,5 +205,6 @@ describe('governance providers', () => {
     await expect(agentModelSpendTableProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });
     await expect(agentUsageTrendProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });
     await expect(agentActorSpendTableProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });
+    await expect(agentTopThreadsTableProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });
   });
 });
