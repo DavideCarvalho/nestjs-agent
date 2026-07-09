@@ -55,6 +55,7 @@ export class AgentDiscoveryService implements OnModuleInit {
         : (meta.systemPrompt ?? 'You are a helpful assistant.');
     return {
       name: meta.name,
+      ...(meta.description !== undefined ? { description: meta.description } : {}),
       systemPrompt,
       ...(meta.tools !== undefined ? { tools: meta.tools } : {}),
       ...(meta.model !== undefined ? { modelId: meta.model } : {}),

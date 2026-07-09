@@ -199,6 +199,8 @@ export interface AgentRunInput {
  */
 export interface AgentDefinition {
   name: string;
+  /** Human-readable summary from `@Agent({ description })`. Surfaced by the `GET agents` catalog. */
+  description?: string;
   /** Base prompt for this agent. A flat string, or a {@link PromptBuilder} resolved per turn. */
   systemPrompt?: string | PromptBuilder;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
@@ -207,6 +209,17 @@ export interface AgentDefinition {
   delegatesTo?: string[];
   modelId?: string;
   maxSteps?: number;
+}
+
+/**
+ * The read-model the `GET agents` endpoint returns to a client — the safe public subset of an
+ * {@link AgentDefinition} so a host can render a persona picker instead of hardcoding one.
+ */
+export interface AgentCatalogEntry {
+  name: string;
+  description: string;
+  /** Whether this is the agent a turn uses when the caller names none. Omitted when not the default. */
+  isDefault?: boolean;
 }
 
 export interface ThreadSummary {

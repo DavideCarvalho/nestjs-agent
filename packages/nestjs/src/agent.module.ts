@@ -23,6 +23,7 @@ import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
 import { AgentService } from './agent.service.js';
+import { AgentsController } from './controller/agents.controller.js';
 import { ChatController } from './controller/chat.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
@@ -142,7 +143,13 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
   ];
 }
 
-const CONTROLLERS = [ChatController, ThreadsController, ToolCallController, QuotaController];
+const CONTROLLERS = [
+  ChatController,
+  ThreadsController,
+  ToolCallController,
+  QuotaController,
+  AgentsController,
+];
 
 /** Mount the controllers under `path` (Nest applies the prefix to their relative routes). */
 function routerFor(path: string): DynamicModule {
