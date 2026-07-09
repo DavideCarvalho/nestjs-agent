@@ -4,10 +4,11 @@ import type {
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
+  ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
-import { and, count, desc, eq, gte, isNull, lte } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   agentMessage,
@@ -146,12 +147,21 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
     const pricing = await this.loadPricing();
     const rows = await this.usageInRange(range);
-    const byActor = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
+    const byActor = new Map<
+      string,
+      { requests: number; totalTokens: number; costUsd: number; threadIds: Set<string> }
+    >();
     for (const row of rows) {
-      const bucket = byActor.get(row.actorRef) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
+      const bucket = byActor.get(row.actorRef) ?? {
+        requests: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        threadIds: new Set<string>(),
+      };
       bucket.requests += 1;
       bucket.totalTokens += row.inputTokens + row.outputTokens;
       bucket.costUsd += rowCost(pricing, row);
+      bucket.threadIds.add(row.threadId);
       byActor.set(row.actorRef, bucket);
     }
     const result: ActorSpendRow[] = [];
@@ -161,12 +171,58 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         requests: bucket.requests,
         totalTokens: bucket.totalTokens,
         costUsd: bucket.costUsd,
+        threadCount: bucket.threadIds.size,
       });
     }
     result.sort(
       (left, right) => right.costUsd - left.costUsd || left.actorRef.localeCompare(right.actorRef),
     );
     return result;
+  }
+
+  /**
+   * Top threads by spend within the range, highest cost first, capped at `limit`. Usage rows for a
+   * soft-deleted thread (`deletedAt` set) are excluded — the thread no longer surfaces as a
+   * governance target even though its ledger rows survive.
+   */
+  async spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]> {
+    const pricing = await this.loadPricing();
+    const rows = await this.usageInRange(range);
+    const byThread = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
+    for (const row of rows) {
+      const bucket = byThread.get(row.threadId) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
+      bucket.requests += 1;
+      bucket.totalTokens += row.inputTokens + row.outputTokens;
+      bucket.costUsd += rowCost(pricing, row);
+      byThread.set(row.threadId, bucket);
+    }
+    if (byThread.size === 0) {
+      return [];
+    }
+    const threads = await this.db
+      .select()
+      .from(agentThread)
+      .where(and(inArray(agentThread.id, [...byThread.keys()]), isNull(agentThread.deletedAt)));
+    const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
+    const result: ThreadSpendRow[] = [];
+    for (const [threadId, bucket] of byThread) {
+      const thread = threadsById.get(threadId);
+      if (thread === undefined) {
+        continue;
+      }
+      result.push({
+        threadId,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        requests: bucket.requests,
+        totalTokens: bucket.totalTokens,
+        costUsd: bucket.costUsd,
+      });
+    }
+    result.sort(
+      (left, right) => right.costUsd - left.costUsd || left.threadId.localeCompare(right.threadId),
+    );
+    return result.slice(0, limit);
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {

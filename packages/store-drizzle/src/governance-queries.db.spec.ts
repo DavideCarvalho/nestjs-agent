@@ -177,13 +177,43 @@ describe('DrizzleGovernanceQueries (better-sqlite3)', () => {
     expect(alice?.requests).toBe(2);
     expect(alice?.totalTokens).toBe(4_500_000);
     expect(alice?.costUsd).toBeCloseTo(10.5, 6);
+    // alice's two in-range rows (usage-a, usage-b) are both on thread-alice
+    expect(alice?.threadCount).toBe(1);
 
     const bob = rows.find((row) => row.actorRef === 'bob');
     expect(bob?.requests).toBe(1);
     expect(bob?.totalTokens).toBe(600_000);
     expect(bob?.costUsd).toBeCloseTo(3.0, 6);
+    expect(bob?.threadCount).toBe(1);
 
     expect(rows[0]?.actorRef).toBe('alice');
+  });
+
+  it('spendByThread rolls up per-thread tokens + cost, highest spend first, capped at limit', async () => {
+    const rows = await queries.spendByThread(range, 10);
+    expect(rows).toHaveLength(2);
+
+    expect(rows[0]).toMatchObject({
+      threadId: 'thread-alice',
+      title: 'Alice chat',
+      actorRef: 'alice',
+      requests: 2,
+      totalTokens: 4_500_000,
+    });
+    expect(rows[0]?.costUsd).toBeCloseTo(10.5, 6);
+
+    expect(rows[1]).toMatchObject({
+      threadId: 'thread-bob',
+      title: 'Bob chat',
+      actorRef: 'bob',
+      requests: 1,
+      totalTokens: 600_000,
+    });
+    expect(rows[1]?.costUsd).toBeCloseTo(3.0, 6);
+
+    const capped = await queries.spendByThread(range, 1);
+    expect(capped).toHaveLength(1);
+    expect(capped[0]?.threadId).toBe('thread-alice');
   });
 
   it('usageTrend buckets tokens + cost by UTC day, ascending, excluding out-of-range rows', async () => {
@@ -380,5 +410,137 @@ describe('DrizzleGovernanceQueries cache pricing (better-sqlite3)', () => {
   it('falls back to the input rate for cache tokens when the pricing row has no cache rates', async () => {
     const rows = await cacheQueries.spendByModel(cacheRange);
     expect(rows.find((row) => row.modelId === 'gpt-flat')?.costUsd).toBeCloseTo(10.5, 6);
+  });
+});
+
+// A self-contained db covering spendByThread ranking/cap and multi-thread threadCount, including a
+// soft-deleted thread that must be excluded from spendByThread despite having in-range usage.
+describe('DrizzleGovernanceQueries spendByThread + threadCount (better-sqlite3)', () => {
+  let threadDb: BetterSQLite3Database<typeof agentSchema>;
+  let threadQueries: DrizzleGovernanceQueries;
+  const threadRange = { fromDay: '2026-07-08', toDay: '2026-07-08' };
+
+  beforeAll(async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    threadDb = drizzle(sqlite, { schema: agentSchema });
+    await ensureAgentSchema(threadDb);
+    threadQueries = new DrizzleGovernanceQueries(threadDb);
+
+    await threadDb.insert(agentModelPricing).values({
+      id: 'price-thread',
+      modelId: 'gpt-x',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+      effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+      isCurrent: true,
+    });
+
+    // erin uses two threads: thread-x (highest spend) and thread-y (lower spend) → threadCount 2.
+    // frank uses a single, lowest-spend thread. gina's thread is soft-deleted.
+    await threadDb.insert(agentThread).values([
+      {
+        id: 'thread-x',
+        actorRef: 'erin',
+        title: 'Thread X',
+        createdAt: new Date('2026-07-08T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-08T09:00:00.000Z'),
+      },
+      {
+        id: 'thread-y',
+        actorRef: 'erin',
+        title: 'Thread Y',
+        createdAt: new Date('2026-07-08T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-08T09:00:00.000Z'),
+      },
+      {
+        id: 'thread-z',
+        actorRef: 'frank',
+        title: 'Thread Z',
+        createdAt: new Date('2026-07-08T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-08T09:00:00.000Z'),
+      },
+      {
+        id: 'thread-deleted',
+        actorRef: 'gina',
+        title: 'Deleted thread',
+        createdAt: new Date('2026-07-08T09:00:00.000Z'),
+        updatedAt: new Date('2026-07-08T09:00:00.000Z'),
+        deletedAt: new Date('2026-07-08T10:00:00.000Z'),
+      },
+    ]);
+
+    await threadDb.insert(agentTokenUsage).values([
+      // thread-x: 1M/500k → 1*3 + 0.5*15 = 10.5
+      {
+        id: 'usage-x',
+        threadId: 'thread-x',
+        actorRef: 'erin',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 1_000_000,
+        outputTokens: 500_000,
+        createdAt: new Date('2026-07-08T09:05:00.000Z'),
+      },
+      // thread-y: 500k/100k → 0.5*3 + 0.1*15 = 3.0
+      {
+        id: 'usage-y',
+        threadId: 'thread-y',
+        actorRef: 'erin',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 500_000,
+        outputTokens: 100_000,
+        createdAt: new Date('2026-07-08T09:10:00.000Z'),
+      },
+      // thread-z: 200k/100k → 0.2*3 + 0.1*15 = 2.1
+      {
+        id: 'usage-z',
+        threadId: 'thread-z',
+        actorRef: 'frank',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 200_000,
+        outputTokens: 100_000,
+        createdAt: new Date('2026-07-08T09:15:00.000Z'),
+      },
+      // thread-deleted: would be the highest spend of all, but must not surface anywhere.
+      {
+        id: 'usage-deleted',
+        threadId: 'thread-deleted',
+        actorRef: 'gina',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 2_000_000,
+        outputTokens: 2_000_000,
+        createdAt: new Date('2026-07-08T09:20:00.000Z'),
+      },
+    ]);
+  });
+
+  it('spendByThread ranks threads highest cost first and excludes soft-deleted threads', async () => {
+    const rows = await threadQueries.spendByThread(threadRange, 10);
+    expect(rows.map((row) => row.threadId)).toEqual(['thread-x', 'thread-y', 'thread-z']);
+
+    expect(rows[0]).toMatchObject({ title: 'Thread X', actorRef: 'erin', requests: 1 });
+    expect(rows[0]?.totalTokens).toBe(1_500_000);
+    expect(rows[0]?.costUsd).toBeCloseTo(10.5, 6);
+
+    expect(rows[1]).toMatchObject({ title: 'Thread Y', actorRef: 'erin', requests: 1 });
+    expect(rows[1]?.costUsd).toBeCloseTo(3.0, 6);
+
+    expect(rows[2]).toMatchObject({ title: 'Thread Z', actorRef: 'frank', requests: 1 });
+    expect(rows[2]?.costUsd).toBeCloseTo(2.1, 6);
+  });
+
+  it('spendByThread caps at limit', async () => {
+    const rows = await threadQueries.spendByThread(threadRange, 2);
+    expect(rows.map((row) => row.threadId)).toEqual(['thread-x', 'thread-y']);
+  });
+
+  it('spendByActor reports threadCount across the actor distinct threads', async () => {
+    const rows = await threadQueries.spendByActor(threadRange);
+    expect(rows.find((row) => row.actorRef === 'erin')?.threadCount).toBe(2);
+    expect(rows.find((row) => row.actorRef === 'frank')?.threadCount).toBe(1);
   });
 });
