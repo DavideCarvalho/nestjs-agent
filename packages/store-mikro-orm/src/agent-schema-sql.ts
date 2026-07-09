@@ -1,4 +1,4 @@
-import { MikroORM } from '@mikro-orm/core';
+import { type Configuration, MikroORM } from '@mikro-orm/core';
 import { agentEntities } from './entities';
 
 export interface AgentSchemaSqlOptions {
@@ -22,12 +22,12 @@ export interface AgentSchemaSqlOptions {
  * `schema.update`, which introspects and can deadlock a shared boot).
  *
  * Drop it into a migration to keep the agent tables in lockstep with the lib as it evolves. Pass
- * the host `MikroORM` instance (migrations run with one available):
+ * either a `MikroORM` instance or, inside a MikroORM `Migration`, the `this.config` it exposes:
  *
  * ```ts
  * export class Migration2026… extends Migration {
  *   override async up(): Promise<void> {
- *     for (const sql of await agentSchemaSql(orm)) {
+ *     for (const sql of await agentSchemaSql(this.config)) {
  *       this.addSql(sql);
  *     }
  *   }
@@ -35,12 +35,15 @@ export interface AgentSchemaSqlOptions {
  * ```
  */
 export async function agentSchemaSql(
-  orm: MikroORM,
+  source: MikroORM | Configuration,
   options?: AgentSchemaSqlOptions,
 ): Promise<string[]> {
+  // Accept either an ORM (has `.config`) or a Configuration directly — a `Migration` only gets the
+  // latter via `this.config`, and that's the primary place this helper is called.
+  const config = 'config' in source ? source.config : source;
   const isolated = await MikroORM.init({
-    driver: orm.config.get('driver'),
-    dbName: orm.config.get('dbName'),
+    driver: config.get('driver'),
+    dbName: config.get('dbName'),
     entities: agentEntities(),
     allowGlobalContext: true,
   });
