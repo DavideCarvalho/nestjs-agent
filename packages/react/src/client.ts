@@ -1,7 +1,4 @@
-import type { Persona, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
-
-/** The trimmed persona shape returned by `/agent/threads/personas/catalog`. */
-export type PersonaCatalogEntry = Pick<Persona, 'id' | 'label'>;
+import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
@@ -64,10 +61,6 @@ export class AgentClient {
       'POST',
       `/agent/threads/${encodeURIComponent(threadId)}/fork-from/${encodeURIComponent(messageId)}`,
     );
-  }
-
-  getPersonaCatalog(): Promise<PersonaCatalogEntry[]> {
-    return this.request<PersonaCatalogEntry[]>('GET', '/agent/threads/personas/catalog');
   }
 
   getQuotaToday(): Promise<QuotaToday> {

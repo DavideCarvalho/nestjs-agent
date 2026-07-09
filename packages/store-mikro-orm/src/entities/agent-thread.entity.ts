@@ -9,7 +9,6 @@ export class AgentThread {
   actorRef!: string;
   tenantRef?: string | null;
   title!: string;
-  persona!: string;
   transient!: boolean;
   activeStreamId?: string | null;
   createdAt!: Date;
@@ -29,7 +28,6 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
       actorRef: { type: 'string', fieldName: 'actor_ref', ...str },
       tenantRef: { type: 'string', nullable: true, fieldName: 'tenant_ref', ...str },
       title: { type: 'string', ...str },
-      persona: { type: 'string', default: 'default', ...str },
       transient: { type: 'boolean', default: false },
       activeStreamId: { type: 'string', nullable: true, fieldName: 'active_stream_id', ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },

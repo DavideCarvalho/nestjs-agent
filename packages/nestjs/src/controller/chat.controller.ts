@@ -13,7 +13,6 @@ interface ChatBody {
   threadId?: string;
   /** Name of the agent to run (orchestrator or a sub-agent). Defaults to the module's default. */
   agent?: string;
-  persona?: string;
   pageContext?: PageContext;
   /** Re-run the last exchange on `threadId` instead of adding a new message. */
   regenerate?: boolean;
@@ -34,7 +33,6 @@ export class ChatController {
       message: body.message,
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
-      ...(body.persona !== undefined ? { personaId: body.persona } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
     });

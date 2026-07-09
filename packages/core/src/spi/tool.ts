@@ -1,4 +1,4 @@
-import type { Actor, PageContext, Persona } from '../types.js';
+import type { Actor, PageContext } from '../types.js';
 
 /**
  * Per-invocation context handed to a tool handler. Host-supplied bits are optional. Identity lives
@@ -10,7 +10,6 @@ export interface AiToolCtx {
   threadId: string;
   runId: string;
   requestId: string;
-  persona?: Persona;
   pageContext?: PageContext;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;

@@ -52,7 +52,6 @@ export class AgentRunWorkflow {
         const subThreadId = await ctx.step(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
             actor: input.actor,
-            persona: 'default',
             transient: true,
           });
           return thread.id;

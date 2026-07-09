@@ -3,7 +3,7 @@ import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
-import { AgentClient, type PersonaCatalogEntry, type QuotaToday } from './client.js';
+import { AgentClient, type QuotaToday } from './client.js';
 
 export interface UseAgentChatOptions {
   /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
@@ -30,8 +30,6 @@ export interface UseAgentChatOptions {
    * mount (no id) never fires a doomed resume GET. Omitted → no resume.
    */
   resumeRunId?: string;
-  /** Active persona id sent on every turn. */
-  persona?: string;
   /** Read at every send to capture a page snapshot for the page-assistant. */
   getPageContext?: () => Record<string, unknown> | null;
   /** Fired after each streamed turn finishes (e.g. to refetch the sidebar). */
@@ -47,8 +45,8 @@ interface AddToolResultArgs {
 /**
  * Generalized `useChat` wiring for the nestjs-agent backend. Wraps the
  * AI SDK v7 hook with `AgentChatTransport`, plus thread list/load/delete/
- * fork, persona catalog, quota, cancel, and HITL approve/reject — all
- * driven through `AgentClient`. Mirrors flip's `useAdminChat`, generalized.
+ * fork, quota, cancel, and HITL approve/reject — all driven through
+ * `AgentClient`. Mirrors flip's `useAdminChat`, generalized.
  */
 export function useAgentChat(options: UseAgentChatOptions) {
   const latest = useRef(options);
@@ -93,7 +91,6 @@ export function useAgentChat(options: UseAgentChatOptions) {
         regenerateNext.current = false;
         return {
           ...(current.threadId !== undefined ? { threadId: current.threadId } : {}),
-          ...(current.persona !== undefined ? { persona: current.persona } : {}),
           ...(pageContext ? { pageContext } : {}),
           ...(regenerate ? { regenerate: true } : {}),
         };
@@ -132,7 +129,6 @@ export function useAgentChat(options: UseAgentChatOptions) {
   );
 
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [personaCatalog, setPersonaCatalog] = useState<PersonaCatalogEntry[]>([]);
   const [quota, setQuota] = useState<QuotaToday | null>(null);
 
   const loadThreads = useCallback(async (): Promise<ThreadSummary[]> => {
@@ -159,12 +155,6 @@ export function useAgentChat(options: UseAgentChatOptions) {
       client.forkFromMessage(threadId, messageId),
     [client],
   );
-
-  const loadPersonaCatalog = useCallback(async (): Promise<PersonaCatalogEntry[]> => {
-    const catalog = await client.getPersonaCatalog();
-    setPersonaCatalog(catalog);
-    return catalog;
-  }, [client]);
 
   const loadQuota = useCallback(async (): Promise<QuotaToday> => {
     const today = await client.getQuotaToday();
@@ -229,8 +219,6 @@ export function useAgentChat(options: UseAgentChatOptions) {
     loadThread,
     deleteThread,
     forkThread,
-    personaCatalog,
-    loadPersonaCatalog,
     quota,
     loadQuota,
     cancel,

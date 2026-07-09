@@ -13,8 +13,8 @@ import {
   type Decision,
   DefaultRolesPolicy,
   type ModelProvider,
-  type Persona,
   type PromptBuilder,
+  type PromptContributor,
   ToolRegistry,
   runAgentLoop,
 } from './index.js';
@@ -63,7 +63,7 @@ async function drain(sink: InMemoryTokenStreamSink, runId: string): Promise<stri
 
 interface RunOverrides {
   systemPrompt?: string | PromptBuilder;
-  persona?: Persona;
+  promptContributors?: PromptContributor[];
   model?: ModelProvider;
 }
 
@@ -76,10 +76,7 @@ async function run(
 ) {
   const store = new InMemoryAgentStore();
   const sink = new InMemoryTokenStreamSink();
-  const thread = await store.createThread({
-    actor: { id: 'u1', roles: ['ADMIN'] },
-    persona: 'default',
-  });
+  const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
   const runId = 'run-1';
 
   const deps: AgentLoopDeps = {
@@ -91,6 +88,9 @@ async function run(
     day: '2026-06-30',
     systemPrompt: overrides.systemPrompt ?? 'You are a test agent.',
     ...(quota !== undefined ? { quota } : {}),
+    ...(overrides.promptContributors !== undefined
+      ? { promptContributors: overrides.promptContributors }
+      : {}),
   };
   const hooks: AgentLoopHooks = {
     runId,
@@ -106,7 +106,6 @@ async function run(
       threadId: thread.id,
       actor: { id: 'u1', roles: ['ADMIN'] },
       userText: 'hi',
-      ...(overrides.persona !== undefined ? { persona: overrides.persona } : {}),
     },
     hooks,
   );
@@ -230,12 +229,15 @@ describe('runAgentLoop', () => {
     expect(result.text).toBe('dynamic prompt for u1');
   });
 
-  it('lets a persona PromptBuilder wrap the agent base prompt', async () => {
-    const persona: Persona = {
-      id: 'analyst',
-      label: 'Analyst',
-      systemPrompt: (ctx) => `${ctx.basePrompt}\n\nActing as analyst for ${ctx.actor.id}.`,
-    };
+  it('composes the base prompt with ordered contributors, skipping null/empty sections', async () => {
+    // Exercises both skip paths (`null` and an empty string) alongside two real sections, and
+    // asserts contributors run in registration order AFTER the agent's own base prompt.
+    const contributors: PromptContributor[] = [
+      () => 'Section A: base-scope legend.',
+      () => null,
+      () => '',
+      (ctx) => `Section B: acting for ${ctx.actor.id} as agent "${ctx.agentName}".`,
+    ];
     const { result } = await run(
       (args) => ({ text: args.system }),
       undefined,
@@ -243,10 +245,32 @@ describe('runAgentLoop', () => {
       undefined,
       {
         systemPrompt: 'Base agent prompt.',
-        persona,
+        promptContributors: contributors,
       },
     );
-    expect(result.text).toBe('Base agent prompt.\n\nActing as analyst for u1.');
+    expect(result.text).toBe(
+      'Base agent prompt.' +
+        '\n\nSection A: base-scope legend.' +
+        '\n\nSection B: acting for u1 as agent "default".',
+    );
+  });
+
+  it('resolves an async contributor and still honors ordering', async () => {
+    const contributors: PromptContributor[] = [
+      async (ctx) => `Async section for ${ctx.actor.id}`,
+      () => 'Sync section',
+    ];
+    const { result } = await run(
+      (args) => ({ text: args.system }),
+      undefined,
+      undefined,
+      undefined,
+      {
+        systemPrompt: 'Base.',
+        promptContributors: contributors,
+      },
+    );
+    expect(result.text).toBe('Base.\n\nAsync section for u1\n\nSync section');
   });
 
   it('delegates to a sub-agent via ctx.runAgent and emits agent.delegated', async () => {

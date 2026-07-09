@@ -5,7 +5,8 @@ export interface AgentRunStarted {
   runId: string;
   threadId: string;
   actorId: string;
-  persona?: string;
+  /** Which agent is handling the run. */
+  agentName?: string;
 }
 export interface AgentMessageEvent {
   runId: string;

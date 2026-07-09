@@ -78,12 +78,12 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     for (const definition of this.agents.list()) {
       for (const target of definition.delegatesTo ?? []) {
         const targetDefinition = this.agents.get(target);
-        // A dangling `delegatesTo` (typo, or a sub-agent never registered via forFeature) would
-        // otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
+        // A dangling handoff target (a `@Agent({ handoff })` class that isn't itself an `@Agent`)
+        // would otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
         // default agent at runtime — a privilege-escalation footgun. Fail the boot instead.
         if (targetDefinition === undefined) {
           throw new Error(
-            `Agent "${definition.name}" delegatesTo "${target}", which is not a registered agent. Register it via AgentModule.forFeature([...]) or fix the name.`,
+            `Agent "${definition.name}" hands off to "${target}", which is not a registered @Agent. Declare it as an @Agent provider or fix the reference.`,
           );
         }
         const name = delegateToolName(target);

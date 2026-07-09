@@ -96,7 +96,6 @@ export class InMemoryAgentStore implements AgentStore {
       id,
       actorRef: input.actor.id,
       title: input.title ?? 'New chat',
-      persona: input.persona,
       transient: input.transient ?? false,
       createdAt: ts,
       updatedAt: ts,
@@ -143,7 +142,6 @@ export class InMemoryAgentStore implements AgentStore {
       id,
       actorRef: source.actorRef,
       title: source.title,
-      persona: source.persona,
       transient: false,
       createdAt: ts,
       updatedAt: ts,
@@ -216,6 +214,7 @@ export class InMemoryAgentStore implements AgentStore {
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
     };
     row.messages.push(message);
     row.updatedAt = message.createdAt;
@@ -358,7 +357,6 @@ export class InMemoryAgentStore implements AgentStore {
     return {
       id: row.id,
       title: row.title,
-      persona: row.persona,
       transient: row.transient,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

@@ -13,8 +13,8 @@ export async function filterToolsByRole(
   return checked.filter((entry) => entry.allowed).map((entry) => entry.tool);
 }
 
-/** Second filter layer: if the persona pins an allow-list, keep only those tool names. */
-export function personaFilterTools(
+/** Second filter layer: if the agent pins an allow-list, keep only those tool names. */
+export function filterToolsByAllowList(
   tools: ToolSpec[],
   allowedTools: string[] | undefined,
 ): ToolSpec[] {

@@ -120,32 +120,31 @@ export interface PageContext {
 }
 
 /**
- * Inputs a {@link PromptBuilder} may use to compose the effective system prompt for a turn.
- * `basePrompt` is the agent's own (already-resolved) base prompt, so a persona builder can wrap
- * or extend it rather than replace it.
+ * Inputs a {@link PromptBuilder} or {@link PromptContributor} may use to compose the system prompt
+ * for a turn. Resolved once per turn from stable inputs (actor / agent / pageContext) so it stays
+ * replay-safe.
  */
 export interface PromptContext {
   actor: Actor;
-  persona?: Persona;
+  /** The selected agent's name. */
+  agentName: string;
   pageContext?: PageContext;
-  basePrompt: string;
 }
 
 /**
- * A dynamic system prompt. Return a string (optionally async) built from the turn's context —
- * e.g. injecting the actor, the current page, or a data-shape description. The loop resolves it
- * once per turn from stable inputs (actor/persona/pageContext), so it stays replay-safe.
+ * An agent's base system prompt. Return a string (optionally async) built from the turn's context —
+ * e.g. injecting the actor, the current page, or a data-shape description. Set on an `@Agent` class
+ * via a `@SystemPrompt()` method (or a flat string).
  */
 export type PromptBuilder = (ctx: PromptContext) => string | Promise<string>;
 
-export interface Persona {
-  id: string;
-  label: string;
-  /** A flat prompt, or a {@link PromptBuilder} composed per request from {@link PromptContext}. */
-  systemPrompt: string | PromptBuilder;
-  /** If set, only these tool names are offered (after role filtering). */
-  allowedTools?: string[];
-}
+/**
+ * A cross-agent system-prompt contributor. Returns an ordered section to APPEND to the composed
+ * prompt (after the agent's base), or `null` to contribute nothing this turn — so conditional
+ * sections (base-scope, a mentions legend, schema hints) stay clean when they don't apply.
+ * Registered app-wide via `@SystemPromptContributor()`; the loop runs every contributor in order.
+ */
+export type PromptContributor = (ctx: PromptContext) => string | null | Promise<string | null>;
 
 /** Everything needed to run one agent turn. */
 export interface AgentRunInput {
@@ -153,7 +152,6 @@ export interface AgentRunInput {
   actor: Actor;
   /** The latest user message text. */
   userText: string;
-  persona?: Persona;
   pageContext?: PageContext;
   /** YYYY-MM-DD stamped by the runner so quota/day stays deterministic under durable replay. */
   day?: string;
@@ -180,10 +178,11 @@ export interface AgentRunInput {
 }
 
 /**
- * A named agent: its prompt, the tools it may use, and its personas. Multiple definitions are
- * registered via `AgentModule.forFeature([...])`; an orchestrator delegates to others through
- * `ctx.runAgent(name, task)`. Model/store/sink/governance are shared from the module unless
- * overridden here.
+ * A named agent: its prompt, the tools it may use, and who it can hand off to. This is the
+ * internal record the loop and `AgentDepsFactory` consume; in an app it is authored as an
+ * `@Agent`-decorated class and populated into the `AgentRegistry` by discovery (name, base prompt
+ * from `@SystemPrompt`, tool allow-list, handoff targets). An orchestrator hands off to others via
+ * `ctx.handoff(OtherAgent)`. Model/store/sink/governance are shared from the module.
  */
 export interface AgentDefinition {
   name: string;
@@ -191,10 +190,8 @@ export interface AgentDefinition {
   systemPrompt?: string | PromptBuilder;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
   tools?: string[];
-  /** Names of other agents this agent may delegate to (auto-registered as `agent`-kind tools). */
+  /** Names of other agents this agent may hand off to (auto-registered as `agent`-kind tools). */
   delegatesTo?: string[];
-  personas?: Persona[];
-  defaultPersona?: string;
   modelId?: string;
   maxSteps?: number;
 }
@@ -202,7 +199,6 @@ export interface AgentDefinition {
 export interface ThreadSummary {
   id: string;
   title: string;
-  persona: string;
   transient: boolean;
   createdAt: string;
   updatedAt: string;
@@ -213,6 +209,8 @@ export interface StoredMessage {
   id: string;
   role: MessageRole;
   content: string;
+  /** Which agent produced this message (assistant messages) — provenance for replay / UI / telescope. */
+  agentName?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
   followUps?: string[];

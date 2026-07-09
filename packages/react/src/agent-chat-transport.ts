@@ -25,9 +25,9 @@ export interface AgentChatTransportOptions {
   /** Named agent to run the turn (backend `agent` field). */
   agent?: string;
   /**
-   * Extra body fields evaluated per send — the hook injects `threadId`,
-   * `persona`, and `pageContext` through this. Returned object is spread
-   * into the request body after the SDK's own `body`.
+   * Extra body fields evaluated per send — the hook injects `threadId`
+   * and `pageContext` through this. Returned object is spread into the
+   * request body after the SDK's own `body`.
    */
   getBody?: () => Record<string, unknown>;
   /**

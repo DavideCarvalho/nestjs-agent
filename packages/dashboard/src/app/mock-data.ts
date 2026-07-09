@@ -152,7 +152,7 @@ export const MOCK_LIVE_EVENTS: FeedEvent[] = [
     id: 'e1',
     event: 'run.started',
     ts: Date.now() - 2000,
-    payload: { runId: 'r-9f2', persona: 'analyst' },
+    payload: { runId: 'r-9f2', agentName: 'analyst' },
   },
   {
     id: 'e2',

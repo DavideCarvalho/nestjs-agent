@@ -5,6 +5,7 @@ import {
   type Actor,
   type AiToolCtx,
   DefaultRolesPolicy,
+  filterToolsByAllowList,
   ToolForbiddenError,
   ToolInputInvalidError,
   ToolRegistry,
@@ -30,39 +31,38 @@ const upperCityValibotLike: StandardSchemaV1<{ city: string }, { city: string }>
 
 function ctxFor(actor: Actor): AiToolCtx {
   return {
-    actorId: actor.id,
+    actor,
     threadId: 't1',
     runId: 'r1',
     requestId: 'r1',
-    actor,
   };
+}
+
+function registry(): ToolRegistry {
+  const reg = new ToolRegistry();
+  reg.register(
+    {
+      name: 'getWeather',
+      kind: 'read',
+      description: 'weather',
+      inputSchema: z.object({ city: z.string() }),
+    },
+    { execute: async (input: { city: string }) => ({ tempC: 21, city: input.city }) },
+  );
+  reg.register(
+    {
+      name: 'purgeCache',
+      kind: 'action',
+      description: 'purge',
+      inputSchema: z.object({ key: z.string() }),
+    },
+    { execute: async () => ({ purged: true }) },
+  );
+  return reg;
 }
 
 describe('ToolRegistry', () => {
   const policy = new DefaultRolesPolicy();
-
-  function registry(): ToolRegistry {
-    const reg = new ToolRegistry();
-    reg.register(
-      {
-        name: 'getWeather',
-        kind: 'read',
-        description: 'weather',
-        inputSchema: z.object({ city: z.string() }),
-      },
-      { execute: async (input: { city: string }) => ({ tempC: 21, city: input.city }) },
-    );
-    reg.register(
-      {
-        name: 'purgeCache',
-        kind: 'action',
-        description: 'purge',
-        inputSchema: z.object({ key: z.string() }),
-      },
-      { execute: async () => ({ purged: true }) },
-    );
-    return reg;
-  }
 
   it('offers neutral definitions for an allowed actor (no execute leaks)', async () => {
     const defs = await registry().definitionsFor({ id: 'u1', roles: ['ADMIN'] }, policy);
@@ -75,7 +75,7 @@ describe('ToolRegistry', () => {
     expect(defs).toHaveLength(0);
   });
 
-  it('applies the persona allow-list on top of role filtering', async () => {
+  it('applies the agent tool allow-list on top of role filtering', async () => {
     const defs = await registry().definitionsFor({ id: 'u1', roles: ['ADMIN'] }, policy, [
       'getWeather',
     ]);
@@ -132,5 +132,26 @@ describe('ToolRegistry', () => {
     await expect(
       reg.invoke('echoCity', { city: 42 }, ctxFor({ id: 'u1', roles: ['ADMIN'] }), policy),
     ).rejects.toBeInstanceOf(ToolInputInvalidError);
+  });
+});
+
+describe('filterToolsByAllowList', () => {
+  const specs = registry().allSpecs();
+
+  it('returns every tool unchanged when no allow-list is given', () => {
+    expect(filterToolsByAllowList(specs, undefined).map((spec) => spec.name).sort()).toEqual([
+      'getWeather',
+      'purgeCache',
+    ]);
+  });
+
+  it('keeps only the named tools, in registry order, dropping unknown names', () => {
+    expect(
+      filterToolsByAllowList(specs, ['purgeCache', 'notRegistered']).map((spec) => spec.name),
+    ).toEqual(['purgeCache']);
+  });
+
+  it('returns no tools for an empty allow-list', () => {
+    expect(filterToolsByAllowList(specs, [])).toEqual([]);
   });
 });

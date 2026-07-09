@@ -93,7 +93,7 @@ export class InlineAgentRunner implements AgentRunner {
     depth: number,
     sinkRunId: string,
   ): Promise<{ text: string }> {
-    const subThread = await this.store.createThread({ actor, persona: 'default', transient: true });
+    const subThread = await this.store.createThread({ actor, transient: true });
     const runId = crypto.randomUUID();
     // Mark the subthread as streaming THIS sub-run so a human approval routes back here
     // (runForToolCall → subthread.activeStreamId → this runId).

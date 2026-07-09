@@ -1,5 +1,6 @@
 import {
   AGENT_MODEL,
+  AGENT_PROMPT_CONTRIBUTORS,
   AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
@@ -10,7 +11,7 @@ import {
   AgentRegistry,
   type AgentStore,
   type ModelProvider,
-  type Persona,
+  type PromptContributor,
   type QuotaStore,
   type RolesPolicy,
   type TokenStreamSink,
@@ -21,12 +22,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 
-/** The synthesized `agent`-kind tool name an orchestrator uses to delegate to `target`. */
+/** The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`. */
 export function delegateToolName(target: string): string {
   return `ask_${target.replace(/[^a-zA-Z0-9]+/g, '_')}`;
 }
 
-/** Builds the per-agent loop deps. The single-agent case is just the `default` definition. */
+/** Builds the per-agent loop deps. The single-agent case is just the one registered `@Agent`. */
 @Injectable()
 export class AgentDepsFactory {
   constructor(
@@ -37,11 +38,20 @@ export class AgentDepsFactory {
     @Inject(AGENT_ROLES_POLICY) private readonly rolesPolicy: RolesPolicy,
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
     @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
+    @Inject(AGENT_PROMPT_CONTRIBUTORS) private readonly promptContributors: PromptContributor[],
     @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
   ) {}
 
+  /**
+   * The agent a turn uses when the caller names none: the explicit `defaultAgent` option, else the
+   * sole registered `@Agent` when there is exactly one, else `'default'` (a bare assistant).
+   */
   defaultAgentName(): string {
-    return this.options.defaultAgent?.name ?? 'default';
+    if (this.options.defaultAgent !== undefined) {
+      return this.options.defaultAgent;
+    }
+    const registered = this.agents.list();
+    return registered.length === 1 ? (registered[0]?.name ?? 'default') : 'default';
   }
 
   private effectiveTools(definition: AgentDefinition | undefined): string[] | undefined {
@@ -58,10 +68,6 @@ export class AgentDepsFactory {
   forAgent(agentName?: string): AgentDeps {
     const name = agentName ?? this.defaultAgentName();
     const definition = this.agents.get(name);
-    const personas = new Map<string, Persona>();
-    for (const persona of definition?.personas ?? []) {
-      personas.set(persona.id, persona);
-    }
     const toolAllowList = this.effectiveTools(definition);
     const followUpsCount = this.followUpsCount();
     const retrieval = this.options.retrieval;
@@ -71,10 +77,9 @@ export class AgentDepsFactory {
       sink: this.sink,
       rolesPolicy: this.rolesPolicy,
       registry: this.registry,
+      promptContributors: this.promptContributors,
       systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',
       maxSteps: definition?.maxSteps ?? 8,
-      personas,
-      defaultPersona: definition?.defaultPersona ?? 'default',
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),

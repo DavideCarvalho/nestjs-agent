@@ -54,7 +54,6 @@ beforeAll(async () => {
       id: 'thread-alice',
       actorRef: 'alice',
       title: 'Alice chat',
-      persona: 'default',
       createdAt: new Date('2026-07-01T09:00:00.000Z'),
       updatedAt: new Date('2026-07-02T09:00:00.000Z'),
     },
@@ -62,7 +61,6 @@ beforeAll(async () => {
       id: 'thread-bob',
       actorRef: 'bob',
       title: 'Bob chat',
-      persona: 'default',
       createdAt: new Date('2026-07-02T09:00:00.000Z'),
       updatedAt: new Date('2026-07-02T10:00:00.000Z'),
     },
@@ -255,7 +253,6 @@ describe('DrizzleGovernanceQueries reported cost (better-sqlite3)', () => {
       id: 'thread-carol',
       actorRef: 'carol',
       title: 'Carol chat',
-      persona: 'default',
       createdAt: new Date('2026-07-05T09:00:00.000Z'),
       updatedAt: new Date('2026-07-05T09:00:00.000Z'),
     });
@@ -340,7 +337,6 @@ describe('DrizzleGovernanceQueries cache pricing (better-sqlite3)', () => {
       id: 'thread-cache',
       actorRef: 'dave',
       title: 'Cache chat',
-      persona: 'default',
       createdAt: new Date('2026-07-06T09:00:00.000Z'),
       updatedAt: new Date('2026-07-06T09:00:00.000Z'),
     });

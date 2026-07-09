@@ -4,6 +4,7 @@ import {
   AGENT_DURABLE_RUNNER,
   AGENT_MODEL,
   AGENT_OPTIONS,
+  AGENT_PROMPT_CONTRIBUTORS,
   AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
@@ -11,7 +12,6 @@ import {
   AGENT_SINK,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
-  type AgentDefinition,
   AgentRegistry,
   type AgentRunner,
   type AgentStore,
@@ -27,24 +27,14 @@ import { ChatController } from './controller/chat.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
 import { ToolCallController } from './controller/tool-call.controller.js';
+import { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaStore } from './ledger-quota-store.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 
-const FEATURE_INIT = Symbol('nestjs-agent:feature-init');
-
 /** Default route prefix the controllers mount under. */
 const DEFAULT_PATH = 'agent';
-
-/**
- * The implicit single agent, built from `options.defaultAgent`. `DefaultAgentOptions` is exactly an
- * `AgentDefinition` with `name` optional, so we just default the name and spread the rest. forFeature
- * adds more named agents.
- */
-function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
-  return { name: 'default', ...options.defaultAgent };
-}
 
 /**
  * The core wiring shared by `forRoot` / `forRootAsync`. `includeStore` controls whether we bind
@@ -54,15 +44,10 @@ function defaultDefinition(options: AgentModuleOptions): AgentDefinition {
 function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
-    {
-      provide: AGENT_REGISTRY,
-      useFactory: (options: AgentModuleOptions) => {
-        const registry = new AgentRegistry();
-        registry.register(defaultDefinition(options));
-        return registry;
-      },
-      inject: [AGENT_OPTIONS],
-    },
+    // Starts empty; AgentDiscoveryService populates it from `@Agent`-decorated providers at boot.
+    { provide: AGENT_REGISTRY, useFactory: () => new AgentRegistry() },
+    // A shared, mutable list AgentDiscoveryService fills with `@SystemPromptContributor()` methods.
+    { provide: AGENT_PROMPT_CONTRIBUTORS, useFactory: () => [] },
     {
       provide: AGENT_SINK,
       useFactory: (options: AgentModuleOptions) => options.sink ?? new InProcessTokenStreamSink(),
@@ -98,6 +83,9 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
+    // Populates the registry + contributors (onModuleInit) BEFORE AiToolDiscoveryService synthesizes
+    // handoff tools (onApplicationBootstrap) reads the registry.
+    AgentDiscoveryService,
     AiToolDiscoveryService,
     InlineAgentRunner,
     AgentService,
@@ -146,6 +134,7 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     AGENT_MODEL,
     ...(includeStore ? [AGENT_STORE] : []),
     AGENT_QUOTA_STORE,
+    AGENT_PROMPT_CONTRIBUTORS,
     AGENT_DEPS_FACTORY,
     AgentDepsFactory,
     AgentService,
@@ -198,25 +187,6 @@ export class AgentModule {
         ...sharedProviders(options.durable ?? false, true),
       ],
       exports: exportsFor(true),
-    };
-  }
-
-  /** Register additional named agents (an orchestrator + its sub-agents). */
-  static forFeature(definitions: AgentDefinition[]): DynamicModule {
-    return {
-      module: AgentModule,
-      providers: [
-        {
-          provide: FEATURE_INIT,
-          useFactory: (registry: AgentRegistry) => {
-            for (const definition of definitions) {
-              registry.register(definition);
-            }
-            return true;
-          },
-          inject: [AGENT_REGISTRY],
-        },
-      ],
     };
   }
 }

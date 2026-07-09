@@ -11,11 +11,12 @@ describe('nestjsAgentCodegen', () => {
     expect(names).toContain('agent.threads.list');
     expect(names).toContain('agent.threads.get');
     expect(names).toContain('agent.threads.fork');
-    expect(names).toContain('agent.personas');
     expect(names).toContain('agent.toolCall.approve');
     expect(names).toContain('agent.toolCall.reject');
     expect(names).toContain('agent.quota');
     expect(names).toContain('agent.chat.cancel');
+    // the persona catalog route was deleted along with the persona concept
+    expect(names).not.toContain('agent.personas');
   });
 
   it('mounts routes under /agent and honors basePath', () => {

@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
+import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 
@@ -27,6 +28,10 @@ class PurgeCacheTool {
   }
 }
 
+@Agent({ name: 'default', systemPrompt: 'durable test agent', model: 'fake-1' })
+@Injectable()
+class DefaultAgent {}
+
 async function buildDurableApp(script: FakeScript) {
   const store = new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
@@ -36,11 +41,11 @@ async function buildDurableApp(script: FakeScript) {
         model: new FakeModelProvider(script),
         store,
         durable: true,
-        defaultAgent: { modelId: 'fake-1', systemPrompt: 'durable test agent' },
+        defaultAgent: 'default',
       }),
       AgentDurableModule,
     ],
-    providers: [PurgeCacheTool],
+    providers: [PurgeCacheTool, DefaultAgent],
   }).compile();
   await moduleRef.init();
   return {

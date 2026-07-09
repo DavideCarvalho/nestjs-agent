@@ -28,12 +28,10 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     // createThread
     const thread = await store.createThread({
       actor: { id: 'actor-1' },
-      persona: 'default',
       title: 'My chat',
     });
     expect(thread.id).toBeTruthy();
     expect(thread.title).toBe('My chat');
-    expect(thread.persona).toBe('default');
     expect(thread.transient).toBe(false);
 
     // appendMessage (user)
@@ -52,11 +50,13 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
       content: 'Looking that up',
       toolCalls: [{ id: 'tc-1', name: 'lookup', input: { q: 'weather' } }],
       usage: { inputTokens: 10, outputTokens: 5 },
+      agentName: 'researcher',
     });
     expect(assistantMessage.toolCalls).toEqual([
       { id: 'tc-1', name: 'lookup', input: { q: 'weather' } },
     ]);
     expect(assistantMessage.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(assistantMessage.agentName).toBe('researcher');
 
     // recordToolCall (pending) → updateToolCall (executed)
     await store.recordToolCall({
@@ -97,6 +97,7 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     expect(messages[1]?.content).toBe('Looking that up');
     expect(messages[1]?.toolCalls?.[0]?.id).toBe('tc-1');
     expect(messages[1]?.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(messages[1]?.agentName).toBe('researcher');
     expect(detail?.lastMessagePreview).toBe('Looking that up');
 
     // setTitle + setActiveStream are reflected in getThread
@@ -158,7 +159,6 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
   it('resolves the owning actorRef of a thread streaming a run via ownerOfActiveStream', async () => {
     const thread = await store.createThread({
       actor: { id: 'actor-1' },
-      persona: 'default',
       title: 'My chat',
     });
     await store.setActiveStream(thread.id, 'run-xyz');

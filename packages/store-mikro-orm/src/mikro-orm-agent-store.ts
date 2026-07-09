@@ -31,7 +31,6 @@ export class MikroOrmAgentStore implements AgentStore {
       id: crypto.randomUUID(),
       actorRef: input.actor.id,
       title: input.title ?? 'New chat',
-      persona: input.persona,
       transient: input.transient ?? false,
       createdAt: now,
       updatedAt: now,
@@ -107,7 +106,6 @@ export class MikroOrmAgentStore implements AgentStore {
       id: crypto.randomUUID(),
       actorRef: source.actorRef,
       title: source.title,
-      persona: source.persona,
       transient: false,
       createdAt: now,
       updatedAt: now,
@@ -126,7 +124,7 @@ export class MikroOrmAgentStore implements AgentStore {
           ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
           ...(message.followUps != null ? { followUps: message.followUps } : {}),
           ...(message.usage != null ? { usage: message.usage } : {}),
-          ...(message.persona != null ? { persona: message.persona } : {}),
+          ...(message.agentName != null ? { agentName: message.agentName } : {}),
         }),
       );
     }
@@ -213,7 +211,7 @@ export class MikroOrmAgentStore implements AgentStore {
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
-      ...(input.persona !== undefined ? { persona: input.persona } : {}),
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
     });
     thread.updatedAt = now;
     em.persist(message);
@@ -321,7 +319,6 @@ export class MikroOrmAgentStore implements AgentStore {
     return {
       id: thread.id,
       title: thread.title,
-      persona: thread.persona,
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
@@ -335,6 +332,7 @@ export class MikroOrmAgentStore implements AgentStore {
       role: message.role,
       content: message.content,
       createdAt: message.createdAt.toISOString(),
+      ...(message.agentName != null ? { agentName: message.agentName } : {}),
       ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
       ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
       ...(message.followUps != null ? { followUps: message.followUps } : {}),

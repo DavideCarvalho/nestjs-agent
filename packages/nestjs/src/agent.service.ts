@@ -7,7 +7,6 @@ import {
   type AgentRunner,
   type AgentStore,
   type PageContext,
-  type Persona,
   type ThreadDetail,
   type ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
@@ -26,7 +25,6 @@ export interface ChatParams {
   message: string;
   threadId?: string;
   agentName?: string;
-  personaId?: string;
   pageContext?: PageContext;
   /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
   regenerate?: boolean;
@@ -48,10 +46,7 @@ export class AgentService {
       if (params.regenerate === true) {
         throw new BadRequestException('regenerate requires an existing threadId');
       }
-      const created = await this.store.createThread({
-        actor: params.actor,
-        persona: params.personaId ?? this.deps.forAgent(agentName).defaultPersona,
-      });
+      const created = await this.store.createThread({ actor: params.actor });
       threadId = created.id;
     } else if (params.regenerate === true) {
       // Regenerate re-runs a run on an existing thread — gate it by ownership like the other
@@ -59,7 +54,6 @@ export class AgentService {
       await this.assertOwnsThread(params.actor, threadId);
     }
 
-    const persona = this.resolvePersona(agentName, params.personaId);
     const input: AgentRunInput = {
       threadId,
       actor: params.actor,
@@ -67,7 +61,6 @@ export class AgentService {
       day: utcDay(),
       agentName,
       ...(params.regenerate === true ? { regenerate: true } : {}),
-      ...(persona !== undefined ? { persona } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
     };
 
@@ -96,18 +89,6 @@ export class AgentService {
   async cancel(actor: Actor, runId: string): Promise<void> {
     await this.assertOwnsActiveStream(actor, runId);
     return this.runner.cancel(runId);
-  }
-
-  resolvePersona(agentName?: string, id?: string): Persona | undefined {
-    const deps = this.deps.forAgent(agentName);
-    return deps.personas.get(id ?? deps.defaultPersona);
-  }
-
-  personaCatalog(agentName?: string): { id: string; label: string }[] {
-    return [...this.deps.forAgent(agentName).personas.values()].map((persona) => ({
-      id: persona.id,
-      label: persona.label,
-    }));
   }
 
   listThreads(actorRef: string): Promise<ThreadSummary[]> {

@@ -12,7 +12,6 @@ import type {
 
 export interface CreateThreadInput {
   actor: Actor;
-  persona: string;
   transient?: boolean;
   title?: string;
 }
@@ -21,7 +20,8 @@ export interface AppendMessageInput {
   threadId: string;
   role: StoredMessage['role'];
   content: string;
-  persona?: string;
+  /** Which agent produced this message (assistant messages) — provenance. */
+  agentName?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
   followUps?: string[];

@@ -36,7 +36,6 @@ export class DrizzleAgentStore implements AgentStore {
       actorRef: input.actor.id,
       tenantRef: input.actor.tenantRef ?? null,
       title: input.title ?? 'New chat',
-      persona: input.persona,
       transient: input.transient ?? false,
       activeStreamId: null,
       createdAt: now,
@@ -119,7 +118,6 @@ export class DrizzleAgentStore implements AgentStore {
       actorRef: source.actorRef,
       tenantRef: source.tenantRef,
       title: source.title,
-      persona: source.persona,
       transient: false,
       activeStreamId: null,
       createdAt: now,
@@ -138,7 +136,7 @@ export class DrizzleAgentStore implements AgentStore {
           toolResults: message.toolResults,
           followUps: message.followUps,
           usage: message.usage,
-          persona: message.persona,
+          agentName: message.agentName,
           createdAt: message.createdAt,
         })),
       );
@@ -214,7 +212,7 @@ export class DrizzleAgentStore implements AgentStore {
       toolResults: input.toolResults ?? null,
       followUps: input.followUps ?? null,
       usage: input.usage ?? null,
-      persona: input.persona ?? null,
+      agentName: input.agentName ?? null,
       createdAt: now,
     };
     await this.db.insert(agentMessage).values(message);
@@ -315,7 +313,6 @@ export class DrizzleAgentStore implements AgentStore {
     return {
       id: thread.id,
       title: thread.title,
-      persona: thread.persona,
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
@@ -333,6 +330,7 @@ export class DrizzleAgentStore implements AgentStore {
       ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
+      ...(message.agentName != null ? { agentName: message.agentName } : {}),
     };
   }
 }

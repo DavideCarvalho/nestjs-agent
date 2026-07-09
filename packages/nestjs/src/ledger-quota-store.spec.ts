@@ -7,7 +7,7 @@ describe('LedgerQuotaStore', () => {
   it('enforces the limit off the persisted ledger, and treats bump as a no-op', async () => {
     const store = new InMemoryAgentStore();
     const day = utcDay();
-    const thread = await store.createThread({ actor: { id: 'u1' }, persona: 'default' });
+    const thread = await store.createThread({ actor: { id: 'u1' } });
     const quota = new LedgerQuotaStore(store, 100);
 
     expect(await quota.check('u1', day)).toEqual({

@@ -22,6 +22,7 @@ import type {
   ModelMessage,
   PromptBuilder,
   PromptContext,
+  PromptContributor,
   ToolCallRequest,
   ToolResult,
 } from './types.js';
@@ -41,10 +42,16 @@ export interface AgentLoopDeps {
   day: string;
   /** The agent's base prompt. A flat string, or a {@link PromptBuilder} resolved per turn. */
   systemPrompt: string | PromptBuilder;
+  /**
+   * Cross-agent system-prompt contributors, applied in order AFTER the agent's base prompt. Each
+   * returns a section to append (or `null` to skip this turn). The app registers them via
+   * `@SystemPromptContributor()`; the loop composes base + contributors into the effective prompt.
+   */
+  promptContributors?: PromptContributor[];
   maxSteps?: number;
   /** Optional host handle threaded to tool ctx (e.g. an ORM EntityManager). */
   host?: unknown;
-  /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
+  /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
   /**
    * Per-tool execution timeout in ms. A tool that runs longer is aborted and recorded as failed
@@ -77,18 +84,6 @@ function buildContextBlock(passages: Passage[]): string {
     })
     .join('\n\n');
   return `<retrieved_context>\n${items}\n</retrieved_context>\nUse the retrieved context above to answer when relevant, and cite sources by their bracket number.`;
-}
-
-/** Intersect two allow-lists where `undefined` means "no restriction". */
-function intersectAllow(a?: string[], b?: string[]): string[] | undefined {
-  if (a === undefined) {
-    return b;
-  }
-  if (b === undefined) {
-    return a;
-  }
-  const second = new Set(b);
-  return a.filter((name) => second.has(name));
 }
 
 export interface AgentLoopHooks {
@@ -129,21 +124,25 @@ async function resolvePrompt(prompt: string | PromptBuilder, ctx: PromptContext)
 }
 
 /**
- * The effective system prompt for a turn: resolve the agent's base prompt first, then — if the
- * request selected a persona — resolve the persona prompt with that base as `basePrompt`, so a
- * persona builder can wrap the agent's base rather than discard it.
+ * The effective system prompt for a turn: the agent's own base prompt, then each cross-agent
+ * contributor's section appended in order (skipping any that return `null`/empty this turn). This is
+ * resolved from stable inputs (actor / agent / pageContext) once per turn; contributors should be
+ * derived from those rather than from uncached I/O so it stays replay-safe.
  */
 async function resolveSystemPrompt(deps: AgentLoopDeps, input: AgentRunInput): Promise<string> {
-  const base: Omit<PromptContext, 'basePrompt'> = {
+  const ctx: PromptContext = {
     actor: input.actor,
-    ...(input.persona !== undefined ? { persona: input.persona } : {}),
+    agentName: input.agentName ?? 'default',
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
   };
-  const basePrompt = await resolvePrompt(deps.systemPrompt, { ...base, basePrompt: '' });
-  if (input.persona === undefined) {
-    return basePrompt;
+  const sections = [await resolvePrompt(deps.systemPrompt, ctx)];
+  for (const contribute of deps.promptContributors ?? []) {
+    const section = await contribute(ctx);
+    if (section !== null && section.length > 0) {
+      sections.push(section);
+    }
   }
-  return resolvePrompt(input.persona.systemPrompt, { ...base, basePrompt });
+  return sections.join('\n\n');
 }
 
 /** An `agent`-kind tool's input is `{ task }` by convention; fall back to a JSON dump. */
@@ -235,7 +234,6 @@ export async function runAgentLoop(
   hooks: AgentLoopHooks,
 ): Promise<{ text: string }> {
   const maxSteps = deps.maxSteps ?? 8;
-  const persona = input.persona;
   let system = await resolveSystemPrompt(deps, input);
 
   if (deps.quota !== undefined) {
@@ -275,7 +273,6 @@ export async function runAgentLoop(
         threadId: input.threadId,
         role: 'user',
         content: input.userText,
-        ...(persona !== undefined ? { persona: persona.id } : {}),
       }),
     );
   }
@@ -298,7 +295,7 @@ export async function runAgentLoop(
     runId: hooks.runId,
     threadId: input.threadId,
     actorId: input.actor.id,
-    ...(persona !== undefined ? { persona: persona.id } : {}),
+    ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
   });
 
   // Inject-mode RAG: retrieve once for the user message and fold the passages into the system prompt
@@ -325,7 +322,7 @@ export async function runAgentLoop(
     const tools = await deps.registry.definitionsFor(
       input.actor,
       deps.rolesPolicy,
-      intersectAllow(persona?.allowedTools, deps.toolAllowList),
+      deps.toolAllowList,
     );
 
     const turn = await hooks.step(`llm:${i}`, () =>
@@ -395,7 +392,7 @@ export async function runAgentLoop(
         role: 'assistant',
         content: turn.text,
         usage: turn.usage,
-        ...(persona !== undefined ? { persona: persona.id } : {}),
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
         ...(followUps !== undefined ? { followUps } : {}),
       }),
@@ -438,7 +435,6 @@ export async function runAgentLoop(
         threadId: input.threadId,
         runId: hooks.runId,
         requestId: hooks.runId,
-        ...(persona !== undefined ? { persona } : {}),
         ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
         ...(deps.host !== undefined ? { host: deps.host } : {}),
       };

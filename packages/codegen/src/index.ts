@@ -17,12 +17,11 @@ export interface AgentCodegenOptions {
 // frontend is the thread/message envelope; rich tool data flows through the React tool-part renderer.
 const USAGE =
   '{ inputTokens: number; outputTokens: number; totalTokens?: number; costUsd?: number }';
-const STORED_MESSAGE = `{ id: string; role: string; content: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
+const STORED_MESSAGE = `{ id: string; role: string; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; createdAt: string }`;
 const THREAD_SUMMARY =
-  '{ id: string; title: string; persona: string; transient: boolean; ' +
+  '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string }';
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
-const PERSONA = '{ id: string; label: string }';
 
 function route(
   method: string,
@@ -41,11 +40,6 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       query: null,
       body: null,
       response: `${THREAD_SUMMARY}[]`,
-    }),
-    route('GET', `${root}/threads/personas/catalog`, `${ns}.personas`, {
-      query: null,
-      body: null,
-      response: `${PERSONA}[]`,
     }),
     route(
       'GET',
@@ -98,9 +92,9 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
 
 /**
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
- * that emits the `@dudousxd/nestjs-agent` JSON REST routes (threads, personas, tool-call
- * approve/reject, quota, cancel) into your generated `api.ts` — so they're available as a typed
- * client / TanStack hooks in your frontend.
+ * that emits the `@dudousxd/nestjs-agent` JSON REST routes (threads, tool-call approve/reject,
+ * quota, cancel) into your generated `api.ts` — so they're available as a typed client / TanStack
+ * hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static
  * AST discovery can't see them. The streaming `POST /agent/chat` + `GET /agent/chat/:runId/stream`

@@ -1,8 +1,8 @@
 import type {
   AgentStore,
   ModelProvider,
-  Persona,
   PromptBuilder,
+  PromptContributor,
   QuotaStore,
   Retriever,
   RolesPolicy,
@@ -22,10 +22,10 @@ export interface AgentDeps {
   /** Fallback accounting label; the provider's turn result overrides it when set. */
   modelId?: string;
   systemPrompt: string | PromptBuilder;
+  /** App-wide `@SystemPromptContributor()` sections appended after the agent's base prompt. */
+  promptContributors: PromptContributor[];
   maxSteps: number;
-  personas: Map<string, Persona>;
-  defaultPersona: string;
-  /** Agent-level tool allow-list (intersected with the persona's). Undefined → all tools. */
+  /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
   toolTimeoutMs?: number;

@@ -36,3 +36,5 @@ export const AGENT_EMBEDDING_PROVIDER = Symbol.for('@dudousxd/nestjs-agent:embed
 // Per-agent deps factory. A Symbol.for token (not the class) so DI survives tsup's dual
 // index/durable bundles, which each get their own copy of the AgentDepsFactory class.
 export const AGENT_DEPS_FACTORY = Symbol.for('@dudousxd/nestjs-agent:deps-factory');
+/** App-wide, ordered `@SystemPromptContributor()` functions the loop appends after the agent base. */
+export const AGENT_PROMPT_CONTRIBUTORS = Symbol.for('@dudousxd/nestjs-agent:prompt-contributors');

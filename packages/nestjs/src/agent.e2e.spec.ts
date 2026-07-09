@@ -1,16 +1,11 @@
-import type {
-  AgentDefinition,
-  QuotaStore,
-  Retriever,
-  RolesPolicy,
-} from '@dudousxd/nestjs-agent-core';
+import type { QuotaStore, Retriever, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
   InMemoryAgentStore,
   InMemoryQuotaStore,
 } from '@dudousxd/nestjs-agent-testing';
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, type Type } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -19,6 +14,7 @@ import { z } from 'zod';
 import { AgentModule } from './agent.module.js';
 import { AgentService } from './agent.service.js';
 import { AiTool } from './decorator/ai-tool.decorator.js';
+import { Agent } from './decorator/agent.decorator.js';
 import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
 
 @AiTool({
@@ -76,9 +72,18 @@ class SlowTool {
   }
 }
 
+/**
+ * The default agent every test app registers under the name `'default'` (mirrors the old
+ * `defaultAgent: { modelId, systemPrompt }` inline object, now expressed as an `@Agent` provider).
+ */
+@Agent({ name: 'default', systemPrompt: 'test agent', model: 'fake-1' })
+@Injectable()
+class DefaultAgent {}
+
 interface BuildOptions {
   rolesPolicy?: RolesPolicy;
-  features?: AgentDefinition[];
+  /** Extra `@Agent`-decorated provider classes to register (e.g. an orchestrator + its sub-agents). */
+  agents?: Type<object>[];
   path?: string;
   quota?: QuotaStore;
   toolTimeoutMs?: number;
@@ -94,7 +99,7 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         model: new FakeModelProvider(script),
         store,
         actorResolver: new HeaderActorResolver(),
-        defaultAgent: { modelId: 'fake-1', systemPrompt: 'test agent' },
+        defaultAgent: 'default',
         ...(options.path !== undefined ? { path: options.path } : {}),
         ...(options.rolesPolicy !== undefined ? { rolesPolicy: options.rolesPolicy } : {}),
         ...(options.quota !== undefined ? { quota: options.quota } : {}),
@@ -102,9 +107,15 @@ async function buildApp(script: FakeScript, options: BuildOptions = {}) {
         ...(options.followUps !== undefined ? { followUps: options.followUps } : {}),
         ...(options.retrieval !== undefined ? { retrieval: options.retrieval } : {}),
       }),
-      ...(options.features !== undefined ? [AgentModule.forFeature(options.features)] : []),
     ],
-    providers: [GetWeatherTool, PurgeCacheTool, AbilityTool, SlowTool],
+    providers: [
+      GetWeatherTool,
+      PurgeCacheTool,
+      AbilityTool,
+      SlowTool,
+      DefaultAgent,
+      ...(options.agents ?? []),
+    ],
   }).compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   await app.init();
@@ -309,12 +320,22 @@ describe('AgentModule (inline)', () => {
     expect(seen.every((roles) => roles === undefined)).toBe(true);
   });
 
-  it('fails boot when an agent delegatesTo an unregistered agent', async () => {
+  it('fails boot when an agent hands off to an @Agent that was never provided', async () => {
+    // GhostAgent carries valid @Agent metadata (so the handoff is accepted at discovery time) but is
+    // deliberately left out of `providers` — it's never instantiated, so it never registers into the
+    // AgentRegistry. That dangling handoff must fail the boot, not silently resolve to an unrestricted
+    // default agent.
+    @Agent({ name: 'ghost-agent', systemPrompt: 'ghost' })
+    @Injectable()
+    class GhostAgent {}
+
+    @Agent({ name: 'orchestrator', systemPrompt: 'orchestrator', handoff: [GhostAgent] })
+    @Injectable()
+    class OrchestratorAgent {}
+
     await expect(
-      buildApp(() => ({ text: 'x' }), {
-        features: [{ name: 'orchestrator', delegatesTo: ['ghost-agent'] }],
-      }),
-    ).rejects.toThrow(/not a registered agent/);
+      buildApp(() => ({ text: 'x' }), { agents: [OrchestratorAgent] }),
+    ).rejects.toThrow(/not a registered @Agent/);
   });
 
   it('scopes cancel to the run owner (403 other, 404 unknown run)', async () => {
@@ -409,12 +430,15 @@ describe('AgentModule (inline)', () => {
       const results = (args.messages.at(-1)?.toolResults ?? []).map((result) => result.output);
       return { text: `done: ${JSON.stringify(results)}` };
     };
-    const built = await buildApp(script, {
-      features: [
-        { name: 'orch', systemPrompt: 'orchestrator', delegatesTo: ['sub'] },
-        { name: 'sub', systemPrompt: 'sub', tools: ['getWeather'] },
-      ],
-    });
+    @Agent({ name: 'sub', systemPrompt: 'sub', tools: ['getWeather'] })
+    @Injectable()
+    class SubAgent {}
+
+    @Agent({ name: 'orch', systemPrompt: 'orchestrator', handoff: [SubAgent] })
+    @Injectable()
+    class OrchAgent {}
+
+    const built = await buildApp(script, { agents: [OrchAgent, SubAgent] });
     app = built.app;
     const { runId } = await built.service.chat({
       actor: { id: 'u1', roles: ['ADMIN'] },
@@ -445,12 +469,15 @@ describe('AgentModule (inline)', () => {
         ? { text: 'delegating', toolCall: { name: 'ask_sub', input: { task: 'purge please' } } }
         : { text: 'orchestrator done' };
     };
-    const built = await buildApp(script, {
-      features: [
-        { name: 'orch', systemPrompt: 'orchestrator', delegatesTo: ['sub'] },
-        { name: 'sub', systemPrompt: 'sub-worker', tools: ['purgeCache'] },
-      ],
-    });
+    @Agent({ name: 'sub', systemPrompt: 'sub-worker', tools: ['purgeCache'] })
+    @Injectable()
+    class SubAgent {}
+
+    @Agent({ name: 'orch', systemPrompt: 'orchestrator', handoff: [SubAgent] })
+    @Injectable()
+    class OrchAgent {}
+
+    const built = await buildApp(script, { agents: [OrchAgent, SubAgent] });
     app = built.app;
     const { runId } = await built.service.chat({
       actor: { id: 'u1', roles: ['ADMIN'] },

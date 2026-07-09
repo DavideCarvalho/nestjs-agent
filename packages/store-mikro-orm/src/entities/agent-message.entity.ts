@@ -21,7 +21,7 @@ export class AgentMessage {
   toolResults?: ToolResult[] | null;
   followUps?: string[] | null;
   usage?: MessageUsage | null;
-  persona?: string | null;
+  agentName?: string | null;
   createdAt!: Date;
 }
 
@@ -47,7 +47,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       toolResults: { type: 'json', nullable: true, fieldName: 'tool_results' },
       followUps: { type: 'json', nullable: true, fieldName: 'follow_ups' },
       usage: { type: 'json', nullable: true },
-      persona: { type: 'string', nullable: true, ...str },
+      agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
     },
   });

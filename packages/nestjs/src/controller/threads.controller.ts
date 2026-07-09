@@ -16,11 +16,6 @@ export class ThreadsController {
     return this.agent.listThreads(actor.id);
   }
 
-  @Get('personas/catalog')
-  personas() {
-    return this.agent.personaCatalog();
-  }
-
   @Get(':id')
   async detail(@Req() req: Request, @Param('id') id: string) {
     const actor = await this.actorResolver.resolve(req);

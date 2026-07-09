@@ -1,6 +1,5 @@
 import type {
   ActorResolver,
-  AgentDefinition,
   AgentStore,
   ModelProvider,
   QuotaStore,
@@ -10,14 +9,6 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import type { InjectionToken, ModuleMetadata, OptionalFactoryDependency } from '@nestjs/common';
 import type { FunctionalTool } from './functional-tool.js';
-
-/**
- * The implicit default agent, configured inline on `forRoot`. It is an {@link AgentDefinition}
- * with `name` optional (defaults to `'default'`) — everything agent-shaped is an AgentDefinition,
- * whether it's this default or one registered via `forFeature`. Omit it entirely for a bare
- * assistant with no base prompt, personas, or tool allow-list.
- */
-export type DefaultAgentOptions = Omit<AgentDefinition, 'name'> & { name?: string };
 
 export interface AgentModuleOptions {
   // --- infrastructure ---
@@ -85,12 +76,12 @@ export interface AgentModuleOptions {
    */
   retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
 
-  // --- the default agent (optional) ---
   /**
-   * The implicit single agent's config (base prompt, personas, tool allow-list, model/step
-   * config). Omit for a bare assistant. Additional named agents are added via `forFeature`.
+   * The name of the agent a turn uses when the caller doesn't select one. Omit → the single
+   * discovered `@Agent` (when there is exactly one), else `'default'` (a bare assistant if no
+   * `@Agent` is registered). Agents themselves are declared as `@Agent`-decorated providers, not here.
    */
-  defaultAgent?: DefaultAgentOptions;
+  defaultAgent?: string;
 }
 
 export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {

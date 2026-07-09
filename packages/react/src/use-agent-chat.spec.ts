@@ -90,7 +90,6 @@ describe('useAgentChat', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-9',
-        persona: 'default',
         fetch: fetchMock as unknown as typeof fetch,
       }),
     );
@@ -105,7 +104,6 @@ describe('useAgentChat', () => {
     expect(body).toMatchObject({
       message: 'how many users?',
       threadId: 'thr-9',
-      persona: 'default',
     });
   });
 });

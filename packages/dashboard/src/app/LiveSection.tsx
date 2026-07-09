@@ -7,7 +7,7 @@ function summarize(event: FeedEvent): string {
   const payload = event.payload;
   switch (event.event) {
     case 'run.started':
-      return `run ${str(payload.runId)} started${payload.persona ? ` · ${str(payload.persona)}` : ''}`;
+      return `run ${str(payload.runId)} started${payload.agentName ? ` · ${str(payload.agentName)}` : ''}`;
     case 'run.finished':
       return `run ${str(payload.runId)} finished · ${num(payload.steps)} steps · ${num(payload.inputTokens) + num(payload.outputTokens)} tok`;
     case 'message':

@@ -1,4 +1,11 @@
-import { AGENT_GOVERNANCE_QUERIES, AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import {
+  AGENT_GOVERNANCE_QUERIES,
+  Agent,
+  AgentModule,
+  HeaderActorResolver,
+  type PromptContext,
+  SystemPrompt,
+} from '@dudousxd/nestjs-agent';
 import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
 import {
   InMemoryAgentStore,
@@ -8,7 +15,7 @@ import {
 import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { DurableModule } from '@dudousxd/nestjs-durable';
 import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
-import { Global, Module } from '@nestjs/common';
+import { Global, Injectable, Module } from '@nestjs/common';
 import { AgentDiagnosticsConsole } from './diagnostics-console.js';
 import { demoModel } from './model.js';
 import { GetWeatherTool } from './tools/get-weather.tool.js';
@@ -30,6 +37,44 @@ const demoGovernance = new InMemoryGovernanceQueries(
 })
 class DemoGovernanceModule {}
 
+/**
+ * The default agent — handles a turn when no `agent` is selected. Its prompt is dynamic (built from
+ * the turn's `PromptContext`) so it demonstrates a `@SystemPrompt()` method, not just a flat string.
+ * No `tools` allow-list, so it may use every tool the actor's role allows (getWeather + purgeCache).
+ */
+@Agent({ name: 'default', model: 'fake-demo-1' })
+@Injectable()
+class DefaultAgent {
+  @SystemPrompt()
+  buildPrompt(ctx: PromptContext): string {
+    return `You are a helpful ops assistant for ${ctx.actor.id}.${
+      ctx.pageContext?.kind ? ` They are viewing the "${ctx.pageContext.kind}" page.` : ''
+    }`;
+  }
+}
+
+/** A focused specialist the orchestrator hands off to. Restricted to the `getWeather` tool. */
+@Agent({
+  name: 'weather-analyst',
+  systemPrompt: 'You answer weather questions using the getWeather tool.',
+  tools: ['getWeather'],
+})
+@Injectable()
+class WeatherAnalystAgent {}
+
+/**
+ * Multi-agent: an orchestrator that delegates to `weather-analyst` (via the synthesized
+ * `ask_weather_analyst` tool). Each delegation is a durable child run AND a `delegated` diagnostics
+ * event.
+ */
+@Agent({
+  name: 'ops-orchestrator',
+  systemPrompt: 'You coordinate specialists. Delegate weather questions to weather-analyst.',
+  handoff: [WeatherAnalystAgent],
+})
+@Injectable()
+class OpsOrchestratorAgent {}
+
 @Module({
   imports: [
     DemoGovernanceModule,
@@ -46,43 +91,19 @@ class DemoGovernanceModule {}
       // Demo/gateway identity: trust x-actor-id / x-actor-role headers. Never fabricates a caller.
       actorResolver: new HeaderActorResolver(),
       durable: true,
-      // --- the default agent ---
-      defaultAgent: {
-        // The fake provider doesn't report a modelId, so this fallback labels usage/cost.
-        modelId: 'fake-demo-1',
-        systemPrompt: 'You are a helpful ops assistant for the demo.',
-        personas: [
-          { id: 'default', label: 'Default', systemPrompt: 'You are a helpful ops assistant.' },
-          {
-            // A dynamic persona: the prompt is composed per request from the turn context
-            // (here the acting user and the page they're on) instead of a flat string.
-            id: 'contextual',
-            label: 'Contextual',
-            systemPrompt: (ctx) =>
-              `You are a helpful ops assistant for ${ctx.actor.id}.${
-                ctx.pageContext?.kind ? ` They are viewing the "${ctx.pageContext.kind}" page.` : ''
-              }`,
-          },
-        ],
-      },
+      // Agents are declared as `@Agent` providers below; this just picks which one an unqualified
+      // turn uses (there are three registered, so it can't fall back to "the single agent").
+      defaultAgent: 'default',
     }),
-    // Multi-agent: an orchestrator that delegates to a focused sub-agent. The orchestrator can only
-    // reach `weather-analyst` (via the synthesized `ask_weather_analyst` tool); the sub-agent can
-    // only use `getWeather`. Each delegation is a durable child run AND a `delegated` diagnostics event.
-    AgentModule.forFeature([
-      {
-        name: 'ops-orchestrator',
-        systemPrompt: 'You coordinate specialists. Delegate weather questions to weather-analyst.',
-        delegatesTo: ['weather-analyst'],
-      },
-      {
-        name: 'weather-analyst',
-        systemPrompt: 'You answer weather questions using the getWeather tool.',
-        tools: ['getWeather'],
-      },
-    ]),
     AgentDurableModule,
   ],
-  providers: [GetWeatherTool, PurgeCacheTool, AgentDiagnosticsConsole],
+  providers: [
+    GetWeatherTool,
+    PurgeCacheTool,
+    AgentDiagnosticsConsole,
+    DefaultAgent,
+    WeatherAnalystAgent,
+    OpsOrchestratorAgent,
+  ],
 })
 export class AppModule {}

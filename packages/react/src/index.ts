@@ -8,7 +8,6 @@ export {
   type AgentClientOptions,
   AgentHttpError,
   type CancelResult,
-  type PersonaCatalogEntry,
   type QuotaToday,
 } from './client.js';
 export { useAgentChat, type UseAgentChatOptions } from './use-agent-chat.js';

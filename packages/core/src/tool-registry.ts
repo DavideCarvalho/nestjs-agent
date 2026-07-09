@@ -1,5 +1,5 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { filterToolsByRole, personaFilterTools } from './personas.js';
+import { filterToolsByAllowList, filterToolsByRole } from './tool-filters.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { AiToolCtx, ToolHandler } from './spi/tool.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
@@ -64,15 +64,15 @@ export class ToolRegistry {
     return [...this.entries.values()].map((entry) => entry.spec);
   }
 
-  /** The tools to offer the model for this actor+persona, after the two filter layers. */
+  /** The tools to offer the model for this actor+agent, after the two filter layers. */
   async definitionsFor(
     actor: Actor,
     policy: RolesPolicy,
     allowedTools?: string[],
   ): Promise<ToolDefinition[]> {
     const roleScoped = await filterToolsByRole(this.allSpecs(), actor, policy);
-    const personaScoped = personaFilterTools(roleScoped, allowedTools);
-    return personaScoped.map((spec) => ({
+    const allowScoped = filterToolsByAllowList(roleScoped, allowedTools);
+    return allowScoped.map((spec) => ({
       name: spec.name,
       kind: spec.kind,
       description: spec.description,

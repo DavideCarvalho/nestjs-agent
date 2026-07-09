@@ -15,7 +15,6 @@ async function seed(): Promise<{ store: InMemoryAgentStore; today: string }> {
 
   const aliceThread = await store.createThread({
     actor: { id: 'alice' },
-    persona: 'default',
     title: 'Alice chat',
   });
   const aliceMessage = await store.appendMessage({
@@ -50,7 +49,6 @@ async function seed(): Promise<{ store: InMemoryAgentStore; today: string }> {
 
   const bobThread = await store.createThread({
     actor: { id: 'bob' },
-    persona: 'default',
     title: 'Bob chat',
   });
   const bobMessage = await store.appendMessage({
@@ -148,7 +146,6 @@ describe('InMemoryGovernanceQueries', () => {
     const today = new Date().toISOString().slice(0, 10);
     const thread = await store.createThread({
       actor: { id: 'alice' },
-      persona: 'default',
       title: 'Gateway chat',
     });
     // gpt-x would estimate 1*3 + 0.5*15 = 10.5, but the gateway reported 4.2 — the report wins.
@@ -187,7 +184,6 @@ describe('InMemoryGovernanceQueries', () => {
     const today = new Date().toISOString().slice(0, 10);
     const thread = await store.createThread({
       actor: { id: 'alice' },
-      persona: 'default',
       title: 'Cached chat',
     });
     // Of 1M input tokens, 200k were cache writes and 300k cache reads → 500k uncached.
@@ -229,7 +225,6 @@ describe('InMemoryGovernanceQueries', () => {
     const today = new Date().toISOString().slice(0, 10);
     const thread = await store.createThread({
       actor: { id: 'alice' },
-      persona: 'default',
       title: 'Cached chat',
     });
     await store.recordUsage({

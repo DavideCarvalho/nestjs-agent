@@ -35,12 +35,10 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     // createThread
     const thread = await store.createThread({
       actor: { id: 'actor-1' },
-      persona: 'default',
       title: 'My chat',
     });
     expect(thread.id).toBeTruthy();
     expect(thread.title).toBe('My chat');
-    expect(thread.persona).toBe('default');
     expect(thread.transient).toBe(false);
 
     // appendMessage (user)
@@ -52,18 +50,20 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(userMessage.role).toBe('user');
     expect(userMessage.content).toBe('Hello');
 
-    // appendMessage (assistant with tool calls + usage)
+    // appendMessage (assistant with tool calls + usage + agentName provenance)
     const assistantMessage = await store.appendMessage({
       threadId: thread.id,
       role: 'assistant',
       content: 'Looking that up',
       toolCalls: [{ id: 'tc-1', name: 'lookup', input: { q: 'weather' } }],
       usage: { inputTokens: 10, outputTokens: 5 },
+      agentName: 'researcher',
     });
     expect(assistantMessage.toolCalls).toEqual([
       { id: 'tc-1', name: 'lookup', input: { q: 'weather' } },
     ]);
     expect(assistantMessage.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(assistantMessage.agentName).toBe('researcher');
 
     // recordToolCall (pending) → updateToolCall (executed)
     await store.recordToolCall({
@@ -104,6 +104,7 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(messages[1]?.content).toBe('Looking that up');
     expect(messages[1]?.toolCalls?.[0]?.id).toBe('tc-1');
     expect(messages[1]?.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+    expect(messages[1]?.agentName).toBe('researcher');
     expect(detail?.lastMessagePreview).toBe('Looking that up');
 
     // recordUsage twice → quotaToday sums them
@@ -153,7 +154,7 @@ describe('MikroOrmAgentStore (sqlite)', () => {
   });
 
   it('resolves the owning actorRef for an active stream by runId', async () => {
-    const thread = await store.createThread({ actor: { id: 'actor-stream' }, persona: 'default' });
+    const thread = await store.createThread({ actor: { id: 'actor-stream' } });
     await store.setActiveStream(thread.id, 'run-xyz');
 
     expect(await store.ownerOfActiveStream('run-xyz')).toBe('actor-stream');

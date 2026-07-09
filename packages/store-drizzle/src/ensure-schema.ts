@@ -13,7 +13,6 @@ const statements: string[] = [
     actor_ref TEXT NOT NULL,
     tenant_ref TEXT,
     title TEXT NOT NULL,
-    persona TEXT NOT NULL DEFAULT 'default',
     transient INTEGER NOT NULL DEFAULT 0,
     active_stream_id TEXT,
     created_at INTEGER NOT NULL,
@@ -31,7 +30,7 @@ const statements: string[] = [
     tool_results TEXT,
     follow_ups TEXT,
     usage TEXT,
-    persona TEXT,
+    agent_name TEXT,
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS agent_message_thread_created_idx
