@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-codegen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "nestjs-codegen extension for @dudousxd/nestjs-agent — emits the /agent REST API into your generated client",
   "license": "MIT",
   "author": "Davide Carvalho",
@@ -20,8 +20,17 @@
       }
     }
   },
-  "files": ["dist"],
-  "keywords": ["nestjs", "ai", "agent", "nestjs-codegen", "codegen", "tanstack-query"],
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "nestjs",
+    "ai",
+    "agent",
+    "nestjs-codegen",
+    "codegen",
+    "tanstack-query"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit"

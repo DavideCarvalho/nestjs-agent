@@ -1,11 +1,15 @@
 {
   "name": "@dudousxd/nestjs-agent-react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "nestjs-agent React adapter — useAgentChat hook, AgentChatTransport (AI SDK v7), REST client, and styling-agnostic chat UI",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
-  "sideEffects": ["**/*.css", "./dist/markdown.js", "./dist/markdown.cjs"],
+  "sideEffects": [
+    "**/*.css",
+    "./dist/markdown.js",
+    "./dist/markdown.cjs"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,7 +35,9 @@
       }
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -57,18 +63,42 @@
     "unist-util-visit": "^5.1.0"
   },
   "peerDependenciesMeta": {
-    "@streamdown/code": { "optional": true },
-    "@streamdown/math": { "optional": true },
-    "@streamdown/mermaid": { "optional": true },
-    "katex": { "optional": true },
-    "prism-react-renderer": { "optional": true },
-    "react-markdown": { "optional": true },
-    "rehype-katex": { "optional": true },
-    "rehype-sanitize": { "optional": true },
-    "remark-gfm": { "optional": true },
-    "remark-math": { "optional": true },
-    "streamdown": { "optional": true },
-    "unist-util-visit": { "optional": true }
+    "@streamdown/code": {
+      "optional": true
+    },
+    "@streamdown/math": {
+      "optional": true
+    },
+    "@streamdown/mermaid": {
+      "optional": true
+    },
+    "katex": {
+      "optional": true
+    },
+    "prism-react-renderer": {
+      "optional": true
+    },
+    "react-markdown": {
+      "optional": true
+    },
+    "rehype-katex": {
+      "optional": true
+    },
+    "rehype-sanitize": {
+      "optional": true
+    },
+    "remark-gfm": {
+      "optional": true
+    },
+    "remark-math": {
+      "optional": true
+    },
+    "streamdown": {
+      "optional": true
+    },
+    "unist-util-visit": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ai-sdk/react": "4.0.17",

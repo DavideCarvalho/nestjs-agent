@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
   "license": "MIT",
   "author": "Davide Carvalho",
@@ -30,7 +30,9 @@
       }
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -48,8 +50,12 @@
     "reflect-metadata": "^0.2.0"
   },
   "peerDependenciesMeta": {
-    "@dudousxd/nestjs-durable": { "optional": true },
-    "@dudousxd/nestjs-durable-core": { "optional": true }
+    "@dudousxd/nestjs-durable": {
+      "optional": true
+    },
+    "@dudousxd/nestjs-durable-core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-testing": "workspace:*",
