@@ -33,6 +33,18 @@ export interface ActorSpendRow {
   requests: number;
   totalTokens: number;
   costUsd: number;
+  /** Distinct threads the actor used in the range. */
+  threadCount: number;
+}
+
+/** Spend + token totals for one thread over a range. */
+export interface ThreadSpendRow {
+  threadId: string;
+  title: string;
+  actorRef: string;
+  requests: number;
+  totalTokens: number;
+  costUsd: number;
 }
 
 /** One point on the daily usage/cost trend. */
@@ -70,6 +82,8 @@ export interface ThreadActivityRow {
 export interface AgentGovernanceQueries {
   spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]>;
   spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]>;
+  /** Top threads by spend within the range, highest cost first, capped at `limit`. */
+  spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]>;
   usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]>;
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
   recentThreads(limit: number): Promise<ThreadActivityRow[]>;
