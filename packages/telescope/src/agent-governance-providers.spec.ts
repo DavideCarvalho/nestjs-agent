@@ -32,8 +32,8 @@ const MODEL_ROWS: ModelSpendRow[] = [
 ];
 
 const ACTOR_ROWS: ActorSpendRow[] = [
-  { actorRef: 'user:1', requests: 6, totalTokens: 1_200, costUsd: 0.9876 },
-  { actorRef: 'user:2', requests: 2, totalTokens: 300, costUsd: 0 },
+  { actorRef: 'user:1', requests: 6, totalTokens: 1_200, costUsd: 0.9876, threadCount: 3 },
+  { actorRef: 'user:2', requests: 2, totalTokens: 300, costUsd: 0, threadCount: 1 },
 ];
 
 const TREND_POINTS: UsageTrendPoint[] = [
@@ -49,6 +49,9 @@ function stubQueries(): AgentGovernanceQueries {
     },
     async spendByActor(_range: GovernanceRange) {
       return ACTOR_ROWS;
+    },
+    async spendByThread(_range: GovernanceRange, _limit: number) {
+      return [];
     },
     async usageTrend(_range: GovernanceRange) {
       return TREND_POINTS;

@@ -32,6 +32,10 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
       record('spendByActor');
       return overrides.spendByActor ?? [];
     },
+    async spendByThread(_range: GovernanceRange, _limit: number) {
+      record('spendByThread');
+      return [];
+    },
     async usageTrend(_range: GovernanceRange) {
       record('usageTrend');
       return overrides.usageTrend ?? [];
@@ -56,7 +60,9 @@ describe('DashboardService', () => {
         spendByModel: [
           { modelId: 'gpt', requests: 2, inputTokens: 10, outputTokens: 5, costUsd: 0.4 },
         ],
-        spendByActor: [{ actorRef: 'user:1', requests: 2, totalTokens: 15, costUsd: 0.4 }],
+        spendByActor: [
+          { actorRef: 'user:1', requests: 2, totalTokens: 15, costUsd: 0.4, threadCount: 1 },
+        ],
         usageTrend: [{ day: '2026-07-01', totalTokens: 15, costUsd: 0.4 }],
       }),
     );
