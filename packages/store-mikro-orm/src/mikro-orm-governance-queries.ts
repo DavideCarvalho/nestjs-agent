@@ -3,11 +3,21 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   GovernanceRange,
+  GovernanceUsageInput,
+  ModelPrice,
   ModelSpendRow,
   ThreadActivityRow,
+  ThreadMeta,
   ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
+} from '@dudousxd/nestjs-agent-core';
+import {
+  bucketByActor,
+  bucketByModel,
+  bucketByThread,
+  bucketUsageTrend,
+  dayBoundsUtc,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
@@ -15,49 +25,18 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 
-/** The current per-1M token prices for one model; cache rates fall back to the input rate. */
-interface ModelPrice {
-  inputPricePer1m: number;
-  outputPricePer1m: number;
-  cacheWritePricePer1m?: number | null;
-  cacheReadPricePer1m?: number | null;
-}
-
-/**
- * Token-ledger estimate for one usage row against the current pricing row: the uncached input at the
- * input rate, cache-write/cache-read tokens at their own rates (falling back to the input rate when
- * unpriced), plus output at the output rate. An unpriced model contributes 0 (tokens still count).
- * Cache token counts are subsets of `inputTokens`, so the uncached remainder is the difference.
- */
-function estimateFromTokens(pricing: Map<string, ModelPrice>, row: AgentTokenUsage): number {
-  const price = pricing.get(row.modelId);
-  if (price === undefined) {
-    return 0;
-  }
-  const cacheWriteTokens = row.cacheWriteTokens ?? 0;
-  const cacheReadTokens = row.cacheReadTokens ?? 0;
-  const uncachedInputTokens = row.inputTokens - cacheWriteTokens - cacheReadTokens;
-  return (
-    (uncachedInputTokens / 1_000_000) * price.inputPricePer1m +
-    (cacheWriteTokens / 1_000_000) * (price.cacheWritePricePer1m ?? price.inputPricePer1m) +
-    (cacheReadTokens / 1_000_000) * (price.cacheReadPricePer1m ?? price.inputPricePer1m) +
-    (row.outputTokens / 1_000_000) * price.outputPricePer1m
-  );
-}
-
-/**
- * The cost of one usage row: the provider-reported `costUsd` when present (gateways report real
- * spend), otherwise the cache-aware token estimate against the current pricing row.
- */
-function rowCost(pricing: Map<string, ModelPrice>, row: AgentTokenUsage): number {
-  return row.costUsd ?? estimateFromTokens(pricing, row);
-}
-
-/** Turns an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used by `quotaToday`. */
-function dayBounds(range: GovernanceRange): { start: Date; end: Date } {
+/** Map a MikroORM usage entity onto the shared bucketer input (thread via relation, day via `createdAt`). */
+function toUsageInput(row: AgentTokenUsage): GovernanceUsageInput {
   return {
-    start: new Date(`${range.fromDay}T00:00:00.000Z`),
-    end: new Date(`${range.toDay}T23:59:59.999Z`),
+    modelId: row.modelId,
+    actorRef: row.actorRef,
+    threadId: row.thread.id,
+    day: row.createdAt.toISOString().slice(0, 10),
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    cacheWriteTokens: row.cacheWriteTokens,
+    cacheReadTokens: row.cacheReadTokens,
+    costUsd: row.costUsd,
   };
 }
 
@@ -93,83 +72,22 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   private async usageInRange(
     em: EntityManager,
     range: GovernanceRange,
-  ): Promise<AgentTokenUsage[]> {
-    const { start, end } = dayBounds(range);
-    return em.find(AgentTokenUsage, { createdAt: { $gte: start, $lte: end } });
+  ): Promise<GovernanceUsageInput[]> {
+    const { start, end } = dayBoundsUtc(range);
+    const rows = await em.find(AgentTokenUsage, { createdAt: { $gte: start, $lte: end } });
+    return rows.map(toUsageInput);
   }
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
     const em = this.em.fork();
     const pricing = await this.loadPricing();
-    const rows = await this.usageInRange(em, range);
-    const byModel = new Map<
-      string,
-      { requests: number; inputTokens: number; outputTokens: number; costUsd: number }
-    >();
-    for (const row of rows) {
-      const bucket = byModel.get(row.modelId) ?? {
-        requests: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUsd: 0,
-      };
-      bucket.requests += 1;
-      bucket.inputTokens += row.inputTokens;
-      bucket.outputTokens += row.outputTokens;
-      bucket.costUsd += rowCost(pricing, row);
-      byModel.set(row.modelId, bucket);
-    }
-    const result: ModelSpendRow[] = [];
-    for (const [modelId, bucket] of byModel) {
-      result.push({
-        modelId,
-        requests: bucket.requests,
-        inputTokens: bucket.inputTokens,
-        outputTokens: bucket.outputTokens,
-        costUsd: bucket.costUsd,
-      });
-    }
-    result.sort(
-      (left, right) => right.costUsd - left.costUsd || left.modelId.localeCompare(right.modelId),
-    );
-    return result;
+    return bucketByModel(await this.usageInRange(em, range), pricing);
   }
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
     const em = this.em.fork();
     const pricing = await this.loadPricing();
-    const rows = await this.usageInRange(em, range);
-    const byActor = new Map<
-      string,
-      { requests: number; totalTokens: number; costUsd: number; threadIds: Set<string> }
-    >();
-    for (const row of rows) {
-      const bucket = byActor.get(row.actorRef) ?? {
-        requests: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        threadIds: new Set<string>(),
-      };
-      bucket.requests += 1;
-      bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += rowCost(pricing, row);
-      bucket.threadIds.add(row.thread.id);
-      byActor.set(row.actorRef, bucket);
-    }
-    const result: ActorSpendRow[] = [];
-    for (const [actorRef, bucket] of byActor) {
-      result.push({
-        actorRef,
-        requests: bucket.requests,
-        totalTokens: bucket.totalTokens,
-        costUsd: bucket.costUsd,
-        threadCount: bucket.threadIds.size,
-      });
-    }
-    result.sort(
-      (left, right) => right.costUsd - left.costUsd || left.actorRef.localeCompare(right.actorRef),
-    );
-    return result;
+    return bucketByActor(await this.usageInRange(em, range), pricing);
   }
 
   /**
@@ -181,61 +99,21 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const em = this.em.fork();
     const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
-    const byThread = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
-    for (const row of rows) {
-      const bucket = byThread.get(row.thread.id) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
-      bucket.requests += 1;
-      bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += rowCost(pricing, row);
-      byThread.set(row.thread.id, bucket);
-    }
-    if (byThread.size === 0) {
+    const threadIds = [...new Set(rows.map((row) => row.threadId))];
+    if (threadIds.length === 0) {
       return [];
     }
-    const threads = await em.find(AgentThread, {
-      id: { $in: [...byThread.keys()] },
-      deletedAt: null,
-    });
-    const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
-    const result: ThreadSpendRow[] = [];
-    for (const [threadId, bucket] of byThread) {
-      const thread = threadsById.get(threadId);
-      if (thread === undefined) {
-        continue;
-      }
-      result.push({
-        threadId,
-        title: thread.title,
-        actorRef: thread.actorRef,
-        requests: bucket.requests,
-        totalTokens: bucket.totalTokens,
-        costUsd: bucket.costUsd,
-      });
-    }
-    result.sort(
-      (left, right) => right.costUsd - left.costUsd || left.threadId.localeCompare(right.threadId),
+    const threads = await em.find(AgentThread, { id: { $in: threadIds }, deletedAt: null });
+    const threadsById = new Map<string, ThreadMeta>(
+      threads.map((thread) => [thread.id, { title: thread.title, actorRef: thread.actorRef }]),
     );
-    return result.slice(0, limit);
+    return bucketByThread(rows, pricing, threadsById, { limit, includeUnknownThreads: false });
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
     const em = this.em.fork();
     const pricing = await this.loadPricing();
-    const rows = await this.usageInRange(em, range);
-    const byDay = new Map<string, { totalTokens: number; costUsd: number }>();
-    for (const row of rows) {
-      const day = row.createdAt.toISOString().slice(0, 10);
-      const bucket = byDay.get(day) ?? { totalTokens: 0, costUsd: 0 };
-      bucket.totalTokens += row.inputTokens + row.outputTokens;
-      bucket.costUsd += rowCost(pricing, row);
-      byDay.set(day, bucket);
-    }
-    const result: UsageTrendPoint[] = [];
-    for (const [day, bucket] of byDay) {
-      result.push({ day, totalTokens: bucket.totalTokens, costUsd: bucket.costUsd });
-    }
-    result.sort((left, right) => left.day.localeCompare(right.day));
-    return result;
+    return bucketUsageTrend(await this.usageInRange(em, range), pricing);
   }
 
   async recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {

@@ -13,6 +13,7 @@ export * from './spi/reranker.js';
 export * from './spi/agent-runner.js';
 export * from './spi/actor-resolver.js';
 export * from './spi/governance-queries.js';
+export * from './governance/compute.js';
 export * from './tool-filters.js';
 export { AgentRegistry } from './agent-registry.js';
 export {
