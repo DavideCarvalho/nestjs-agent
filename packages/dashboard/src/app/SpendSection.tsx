@@ -1,15 +1,22 @@
 import { useState } from 'react';
-import type { SpendOverview } from '../client/agent-client';
+import type { SpendOverview, ThreadSpendRow } from '../client/agent-client';
 import { formatCount, formatUsd } from '../client/format-usd';
 import { donutSegments, summarizeSpend, withShares } from '../client/spend-summary';
 import type { TrendMetric } from '../client/trend-path';
 import { Donut, colorAt } from './Donut';
+import { TopThreadsSection } from './TopThreadsSection';
 import { TrendChart } from './TrendChart';
 import { ActivityIcon, ChipIcon, DollarIcon, TrendIcon } from './icons';
 import { Empty, Panel, Stat } from './ui';
 
 /** The headline governance section: total spend + usage, the by-model donut, and the daily trend. */
-export function SpendSection({ overview }: { overview: SpendOverview }) {
+export function SpendSection({
+  overview,
+  topThreads,
+}: {
+  overview: SpendOverview;
+  topThreads: ThreadSpendRow[];
+}) {
   const [metric, setMetric] = useState<TrendMetric>('costUsd');
   const totals = summarizeSpend(overview.byModel);
   const shares = withShares(overview.byModel);
@@ -107,6 +114,8 @@ export function SpendSection({ overview }: { overview: SpendOverview }) {
           )}
         </Panel>
       </div>
+
+      <TopThreadsSection rows={topThreads} />
     </div>
   );
 }

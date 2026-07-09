@@ -9,6 +9,14 @@ export function useSpend(range: GovernanceRange) {
   });
 }
 
+/** Poll the top-threads-by-cost feed for a range. */
+export function useTopThreads(range: GovernanceRange, limit = 10) {
+  return useQuery({
+    queryKey: ['top-threads', range.fromDay, range.toDay, limit],
+    queryFn: () => agentClient.topThreads(range, limit),
+  });
+}
+
 /** Poll the recent tool-calls feed. */
 export function useToolCalls(limit = 50) {
   return useQuery({

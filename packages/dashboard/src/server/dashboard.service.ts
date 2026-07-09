@@ -5,6 +5,7 @@ import type {
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
+  ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -78,6 +79,11 @@ export class DashboardService {
       this.queries.usageTrend(range),
     ]);
     return { byModel, byActor, trend };
+  }
+
+  /** Top threads by cost for a day range (default 10, highest cost first). */
+  topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRow[]> {
+    return this.queries.spendByThread(range, limit);
   }
 
   /** Most recent tool calls (status/type/thread) for the Runs & tools activity feed. */

@@ -3,6 +3,7 @@ import type {
   ModelSpendRow,
   SpendOverview,
   ThreadActivityRow,
+  ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '../client/agent-client';
@@ -144,6 +145,33 @@ export const MOCK_THREADS: ThreadActivityRow[] = [
     messageCount: 6,
     totalTokens: 28_400,
     lastActivityAt: new Date(Date.now() - 1_800_000).toISOString(),
+  },
+];
+
+export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
+  {
+    threadId: 'th1',
+    title: 'Q3 procurement review',
+    actorRef: 'tenant:acme',
+    requests: 24,
+    totalTokens: 184_000,
+    costUsd: 18.4,
+  },
+  {
+    threadId: 'th2',
+    title: 'Incident triage',
+    actorRef: 'user:ops-bot',
+    requests: 11,
+    totalTokens: 62_000,
+    costUsd: 6.2,
+  },
+  {
+    threadId: 'th3',
+    title: 'Contract summary',
+    actorRef: 'user:davi@goflip.ai',
+    requests: 6,
+    totalTokens: 28_400,
+    costUsd: 2.8,
   },
 ];
 

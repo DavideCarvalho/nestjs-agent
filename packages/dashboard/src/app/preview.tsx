@@ -12,6 +12,7 @@ import {
   MOCK_SPEND,
   MOCK_THREADS,
   MOCK_TOOL_CALLS,
+  MOCK_TOP_THREADS,
 } from './mock-data';
 import './index.css';
 
@@ -37,7 +38,7 @@ function Preview() {
         </header>
 
         <Group label="Spend & usage">
-          <SpendSection overview={MOCK_SPEND} />
+          <SpendSection overview={MOCK_SPEND} topThreads={MOCK_TOP_THREADS} />
         </Group>
         <Group label="Models">
           <ModelsSection rows={MOCK_SPEND.byModel} />

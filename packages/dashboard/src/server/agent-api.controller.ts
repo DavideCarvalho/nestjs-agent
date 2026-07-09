@@ -1,4 +1,8 @@
-import type { ThreadActivityRow, ToolCallActivityRow } from '@dudousxd/nestjs-agent-core';
+import type {
+  ThreadActivityRow,
+  ThreadSpendRow,
+  ToolCallActivityRow,
+} from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Query, Sse } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import { DashboardService, type LiveAgentEvent, type SpendOverview } from './dashboard.service.js';
@@ -46,6 +50,16 @@ export class AgentApiController {
   @Get('spend')
   spend(@Query('from') from?: string, @Query('to') to?: string): Promise<SpendOverview> {
     return this.dashboard.spend(resolveRange(from, to));
+  }
+
+  /** Top threads by cost (default 10, max 200) for a day range (defaults to the last 30 days). */
+  @Get('top-threads')
+  topThreads(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ): Promise<ThreadSpendRow[]> {
+    return this.dashboard.topThreads(resolveRange(from, to), parseLimit(limit, 10));
   }
 
   /** Most recent tool calls (default 50, max 200) for the activity feed. */

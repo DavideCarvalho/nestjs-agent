@@ -4,6 +4,7 @@ import type {
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
+  ThreadSpendRow,
   ToolCallActivityRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -15,6 +16,7 @@ interface QueriesOverrides {
   record?: (call: string) => void;
   spendByModel?: ModelSpendRow[];
   spendByActor?: ActorSpendRow[];
+  spendByThread?: ThreadSpendRow[];
   usageTrend?: UsageTrendPoint[];
   recentToolCalls?: ToolCallActivityRow[];
   recentThreads?: ThreadActivityRow[];
@@ -34,7 +36,7 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
     },
     async spendByThread(_range: GovernanceRange, _limit: number) {
       record('spendByThread');
-      return [];
+      return overrides.spendByThread ?? [];
     },
     async usageTrend(_range: GovernanceRange) {
       record('usageTrend');
@@ -103,6 +105,28 @@ describe('DashboardService', () => {
 
     expect((await service.recentToolCalls(10))[0]?.toolName).toBe('search');
     expect((await service.recentThreads(10))[0]?.threadId).toBe('th1');
+  });
+
+  it('topThreads() passes the range and limit through to the read-model', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        spendByThread: [
+          {
+            threadId: 'th1',
+            title: 'hello',
+            actorRef: 'user:1',
+            requests: 3,
+            totalTokens: 30,
+            costUsd: 0.5,
+          },
+        ],
+      }),
+    );
+
+    const rows = await service.topThreads({ fromDay: '2026-07-01', toDay: '2026-07-05' }, 5);
+
+    expect(rows[0]?.threadId).toBe('th1');
+    expect(rows[0]?.costUsd).toBe(0.5);
   });
 
   it('streamEvents() forwards a live agent diagnostics event to a subscriber', async () => {

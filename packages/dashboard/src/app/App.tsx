@@ -1,5 +1,10 @@
 import { type ReactNode, useState } from 'react';
-import type { SpendOverview, ThreadActivityRow, ToolCallActivityRow } from '../client/agent-client';
+import type {
+  SpendOverview,
+  ThreadActivityRow,
+  ThreadSpendRow,
+  ToolCallActivityRow,
+} from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { ActorsSection } from './ActorsSection';
@@ -8,7 +13,7 @@ import { ModelsSection } from './ModelsSection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
 import { ActivityIcon, ChipIcon, DollarIcon, LogoMark, UsersIcon, WrenchIcon } from './icons';
-import { useSpend, useThreads, useToolCalls } from './use-governance';
+import { useSpend, useThreads, useToolCalls, useTopThreads } from './use-governance';
 import { useLiveEvents } from './use-live-events';
 
 type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'live';
@@ -24,6 +29,7 @@ const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
 const EMPTY_SPEND: SpendOverview = { byModel: [], byActor: [], trend: [] };
 const EMPTY_TOOL_CALLS: ToolCallActivityRow[] = [];
 const EMPTY_THREADS: ThreadActivityRow[] = [];
+const EMPTY_TOP_THREADS: ThreadSpendRow[] = [];
 
 /**
  * The AI-gateway console shell: brand, section nav, a UTC day-range picker, and the live-connection
@@ -35,6 +41,7 @@ export function App() {
   const [section, setSection] = useState<SectionKey>('spend');
 
   const spend = useSpend(range);
+  const topThreads = useTopThreads(range);
   const toolCalls = useToolCalls();
   const threads = useThreads();
   const live = useLiveEvents();
@@ -78,6 +85,7 @@ export function App() {
         <ActiveSection
           section={section}
           overview={overview}
+          topThreads={topThreads.data ?? EMPTY_TOP_THREADS}
           loadingSpend={spend.isLoading}
           errorSpend={spend.isError}
           toolCalls={toolCalls.data ?? EMPTY_TOOL_CALLS}
@@ -93,6 +101,7 @@ export function App() {
 function ActiveSection({
   section,
   overview,
+  topThreads,
   loadingSpend,
   errorSpend,
   toolCalls,
@@ -102,6 +111,7 @@ function ActiveSection({
 }: {
   section: SectionKey;
   overview: SpendOverview;
+  topThreads: ThreadSpendRow[];
   loadingSpend: boolean;
   errorSpend: boolean;
   toolCalls: ToolCallActivityRow[];
@@ -121,7 +131,7 @@ function ActiveSection({
   }
   switch (section) {
     case 'spend':
-      return <SpendSection overview={overview} />;
+      return <SpendSection overview={overview} topThreads={topThreads} />;
     case 'models':
       return <ModelsSection rows={overview.byModel} />;
     case 'actors':

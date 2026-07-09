@@ -25,6 +25,16 @@ export interface ActorSpendRow {
   costUsd: number;
 }
 
+/** Spend + token totals for one thread over a range. */
+export interface ThreadSpendRow {
+  threadId: string;
+  title: string;
+  actorRef: string;
+  requests: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
 /** One point on the daily usage/cost trend. */
 export interface UsageTrendPoint {
   day: string;
@@ -92,6 +102,11 @@ export const agentClient = {
   spend(range: GovernanceRange): Promise<SpendOverview> {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
     return http<SpendOverview>(`/spend?${q.toString()}`);
+  },
+  /** Top threads by cost for a day range (default 10). */
+  topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRow[]> {
+    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay, limit: `${limit}` });
+    return http<ThreadSpendRow[]>(`/top-threads?${q.toString()}`);
   },
   /** Most recent tool calls (default 50). */
   toolCalls(limit = 50): Promise<ToolCallActivityRow[]> {
