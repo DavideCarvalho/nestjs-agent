@@ -1,6 +1,7 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  AgentPricingStore,
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
@@ -10,7 +11,6 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
-import { AgentModelPricing } from './entities/agent-model-pricing.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
@@ -64,22 +64,27 @@ function dayBounds(range: GovernanceRange): { start: Date; end: Date } {
 /**
  * {@link AgentGovernanceQueries} backed by MikroORM — the read/analytics half of the store SPI
  * (the write/thread half is {@link import('./mikro-orm-agent-store').MikroOrmAgentStore}). Cost is
- * the token ledger joined to the current pricing row per model (`AgentModelPricing.isCurrent`); an
- * unpriced model contributes 0 cost. Each operation runs on a fresh `em.fork()`, mirroring the
+ * the token ledger priced against the current prices from the injected {@link AgentPricingStore}
+ * (`AGENT_PRICING_STORE`) — so a host that binds its own pricing store (e.g. its own curated pricing
+ * table) controls the cost every governance surface reports, without this class knowing the source.
+ * An unpriced model contributes 0 cost. Each operation runs on a fresh `em.fork()`, mirroring the
  * store, and aggregates in-process (like `quotaToday`) so the day-bucketing stays engine-portable.
  */
 export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
-  constructor(private readonly em: EntityManager) {}
+  constructor(
+    private readonly em: EntityManager,
+    private readonly pricingStore: AgentPricingStore,
+  ) {}
 
-  private async loadPricing(em: EntityManager): Promise<Map<string, ModelPrice>> {
-    const rows = await em.find(AgentModelPricing, { isCurrent: true });
+  private async loadPricing(): Promise<Map<string, ModelPrice>> {
+    const prices = await this.pricingStore.listCurrentPrices();
     const pricing = new Map<string, ModelPrice>();
-    for (const row of rows) {
-      pricing.set(row.modelId, {
-        inputPricePer1m: row.inputPricePer1m,
-        outputPricePer1m: row.outputPricePer1m,
-        cacheWritePricePer1m: row.cacheWritePricePer1m ?? null,
-        cacheReadPricePer1m: row.cacheReadPricePer1m ?? null,
+    for (const price of prices) {
+      pricing.set(price.modelId, {
+        inputPricePer1m: price.inputPricePer1m,
+        outputPricePer1m: price.outputPricePer1m,
+        cacheWritePricePer1m: price.cacheWritePricePer1m ?? null,
+        cacheReadPricePer1m: price.cacheReadPricePer1m ?? null,
       });
     }
     return pricing;
@@ -95,7 +100,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
     const em = this.em.fork();
-    const pricing = await this.loadPricing(em);
+    const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
     const byModel = new Map<
       string,
@@ -132,7 +137,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
     const em = this.em.fork();
-    const pricing = await this.loadPricing(em);
+    const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
     const byActor = new Map<
       string,
@@ -174,7 +179,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    */
   async spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]> {
     const em = this.em.fork();
-    const pricing = await this.loadPricing(em);
+    const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
     const byThread = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
     for (const row of rows) {
@@ -215,7 +220,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
     const em = this.em.fork();
-    const pricing = await this.loadPricing(em);
+    const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
     const byDay = new Map<string, { totalTokens: number; costUsd: number }>();
     for (const row of rows) {

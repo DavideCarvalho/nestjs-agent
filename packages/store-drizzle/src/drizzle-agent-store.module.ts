@@ -2,8 +2,9 @@ import {
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
   AGENT_STORE,
+  type AgentPricingStore,
 } from '@dudousxd/nestjs-agent-core';
-import { type DynamicModule, Module } from '@nestjs/common';
+import { type DynamicModule, Module, type Type } from '@nestjs/common';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
@@ -13,6 +14,12 @@ import type { AgentDrizzleDb } from './schema.js';
 export interface DrizzleAgentStoreModuleOptions {
   /** A Drizzle SQLite database instance (`drizzle(client, { schema: agentSchema })`). */
   db: AgentDrizzleDb;
+  /**
+   * Bind {@link AGENT_PRICING_STORE} (which {@link DrizzleGovernanceQueries} prices usage against) to
+   * a host-supplied store instead of the default {@link DrizzlePricingStore} — make your OWN pricing
+   * table the single source of cost truth without touching `agent_model_pricing`.
+   */
+  pricingStore?: Type<AgentPricingStore>;
 }
 
 /**
@@ -42,15 +49,21 @@ export class DrizzleAgentStoreModule {
         { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db) },
         { provide: AGENT_STORE, useExisting: DrizzleAgentStore },
         {
-          provide: DrizzleGovernanceQueries,
-          useFactory: () => new DrizzleGovernanceQueries(options.db),
-        },
-        { provide: AGENT_GOVERNANCE_QUERIES, useExisting: DrizzleGovernanceQueries },
-        {
           provide: DrizzlePricingStore,
           useFactory: () => new DrizzlePricingStore(options.db),
         },
-        { provide: AGENT_PRICING_STORE, useExisting: DrizzlePricingStore },
+        // AGENT_PRICING_STORE: the host's own store when supplied, else the default Drizzle one.
+        // DrizzleGovernanceQueries prices usage against whatever is bound here.
+        options.pricingStore
+          ? { provide: AGENT_PRICING_STORE, useClass: options.pricingStore }
+          : { provide: AGENT_PRICING_STORE, useExisting: DrizzlePricingStore },
+        {
+          provide: DrizzleGovernanceQueries,
+          useFactory: (pricingStore: AgentPricingStore) =>
+            new DrizzleGovernanceQueries(options.db, pricingStore),
+          inject: [AGENT_PRICING_STORE],
+        },
+        { provide: AGENT_GOVERNANCE_QUERIES, useExisting: DrizzleGovernanceQueries },
       ],
       exports: [
         DrizzleAgentStore,

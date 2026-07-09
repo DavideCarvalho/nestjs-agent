@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
+import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import { ensureAgentSchema } from './ensure-schema.js';
 import {
   agentMessage,
@@ -27,7 +28,7 @@ beforeAll(async () => {
   sqlite.pragma('foreign_keys = ON');
   db = drizzle(sqlite, { schema: agentSchema });
   await ensureAgentSchema(db);
-  queries = new DrizzleGovernanceQueries(db);
+  queries = new DrizzleGovernanceQueries(db, new DrizzlePricingStore(db));
 
   // Pricing: gpt-x current 3/15; an older non-current gpt-x row must be ignored; free-y unpriced.
   await db.insert(agentModelPricing).values([
@@ -268,7 +269,7 @@ describe('DrizzleGovernanceQueries reported cost (better-sqlite3)', () => {
     sqlite.pragma('foreign_keys = ON');
     reportedDb = drizzle(sqlite, { schema: agentSchema });
     await ensureAgentSchema(reportedDb);
-    reportedQueries = new DrizzleGovernanceQueries(reportedDb);
+    reportedQueries = new DrizzleGovernanceQueries(reportedDb, new DrizzlePricingStore(reportedDb));
 
     // gpt-x is priced 3/15 → estimate 1*3 + 0.5*15 = 10.5, but the gateway reported 4.2 (wins).
     await reportedDb.insert(agentModelPricing).values({
@@ -340,7 +341,7 @@ describe('DrizzleGovernanceQueries cache pricing (better-sqlite3)', () => {
     sqlite.pragma('foreign_keys = ON');
     cacheDb = drizzle(sqlite, { schema: agentSchema });
     await ensureAgentSchema(cacheDb);
-    cacheQueries = new DrizzleGovernanceQueries(cacheDb);
+    cacheQueries = new DrizzleGovernanceQueries(cacheDb, new DrizzlePricingStore(cacheDb));
 
     // priced: cache-write 3.75 (1.25×), cache-read 0.3 (0.1×); gpt-flat has no cache rates.
     await cacheDb.insert(agentModelPricing).values([
@@ -425,7 +426,7 @@ describe('DrizzleGovernanceQueries spendByThread + threadCount (better-sqlite3)'
     sqlite.pragma('foreign_keys = ON');
     threadDb = drizzle(sqlite, { schema: agentSchema });
     await ensureAgentSchema(threadDb);
-    threadQueries = new DrizzleGovernanceQueries(threadDb);
+    threadQueries = new DrizzleGovernanceQueries(threadDb, new DrizzlePricingStore(threadDb));
 
     await threadDb.insert(agentModelPricing).values({
       id: 'price-thread',

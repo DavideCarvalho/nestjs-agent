@@ -2,6 +2,7 @@ import {
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
   AGENT_STORE,
+  type AgentPricingStore,
 } from '@dudousxd/nestjs-agent-core';
 import { EntityManager, MikroORM } from '@mikro-orm/core';
 import {
@@ -9,6 +10,7 @@ import {
   Module,
   type OnApplicationBootstrap,
   type Provider,
+  type Type,
 } from '@nestjs/common';
 import { ensureAgentSchema } from './ensure-schema';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
@@ -22,6 +24,13 @@ export interface MikroOrmAgentStoreOptions {
    * `false` when the host owns these tables through its own migrations instead.
    */
   autoSchema?: boolean;
+  /**
+   * Bind {@link AGENT_PRICING_STORE} (which {@link MikroOrmGovernanceQueries} prices usage against,
+   * and every governance surface reports) to a host-supplied store instead of the default
+   * {@link MikroOrmPricingStore}. Pass this to make your OWN pricing table the single source of cost
+   * truth (e.g. a versioned admin-curated pricing table) without touching `agent_model_pricing`.
+   */
+  pricingStore?: Type<AgentPricingStore>;
 }
 
 /** Runs {@link ensureAgentSchema} once the app is up. Registered only when `autoSchema` is on. */
@@ -87,17 +96,22 @@ export class MikroOrmAgentStoreModule {
         },
         { provide: AGENT_STORE, useExisting: MikroOrmAgentStore },
         {
-          provide: MikroOrmGovernanceQueries,
-          useFactory: (em: EntityManager) => new MikroOrmGovernanceQueries(em),
-          inject: [EntityManager],
-        },
-        { provide: AGENT_GOVERNANCE_QUERIES, useExisting: MikroOrmGovernanceQueries },
-        {
           provide: MikroOrmPricingStore,
           useFactory: (em: EntityManager) => new MikroOrmPricingStore(em),
           inject: [EntityManager],
         },
-        { provide: AGENT_PRICING_STORE, useExisting: MikroOrmPricingStore },
+        // AGENT_PRICING_STORE: the host's own store when supplied, else the default MikroOrm one.
+        // MikroOrmGovernanceQueries prices usage against whatever is bound here.
+        options.pricingStore
+          ? { provide: AGENT_PRICING_STORE, useClass: options.pricingStore }
+          : { provide: AGENT_PRICING_STORE, useExisting: MikroOrmPricingStore },
+        {
+          provide: MikroOrmGovernanceQueries,
+          useFactory: (em: EntityManager, pricingStore: AgentPricingStore) =>
+            new MikroOrmGovernanceQueries(em, pricingStore),
+          inject: [EntityManager, AGENT_PRICING_STORE],
+        },
+        { provide: AGENT_GOVERNANCE_QUERIES, useExisting: MikroOrmGovernanceQueries },
       ],
       exports: [
         MikroOrmAgentStore,

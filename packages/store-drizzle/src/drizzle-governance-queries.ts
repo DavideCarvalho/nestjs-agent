@@ -1,6 +1,7 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  AgentPricingStore,
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
@@ -12,7 +13,6 @@ import { and, count, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   agentMessage,
-  agentModelPricing,
   agentThread,
   agentTokenUsage,
   agentToolCall,
@@ -73,25 +73,26 @@ function dayBounds(range: GovernanceRange): { start: Date; end: Date } {
 /**
  * {@link AgentGovernanceQueries} backed by Drizzle ORM — the read/analytics half of the store SPI,
  * mirroring {@link import('@dudousxd/nestjs-agent-store-mikro-orm')} exactly. Cost is the token
- * ledger joined to the current pricing row per model (`agentModelPricing.isCurrent`); an unpriced
- * model contributes 0 cost. Aggregation is in-process (like `quotaToday`) so day-bucketing stays
- * dialect-portable.
+ * ledger priced against the current prices from the injected {@link AgentPricingStore}
+ * (`AGENT_PRICING_STORE`), so a host that binds its own pricing store controls the cost every
+ * governance surface reports. An unpriced model contributes 0 cost. Aggregation is in-process (like
+ * `quotaToday`) so day-bucketing stays dialect-portable.
  */
 export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
-  constructor(private readonly db: AgentDrizzleDb) {}
+  constructor(
+    private readonly db: AgentDrizzleDb,
+    private readonly pricingStore: AgentPricingStore,
+  ) {}
 
   private async loadPricing(): Promise<Map<string, ModelPrice>> {
-    const rows = await this.db
-      .select()
-      .from(agentModelPricing)
-      .where(eq(agentModelPricing.isCurrent, true));
+    const prices = await this.pricingStore.listCurrentPrices();
     const pricing = new Map<string, ModelPrice>();
-    for (const row of rows) {
-      pricing.set(row.modelId, {
-        inputPricePer1m: row.inputPricePer1m,
-        outputPricePer1m: row.outputPricePer1m,
-        cacheWritePricePer1m: row.cacheWritePricePer1m,
-        cacheReadPricePer1m: row.cacheReadPricePer1m,
+    for (const price of prices) {
+      pricing.set(price.modelId, {
+        inputPricePer1m: price.inputPricePer1m,
+        outputPricePer1m: price.outputPricePer1m,
+        cacheWritePricePer1m: price.cacheWritePricePer1m ?? null,
+        cacheReadPricePer1m: price.cacheReadPricePer1m ?? null,
       });
     }
     return pricing;

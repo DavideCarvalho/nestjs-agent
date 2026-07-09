@@ -12,6 +12,7 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
+import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
 
 let orm: MikroORM;
 let queries: MikroOrmGovernanceQueries;
@@ -27,7 +28,7 @@ beforeAll(async () => {
     allowGlobalContext: true,
   });
   await ensureAgentSchema(orm);
-  queries = new MikroOrmGovernanceQueries(orm.em);
+  queries = new MikroOrmGovernanceQueries(orm.em, new MikroOrmPricingStore(orm.em));
 
   const em = orm.em.fork();
 
@@ -288,7 +289,10 @@ describe('MikroOrmGovernanceQueries reported cost (sqlite)', () => {
       allowGlobalContext: true,
     });
     await ensureAgentSchema(reportedOrm);
-    reportedQueries = new MikroOrmGovernanceQueries(reportedOrm.em);
+    reportedQueries = new MikroOrmGovernanceQueries(
+      reportedOrm.em,
+      new MikroOrmPricingStore(reportedOrm.em),
+    );
 
     const em = reportedOrm.em.fork();
     const thread = em.create(AgentThread, {
@@ -370,7 +374,10 @@ describe('MikroOrmGovernanceQueries cache pricing (sqlite)', () => {
       allowGlobalContext: true,
     });
     await ensureAgentSchema(cacheOrm);
-    cacheQueries = new MikroOrmGovernanceQueries(cacheOrm.em);
+    cacheQueries = new MikroOrmGovernanceQueries(
+      cacheOrm.em,
+      new MikroOrmPricingStore(cacheOrm.em),
+    );
 
     const em = cacheOrm.em.fork();
     const thread = em.create(AgentThread, {
@@ -464,7 +471,10 @@ describe('MikroOrmGovernanceQueries spendByThread + threadCount (sqlite)', () =>
       allowGlobalContext: true,
     });
     await ensureAgentSchema(threadOrm);
-    threadQueries = new MikroOrmGovernanceQueries(threadOrm.em);
+    threadQueries = new MikroOrmGovernanceQueries(
+      threadOrm.em,
+      new MikroOrmPricingStore(threadOrm.em),
+    );
 
     const em = threadOrm.em.fork();
     const pricing = em.create(AgentModelPricing, {
