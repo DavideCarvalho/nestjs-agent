@@ -39,7 +39,12 @@ export function Agent(options: AgentOptions): ClassDecorator {
   };
 }
 
-/** Reads {@link AgentOptions} off a class (its constructor), or `undefined` if not an `@Agent`. */
+/**
+ * Reads {@link AgentOptions} off a class (its constructor), or `undefined` if not an `@Agent`. The
+ * reflection target is a class or Nest's provider `metatype`, whose type is precisely `Type |
+ * Function`; narrowing it away from `Function` would reject valid callers.
+ */
+// biome-ignore lint/complexity/noBannedTypes: the reflection target's type is precisely `Type | Function`.
 export function readAgentMetadata(target: Type | Function): AgentOptions | undefined {
   return Reflect.getMetadata(AGENT_METADATA, target) as AgentOptions | undefined;
 }
