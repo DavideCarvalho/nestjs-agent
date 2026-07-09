@@ -435,6 +435,7 @@ export async function runAgentLoop(
         threadId: input.threadId,
         runId: hooks.runId,
         requestId: hooks.runId,
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
         ...(deps.host !== undefined ? { host: deps.host } : {}),
       };
