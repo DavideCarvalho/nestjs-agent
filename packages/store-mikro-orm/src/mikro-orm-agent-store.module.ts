@@ -4,7 +4,6 @@ import {
   AGENT_STORE,
 } from '@dudousxd/nestjs-agent-core';
 import { EntityManager, MikroORM } from '@mikro-orm/core';
-import { MikroOrmModule } from '@mikro-orm/nestjs';
 import {
   type DynamicModule,
   Module,
@@ -12,7 +11,6 @@ import {
   type Provider,
 } from '@nestjs/common';
 import { ensureAgentSchema } from './ensure-schema';
-import { AGENT_ENTITIES } from './entities';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
@@ -50,7 +48,16 @@ class AgentSchemaInitializer implements OnApplicationBootstrap {
  * By default the store reconciles its tables at boot (fingerprint-gated {@link ensureAgentSchema});
  * pass `{ autoSchema: false }` when the host manages them via its own migrations.
  *
+ * The host must register the agent entities in its own MikroORM config — same as the durable and
+ * notifications stores — so they enter the shared ORM's discovery metadata (which the store repos
+ * and the boot autoSchema read):
+ *
  * ```ts
+ * // mikro-orm config
+ * import { agentEntities } from '@dudousxd/nestjs-agent-store-mikro-orm';
+ * entities: [ ...yourEntities, ...agentEntities({ collation: 'utf8mb4_unicode_ci' }) ]
+ *
+ * // app module
  * @Module({ imports: [MikroOrmAgentStoreModule.forFeature()] })
  * export class AppModule {}
  * ```
@@ -71,7 +78,6 @@ export class MikroOrmAgentStoreModule {
     return {
       module: MikroOrmAgentStoreModule,
       global: true,
-      imports: [MikroOrmModule.forFeature(AGENT_ENTITIES)],
       providers: [
         ...schemaProviders,
         {
