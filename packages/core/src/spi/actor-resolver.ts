@@ -9,9 +9,10 @@ import type { Actor } from '../types.js';
  * an identity is never invented from a default. See `HeaderActorResolver` for a header-based
  * resolver suitable for demos and gateways that strip/re-set the headers.
  *
- * `req` is the transport request object, typed `unknown` to keep core framework-agnostic;
- * a NestJS/Express app receives the express `Request`.
+ * `req` is the transport request object. Defaults to `unknown` to keep core framework-agnostic
+ * (a NestJS/Express app receives the express `Request`) — a host may narrow it via
+ * `ActorResolver<Request>` instead of writing its own `unknown`-narrowing type guard.
  */
-export interface ActorResolver {
-  resolve(req: unknown): Actor | Promise<Actor>;
+export interface ActorResolver<TReq = unknown> {
+  resolve(req: TReq): Actor | Promise<Actor>;
 }
