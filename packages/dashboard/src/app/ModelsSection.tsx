@@ -1,4 +1,5 @@
 import type { ModelSpendRow } from '../client/agent-client';
+import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatUsd } from '../client/format-usd';
 import { withShares } from '../client/spend-summary';
 import { colorAt } from './Donut';
@@ -28,13 +29,18 @@ export function ModelsSection({ rows }: { rows: ModelSpendRow[] }) {
             <tbody className="mono tnum">
               {shares.map((row, index) => (
                 <tr key={row.modelId} className="border-b border-[var(--line-soft)]">
-                  <td className="py-2.5">
+                  <td className="py-2.5 pr-4">
                     <span className="flex items-center gap-2">
                       <span
                         className="h-2.5 w-2.5 shrink-0 rounded-sm"
                         style={{ background: colorAt(index) }}
                       />
-                      <span className="truncate text-[var(--text)]">{row.modelId}</span>
+                      <span
+                        className="block max-w-[240px] truncate text-[var(--text)]"
+                        title={row.modelId}
+                      >
+                        {formatModelLabel(row.modelId)}
+                      </span>
                     </span>
                   </td>
                   <td className="py-2.5 text-right text-[var(--muted)]">{row.requests}</td>

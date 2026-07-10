@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SpendOverview, ThreadSpendRow } from '../client/agent-client';
+import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatUsd } from '../client/format-usd';
 import { donutSegments, summarizeSpend, withShares } from '../client/spend-summary';
 import type { TrendMetric } from '../client/trend-path';
@@ -70,11 +71,16 @@ export function SpendSection({
                       className="h-2.5 w-2.5 shrink-0 rounded-sm"
                       style={{ background: colorAt(index) }}
                     />
-                    <span className="mono truncate text-[var(--text)]">{row.modelId}</span>
-                    <span className="mono tnum ml-auto text-[var(--muted)]">
+                    <span
+                      className="mono min-w-0 flex-1 truncate text-[var(--text)]"
+                      title={row.modelId}
+                    >
+                      {formatModelLabel(row.modelId)}
+                    </span>
+                    <span className="mono tnum ml-auto shrink-0 text-[var(--muted)]">
                       {formatUsd(row.costUsd)}
                     </span>
-                    <span className="mono tnum w-9 text-right text-[var(--muted)]">
+                    <span className="mono tnum w-9 shrink-0 text-right text-[var(--muted)]">
                       {Math.round(row.costShare * 100)}%
                     </span>
                   </li>
