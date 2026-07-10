@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig([
   {
-    entry: ['src/index.ts', 'src/durable/index.ts'],
+    entry: ['src/index.ts', 'src/durable/index.ts', 'src/sink-redis/index.ts'],
     format: ['esm'],
     dts: true,
     clean: true,
@@ -11,7 +11,7 @@ export default defineConfig([
     outDir: 'dist',
   },
   {
-    entry: ['src/index.ts', 'src/durable/index.ts'],
+    entry: ['src/index.ts', 'src/durable/index.ts', 'src/sink-redis/index.ts'],
     format: ['cjs'],
     dts: true,
     clean: false,
