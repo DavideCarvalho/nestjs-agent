@@ -98,4 +98,15 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
    */
   durable?: boolean;
+  /**
+   * Set when `AGENT_STORE` is bound by a globally-imported store module (e.g.
+   * `MikroOrmAgentStoreModule.forFeature()`) instead of returned as `store` from `useFactory`.
+   *
+   * `forRoot` decides this synchronously (`store` present or not), but the async factory resolves
+   * too late to inspect — so by default `forRootAsync` binds `AGENT_STORE` from the factory result,
+   * which would shadow a global store binding with `undefined` when the factory omits `store`. Set
+   * this to `true` to skip the local binding and defer to the global one. Leave it unset (and return
+   * `store` from the factory) when the store is constructed inside the factory.
+   */
+  externalStore?: boolean;
 }

@@ -178,6 +178,11 @@ export class AgentModule {
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
+    // The async factory resolves too late to inspect `store`, so `forRootAsync` binds AGENT_STORE
+    // locally from the factory result by default. `externalStore: true` opts out — deferring to a
+    // globally-imported store module (e.g. `MikroOrmAgentStoreModule.forFeature()`) so the host
+    // doesn't have to inject that store just to hand it back as `store`.
+    const includeStore = options.externalStore !== true;
     return {
       module: AgentModule,
       global: true,
@@ -189,11 +194,9 @@ export class AgentModule {
           useFactory: options.useFactory,
           inject: options.inject ?? [],
         },
-        // The async factory resolves too late to inspect `store`, so we always bind AGENT_STORE here
-        // (its factory reads the resolved options). Omit-and-import-a-store-module is a `forRoot` path.
-        ...sharedProviders(options.durable ?? false, true),
+        ...sharedProviders(options.durable ?? false, includeStore),
       ],
-      exports: exportsFor(true),
+      exports: exportsFor(includeStore),
     };
   }
 }
