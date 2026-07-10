@@ -1,18 +1,22 @@
-import type {
-  MessageUsage,
-  ModelMessage,
-  ModelProvider,
-  ModelTurnArgs,
-  ModelTurnResult,
-  ToolCallRequest,
-  ToolDefinition,
-  ToolResult,
+import {
+  type MessageAttachment,
+  type MessageUsage,
+  type ModelMessage,
+  type ModelProvider,
+  type ModelTurnArgs,
+  type ModelTurnResult,
+  type ToolCallRequest,
+  type ToolDefinition,
+  type ToolResult,
+  encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 import {
   type AssistantContent,
   type CallSettings,
+  type FilePart,
   type FlexibleSchema,
+  type ImagePart,
   type JSONValue,
   type LanguageModel,
   type LanguageModelUsage,
@@ -55,13 +59,43 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
         ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
       });
 
-      // Encode deltas to bytes for the live token sink, exactly as the reference fake provider does.
-      const encoder = new TextEncoder();
+      // Translate the model's streamed parts into the neutral AgentStreamEvent vocabulary and write
+      // them to the sink, so the client reconstructs text, reasoning, and live tool-call cards (the
+      // input streaming in) — not just text. Tool RESULTS are emitted by the agent loop after it runs
+      // the tool; step boundaries are owned by the loop too (a step spans the model call + its tool
+      // execution). `text` is still accumulated for the persisted assistant message.
       let text = '';
       for await (const part of result.stream) {
-        if (part.type === 'text-delta') {
-          text += part.text;
-          await args.sink.write(encoder.encode(part.text));
+        switch (part.type) {
+          case 'text-delta':
+            text += part.text;
+            await args.sink.write(encodeStreamEvent({ kind: 'text', text: part.text }));
+            break;
+          case 'reasoning-delta':
+            await args.sink.write(encodeStreamEvent({ kind: 'reasoning', text: part.text }));
+            break;
+          case 'tool-input-start':
+            await args.sink.write(
+              encodeStreamEvent({ kind: 'tool-input-start', id: part.id, name: part.toolName }),
+            );
+            break;
+          case 'tool-input-delta':
+            await args.sink.write(
+              encodeStreamEvent({ kind: 'tool-input-delta', id: part.id, delta: part.delta }),
+            );
+            break;
+          case 'tool-call':
+            await args.sink.write(
+              encodeStreamEvent({
+                kind: 'tool-input-available',
+                id: part.toolCallId,
+                name: part.toolName,
+                input: part.input,
+              }),
+            );
+            break;
+          default:
+            break;
         }
       }
 
@@ -100,7 +134,12 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
       continue;
     }
     if (message.role === 'user') {
-      out.push({ role: 'user', content: message.content });
+      const attachments = message.attachments ?? [];
+      out.push(
+        attachments.length === 0
+          ? { role: 'user', content: message.content }
+          : { role: 'user', content: userContentWithAttachments(message.content, attachments) },
+      );
       continue;
     }
 
@@ -143,6 +182,35 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
 
 /** `Array<TextPart | ToolCallPart>` is a valid `AssistantContent`; name the widening explicitly. */
 function assistantContent(parts: Array<TextPart | ToolCallPart>): AssistantContent {
+  return parts;
+}
+
+/**
+ * Build a multimodal user content array: the text (when non-empty) followed by one part per
+ * attachment — `image/*` → an image part, everything else → a file part (Bedrock Claude reads a PDF
+ * this way). The attachment's `url` is passed straight through as the part's source; making it
+ * reachable by the provider is the consumer's concern, not the adapter's.
+ */
+function userContentWithAttachments(
+  text: string,
+  attachments: MessageAttachment[],
+): Array<TextPart | ImagePart | FilePart> {
+  const parts: Array<TextPart | ImagePart | FilePart> = [];
+  if (text.length > 0) {
+    parts.push({ type: 'text', text });
+  }
+  for (const attachment of attachments) {
+    parts.push(
+      attachment.contentType.startsWith('image/')
+        ? { type: 'image', image: new URL(attachment.url), mediaType: attachment.contentType }
+        : {
+            type: 'file',
+            data: new URL(attachment.url),
+            mediaType: attachment.contentType,
+            filename: attachment.name,
+          },
+    );
+  }
   return parts;
 }
 

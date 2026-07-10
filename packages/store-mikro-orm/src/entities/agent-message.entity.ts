@@ -1,4 +1,5 @@
 import type {
+  MessageAttachment,
   MessageRole,
   MessageUsage,
   ToolCallRequest,
@@ -19,6 +20,7 @@ export class AgentMessage {
   content!: string;
   toolCalls?: ToolCallRequest[] | null;
   toolResults?: ToolResult[] | null;
+  attachments?: MessageAttachment[] | null;
   followUps?: string[] | null;
   usage?: MessageUsage | null;
   agentName?: string | null;
@@ -45,6 +47,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       content: { type: 'text', ...str },
       toolCalls: { type: 'json', nullable: true, fieldName: 'tool_calls' },
       toolResults: { type: 'json', nullable: true, fieldName: 'tool_results' },
+      attachments: { type: 'json', nullable: true },
       followUps: { type: 'json', nullable: true, fieldName: 'follow_ups' },
       usage: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },

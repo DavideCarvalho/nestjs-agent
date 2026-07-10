@@ -13,6 +13,7 @@ import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
+import { encodeStreamEvent } from './stream-events.js';
 import type { AiToolCtx } from './spi/tool.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type {
@@ -273,6 +274,7 @@ export async function runAgentLoop(
         threadId: input.threadId,
         role: 'user',
         content: input.userText,
+        ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       }),
     );
   }
@@ -283,6 +285,7 @@ export async function runAgentLoop(
     content: message.content,
     ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
     ...(message.toolResults !== undefined ? { toolResults: message.toolResults } : {}),
+    ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
   }));
 
   const writer = await hooks.openSink();
@@ -319,6 +322,13 @@ export async function runAgentLoop(
   // and prematurely close the live stream. We only end on normal completion — the throw propagates
   // to the engine, and the resumed replay reaches the writer.end() below.
   for (let i = 0; i < maxSteps; i += 1) {
+    // Open a UI step spanning this model call AND its tool execution — matching the AI SDK's own
+    // step semantics, so tool-output lands inside the step that made the call. Wrapped in a durable
+    // step so replay doesn't re-emit it (a no-op for the inline runner).
+    await hooks.step(`stream:step-start:${i}`, async () => {
+      await writer.write(encodeStreamEvent({ kind: 'step-start' }));
+    });
+
     const tools = await deps.registry.definitionsFor(
       input.actor,
       deps.rolesPolicy,
@@ -397,11 +407,15 @@ export async function runAgentLoop(
         ...(followUps !== undefined ? { followUps } : {}),
       }),
     );
-    modelMessages.push({
+    // Tool results ride on the same assistant message that made the calls — the compact shape the
+    // store persists and `mapMessages` (in every model adapter) expands into an assistant + tool
+    // message pair. We keep the reference and attach `toolResults` below once the tools have run.
+    const assistantMessage: ModelMessage = {
       role: 'assistant',
       content: turn.text,
       ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
-    });
+    };
+    modelMessages.push(assistantMessage);
 
     // Record inject-mode retrieval as a synthetic auto-executed `retrieve` tool call on the assistant
     // message it informed — so its passages persist and render as citations exactly like an agentic
@@ -423,6 +437,9 @@ export async function runAgentLoop(
     }
 
     if (isFinalTurn) {
+      await hooks.step(`stream:step-finish:${i}`, async () => {
+        await writer.write(encodeStreamEvent({ kind: 'step-finish' }));
+      });
       break;
     }
 
@@ -573,7 +590,26 @@ export async function runAgentLoop(
       }
     }
 
-    modelMessages.push({ role: 'user', content: '', toolResults: results });
+    assistantMessage.toolResults = results;
+
+    // Stream each tool's result so the client flips its live tool card from "running" to the
+    // rendered output (renderResult → DataTable/Chart, executeSql → rows). One durable step keeps
+    // replay from re-emitting. `error` covers both a thrown tool and a rejected action.
+    await hooks.step(`stream:tool-outputs:${i}`, async () => {
+      for (const result of results) {
+        await writer.write(
+          encodeStreamEvent(
+            result.error !== undefined
+              ? { kind: 'tool-output-error', id: result.id, error: result.error }
+              : { kind: 'tool-output', id: result.id, output: result.output },
+          ),
+        );
+      }
+    });
+
+    await hooks.step(`stream:step-finish:${i}`, async () => {
+      await writer.write(encodeStreamEvent({ kind: 'step-finish' }));
+    });
   }
 
   if (thread !== null && (thread.title === '' || thread.title === 'New chat')) {

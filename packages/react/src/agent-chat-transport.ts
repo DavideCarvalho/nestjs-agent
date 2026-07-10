@@ -1,3 +1,4 @@
+import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 
 /** Identity surfaced by the backend's `meta` SSE frame / response headers. */
@@ -55,6 +56,13 @@ const HEADER_THREAD_ID = 'x-agent-thread-id';
  * The backend hydrates prior history from its store, so only the latest
  * user message text is sent each turn — keeping payloads tiny and
  * preventing the client from corrupting replayed history.
+ *
+ * Attachments (image/PDF for a vision-capable model) ride the per-send body:
+ * `sendMessage({ text }, { body: { attachments: MessageAttachment[] } })`. They
+ * flow to the backend as the turn's `attachments`, get persisted on the user
+ * message, and are rendered as native model content parts. Optimistic display of
+ * the user's own attachment thumbnails is the consumer's concern (it stages the
+ * upload), the same way history rendering reads `StoredMessage.attachments`.
  */
 export class AgentChatTransport implements ChatTransport<UIMessage> {
   private currentRunId: string | undefined;
@@ -160,18 +168,26 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   }
 
   /**
-   * Parse the backend's SSE byte stream and synthesize a valid v7
-   * UI-message chunk stream. Recognized backend frames:
-   *  - `event: meta`  `data: {"runId","threadId"}`  → records identity
-   *  - `data: {"delta":"..."}`                       → `text-delta`
-   *  - `event: done`  `data: {}`                     → terminates
+   * Parse the backend's SSE byte stream and re-emit it as a valid v7 UI-message chunk stream.
+   * Recognized frames:
+   *  - `event: meta`  `data: {"runId","threadId"}`   → records identity
+   *  - `data: <AgentStreamEvent JSON>`                → mapped to UI chunks (text / reasoning / tool)
+   *  - `event: done`  `data: {}`                      → terminates
+   *  - `event: error` `data: {code,message}`          → error chunk
+   *
+   * A run is ONE UI message with N steps. Each `step-start`/`step-finish` pair brackets a model
+   * call plus its tool execution; text and reasoning open lazily and close at the step boundary, so
+   * tool-call cards (input streaming → output) render live between the prose.
    */
   private toChunkStream(source: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
     const reader = source.getReader();
     const decoder = new TextDecoder();
-    const textId = `txt-${Math.random().toString(36).slice(2)}`;
     let buffer = '';
     let started = false;
+    let stepOpen = false;
+    let stepIndex = 0;
+    let textId: string | null = null;
+    let reasoningId: string | null = null;
     const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
 
     return new ReadableStream<UIMessageChunk>({
@@ -180,13 +196,104 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           if (started) return;
           started = true;
           controller.enqueue({ type: 'start' });
+        }
+        function openStep() {
+          ensureStarted();
+          if (stepOpen) closeStep();
+          stepOpen = true;
+          stepIndex += 1;
+          textId = null;
+          reasoningId = null;
           controller.enqueue({ type: 'start-step' });
-          controller.enqueue({ type: 'text-start', id: textId });
+        }
+        function ensureStep() {
+          if (!stepOpen) openStep();
+        }
+        function closeStep() {
+          if (!stepOpen) return;
+          if (textId !== null) {
+            controller.enqueue({ type: 'text-end', id: textId });
+            textId = null;
+          }
+          if (reasoningId !== null) {
+            controller.enqueue({ type: 'reasoning-end', id: reasoningId });
+            reasoningId = null;
+          }
+          controller.enqueue({ type: 'finish-step' });
+          stepOpen = false;
+        }
+        function emit(event: AgentStreamEvent) {
+          switch (event.kind) {
+            case 'step-start':
+              openStep();
+              break;
+            case 'step-finish':
+              closeStep();
+              break;
+            case 'text':
+              ensureStep();
+              if (textId === null) {
+                textId = `txt-${stepIndex}`;
+                controller.enqueue({ type: 'text-start', id: textId });
+              }
+              controller.enqueue({ type: 'text-delta', id: textId, delta: event.text });
+              break;
+            case 'reasoning':
+              ensureStep();
+              if (reasoningId === null) {
+                reasoningId = `rsn-${stepIndex}`;
+                controller.enqueue({ type: 'reasoning-start', id: reasoningId });
+              }
+              controller.enqueue({ type: 'reasoning-delta', id: reasoningId, delta: event.text });
+              break;
+            case 'tool-input-start':
+              ensureStep();
+              controller.enqueue({
+                type: 'tool-input-start',
+                toolCallId: event.id,
+                toolName: event.name,
+              });
+              break;
+            case 'tool-input-delta':
+              ensureStep();
+              controller.enqueue({
+                type: 'tool-input-delta',
+                toolCallId: event.id,
+                inputTextDelta: event.delta,
+              });
+              break;
+            case 'tool-input-available':
+              ensureStep();
+              controller.enqueue({
+                type: 'tool-input-available',
+                toolCallId: event.id,
+                toolName: event.name,
+                input: event.input,
+              });
+              break;
+            case 'tool-output':
+              ensureStep();
+              controller.enqueue({
+                type: 'tool-output-available',
+                toolCallId: event.id,
+                output: event.output,
+              });
+              break;
+            case 'tool-output-error':
+              ensureStep();
+              controller.enqueue({
+                type: 'tool-output-error',
+                toolCallId: event.id,
+                errorText: event.error,
+              });
+              break;
+            default:
+              break;
+          }
         }
         function finish() {
           ensureStarted();
-          controller.enqueue({ type: 'text-end', id: textId });
-          controller.enqueue({ type: 'finish-step' });
+          closeStep();
           controller.enqueue({ type: 'finish' });
           controller.close();
         }
@@ -217,15 +324,8 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 const meta = parseMeta(frame.data);
                 if (meta) record(meta);
               } else if (frame.data) {
-                const delta = parseDelta(frame.data);
-                if (delta) {
-                  ensureStarted();
-                  controller.enqueue({
-                    type: 'text-delta',
-                    id: textId,
-                    delta,
-                  });
-                }
+                const event = parseEvent(frame.data);
+                if (event) emit(event);
               }
               separator = buffer.indexOf('\n\n');
             }
@@ -306,19 +406,15 @@ function parseErrorText(data: string | undefined): string {
   return 'Agent run failed';
 }
 
-function parseDelta(data: string): string | null {
+/** Parse a `data:` frame as an `AgentStreamEvent`. Returns null for anything without a `kind`. */
+function parseEvent(data: string): AgentStreamEvent | null {
   try {
     const parsed: unknown = JSON.parse(data);
-    if (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      'delta' in parsed &&
-      typeof parsed.delta === 'string'
-    ) {
-      return parsed.delta;
+    if (parsed !== null && typeof parsed === 'object' && 'kind' in parsed) {
+      return parsed as AgentStreamEvent;
     }
   } catch {
-    /* not a delta frame — ignore */
+    /* not an event frame — ignore */
   }
   return null;
 }

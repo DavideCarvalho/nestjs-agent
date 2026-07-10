@@ -2,6 +2,7 @@ import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
   AgentStreamError,
+  type MessageAttachment,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
@@ -13,6 +14,8 @@ interface ChatBody {
   threadId?: string;
   /** Name of the agent to run (orchestrator or a sub-agent). Defaults to the module's default. */
   agent?: string;
+  /** Files attached to this message (image/PDF) for a vision-capable model. */
+  attachments?: MessageAttachment[];
   pageContext?: PageContext;
   /** Re-run the last exchange on `threadId` instead of adding a new message. */
   regenerate?: boolean;
@@ -35,6 +38,7 @@ export class ChatController {
       message: body.message,
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
+      ...(body.attachments !== undefined ? { attachments: body.attachments } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
       ...(body.transient === true ? { transient: true } : {}),
@@ -63,10 +67,26 @@ export class ChatController {
       res.setHeader('X-Agent-Thread-Id', threadId);
     }
     res.write(`event: meta\ndata: ${JSON.stringify({ runId, threadId })}\n\n`);
+    // The sink now carries NDJSON `AgentStreamEvent`s (one `{...}\n` per write). Forward each line
+    // as an SSE `data:` frame verbatim — the client transport maps them to the AI SDK UI-message
+    // chunk protocol. Buffer across chunk boundaries in case a transport batches multiple writes.
     const decoder = new TextDecoder();
+    let buffer = '';
     try {
       for await (const chunk of this.agent.subscribe(runId)) {
-        res.write(`data: ${JSON.stringify({ delta: decoder.decode(chunk) })}\n\n`);
+        buffer += decoder.decode(chunk, { stream: true });
+        let newline = buffer.indexOf('\n');
+        while (newline !== -1) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (line.length > 0) {
+            res.write(`data: ${line}\n\n`);
+          }
+          newline = buffer.indexOf('\n');
+        }
+      }
+      if (buffer.length > 0) {
+        res.write(`data: ${buffer}\n\n`);
       }
       res.write('event: done\ndata: {}\n\n');
     } catch (error) {

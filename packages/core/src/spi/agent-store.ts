@@ -1,5 +1,6 @@
 import type {
   Actor,
+  MessageAttachment,
   MessageUsage,
   StoredMessage,
   ThreadDetail,
@@ -24,6 +25,8 @@ export interface AppendMessageInput {
   agentName?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
+  /** Files the user attached to this message (image/PDF). Persisted verbatim. */
+  attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
 }

@@ -38,8 +38,10 @@ describe('useAgentChat', () => {
       if (url.endsWith('/agent/chat')) {
         return sseResponse([
           'event: meta\ndata: {"runId":"run-1","threadId":"thr-1"}\n\n',
-          'data: {"delta":"Hello"}\n\n',
-          'data: {"delta":" world"}\n\n',
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"text","text":"Hello"}\n\n',
+          'data: {"kind":"text","text":" world"}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
           'event: done\ndata: {}\n\n',
         ]);
       }
@@ -82,7 +84,10 @@ describe('useAgentChat', () => {
   it('sends only the latest user message text in the chat request body', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith('/agent/chat')) {
-        return sseResponse(['data: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
+        return sseResponse([
+          'data: {"kind":"text","text":"ok"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]);
       }
       return jsonResponse();
     });
@@ -105,5 +110,45 @@ describe('useAgentChat', () => {
       message: 'how many users?',
       threadId: 'thr-9',
     });
+  });
+
+  it('reuses the backend-created thread on later sends (no new thread per message)', async () => {
+    const created: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/agent/chat')) {
+        return sseResponse([
+          'event: meta\ndata: {"runId":"run-1","threadId":"srv-thread"}\n\n',
+          'data: {"kind":"text","text":"hi"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]);
+      }
+      return jsonResponse();
+    });
+
+    // No threadId option → a "new chat". The backend mints `srv-thread` and reports it via `meta`.
+    const { result } = renderHook(() =>
+      useAgentChat({
+        fetch: fetchMock as unknown as typeof fetch,
+        onThreadCreated: (id) => created.push(id),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.sendMessage({ text: 'first' });
+    });
+    await act(async () => {
+      await result.current.sendMessage({ text: 'second' });
+    });
+
+    const chatBodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith('/agent/chat'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+
+    // First send carries no threadId (none exists yet); the second reuses the created one.
+    expect(chatBodies[0]).toMatchObject({ message: 'first' });
+    expect(chatBodies[0].threadId).toBeUndefined();
+    expect(chatBodies[1]).toMatchObject({ message: 'second', threadId: 'srv-thread' });
+    // onThreadCreated fires exactly once, with the server id.
+    expect(created).toEqual(['srv-thread']);
   });
 });

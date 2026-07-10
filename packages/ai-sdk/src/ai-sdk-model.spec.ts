@@ -88,8 +88,20 @@ describe('aiSdkModel', () => {
       sink,
     });
 
-    // Only text deltas reach the sink (reasoning-delta is ignored), and in stream order.
-    expect(sink.written).toBe('Hello');
+    // The sink carries NDJSON AgentStreamEvents. Text deltas arrive in stream order as `text` events
+    // and accumulate to the final text; reasoning + the tool call ride the same stream.
+    const events = sink.written
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line): unknown => JSON.parse(line));
+    const textDeltas = events
+      .filter(
+        (event): event is { kind: 'text'; text: string } =>
+          typeof event === 'object' && event !== null && (event as { kind?: unknown }).kind === 'text',
+      )
+      .map((event) => event.text);
+    expect(textDeltas.join('')).toBe('Hello');
+    expect(events).toContainEqual({ kind: 'reasoning', text: 'thinking' });
     expect(result.text).toBe('Hello');
   });
 
@@ -218,6 +230,55 @@ describe('aiSdkModel', () => {
         ],
       },
     ]);
+  });
+
+  it('maps a user message with attachments into image/file content parts', async () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'user',
+        content: 'what is in these?',
+        attachments: [
+          { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
+          { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+        ],
+      },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what is in these?' },
+          { type: 'image', image: new URL('https://cdn/a.png'), mediaType: 'image/png' },
+          {
+            type: 'file',
+            data: new URL('https://cdn/b.pdf'),
+            mediaType: 'application/pdf',
+            filename: 'b.pdf',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('leaves a user message with no attachments as a plain string', async () => {
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages: [{ role: 'user', content: 'plain', attachments: [] }],
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed).toEqual([{ role: 'user', content: 'plain' }]);
   });
 
   it('passes a Standard Schema through directly when it carries the JSON Schema converter', async () => {

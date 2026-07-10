@@ -42,14 +42,22 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(thread.title).toBe('My chat');
     expect(thread.transient).toBe(false);
 
-    // appendMessage (user)
+    // appendMessage (user, with an image + PDF attachment)
     const userMessage = await store.appendMessage({
       threadId: thread.id,
       role: 'user',
       content: 'Hello',
+      attachments: [
+        { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
+        { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+      ],
     });
     expect(userMessage.role).toBe('user');
     expect(userMessage.content).toBe('Hello');
+    expect(userMessage.attachments).toEqual([
+      { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
+      { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+    ]);
 
     // appendMessage (assistant with tool calls + usage + agentName provenance)
     const assistantMessage = await store.appendMessage({
@@ -102,6 +110,10 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     const messages = detail?.messages as StoredMessage[];
     expect(messages).toHaveLength(2);
     expect(messages[0]?.content).toBe('Hello');
+    expect(messages[0]?.attachments).toEqual([
+      { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
+      { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+    ]);
     expect(messages[1]?.content).toBe('Looking that up');
     expect(messages[1]?.toolCalls?.[0]?.id).toBe('tc-1');
     expect(messages[1]?.usage).toEqual({ inputTokens: 10, outputTokens: 5 });

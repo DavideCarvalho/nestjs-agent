@@ -54,14 +54,18 @@ function sendArgs(): Parameters<ChatTransport<UIMessage>['sendMessages']>[0] {
 }
 
 describe('AgentChatTransport', () => {
-  it('parses meta + delta + done into a v7 UI-message chunk stream', async () => {
+  it('maps AgentStreamEvent frames (text + tool round) into a v7 UI-message chunk stream', async () => {
     const captured: AgentStreamMeta[] = [];
     const transport = new AgentChatTransport({
       fetch: fakeFetch(
         sseStream([
           'event: meta\ndata: {"runId":"run-1","threadId":"thr-1"}\n\n',
-          'data: {"delta":"Hello"}\n\n',
-          'data: {"delta":" world"}\n\n',
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"text","text":"Hello"}\n\n',
+          'data: {"kind":"text","text":" world"}\n\n',
+          'data: {"kind":"tool-input-available","id":"t1","name":"executeSql","input":{"query":"SELECT 1"}}\n\n',
+          'data: {"kind":"tool-output","id":"t1","output":{"rows":[]}}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
           'event: done\ndata: {}\n\n',
         ]),
       ),
@@ -77,6 +81,8 @@ describe('AgentChatTransport', () => {
       'text-start',
       'text-delta',
       'text-delta',
+      'tool-input-available',
+      'tool-output-available',
       'text-end',
       'finish-step',
       'finish',
@@ -90,6 +96,34 @@ describe('AgentChatTransport', () => {
       .map((chunk) => chunk.delta)
       .join('');
     expect(text).toBe('Hello world');
+
+    const toolAvailable = chunks.find((chunk) => chunk.type === 'tool-input-available');
+    expect(toolAvailable).toMatchObject({ toolCallId: 't1', toolName: 'executeSql' });
+    const toolOutput = chunks.find((chunk) => chunk.type === 'tool-output-available');
+    expect(toolOutput).toMatchObject({ toolCallId: 't1', output: { rows: [] } });
+  });
+
+  it('forwards per-send attachments (image/PDF) in the POST body alongside the message text', async () => {
+    let capturedBody: unknown;
+    const capturingFetch = (async (_url: string, init: RequestInit) => {
+      capturedBody = JSON.parse(init.body as string);
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body: sseStream(['event: done\ndata: {}\n\n']),
+        headers: new Headers(),
+      };
+    }) as unknown as typeof fetch;
+    const transport = new AgentChatTransport({ fetch: capturingFetch });
+
+    const attachments = [
+      { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
+      { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+    ];
+    await collect(await transport.sendMessages({ ...sendArgs(), body: { attachments } }));
+
+    expect(capturedBody).toMatchObject({ message: 'hello', attachments });
   });
 
   it('surfaces runId/threadId from the meta frame', async () => {
@@ -97,7 +131,7 @@ describe('AgentChatTransport', () => {
       fetch: fakeFetch(
         sseStream([
           'event: meta\ndata: {"runId":"run-1","threadId":"thr-1"}\n\n',
-          'data: {"delta":"hi"}\n\n',
+          'data: {"kind":"text","text":"hi"}\n\n',
           'event: done\ndata: {}\n\n',
         ]),
       ),

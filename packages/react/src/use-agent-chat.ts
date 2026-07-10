@@ -34,6 +34,13 @@ export interface UseAgentChatOptions {
   getPageContext?: () => Record<string, unknown> | null;
   /** Fired after each streamed turn finishes (e.g. to refetch the sidebar). */
   onFinish?: () => void;
+  /**
+   * Fired once when a threadless chat's first send makes the backend create a thread — carries the
+   * new id so the consumer can sync its URL/router. Not fired when `threadId` was supplied. The hook
+   * ALSO remembers the id internally, so every subsequent send reuses it (no new thread per message)
+   * even before the consumer navigates.
+   */
+  onThreadCreated?: (threadId: string) => void;
 }
 
 interface AddToolResultArgs {
@@ -60,6 +67,11 @@ export function useAgentChat(options: UseAgentChatOptions) {
   // `regenerate: true` — telling the backend to re-run the last exchange instead of appending.
   const regenerateNext = useRef(false);
 
+  // The thread the backend created for a threadless chat, captured from the `meta` frame. Every send
+  // after the first reuses it (via getBody) so the conversation stays on ONE thread instead of
+  // spawning a new one per message. Reset per mount; an explicit `threadId` option always wins.
+  const createdThreadId = useRef<string | undefined>(undefined);
+
   // Identity-stable: per-render config is read through `latest`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   const client = useMemo(() => {
@@ -77,6 +89,17 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const transport = useMemo(() => {
     function onMeta(meta: AgentStreamMeta): void {
       setRunId(meta.runId);
+      // A threadless chat just had its thread created server-side — remember it so subsequent sends
+      // reuse it, and tell the consumer once so it can sync its URL. An explicit threadId option owns
+      // the binding, so we never override it here.
+      if (
+        latest.current.threadId === undefined &&
+        meta.threadId &&
+        createdThreadId.current !== meta.threadId
+      ) {
+        createdThreadId.current = meta.threadId;
+        latest.current.onThreadCreated?.(meta.threadId);
+      }
     }
     return new AgentChatTransport({
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
@@ -89,8 +112,11 @@ export function useAgentChat(options: UseAgentChatOptions) {
         const pageContext = current.getPageContext?.() ?? null;
         const regenerate = regenerateNext.current;
         regenerateNext.current = false;
+        // Prefer the explicit threadId; else the one the backend created for this chat, so the second
+        // and later sends land on the same thread instead of forking a new one each time.
+        const threadId = current.threadId ?? createdThreadId.current;
         return {
-          ...(current.threadId !== undefined ? { threadId: current.threadId } : {}),
+          ...(threadId !== undefined ? { threadId } : {}),
           ...(pageContext ? { pageContext } : {}),
           ...(regenerate ? { regenerate: true } : {}),
         };

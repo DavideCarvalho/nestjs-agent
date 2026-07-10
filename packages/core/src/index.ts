@@ -3,6 +3,7 @@ export * from './tokens.js';
 export * from './spi/tool.js';
 export * from './spi/model-provider.js';
 export * from './spi/token-stream-sink.js';
+export * from './stream-events.js';
 export * from './spi/agent-store.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';

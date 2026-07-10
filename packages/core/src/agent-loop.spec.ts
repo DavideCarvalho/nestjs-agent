@@ -118,7 +118,10 @@ describe('runAgentLoop', () => {
   it('streams a no-tool turn and persists user + assistant messages', async () => {
     const { result, streamed, detail } = await run(() => ({ text: 'hello world' }));
     expect(result.text).toBe('hello world');
-    expect(streamed).toBe('hello world');
+    // The loop brackets the model turn with NDJSON step frames; the model's text streams between them.
+    expect(streamed).toContain('{"kind":"step-start"}');
+    expect(streamed).toContain('hello world');
+    expect(streamed).toContain('{"kind":"step-finish"}');
     expect(detail?.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 

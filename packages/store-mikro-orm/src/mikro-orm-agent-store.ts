@@ -7,6 +7,7 @@ import type {
   StoredMessage,
   ThreadDetail,
   ThreadSummary,
+  ToolResult,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
@@ -52,12 +53,53 @@ export class MikroOrmAgentStore implements AgentStore {
       { thread },
       { orderBy: { createdAt: 'asc', id: 'asc' } },
     );
+    // Tool RESULTS live on the `agent_tool_call` records (the source of truth for outputs), not on
+    // the message row. Rebuild each assistant message's `toolResults` from its resolved calls so a
+    // reloaded thread feeds a complete assistant+tool pair back to the model — without this a
+    // multi-turn thread that used tools throws MissingToolResultsError on the NEXT turn, since the
+    // prior assistant message would carry tool calls with no matching results.
+    const resultsByMessage = await this.loadToolResults(em, messages);
     const last = messages[messages.length - 1];
     return {
       ...this.toSummary(thread, last?.content),
-      messages: messages.map((message) => this.toStoredMessage(message)),
+      messages: messages.map((message) =>
+        this.toStoredMessage(message, resultsByMessage.get(message.id)),
+      ),
       ...(thread.activeStreamId != null ? { activeStreamId: thread.activeStreamId } : {}),
     };
+  }
+
+  /**
+   * Group each message's resolved tool calls into `ToolResult[]`, keyed by message id. A call is
+   * "resolved" once it has run (executed/failed/rejected) — a pending-approval call has no result
+   * yet and is skipped, so a mid-approval turn doesn't inject a phantom empty result.
+   */
+  private async loadToolResults(
+    em: EntityManager,
+    messages: AgentMessage[],
+  ): Promise<Map<string, ToolResult[]>> {
+    const withCalls = messages.filter((message) => message.toolCalls != null);
+    const byMessage = new Map<string, ToolResult[]>();
+    if (withCalls.length === 0) {
+      return byMessage;
+    }
+    const calls = await em.find(
+      AgentToolCall,
+      { message: { $in: withCalls }, status: { $ne: 'pending_approval' } },
+      { orderBy: { createdAt: 'asc', id: 'asc' } },
+    );
+    for (const call of calls) {
+      const messageId = call.message.id;
+      const list = byMessage.get(messageId) ?? [];
+      list.push({
+        id: call.id,
+        name: call.toolName,
+        output: call.output ?? null,
+        ...(call.error != null ? { error: call.error } : {}),
+      });
+      byMessage.set(messageId, list);
+    }
+    return byMessage;
   }
 
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
@@ -219,6 +261,7 @@ export class MikroOrmAgentStore implements AgentStore {
       createdAt: now,
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
@@ -340,7 +383,10 @@ export class MikroOrmAgentStore implements AgentStore {
     };
   }
 
-  private toStoredMessage(message: AgentMessage): StoredMessage {
+  private toStoredMessage(message: AgentMessage, toolResults?: ToolResult[]): StoredMessage {
+    // Prefer results rebuilt from the tool-call records; fall back to the (legacy) message column.
+    const resolvedResults =
+      toolResults !== undefined && toolResults.length > 0 ? toolResults : message.toolResults;
     return {
       id: message.id,
       role: message.role,
@@ -348,7 +394,8 @@ export class MikroOrmAgentStore implements AgentStore {
       createdAt: message.createdAt.toISOString(),
       ...(message.agentName != null ? { agentName: message.agentName } : {}),
       ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
-      ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
+      ...(resolvedResults != null ? { toolResults: resolvedResults } : {}),
+      ...(message.attachments != null ? { attachments: message.attachments } : {}),
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
     };

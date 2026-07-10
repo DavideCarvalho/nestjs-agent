@@ -7,6 +7,7 @@ import {
   type AgentRunInput,
   type AgentRunner,
   type AgentStore,
+  type MessageAttachment,
   type PageContext,
   type QuotaStore,
   type QuotaView,
@@ -28,6 +29,8 @@ export interface ChatParams {
   message: string;
   threadId?: string;
   agentName?: string;
+  /** Files attached to this message (image/PDF) for a vision-capable model. */
+  attachments?: MessageAttachment[];
   pageContext?: PageContext;
   /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
   regenerate?: boolean;
@@ -73,6 +76,7 @@ export class AgentService {
       day: utcDay(),
       agentName,
       ...(params.regenerate === true ? { regenerate: true } : {}),
+      ...(params.attachments !== undefined ? { attachments: params.attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
     };
 
