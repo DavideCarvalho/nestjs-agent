@@ -104,7 +104,11 @@ export class AgentDashboardModule {
         ...(options.imports ?? []),
         // Guards + host imports must reach the API controller's HOST module — enhancers resolve
         // from their controller's own module, never from a parent (see AgentApiModule.register).
-        AgentApiModule.register({ imports: options.imports, guards: options.guards }),
+        // Spread-only-when-set: exactOptionalPropertyTypes rejects an explicit `undefined`.
+        AgentApiModule.register({
+          ...(options.imports ? { imports: options.imports } : {}),
+          ...(options.guards ? { guards: options.guards } : {}),
+        }),
         RouterModule.register([
           { path: basePath, module: AgentDashboardModule }, // the UI controller below
           { path: apiBasePath, module: AgentApiModule },
