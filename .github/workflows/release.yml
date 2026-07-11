@@ -46,5 +46,14 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `changesets/action` decides token-vs-OIDC by looking for the NPM_TOKEN
+          # *env var*. NODE_AUTH_TOKEN alone (what setup-node's ~/.npmrc reads) is
+          # invisible to it, so without this line it logs "No NPM_TOKEN found ...
+          # using npm trusted publishing" and falls back to OIDC — which isn't
+          # configured for these packages, so `changeset publish` 404s. Exposing
+          # NPM_TOKEN here makes it use the token path. The secret MUST be an
+          # automation / bypass-2FA token, else CI hits `EOTP` (a plain "publish"
+          # token demands an OTP no CI can supply).
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
