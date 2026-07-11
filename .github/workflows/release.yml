@@ -27,8 +27,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          # Writes ~/.npmrc pointing at npm and reading NODE_AUTH_TOKEN, so
-          # `changeset publish` authenticates without a committed token.
+          # Point npm at the public registry; publish auth comes from OIDC trusted
+          # publishing (see the changesets step), not a token.
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
@@ -46,11 +46,9 @@ jobs:
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No NPM_TOKEN env on purpose: `changesets/action` only reaches for OIDC
-          # trusted publishing when it finds no NPM_TOKEN. Every @dudousxd/nestjs-agent*
-          # package has this workflow registered as a Trusted Publisher on npm, so the
-          # OIDC id-token (permissions.id-token: write) authenticates the publish and
-          # NPM_CONFIG_PROVENANCE attaches provenance — no long-lived token needed.
-          # NODE_AUTH_TOKEN stays for setup-node's ~/.npmrc but is unused by the action.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No npm token at all: every @dudousxd/nestjs-agent* package has this workflow
+          # registered as a Trusted Publisher on npm, so `changesets/action` (which only
+          # falls back to OIDC when it finds no NPM_TOKEN) authenticates the publish via
+          # the OIDC id-token (permissions.id-token: write) and NPM_CONFIG_PROVENANCE
+          # attaches provenance. There is no NPM_TOKEN secret anymore.
           NPM_CONFIG_PROVENANCE: true
