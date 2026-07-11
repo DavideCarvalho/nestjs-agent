@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryGovernanceQueries,
   type InMemoryModelPrice,
@@ -329,5 +329,133 @@ describe('InMemoryGovernanceQueries', () => {
     const bob = rows.find((row) => row.title === 'Bob chat');
     expect(bob?.messageCount).toBe(1);
     expect(bob?.totalTokens).toBe(600_000);
+  });
+});
+
+// The five reliability (run) queries — recordRunStart/recordRunEnd/bumpRunRetries on the store,
+// aggregated through InMemoryGovernanceQueries. Mirrors the SQL adapter's db-spec fixtures/math.
+describe('InMemoryGovernanceQueries run reliability', () => {
+  it('runMetrics aggregates counts, successRate, retries and duration percentiles', async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'hank' } });
+    const today = new Date().toISOString().slice(0, 10);
+    const queries = new InMemoryGovernanceQueries(store);
+
+    // run-1: completed, one retry, duration 100
+    await store.recordRunStart({
+      runId: 'run-1',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'researcher',
+    });
+    await store.bumpRunRetries('run-1');
+    await store.recordRunEnd({ runId: 'run-1', status: 'completed', durationMs: 100 });
+
+    // run-2: failed, duration 200, classified error
+    await store.recordRunStart({
+      runId: 'run-2',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'researcher',
+    });
+    await store.recordRunEnd({
+      runId: 'run-2',
+      status: 'failed',
+      durationMs: 200,
+      errorCode: 'timeout',
+      errorMessage: 'upstream timed out',
+    });
+
+    // run-3: completed, no agentName ('(default)' bucket), duration 300
+    await store.recordRunStart({ runId: 'run-3', threadId: thread.id, actorRef: 'hank' });
+    await store.recordRunEnd({ runId: 'run-3', status: 'completed', durationMs: 300 });
+
+    // run-4: still running — excluded from completed/failed counts and from the duration set
+    await store.recordRunStart({ runId: 'run-4', threadId: thread.id, actorRef: 'hank' });
+
+    const range = { fromDay: today, toDay: today };
+    const metrics = await queries.runMetrics(range);
+    expect(metrics.runs).toBe(4);
+    expect(metrics.completed).toBe(2);
+    expect(metrics.failed).toBe(1);
+    expect(metrics.successRate).toBeCloseTo(0.5, 6);
+    expect(metrics.retries).toBe(1);
+    // settled durations ascending: [100, 200, 300] → p50 offset 1, p95 offset 2
+    expect(metrics.durationP50Ms).toBe(200);
+    expect(metrics.durationP95Ms).toBe(300);
+
+    const byAgent = await queries.runsByAgent(range);
+    expect(byAgent.find((row) => row.agentName === 'researcher')).toEqual({
+      agentName: 'researcher',
+      runs: 2,
+      failed: 1,
+      retries: 1,
+    });
+    expect(byAgent.find((row) => row.agentName === '(default)')).toEqual({
+      agentName: '(default)',
+      runs: 2,
+      failed: 0,
+      retries: 0,
+    });
+
+    expect(await queries.runErrors(range)).toEqual([{ errorCode: 'timeout', count: 1 }]);
+  });
+
+  it('runMetrics reports successRate 0 and null percentiles when there are no runs in range', async () => {
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(store);
+    const today = new Date().toISOString().slice(0, 10);
+
+    expect(await queries.runMetrics({ fromDay: today, toDay: today })).toEqual({
+      runs: 0,
+      completed: 0,
+      failed: 0,
+      successRate: 0,
+      retries: 0,
+      durationP50Ms: null,
+      durationP95Ms: null,
+    });
+  });
+
+  it('runTrend buckets by UTC day and recentRuns orders newest-first, capped, with nulls for an unsettled run', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryAgentStore();
+      const thread = await store.createThread({ actor: { id: 'ivan' } });
+
+      vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
+      await store.recordRunStart({ runId: 'day1-a', threadId: thread.id, actorRef: 'ivan' });
+      await store.recordRunEnd({ runId: 'day1-a', status: 'completed', durationMs: 10 });
+
+      vi.setSystemTime(new Date('2026-07-10T10:00:00.000Z'));
+      await store.recordRunStart({ runId: 'day1-b', threadId: thread.id, actorRef: 'ivan' });
+      await store.recordRunEnd({ runId: 'day1-b', status: 'failed', errorCode: 'timeout' });
+
+      // day2-a is left running (no recordRunEnd) — the most recent row, unsettled.
+      vi.setSystemTime(new Date('2026-07-11T09:00:00.000Z'));
+      await store.recordRunStart({ runId: 'day2-a', threadId: thread.id, actorRef: 'ivan' });
+
+      const queries = new InMemoryGovernanceQueries(store);
+      const trend = await queries.runTrend({ fromDay: '2026-07-10', toDay: '2026-07-11' });
+      expect(trend).toEqual([
+        { day: '2026-07-10', runs: 2, failed: 1 },
+        { day: '2026-07-11', runs: 1, failed: 0 },
+      ]);
+
+      const recent = await queries.recentRuns(10);
+      expect(recent.map((row) => row.runId)).toEqual(['day2-a', 'day1-b', 'day1-a']);
+      expect(recent.find((row) => row.runId === 'day2-a')).toMatchObject({
+        status: 'running',
+        agentName: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+      });
+
+      const capped = await queries.recentRuns(2);
+      expect(capped.map((row) => row.runId)).toEqual(['day2-a', 'day1-b']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

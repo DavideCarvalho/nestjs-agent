@@ -6,6 +6,11 @@ import type {
   GovernanceRange,
   ModelPriceInput,
   ModelSpendRow,
+  RecentRunRow,
+  RunAgentBreakdownRow,
+  RunErrorBreakdownRow,
+  RunMetrics,
+  RunTrendPoint,
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
@@ -17,6 +22,17 @@ import { describe, expect, it } from 'vitest';
 import type { ActorDirectory } from './actor-directory';
 import { DashboardService, type LiveAgentEvent } from './dashboard.service';
 
+/** A zeroed `RunMetrics` — the shape a store without run recording returns. */
+const EMPTY_RUN_METRICS: RunMetrics = {
+  runs: 0,
+  completed: 0,
+  failed: 0,
+  successRate: 0,
+  retries: 0,
+  durationP50Ms: null,
+  durationP95Ms: null,
+};
+
 interface QueriesOverrides {
   record?: (call: string) => void;
   spendByModel?: ModelSpendRow[];
@@ -25,6 +41,11 @@ interface QueriesOverrides {
   usageTrend?: UsageTrendPoint[];
   recentToolCalls?: ToolCallActivityRow[];
   recentThreads?: ThreadActivityRow[];
+  runMetrics?: RunMetrics;
+  runsByAgent?: RunAgentBreakdownRow[];
+  runErrors?: RunErrorBreakdownRow[];
+  runTrend?: RunTrendPoint[];
+  recentRuns?: RecentRunRow[];
 }
 
 /** A `AgentGovernanceQueries` fake — records each call and returns the override (or `[]`). */
@@ -55,6 +76,26 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
       record('recentThreads');
       return overrides.recentThreads ?? [];
     },
+    async runMetrics(_range: GovernanceRange) {
+      record('runMetrics');
+      return overrides.runMetrics ?? EMPTY_RUN_METRICS;
+    },
+    async runsByAgent(_range: GovernanceRange) {
+      record('runsByAgent');
+      return overrides.runsByAgent ?? [];
+    },
+    async runErrors(_range: GovernanceRange) {
+      record('runErrors');
+      return overrides.runErrors ?? [];
+    },
+    async runTrend(_range: GovernanceRange) {
+      record('runTrend');
+      return overrides.runTrend ?? [];
+    },
+    async recentRuns(_limit: number) {
+      record('recentRuns');
+      return overrides.recentRuns ?? [];
+    },
   };
 }
 
@@ -80,6 +121,59 @@ describe('DashboardService', () => {
     expect(overview.byModel[0]?.modelId).toBe('gpt');
     expect(overview.byActor[0]?.actorRef).toBe('user:1');
     expect(overview.trend[0]?.day).toBe('2026-07-01');
+  });
+
+  it('reliability() fans the four run-reliability queries and shapes the overview', async () => {
+    const calls: string[] = [];
+    const runMetrics: RunMetrics = {
+      runs: 10,
+      completed: 8,
+      failed: 2,
+      successRate: 0.8,
+      retries: 3,
+      durationP50Ms: 420,
+      durationP95Ms: 1800,
+    };
+    const service = new DashboardService(
+      fakeQueries({
+        record: (call) => calls.push(call),
+        runMetrics,
+        runsByAgent: [{ agentName: 'analyst', runs: 6, failed: 1, retries: 2 }],
+        runErrors: [{ errorCode: 'TIMEOUT', count: 2 }],
+        runTrend: [{ day: '2026-07-01', runs: 4, failed: 1 }],
+      }),
+    );
+
+    const overview = await service.reliability({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+
+    expect(calls.sort()).toEqual(['runErrors', 'runMetrics', 'runTrend', 'runsByAgent']);
+    expect(overview.metrics).toEqual(runMetrics);
+    expect(overview.byAgent[0]?.agentName).toBe('analyst');
+    expect(overview.errors[0]?.errorCode).toBe('TIMEOUT');
+    expect(overview.trend[0]?.day).toBe('2026-07-01');
+  });
+
+  it('recentRuns() passes through to the read-model', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        recentRuns: [
+          {
+            runId: 'r1',
+            threadId: 'th1',
+            actorRef: 'user:1',
+            agentName: 'analyst',
+            status: 'failed',
+            durationMs: 1200,
+            errorCode: 'TIMEOUT',
+            errorMessage: 'upstream timed out',
+            retries: 1,
+            startedAt: '2026-07-05T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    expect((await service.recentRuns(10))[0]?.runId).toBe('r1');
   });
 
   it('recentToolCalls / recentThreads pass through to the read-model', async () => {

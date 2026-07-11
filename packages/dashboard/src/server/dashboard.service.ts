@@ -6,6 +6,11 @@ import type {
   CurrentModelPrice,
   GovernanceRange,
   ModelSpendRow,
+  RecentRunRow,
+  RunAgentBreakdownRow,
+  RunErrorBreakdownRow,
+  RunMetrics,
+  RunTrendPoint,
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
@@ -32,6 +37,14 @@ export interface SpendOverview {
   byModel: ModelSpendRow[];
   byActor: ActorSpendRowWithLabel[];
   trend: UsageTrendPoint[];
+}
+
+/** The run-reliability overview the SPA renders on its Reliability section (`GET <api>/reliability`). */
+export interface ReliabilityOverview {
+  metrics: RunMetrics;
+  byAgent: RunAgentBreakdownRow[];
+  errors: RunErrorBreakdownRow[];
+  trend: RunTrendPoint[];
 }
 
 /** The message returned as a 501 when no `AGENT_PRICING_STORE` is bound. */
@@ -116,6 +129,22 @@ export class DashboardService {
   async topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRowWithLabel[]> {
     const rows = await this.queries.spendByThread(range, limit);
     return this.withActorLabels(rows);
+  }
+
+  /** Run reliability for a day range: metrics, by-agent/by-error breakdowns and the trend, in parallel. */
+  async reliability(range: GovernanceRange): Promise<ReliabilityOverview> {
+    const [metrics, byAgent, errors, trend] = await Promise.all([
+      this.queries.runMetrics(range),
+      this.queries.runsByAgent(range),
+      this.queries.runErrors(range),
+      this.queries.runTrend(range),
+    ]);
+    return { metrics, byAgent, errors, trend };
+  }
+
+  /** Most recent runs (status/agent/duration/error) for the Reliability recent-runs table. */
+  recentRuns(limit: number): Promise<RecentRunRow[]> {
+    return this.queries.recentRuns(limit);
   }
 
   /** Most recent tool calls (status/type/thread) for the Runs & tools activity feed. */

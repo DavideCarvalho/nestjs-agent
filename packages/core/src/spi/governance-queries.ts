@@ -74,6 +74,57 @@ export interface ThreadActivityRow {
   lastActivityAt: string;
 }
 
+/** Aggregated run reliability over a range. */
+export interface RunMetrics {
+  runs: number;
+  completed: number;
+  failed: number;
+  /** completed / runs, 0 when runs = 0. */
+  successRate: number;
+  /** Total llm-step retries across the range's runs. */
+  retries: number;
+  durationP50Ms: number | null;
+  durationP95Ms: number | null;
+}
+
+/** Run/failure/retry rollup for one agent over a range. */
+export interface RunAgentBreakdownRow {
+  /** '(default)' when the run had none. */
+  agentName: string;
+  runs: number;
+  failed: number;
+  retries: number;
+}
+
+/** Failed-run count for one error code over a range. */
+export interface RunErrorBreakdownRow {
+  errorCode: string;
+  count: number;
+}
+
+/** One point on the daily run/failure trend. */
+export interface RunTrendPoint {
+  day: string;
+  runs: number;
+  failed: number;
+}
+
+/** A recent run for the reliability feed. */
+export interface RecentRunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  agentName: string | null;
+  /** 'running' | 'completed' | 'failed'. */
+  status: string;
+  durationMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  retries: number;
+  /** ISO timestamp. */
+  startedAt: string;
+}
+
 /**
  * The governance read-model. Cost is `inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 *
  * outputPricePer1m` against the current pricing row per model; an unpriced model contributes 0 cost
@@ -87,4 +138,11 @@ export interface AgentGovernanceQueries {
   usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]>;
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
   recentThreads(limit: number): Promise<ThreadActivityRow[]>;
+  // Run reliability. An adapter backed by a store without run recording (no `recordRunStart`)
+  // returns zeros/empty from all five — the dashboard renders an empty reliability surface.
+  runMetrics(range: GovernanceRange): Promise<RunMetrics>;
+  runsByAgent(range: GovernanceRange): Promise<RunAgentBreakdownRow[]>;
+  runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]>;
+  runTrend(range: GovernanceRange): Promise<RunTrendPoint[]>;
+  recentRuns(limit: number): Promise<RecentRunRow[]>;
 }

@@ -8,6 +8,7 @@ import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentModelPricing } from './entities/agent-model-pricing.entity';
+import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
@@ -610,5 +611,191 @@ describe('MikroOrmGovernanceQueries spendByThread + threadCount (sqlite)', () =>
     const rows = await threadQueries.spendByActor(threadRange);
     expect(rows.find((row) => row.actorRef === 'erin')?.threadCount).toBe(2);
     expect(rows.find((row) => row.actorRef === 'frank')?.threadCount).toBe(1);
+  });
+});
+
+// A self-contained ORM covering the five reliability (run) queries: runMetrics, runsByAgent,
+// runErrors, runTrend, recentRuns. Seeds completed/failed/running runs across two agents and two
+// in-range days, plus one out-of-range run that only `recentRuns` (unranged) should surface.
+describe('MikroOrmGovernanceQueries run reliability (sqlite)', () => {
+  let runOrm: MikroORM;
+  let runQueries: MikroOrmGovernanceQueries;
+  const runRange = { fromDay: '2026-07-10', toDay: '2026-07-11' };
+
+  beforeAll(async () => {
+    runOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(runOrm);
+    runQueries = new MikroOrmGovernanceQueries(runOrm.em, new MikroOrmPricingStore(runOrm.em));
+
+    const em = runOrm.em.fork();
+    const threadR1 = em.create(AgentThread, {
+      id: 'thread-r1',
+      actorRef: 'hank',
+      title: 'Hank chat',
+      transient: false,
+      createdAt: new Date('2026-07-10T08:00:00.000Z'),
+      updatedAt: new Date('2026-07-10T10:00:00.000Z'),
+    });
+    const threadR2 = em.create(AgentThread, {
+      id: 'thread-r2',
+      actorRef: 'ivan',
+      title: 'Ivan chat',
+      transient: false,
+      createdAt: new Date('2026-07-11T08:00:00.000Z'),
+      updatedAt: new Date('2026-07-11T10:00:00.000Z'),
+    });
+
+    // run-1/run-2: agent 'researcher' on thread-r1, day 2026-07-10 — one completed, one failed.
+    const run1 = em.create(AgentRun, {
+      id: 'run-1',
+      thread: threadR1,
+      actorRef: 'hank',
+      agentName: 'researcher',
+      status: 'completed',
+      durationMs: 100,
+      retries: 1,
+      startedAt: new Date('2026-07-10T09:00:00.000Z'),
+      settledAt: new Date('2026-07-10T09:00:00.100Z'),
+    });
+    const run2 = em.create(AgentRun, {
+      id: 'run-2',
+      thread: threadR1,
+      actorRef: 'hank',
+      agentName: 'researcher',
+      status: 'failed',
+      durationMs: 200,
+      errorCode: 'timeout',
+      errorMessage: 'upstream timed out',
+      retries: 0,
+      startedAt: new Date('2026-07-10T10:00:00.000Z'),
+      settledAt: new Date('2026-07-10T10:00:00.200Z'),
+    });
+    // run-3/run-4: no agentName ('(default)' bucket) on thread-r2, day 2026-07-11 — one completed,
+    // one still running (unsettled — excluded from the duration percentiles and completed/failed counts).
+    const run3 = em.create(AgentRun, {
+      id: 'run-3',
+      thread: threadR2,
+      actorRef: 'ivan',
+      status: 'completed',
+      durationMs: 300,
+      retries: 2,
+      startedAt: new Date('2026-07-11T09:00:00.000Z'),
+      settledAt: new Date('2026-07-11T09:00:00.300Z'),
+    });
+    const run4 = em.create(AgentRun, {
+      id: 'run-4',
+      thread: threadR2,
+      actorRef: 'ivan',
+      status: 'running',
+      retries: 0,
+      startedAt: new Date('2026-07-11T10:00:00.000Z'),
+    });
+    // run-5: out of `runRange` (a day earlier) — excluded from every ranged query, but `recentRuns`
+    // has no range param, so it still surfaces there as the oldest row.
+    const run5 = em.create(AgentRun, {
+      id: 'run-5',
+      thread: threadR1,
+      actorRef: 'hank',
+      status: 'completed',
+      durationMs: 50,
+      retries: 0,
+      startedAt: new Date('2026-07-09T09:00:00.000Z'),
+      settledAt: new Date('2026-07-09T09:00:00.050Z'),
+    });
+
+    em.persist([threadR1, threadR2, run1, run2, run3, run4, run5]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await runOrm?.close(true);
+  });
+
+  it('runMetrics aggregates counts, successRate, retries and duration percentiles over settled runs', async () => {
+    const metrics = await runQueries.runMetrics(runRange);
+    // run-5 is out of range; run-1..4 are in range (2 completed, 1 failed, 1 still running)
+    expect(metrics.runs).toBe(4);
+    expect(metrics.completed).toBe(2);
+    expect(metrics.failed).toBe(1);
+    expect(metrics.successRate).toBeCloseTo(0.5, 6);
+    expect(metrics.retries).toBe(3); // 1 + 0 + 2 + 0
+    // settled durations ascending: [100, 200, 300] (run-4 is unsettled, excluded)
+    expect(metrics.durationP50Ms).toBe(200);
+    expect(metrics.durationP95Ms).toBe(300);
+  });
+
+  it('runMetrics reports successRate 0 and null percentiles when there are no runs in range', async () => {
+    const metrics = await runQueries.runMetrics({ fromDay: '2020-01-01', toDay: '2020-01-01' });
+    expect(metrics).toEqual({
+      runs: 0,
+      completed: 0,
+      failed: 0,
+      successRate: 0,
+      retries: 0,
+      durationP50Ms: null,
+      durationP95Ms: null,
+    });
+  });
+
+  it('runsByAgent buckets by agentName, defaulting a null agentName to "(default)"', async () => {
+    const rows = await runQueries.runsByAgent(runRange);
+    expect(rows).toHaveLength(2);
+
+    const researcher = rows.find((row) => row.agentName === 'researcher');
+    expect(researcher).toEqual({ agentName: 'researcher', runs: 2, failed: 1, retries: 1 });
+
+    const defaulted = rows.find((row) => row.agentName === '(default)');
+    expect(defaulted).toEqual({ agentName: '(default)', runs: 2, failed: 0, retries: 2 });
+  });
+
+  it('runErrors buckets failed runs by errorCode', async () => {
+    const rows = await runQueries.runErrors(runRange);
+    expect(rows).toEqual([{ errorCode: 'timeout', count: 1 }]);
+  });
+
+  it('runTrend buckets runs + failures by UTC day, ascending, excluding out-of-range rows', async () => {
+    const points = await runQueries.runTrend(runRange);
+    expect(points).toEqual([
+      { day: '2026-07-10', runs: 2, failed: 1 },
+      { day: '2026-07-11', runs: 2, failed: 0 },
+    ]);
+  });
+
+  it('recentRuns orders newest-first with no range filter and reports every field', async () => {
+    const rows = await runQueries.recentRuns(10);
+    expect(rows.map((row) => row.runId)).toEqual(['run-4', 'run-3', 'run-2', 'run-1', 'run-5']);
+
+    const running = rows.find((row) => row.runId === 'run-4');
+    expect(running).toMatchObject({
+      threadId: 'thread-r2',
+      actorRef: 'ivan',
+      agentName: null,
+      status: 'running',
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      retries: 0,
+    });
+
+    const failed = rows.find((row) => row.runId === 'run-2');
+    expect(failed).toMatchObject({
+      threadId: 'thread-r1',
+      actorRef: 'hank',
+      agentName: 'researcher',
+      status: 'failed',
+      durationMs: 200,
+      errorCode: 'timeout',
+      errorMessage: 'upstream timed out',
+    });
+  });
+
+  it('recentRuns caps at limit', async () => {
+    const rows = await runQueries.recentRuns(2);
+    expect(rows.map((row) => row.runId)).toEqual(['run-4', 'run-3']);
   });
 });

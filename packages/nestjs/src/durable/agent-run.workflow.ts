@@ -5,7 +5,10 @@ import {
   type AgentRunInput,
   type AgentStore,
   type Decision,
+  type LlmStepEnvelope,
   QuotaExceededError,
+  type ToolCallRequest,
+  type ToolStepEnvelope,
   publishAgentRunFailed,
   runAgentLoop,
 } from '@dudousxd/nestjs-agent-core';
@@ -14,6 +17,8 @@ import { ContinueAsNew, type WorkflowCtx, WorkflowSuspended } from '@dudousxd/ne
 import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
+import { AgentRunSteps } from './agent-run.steps.js';
+import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 
 /**
  * The agent turn AS a durable workflow. Each model/tool call is a checkpointed `ctx.localStep` — the
@@ -31,6 +36,8 @@ export class AgentRunWorkflow {
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
+    private readonly steps: AgentRunSteps,
+    @Inject(AGENT_DISPATCHED_STEPS) private readonly dispatchedSteps: boolean,
   ) {}
 
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<{ text: string }> {
@@ -51,6 +58,9 @@ export class AgentRunWorkflow {
           : deps.sink.open(ctx.runId),
       awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
       step: (name, fn) => ctx.localStep(name, fn),
+      // Dispatched-step suspends must escape the loop's tool catch — control flow, not a tool failure.
+      isControlFlowError: (error) =>
+        error instanceof WorkflowSuspended || error instanceof ContinueAsNew,
       runAgent: async (agentName, task) => {
         const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
@@ -69,6 +79,23 @@ export class AgentRunWorkflow {
           sinkRunId,
         });
       },
+      // Routes the two long steps through AgentRunSteps as engine-dispatched `ctx.step`s instead of
+      // `ctx.localStep`s, so a turn isn't pinned to this workflow worker for the model call or a tool
+      // execution. `sinkRunId`/`childSink` are sink routing this workflow already resolved above —
+      // core's dispatchLlm signature stays sink-topology-agnostic, so we add them here, not in core.
+      ...(this.dispatchedSteps
+        ? {
+            dispatchLlm: (_index: number, envelope: LlmStepEnvelope) =>
+              ctx.step(this.steps.llm, {
+                ...envelope,
+                runId: ctx.runId,
+                sinkRunId,
+                childSink: input.sinkRunId !== undefined,
+              }),
+            dispatchTool: (_call: ToolCallRequest, envelope: ToolStepEnvelope) =>
+              ctx.step(this.steps.tool, envelope),
+          }
+        : {}),
     };
     try {
       const result = await runAgentLoop({ ...deps, day }, input, hooks);
@@ -90,6 +117,18 @@ export class AgentRunWorkflow {
       const message = error instanceof Error ? error.message : String(error);
       const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
       publishAgentRunFailed({ runId: ctx.runId, code, message });
+      // Settle the run's persisted outcome (the loop only records completions — it can't catch its
+      // own crash). Optional-call: a store without run recording degrades to no reliability metrics.
+      await ctx.localStep(
+        'persist:run:fail',
+        () =>
+          this.store.recordRunEnd?.({
+            runId: ctx.runId,
+            status: 'failed',
+            errorCode: code,
+            errorMessage: message,
+          }) ?? Promise.resolve(),
+      );
       await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
       // Reuse the run's own sink resolution: a top-level run fails the watched stream; a child run's
       // writer no-ops fail, deferring the surfaced error to the ancestor whose run also unwinds.

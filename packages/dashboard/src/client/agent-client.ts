@@ -68,6 +68,62 @@ export interface ThreadActivityRow {
   actorLabel: string | null;
 }
 
+/** Aggregated run reliability over a range. */
+export interface RunMetrics {
+  runs: number;
+  completed: number;
+  failed: number;
+  /** completed / runs, 0 when runs = 0. */
+  successRate: number;
+  /** Total llm-step retries across the range's runs. */
+  retries: number;
+  durationP50Ms: number | null;
+  durationP95Ms: number | null;
+}
+
+/** Run/failure counts for one agent over a range. */
+export interface RunAgentBreakdownRow {
+  agentName: string;
+  runs: number;
+  failed: number;
+  retries: number;
+}
+
+/** Failure count for one error code over a range. */
+export interface RunErrorBreakdownRow {
+  errorCode: string;
+  count: number;
+}
+
+/** One point on the daily run/failure trend. */
+export interface RunTrendPoint {
+  day: string;
+  runs: number;
+  failed: number;
+}
+
+/** A recent run for the Reliability recent-runs table. */
+export interface RecentRunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  agentName: string | null;
+  status: string;
+  durationMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  retries: number;
+  startedAt: string;
+}
+
+/** The `GET <api>/reliability` response. */
+export interface ReliabilityOverview {
+  metrics: RunMetrics;
+  byAgent: RunAgentBreakdownRow[];
+  errors: RunErrorBreakdownRow[];
+  trend: RunTrendPoint[];
+}
+
 /** A model's current per-1M-token price (the pricing tab's row shape). */
 export interface ModelPrice {
   modelId: string;
@@ -132,6 +188,15 @@ export const agentClient = {
   topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRow[]> {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay, limit: `${limit}` });
     return http<ThreadSpendRow[]>(`/top-threads?${q.toString()}`);
+  },
+  /** Run reliability for a day range: `{ metrics, byAgent, errors, trend }`. */
+  reliability(range: GovernanceRange): Promise<ReliabilityOverview> {
+    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
+    return http<ReliabilityOverview>(`/reliability?${q.toString()}`);
+  },
+  /** Most recent runs (default 50). */
+  runs(limit = 50): Promise<RecentRunRow[]> {
+    return http<RecentRunRow[]>(`/runs?limit=${limit}`);
   },
   /** Most recent tool calls (default 50). */
   toolCalls(limit = 50): Promise<ToolCallActivityRow[]> {

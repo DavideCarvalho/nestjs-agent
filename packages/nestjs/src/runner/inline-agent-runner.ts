@@ -45,6 +45,14 @@ export class InlineAgentRunner implements AgentRunner {
         const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
         this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
         publishAgentRunFailed({ runId, code, message });
+        // Settle the run's persisted outcome (the loop only records completions — it can't catch
+        // its own crash). Optional-call: a store without run recording skips reliability metrics.
+        await this.store.recordRunEnd?.({
+          runId,
+          status: 'failed',
+          errorCode: code,
+          errorMessage: message,
+        });
         // Clear the thread's active run — a failed run isn't "still running" for `activeRunForThread`.
         await this.store.setActiveStream(input.threadId, null);
         // Terminate the live stream with a typed failure so the transport emits an error frame

@@ -2,6 +2,9 @@ import type {
   ActorSpendRow,
   ModelPrice,
   ModelSpendRow,
+  RecentRunRow,
+  ReliabilityOverview,
+  RunTrendPoint,
   SpendOverview,
   ThreadActivityRow,
   ThreadSpendRow,
@@ -95,11 +98,109 @@ function buildTrend(): UsageTrendPoint[] {
   return points;
 }
 
+function buildRunTrend(): RunTrendPoint[] {
+  const points: RunTrendPoint[] = [];
+  for (let i = 29; i >= 0; i -= 1) {
+    const day = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
+    const wave = Math.sin(i / 3) * 0.5 + 1;
+    const runs = Math.round(18 * wave + i * 0.3);
+    points.push({ day, runs, failed: Math.max(0, Math.round(runs * 0.06)) });
+  }
+  return points;
+}
+
 export const MOCK_SPEND: SpendOverview = {
   byModel: MODELS,
   byActor: ACTORS,
   trend: buildTrend(),
 };
+
+export const MOCK_RELIABILITY: ReliabilityOverview = {
+  metrics: {
+    runs: 482,
+    completed: 461,
+    failed: 21,
+    successRate: 461 / 482,
+    retries: 34,
+    durationP50Ms: 640,
+    durationP95Ms: 2_400,
+  },
+  byAgent: [
+    { agentName: 'analyst', runs: 210, failed: 8, retries: 14 },
+    { agentName: 'billing-agent', runs: 150, failed: 9, retries: 12 },
+    { agentName: '(default)', runs: 122, failed: 4, retries: 8 },
+  ],
+  errors: [
+    { errorCode: 'TIMEOUT', count: 9 },
+    { errorCode: 'TOOL_ERROR', count: 6 },
+    { errorCode: 'RATE_LIMIT', count: 4 },
+    { errorCode: 'UNKNOWN', count: 2 },
+  ],
+  trend: buildRunTrend(),
+};
+
+export const MOCK_RUNS: RecentRunRow[] = [
+  {
+    runId: 'r-9f2a',
+    threadId: 'th1',
+    actorRef: 'tenant:acme',
+    agentName: 'analyst',
+    status: 'completed',
+    durationMs: 820,
+    errorCode: null,
+    errorMessage: null,
+    retries: 0,
+    startedAt: new Date(Date.now() - 40_000).toISOString(),
+  },
+  {
+    runId: 'r-7c31',
+    threadId: 'th2',
+    actorRef: 'user:ops-bot',
+    agentName: 'billing-agent',
+    status: 'failed',
+    durationMs: 4_200,
+    errorCode: 'TIMEOUT',
+    errorMessage: 'upstream model request timed out after 3 attempts',
+    retries: 2,
+    startedAt: new Date(Date.now() - 210_000).toISOString(),
+  },
+  {
+    runId: 'r-a114',
+    threadId: 'th3',
+    actorRef: 'user:davi@goflip.ai',
+    agentName: null,
+    status: 'completed',
+    durationMs: 1_150,
+    errorCode: null,
+    errorMessage: null,
+    retries: 1,
+    startedAt: new Date(Date.now() - 540_000).toISOString(),
+  },
+  {
+    runId: 'r-b902',
+    threadId: 'th1',
+    actorRef: 'tenant:acme',
+    agentName: 'analyst',
+    status: 'failed',
+    durationMs: 980,
+    errorCode: 'TOOL_ERROR',
+    errorMessage: 'search_records returned a 500',
+    retries: 0,
+    startedAt: new Date(Date.now() - 1_320_000).toISOString(),
+  },
+  {
+    runId: 'r-c447',
+    threadId: 'th2',
+    actorRef: 'user:ops-bot',
+    agentName: 'billing-agent',
+    status: 'running',
+    durationMs: null,
+    errorCode: null,
+    errorMessage: null,
+    retries: 0,
+    startedAt: new Date(Date.now() - 8_000).toISOString(),
+  },
+];
 
 export const MOCK_BUDGETS = BUDGETS;
 

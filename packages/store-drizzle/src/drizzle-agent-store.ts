@@ -9,12 +9,14 @@ import type {
   ThreadSummary,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   type AgentMessageRow,
+  type AgentRunRow,
   type AgentThreadRow,
   agentMessage,
+  agentRun,
   agentThread,
   agentTokenUsage,
   agentToolCall,
@@ -199,6 +201,61 @@ export class DrizzleAgentStore implements AgentStore {
       .update(agentThread)
       .set({ activeStreamId: runId })
       .where(eq(agentThread.id, threadId));
+  }
+
+  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
+  async recordRunStart(run: {
+    runId: string;
+    threadId: string;
+    actorRef: string;
+    agentName?: string;
+  }): Promise<void> {
+    const runRow: AgentRunRow = {
+      id: run.runId,
+      threadId: run.threadId,
+      actorRef: run.actorRef,
+      agentName: run.agentName ?? null,
+      status: 'running',
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      retries: 0,
+      startedAt: new Date(),
+      settledAt: null,
+    };
+    await this.db.insert(agentRun).values(runRow);
+  }
+
+  /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
+  async recordRunEnd(end: {
+    runId: string;
+    status: 'completed' | 'failed';
+    durationMs?: number;
+    errorCode?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    const updates: Partial<typeof agentRun.$inferInsert> = {
+      status: end.status,
+      settledAt: new Date(),
+    };
+    if (end.durationMs !== undefined) {
+      updates.durationMs = end.durationMs;
+    }
+    if (end.errorCode !== undefined) {
+      updates.errorCode = end.errorCode;
+    }
+    if (end.errorMessage !== undefined) {
+      updates.errorMessage = end.errorMessage;
+    }
+    await this.db.update(agentRun).set(updates).where(eq(agentRun.id, end.runId));
+  }
+
+  /** Bump the run's llm-step retry counter. Atomic `retries = retries + 1`, no read-modify-write. */
+  async bumpRunRetries(runId: string): Promise<void> {
+    await this.db
+      .update(agentRun)
+      .set({ retries: sql`${agentRun.retries} + 1` })
+      .where(eq(agentRun.id, runId));
   }
 
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {

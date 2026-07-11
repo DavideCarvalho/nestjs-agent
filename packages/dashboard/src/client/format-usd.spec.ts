@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatCount, formatPercent, formatUsd } from './format-usd';
+import { formatCount, formatDurationMs, formatPercent, formatUsd } from './format-usd';
 
 describe('formatUsd', () => {
   it('formats plain dollars to two decimals', () => {
@@ -35,5 +35,24 @@ describe('formatPercent', () => {
     expect(formatPercent(0.1234)).toBe('12%');
     expect(formatPercent(1)).toBe('100%');
     expect(formatPercent(Number.NaN)).toBe('0%');
+  });
+});
+
+describe('formatDurationMs', () => {
+  it('renders sub-second durations in ms', () => {
+    expect(formatDurationMs(420)).toBe('420ms');
+  });
+
+  it('renders sub-minute durations in seconds', () => {
+    expect(formatDurationMs(1800)).toBe('1.8s');
+  });
+
+  it('renders minute-scale durations as `Nm Ns`', () => {
+    expect(formatDurationMs(125_000)).toBe('2m 5s');
+  });
+
+  it('renders `—` for null (no data) or non-finite input', () => {
+    expect(formatDurationMs(null)).toBe('—');
+    expect(formatDurationMs(Number.NaN)).toBe('—');
   });
 });

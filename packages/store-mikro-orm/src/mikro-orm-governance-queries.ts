@@ -6,6 +6,11 @@ import type {
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
+  RecentRunRow,
+  RunAgentBreakdownRow,
+  RunErrorBreakdownRow,
+  RunMetrics,
+  RunTrendPoint,
   ThreadActivityRow,
   ThreadMeta,
   ThreadSpendRow,
@@ -21,9 +26,28 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
+import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
+
+/** No error code recorded on a failed run (the caller didn't classify it). Groups those together. */
+const UNCLASSIFIED_ERROR_CODE = 'unknown';
+/** Bucket key for a run with no `agentName` (mirrors {@link RunAgentBreakdownRow}'s contract). */
+const DEFAULT_AGENT_BUCKET = '(default)';
+
+/**
+ * MySQL-compatible percentile (no `PERCENTILE_CONT`): index into an ascending-sorted array by
+ * offset. `null` when there are no settled durations in range. Shared by every reliability query
+ * that reports p50/p95 so the SQL and in-memory adapters compute identically.
+ */
+function percentileMs(sortedDurationsMs: number[], p: number): number | null {
+  if (sortedDurationsMs.length === 0) {
+    return null;
+  }
+  const offset = Math.min(sortedDurationsMs.length - 1, Math.floor(p * sortedDurationsMs.length));
+  return sortedDurationsMs[offset] ?? null;
+}
 
 /** Map a MikroORM usage entity onto the shared bucketer input (thread via relation, day via `createdAt`). */
 function toUsageInput(row: AgentTokenUsage): GovernanceUsageInput {
@@ -158,5 +182,120 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       });
     }
     return result;
+  }
+
+  private async runsInRange(em: EntityManager, range: GovernanceRange): Promise<AgentRun[]> {
+    const { start, end } = dayBoundsUtc(range);
+    return em.find(AgentRun, { startedAt: { $gte: start, $lte: end } });
+  }
+
+  async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
+    const em = this.em.fork();
+    const runs = await this.runsInRange(em, range);
+    let completed = 0;
+    let failed = 0;
+    let retries = 0;
+    const settledDurationsMs: number[] = [];
+    for (const run of runs) {
+      if (run.status === 'completed') {
+        completed += 1;
+      } else if (run.status === 'failed') {
+        failed += 1;
+      }
+      retries += run.retries;
+      if ((run.status === 'completed' || run.status === 'failed') && run.durationMs != null) {
+        settledDurationsMs.push(run.durationMs);
+      }
+    }
+    settledDurationsMs.sort((left, right) => left - right);
+    return {
+      runs: runs.length,
+      completed,
+      failed,
+      successRate: runs.length === 0 ? 0 : completed / runs.length,
+      retries,
+      durationP50Ms: percentileMs(settledDurationsMs, 0.5),
+      durationP95Ms: percentileMs(settledDurationsMs, 0.95),
+    };
+  }
+
+  async runsByAgent(range: GovernanceRange): Promise<RunAgentBreakdownRow[]> {
+    const em = this.em.fork();
+    const runs = await this.runsInRange(em, range);
+    const byAgent = new Map<string, { runs: number; failed: number; retries: number }>();
+    for (const run of runs) {
+      const agentName = run.agentName ?? DEFAULT_AGENT_BUCKET;
+      const bucket = byAgent.get(agentName) ?? { runs: 0, failed: 0, retries: 0 };
+      bucket.runs += 1;
+      bucket.failed += run.status === 'failed' ? 1 : 0;
+      bucket.retries += run.retries;
+      byAgent.set(agentName, bucket);
+    }
+    const result: RunAgentBreakdownRow[] = [];
+    for (const [agentName, bucket] of byAgent) {
+      result.push({ agentName, ...bucket });
+    }
+    result.sort(
+      (left, right) => right.runs - left.runs || left.agentName.localeCompare(right.agentName),
+    );
+    return result;
+  }
+
+  async runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]> {
+    const em = this.em.fork();
+    const { start, end } = dayBoundsUtc(range);
+    const runs = await em.find(AgentRun, {
+      startedAt: { $gte: start, $lte: end },
+      status: 'failed',
+    });
+    const byError = new Map<string, number>();
+    for (const run of runs) {
+      const errorCode = run.errorCode ?? UNCLASSIFIED_ERROR_CODE;
+      byError.set(errorCode, (byError.get(errorCode) ?? 0) + 1);
+    }
+    const result: RunErrorBreakdownRow[] = [];
+    for (const [errorCode, count] of byError) {
+      result.push({ errorCode, count });
+    }
+    result.sort(
+      (left, right) => right.count - left.count || left.errorCode.localeCompare(right.errorCode),
+    );
+    return result;
+  }
+
+  async runTrend(range: GovernanceRange): Promise<RunTrendPoint[]> {
+    const em = this.em.fork();
+    const runs = await this.runsInRange(em, range);
+    const byDay = new Map<string, { runs: number; failed: number }>();
+    for (const run of runs) {
+      const day = run.startedAt.toISOString().slice(0, 10);
+      const bucket = byDay.get(day) ?? { runs: 0, failed: 0 };
+      bucket.runs += 1;
+      bucket.failed += run.status === 'failed' ? 1 : 0;
+      byDay.set(day, bucket);
+    }
+    const result: RunTrendPoint[] = [];
+    for (const [day, bucket] of byDay) {
+      result.push({ day, ...bucket });
+    }
+    result.sort((left, right) => left.day.localeCompare(right.day));
+    return result;
+  }
+
+  async recentRuns(limit: number): Promise<RecentRunRow[]> {
+    const em = this.em.fork();
+    const runs = await em.find(AgentRun, {}, { orderBy: { startedAt: 'desc', id: 'desc' }, limit });
+    return runs.map((run) => ({
+      runId: run.id,
+      threadId: run.thread.id,
+      actorRef: run.actorRef,
+      agentName: run.agentName ?? null,
+      status: run.status,
+      durationMs: run.durationMs ?? null,
+      errorCode: run.errorCode ?? null,
+      errorMessage: run.errorMessage ?? null,
+      retries: run.retries,
+      startedAt: run.startedAt.toISOString(),
+    }));
   }
 }

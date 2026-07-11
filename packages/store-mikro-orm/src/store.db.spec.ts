@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
+import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
@@ -236,6 +237,59 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(await store.listThreads('actor-p')).toHaveLength(1);
   });
 
+  it('records a run start/end and bumps retries atomically', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-run' } });
+
+    await store.recordRunStart({
+      runId: 'run-1',
+      threadId: thread.id,
+      actorRef: 'actor-run',
+      agentName: 'researcher',
+    });
+    const started = await orm.em.fork().findOne(AgentRun, { id: 'run-1' });
+    expect(started?.status).toBe('running');
+    expect(started?.retries).toBe(0);
+    expect(started?.agentName).toBe('researcher');
+    expect(started?.settledAt).toBeNull();
+
+    // bumpRunRetries increments without a read-modify-write race (nativeUpdate `retries + 1`)
+    await store.bumpRunRetries('run-1');
+    await store.bumpRunRetries('run-1');
+    const bumped = await orm.em.fork().findOne(AgentRun, { id: 'run-1' });
+    expect(bumped?.retries).toBe(2);
+
+    await store.recordRunEnd({
+      runId: 'run-1',
+      status: 'completed',
+      durationMs: 1_234,
+    });
+    const settled = await orm.em.fork().findOne(AgentRun, { id: 'run-1' });
+    expect(settled?.status).toBe('completed');
+    expect(settled?.durationMs).toBe(1_234);
+    expect(settled?.settledAt).toBeInstanceOf(Date);
+    expect(settled?.errorCode).toBeNull();
+
+    // a run with no agentName defaults to null, and a failed run carries the error fields
+    await store.recordRunStart({ runId: 'run-2', threadId: thread.id, actorRef: 'actor-run' });
+    await store.recordRunEnd({
+      runId: 'run-2',
+      status: 'failed',
+      errorCode: 'timeout',
+      errorMessage: 'upstream timed out',
+    });
+    const failed = await orm.em.fork().findOne(AgentRun, { id: 'run-2' });
+    expect(failed?.agentName).toBeNull();
+    expect(failed?.status).toBe('failed');
+    expect(failed?.errorCode).toBe('timeout');
+    expect(failed?.errorMessage).toBe('upstream timed out');
+
+    // recordRunEnd/bumpRunRetries on an unknown run are silent no-ops
+    await expect(
+      store.recordRunEnd({ runId: 'missing', status: 'completed' }),
+    ).resolves.toBeUndefined();
+    await expect(store.bumpRunRetries('missing')).resolves.toBeUndefined();
+  });
+
   it('supersedes the current price row on upsert, keeping exactly one current row per model', async () => {
     const pricingStore = new MikroOrmPricingStore(orm.em);
 
@@ -301,7 +355,7 @@ describe('ensureAgentSchema (fingerprint-gated autoSchema)', () => {
 });
 
 describe('agentSchemaSql', () => {
-  it('renders create-only DDL for the five agent tables, applying `if not exists` to tables', async () => {
+  it('renders create-only DDL for the six agent tables, applying `if not exists` to tables', async () => {
     const statements = await agentSchemaSql(orm);
     const joined = statements.join('\n');
     for (const table of [
@@ -310,11 +364,12 @@ describe('agentSchemaSql', () => {
       'agent_tool_call',
       'agent_token_usage',
       'agent_model_pricing',
+      'agent_run',
     ]) {
       expect(joined).toContain(table);
     }
     const creates = statements.filter((sql) => /^create table/i.test(sql));
-    expect(creates).toHaveLength(5);
+    expect(creates).toHaveLength(6);
     // every create table is guarded; indexes stay plain (MySQL has no `create index if not exists`)
     expect(creates.every((sql) => /^create table if not exists/i.test(sql))).toBe(true);
     expect(statements.some((sql) => /^create index/i.test(sql))).toBe(true);

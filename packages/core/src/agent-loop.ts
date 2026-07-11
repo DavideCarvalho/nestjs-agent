@@ -9,7 +9,7 @@ import {
 } from './diagnostics.js';
 import { estimateCost } from './governance/compute.js';
 import type { AgentStore } from './spi/agent-store.js';
-import type { ModelProvider } from './spi/model-provider.js';
+import type { ModelProvider, ModelTurnResult } from './spi/model-provider.js';
 import type { AgentPricingStore, CurrentModelPrice } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
@@ -21,6 +21,7 @@ import type { ToolRegistry } from './tool-registry.js';
 import type {
   AgentRunInput,
   Decision,
+  LlmStepEnvelope,
   MessageUsage,
   ModelMessage,
   PromptBuilder,
@@ -28,6 +29,8 @@ import type {
   PromptContributor,
   ToolCallRequest,
   ToolResult,
+  ToolStepCtx,
+  ToolStepEnvelope,
 } from './types.js';
 
 export interface AgentLoopDeps {
@@ -128,6 +131,24 @@ export interface AgentLoopHooks {
    * cached results (stable ids, no double-write, no re-streaming).
    */
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Dispatch the model turn as a routed remote step. When present the loop uses it INSTEAD of
+   * running the model inline under hooks.step. Must resolve to exactly what deps.model.runTurn
+   * resolves. The durable runner enriches the envelope with sink routing (sinkRunId/childSink)
+   * on its side — core stays sink-topology-agnostic.
+   */
+  dispatchLlm?(index: number, envelope: LlmStepEnvelope): Promise<ModelTurnResult>;
+  /**
+   * Dispatch one tool execution as a routed remote step. Replaces ONLY the registry.invoke call
+   * (+ its timeout, applied handler-side); all persist steps around it stay local.
+   */
+  dispatchTool?(call: ToolCallRequest, envelope: ToolStepEnvelope): Promise<unknown>;
+  /**
+   * Recognizes the runner's control-flow signals (durable suspend / continue-as-new) so the loop
+   * rethrows them untouched instead of recording a failure. Inline runners omit it — they have no
+   * control-flow exceptions.
+   */
+  isControlFlowError?(error: unknown): boolean;
 }
 
 export class QuotaExceededError extends Error {
@@ -195,7 +216,7 @@ class ToolTimeoutError extends Error {
 }
 
 /** Reject if `work` doesn't settle within `ms`. The underlying work is left to finish on its own. */
-function withTimeout<T>(work: Promise<T>, ms: number, toolName: string): Promise<T> {
+export function withToolTimeout<T>(work: Promise<T>, ms: number, toolName: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new ToolTimeoutError(toolName, ms)), ms);
     work.then(
@@ -325,6 +346,19 @@ export async function runAgentLoop(
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
   });
 
+  // Its own step so durable replay reuses the ORIGINAL wall-clock start — durationMs stays honest
+  // across suspend/resume.
+  const startedAt = await hooks.step('run:started-at', () => Promise.resolve(Date.now()));
+  // Optional-chained: a store without run recording makes this (and persist:run:end) a no-op.
+  await hooks.step('persist:run:start', async () => {
+    await deps.store.recordRunStart?.({
+      runId: hooks.runId,
+      threadId: input.threadId,
+      actorRef: input.actor.id,
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    });
+  });
+
   // Inject-mode RAG: retrieve once for the user message and fold the passages into the system prompt
   // (a `ctx.step` so it's replay-cached under durable). Recorded below as a synthetic tool call on
   // the first assistant message, so citations surface through the same machinery as agentic search.
@@ -362,15 +396,26 @@ export async function runAgentLoop(
       await writer.write(encodeStreamEvent({ kind: 'step-start' }));
     });
 
-    const tools = await deps.registry.definitionsFor(
-      input.actor,
-      deps.rolesPolicy,
-      deps.toolAllowList,
-    );
-
-    const turn = await hooks.step(`llm:${i}`, () =>
-      deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
-    );
+    let turn: ModelTurnResult;
+    if (hooks.dispatchLlm) {
+      // No definitionsFor here: the envelope carries only wire-safe data (a ToolDefinition holds a
+      // live schema instance) — the serving handler re-derives tool definitions from the actor.
+      turn = await hooks.dispatchLlm(i, {
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        system,
+        messages: modelMessages,
+        actor: input.actor,
+      });
+    } else {
+      const tools = await deps.registry.definitionsFor(
+        input.actor,
+        deps.rolesPolicy,
+        deps.toolAllowList,
+      );
+      turn = await hooks.step(`llm:${i}`, () =>
+        deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+      );
+    }
     // provider-reported model wins over the configured fallback, so cost can't misattribute
     const resolvedModelId = turn.modelId ?? deps.modelId ?? 'unknown';
     // Provider-reported spend wins; else an estimate from the (once-per-run cached) price list; else
@@ -418,6 +463,8 @@ export async function runAgentLoop(
     let followUps: string[] | undefined;
     if (isFinalTurn && deps.followUpsCount !== undefined && deps.followUpsCount > 0) {
       const count = deps.followUpsCount;
+      // Stays on hooks.step (not dispatchLlm) — a short, non-streamed call, deliberately not
+      // dispatched as a routed remote step.
       const generated = await hooks.step(`followups:${i}`, () =>
         generateFollowUps(
           deps.model,
@@ -586,13 +633,33 @@ export async function runAgentLoop(
 
       const startedAt = Date.now();
       try {
-        const invocation = hooks.step(`tool:${call.id}`, () =>
-          deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
-        );
-        const output =
-          deps.toolTimeoutMs !== undefined
-            ? await withTimeout(invocation, deps.toolTimeoutMs, call.name)
-            : await invocation;
+        let output: unknown;
+        if (hooks.dispatchTool) {
+          const stepCtx: ToolStepCtx = {
+            actor: input.actor,
+            threadId: input.threadId,
+            runId: hooks.runId,
+            requestId: hooks.runId,
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+          };
+          const envelope: ToolStepEnvelope = {
+            toolName: call.name,
+            input: call.input,
+            ctx: stepCtx,
+            ...(deps.toolTimeoutMs !== undefined ? { timeoutMs: deps.toolTimeoutMs } : {}),
+          };
+          // The handler applies withToolTimeout itself — no loop-side wrap for a dispatched call.
+          output = await hooks.dispatchTool(call, envelope);
+        } else {
+          const invocation = hooks.step(`tool:${call.id}`, () =>
+            deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+          );
+          output =
+            deps.toolTimeoutMs !== undefined
+              ? await withToolTimeout(invocation, deps.toolTimeoutMs, call.name)
+              : await invocation;
+        }
         const executionMs = Date.now() - startedAt;
         await hooks.step(`persist:toolexec:${call.id}`, () =>
           deps.store.updateToolCall({
@@ -612,6 +679,12 @@ export async function runAgentLoop(
           durationMs: executionMs,
         });
       } catch (error) {
+        // Runner control-flow (durable suspend / continue-as-new) is not a tool failure — it must
+        // propagate untouched, like awaitApproval's suspend does. Persisting a toolfail checkpoint
+        // here would diverge from the replay's real result (NonDeterminismError).
+        if (hooks.isControlFlowError?.(error) === true) {
+          throw error;
+        }
         const executionMs = Date.now() - startedAt;
         const message = error instanceof Error ? error.message : String(error);
         await hooks.step(`persist:toolfail:${call.id}`, () =>
@@ -660,6 +733,16 @@ export async function runAgentLoop(
       deps.store.setTitle(input.threadId, deriveTitle(input.userText)),
     );
   }
+
+  // Normal completion only. The loop never records 'failed' — it doesn't catch its own crash;
+  // failure recording is the RUNNER's job. A checkpointed step, so a resumed replay settles once.
+  await hooks.step('persist:run:end', async () => {
+    await deps.store.recordRunEnd?.({
+      runId: hooks.runId,
+      status: 'completed',
+      durationMs: Date.now() - startedAt,
+    });
+  });
 
   await writer.end();
   publishAgentRunFinished({

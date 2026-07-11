@@ -206,10 +206,28 @@ function routerFor(path: string): DynamicModule {
   return RouterModule.register([{ path, module: AgentModule }]);
 }
 
+/**
+ * `dispatchedSteps` routes the turn's model/tool calls through `AgentRunSteps` — a durable-only
+ * worker group. Without `durable: true` there is no workflow to dispatch from, so this would silently
+ * no-op; fail loudly at build time instead of at first request.
+ */
+function assertDispatchedStepsRequiresDurable(dispatchedSteps: boolean, durable: boolean): void {
+  if (dispatchedSteps && !durable) {
+    throw new Error(
+      'AgentModule dispatchedSteps: true requires durable: true — dispatched steps are routed ' +
+        'durable steps (AgentRunSteps.llm/tool) with no in-process equivalent.',
+    );
+  }
+}
+
 @Global()
 @Module({})
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
+    assertDispatchedStepsRequiresDurable(
+      options.dispatchedSteps ?? false,
+      options.durable ?? false,
+    );
     const path = options.path ?? DEFAULT_PATH;
     // Bind AGENT_STORE locally only when the host passes a store; otherwise defer to a global one.
     const includeStore = options.store !== undefined;
@@ -229,6 +247,10 @@ export class AgentModule {
   }
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
+    assertDispatchedStepsRequiresDurable(
+      options.dispatchedSteps ?? false,
+      options.durable ?? false,
+    );
     const path = options.path ?? DEFAULT_PATH;
     // The async factory resolves too late to inspect `store`, so `forRootAsync` binds AGENT_STORE
     // locally from the factory result by default. `externalStore: true` opts out — deferring to a

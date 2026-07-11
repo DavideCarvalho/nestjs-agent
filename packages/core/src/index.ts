@@ -29,6 +29,7 @@ export {
 export {
   runAgentLoop,
   QuotaExceededError,
+  withToolTimeout,
   type AgentLoopDeps,
   type AgentLoopHooks,
 } from './agent-loop.js';

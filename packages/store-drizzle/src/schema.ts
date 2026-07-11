@@ -18,7 +18,7 @@ import {
 
 /**
  * Drizzle schema mirroring the MikroORM agent entities (same logical columns/relations):
- * threads, messages, tool calls, token usage and model pricing. Targets the SQLite core so the
+ * threads, messages, tool calls, token usage, model pricing and run outcomes. Targets the SQLite core so the
  * db-test runs on an in-memory better-sqlite3; timestamps are stored as integer epoch-ms columns
  * (`{ mode: 'timestamp_ms' }`) which Drizzle round-trips to/from JS `Date`, and the model-facing
  * message extras (tool calls/results, follow-ups, usage) live in JSON `text` columns.
@@ -126,13 +126,45 @@ export const agentModelPricing = sqliteTable('agent_model_pricing', {
   isCurrent: integer('is_current', { mode: 'boolean' }).notNull(),
 });
 
-/** The five agent tables as one schema object, ready for `drizzle(client, { schema })`. */
+/** A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only. */
+export type AgentRunStatus = 'running' | 'completed' | 'failed';
+
+/**
+ * One recorded run (turn) outcome — the durable half of what `aviary:agent:*` diagnostics report
+ * ephemerally. Written by {@link import('./drizzle-agent-store.js').DrizzleAgentStore.recordRunStart}/
+ * `recordRunEnd`/`bumpRunRetries`, read by
+ * {@link import('./drizzle-governance-queries.js').DrizzleGovernanceQueries} for the reliability
+ * surfaces (success rate, error breakdown, duration percentiles, trend, recent runs). `threadId`
+ * cascades on delete, like `agent_message`/`agent_token_usage`.
+ */
+export const agentRun = sqliteTable(
+  'agent_run',
+  {
+    id: text('id').primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => agentThread.id, { onDelete: 'cascade' }),
+    actorRef: text('actor_ref').notNull(),
+    agentName: text('agent_name'),
+    status: text('status').$type<AgentRunStatus>().notNull(),
+    durationMs: integer('duration_ms'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    retries: integer('retries').notNull().default(0),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    settledAt: integer('settled_at', { mode: 'timestamp_ms' }),
+  },
+  (table) => [index('agent_run_started_idx').on(table.startedAt)],
+);
+
+/** The six agent tables as one schema object, ready for `drizzle(client, { schema })`. */
 export const agentSchema = {
   agentThread,
   agentMessage,
   agentToolCall,
   agentTokenUsage,
   agentModelPricing,
+  agentRun,
 };
 
 /**
@@ -146,3 +178,5 @@ export type AgentDrizzleDb = BaseSQLiteDatabase<'sync' | 'async', unknown>;
 export type AgentThreadRow = typeof agentThread.$inferSelect;
 /** A persisted message row as Drizzle selects it. */
 export type AgentMessageRow = typeof agentMessage.$inferSelect;
+/** A persisted run row as Drizzle selects it. */
+export type AgentRunRow = typeof agentRun.$inferSelect;

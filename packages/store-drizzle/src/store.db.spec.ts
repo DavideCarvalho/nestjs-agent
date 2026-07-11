@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import { ensureAgentSchema } from './ensure-schema.js';
-import { agentSchema, agentToolCall } from './schema.js';
+import { agentRun, agentSchema, agentToolCall } from './schema.js';
 
 let db: BetterSQLite3Database<typeof agentSchema>;
 let store: DrizzleAgentStore;
@@ -154,6 +154,59 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     expect(await store.getThread(thread.id)).toBeNull();
     const after = await store.listThreads('actor-1');
     expect(after.map((t) => t.id)).toEqual([fork.id]);
+  });
+
+  it('records a run start/end and bumps retries atomically', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-run' } });
+
+    await store.recordRunStart({
+      runId: 'run-1',
+      threadId: thread.id,
+      actorRef: 'actor-run',
+      agentName: 'researcher',
+    });
+    const [started] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-1'));
+    expect(started?.status).toBe('running');
+    expect(started?.retries).toBe(0);
+    expect(started?.agentName).toBe('researcher');
+    expect(started?.settledAt).toBeNull();
+
+    // bumpRunRetries increments without a read-modify-write race (`retries + 1` in the SQL itself)
+    await store.bumpRunRetries('run-1');
+    await store.bumpRunRetries('run-1');
+    const [bumped] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-1'));
+    expect(bumped?.retries).toBe(2);
+
+    await store.recordRunEnd({
+      runId: 'run-1',
+      status: 'completed',
+      durationMs: 1_234,
+    });
+    const [settled] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-1'));
+    expect(settled?.status).toBe('completed');
+    expect(settled?.durationMs).toBe(1_234);
+    expect(settled?.settledAt).toBeInstanceOf(Date);
+    expect(settled?.errorCode).toBeNull();
+
+    // a run with no agentName defaults to null, and a failed run carries the error fields
+    await store.recordRunStart({ runId: 'run-2', threadId: thread.id, actorRef: 'actor-run' });
+    await store.recordRunEnd({
+      runId: 'run-2',
+      status: 'failed',
+      errorCode: 'timeout',
+      errorMessage: 'upstream timed out',
+    });
+    const [failed] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-2'));
+    expect(failed?.agentName).toBeNull();
+    expect(failed?.status).toBe('failed');
+    expect(failed?.errorCode).toBe('timeout');
+    expect(failed?.errorMessage).toBe('upstream timed out');
+
+    // recordRunEnd/bumpRunRetries on an unknown run are silent no-ops
+    await expect(
+      store.recordRunEnd({ runId: 'missing', status: 'completed' }),
+    ).resolves.toBeUndefined();
+    await expect(store.bumpRunRetries('missing')).resolves.toBeUndefined();
   });
 
   it('resolves the owning actorRef of a thread streaming a run via ownerOfActiveStream', async () => {

@@ -4,6 +4,7 @@ import { ActorsSection } from './ActorsSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
 import { PricingSection } from './PricingSection';
+import { ReliabilitySection } from './ReliabilitySection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
 import { LogoMark } from './icons';
@@ -11,6 +12,8 @@ import {
   MOCK_BUDGETS,
   MOCK_LIVE_EVENTS,
   MOCK_PRICES,
+  MOCK_RELIABILITY,
+  MOCK_RUNS,
   MOCK_SPEND,
   MOCK_THREADS,
   MOCK_TOOL_CALLS,
@@ -50,6 +53,9 @@ function Preview() {
         </Group>
         <Group label="Runs & tools">
           <RunsToolsSection toolCalls={MOCK_TOOL_CALLS} threads={MOCK_THREADS} />
+        </Group>
+        <Group label="Reliability">
+          <ReliabilitySection overview={MOCK_RELIABILITY} runs={MOCK_RUNS} />
         </Group>
         <Group label="Pricing">
           <PricingSection

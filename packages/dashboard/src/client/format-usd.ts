@@ -25,3 +25,14 @@ export function formatPercent(ratio: number): string {
   if (!Number.isFinite(ratio)) return '0%';
   return `${Math.round(ratio * 100)}%`;
 }
+
+/** Format a duration in ms (`420ms`, `1.8s`, `2m 5s`); `null`/non-finite reads as `—` (no data). */
+export function formatDurationMs(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return '—';
+  const abs = Math.abs(ms);
+  if (abs < 1000) return `${Math.round(ms)}ms`;
+  if (abs < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(abs / 60_000);
+  const seconds = Math.round((abs % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}

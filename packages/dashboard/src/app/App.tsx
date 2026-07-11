@@ -1,6 +1,8 @@
 import { type ReactNode, useState } from 'react';
 import type {
   ModelPrice,
+  RecentRunRow,
+  ReliabilityOverview,
   SpendOverview,
   ThreadActivityRow,
   ThreadSpendRow,
@@ -13,6 +15,7 @@ import { ActorsSection } from './ActorsSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
 import { PricingSection } from './PricingSection';
+import { ReliabilitySection } from './ReliabilitySection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
 import {
@@ -20,12 +23,15 @@ import {
   ChipIcon,
   DollarIcon,
   LogoMark,
+  ShieldIcon,
   TagIcon,
   UsersIcon,
   WrenchIcon,
 } from './icons';
 import {
   usePricing,
+  useReliability,
+  useRuns,
   useSpend,
   useThreads,
   useToolCalls,
@@ -34,13 +40,14 @@ import {
 } from './use-governance';
 import { useLiveEvents } from './use-live-events';
 
-type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'pricing' | 'live';
+type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'reliability' | 'pricing' | 'live';
 
 const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'spend', label: 'Spend & usage', icon: <DollarIcon /> },
   { key: 'models', label: 'Models', icon: <ChipIcon /> },
   { key: 'actors', label: 'Actors & budgets', icon: <UsersIcon /> },
   { key: 'runs', label: 'Runs & tools', icon: <WrenchIcon /> },
+  { key: 'reliability', label: 'Reliability', icon: <ShieldIcon /> },
   { key: 'pricing', label: 'Pricing', icon: <TagIcon /> },
   { key: 'live', label: 'Live', icon: <ActivityIcon /> },
 ];
@@ -50,6 +57,21 @@ const EMPTY_TOOL_CALLS: ToolCallActivityRow[] = [];
 const EMPTY_THREADS: ThreadActivityRow[] = [];
 const EMPTY_TOP_THREADS: ThreadSpendRow[] = [];
 const EMPTY_PRICES: ModelPrice[] = [];
+const EMPTY_RELIABILITY: ReliabilityOverview = {
+  metrics: {
+    runs: 0,
+    completed: 0,
+    failed: 0,
+    successRate: 0,
+    retries: 0,
+    durationP50Ms: null,
+    durationP95Ms: null,
+  },
+  byAgent: [],
+  errors: [],
+  trend: [],
+};
+const EMPTY_RUNS: RecentRunRow[] = [];
 
 /** HTTP status the pricing API 501s with when no `AGENT_PRICING_STORE` is bound. */
 const PRICING_UNAVAILABLE_STATUS = '501';
@@ -67,6 +89,8 @@ export function App() {
   const topThreads = useTopThreads(range);
   const toolCalls = useToolCalls();
   const threads = useThreads();
+  const reliability = useReliability(range);
+  const runs = useRuns();
   const pricing = usePricing();
   const upsertPrice = useUpsertPrice();
   const live = useLiveEvents();
@@ -119,6 +143,8 @@ export function App() {
           errorSpend={spend.isError}
           toolCalls={toolCalls.data ?? EMPTY_TOOL_CALLS}
           threads={threads.data ?? EMPTY_THREADS}
+          reliability={reliability.data ?? EMPTY_RELIABILITY}
+          runs={runs.data ?? EMPTY_RUNS}
           liveEvents={live.events}
           connected={live.connected}
           prices={pricing.data ?? EMPTY_PRICES}
@@ -140,6 +166,8 @@ function ActiveSection({
   errorSpend,
   toolCalls,
   threads,
+  reliability,
+  runs,
   liveEvents,
   connected,
   prices,
@@ -155,6 +183,8 @@ function ActiveSection({
   errorSpend: boolean;
   toolCalls: ToolCallActivityRow[];
   threads: ThreadActivityRow[];
+  reliability: ReliabilityOverview;
+  runs: RecentRunRow[];
   liveEvents: FeedEvent[];
   connected: boolean;
   prices: ModelPrice[];
@@ -182,6 +212,8 @@ function ActiveSection({
       return <ActorsSection rows={overview.byActor} />;
     case 'runs':
       return <RunsToolsSection toolCalls={toolCalls} threads={threads} />;
+    case 'reliability':
+      return <ReliabilitySection overview={reliability} runs={runs} />;
     case 'pricing':
       return (
         <PricingSection

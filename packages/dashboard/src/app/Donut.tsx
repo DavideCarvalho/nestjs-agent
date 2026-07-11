@@ -26,26 +26,23 @@ export function Donut({
   thickness = 20,
   centerLabel,
   centerSub,
+  label = 'spend by model',
 }: {
   segments: DonutSegment[];
   size?: number;
   thickness?: number;
   centerLabel?: string;
   centerSub?: string;
+  /** Accessible label for the chart (also the `<title>`) — describes what the segments break down. */
+  label?: string;
 }) {
   const radius = (size - thickness) / 2;
   const circumference = 2 * Math.PI * radius;
   const center = size / 2;
 
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      role="img"
-      aria-label="spend by model"
-    >
-      <title>spend by model</title>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
+      <title>{label}</title>
       <g transform={`rotate(-90 ${center} ${center})`}>
         <circle
           cx={center}

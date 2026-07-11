@@ -67,6 +67,21 @@ export interface RecordUsageInput {
   costUsd?: number;
 }
 
+export interface RecordRunStartInput {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  agentName?: string;
+}
+
+export interface RecordRunEndInput {
+  runId: string;
+  status: 'completed' | 'failed';
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 /** ORM-agnostic persistence. Refs are string ids; adapters may add real relations. */
 export interface AgentStore {
   createThread(input: CreateThreadInput): Promise<ThreadSummary>;
@@ -97,6 +112,15 @@ export interface AgentStore {
    * Absent on a store that predates this — thread read/list payloads report `activeRunId: null`.
    */
   activeRunForThread?(threadId: string): Promise<string | null>;
+  /**
+   * OPTIONAL: persist the start of a run (turn). Replay-safe: called under a durable localStep.
+   * Absent on a store that predates run recording — reliability metrics degrade to zeros/empty.
+   */
+  recordRunStart?(run: RecordRunStartInput): Promise<void>;
+  /** OPTIONAL: settle a run's outcome. `errorCode`/`errorMessage` only when status is 'failed'. */
+  recordRunEnd?(end: RecordRunEndInput): Promise<void>;
+  /** OPTIONAL: bump the run's llm-step retry counter (dispatched-step attempt > 1). */
+  bumpRunRetries?(runId: string): Promise<void>;
 
   /**
    * The `actorRef` that owns a thread, or `null` if no such thread exists. The authorization seam

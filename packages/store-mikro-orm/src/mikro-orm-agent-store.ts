@@ -11,8 +11,9 @@ import type {
   UpdateThreadInput,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
-import type { EntityManager } from '@mikro-orm/core';
+import { type EntityManager, raw } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
+import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
@@ -288,6 +289,60 @@ export class MikroOrmAgentStore implements AgentStore {
       { fields: ['activeStreamId'] },
     );
     return thread?.activeStreamId ?? null;
+  }
+
+  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
+  async recordRunStart(run: {
+    runId: string;
+    threadId: string;
+    actorRef: string;
+    agentName?: string;
+  }): Promise<void> {
+    const em = this.em.fork();
+    const runRow = em.create(AgentRun, {
+      id: run.runId,
+      thread: em.getReference(AgentThread, run.threadId),
+      actorRef: run.actorRef,
+      status: 'running',
+      retries: 0,
+      startedAt: new Date(),
+      ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+    });
+    em.persist(runRow);
+    await em.flush();
+  }
+
+  /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
+  async recordRunEnd(end: {
+    runId: string;
+    status: 'completed' | 'failed';
+    durationMs?: number;
+    errorCode?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    const em = this.em.fork();
+    const runRow = await em.findOne(AgentRun, { id: end.runId });
+    if (runRow === null) {
+      return;
+    }
+    runRow.status = end.status;
+    runRow.settledAt = new Date();
+    if (end.durationMs !== undefined) {
+      runRow.durationMs = end.durationMs;
+    }
+    if (end.errorCode !== undefined) {
+      runRow.errorCode = end.errorCode;
+    }
+    if (end.errorMessage !== undefined) {
+      runRow.errorMessage = end.errorMessage;
+    }
+    await em.flush();
+  }
+
+  /** Bump the run's llm-step retry counter. Atomic `retries = retries + 1`, no read-modify-write. */
+  async bumpRunRetries(runId: string): Promise<void> {
+    const em = this.em.fork();
+    await em.nativeUpdate(AgentRun, { id: runId }, { retries: raw<number>('retries + 1') });
   }
 
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {

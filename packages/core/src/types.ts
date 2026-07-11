@@ -304,3 +304,38 @@ export type ToolCallStatus =
   | 'executed'
   | 'rejected'
   | 'failed';
+
+/**
+ * Serializable input for a dispatched model-turn step. Carries only data — the serving worker
+ * re-resolves the model/sink/registry from its own DI via AGENT_DEPS_FACTORY.forAgent(agentName).
+ */
+export interface LlmStepEnvelope {
+  /** Undefined = default agent (same semantics as {@link AgentRunInput.agentName}). */
+  agentName?: string;
+  system: string;
+  messages: ModelMessage[];
+  /** The turn's actor — the handler re-derives tool definitions from it (definitionsFor). */
+  actor: Actor;
+}
+
+/**
+ * The serializable subset of `AiToolCtx` — everything except `host` (re-attached handler-side
+ * from DI).
+ */
+export interface ToolStepCtx {
+  actor: Actor;
+  threadId: string;
+  runId: string;
+  requestId: string;
+  agentName?: string;
+  pageContext?: PageContext;
+}
+
+/** Serializable input for a dispatched tool-execution step. */
+export interface ToolStepEnvelope {
+  toolName: string;
+  input: unknown;
+  ctx: ToolStepCtx;
+  /** Applied INSIDE the handler (`withToolTimeout`) — never as a durable step `timeoutMs`. */
+  timeoutMs?: number;
+}

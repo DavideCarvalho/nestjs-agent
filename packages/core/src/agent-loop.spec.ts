@@ -12,13 +12,18 @@ import {
   type AgentLoopDeps,
   type AgentLoopHooks,
   type AgentPricingStore,
+  type AgentStore,
   type AgentStreamEvent,
   type Decision,
   DefaultRolesPolicy,
+  type LlmStepEnvelope,
   type ModelProvider,
   type PromptBuilder,
   type PromptContributor,
+  type RecordRunEndInput,
+  type RecordRunStartInput,
   ToolRegistry,
+  type ToolStepEnvelope,
   runAgentLoop,
 } from './index.js';
 
@@ -87,6 +92,11 @@ interface RunOverrides {
   promptContributors?: PromptContributor[];
   model?: ModelProvider;
   pricingStore?: AgentPricingStore;
+  toolTimeoutMs?: number;
+  dispatchLlm?: AgentLoopHooks['dispatchLlm'];
+  dispatchTool?: AgentLoopHooks['dispatchTool'];
+  /** Decorates the store the LOOP sees (thread setup + assertions still use the inner store). */
+  wrapStore?: (store: InMemoryAgentStore) => AgentStore;
 }
 
 async function run(
@@ -100,10 +110,13 @@ async function run(
   const sink = new InMemoryTokenStreamSink();
   const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
   const runId = 'run-1';
+  // Records every `hooks.step` checkpoint name — lets a test prove a step was (or wasn't) taken
+  // the local, in-process way (as opposed to a dispatched llm/tool call).
+  const stepNames: string[] = [];
 
   const deps: AgentLoopDeps = {
     model: overrides.model ?? new FakeModelProvider(script),
-    store,
+    store: overrides.wrapStore !== undefined ? overrides.wrapStore(store) : store,
     registry: buildRegistry(),
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
@@ -114,13 +127,19 @@ async function run(
       ? { promptContributors: overrides.promptContributors }
       : {}),
     ...(overrides.pricingStore !== undefined ? { pricingStore: overrides.pricingStore } : {}),
+    ...(overrides.toolTimeoutMs !== undefined ? { toolTimeoutMs: overrides.toolTimeoutMs } : {}),
   };
   const hooks: AgentLoopHooks = {
     runId,
     openSink: () => sink.open(runId),
     awaitApproval: async (call) => decide(call.id),
-    step: (_name, fn) => fn(),
+    step: (name, fn) => {
+      stepNames.push(name);
+      return fn();
+    },
     ...(runAgent !== undefined ? { runAgent } : {}),
+    ...(overrides.dispatchLlm !== undefined ? { dispatchLlm: overrides.dispatchLlm } : {}),
+    ...(overrides.dispatchTool !== undefined ? { dispatchTool: overrides.dispatchTool } : {}),
   };
 
   const result = await runAgentLoop(
@@ -134,7 +153,7 @@ async function run(
   );
   const streamed = await drain(sink, runId);
   const detail = await store.getThread(thread.id);
-  return { result, streamed, events: parseEvents(streamed), store, detail };
+  return { result, streamed, events: parseEvents(streamed), store, detail, stepNames };
 }
 
 describe('runAgentLoop', () => {
@@ -464,5 +483,318 @@ describe('runAgentLoop', () => {
     });
     const stepFinish = events.find((event) => event.kind === 'step-finish');
     expect(stepFinish).toMatchObject({ kind: 'step-finish', costUsd: 0.0042 });
+  });
+});
+
+describe('dispatched turn steps (dispatchLlm / dispatchTool)', () => {
+  it('uses dispatchLlm when provided, passing the turn index and a JSON-serializable envelope', async () => {
+    const calls: Array<{ index: number; envelope: LlmStepEnvelope }> = [];
+    const dispatchLlm: NonNullable<AgentLoopHooks['dispatchLlm']> = async (index, envelope) => {
+      calls.push({ index, envelope });
+      return {
+        text: 'dispatched reply',
+        toolCalls: [],
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    };
+    // Uses the default registry, which has Zod-schema tools registered — the regression that
+    // matters: the envelope must carry NO schema instances (no `tools`; the serving handler
+    // re-derives definitions from `actor`), so a strict JSON round-trip must hold.
+    const { result, stepNames } = await run(
+      () => ({ text: 'unused — dispatchLlm short-circuits the model call' }),
+      undefined,
+      undefined,
+      undefined,
+      { dispatchLlm },
+    );
+    expect(result.text).toBe('dispatched reply');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.index).toBe(0);
+    expect(stepNames).not.toContain('llm:0');
+    const envelope = calls[0]?.envelope;
+    expect(envelope).toMatchObject({
+      system: 'You are a test agent.',
+      actor: { id: 'u1', roles: ['ADMIN'] },
+    });
+    expect(envelope).not.toHaveProperty('agentName');
+    expect(envelope).not.toHaveProperty('tools');
+    expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
+  });
+
+  it('falls back to hooks.step when dispatchLlm is absent (existing behavior untouched)', async () => {
+    const { result, stepNames } = await run(() => ({ text: 'hello world' }));
+    expect(result.text).toBe('hello world');
+    expect(stepNames).toContain('llm:0');
+  });
+
+  it('uses dispatchTool for a read tool, carrying actor/thread/run/request ctx (never host)', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'it is 21C in Recife' };
+    const calls: Array<{ toolName: string; envelope: ToolStepEnvelope }> = [];
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async (call, envelope) => {
+      calls.push({ toolName: call.name, envelope });
+      return { tempC: 99, city: 'dispatched' };
+    };
+    const { store, stepNames } = await run(script, undefined, undefined, undefined, {
+      dispatchTool,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.toolName).toBe('getWeather');
+    expect(calls[0]?.envelope).toMatchObject({
+      toolName: 'getWeather',
+      input: { city: 'Recife' },
+      ctx: { actor: { id: 'u1', roles: ['ADMIN'] }, runId: 'run-1', requestId: 'run-1' },
+    });
+    expect(calls[0]?.envelope.ctx).not.toHaveProperty('host');
+    // The loop-side `tool:${call.id}` checkpoint is skipped entirely when dispatched.
+    expect(stepNames.some((name) => name.startsWith('tool:'))).toBe(false);
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'getWeather', status: 'executed' });
+    expect(rows[0]?.output).toEqual({ tempC: 99, city: 'dispatched' });
+  });
+
+  it('uses dispatchTool for an approved action tool', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'done' };
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async () => ({
+      purged: 'dispatched-cfg',
+    });
+    const { store } = await run(script, () => ({ approved: true }), undefined, undefined, {
+      dispatchTool,
+    });
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
+    expect(rows[0]?.output).toEqual({ purged: 'dispatched-cfg' });
+  });
+
+  it('does not use dispatchTool for agent-kind delegation (stays loop-level via ctx.runAgent)', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? {
+            text: 'asking the sub-agent',
+            toolCall: { name: 'askSub', input: { task: 'how many?' } },
+          }
+        : { text: 'the sub-agent said hi' };
+    let dispatchToolCalls = 0;
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async () => {
+      dispatchToolCalls += 1;
+      return null;
+    };
+    const { result } = await run(
+      script,
+      () => ({ approved: true }),
+      undefined,
+      async () => ({ text: 'sub-agent answer' }),
+      { dispatchTool },
+    );
+    expect(result.text).toBe('the sub-agent said hi');
+    expect(dispatchToolCalls).toBe(0);
+  });
+
+  it('a dispatchTool rejection persists the tool call as failed and the loop continues', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'could not check the weather' };
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async () => {
+      throw new Error('dispatched step failed');
+    };
+    const { result, store } = await run(script, undefined, undefined, undefined, { dispatchTool });
+    // Same outcome as a thrown tool today: the loop doesn't halt, it feeds the model the error.
+    expect(result.text).toBe('could not check the weather');
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'getWeather', status: 'failed' });
+  });
+
+  it('carries deps.toolTimeoutMs as envelope.timeoutMs, omitted when unset', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'it is 21C in Recife' };
+    const seen: ToolStepEnvelope[] = [];
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async (_call, envelope) => {
+      seen.push(envelope);
+      return { tempC: 21, city: 'Recife' };
+    };
+
+    await run(script, undefined, undefined, undefined, { dispatchTool, toolTimeoutMs: 5_000 });
+    expect(seen[0]?.timeoutMs).toBe(5_000);
+
+    seen.length = 0;
+    await run(script, undefined, undefined, undefined, { dispatchTool });
+    expect(seen[0]).not.toHaveProperty('timeoutMs');
+  });
+
+  it('rethrows a control-flow rejection untouched — no toolfail persisted, loop halted', async () => {
+    const store = new InMemoryAgentStore();
+    const sink = new InMemoryTokenStreamSink();
+    const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'never reached — the suspend throws through the loop' };
+    const deps: AgentLoopDeps = {
+      model: new FakeModelProvider(script),
+      store,
+      registry: buildRegistry(),
+      rolesPolicy: new DefaultRolesPolicy(),
+      modelId: 'fake-1',
+      day: '2026-06-30',
+      systemPrompt: 'You are a test agent.',
+    };
+    const hooks: AgentLoopHooks = {
+      runId: 'run-1',
+      openSink: () => sink.open('run-1'),
+      awaitApproval: async () => ({ approved: true }),
+      step: (_name, fn) => fn(),
+      dispatchTool: async () => {
+        throw new FakeSuspendSignal();
+      },
+      isControlFlowError: (error) => error instanceof FakeSuspendSignal,
+    };
+    await expect(
+      runAgentLoop(
+        deps,
+        { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'hi' },
+        hooks,
+      ),
+    ).rejects.toThrow(FakeSuspendSignal);
+    // No toolfail checkpoint: the call keeps its pre-invoke status, exactly as an awaitApproval
+    // suspend leaves an action call pending.
+    expect(store.toolCallRows()[0]).toMatchObject({
+      toolName: 'getWeather',
+      status: 'auto_executed',
+    });
+    // The loop did not continue past the throw — no second model turn was persisted.
+    const detail = await store.getThread(thread.id);
+    expect(detail?.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+
+  it('the same rejection without isControlFlowError is a plain tool failure (inline runner)', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'gave up' };
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async () => {
+      throw new FakeSuspendSignal();
+    };
+    const { result, store } = await run(script, undefined, undefined, undefined, { dispatchTool });
+    expect(result.text).toBe('gave up');
+    expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'getWeather', status: 'failed' });
+  });
+});
+
+/** Stands in for the durable runner's suspend signal (e.g. WorkflowSuspended on first dispatch). */
+class FakeSuspendSignal extends Error {
+  constructor() {
+    super('workflow suspended');
+    this.name = 'FakeSuspendSignal';
+  }
+}
+
+/**
+ * A store exposing only the REQUIRED AgentStore surface — every optional method genuinely absent,
+ * regardless of what the in-memory store grows over time. Proves the loop's run-recording steps
+ * no-op against a store that predates them.
+ */
+function withoutOptionalStoreMethods(store: InMemoryAgentStore): AgentStore {
+  return {
+    createThread: (input) => store.createThread(input),
+    getThread: (threadId) => store.getThread(threadId),
+    listThreads: (actorRef, limit) => store.listThreads(actorRef, limit),
+    softDeleteThread: (threadId) => store.softDeleteThread(threadId),
+    forkThread: (threadId, fromMessageId) => store.forkThread(threadId, fromMessageId),
+    setTitle: (threadId, title) => store.setTitle(threadId, title),
+    promoteThread: (threadId) => store.promoteThread(threadId),
+    setActiveStream: (threadId, runId) => store.setActiveStream(threadId, runId),
+    ownerOfThread: (threadId) => store.ownerOfThread(threadId),
+    ownerOfToolCall: (toolCallId) => store.ownerOfToolCall(toolCallId),
+    runForToolCall: (toolCallId) => store.runForToolCall(toolCallId),
+    ownerOfActiveStream: (runId) => store.ownerOfActiveStream(runId),
+    appendMessage: (input) => store.appendMessage(input),
+    truncateFrom: (threadId, messageId) => store.truncateFrom(threadId, messageId),
+    recordToolCall: (input) => store.recordToolCall(input),
+    updateToolCall: (input) => store.updateToolCall(input),
+    recordUsage: (input) => store.recordUsage(input),
+    quotaToday: (actorRef, day) => store.quotaToday(actorRef, day),
+  };
+}
+
+describe('run reliability recording', () => {
+  function captureRunRecording() {
+    const runStarts: RecordRunStartInput[] = [];
+    const runEnds: RecordRunEndInput[] = [];
+    const wrapStore = (store: InMemoryAgentStore): AgentStore =>
+      Object.assign(store, {
+        recordRunStart: async (start: RecordRunStartInput) => {
+          runStarts.push(start);
+        },
+        recordRunEnd: async (end: RecordRunEndInput) => {
+          runEnds.push(end);
+        },
+      });
+    return { runStarts, runEnds, wrapStore };
+  }
+
+  it('records run start and completed end on a no-tool turn', async () => {
+    const { runStarts, runEnds, wrapStore } = captureRunRecording();
+    const { result, detail, stepNames } = await run(
+      () => ({ text: 'hello' }),
+      undefined,
+      undefined,
+      undefined,
+      { wrapStore },
+    );
+    expect(result.text).toBe('hello');
+    expect(stepNames).toContain('run:started-at');
+    expect(stepNames).toContain('persist:run:start');
+    expect(stepNames).toContain('persist:run:end');
+    expect(runStarts).toHaveLength(1);
+    expect(runStarts[0]).toMatchObject({
+      runId: 'run-1',
+      threadId: detail?.id,
+      actorRef: 'u1',
+    });
+    // No agentName on the input → the key is omitted entirely, not set to undefined.
+    expect(runStarts[0]).not.toHaveProperty('agentName');
+    expect(runEnds).toHaveLength(1);
+    expect(runEnds[0]).toMatchObject({ runId: 'run-1', status: 'completed' });
+    expect(typeof runEnds[0]?.durationMs).toBe('number');
+    expect(runEnds[0]?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('completes fine against a store without the run-recording methods', async () => {
+    const { result, detail, stepNames } = await run(
+      () => ({ text: 'hello' }),
+      undefined,
+      undefined,
+      undefined,
+      { wrapStore: withoutOptionalStoreMethods },
+    );
+    expect(result.text).toBe('hello');
+    // The steps still run (one code shape) — they just no-op inside.
+    expect(stepNames).toContain('persist:run:start');
+    expect(stepNames).toContain('persist:run:end');
+    expect(detail?.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('never records a failed end from the loop — a tool failure still settles as completed', async () => {
+    const { runStarts, runEnds, wrapStore } = captureRunRecording();
+    // ghostTool is unregistered → the tool call fails, but the run itself completes normally.
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'trying', toolCall: { name: 'ghostTool', input: {} } }
+        : { text: 'gave up' };
+    const { result, store } = await run(script, undefined, undefined, undefined, { wrapStore });
+    expect(result.text).toBe('gave up');
+    expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'ghostTool', status: 'failed' });
+    expect(runStarts).toHaveLength(1);
+    expect(runEnds).toHaveLength(1);
+    expect(runEnds[0]?.status).toBe('completed');
+    expect(runEnds.filter((end) => end.status === 'failed')).toHaveLength(0);
   });
 });

@@ -80,6 +80,16 @@ export interface AgentModuleOptions {
    */
   durable?: boolean;
   /**
+   * Dispatch the turn's model call and tool executions as routed durable steps
+   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of in-process `ctx.localStep`s. Requires
+   * `durable: true` (module build throws otherwise). Multi-pod fleets MUST wire a cross-process
+   * token sink (e.g. a Redis pub/sub `TokenStreamSink`) — the dispatched `llm` step streams from
+   * whichever worker serves it, not necessarily the one running this workflow. STATIC top-level flag
+   * (like `durable`/`attachments.upload`): it changes what gets registered and how the workflow
+   * dispatches, decided at module build time.
+   */
+  dispatchedSteps?: boolean;
+  /**
    * Static functional tools (`{ spec, handler }`, e.g. from `createExecuteSqlTool`) to register at
    * boot. For tools that need DI-resolved dependencies, use `provideAgentTool(factory, inject)` in a
    * module's `providers` instead.
@@ -138,6 +148,13 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
    */
   durable?: boolean;
+  /**
+   * Dispatch the turn's model call and tool executions as routed durable steps. Same static-wiring
+   * reasoning as `durable` above — it lives here (not in the async factory result) because it decides
+   * how `AgentRunWorkflow` builds its hooks at module build time. Requires `durable: true` (module
+   * build throws otherwise). See `AgentModuleOptions.dispatchedSteps` for the full contract.
+   */
+  dispatchedSteps?: boolean;
   /**
    * Set when `AGENT_STORE` is bound by a globally-imported store module (e.g.
    * `MikroOrmAgentStoreModule.forFeature()`) instead of returned as `store` from `useFactory`.

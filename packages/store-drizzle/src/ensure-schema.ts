@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { AgentDrizzleDb } from './schema.js';
 
 /**
- * Idempotent `CREATE TABLE IF NOT EXISTS` DDL for the five agent tables, mirroring
+ * Idempotent `CREATE TABLE IF NOT EXISTS` DDL for the six agent tables, mirroring
  * {@link import('./schema.js').agentSchema}. SQLite dialect (the db-test driver); kept here rather
  * than relying on drizzle-kit so the package can stand up its schema with no migration files. Safe
  * to run on boot against a shared database — it never drops or alters existing columns.
@@ -75,6 +75,21 @@ const statements: string[] = [
     effective_from INTEGER NOT NULL,
     is_current INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS agent_run (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
+    actor_ref TEXT NOT NULL,
+    agent_name TEXT,
+    status TEXT NOT NULL,
+    duration_ms INTEGER,
+    error_code TEXT,
+    error_message TEXT,
+    retries INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,
+    settled_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS agent_run_started_idx
+    ON agent_run (started_at)`,
 ];
 
 /** Runs the `CREATE TABLE IF NOT EXISTS` DDL above against the supplied Drizzle SQLite db. */

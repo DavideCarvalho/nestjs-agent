@@ -1,9 +1,14 @@
-import type { CurrentModelPrice, ToolCallActivityRow } from '@dudousxd/nestjs-agent-core';
+import type {
+  CurrentModelPrice,
+  RecentRunRow,
+  ToolCallActivityRow,
+} from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Get, Post, Query, Sse } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import {
   DashboardService,
   type LiveAgentEvent,
+  type ReliabilityOverview,
   type SpendOverview,
   type ThreadActivityRowWithLabel,
   type ThreadSpendRowWithLabel,
@@ -62,6 +67,21 @@ export class AgentApiController {
     @Query('limit') limit?: string,
   ): Promise<ThreadSpendRowWithLabel[]> {
     return this.dashboard.topThreads(resolveRange(from, to), parseLimit(limit, 10));
+  }
+
+  /** `{ metrics, byAgent, errors, trend }` for a day range (defaults to the last 30 days). */
+  @Get('reliability')
+  reliability(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ): Promise<ReliabilityOverview> {
+    return this.dashboard.reliability(resolveRange(from, to));
+  }
+
+  /** Most recent runs (default 50, max 200) for the Reliability recent-runs table. */
+  @Get('runs')
+  runs(@Query('limit') limit?: string): Promise<RecentRunRow[]> {
+    return this.dashboard.recentRuns(parseLimit(limit, 50));
   }
 
   /** Most recent tool calls (default 50, max 200) for the activity feed. */

@@ -21,6 +21,22 @@ export function useTopThreads(range: GovernanceRange, limit = 10) {
   });
 }
 
+/** Poll the run reliability overview for a range. */
+export function useReliability(range: GovernanceRange) {
+  return useQuery({
+    queryKey: ['reliability', range.fromDay, range.toDay],
+    queryFn: () => agentClient.reliability(range),
+  });
+}
+
+/** Poll the recent-runs feed. */
+export function useRuns(limit = 50) {
+  return useQuery({
+    queryKey: ['runs', limit],
+    queryFn: () => agentClient.runs(limit),
+  });
+}
+
 /** Poll the recent tool-calls feed. */
 export function useToolCalls(limit = 50) {
   return useQuery({

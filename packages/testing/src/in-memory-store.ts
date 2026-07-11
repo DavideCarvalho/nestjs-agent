@@ -80,11 +80,41 @@ export interface GovernanceThreadRow {
   updatedAt: string;
 }
 
+interface RunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  agentName?: string;
+  status: 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  retries: number;
+  startedAt: string;
+  settledAt?: string;
+}
+
+/** A recorded run outcome exposed to the governance read-model (reliability surfaces). */
+export interface GovernanceRunRow {
+  runId: string;
+  threadId: string;
+  actorRef: string;
+  agentName?: string;
+  status: 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  retries: number;
+  startedAt: string;
+  settledAt?: string;
+}
+
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
 export class InMemoryAgentStore implements AgentStore {
   private readonly threads = new Map<string, ThreadRow>();
   private readonly toolCalls = new Map<string, ToolCallRow>();
   private readonly usage: UsageRow[] = [];
+  private readonly runs = new Map<string, RunRow>();
 
   private now(): string {
     return new Date().toISOString();
@@ -205,6 +235,57 @@ export class InMemoryAgentStore implements AgentStore {
 
   async activeRunForThread(threadId: string): Promise<string | null> {
     return this.threads.get(threadId)?.activeStreamId ?? null;
+  }
+
+  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
+  async recordRunStart(run: {
+    runId: string;
+    threadId: string;
+    actorRef: string;
+    agentName?: string;
+  }): Promise<void> {
+    this.runs.set(run.runId, {
+      runId: run.runId,
+      threadId: run.threadId,
+      actorRef: run.actorRef,
+      status: 'running',
+      retries: 0,
+      startedAt: this.now(),
+      ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+    });
+  }
+
+  /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
+  async recordRunEnd(end: {
+    runId: string;
+    status: 'completed' | 'failed';
+    durationMs?: number;
+    errorCode?: string;
+    errorMessage?: string;
+  }): Promise<void> {
+    const row = this.runs.get(end.runId);
+    if (row === undefined) {
+      return;
+    }
+    row.status = end.status;
+    row.settledAt = this.now();
+    if (end.durationMs !== undefined) {
+      row.durationMs = end.durationMs;
+    }
+    if (end.errorCode !== undefined) {
+      row.errorCode = end.errorCode;
+    }
+    if (end.errorMessage !== undefined) {
+      row.errorMessage = end.errorMessage;
+    }
+  }
+
+  /** Bump the run's llm-step retry counter. */
+  async bumpRunRetries(runId: string): Promise<void> {
+    const row = this.runs.get(runId);
+    if (row !== undefined) {
+      row.retries += 1;
+    }
   }
 
   async promoteThread(threadId: string): Promise<void> {
@@ -361,6 +442,23 @@ export class InMemoryAgentStore implements AgentStore {
       actorRef: row.actorRef,
       messageCount: row.messages.length,
       updatedAt: row.updatedAt,
+    }));
+  }
+
+  /** Governance read-model feed: recorded run outcomes (the reliability surfaces). */
+  governanceRuns(): GovernanceRunRow[] {
+    return [...this.runs.values()].map((row) => ({
+      runId: row.runId,
+      threadId: row.threadId,
+      actorRef: row.actorRef,
+      status: row.status,
+      retries: row.retries,
+      startedAt: row.startedAt,
+      ...(row.agentName !== undefined ? { agentName: row.agentName } : {}),
+      ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
+      ...(row.errorCode !== undefined ? { errorCode: row.errorCode } : {}),
+      ...(row.errorMessage !== undefined ? { errorMessage: row.errorMessage } : {}),
+      ...(row.settledAt !== undefined ? { settledAt: row.settledAt } : {}),
     }));
   }
 
