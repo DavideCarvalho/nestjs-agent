@@ -1,5 +1,50 @@
 # @dudousxd/nestjs-agent
 
+## 0.5.0
+
+### Minor Changes
+
+- [`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5) - Dispatched turn steps — opt-in `dispatchedSteps: true` (requires `durable: true`) dispatches the
+  turn's two LONG steps as routed durable steps instead of in-process localSteps, so a run is no
+  longer pinned to its pod while the model call or a tool executes:
+
+  - `AgentRunSteps.llm` (`@Step({ retries: 3 })`): resolves the model/sink/tool definitions from the
+    serving worker's own DI and streams from wherever it runs. `AgentRunSteps.tool` (no retries —
+    tool idempotency is the app's domain): rebuilds the tool ctx and applies the tool timeout
+    handler-side. Both are ALWAYS registered by `AgentDurableModule` (worker groups always served);
+    the flag only controls dispatching. Bookkeeping steps (persist/quota/stream markers) stay local —
+    dispatching a 10ms DB write through a queue buys nothing.
+  - Core: serializable `LlmStepEnvelope`/`ToolStepEnvelope` (`ToolStepCtx` excludes `host`, re-attached
+    from DI handler-side; the llm envelope carries the `actor` and the handler re-derives tool
+    definitions — live schema instances never cross the wire), optional `dispatchLlm`/`dispatchTool`
+    loop hooks (absent = behavior identical to before), exported `withToolTimeout`.
+  - Core: new `AgentLoopHooks.isControlFlowError` — the durable runner's suspend/continue-as-new
+    signals now escape the loop's tool catch instead of being mispersisted as tool failures (which
+    diverged on replay).
+  - Multi-pod fleets MUST wire a cross-process token sink (e.g. `RedisTokenStreamSink`); a boot
+    warning fires when `dispatchedSteps` is on with the default in-process sink.
+
+- [`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5) - Run reliability metrics — run outcomes are now durably recorded and surfaced as governance reads
+  and a dashboard Reliability section:
+
+  - Store SPI: optional `recordRunStart`/`recordRunEnd`/`bumpRunRetries` on `AgentStore` (absent =
+    graceful no-op). The loop records start/completed (with duration) as checkpointed steps; the
+    runners (durable workflow + inline) record failures with error code/message. Both bundled store
+    adapters ship the new `agent_run` table (autoSchema-managed, in the managed-tables lists).
+  - `AgentGovernanceQueries` grew `runMetrics`, `runsByAgent`, `runErrors`, `runTrend`, `recentRuns`
+    (REQUIRED members — external adapters must implement them; return zeros/empty when the backing
+    store never records runs). In-memory testing impls included.
+  - Dashboard: `GET <api>/reliability?from&to` + `GET <api>/runs?limit`, and a Reliability section in
+    the SPA — success/error rate, retries, p95 duration, run/failure trend, failure breakdown by
+    error code, recent runs table.
+  - `DispatchedLlmInput` carries `runId` so llm-step retries can be attributed to the run; the retry
+    counter stays 0 until the durable runtime exposes the attempt number to remote step handlers.
+
+### Patch Changes
+
+- Updated dependencies [[`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5), [`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5)]:
+  - @dudousxd/nestjs-agent-core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
