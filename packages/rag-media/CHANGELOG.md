@@ -1,6 +1,6 @@
 # @dudousxd/nestjs-agent-rag-media
 
-## 1.0.0
+## 0.3.4
 
 ### Patch Changes
 
