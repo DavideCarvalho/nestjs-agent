@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-transport-redis",
-  "version": "0.3.3",
+  "version": "1.0.0",
   "description": "nestjs-agent Redis token-stream transport — a multi-replica TokenStreamSink over Redis pub/sub + list replay",
   "license": "MIT",
   "author": "Davide Carvalho",
