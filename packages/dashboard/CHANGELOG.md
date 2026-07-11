@@ -1,5 +1,15 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.4.1
+
+### Patch Changes
+
+- [#5](https://github.com/DavideCarvalho/nestjs-agent/pull/5) [`619a097`](https://github.com/DavideCarvalho/nestjs-agent/commit/619a09771830db31739594813b0b937b844939f6) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Guards with dependencies now resolve: guard classes and the host's `imports` are threaded into
+  `AgentApiModule` (the API controller's HOST module) and registered as providers on both host
+  modules — enhancers DI-instantiate from their controller's own module, never a parent, so the
+  previous wiring failed boot with "Nest can't resolve dependencies ... in the AgentApiModule
+  context" for any guard that injects something.
+
 ## 0.4.0
 
 ### Minor Changes
