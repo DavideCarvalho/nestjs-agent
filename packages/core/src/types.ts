@@ -52,6 +52,13 @@ export interface ToolCallRequest {
   id: string;
   name: string;
   input: unknown;
+  /**
+   * The tool's declared kind (`ToolSpec.kind`), stamped by the loop from the tool registry so
+   * thread-read consumers know a call's kind without hardcoding a tool-name allowlist. Undefined
+   * only for a call the loop couldn't resolve against the registry (defensively treated as `read`
+   * wherever a definite value is required).
+   */
+  kind?: ToolKind;
 }
 
 /** Result of running a tool. */
@@ -88,6 +95,13 @@ export interface MessageUsage {
    * non-reasoning models or providers that don't report it.
    */
   reasoningTokens?: number;
+  /**
+   * This turn's USD cost: the provider's own reported figure when it has one, else an estimate from
+   * the bound `AgentPricingStore` (cached once per run — see `AgentLoopDeps.pricingStore`), else
+   * `null` when no pricing store is bound or the model has no price row. Never `0` for an unpriced
+   * model — a real $0 turn and "we don't know" must stay distinguishable.
+   */
+  costUsd?: number | null;
 }
 
 export type UsagePurpose = 'chat' | 'follow_ups';
@@ -250,6 +264,18 @@ export interface ThreadSummary {
   createdAt: string;
   updatedAt: string;
   lastMessagePreview?: string;
+  /**
+   * The agent a `chat()` call on this thread uses when the caller doesn't name one explicitly.
+   * Optional — undefined for a store that doesn't implement `AgentStore.updateThread` (the only
+   * way to set it). The REST/service read-model normalizes this to `null` when absent.
+   */
+  defaultAgent?: string | null;
+  /**
+   * The runId of a currently-running turn on this thread, or `null` if none is running. Optional —
+   * undefined for a store that doesn't implement `AgentStore.activeRunForThread`. The REST/service
+   * read-model normalizes this to `null` when absent, so a client can always do `?? null`.
+   */
+  activeRunId?: string | null;
 }
 
 export interface StoredMessage {

@@ -18,12 +18,20 @@ import {
   DefaultRolesPolicy,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
-import { type DynamicModule, Global, Module, type Provider } from '@nestjs/common';
+import {
+  type CanActivate,
+  type DynamicModule,
+  Global,
+  Module,
+  type Provider,
+  type Type,
+} from '@nestjs/common';
 import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { AgentsController } from './controller/agents.controller.js';
+import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
@@ -143,13 +151,55 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
   ];
 }
 
-const CONTROLLERS = [
+const BASE_CONTROLLERS = [
   ChatController,
   ThreadsController,
   ToolCallController,
   QuotaController,
   AgentsController,
 ];
+
+/** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */
+const GUARDABLE_CONTROLLERS = [...BASE_CONTROLLERS, AttachmentsController];
+
+/** The controllers to mount: the base five, plus attachments when the host opted into uploads. */
+function controllersFor(mountAttachments: boolean): Type<object>[] {
+  return mountAttachments ? [...BASE_CONTROLLERS, AttachmentsController] : BASE_CONTROLLERS;
+}
+
+/**
+ * Nest's `GUARDS_METADATA` key (`@nestjs/common/constants`), inlined as a literal: `@nestjs/common`
+ * has no `exports` map and its ESM-facing files are CJS, so a deep `import ... from
+ * '@nestjs/common/constants'` in our ESM build is emitted extensionless and rejected by Node's
+ * strict ESM resolver (surfaced by a consumer's bundler/test runner externalizing this package).
+ * `agent-guards.spec.ts` asserts this literal still matches the real constant, so upstream drift
+ * fails loudly instead of silently stamping a dead metadata key.
+ */
+const GUARDS_METADATA = '__guards__';
+
+/**
+ * Stamp (or clear) `@UseGuards`-equivalent metadata on every controller this module MIGHT mount.
+ *
+ * Mechanism: `@UseGuards(...guards)` on a controller just does `Reflect.defineMetadata(GUARDS_METADATA,
+ * guards, ControllerClass)` (via Nest's `extendArrayMetadata`, which *appends* to any existing array).
+ * We call `Reflect.defineMetadata` directly instead, so each `forRoot`/`forRootAsync` call REPLACES
+ * the metadata rather than appending to it — appending would leak guards across repeated module
+ * registrations in the same process (every test file that calls `forRoot` more than once, say) since
+ * these controller classes are module-level singletons shared by every registration. Nest's
+ * `GuardsConsumer` reads this metadata per-request via `Reflector`, not once at boot, so the LAST call
+ * to stamp it before a request is served wins for that controller class in this process.
+ */
+function applyGuards(guards: Type<CanActivate>[] | undefined): void {
+  const resolved = guards ?? [];
+  for (const controller of GUARDABLE_CONTROLLERS) {
+    Reflect.defineMetadata(GUARDS_METADATA, resolved, controller);
+  }
+}
+
+/** Distinct guard classes for the module's `providers`, so Nest can DI-instantiate them. */
+function guardProviders(guards: Type<CanActivate>[] | undefined): Type<CanActivate>[] {
+  return [...new Set(guards ?? [])];
+}
 
 /** Mount the controllers under `path` (Nest applies the prefix to their relative routes). */
 function routerFor(path: string): DynamicModule {
@@ -163,14 +213,16 @@ export class AgentModule {
     const path = options.path ?? DEFAULT_PATH;
     // Bind AGENT_STORE locally only when the host passes a store; otherwise defer to a global one.
     const includeStore = options.store !== undefined;
+    applyGuards(options.guards);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: CONTROLLERS,
+      controllers: controllersFor(options.attachments?.upload === true),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false, includeStore),
+        ...guardProviders(options.guards),
       ],
       exports: exportsFor(includeStore),
     };
@@ -183,11 +235,12 @@ export class AgentModule {
     // globally-imported store module (e.g. `MikroOrmAgentStoreModule.forFeature()`) so the host
     // doesn't have to inject that store just to hand it back as `store`.
     const includeStore = options.externalStore !== true;
+    applyGuards(options.guards);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: CONTROLLERS,
+      controllers: controllersFor(options.attachmentsUpload === true),
       providers: [
         {
           provide: AGENT_OPTIONS,
@@ -195,6 +248,7 @@ export class AgentModule {
           inject: options.inject ?? [],
         },
         ...sharedProviders(options.durable ?? false, includeStore),
+        ...guardProviders(options.guards),
       ],
       exports: exportsFor(includeStore),
     };

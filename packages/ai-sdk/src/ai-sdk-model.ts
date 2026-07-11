@@ -76,7 +76,12 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
             break;
           case 'tool-input-start':
             await args.sink.write(
-              encodeStreamEvent({ kind: 'tool-input-start', id: part.id, name: part.toolName }),
+              encodeStreamEvent({
+                kind: 'tool-input-start',
+                id: part.id,
+                name: part.toolName,
+                toolKind: toolKindFor(part.toolName, args.tools),
+              }),
             );
             break;
           case 'tool-input-delta':
@@ -91,6 +96,7 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
                 id: part.toolCallId,
                 name: part.toolName,
                 input: part.input,
+                toolKind: toolKindFor(part.toolName, args.tools),
               }),
             );
             break;
@@ -295,6 +301,17 @@ function hasStandardJsonSchema(
 
 function mapToolCall(call: TypedToolCall<ToolSet>): ToolCallRequest {
   return { id: call.toolCallId, name: call.toolName, input: call.input };
+}
+
+/**
+ * The wire `toolKind` for a tool-input stream frame, looked up from this turn's `ToolDefinition`s
+ * (which the registry already stamped with the tool's declared kind). Collapses `'agent'` (a
+ * delegation tool, which auto-executes) into `'read'` — the wire vocabulary is `'read' | 'action'`
+ * only, matching what a client actually needs to decide (does this need my approval or not).
+ */
+function toolKindFor(toolName: string, tools: ToolDefinition[]): 'read' | 'action' {
+  const kind = tools.find((definition) => definition.name === toolName)?.kind;
+  return kind === 'action' ? 'action' : 'read';
 }
 
 /**

@@ -3,7 +3,7 @@ import type { ActorSpendRow } from './agent-client';
 import { joinBudgets } from './budget-usage';
 
 function actor(over: Partial<ActorSpendRow> = {}): ActorSpendRow {
-  return { actorRef: 'user:1', requests: 0, totalTokens: 0, costUsd: 0, ...over };
+  return { actorRef: 'user:1', requests: 0, totalTokens: 0, costUsd: 0, actorLabel: null, ...over };
 }
 
 describe('joinBudgets', () => {

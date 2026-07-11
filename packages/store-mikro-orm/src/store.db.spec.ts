@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
+import { AgentThread } from './entities/agent-thread.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
@@ -176,6 +177,47 @@ describe('MikroOrmAgentStore (sqlite)', () => {
 
     expect(await store.ownerOfActiveStream('run-xyz')).toBe('actor-stream');
     expect(await store.ownerOfActiveStream('missing')).toBeNull();
+  });
+
+  it('activeRunForThread reads the same activeStreamId setActiveStream writes', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-active' } });
+    expect(await store.activeRunForThread(thread.id)).toBeNull();
+
+    await store.setActiveStream(thread.id, 'run-abc');
+    expect(await store.activeRunForThread(thread.id)).toBe('run-abc');
+
+    await store.setActiveStream(thread.id, null);
+    expect(await store.activeRunForThread(thread.id)).toBeNull();
+
+    expect(await store.activeRunForThread('missing')).toBeNull();
+  });
+
+  it('updateThread patches title and/or defaultAgent, leaving omitted fields untouched', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-update' }, title: 'Original' });
+    const readDefaultAgent = async () =>
+      (await orm.em.fork().findOne(AgentThread, { id: thread.id }))?.defaultAgent;
+
+    // title only — defaultAgent stays unset (NULL, since it was never set on create)
+    await store.updateThread(thread.id, { title: 'Renamed' });
+    expect((await store.getThread(thread.id))?.title).toBe('Renamed');
+    expect(await readDefaultAgent()).toBeNull();
+
+    // defaultAgent only — title from the previous patch is preserved
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect((await store.getThread(thread.id))?.title).toBe('Renamed');
+    expect(await readDefaultAgent()).toBe('researcher');
+
+    // explicit null clears defaultAgent
+    await store.updateThread(thread.id, { defaultAgent: null });
+    expect(await readDefaultAgent()).toBeNull();
+
+    // both fields in one patch
+    await store.updateThread(thread.id, { title: 'Both', defaultAgent: 'billing-agent' });
+    expect((await store.getThread(thread.id))?.title).toBe('Both');
+    expect(await readDefaultAgent()).toBe('billing-agent');
+
+    // unknown thread is a silent no-op
+    await expect(store.updateThread('missing', { title: 'x' })).resolves.toBeUndefined();
   });
 
   it('promotes a transient thread so it surfaces in listThreads', async () => {

@@ -29,7 +29,22 @@ export function ActorsSection({
           {actors.map((actor) => (
             <li key={actor.actorRef} className="rounded-lg border border-[var(--line-soft)] p-3">
               <div className="flex items-center justify-between gap-3">
-                <span className="mono truncate text-xs text-[var(--text)]">{actor.actorRef}</span>
+                <span className="flex min-w-0 items-baseline gap-2">
+                  {actor.actorLabel ? (
+                    <>
+                      <span className="truncate text-xs text-[var(--text)]">
+                        {actor.actorLabel}
+                      </span>
+                      <span className="mono truncate text-[10px] text-[var(--muted)]">
+                        {actor.actorRef}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="mono truncate text-xs text-[var(--text)]">
+                      {actor.actorRef}
+                    </span>
+                  )}
+                </span>
                 <span className="mono tnum flex items-center gap-3 text-xs text-[var(--muted)]">
                   <span>{actor.requests} req</span>
                   <span>{formatCount(actor.totalTokens)} tok</span>

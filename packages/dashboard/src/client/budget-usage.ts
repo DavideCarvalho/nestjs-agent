@@ -9,6 +9,8 @@ export interface ActorBudget {
   requests: number;
   totalTokens: number;
   costUsd: number;
+  /** Human-readable label resolved from `actorRef`, when an `ActorDirectory` is bound server-side. */
+  actorLabel: string | null;
   /** Configured daily token limit, when known. */
   limitTokens?: number;
   /** `totalTokens / limitTokens` (0..N; can exceed 1). Present only when a limit is known. */
@@ -33,6 +35,7 @@ export function joinBudgets(rows: ActorSpendRow[], budgets: BudgetMap = {}): Act
         requests: row.requests,
         totalTokens: row.totalTokens,
         costUsd: row.costUsd,
+        actorLabel: row.actorLabel,
         overBudget: usageRatio !== undefined && usageRatio >= 1,
         ...(hasLimit ? { limitTokens: limit } : {}),
         ...(usageRatio !== undefined ? { usageRatio } : {}),

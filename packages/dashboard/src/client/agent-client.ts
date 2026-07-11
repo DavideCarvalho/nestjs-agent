@@ -23,6 +23,8 @@ export interface ActorSpendRow {
   requests: number;
   totalTokens: number;
   costUsd: number;
+  /** Human-readable label resolved from `actorRef` (an `ActorDirectory`), when one is bound server-side. */
+  actorLabel: string | null;
 }
 
 /** Spend + token totals for one thread over a range. */
@@ -33,6 +35,8 @@ export interface ThreadSpendRow {
   requests: number;
   totalTokens: number;
   costUsd: number;
+  /** Human-readable label resolved from `actorRef` (an `ActorDirectory`), when one is bound server-side. */
+  actorLabel: string | null;
 }
 
 /** One point on the daily usage/cost trend. */
@@ -60,6 +64,27 @@ export interface ThreadActivityRow {
   messageCount: number;
   totalTokens: number;
   lastActivityAt: string;
+  /** Human-readable label resolved from `actorRef` (an `ActorDirectory`), when one is bound server-side. */
+  actorLabel: string | null;
+}
+
+/** A model's current per-1M-token price (the pricing tab's row shape). */
+export interface ModelPrice {
+  modelId: string;
+  inputPricePer1m: number;
+  outputPricePer1m: number;
+  cacheWritePricePer1m?: number;
+  cacheReadPricePer1m?: number;
+  effectiveFrom: string;
+}
+
+/** Body for `POST <api>/pricing` — sets a model's current price. */
+export interface UpsertModelPriceInput {
+  modelId: string;
+  inputPricePer1m: number;
+  outputPricePer1m: number;
+  cacheWritePricePer1m?: number;
+  cacheReadPricePer1m?: number;
 }
 
 /** The `GET <api>/spend` response. */
@@ -115,6 +140,19 @@ export const agentClient = {
   /** Most recent threads (default 50). */
   threads(limit = 50): Promise<ThreadActivityRow[]> {
     return http<ThreadActivityRow[]>(`/threads?limit=${limit}`);
+  },
+  /** Current price row per model. 501s if the host has no pricing store bound. */
+  pricing(): Promise<ModelPrice[]> {
+    return http<ModelPrice[]>('/pricing');
+  },
+  /** Set a model's current price. 501s if the host has no pricing store bound. */
+  async upsertPrice(input: UpsertModelPriceInput): Promise<void> {
+    const res = await fetch(`${apiBase()}/pricing`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   },
   /**
    * Live-tail `aviary:agent:*` events over SSE. Calls `onEvent` per event; returns a function that

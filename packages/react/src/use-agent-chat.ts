@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react';
 import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
 import { AgentClient, type QuotaToday } from './client.js';
 
@@ -28,8 +28,19 @@ export interface UseAgentChatOptions {
    * Run id of a buffered stream to reconnect to on mount — wire this to the thread's
    * `activeStreamId`. Its presence both gates the SDK's `resume` and names the run, so a normal
    * mount (no id) never fires a doomed resume GET. Omitted → no resume.
+   *
+   * For the common case (no id in hand yet), prefer {@link UseAgentChatOptions.resume} — it does
+   * this fetch-and-wire for you.
    */
   resumeRunId?: string;
+  /**
+   * When `true` and the hook (re)mounts with a `threadId`, the hook fetches the thread and, if its
+   * `activeRunId` is non-null (a turn was still streaming when the page loaded/reloaded), attaches
+   * to that run's `GET /agent/chat/:runId/stream` automatically — the in-flight turn streams into
+   * this session's message state exactly as if the send had happened here. A no-op when `threadId`
+   * is omitted (nothing to resume) or the fetched thread has no active run. Default `false`.
+   */
+  resume?: boolean;
   /** Read at every send to capture a page snapshot for the page-assistant. */
   getPageContext?: () => Record<string, unknown> | null;
   /** Fired after each streamed turn finishes (e.g. to refetch the sidebar). */
@@ -63,6 +74,18 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
 
+  // Auto-resume (`resume: true`): the run id discovered from the thread's `activeRunId`, read by
+  // the transport's `getResumeRunId` alongside the explicit `resumeRunId` option. A ref, not state
+  // — it must be current by the time the SDK's resume effect (below) fires synchronously off it.
+  const autoResumeRunIdRef = useRef<string | undefined>(undefined);
+  // Flips once the auto-resume fetch resolves a live run. `useChat`'s own `resume` is a reactive
+  // effect dependency (it doesn't need to be `true` at mount), so toggling this after the async
+  // thread fetch still attaches to the stream.
+  const [autoResume, setAutoResume] = useState(false);
+  // The loaded thread's active run, if any — exposed regardless of `resume` so a consumer can
+  // render a "still generating" affordance even when it wires resumption itself via `resumeRunId`.
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+
   // One-shot flag read (and cleared) by the transport's getBody so the next send carries
   // `regenerate: true` — telling the backend to re-run the last exchange instead of appending.
   const regenerateNext = useRef(false);
@@ -83,6 +106,27 @@ export function useAgentChat(options: UseAgentChatOptions) {
       getHeaders: async () => mergeHeaders(latest.current),
     });
   }, []);
+
+  // Auto-resume: on (re)mount with `resume: true` and a `threadId`, read the thread and, if it
+  // carries a live `activeRunId`, attach to it — the same GET-stream reconnect `resumeRunId`
+  // already wires, just discovered instead of supplied. Re-runs if `resume`/`threadId` change; a
+  // stale response from a since-abandoned fetch (thread swapped mid-flight) is dropped via `cancelled`.
+  useEffect(() => {
+    if (!options.resume || options.threadId === undefined) return;
+    let cancelled = false;
+    const threadId = options.threadId;
+    void client.getThread(threadId).then((thread) => {
+      if (cancelled) return;
+      setActiveRunId(thread.activeRunId ?? null);
+      if (thread.activeRunId != null) {
+        autoResumeRunIdRef.current = thread.activeRunId;
+        setAutoResume(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, options.resume, options.threadId]);
 
   // Identity-stable: per-render config is read through `latest`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
@@ -121,14 +165,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
           ...(regenerate ? { regenerate: true } : {}),
         };
       },
-      getResumeRunId: () => latest.current.resumeRunId,
+      getResumeRunId: () => latest.current.resumeRunId ?? autoResumeRunIdRef.current,
       onMeta,
     });
   }, []);
 
   const chat = useChat({
     transport,
-    resume: options.resumeRunId !== undefined,
+    resume: options.resumeRunId !== undefined || autoResume,
     ...(options.threadId !== undefined ? { id: options.threadId } : {}),
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onFinish: () => {
@@ -264,6 +308,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     ...chat,
     addToolResult,
     runId,
+    /** The `resume`-fetched thread's active run id, or `null` once resolved with none. */
+    activeRunId,
     client,
     threads,
     loadThreads,

@@ -1,7 +1,10 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  AgentPricingStore,
+  CurrentModelPrice,
   GovernanceRange,
+  ModelPriceInput,
   ModelSpendRow,
   ThreadActivityRow,
   ThreadSpendRow,
@@ -9,7 +12,9 @@ import type {
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
+import { NotImplementedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
+import type { ActorDirectory } from './actor-directory';
 import { DashboardService, type LiveAgentEvent } from './dashboard.service';
 
 interface QueriesOverrides {
@@ -152,5 +157,167 @@ describe('DashboardService', () => {
     publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'ok' });
 
     expect(seen).toHaveLength(0);
+  });
+});
+
+/** An `ActorDirectory` fake — resolves whatever's in `labels`, records the batched ref set it saw. */
+function fakeActorDirectory(
+  labels: Record<string, string>,
+  seenRefs: string[][] = [],
+): ActorDirectory {
+  return {
+    async resolveDisplay(refs: readonly string[]) {
+      seenRefs.push([...refs]);
+      const resolved: Record<string, string> = {};
+      for (const ref of refs) {
+        const label = labels[ref];
+        if (label !== undefined) resolved[ref] = label;
+      }
+      return resolved;
+    },
+  };
+}
+
+describe('DashboardService actorLabel decoration', () => {
+  it('leaves actorLabel null on every actor-scoped row when no ActorDirectory is bound', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        spendByActor: [
+          { actorRef: 'user:1', requests: 1, totalTokens: 10, costUsd: 0.1, threadCount: 1 },
+        ],
+        spendByThread: [
+          {
+            threadId: 'th1',
+            title: 'hi',
+            actorRef: 'user:1',
+            requests: 1,
+            totalTokens: 10,
+            costUsd: 0.1,
+          },
+        ],
+        recentThreads: [
+          {
+            threadId: 'th1',
+            title: 'hi',
+            actorRef: 'user:1',
+            messageCount: 1,
+            totalTokens: 10,
+            lastActivityAt: '2026-07-05T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    const overview = await service.spend({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+    expect(overview.byActor[0]?.actorLabel).toBeNull();
+
+    const topThreads = await service.topThreads({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+    expect(topThreads[0]?.actorLabel).toBeNull();
+
+    const threads = await service.recentThreads(10);
+    expect(threads[0]?.actorLabel).toBeNull();
+  });
+
+  it('resolves actorLabel from a bound ActorDirectory, batching the distinct refs into one call', async () => {
+    const seenRefs: string[][] = [];
+    const service = new DashboardService(
+      fakeQueries({
+        spendByActor: [
+          { actorRef: 'user:1', requests: 1, totalTokens: 10, costUsd: 0.1, threadCount: 1 },
+          { actorRef: 'user:2', requests: 1, totalTokens: 5, costUsd: 0.05, threadCount: 1 },
+        ],
+      }),
+      fakeActorDirectory({ 'user:1': 'Ada Lovelace' }, seenRefs),
+    );
+
+    const overview = await service.spend({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+
+    expect(overview.byActor.find((row) => row.actorRef === 'user:1')?.actorLabel).toBe(
+      'Ada Lovelace',
+    );
+    // an unresolved ref (the directory has no entry for it) falls back to null, not an error
+    expect(overview.byActor.find((row) => row.actorRef === 'user:2')?.actorLabel).toBeNull();
+    expect(seenRefs).toEqual([['user:1', 'user:2']]);
+  });
+
+  it('does not call the directory for an empty row set', async () => {
+    const seenRefs: string[][] = [];
+    const service = new DashboardService(fakeQueries(), fakeActorDirectory({}, seenRefs));
+
+    await service.topThreads({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+
+    expect(seenRefs).toEqual([]);
+  });
+});
+
+/** An `AgentPricingStore` fake. */
+function fakePricingStore(overrides: {
+  listCurrentPrices?: CurrentModelPrice[];
+  onUpsert?: (input: ModelPriceInput) => void;
+}): AgentPricingStore {
+  return {
+    async upsertModelPrice(input: ModelPriceInput) {
+      overrides.onUpsert?.(input);
+    },
+    async listCurrentPrices() {
+      return overrides.listCurrentPrices ?? [];
+    },
+  };
+}
+
+describe('DashboardService pricing CRUD', () => {
+  it('listPrices() 501s with a clear message when no AGENT_PRICING_STORE is bound', async () => {
+    const service = new DashboardService(fakeQueries());
+
+    await expect(service.listPrices()).rejects.toBeInstanceOf(NotImplementedException);
+    await expect(service.listPrices()).rejects.toThrow(/AGENT_PRICING_STORE is bound/);
+  });
+
+  it('upsertPrice() 501s with a clear message when no AGENT_PRICING_STORE is bound', async () => {
+    const service = new DashboardService(fakeQueries());
+
+    await expect(
+      service.upsertPrice({ modelId: 'gpt', inputPricePer1m: 3, outputPricePer1m: 15 }),
+    ).rejects.toBeInstanceOf(NotImplementedException);
+  });
+
+  it('listPrices() passes through the bound store', async () => {
+    const service = new DashboardService(
+      fakeQueries(),
+      undefined,
+      fakePricingStore({
+        listCurrentPrices: [
+          {
+            modelId: 'gpt',
+            inputPricePer1m: 3,
+            outputPricePer1m: 15,
+            effectiveFrom: '2026-07-01T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    const prices = await service.listPrices();
+    expect(prices[0]?.modelId).toBe('gpt');
+  });
+
+  it('upsertPrice() validates the body minimally before calling the store', async () => {
+    const calls: ModelPriceInput[] = [];
+    const service = new DashboardService(
+      fakeQueries(),
+      undefined,
+      fakePricingStore({ onUpsert: (input) => calls.push(input) }),
+    );
+
+    await service.upsertPrice({ modelId: 'gpt', inputPricePer1m: 3, outputPricePer1m: 15 });
+    expect(calls).toEqual([{ modelId: 'gpt', inputPricePer1m: 3, outputPricePer1m: 15 }]);
+
+    await expect(
+      service.upsertPrice({ modelId: '', inputPricePer1m: 3, outputPricePer1m: 15 }),
+    ).rejects.toThrow();
+    await expect(
+      service.upsertPrice({ modelId: 'gpt', inputPricePer1m: -1, outputPricePer1m: 15 }),
+    ).rejects.toThrow();
+    await expect(service.upsertPrice(null)).rejects.toThrow();
   });
 });

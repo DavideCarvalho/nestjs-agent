@@ -155,4 +155,104 @@ describe('AgentChatTransport', () => {
     const result = await transport.reconnectToStream({ chatId: 'thr-1' });
     expect(result).toBeNull();
   });
+
+  it('carries toolKind through to tool-input-start/available chunks as toolMetadata', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"tool-input-start","id":"t1","name":"purgeCache","toolKind":"action"}\n\n',
+          'data: {"kind":"tool-input-available","id":"t1","name":"purgeCache","input":{},"toolKind":"action"}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    const inputStart = chunks.find((chunk) => chunk.type === 'tool-input-start');
+    expect(inputStart).toMatchObject({ toolMetadata: { toolKind: 'action' } });
+    const inputAvailable = chunks.find((chunk) => chunk.type === 'tool-input-available');
+    expect(inputAvailable).toMatchObject({ toolMetadata: { toolKind: 'action' } });
+  });
+
+  it('omits toolMetadata when the backend does not report toolKind (older backends)', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"tool-input-start","id":"t1","name":"listUsers"}\n\n',
+          'data: {"kind":"tool-input-available","id":"t1","name":"listUsers","input":{}}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    const inputStart = chunks.find((chunk) => chunk.type === 'tool-input-start') as Record<
+      string,
+      unknown
+    >;
+    const inputAvailable = chunks.find((chunk) => chunk.type === 'tool-input-available') as Record<
+      string,
+      unknown
+    >;
+    expect('toolMetadata' in inputStart).toBe(false);
+    expect('toolMetadata' in inputAvailable).toBe(false);
+  });
+
+  it('surfaces costUsd from a step-finish frame as message-metadata', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"text","text":"hi"}\n\n',
+          'data: {"kind":"step-finish","usage":{"inputTokens":10,"outputTokens":5},"costUsd":0.0042}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    const metadata = chunks.find((chunk) => chunk.type === 'message-metadata');
+    expect(metadata).toMatchObject({ messageMetadata: { costUsd: 0.0042 } });
+  });
+
+  it('surfaces a null costUsd when no pricing store/provider figure is available', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"step-finish","usage":{"inputTokens":10,"outputTokens":5},"costUsd":null}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    const metadata = chunks.find((chunk) => chunk.type === 'message-metadata');
+    expect(metadata).toMatchObject({ messageMetadata: { costUsd: null } });
+  });
+
+  it('emits no message-metadata chunk when step-finish carries no costUsd (older backends)', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"text","text":"hi"}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    expect(chunks.some((chunk) => chunk.type === 'message-metadata')).toBe(false);
+  });
 });

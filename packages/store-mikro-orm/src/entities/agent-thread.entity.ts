@@ -11,6 +11,8 @@ export class AgentThread {
   title!: string;
   transient!: boolean;
   activeStreamId?: string | null;
+  /** The agent name a new turn on this thread defaults to when the caller names none. */
+  defaultAgent?: string | null;
   createdAt!: Date;
   updatedAt!: Date;
   deletedAt?: Date | null;
@@ -30,6 +32,7 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
       title: { type: 'string', ...str },
       transient: { type: 'boolean', default: false },
       activeStreamId: { type: 'string', nullable: true, fieldName: 'active_stream_id', ...str },
+      defaultAgent: { type: 'string', nullable: true, fieldName: 'default_agent', ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
       updatedAt: { type: 'datetime', fieldName: 'updated_at' },
       deletedAt: { type: 'datetime', nullable: true, fieldName: 'deleted_at' },

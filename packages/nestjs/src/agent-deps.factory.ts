@@ -1,5 +1,6 @@
 import {
   AGENT_MODEL,
+  AGENT_PRICING_STORE,
   AGENT_PROMPT_CONTRIBUTORS,
   AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
@@ -8,6 +9,7 @@ import {
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   type AgentDefinition,
+  type AgentPricingStore,
   AgentRegistry,
   type AgentStore,
   type ModelProvider,
@@ -18,7 +20,7 @@ import {
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 
@@ -40,6 +42,12 @@ export class AgentDepsFactory {
     @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
     @Inject(AGENT_PROMPT_CONTRIBUTORS) private readonly promptContributors: PromptContributor[],
     @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
+    // Optional: AGENT_PRICING_STORE has no local provider in this module (unlike AGENT_QUOTA_STORE,
+    // which is always a registered factory) — it's bound externally (e.g. by a store module), so a
+    // plain @Inject would throw when nothing binds it.
+    @Optional()
+    @Inject(AGENT_PRICING_STORE)
+    private readonly pricingStore: AgentPricingStore | undefined,
   ) {}
 
   /**
@@ -82,6 +90,7 @@ export class AgentDepsFactory {
       maxSteps: definition?.maxSteps ?? 8,
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
+      ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
       ...(this.options.toolTimeoutMs !== undefined
         ? { toolTimeoutMs: this.options.toolTimeoutMs }

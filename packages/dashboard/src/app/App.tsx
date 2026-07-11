@@ -1,28 +1,47 @@
 import { type ReactNode, useState } from 'react';
 import type {
+  ModelPrice,
   SpendOverview,
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
+  UpsertModelPriceInput,
 } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { ActorsSection } from './ActorsSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
+import { PricingSection } from './PricingSection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
-import { ActivityIcon, ChipIcon, DollarIcon, LogoMark, UsersIcon, WrenchIcon } from './icons';
-import { useSpend, useThreads, useToolCalls, useTopThreads } from './use-governance';
+import {
+  ActivityIcon,
+  ChipIcon,
+  DollarIcon,
+  LogoMark,
+  TagIcon,
+  UsersIcon,
+  WrenchIcon,
+} from './icons';
+import {
+  usePricing,
+  useSpend,
+  useThreads,
+  useToolCalls,
+  useTopThreads,
+  useUpsertPrice,
+} from './use-governance';
 import { useLiveEvents } from './use-live-events';
 
-type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'live';
+type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'pricing' | 'live';
 
 const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'spend', label: 'Spend & usage', icon: <DollarIcon /> },
   { key: 'models', label: 'Models', icon: <ChipIcon /> },
   { key: 'actors', label: 'Actors & budgets', icon: <UsersIcon /> },
   { key: 'runs', label: 'Runs & tools', icon: <WrenchIcon /> },
+  { key: 'pricing', label: 'Pricing', icon: <TagIcon /> },
   { key: 'live', label: 'Live', icon: <ActivityIcon /> },
 ];
 
@@ -30,6 +49,10 @@ const EMPTY_SPEND: SpendOverview = { byModel: [], byActor: [], trend: [] };
 const EMPTY_TOOL_CALLS: ToolCallActivityRow[] = [];
 const EMPTY_THREADS: ThreadActivityRow[] = [];
 const EMPTY_TOP_THREADS: ThreadSpendRow[] = [];
+const EMPTY_PRICES: ModelPrice[] = [];
+
+/** HTTP status the pricing API 501s with when no `AGENT_PRICING_STORE` is bound. */
+const PRICING_UNAVAILABLE_STATUS = '501';
 
 /**
  * The AI-gateway console shell: brand, section nav, a UTC day-range picker, and the live-connection
@@ -44,9 +67,15 @@ export function App() {
   const topThreads = useTopThreads(range);
   const toolCalls = useToolCalls();
   const threads = useThreads();
+  const pricing = usePricing();
+  const upsertPrice = useUpsertPrice();
   const live = useLiveEvents();
 
   const overview = spend.data ?? EMPTY_SPEND;
+  const pricingUnavailable =
+    pricing.isError && pricing.error instanceof Error
+      ? pricing.error.message.startsWith(PRICING_UNAVAILABLE_STATUS)
+      : false;
 
   return (
     <div className="relative min-h-full">
@@ -92,6 +121,11 @@ export function App() {
           threads={threads.data ?? EMPTY_THREADS}
           liveEvents={live.events}
           connected={live.connected}
+          prices={pricing.data ?? EMPTY_PRICES}
+          loadingPrices={pricing.isLoading}
+          pricingUnavailable={pricingUnavailable}
+          onUpsertPrice={(input) => upsertPrice.mutateAsync(input)}
+          savingPrice={upsertPrice.isPending}
         />
       </div>
     </div>
@@ -108,6 +142,11 @@ function ActiveSection({
   threads,
   liveEvents,
   connected,
+  prices,
+  loadingPrices,
+  pricingUnavailable,
+  onUpsertPrice,
+  savingPrice,
 }: {
   section: SectionKey;
   overview: SpendOverview;
@@ -118,6 +157,11 @@ function ActiveSection({
   threads: ThreadActivityRow[];
   liveEvents: FeedEvent[];
   connected: boolean;
+  prices: ModelPrice[];
+  loadingPrices: boolean;
+  pricingUnavailable: boolean;
+  onUpsertPrice: (input: UpsertModelPriceInput) => Promise<void>;
+  savingPrice: boolean;
 }) {
   if (errorSpend && (section === 'spend' || section === 'models' || section === 'actors')) {
     return (
@@ -138,6 +182,16 @@ function ActiveSection({
       return <ActorsSection rows={overview.byActor} />;
     case 'runs':
       return <RunsToolsSection toolCalls={toolCalls} threads={threads} />;
+    case 'pricing':
+      return (
+        <PricingSection
+          prices={prices}
+          loading={loadingPrices}
+          unavailable={pricingUnavailable}
+          onUpsert={onUpsertPrice}
+          saving={savingPrice}
+        />
+      );
     case 'live':
       return <LiveSection events={liveEvents} connected={connected} />;
     default:

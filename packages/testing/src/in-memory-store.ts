@@ -8,6 +8,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
   ToolCallStatus,
+  UpdateThreadInput,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
 
@@ -186,6 +187,24 @@ export class InMemoryAgentStore implements AgentStore {
       row.title = title;
       row.updatedAt = this.now();
     }
+  }
+
+  async updateThread(threadId: string, patch: UpdateThreadInput): Promise<void> {
+    const row = this.threads.get(threadId);
+    if (row === undefined) {
+      return;
+    }
+    if (patch.title !== undefined) {
+      row.title = patch.title;
+    }
+    if (patch.defaultAgent !== undefined) {
+      row.defaultAgent = patch.defaultAgent;
+    }
+    row.updatedAt = this.now();
+  }
+
+  async activeRunForThread(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.activeStreamId ?? null;
   }
 
   async promoteThread(threadId: string): Promise<void> {
@@ -372,6 +391,7 @@ export class InMemoryAgentStore implements AgentStore {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       ...(last !== undefined ? { lastMessagePreview: last.content.slice(0, 120) } : {}),
+      ...(row.defaultAgent !== undefined ? { defaultAgent: row.defaultAgent } : {}),
     };
   }
 }

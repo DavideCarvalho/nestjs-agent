@@ -3,8 +3,10 @@ import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Req } from '
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
-interface RenameThreadBody {
-  title: string;
+interface UpdateThreadBody {
+  title?: string;
+  /** `null` clears the thread's default agent. Omitted → left untouched. */
+  defaultAgent?: string | null;
 }
 
 @Controller('threads')
@@ -39,14 +41,22 @@ export class ThreadsController {
     return this.agent.forkThread(actor, id, messageId);
   }
 
+  /**
+   * Renames the thread and/or sets its default agent. `defaultAgent` is only present in the request
+   * body when the client actually sent the key (JSON has no `undefined`), so `'defaultAgent' in body`
+   * distinguishes "leave it alone" from "set it to null" (clear it) unambiguously.
+   */
   @Patch(':id')
-  async rename(
+  async update(
     @Req() req: Request,
     @Param('id') id: string,
-    @Body() body: RenameThreadBody,
+    @Body() body: UpdateThreadBody,
   ): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.renameThread(actor, id, body.title);
+    await this.agent.updateThread(actor, id, {
+      ...(body.title !== undefined ? { title: body.title } : {}),
+      ...('defaultAgent' in body ? { defaultAgent: body.defaultAgent ?? null } : {}),
+    });
     return { ok: true };
   }
 

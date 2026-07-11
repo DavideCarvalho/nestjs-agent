@@ -1,4 +1,5 @@
 import type {
+  AgentPricingStore,
   AgentStore,
   ModelProvider,
   PromptBuilder,
@@ -35,6 +36,8 @@ export interface AgentDeps {
   retriever?: Retriever;
   /** Passages inject-mode retrieval requests. Undefined → loop default (5). */
   retrievalTopK?: number;
+  /** Bound `AGENT_PRICING_STORE`, when a module (e.g. a store's) provides one. Undefined → no pricing. */
+  pricingStore?: AgentPricingStore;
 }
 
 export function utcDay(date = new Date()): string {

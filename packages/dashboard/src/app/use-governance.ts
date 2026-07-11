@@ -1,5 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
-import { type GovernanceRange, agentClient } from '../client/agent-client';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  type GovernanceRange,
+  type UpsertModelPriceInput,
+  agentClient,
+} from '../client/agent-client';
 
 /** Poll the spend overview for a range. Refetches on the QueryClient's default interval. */
 export function useSpend(range: GovernanceRange) {
@@ -30,5 +34,24 @@ export function useThreads(limit = 50) {
   return useQuery({
     queryKey: ['threads', limit],
     queryFn: () => agentClient.threads(limit),
+  });
+}
+
+/** Poll the current-prices list (the pricing tab). 501s when the host has no pricing store bound. */
+export function usePricing() {
+  return useQuery({
+    queryKey: ['pricing'],
+    queryFn: () => agentClient.pricing(),
+  });
+}
+
+/** Upsert a model's current price, refetching the pricing list on success. */
+export function useUpsertPrice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpsertModelPriceInput) => agentClient.upsertPrice(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pricing'] });
+    },
   });
 }

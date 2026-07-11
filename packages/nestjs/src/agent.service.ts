@@ -13,6 +13,7 @@ import {
   type QuotaView,
   type ThreadDetail,
   type ThreadSummary,
+  type UpdateThreadInput,
 } from '@dudousxd/nestjs-agent-core';
 import {
   BadRequestException,
@@ -20,6 +21,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  NotImplementedException,
 } from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
@@ -52,7 +54,10 @@ export class AgentService {
   ) {}
 
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
-    const agentName = params.agentName ?? this.deps.defaultAgentName();
+    // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
+    // module's configured default. Resolved up front (before thread creation) so a brand-new thread
+    // — which has no defaultAgent yet — falls straight through to the module default.
+    const agentName = await this.resolveAgentName(params.agentName, params.threadId);
     let threadId = params.threadId;
     if (threadId === undefined) {
       if (params.regenerate === true) {
@@ -107,13 +112,15 @@ export class AgentService {
     return this.runner.cancel(runId);
   }
 
-  listThreads(actorRef: string): Promise<ThreadSummary[]> {
-    return this.store.listThreads(actorRef);
+  async listThreads(actorRef: string): Promise<ThreadSummary[]> {
+    const threads = await this.store.listThreads(actorRef);
+    return Promise.all(threads.map((thread) => this.toSummaryView(thread)));
   }
 
   async getThread(actor: Actor, threadId: string): Promise<ThreadDetail | null> {
     await this.assertOwnsThread(actor, threadId);
-    return this.store.getThread(threadId);
+    const thread = await this.store.getThread(threadId);
+    return thread === null ? null : this.toDetailView(thread);
   }
 
   async deleteThread(actor: Actor, threadId: string): Promise<void> {
@@ -126,7 +133,39 @@ export class AgentService {
     return this.store.forkThread(threadId, fromMessageId);
   }
 
+  /** Kept for source compatibility — a thin wrapper over the more general `updateThread`. */
   async renameThread(actor: Actor, threadId: string, title: string): Promise<void> {
+    return this.updateThread(actor, threadId, { title });
+  }
+
+  /**
+   * Rename a thread and/or set its default agent. Title-only patches work against ANY store (via
+   * the required `setTitle`); a `defaultAgent` change requires the bound store to implement the
+   * optional `updateThread` — 501 with a clear message when it doesn't, rather than silently
+   * dropping the field.
+   */
+  async updateThread(actor: Actor, threadId: string, patch: UpdateThreadInput): Promise<void> {
+    const title = patch.title !== undefined ? this.validateTitle(patch.title) : undefined;
+    await this.assertOwnsThread(actor, threadId);
+    if (patch.defaultAgent === undefined) {
+      if (title !== undefined) {
+        await this.store.setTitle(threadId, title);
+      }
+      return;
+    }
+    if (this.store.updateThread === undefined) {
+      throw new NotImplementedException(
+        "Setting a thread's defaultAgent requires an AgentStore that implements updateThread(); " +
+          'the bound store does not support it.',
+      );
+    }
+    await this.store.updateThread(threadId, {
+      ...(title !== undefined ? { title } : {}),
+      defaultAgent: patch.defaultAgent,
+    });
+  }
+
+  private validateTitle(title: string): string {
     const trimmed = title.trim();
     if (trimmed.length === 0) {
       throw new BadRequestException('title must not be empty');
@@ -134,8 +173,45 @@ export class AgentService {
     if (trimmed.length > 200) {
       throw new BadRequestException('title must be at most 200 characters');
     }
-    await this.assertOwnsThread(actor, threadId);
-    return this.store.setTitle(threadId, trimmed);
+    return trimmed;
+  }
+
+  /**
+   * Agent-selection precedence for a `chat()` call with no explicit `agentName`: the thread's own
+   * `defaultAgent` (if the thread exists and one is set) wins over the module's configured default.
+   * Skips the thread lookup entirely when the caller already named an agent or there's no thread yet.
+   */
+  private async resolveAgentName(
+    agentName: string | undefined,
+    threadId: string | undefined,
+  ): Promise<string> {
+    if (agentName !== undefined) {
+      return agentName;
+    }
+    if (threadId !== undefined) {
+      const thread = await this.store.getThread(threadId);
+      if (thread?.defaultAgent !== undefined && thread.defaultAgent !== null) {
+        return thread.defaultAgent;
+      }
+    }
+    return this.deps.defaultAgentName();
+  }
+
+  private async toSummaryView(thread: ThreadSummary): Promise<ThreadSummary> {
+    return {
+      ...thread,
+      defaultAgent: thread.defaultAgent ?? null,
+      activeRunId: (await this.store.activeRunForThread?.(thread.id)) ?? null,
+    };
+  }
+
+  private async toDetailView(thread: ThreadDetail): Promise<ThreadDetail> {
+    const summary = await this.toSummaryView(thread);
+    return {
+      ...summary,
+      messages: thread.messages,
+      ...(thread.activeStreamId !== undefined ? { activeStreamId: thread.activeStreamId } : {}),
+    };
   }
 
   async promoteThread(actor: Actor, threadId: string): Promise<void> {

@@ -13,6 +13,27 @@ const AGENT_TABLE_NAMES = new Set([
   'agent_model_pricing',
 ]);
 
+/**
+ * Tables this store creates and manages at boot (autoSchema). Feed to your ORM's migration differ
+ * skip/exclude list so it never tries to drop them.
+ *
+ * ```ts
+ * await MikroORM.init({
+ *   // ...your entities/driver config
+ *   schemaGenerator: { skipTables: agentManagedTables() },
+ * });
+ * ```
+ *
+ * Derived from the SAME {@link AGENT_TABLE_NAMES} set {@link ensureAgentSchema} scopes its own heal
+ * to — mirrors `durableManagedTables()` / `telescopeManagedTables()` in the sibling
+ * `@dudousxd/nestjs-durable` / `-telescope` ecosystem, so a consumer's denylist can never hand-drift
+ * from what this store actually owns. Does NOT include `agent_schema_meta` (the boot fingerprint
+ * marker table) — same convention as `durableManagedTables()`.
+ */
+export function agentManagedTables(): string[] {
+  return [...AGENT_TABLE_NAMES];
+}
+
 /** A tiny marker table holding one row: the fingerprint of the agent schema last applied. */
 const MARKER_TABLE = 'agent_schema_meta';
 const MARKER_ROW_ID = 'agent';

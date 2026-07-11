@@ -229,6 +229,17 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'step-finish':
               closeStep();
+              // `costUsd` rides the step boundary once the backend reports it (older backends omit
+              // it entirely — `undefined`, never a crash). `null` means "priced provider/estimate
+              // unavailable", distinct from a real $0 turn — surfaced verbatim as message metadata
+              // (merged onto `message.metadata` by the AI SDK) so a UI can render running cost
+              // without polling `GET /quota/today`.
+              if (event.costUsd !== undefined) {
+                controller.enqueue({
+                  type: 'message-metadata',
+                  messageMetadata: { costUsd: event.costUsd },
+                });
+              }
               break;
             case 'text':
               ensureStep();
@@ -252,6 +263,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 type: 'tool-input-start',
                 toolCallId: event.id,
                 toolName: event.name,
+                // `toolKind` is absent on older backends — omitted (not `undefined`-valued) so
+                // `toolMetadata` itself is only present when there's something to say, letting a
+                // UI gate approval affordances on `kind === 'action'` without hardcoding tool names.
+                ...(event.toolKind !== undefined
+                  ? { toolMetadata: { toolKind: event.toolKind } }
+                  : {}),
               });
               break;
             case 'tool-input-delta':
@@ -269,6 +286,9 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 toolCallId: event.id,
                 toolName: event.name,
                 input: event.input,
+                ...(event.toolKind !== undefined
+                  ? { toolMetadata: { toolKind: event.toolKind } }
+                  : {}),
               });
               break;
             case 'tool-output':

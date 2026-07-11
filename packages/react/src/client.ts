@@ -1,4 +1,9 @@
-import type { QuotaView, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type {
+  MessageAttachment,
+  QuotaView,
+  ThreadDetail,
+  ThreadSummary,
+} from '@dudousxd/nestjs-agent-core';
 
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
@@ -25,6 +30,16 @@ export interface CancelResult {
 
 export interface OkResult {
   ok: boolean;
+}
+
+/**
+ * Partial update accepted by `PATCH /agent/threads/:threadId`. `defaultAgent: null` clears a
+ * previously-set default back to the module's own default; omitting it leaves the thread's
+ * current default untouched.
+ */
+export interface ThreadPatch {
+  title?: string;
+  defaultAgent?: string | null;
 }
 
 export interface AgentClientOptions {
@@ -67,7 +82,36 @@ export class AgentClient {
   }
 
   renameThread(id: string, title: string): Promise<OkResult> {
-    return this.request<OkResult>('PATCH', `/agent/threads/${encodeURIComponent(id)}`, { title });
+    return this.updateThread(id, { title });
+  }
+
+  /** General `PATCH /agent/threads/:threadId` — title and/or the thread's pinned default agent. */
+  updateThread(id: string, patch: ThreadPatch): Promise<OkResult> {
+    return this.request<OkResult>('PATCH', `/agent/threads/${encodeURIComponent(id)}`, patch);
+  }
+
+  /**
+   * Uploads a file (image/PDF) for a vision-capable model turn. Multipart, field name `file` —
+   * mirrors the backend's `POST /agent/attachments`. The returned {@link MessageAttachment} is
+   * what a caller then rides on `sendMessage({ text }, { body: { attachments: [...] } })`.
+   */
+  async uploadAttachment(file: File): Promise<MessageAttachment> {
+    const fetchImpl = this.options.fetch ?? globalThis.fetch;
+    const baseUrl = (this.options.baseUrl ?? '').replace(/\/$/, '');
+    const dynamic = (await this.options.getHeaders?.()) ?? {};
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetchImpl(`${baseUrl}/agent/attachments`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        ...this.options.headers,
+        ...dynamic,
+      },
+      body: formData,
+      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
+    });
+    return this.handleResponse<MessageAttachment>(response, 'POST', '/agent/attachments');
   }
 
   promoteThread(id: string): Promise<OkResult> {
@@ -112,6 +156,10 @@ export class AgentClient {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
     });
+    return this.handleResponse<T>(response, method, path);
+  }
+
+  private async handleResponse<T>(response: Response, method: string, path: string): Promise<T> {
     if (!response.ok) {
       throw new AgentHttpError(response.status, method, path, response.statusText);
     }

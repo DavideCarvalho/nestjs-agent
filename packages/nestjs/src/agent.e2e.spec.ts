@@ -1,11 +1,35 @@
-import type { QuotaStore, Retriever, RolesPolicy } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentPricingStore,
+  AgentStore,
+  AppendMessageInput,
+  CreateThreadInput,
+  QuotaStore,
+  RecordToolCallInput,
+  RecordUsageInput,
+  Retriever,
+  RolesPolicy,
+  StoredMessage,
+  ThreadDetail,
+  ThreadSummary,
+  UpdateToolCallInput,
+} from '@dudousxd/nestjs-agent-core';
+import { AGENT_PRICING_STORE } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
   InMemoryAgentStore,
+  InMemoryPricingStore,
   InMemoryQuotaStore,
 } from '@dudousxd/nestjs-agent-testing';
-import { ForbiddenException, Injectable, NotFoundException, type Type } from '@nestjs/common';
+import {
+  type DynamicModule,
+  ForbiddenException,
+  Global,
+  Injectable,
+  Module,
+  NotFoundException,
+  type Type,
+} from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -16,6 +40,85 @@ import { AgentService } from './agent.service.js';
 import { Agent } from './decorator/agent.decorator.js';
 import { AiTool } from './decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
+
+/**
+ * `AGENT_PRICING_STORE` is bound externally (like a real host's store module would) — see the usage
+ * site below for why a plain sibling provider on the root TestingModule isn't visible to AgentModule.
+ */
+function globalPricingStoreModule(pricingStore: AgentPricingStore): DynamicModule {
+  @Global()
+  @Module({
+    providers: [{ provide: AGENT_PRICING_STORE, useValue: pricingStore }],
+    exports: [AGENT_PRICING_STORE],
+  })
+  class GlobalPricingStoreModule {}
+  return { module: GlobalPricingStoreModule };
+}
+
+/**
+ * An `AgentStore` that delegates everything to an in-memory store EXCEPT `updateThread` and
+ * `activeRunForThread` — both left undefined (they're optional on the SPI) to exercise the "store
+ * predates this feature" paths: `PATCH /threads/:id` 501s on a `defaultAgent` change, and thread
+ * reads normalize `activeRunId` to `null` rather than throwing or leaving it absent.
+ */
+class MinimalAgentStore implements AgentStore {
+  private readonly inner = new InMemoryAgentStore();
+
+  createThread(input: CreateThreadInput): Promise<ThreadSummary> {
+    return this.inner.createThread(input);
+  }
+  getThread(threadId: string): Promise<ThreadDetail | null> {
+    return this.inner.getThread(threadId);
+  }
+  listThreads(actorRef: string, limit?: number): Promise<ThreadSummary[]> {
+    return this.inner.listThreads(actorRef, limit);
+  }
+  softDeleteThread(threadId: string): Promise<void> {
+    return this.inner.softDeleteThread(threadId);
+  }
+  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+    return this.inner.forkThread(threadId, fromMessageId);
+  }
+  setTitle(threadId: string, title: string): Promise<void> {
+    return this.inner.setTitle(threadId, title);
+  }
+  promoteThread(threadId: string): Promise<void> {
+    return this.inner.promoteThread(threadId);
+  }
+  setActiveStream(threadId: string, runId: string | null): Promise<void> {
+    return this.inner.setActiveStream(threadId, runId);
+  }
+  ownerOfThread(threadId: string): Promise<string | null> {
+    return this.inner.ownerOfThread(threadId);
+  }
+  ownerOfToolCall(toolCallId: string): Promise<string | null> {
+    return this.inner.ownerOfToolCall(toolCallId);
+  }
+  runForToolCall(toolCallId: string): Promise<string | null> {
+    return this.inner.runForToolCall(toolCallId);
+  }
+  ownerOfActiveStream(runId: string): Promise<string | null> {
+    return this.inner.ownerOfActiveStream(runId);
+  }
+  appendMessage(input: AppendMessageInput): Promise<StoredMessage> {
+    return this.inner.appendMessage(input);
+  }
+  truncateFrom(threadId: string, messageId: string): Promise<void> {
+    return this.inner.truncateFrom(threadId, messageId);
+  }
+  recordToolCall(input: RecordToolCallInput): Promise<void> {
+    return this.inner.recordToolCall(input);
+  }
+  updateToolCall(input: UpdateToolCallInput): Promise<void> {
+    return this.inner.updateToolCall(input);
+  }
+  recordUsage(input: RecordUsageInput): Promise<void> {
+    return this.inner.recordUsage(input);
+  }
+  quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number; costUsd: number }> {
+    return this.inner.quotaToday(actorRef, day);
+  }
+}
 
 @AiTool({
   name: 'getWeather',
@@ -550,5 +653,238 @@ describe('AgentModule (inline)', () => {
     await collect(built.service.subscribe(runId));
 
     expect(seen.find((tool) => tool.name === 'abilityTool')?.ability).toBe('cache.purge');
+  });
+});
+
+describe('thread rename + defaultAgent (Feature 4)', () => {
+  let app: NestExpressApplication | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it('PATCH sets title/defaultAgent; chat() precedence is explicit agentName > thread default > module default', async () => {
+    @Agent({ name: 'specialist', systemPrompt: 'specialist agent', model: 'fake-1' })
+    @Injectable()
+    class SpecialistAgent {}
+
+    const built = await buildApp(() => ({ text: 'answered' }), { agents: [SpecialistAgent] });
+    app = built.app;
+    const { threadId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+
+    const patchRes = await request(app.getHttpServer())
+      .patch(`/agent/threads/${threadId}`)
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ title: 'Renamed', defaultAgent: 'specialist' });
+    expect(patchRes.status).toBe(200);
+
+    const afterPatch = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(afterPatch?.title).toBe('Renamed');
+    expect(afterPatch?.defaultAgent).toBe('specialist');
+
+    // No explicit agentName on this send — the thread's own default takes over.
+    const second = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'again',
+      threadId,
+    });
+    await collect(built.service.subscribe(second.runId));
+    const afterSecond = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(afterSecond?.messages.at(-1)?.agentName).toBe('specialist');
+
+    // An explicit agentName still wins over the thread's own default.
+    const third = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'once more',
+      threadId,
+      agentName: 'default',
+    });
+    await collect(built.service.subscribe(third.runId));
+    const afterThird = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(afterThird?.messages.at(-1)?.agentName).toBe('default');
+  });
+
+  it('clearing defaultAgent (null) falls back to the module default again', async () => {
+    @Agent({ name: 'specialist', systemPrompt: 'specialist agent', model: 'fake-1' })
+    @Injectable()
+    class SpecialistAgent {}
+    const built = await buildApp(() => ({ text: 'answered' }), { agents: [SpecialistAgent] });
+    app = built.app;
+    const { threadId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await built.service.updateThread({ id: 'u1', roles: ['ADMIN'] }, threadId, {
+      defaultAgent: 'specialist',
+    });
+    await built.service.updateThread({ id: 'u1', roles: ['ADMIN'] }, threadId, {
+      defaultAgent: null,
+    });
+    const detail = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(detail?.defaultAgent).toBeNull();
+
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'again',
+      threadId,
+    });
+    await collect(built.service.subscribe(runId));
+    const after = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(after?.messages.at(-1)?.agentName).toBe('default');
+  });
+
+  it('501s a defaultAgent change against a store that lacks updateThread, but title-only patches still work', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'hi' })),
+          store: new MinimalAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          defaultAgent: 'default',
+        }),
+      ],
+      providers: [DefaultAgent],
+    }).compile();
+    const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+    app = testApp;
+    await testApp.init();
+    const service = testApp.get(AgentService);
+    const { threadId } = await service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+
+    const res = await request(testApp.getHttpServer())
+      .patch(`/agent/threads/${threadId}`)
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ defaultAgent: 'specialist' });
+    expect(res.status).toBe(501);
+
+    const titleRes = await request(testApp.getHttpServer())
+      .patch(`/agent/threads/${threadId}`)
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'ADMIN')
+      .send({ title: 'still works' });
+    expect(titleRes.status).toBe(200);
+  });
+});
+
+describe('activeRunId (Feature 5)', () => {
+  let app: NestExpressApplication | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it('exposes the running runId on thread read while pending approval, then null after completion', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'purged ok' };
+    const built = await buildApp(script);
+    app = built.app;
+    const { runId, threadId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'purge it',
+    });
+    const collected = collect(built.service.subscribe(runId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const midRun = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(midRun?.activeRunId).toBe(runId);
+
+    await built.service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
+    await collected;
+
+    const afterRun = await built.service.getThread({ id: 'u1' }, threadId);
+    expect(afterRun?.activeRunId).toBeNull();
+  });
+
+  it('reports null on a store that does not implement activeRunForThread', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'hi' })),
+          store: new MinimalAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          defaultAgent: 'default',
+        }),
+      ],
+      providers: [DefaultAgent],
+    }).compile();
+    const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+    app = testApp;
+    await testApp.init();
+    const service = testApp.get(AgentService);
+    const { threadId } = await service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    const detail = await service.getThread({ id: 'u1', roles: ['ADMIN'] }, threadId);
+    expect(detail?.activeRunId).toBeNull();
+  });
+});
+
+describe('per-message costUsd (Feature 3, wired through DI)', () => {
+  let app: NestExpressApplication | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it('prices the stored assistant message when AGENT_PRICING_STORE is bound', async () => {
+    const pricingStore = new InMemoryPricingStore();
+    await pricingStore.upsertModelPrice({
+      modelId: 'fake-1',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+    });
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        // AGENT_PRICING_STORE is bound externally (like a real host's store module would) — a
+        // provider on the root TestingModule's own `providers` isn't visible to AgentDepsFactory,
+        // which lives inside the separately-encapsulated AgentModule; only a @Global() module's
+        // exports cross that boundary.
+        globalPricingStoreModule(pricingStore),
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'hi' })),
+          store: new InMemoryAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          defaultAgent: 'default',
+        }),
+      ],
+      providers: [DefaultAgent],
+    }).compile();
+    const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+    app = testApp;
+    await testApp.init();
+    const service = testApp.get(AgentService);
+    const { runId, threadId } = await service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await collect(service.subscribe(runId));
+
+    const detail = await service.getThread({ id: 'u1' }, threadId);
+    const assistant = detail?.messages.find((m) => m.role === 'assistant');
+    expect(typeof assistant?.usage?.costUsd).toBe('number');
+  });
+
+  it('leaves costUsd null when no pricing store is bound', async () => {
+    const built = await buildApp(() => ({ text: 'hi' }));
+    app = built.app;
+    const { runId, threadId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'hi',
+    });
+    await collect(built.service.subscribe(runId));
+    const detail = await built.service.getThread({ id: 'u1' }, threadId);
+    const assistant = detail?.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.usage?.costUsd).toBeNull();
   });
 });
