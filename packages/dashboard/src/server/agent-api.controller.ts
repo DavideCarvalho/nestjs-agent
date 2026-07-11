@@ -1,9 +1,22 @@
 import type {
   CurrentModelPrice,
+  PendingApprovalRow,
   RecentRunRow,
   ToolCallActivityRow,
+  ToolStatRow,
 } from '@dudousxd/nestjs-agent-core';
-import { Body, Controller, Get, Post, Query, Sse } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Query,
+  Req,
+  Sse,
+} from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import {
   DashboardService,
@@ -13,6 +26,7 @@ import {
   type ThreadActivityRowWithLabel,
   type ThreadSpendRowWithLabel,
 } from './dashboard.service.js';
+import { DASHBOARD_APPROVAL_ACTOR_REF } from './tokens.js';
 
 const DAY_MS = 86_400_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -51,7 +65,13 @@ function parseLimit(value: string | undefined, fallback: number): number {
  */
 @Controller()
 export class AgentApiController {
-  constructor(private readonly dashboard: DashboardService) {}
+  constructor(
+    private readonly dashboard: DashboardService,
+    // `useValue` even when the host omitted `approvalActorRef` — no `@Optional()` needed (the token
+    // is always bound; see DASHBOARD_APPROVAL_ACTOR_REF's TSDoc).
+    @Inject(DASHBOARD_APPROVAL_ACTOR_REF)
+    private readonly approvalActorRef: ((req: unknown) => string | undefined) | undefined,
+  ) {}
 
   /** `{ byModel, byActor, trend }` for a day range (defaults to the last 30 days). */
   @Get('spend')
@@ -88,6 +108,33 @@ export class AgentApiController {
   @Get('tool-calls')
   toolCalls(@Query('limit') limit?: string): Promise<ToolCallActivityRow[]> {
     return this.dashboard.recentToolCalls(parseLimit(limit, 50));
+  }
+
+  /** Tool calls sitting `pending_approval` (default 50, max 200), oldest first — the approvals inbox. */
+  @Get('approvals')
+  approvals(@Query('limit') limit?: string): Promise<PendingApprovalRow[]> {
+    return this.dashboard.pendingApprovals(parseLimit(limit, 50));
+  }
+
+  /**
+   * Decide a pending HITL tool call. Body `{ approved: boolean; reason?: string }`. 501s (via
+   * `DashboardService.decideApproval`) when no `AGENT_APPROVAL_PORT` is bound. `executedByRef`
+   * comes from the host's `approvalActorRef` extractor run against the live request, when configured.
+   */
+  @Post('approvals/:toolCallId')
+  @HttpCode(204)
+  async decideApproval(
+    @Param('toolCallId') toolCallId: string,
+    @Body() body: unknown,
+    @Req() req: unknown,
+  ): Promise<void> {
+    await this.dashboard.decideApproval(toolCallId, body, this.approvalActorRef?.(req));
+  }
+
+  /** Per-tool call/failure/rejection/latency rollup for a day range (defaults to the last 30 days). */
+  @Get('tools')
+  tools(@Query('from') from?: string, @Query('to') to?: string): Promise<ToolStatRow[]> {
+    return this.dashboard.toolStats(resolveRange(from, to));
   }
 
   /** Most recent threads (default 50, max 200) with rolled-up counts. */

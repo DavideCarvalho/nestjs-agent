@@ -28,6 +28,7 @@ interface ToolCallRow {
   output?: unknown;
   status: ToolCallStatus;
   error?: string;
+  executionMs?: number;
   createdAt: string;
 }
 
@@ -68,7 +69,21 @@ export interface GovernanceToolCallRow {
   toolType: 'read' | 'action';
   status: ToolCallStatus;
   threadId: string;
+  /** Wall-clock milliseconds the tool took to run; undefined when it never recorded one. */
+  executionMs?: number;
   createdAt: string;
+}
+
+/** A tool call awaiting a HITL decision, joined to its thread + message for the approvals inbox. */
+export interface GovernancePendingApprovalRow {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  threadId: string;
+  threadTitle: string;
+  actorRef: string;
+  agentName?: string;
+  requestedAt: string;
 }
 
 /** Thread metadata exposed to the governance read-model (title/actor/count/last activity). */
@@ -92,6 +107,8 @@ interface RunRow {
   retries: number;
   startedAt: string;
   settledAt?: string;
+  /** sha256 hex of the run's resolved (pre-RAG) system prompt; undefined for a pre-existing run. */
+  promptHash?: string;
 }
 
 /** A recorded run outcome exposed to the governance read-model (reliability surfaces). */
@@ -107,6 +124,7 @@ export interface GovernanceRunRow {
   retries: number;
   startedAt: string;
   settledAt?: string;
+  promptHash?: string;
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
@@ -243,6 +261,7 @@ export class InMemoryAgentStore implements AgentStore {
     threadId: string;
     actorRef: string;
     agentName?: string;
+    promptHash?: string;
   }): Promise<void> {
     this.runs.set(run.runId, {
       runId: run.runId,
@@ -252,6 +271,7 @@ export class InMemoryAgentStore implements AgentStore {
       retries: 0,
       startedAt: this.now(),
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+      ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
     });
   }
 
@@ -365,6 +385,9 @@ export class InMemoryAgentStore implements AgentStore {
     if (input.error !== undefined) {
       row.error = input.error;
     }
+    if (input.executionMs !== undefined) {
+      row.executionMs = input.executionMs;
+    }
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {
@@ -431,7 +454,37 @@ export class InMemoryAgentStore implements AgentStore {
       status: row.status,
       threadId: row.threadId,
       createdAt: row.createdAt,
+      ...(row.executionMs !== undefined ? { executionMs: row.executionMs } : {}),
     }));
+  }
+
+  /**
+   * Governance read-model feed: tool calls sitting `pending_approval`, joined to their thread
+   * (title/actorRef) and the message that requested them (`agentName`, when the message has one).
+   */
+  governancePendingApprovals(): GovernancePendingApprovalRow[] {
+    const rows: GovernancePendingApprovalRow[] = [];
+    for (const call of this.toolCalls.values()) {
+      if (call.status !== 'pending_approval') {
+        continue;
+      }
+      const thread = this.threads.get(call.threadId);
+      if (thread === undefined) {
+        continue;
+      }
+      const message = thread.messages.find((candidate) => candidate.id === call.messageId);
+      rows.push({
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: call.input,
+        threadId: call.threadId,
+        threadTitle: thread.title,
+        actorRef: thread.actorRef,
+        requestedAt: call.createdAt,
+        ...(message?.agentName !== undefined ? { agentName: message.agentName } : {}),
+      });
+    }
+    return rows;
   }
 
   /** Governance read-model feed: thread metadata (title/actor/message count/last activity). */
@@ -459,6 +512,7 @@ export class InMemoryAgentStore implements AgentStore {
       ...(row.errorCode !== undefined ? { errorCode: row.errorCode } : {}),
       ...(row.errorMessage !== undefined ? { errorMessage: row.errorMessage } : {}),
       ...(row.settledAt !== undefined ? { settledAt: row.settledAt } : {}),
+      ...(row.promptHash !== undefined ? { promptHash: row.promptHash } : {}),
     }));
   }
 

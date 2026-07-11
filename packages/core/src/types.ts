@@ -129,6 +129,11 @@ export interface QuotaView {
 export interface Decision {
   approved: boolean;
   reason?: string;
+  /**
+   * Opaque ref of WHO decided (e.g. a console admin). When absent, the run's own actor decided
+   * (the chat flow).
+   */
+  executedByRef?: string;
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system';

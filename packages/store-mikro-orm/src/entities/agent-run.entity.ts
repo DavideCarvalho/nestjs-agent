@@ -22,6 +22,8 @@ export class AgentRun {
   retries!: number;
   startedAt!: Date;
   settledAt?: Date | null;
+  /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a run recorded before this shipped. */
+  promptHash?: string | null;
 }
 
 /** Builds the `agent_run` schema. `thread` cascades on delete (§5). */
@@ -49,6 +51,7 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
       retries: { type: 'integer', default: 0 },
       startedAt: { type: 'datetime', fieldName: 'started_at' },
       settledAt: { type: 'datetime', nullable: true, fieldName: 'settled_at' },
+      promptHash: { type: 'string', nullable: true, fieldName: 'prompt_hash', ...str },
     },
   });
 }

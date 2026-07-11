@@ -86,7 +86,8 @@ const statements: string[] = [
     error_message TEXT,
     retries INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,
-    settled_at INTEGER
+    settled_at INTEGER,
+    prompt_hash TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS agent_run_started_idx
     ON agent_run (started_at)`,

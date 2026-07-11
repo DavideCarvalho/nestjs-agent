@@ -7,6 +7,7 @@ import {
   type AgentRunInput,
   type AgentRunner,
   type AgentStore,
+  type Decision,
   type MessageAttachment,
   type PageContext,
   type QuotaStore,
@@ -95,16 +96,29 @@ export class AgentService {
   }
 
   async approve(actor: Actor, toolCallId: string): Promise<void> {
-    const runId = await this.runForOwnedToolCall(actor, toolCallId);
-    return this.runner.signal(runId, toolCallId, { approved: true });
+    await this.assertOwnsToolCall(actor, toolCallId);
+    return this.signalToolCall(toolCallId, { approved: true });
   }
 
   async reject(actor: Actor, toolCallId: string, reason?: string): Promise<void> {
-    const runId = await this.runForOwnedToolCall(actor, toolCallId);
-    return this.runner.signal(runId, toolCallId, {
+    await this.assertOwnsToolCall(actor, toolCallId);
+    return this.signalToolCall(toolCallId, {
       approved: false,
       ...(reason !== undefined ? { reason } : {}),
     });
+  }
+
+  /**
+   * The decision core behind approve/reject, WITHOUT an ownership check: resolves the run
+   * currently awaiting `toolCallId` and signals it. `approve`/`reject` above call this after their
+   * own `assertOwnsToolCall` gate; the console `AgentApprovalPort` adapter (bound by `AgentModule`)
+   * calls it directly — a console caller is already authorized by the dashboard's own guards, and
+   * re-deriving thread ownership here would reject a legitimate operator decision (an operator is
+   * not the thread's own actor).
+   */
+  async signalToolCall(toolCallId: string, decision: Decision): Promise<void> {
+    const runId = await this.resolveRunForToolCall(toolCallId);
+    return this.runner.signal(runId, toolCallId, decision);
   }
 
   async cancel(actor: Actor, runId: string): Promise<void> {
@@ -264,12 +278,11 @@ export class AgentService {
   }
 
   /**
-   * Authorization + routing seam for HITL approve/reject: assert the caller owns the tool call's
-   * thread, then resolve the run currently awaiting that call (its thread's active stream). That run
-   * is the sub-agent's own child run when the pending call belongs to a delegated agent — the client
-   * never knows or supplies a runId; it is derived here from the tool call alone.
+   * Authorization seam for HITL approve/reject: the caller must own the tool call's thread. Split
+   * out from run resolution (see {@link resolveRunForToolCall}) so the console `AgentApprovalPort`
+   * adapter can resolve+signal a decision WITHOUT this check — it is authorized upstream instead.
    */
-  private async runForOwnedToolCall(actor: Actor, toolCallId: string): Promise<string> {
+  private async assertOwnsToolCall(actor: Actor, toolCallId: string): Promise<void> {
     const owner = await this.store.ownerOfToolCall(toolCallId);
     if (owner === null) {
       throw new NotFoundException(`tool call ${toolCallId} not found`);
@@ -277,6 +290,14 @@ export class AgentService {
     if (owner !== actor.id) {
       throw new ForbiddenException('tool call belongs to another actor');
     }
+  }
+
+  /**
+   * Resolve the run currently awaiting `toolCallId` (its thread's active stream). That run is the
+   * sub-agent's own child run when the pending call belongs to a delegated agent — the client never
+   * knows or supplies a runId; it is derived here from the tool call alone.
+   */
+  private async resolveRunForToolCall(toolCallId: string): Promise<string> {
     const runId = await this.store.runForToolCall(toolCallId);
     if (runId === null) {
       throw new NotFoundException(`tool call ${toolCallId} has no active run to signal`);

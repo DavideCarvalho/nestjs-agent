@@ -1,5 +1,6 @@
 import {
   AGENT_ACTOR_RESOLVER,
+  AGENT_APPROVAL_PORT,
   AGENT_DEPS_FACTORY,
   AGENT_DURABLE_RUNNER,
   AGENT_MODEL,
@@ -30,6 +31,7 @@ import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
 import { AgentService } from './agent.service.js';
+import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
 import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
@@ -98,6 +100,10 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     AiToolDiscoveryService,
     InlineAgentRunner,
     AgentService,
+    // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
+    // through AgentService.signalToolCall, which reaches whichever AGENT_RUNNER is bound above.
+    AgentApprovalPortAdapter,
+    { provide: AGENT_APPROVAL_PORT, useExisting: AgentApprovalPortAdapter },
   ];
   if (includeStore) {
     providers.push({
@@ -148,6 +154,7 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     AgentDepsFactory,
     AgentService,
     InlineAgentRunner,
+    AGENT_APPROVAL_PORT,
   ];
 }
 

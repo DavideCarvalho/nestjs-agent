@@ -114,6 +114,39 @@ export interface RecentRunRow {
   errorMessage: string | null;
   retries: number;
   startedAt: string;
+  /** sha256 hex of the run's resolved (pre-RAG) system prompt; `null` for a run recorded before this shipped. */
+  promptHash: string | null;
+}
+
+/** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */
+export interface PendingApprovalRow {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  threadId: string;
+  threadTitle: string;
+  /** Who asked — the run's actor. */
+  actorRef: string;
+  agentName: string | null;
+  /** ISO timestamp. */
+  requestedAt: string;
+}
+
+/** Body for `POST <api>/approvals/:toolCallId` — decide a pending HITL tool call. */
+export interface ApprovalDecisionInput {
+  approved: boolean;
+  reason?: string;
+}
+
+/** Governance rollup for one tool over a range, for the Tools section. */
+export interface ToolStatRow {
+  toolName: string;
+  toolType: string;
+  calls: number;
+  failed: number;
+  rejected: number;
+  /** p95 of executionMs across executed calls; null when none carry it. */
+  p95ExecutionMs: number | null;
 }
 
 /** The `GET <api>/reliability` response. */
@@ -201,6 +234,28 @@ export const agentClient = {
   /** Most recent tool calls (default 50). */
   toolCalls(limit = 50): Promise<ToolCallActivityRow[]> {
     return http<ToolCallActivityRow[]>(`/tool-calls?limit=${limit}`);
+  },
+  /** Tool calls sitting `pending_approval`, oldest first (default 50) — the approvals inbox. */
+  approvals(limit = 50): Promise<PendingApprovalRow[]> {
+    return http<PendingApprovalRow[]>(`/approvals?limit=${limit}`);
+  },
+  /**
+   * Decide a pending HITL tool call. 501s (a plain `Error` whose message starts with `501`, like
+   * `upsertPrice` below) if the host has no `AGENT_APPROVAL_PORT` bound — the approvals inbox reads
+   * that as "render read-only".
+   */
+  async decideApproval(toolCallId: string, input: ApprovalDecisionInput): Promise<void> {
+    const res = await fetch(`${apiBase()}/approvals/${encodeURIComponent(toolCallId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  },
+  /** Per-tool call/failure/rejection/latency rollup for a day range (the Tools section). */
+  toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
+    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
+    return http<ToolStatRow[]>(`/tools?${q.toString()}`);
   },
   /** Most recent threads (default 50). */
   threads(limit = 50): Promise<ThreadActivityRow[]> {

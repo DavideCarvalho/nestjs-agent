@@ -661,6 +661,7 @@ describe('MikroOrmGovernanceQueries run reliability (sqlite)', () => {
       retries: 1,
       startedAt: new Date('2026-07-10T09:00:00.000Z'),
       settledAt: new Date('2026-07-10T09:00:00.100Z'),
+      promptHash: 'hash-run-1',
     });
     const run2 = em.create(AgentRun, {
       id: 'run-2',
@@ -791,11 +792,274 @@ describe('MikroOrmGovernanceQueries run reliability (sqlite)', () => {
       durationMs: 200,
       errorCode: 'timeout',
       errorMessage: 'upstream timed out',
+      // run-2 was started with no promptHash
+      promptHash: null,
     });
+
+    const completed = rows.find((row) => row.runId === 'run-1');
+    expect(completed?.promptHash).toBe('hash-run-1');
   });
 
   it('recentRuns caps at limit', async () => {
     const rows = await runQueries.recentRuns(2);
     expect(rows.map((row) => row.runId)).toEqual(['run-4', 'run-3']);
+  });
+});
+
+// A self-contained ORM covering pendingApprovals (thread/message join, oldest-first, limit) and
+// toolStats (call/failure/rejection counts + p95 execution latency, bucketed by tool + range).
+describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
+  let toolOrm: MikroORM;
+  let toolQueries: MikroOrmGovernanceQueries;
+
+  beforeAll(async () => {
+    toolOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(toolOrm);
+    toolQueries = new MikroOrmGovernanceQueries(toolOrm.em, new MikroOrmPricingStore(toolOrm.em));
+
+    const em = toolOrm.em.fork();
+    const threadJudy = em.create(AgentThread, {
+      id: 'thread-judy',
+      actorRef: 'judy',
+      title: 'Judy chat',
+      transient: false,
+      createdAt: new Date('2026-07-10T08:00:00.000Z'),
+      updatedAt: new Date('2026-07-10T08:00:00.000Z'),
+    });
+    const threadKyle = em.create(AgentThread, {
+      id: 'thread-kyle',
+      actorRef: 'kyle',
+      title: 'Kyle chat',
+      transient: false,
+      createdAt: new Date('2026-07-10T08:00:00.000Z'),
+      updatedAt: new Date('2026-07-10T08:00:00.000Z'),
+    });
+
+    // judy's first message has an agentName; her second one has none (agentName resolves to null).
+    const messageJudyA = em.create(AgentMessage, {
+      id: 'msg-judy-a',
+      thread: threadJudy,
+      role: 'assistant',
+      content: 'deploying',
+      agentName: 'assistant-1',
+      createdAt: new Date('2026-07-10T08:30:00.000Z'),
+    });
+    const messageJudyB = em.create(AgentMessage, {
+      id: 'msg-judy-b',
+      thread: threadJudy,
+      role: 'assistant',
+      content: 'restarting',
+      createdAt: new Date('2026-07-10T08:31:00.000Z'),
+    });
+    const messageKyle = em.create(AgentMessage, {
+      id: 'msg-kyle',
+      thread: threadKyle,
+      role: 'assistant',
+      content: 'deleting',
+      agentName: 'assistant-2',
+      createdAt: new Date('2026-07-10T08:32:00.000Z'),
+    });
+
+    // Three pending approvals across the two threads, plus one already-executed call that must be
+    // excluded. Oldest first: tc-pa-1, tc-pa-2, tc-pa-3.
+    const pendingOldest = em.create(AgentToolCall, {
+      id: 'tc-pa-1',
+      message: messageJudyA,
+      toolName: 'deploy',
+      toolType: 'action',
+      input: { env: 'prod' },
+      status: 'pending_approval',
+      createdAt: new Date('2026-07-10T09:00:00.000Z'),
+    });
+    const pendingMiddle = em.create(AgentToolCall, {
+      id: 'tc-pa-2',
+      message: messageKyle,
+      toolName: 'delete',
+      toolType: 'action',
+      input: { id: 1 },
+      status: 'pending_approval',
+      createdAt: new Date('2026-07-10T10:00:00.000Z'),
+    });
+    const pendingNewest = em.create(AgentToolCall, {
+      id: 'tc-pa-3',
+      message: messageJudyB,
+      toolName: 'restart',
+      toolType: 'action',
+      input: {},
+      status: 'pending_approval',
+      createdAt: new Date('2026-07-10T11:00:00.000Z'),
+    });
+    const alreadyExecuted = em.create(AgentToolCall, {
+      id: 'tc-executed',
+      message: messageJudyA,
+      toolName: 'search',
+      toolType: 'read',
+      input: {},
+      status: 'executed',
+      createdAt: new Date('2026-07-10T09:30:00.000Z'),
+    });
+
+    // toolStats fixtures, in their own day range (2026-07-20/21): search/read x3 (executed +
+    // auto_executed), deploy/action x2 (one failed, one rejected), notify/action x1 (executed but
+    // never recorded an executionMs), plus one out-of-range search call that must be excluded.
+    const search1 = em.create(AgentToolCall, {
+      id: 'tc-stats-search-1',
+      message: messageJudyA,
+      toolName: 'search',
+      toolType: 'read',
+      status: 'executed',
+      executionMs: 50,
+      createdAt: new Date('2026-07-20T09:00:00.000Z'),
+    });
+    const search2 = em.create(AgentToolCall, {
+      id: 'tc-stats-search-2',
+      message: messageJudyA,
+      toolName: 'search',
+      toolType: 'read',
+      status: 'executed',
+      executionMs: 150,
+      createdAt: new Date('2026-07-20T09:05:00.000Z'),
+    });
+    const search3 = em.create(AgentToolCall, {
+      id: 'tc-stats-search-3',
+      message: messageJudyA,
+      toolName: 'search',
+      toolType: 'read',
+      status: 'auto_executed',
+      executionMs: 250,
+      createdAt: new Date('2026-07-20T09:10:00.000Z'),
+    });
+    const deployFailed = em.create(AgentToolCall, {
+      id: 'tc-stats-deploy-1',
+      message: messageJudyA,
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'failed',
+      executionMs: 500,
+      createdAt: new Date('2026-07-20T10:00:00.000Z'),
+    });
+    const deployRejected = em.create(AgentToolCall, {
+      id: 'tc-stats-deploy-2',
+      message: messageJudyA,
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'rejected',
+      createdAt: new Date('2026-07-20T10:05:00.000Z'),
+    });
+    const notifyNoLatency = em.create(AgentToolCall, {
+      id: 'tc-stats-notify-1',
+      message: messageJudyA,
+      toolName: 'notify',
+      toolType: 'action',
+      status: 'executed',
+      createdAt: new Date('2026-07-21T09:00:00.000Z'),
+    });
+    const outOfRangeSearch = em.create(AgentToolCall, {
+      id: 'tc-stats-search-out',
+      message: messageJudyA,
+      toolName: 'search',
+      toolType: 'read',
+      status: 'executed',
+      executionMs: 999,
+      createdAt: new Date('2026-07-19T09:00:00.000Z'),
+    });
+
+    em.persist([
+      threadJudy,
+      threadKyle,
+      messageJudyA,
+      messageJudyB,
+      messageKyle,
+      pendingOldest,
+      pendingMiddle,
+      pendingNewest,
+      alreadyExecuted,
+      search1,
+      search2,
+      search3,
+      deployFailed,
+      deployRejected,
+      notifyNoLatency,
+      outOfRangeSearch,
+    ]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await toolOrm?.close(true);
+  });
+
+  it('pendingApprovals joins message→thread for title/actorRef/agentName, oldest first', async () => {
+    const rows = await toolQueries.pendingApprovals(10);
+    expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2', 'tc-pa-3']);
+
+    expect(rows[0]).toMatchObject({
+      toolName: 'deploy',
+      input: { env: 'prod' },
+      threadId: 'thread-judy',
+      threadTitle: 'Judy chat',
+      actorRef: 'judy',
+      agentName: 'assistant-1',
+    });
+
+    expect(rows[1]).toMatchObject({
+      toolName: 'delete',
+      threadId: 'thread-kyle',
+      threadTitle: 'Kyle chat',
+      actorRef: 'kyle',
+      agentName: 'assistant-2',
+    });
+
+    // judy's second message carries no agentName — resolves to null, not undefined.
+    expect(rows[2]).toMatchObject({
+      toolName: 'restart',
+      threadId: 'thread-judy',
+      agentName: null,
+    });
+  });
+
+  it('pendingApprovals caps at limit, keeping the oldest', async () => {
+    const rows = await toolQueries.pendingApprovals(2);
+    expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2']);
+  });
+
+  it('toolStats buckets by tool+type, counts failed/rejected, and computes p95 execution latency', async () => {
+    const rows = await toolQueries.toolStats({ fromDay: '2026-07-20', toDay: '2026-07-21' });
+    expect(rows).toEqual([
+      {
+        toolName: 'search',
+        toolType: 'read',
+        calls: 3,
+        failed: 0,
+        rejected: 0,
+        p95ExecutionMs: 250,
+      },
+      {
+        toolName: 'deploy',
+        toolType: 'action',
+        calls: 2,
+        failed: 1,
+        rejected: 1,
+        p95ExecutionMs: 500,
+      },
+      {
+        toolName: 'notify',
+        toolType: 'action',
+        calls: 1,
+        failed: 0,
+        rejected: 0,
+        p95ExecutionMs: null,
+      },
+    ]);
+  });
+
+  it('toolStats reports nothing outside the range', async () => {
+    const rows = await toolQueries.toolStats({ fromDay: '2020-01-01', toDay: '2020-01-01' });
+    expect(rows).toEqual([]);
   });
 });

@@ -1,4 +1,5 @@
 export { AgentModule } from './agent.module.js';
+export { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 export type {
   AgentModuleOptions,
   AgentModuleAsyncOptions,

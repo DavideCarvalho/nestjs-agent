@@ -1,22 +1,26 @@
 import { type ReactNode, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ActorsSection } from './ActorsSection';
+import { ApprovalsSection } from './ApprovalsSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
 import { PricingSection } from './PricingSection';
 import { ReliabilitySection } from './ReliabilitySection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
+import { ToolsSection } from './ToolsSection';
 import { LogoMark } from './icons';
 import {
   MOCK_BUDGETS,
   MOCK_LIVE_EVENTS,
+  MOCK_PENDING_APPROVALS,
   MOCK_PRICES,
   MOCK_RELIABILITY,
   MOCK_RUNS,
   MOCK_SPEND,
   MOCK_THREADS,
   MOCK_TOOL_CALLS,
+  MOCK_TOOL_STATS,
   MOCK_TOP_THREADS,
 } from './mock-data';
 import './index.css';
@@ -56,6 +60,12 @@ function Preview() {
         </Group>
         <Group label="Reliability">
           <ReliabilitySection overview={MOCK_RELIABILITY} runs={MOCK_RUNS} />
+        </Group>
+        <Group label="Approvals">
+          <ApprovalsSection approvals={MOCK_PENDING_APPROVALS} onDecide={async () => {}} />
+        </Group>
+        <Group label="Tools">
+          <ToolsSection rows={MOCK_TOOL_STATS} />
         </Group>
         <Group label="Pricing">
           <PricingSection

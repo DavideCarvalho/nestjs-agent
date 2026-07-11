@@ -1,11 +1,13 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import type {
   ActorSpendRow,
+  AgentApprovalPort,
   AgentGovernanceQueries,
   AgentPricingStore,
   CurrentModelPrice,
   GovernanceRange,
   ModelSpendRow,
+  PendingApprovalRow,
   RecentRunRow,
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
@@ -14,14 +16,21 @@ import type {
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Inject, Injectable, NotImplementedException, Optional } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import type { ActorDirectory } from './actor-directory.js';
+import { parseApprovalDecision } from './parse-approval-decision.js';
 import { parsePriceInput } from './parse-price-input.js';
-import { AGENT_ACTOR_DIRECTORY, AGENT_GOVERNANCE_QUERIES, AGENT_PRICING_STORE } from './tokens.js';
+import {
+  AGENT_ACTOR_DIRECTORY,
+  AGENT_APPROVAL_PORT,
+  AGENT_GOVERNANCE_QUERIES,
+  AGENT_PRICING_STORE,
+} from './tokens.js';
 
 /** An actor-scoped row decorated with its resolved display label — `null` when unbound or unresolved. */
 export interface WithActorLabel {
@@ -51,6 +60,12 @@ export interface ReliabilityOverview {
 const PRICING_STORE_UNBOUND_MESSAGE =
   'Pricing CRUD is unavailable: no AGENT_PRICING_STORE is bound. Bind a pricing store (e.g. ' +
   'MikroOrmPricingStore from @dudousxd/nestjs-agent-store-mikro-orm) to enable it.';
+
+/** The message returned as a 501 when no `AGENT_APPROVAL_PORT` is bound. */
+const APPROVAL_PORT_UNBOUND_MESSAGE =
+  'Approve/reject is unavailable: no AGENT_APPROVAL_PORT is bound. Import AgentModule from ' +
+  '@dudousxd/nestjs-agent alongside this dashboard to enable it — the approvals inbox stays ' +
+  'read-only until then.';
 
 /** One live agent event forwarded over SSE, flattened from the `aviary:agent:*` diagnostics envelope. */
 export interface LiveAgentEvent {
@@ -112,6 +127,9 @@ export class DashboardService {
     @Optional()
     @Inject(AGENT_PRICING_STORE)
     private readonly pricingStore?: AgentPricingStore,
+    @Optional()
+    @Inject(AGENT_APPROVAL_PORT)
+    private readonly approvalPort?: AgentApprovalPort,
   ) {}
 
   /** Spend/usage overview for a day range: by-model + by-actor spend and the daily trend, in parallel. */
@@ -150,6 +168,44 @@ export class DashboardService {
   /** Most recent tool calls (status/type/thread) for the Runs & tools activity feed. */
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
     return this.queries.recentToolCalls(limit);
+  }
+
+  /** Tool calls sitting `pending_approval`, oldest first, for the cross-thread approvals inbox. */
+  pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
+    return this.queries.pendingApprovals(limit);
+  }
+
+  /** Per-tool call/failure/rejection/latency rollup for a day range, for the Tools section. */
+  toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
+    return this.queries.toolStats(range);
+  }
+
+  /**
+   * Decide a pending HITL tool call from the console. Routes through the OPTIONAL
+   * {@link AGENT_APPROVAL_PORT} — bound by `@dudousxd/nestjs-agent` to the SAME signal path chat
+   * approvals use — so a 501 here (checked BEFORE body validation, same ordering as
+   * {@link upsertPrice}) means "no approval port bound", not "your body was invalid". `executedByRef`
+   * is an OPAQUE decider ref the caller resolved from the live request (see
+   * `AgentDashboardOptions.approvalActorRef`); omitted when the host didn't configure one.
+   */
+  async decideApproval(
+    toolCallId: string,
+    body: unknown,
+    executedByRef: string | undefined,
+  ): Promise<void> {
+    if (this.approvalPort === undefined) {
+      throw new NotImplementedException(APPROVAL_PORT_UNBOUND_MESSAGE);
+    }
+    const decision = parseApprovalDecision(body);
+    const opts = executedByRef !== undefined ? { executedByRef } : {};
+    if (decision.approved) {
+      await this.approvalPort.approve(toolCallId, opts);
+      return;
+    }
+    await this.approvalPort.reject(toolCallId, {
+      ...opts,
+      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+    });
   }
 
   /** Most recent threads with rolled-up message/token counts. */

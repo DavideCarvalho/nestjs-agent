@@ -22,8 +22,10 @@ import {
   type PromptContributor,
   type RecordRunEndInput,
   type RecordRunStartInput,
+  type Retriever,
   ToolRegistry,
   type ToolStepEnvelope,
+  type UpdateToolCallInput,
   runAgentLoop,
 } from './index.js';
 
@@ -97,6 +99,8 @@ interface RunOverrides {
   dispatchTool?: AgentLoopHooks['dispatchTool'];
   /** Decorates the store the LOOP sees (thread setup + assertions still use the inner store). */
   wrapStore?: (store: InMemoryAgentStore) => AgentStore;
+  /** Inject-mode RAG (Feature 3 prompt-hash tests exercise this to prove the hash is pre-retrieval). */
+  retriever?: Retriever;
 }
 
 async function run(
@@ -128,6 +132,7 @@ async function run(
       : {}),
     ...(overrides.pricingStore !== undefined ? { pricingStore: overrides.pricingStore } : {}),
     ...(overrides.toolTimeoutMs !== undefined ? { toolTimeoutMs: overrides.toolTimeoutMs } : {}),
+    ...(overrides.retriever !== undefined ? { retriever: overrides.retriever } : {}),
   };
   const hooks: AgentLoopHooks = {
     runId,
@@ -724,22 +729,23 @@ function withoutOptionalStoreMethods(store: InMemoryAgentStore): AgentStore {
   };
 }
 
-describe('run reliability recording', () => {
-  function captureRunRecording() {
-    const runStarts: RecordRunStartInput[] = [];
-    const runEnds: RecordRunEndInput[] = [];
-    const wrapStore = (store: InMemoryAgentStore): AgentStore =>
-      Object.assign(store, {
-        recordRunStart: async (start: RecordRunStartInput) => {
-          runStarts.push(start);
-        },
-        recordRunEnd: async (end: RecordRunEndInput) => {
-          runEnds.push(end);
-        },
-      });
-    return { runStarts, runEnds, wrapStore };
-  }
+/** Wraps a store to capture every `recordRunStart`/`recordRunEnd` call the loop makes against it. */
+function captureRunRecording() {
+  const runStarts: RecordRunStartInput[] = [];
+  const runEnds: RecordRunEndInput[] = [];
+  const wrapStore = (store: InMemoryAgentStore): AgentStore =>
+    Object.assign(store, {
+      recordRunStart: async (start: RecordRunStartInput) => {
+        runStarts.push(start);
+      },
+      recordRunEnd: async (end: RecordRunEndInput) => {
+        runEnds.push(end);
+      },
+    });
+  return { runStarts, runEnds, wrapStore };
+}
 
+describe('run reliability recording', () => {
   it('records run start and completed end on a no-tool turn', async () => {
     const { runStarts, runEnds, wrapStore } = captureRunRecording();
     const { result, detail, stepNames } = await run(
@@ -796,5 +802,112 @@ describe('run reliability recording', () => {
     expect(runEnds).toHaveLength(1);
     expect(runEnds[0]?.status).toBe('completed');
     expect(runEnds.filter((end) => end.status === 'failed')).toHaveLength(0);
+  });
+});
+
+describe('prompt hash recording (Feature 3)', () => {
+  it('records a 64-char lowercase hex promptHash alongside the run start', async () => {
+    const { runStarts, wrapStore } = captureRunRecording();
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, { wrapStore });
+    expect(runStarts).toHaveLength(1);
+    expect(runStarts[0]?.promptHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('is stable across two runs sharing the same resolved system prompt', async () => {
+    const first = captureRunRecording();
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, {
+      wrapStore: first.wrapStore,
+      systemPrompt: 'You are a test agent.',
+    });
+    const second = captureRunRecording();
+    await run(() => ({ text: 'a completely different reply' }), undefined, undefined, undefined, {
+      wrapStore: second.wrapStore,
+      systemPrompt: 'You are a test agent.',
+    });
+    expect(second.runStarts[0]?.promptHash).toBe(first.runStarts[0]?.promptHash);
+  });
+
+  it('changes when the resolved system prompt changes', async () => {
+    const first = captureRunRecording();
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, {
+      wrapStore: first.wrapStore,
+      systemPrompt: 'Prompt version A.',
+    });
+    const second = captureRunRecording();
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, {
+      wrapStore: second.wrapStore,
+      systemPrompt: 'Prompt version B.',
+    });
+    expect(second.runStarts[0]?.promptHash).not.toBe(first.runStarts[0]?.promptHash);
+  });
+
+  it('is computed from the PRE-retrieval system prompt — a retriever injecting context does not change it', async () => {
+    const withoutRetrieval = captureRunRecording();
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, {
+      wrapStore: withoutRetrieval.wrapStore,
+      systemPrompt: 'Same base prompt.',
+    });
+
+    const withRetrieval = captureRunRecording();
+    const retriever: Retriever = {
+      retrieve: async () => [{ id: 'p1', text: 'some retrieved passage', score: 0.9 }],
+    };
+    await run(() => ({ text: 'hello' }), undefined, undefined, undefined, {
+      wrapStore: withRetrieval.wrapStore,
+      systemPrompt: 'Same base prompt.',
+      retriever,
+    });
+
+    expect(withRetrieval.runStarts[0]?.promptHash).toBe(withoutRetrieval.runStarts[0]?.promptHash);
+  });
+});
+
+describe('action decision attribution (Decision.executedByRef)', () => {
+  function captureToolCallUpdates() {
+    const updates: UpdateToolCallInput[] = [];
+    const wrapStore = (store: InMemoryAgentStore): AgentStore => {
+      const original = store.updateToolCall.bind(store);
+      return Object.assign(store, {
+        updateToolCall: async (input: UpdateToolCallInput) => {
+          updates.push(input);
+          await original(input);
+        },
+      });
+    };
+    return { updates, wrapStore };
+  }
+
+  const purgeScript: FakeScript = (_args, turnIndex) =>
+    turnIndex === 0
+      ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+      : { text: 'done' };
+
+  it('persists the Decision ref on an approved action tool (console approval)', async () => {
+    const { updates, wrapStore } = captureToolCallUpdates();
+    await run(purgeScript, () => ({ approved: true, executedByRef: 'admin-9' }), undefined, undefined, {
+      wrapStore,
+    });
+    const executed = updates.find((update) => update.status === 'executed');
+    expect(executed?.executedByRef).toBe('admin-9');
+  });
+
+  it("persists the run's own actor when the Decision carries no ref (chat flow, today's behavior)", async () => {
+    const { updates, wrapStore } = captureToolCallUpdates();
+    await run(purgeScript, () => ({ approved: true }), undefined, undefined, { wrapStore });
+    const executed = updates.find((update) => update.status === 'executed');
+    expect(executed?.executedByRef).toBe('u1');
+  });
+
+  it('stamps the decider on a rejection too', async () => {
+    const { updates, wrapStore } = captureToolCallUpdates();
+    await run(
+      purgeScript,
+      () => ({ approved: false, reason: 'nope', executedByRef: 'admin-9' }),
+      undefined,
+      undefined,
+      { wrapStore },
+    );
+    const rejected = updates.find((update) => update.status === 'rejected');
+    expect(rejected).toMatchObject({ executedByRef: 'admin-9', error: 'nope' });
   });
 });

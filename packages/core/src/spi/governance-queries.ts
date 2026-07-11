@@ -123,6 +123,33 @@ export interface RecentRunRow {
   retries: number;
   /** ISO timestamp. */
   startedAt: string;
+  /** sha256 hex of the run's resolved (pre-RAG) system prompt; `null` for a run recorded before this shipped. */
+  promptHash: string | null;
+}
+
+/** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */
+export interface PendingApprovalRow {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  threadId: string;
+  threadTitle: string;
+  /** Who asked — the run's actor. */
+  actorRef: string;
+  agentName: string | null;
+  /** ISO timestamp. */
+  requestedAt: string;
+}
+
+/** Governance rollup for one tool over a range. */
+export interface ToolStatRow {
+  toolName: string;
+  toolType: string;
+  calls: number;
+  failed: number;
+  rejected: number;
+  /** p95 of executionMs across executed calls; null when none carry it. */
+  p95ExecutionMs: number | null;
 }
 
 /**
@@ -145,4 +172,8 @@ export interface AgentGovernanceQueries {
   runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]>;
   runTrend(range: GovernanceRange): Promise<RunTrendPoint[]>;
   recentRuns(limit: number): Promise<RecentRunRow[]>;
+  /** Tool calls sitting `pending_approval`, oldest first — an inbox drains from the back. Capped at `limit`. */
+  pendingApprovals(limit: number): Promise<PendingApprovalRow[]>;
+  /** Per-tool call/failure/rejection/latency rollup over the range, highest call count first. */
+  toolStats(range: GovernanceRange): Promise<ToolStatRow[]>;
 }

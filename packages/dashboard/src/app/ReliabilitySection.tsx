@@ -127,6 +127,7 @@ export function ReliabilitySection({
                     <th className="py-2 font-medium">Agent</th>
                     <th className="py-2 text-right font-medium">Duration</th>
                     <th className="py-2 pl-4 font-medium">Error</th>
+                    <th className="py-2 pl-4 font-medium">Prompt</th>
                     <th className="py-2 pl-4 text-right font-medium">Started</th>
                   </tr>
                 </thead>
@@ -151,6 +152,18 @@ export function ReliabilitySection({
                             {run.errorCode
                               ? `${run.errorCode}: ${run.errorMessage}`
                               : run.errorMessage}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--muted)]">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pl-4">
+                        {run.promptHash ? (
+                          <span
+                            title={run.promptHash}
+                            className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]"
+                          >
+                            {run.promptHash.slice(0, 8)}
                           </span>
                         ) : (
                           <span className="text-[var(--muted)]">—</span>

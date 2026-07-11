@@ -2,6 +2,7 @@ import type {
   ActorSpendRow,
   ModelPrice,
   ModelSpendRow,
+  PendingApprovalRow,
   RecentRunRow,
   ReliabilityOverview,
   RunTrendPoint,
@@ -9,6 +10,7 @@ import type {
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UsageTrendPoint,
 } from '../client/agent-client';
 import type { BudgetMap } from '../client/budget-usage';
@@ -151,6 +153,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     errorMessage: null,
     retries: 0,
     startedAt: new Date(Date.now() - 40_000).toISOString(),
+    promptHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef01234',
   },
   {
     runId: 'r-7c31',
@@ -163,6 +166,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     errorMessage: 'upstream model request timed out after 3 attempts',
     retries: 2,
     startedAt: new Date(Date.now() - 210_000).toISOString(),
+    promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
   },
   {
     runId: 'r-a114',
@@ -175,6 +179,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     errorMessage: null,
     retries: 1,
     startedAt: new Date(Date.now() - 540_000).toISOString(),
+    promptHash: null,
   },
   {
     runId: 'r-b902',
@@ -187,6 +192,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     errorMessage: 'search_records returned a 500',
     retries: 0,
     startedAt: new Date(Date.now() - 1_320_000).toISOString(),
+    promptHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef01234',
   },
   {
     runId: 'r-c447',
@@ -199,6 +205,65 @@ export const MOCK_RUNS: RecentRunRow[] = [
     errorMessage: null,
     retries: 0,
     startedAt: new Date(Date.now() - 8_000).toISOString(),
+    promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
+  },
+];
+
+export const MOCK_PENDING_APPROVALS: PendingApprovalRow[] = [
+  {
+    toolCallId: 'tc-approve-1',
+    toolName: 'delete_asset',
+    input: { assetId: 'asset-42', reason: 'stale' },
+    threadId: 'th2',
+    threadTitle: 'Incident triage',
+    actorRef: 'user:ops-bot',
+    agentName: 'billing-agent',
+    requestedAt: new Date(Date.now() - 300_000).toISOString(),
+  },
+  {
+    toolCallId: 'tc-approve-2',
+    toolName: 'send_email',
+    input: { to: 'finance@acme.example', subject: 'Q3 invoice adjustment' },
+    threadId: 'th1',
+    threadTitle: 'Q3 procurement review',
+    actorRef: 'tenant:acme',
+    agentName: 'analyst',
+    requestedAt: new Date(Date.now() - 900_000).toISOString(),
+  },
+];
+
+export const MOCK_TOOL_STATS: ToolStatRow[] = [
+  {
+    toolName: 'search_records',
+    toolType: 'read',
+    calls: 420,
+    failed: 6,
+    rejected: 0,
+    p95ExecutionMs: 180,
+  },
+  {
+    toolName: 'delete_asset',
+    toolType: 'action',
+    calls: 34,
+    failed: 1,
+    rejected: 4,
+    p95ExecutionMs: 620,
+  },
+  {
+    toolName: 'send_email',
+    toolType: 'action',
+    calls: 58,
+    failed: 2,
+    rejected: 2,
+    p95ExecutionMs: 410,
+  },
+  {
+    toolName: 'fetch_pricing',
+    toolType: 'read',
+    calls: 210,
+    failed: 0,
+    rejected: 0,
+    p95ExecutionMs: 95,
   },
 ];
 

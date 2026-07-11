@@ -153,6 +153,8 @@ export const agentRun = sqliteTable(
     retries: integer('retries').notNull().default(0),
     startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
     settledAt: integer('settled_at', { mode: 'timestamp_ms' }),
+    /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a pre-existing run. */
+    promptHash: text('prompt_hash'),
   },
   (table) => [index('agent_run_started_idx').on(table.startedAt)],
 );

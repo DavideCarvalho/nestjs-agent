@@ -209,6 +209,7 @@ export class DrizzleAgentStore implements AgentStore {
     threadId: string;
     actorRef: string;
     agentName?: string;
+    promptHash?: string;
   }): Promise<void> {
     const runRow: AgentRunRow = {
       id: run.runId,
@@ -222,6 +223,7 @@ export class DrizzleAgentStore implements AgentStore {
       retries: 0,
       startedAt: new Date(),
       settledAt: null,
+      promptHash: run.promptHash ?? null,
     };
     await this.db.insert(agentRun).values(runRow);
   }

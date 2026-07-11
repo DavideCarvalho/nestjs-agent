@@ -591,6 +591,7 @@ describe('DrizzleGovernanceQueries run reliability (better-sqlite3)', () => {
         retries: 1,
         startedAt: new Date('2026-07-10T09:00:00.000Z'),
         settledAt: new Date('2026-07-10T09:00:00.100Z'),
+        promptHash: 'hash-run-1',
       },
       {
         id: 'run-2',
@@ -715,11 +716,249 @@ describe('DrizzleGovernanceQueries run reliability (better-sqlite3)', () => {
       durationMs: 200,
       errorCode: 'timeout',
       errorMessage: 'upstream timed out',
+      // run-2 was started with no promptHash
+      promptHash: null,
     });
+
+    const completed = rows.find((row) => row.runId === 'run-1');
+    expect(completed?.promptHash).toBe('hash-run-1');
   });
 
   it('recentRuns caps at limit', async () => {
     const rows = await runQueries.recentRuns(2);
     expect(rows.map((row) => row.runId)).toEqual(['run-4', 'run-3']);
+  });
+});
+
+// A self-contained db covering pendingApprovals (thread/message join, oldest-first, limit) and
+// toolStats (call/failure/rejection counts + p95 execution latency, bucketed by tool + range).
+describe('DrizzleGovernanceQueries approvals + tool stats (better-sqlite3)', () => {
+  let toolDb: BetterSQLite3Database<typeof agentSchema>;
+  let toolQueries: DrizzleGovernanceQueries;
+
+  beforeAll(async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    toolDb = drizzle(sqlite, { schema: agentSchema });
+    await ensureAgentSchema(toolDb);
+    toolQueries = new DrizzleGovernanceQueries(toolDb, new DrizzlePricingStore(toolDb));
+
+    await toolDb.insert(agentThread).values([
+      {
+        id: 'thread-judy',
+        actorRef: 'judy',
+        title: 'Judy chat',
+        createdAt: new Date('2026-07-10T08:00:00.000Z'),
+        updatedAt: new Date('2026-07-10T08:00:00.000Z'),
+      },
+      {
+        id: 'thread-kyle',
+        actorRef: 'kyle',
+        title: 'Kyle chat',
+        createdAt: new Date('2026-07-10T08:00:00.000Z'),
+        updatedAt: new Date('2026-07-10T08:00:00.000Z'),
+      },
+    ]);
+
+    // judy's first message has an agentName; her second one has none (agentName resolves to null).
+    await toolDb.insert(agentMessage).values([
+      {
+        id: 'msg-judy-a',
+        threadId: 'thread-judy',
+        role: 'assistant',
+        content: 'deploying',
+        agentName: 'assistant-1',
+        createdAt: new Date('2026-07-10T08:30:00.000Z'),
+      },
+      {
+        id: 'msg-judy-b',
+        threadId: 'thread-judy',
+        role: 'assistant',
+        content: 'restarting',
+        createdAt: new Date('2026-07-10T08:31:00.000Z'),
+      },
+      {
+        id: 'msg-kyle',
+        threadId: 'thread-kyle',
+        role: 'assistant',
+        content: 'deleting',
+        agentName: 'assistant-2',
+        createdAt: new Date('2026-07-10T08:32:00.000Z'),
+      },
+    ]);
+
+    await toolDb.insert(agentToolCall).values([
+      // Three pending approvals across the two threads, plus one already-executed call that must
+      // be excluded. Oldest first: tc-pa-1, tc-pa-2, tc-pa-3.
+      {
+        id: 'tc-pa-1',
+        messageId: 'msg-judy-a',
+        toolName: 'deploy',
+        toolType: 'action',
+        input: { env: 'prod' },
+        status: 'pending_approval',
+        createdAt: new Date('2026-07-10T09:00:00.000Z'),
+      },
+      {
+        id: 'tc-pa-2',
+        messageId: 'msg-kyle',
+        toolName: 'delete',
+        toolType: 'action',
+        input: { id: 1 },
+        status: 'pending_approval',
+        createdAt: new Date('2026-07-10T10:00:00.000Z'),
+      },
+      {
+        id: 'tc-pa-3',
+        messageId: 'msg-judy-b',
+        toolName: 'restart',
+        toolType: 'action',
+        input: {},
+        status: 'pending_approval',
+        createdAt: new Date('2026-07-10T11:00:00.000Z'),
+      },
+      {
+        id: 'tc-executed',
+        messageId: 'msg-judy-a',
+        toolName: 'search',
+        toolType: 'read',
+        input: {},
+        status: 'executed',
+        createdAt: new Date('2026-07-10T09:30:00.000Z'),
+      },
+      // toolStats fixtures, in their own day range (2026-07-20/21): search/read x3 (executed +
+      // auto_executed), deploy/action x2 (one failed, one rejected), notify/action x1 (executed
+      // but never recorded an executionMs), plus one out-of-range search call that must be excluded.
+      {
+        id: 'tc-stats-search-1',
+        messageId: 'msg-judy-a',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+        executionMs: 50,
+        createdAt: new Date('2026-07-20T09:00:00.000Z'),
+      },
+      {
+        id: 'tc-stats-search-2',
+        messageId: 'msg-judy-a',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+        executionMs: 150,
+        createdAt: new Date('2026-07-20T09:05:00.000Z'),
+      },
+      {
+        id: 'tc-stats-search-3',
+        messageId: 'msg-judy-a',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'auto_executed',
+        executionMs: 250,
+        createdAt: new Date('2026-07-20T09:10:00.000Z'),
+      },
+      {
+        id: 'tc-stats-deploy-1',
+        messageId: 'msg-judy-a',
+        toolName: 'deploy',
+        toolType: 'action',
+        status: 'failed',
+        executionMs: 500,
+        createdAt: new Date('2026-07-20T10:00:00.000Z'),
+      },
+      {
+        id: 'tc-stats-deploy-2',
+        messageId: 'msg-judy-a',
+        toolName: 'deploy',
+        toolType: 'action',
+        status: 'rejected',
+        createdAt: new Date('2026-07-20T10:05:00.000Z'),
+      },
+      {
+        id: 'tc-stats-notify-1',
+        messageId: 'msg-judy-a',
+        toolName: 'notify',
+        toolType: 'action',
+        status: 'executed',
+        createdAt: new Date('2026-07-21T09:00:00.000Z'),
+      },
+      {
+        id: 'tc-stats-search-out',
+        messageId: 'msg-judy-a',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+        executionMs: 999,
+        createdAt: new Date('2026-07-19T09:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('pendingApprovals joins message→thread for title/actorRef/agentName, oldest first', async () => {
+    const rows = await toolQueries.pendingApprovals(10);
+    expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2', 'tc-pa-3']);
+
+    expect(rows[0]).toMatchObject({
+      toolName: 'deploy',
+      input: { env: 'prod' },
+      threadId: 'thread-judy',
+      threadTitle: 'Judy chat',
+      actorRef: 'judy',
+      agentName: 'assistant-1',
+    });
+
+    expect(rows[1]).toMatchObject({
+      toolName: 'delete',
+      threadId: 'thread-kyle',
+      threadTitle: 'Kyle chat',
+      actorRef: 'kyle',
+      agentName: 'assistant-2',
+    });
+
+    // judy's second message carries no agentName — resolves to null, not undefined.
+    expect(rows[2]).toMatchObject({
+      toolName: 'restart',
+      threadId: 'thread-judy',
+      agentName: null,
+    });
+  });
+
+  it('pendingApprovals caps at limit, keeping the oldest', async () => {
+    const rows = await toolQueries.pendingApprovals(2);
+    expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2']);
+  });
+
+  it('toolStats buckets by tool+type, counts failed/rejected, and computes p95 execution latency', async () => {
+    const rows = await toolQueries.toolStats({ fromDay: '2026-07-20', toDay: '2026-07-21' });
+    expect(rows).toEqual([
+      {
+        toolName: 'search',
+        toolType: 'read',
+        calls: 3,
+        failed: 0,
+        rejected: 0,
+        p95ExecutionMs: 250,
+      },
+      {
+        toolName: 'deploy',
+        toolType: 'action',
+        calls: 2,
+        failed: 1,
+        rejected: 1,
+        p95ExecutionMs: 500,
+      },
+      {
+        toolName: 'notify',
+        toolType: 'action',
+        calls: 1,
+        failed: 0,
+        rejected: 0,
+        p95ExecutionMs: null,
+      },
+    ]);
+  });
+
+  it('toolStats reports nothing outside the range', async () => {
+    const rows = await toolQueries.toolStats({ fromDay: '2020-01-01', toDay: '2020-01-01' });
+    expect(rows).toEqual([]);
   });
 });

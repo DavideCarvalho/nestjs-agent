@@ -297,6 +297,7 @@ export class MikroOrmAgentStore implements AgentStore {
     threadId: string;
     actorRef: string;
     agentName?: string;
+    promptHash?: string;
   }): Promise<void> {
     const em = this.em.fork();
     const runRow = em.create(AgentRun, {
@@ -307,6 +308,7 @@ export class MikroOrmAgentStore implements AgentStore {
       retries: 0,
       startedAt: new Date(),
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+      ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
     });
     em.persist(runRow);
     await em.flush();

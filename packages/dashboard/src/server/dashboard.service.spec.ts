@@ -1,11 +1,13 @@
 import type {
   ActorSpendRow,
+  AgentApprovalPort,
   AgentGovernanceQueries,
   AgentPricingStore,
   CurrentModelPrice,
   GovernanceRange,
   ModelPriceInput,
   ModelSpendRow,
+  PendingApprovalRow,
   RecentRunRow,
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
@@ -14,6 +16,7 @@ import type {
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
@@ -46,6 +49,8 @@ interface QueriesOverrides {
   runErrors?: RunErrorBreakdownRow[];
   runTrend?: RunTrendPoint[];
   recentRuns?: RecentRunRow[];
+  pendingApprovals?: PendingApprovalRow[];
+  toolStats?: ToolStatRow[];
 }
 
 /** A `AgentGovernanceQueries` fake — records each call and returns the override (or `[]`). */
@@ -95,6 +100,28 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
     async recentRuns(_limit: number) {
       record('recentRuns');
       return overrides.recentRuns ?? [];
+    },
+    async pendingApprovals(_limit: number) {
+      record('pendingApprovals');
+      return overrides.pendingApprovals ?? [];
+    },
+    async toolStats(_range: GovernanceRange) {
+      record('toolStats');
+      return overrides.toolStats ?? [];
+    },
+  };
+}
+
+/** An `AgentApprovalPort` fake — records each call it saw. */
+function fakeApprovalPort(
+  calls: { method: 'approve' | 'reject'; toolCallId: string; opts?: unknown }[] = [],
+): AgentApprovalPort {
+  return {
+    async approve(toolCallId, opts) {
+      calls.push({ method: 'approve', toolCallId, opts });
+    },
+    async reject(toolCallId, opts) {
+      calls.push({ method: 'reject', toolCallId, opts });
     },
   };
 }
@@ -204,6 +231,47 @@ describe('DashboardService', () => {
 
     expect((await service.recentToolCalls(10))[0]?.toolName).toBe('search');
     expect((await service.recentThreads(10))[0]?.threadId).toBe('th1');
+  });
+
+  it('pendingApprovals() passes through to the read-model', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        pendingApprovals: [
+          {
+            toolCallId: 'tc1',
+            toolName: 'purgeCache',
+            input: { key: 'cfg' },
+            threadId: 'th1',
+            threadTitle: 'hi',
+            actorRef: 'user:1',
+            agentName: 'analyst',
+            requestedAt: '2026-07-05T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+
+    expect((await service.pendingApprovals(10))[0]?.toolCallId).toBe('tc1');
+  });
+
+  it('toolStats() passes the range through to the read-model', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        toolStats: [
+          {
+            toolName: 'purgeCache',
+            toolType: 'action',
+            calls: 4,
+            failed: 1,
+            rejected: 1,
+            p95ExecutionMs: 320,
+          },
+        ],
+      }),
+    );
+
+    const rows = await service.toolStats({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+    expect(rows[0]?.toolName).toBe('purgeCache');
   });
 
   it('topThreads() passes the range and limit through to the read-model', async () => {
@@ -413,5 +481,55 @@ describe('DashboardService pricing CRUD', () => {
       service.upsertPrice({ modelId: 'gpt', inputPricePer1m: -1, outputPricePer1m: 15 }),
     ).rejects.toThrow();
     await expect(service.upsertPrice(null)).rejects.toThrow();
+  });
+});
+
+describe('DashboardService.decideApproval', () => {
+  it('501s with a clear message when no AGENT_APPROVAL_PORT is bound', async () => {
+    const service = new DashboardService(fakeQueries());
+
+    await expect(service.decideApproval('tc1', { approved: true }, undefined)).rejects.toThrow(
+      NotImplementedException,
+    );
+    await expect(service.decideApproval('tc1', { approved: true }, undefined)).rejects.toThrow(
+      /AGENT_APPROVAL_PORT is bound/,
+    );
+  });
+
+  it('routes an approve decision through the bound port, carrying executedByRef when given', async () => {
+    const calls: { method: 'approve' | 'reject'; toolCallId: string; opts?: unknown }[] = [];
+    const service = new DashboardService(
+      fakeQueries(),
+      undefined,
+      undefined,
+      fakeApprovalPort(calls),
+    );
+
+    await service.decideApproval('tc1', { approved: true }, 'user:ops-1');
+
+    expect(calls).toEqual([
+      { method: 'approve', toolCallId: 'tc1', opts: { executedByRef: 'user:ops-1' } },
+    ]);
+  });
+
+  it('routes a reject decision (with reason) through the bound port, omitting executedByRef when absent', async () => {
+    const calls: { method: 'approve' | 'reject'; toolCallId: string; opts?: unknown }[] = [];
+    const service = new DashboardService(
+      fakeQueries(),
+      undefined,
+      undefined,
+      fakeApprovalPort(calls),
+    );
+
+    await service.decideApproval('tc1', { approved: false, reason: 'not now' }, undefined);
+
+    expect(calls).toEqual([{ method: 'reject', toolCallId: 'tc1', opts: { reason: 'not now' } }]);
+  });
+
+  it('validates the body BEFORE trusting it, even with a bound port', async () => {
+    const service = new DashboardService(fakeQueries(), undefined, undefined, fakeApprovalPort());
+
+    await expect(service.decideApproval('tc1', { approved: 'yes' }, undefined)).rejects.toThrow();
+    await expect(service.decideApproval('tc1', null, undefined)).rejects.toThrow();
   });
 });

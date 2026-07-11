@@ -95,6 +95,27 @@ export function ClockIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function CheckIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M4 12.5 9.5 18 20 6" />
+    </svg>
+  );
+}
+export function XIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M5 5l14 14M19 5 5 19" />
+    </svg>
+  );
+}
+export function InboxIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M3 12h4.5l1.5 3h6l1.5-3H21M4 12 5.6 5.8A2 2 0 0 1 7.5 4.3h9a2 2 0 0 1 1.9 1.5L20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+    </svg>
+  );
+}
 
 /** The console brand mark — a governed-gateway glyph (a diamond gateway with a routed path). */
 export function LogoMark({ className }: { className?: string }) {

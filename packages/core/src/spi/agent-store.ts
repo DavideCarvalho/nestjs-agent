@@ -72,6 +72,8 @@ export interface RecordRunStartInput {
   threadId: string;
   actorRef: string;
   agentName?: string;
+  /** sha256 hex of the run's resolved (pre-RAG) system prompt — identifies the prompt VERSION. */
+  promptHash?: string;
 }
 
 export interface RecordRunEndInput {

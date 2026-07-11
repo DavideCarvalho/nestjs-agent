@@ -5,7 +5,7 @@ import { AgentApiController } from './agent-api.controller.js';
 import { AgentUiController } from './agent-ui.controller.js';
 import { DashboardService } from './dashboard.service.js';
 import { normalizeDashboardPath } from './normalize-path.js';
-import { DASHBOARD_API_PATH, DASHBOARD_BASE_PATH } from './tokens.js';
+import { DASHBOARD_API_PATH, DASHBOARD_APPROVAL_ACTOR_REF, DASHBOARD_BASE_PATH } from './tokens.js';
 
 /**
  * `@nestjs/common`'s own `GUARDS_METADATA` key, INLINED rather than deep-imported from
@@ -45,6 +45,14 @@ export interface AgentDashboardOptions {
    * host's own auth module, e.g. `imports: [AuthModule]` alongside `guards: [JwtAuthGuard]`.
    */
   imports?: DynamicModule['imports'];
+  /**
+   * Extracts WHO is deciding a HITL approval from the live request — invoked on the incoming
+   * `POST <api>/approvals/:toolCallId` request to stamp `AgentApprovalPort`'s `opts.executedByRef`.
+   * Typically pulls the authenticated principal your own auth guard/middleware already attached to
+   * the request (e.g. `(req) => (req as { user?: { id: string } }).user?.id`). Omit to leave
+   * `executedByRef` unset — the decision still goes through, just without a recorded decider ref.
+   */
+  approvalActorRef?: (req: unknown) => string | undefined;
 }
 
 /** Leading slash, no trailing slash. */
@@ -72,12 +80,19 @@ export class AgentApiModule {
   static register(options: {
     imports?: DynamicModule['imports'];
     guards?: Type<CanActivate>[];
+    approvalActorRef?: (req: unknown) => string | undefined;
   }): DynamicModule {
     return {
       module: AgentApiModule,
       imports: [...(options.imports ?? [])],
       controllers: [AgentApiController],
-      providers: [DashboardService, ...(options.guards ?? [])],
+      providers: [
+        DashboardService,
+        ...(options.guards ?? []),
+        // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
+        // injects this WITHOUT `@Optional()` (same pattern as `AGENT_QUOTA_STORE`'s factory).
+        { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
+      ],
       exports: [DashboardService],
     };
   }
@@ -108,6 +123,7 @@ export class AgentDashboardModule {
         AgentApiModule.register({
           ...(options.imports ? { imports: options.imports } : {}),
           ...(options.guards ? { guards: options.guards } : {}),
+          ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
         }),
         RouterModule.register([
           { path: basePath, module: AgentDashboardModule }, // the UI controller below

@@ -10,6 +10,7 @@ export {
   type GovernanceToolCallRow,
   type GovernanceThreadRow,
   type GovernanceRunRow,
+  type GovernancePendingApprovalRow,
 } from './in-memory-store.js';
 export {
   InMemoryGovernanceQueries,

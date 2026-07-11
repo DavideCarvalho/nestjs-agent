@@ -6,6 +6,7 @@ import type {
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
+  PendingApprovalRow,
   RecentRunRow,
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
@@ -15,6 +16,7 @@ import type {
   ThreadMeta,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -296,6 +298,91 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       errorMessage: run.errorMessage ?? null,
       retries: run.retries,
       startedAt: run.startedAt.toISOString(),
+      promptHash: run.promptHash ?? null,
     }));
+  }
+
+  /**
+   * Tool calls sitting `pending_approval`, oldest first (an inbox drains from the back), joined
+   * through their message to the owning thread for title/actorRef and to the message itself for
+   * `agentName` (null when the message carries none).
+   */
+  async pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
+    const em = this.em.fork();
+    const rows = await em.find(
+      AgentToolCall,
+      { status: 'pending_approval' },
+      {
+        orderBy: { createdAt: 'asc', id: 'asc' },
+        limit,
+        populate: ['message', 'message.thread'],
+      },
+    );
+    return rows.map((toolCall) => ({
+      toolCallId: toolCall.id,
+      toolName: toolCall.toolName,
+      input: toolCall.input,
+      threadId: toolCall.message.thread.id,
+      threadTitle: toolCall.message.thread.title,
+      actorRef: toolCall.message.thread.actorRef,
+      agentName: toolCall.message.agentName ?? null,
+      requestedAt: toolCall.createdAt.toISOString(),
+    }));
+  }
+
+  /**
+   * Per-tool call/failure/rejection/latency rollup over the range, highest call count first.
+   * `p95ExecutionMs` is computed over calls that recorded a non-null `executionMs` (regardless of
+   * their final status); `null` when none did.
+   */
+  async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
+    const em = this.em.fork();
+    const { start, end } = dayBoundsUtc(range);
+    const calls = await em.find(AgentToolCall, { createdAt: { $gte: start, $lte: end } });
+    const byTool = new Map<
+      string,
+      {
+        toolName: string;
+        toolType: string;
+        calls: number;
+        failed: number;
+        rejected: number;
+        executionMs: number[];
+      }
+    >();
+    for (const call of calls) {
+      const key = `${call.toolName} ${call.toolType}`;
+      const bucket = byTool.get(key) ?? {
+        toolName: call.toolName,
+        toolType: call.toolType,
+        calls: 0,
+        failed: 0,
+        rejected: 0,
+        executionMs: [],
+      };
+      bucket.calls += 1;
+      bucket.failed += call.status === 'failed' ? 1 : 0;
+      bucket.rejected += call.status === 'rejected' ? 1 : 0;
+      if (call.executionMs != null) {
+        bucket.executionMs.push(call.executionMs);
+      }
+      byTool.set(key, bucket);
+    }
+    const result: ToolStatRow[] = [];
+    for (const bucket of byTool.values()) {
+      bucket.executionMs.sort((left, right) => left - right);
+      result.push({
+        toolName: bucket.toolName,
+        toolType: bucket.toolType,
+        calls: bucket.calls,
+        failed: bucket.failed,
+        rejected: bucket.rejected,
+        p95ExecutionMs: percentileMs(bucket.executionMs, 0.95),
+      });
+    }
+    result.sort(
+      (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
+    );
+    return result;
   }
 }

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  type ApprovalDecisionInput,
   type GovernanceRange,
   type UpsertModelPriceInput,
   agentClient,
@@ -50,6 +51,34 @@ export function useThreads(limit = 50) {
   return useQuery({
     queryKey: ['threads', limit],
     queryFn: () => agentClient.threads(limit),
+  });
+}
+
+/** Poll the cross-thread approvals inbox (tool calls sitting `pending_approval`). */
+export function useApprovals(limit = 50) {
+  return useQuery({
+    queryKey: ['approvals', limit],
+    queryFn: () => agentClient.approvals(limit),
+  });
+}
+
+/** Decide a pending HITL tool call, refetching the approvals inbox on success. */
+export function useDecideApproval() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ toolCallId, input }: { toolCallId: string; input: ApprovalDecisionInput }) =>
+      agentClient.decideApproval(toolCallId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
+  });
+}
+
+/** Poll the per-tool call/failure/rejection/latency rollup for a range. */
+export function useToolStats(range: GovernanceRange) {
+  return useQuery({
+    queryKey: ['tool-stats', range.fromDay, range.toDay],
+    queryFn: () => agentClient.toolStats(range),
   });
 }
 

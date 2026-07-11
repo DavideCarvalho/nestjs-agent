@@ -1,3 +1,4 @@
+import { AGENT_APPROVAL_PORT, type AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -9,7 +10,7 @@ import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
@@ -183,6 +184,86 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
       expect(result.status).toBe('completed');
       expect(streamed).toContain('purged durably');
       expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
+    } finally {
+      await moduleRef.close();
+    }
+  });
+});
+
+describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same durable signal path)', () => {
+  it('approve via the port resolves a durable pending action tool', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'purged durably' };
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script);
+    try {
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'purge it',
+      });
+      const collected = collect(service.subscribe(runId));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The port never sees (or needs) the run's own actor — a console operator is authorized by
+      // the dashboard's guards, not by owning the thread. `store.toolCallRows()` (a test helper)
+      // doesn't surface `executedByRef` — spy on the SPI method to assert the decider ref lands.
+      const updateSpy = vi.spyOn(store, 'updateToolCall');
+      const port = moduleRef.get<AgentApprovalPort>(AGENT_APPROVAL_PORT);
+      await port.approve('call-0-purgeCache', { executedByRef: 'console-admin' });
+
+      const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      const streamed = await collected;
+
+      expect(result.status).toBe('completed');
+      expect(streamed).toContain('purged durably');
+      expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
+      // The console decider — not the run's own actor 'u1' — is recorded as the executor.
+      expect(updateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolCallId: 'call-0-purgeCache',
+          status: 'executed',
+          executedByRef: 'console-admin',
+        }),
+      );
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('reject via the port persists rejected with reason and the decider ref', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'not purging' };
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script);
+    try {
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'purge it',
+      });
+      const collected = collect(service.subscribe(runId));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // `store.toolCallRows()` (a test helper) doesn't surface `error`/`executedByRef` — spy on the
+      // SPI method directly to assert both reach persistence, not just that the run unblocks.
+      const updateSpy = vi.spyOn(store, 'updateToolCall');
+      const port = moduleRef.get<AgentApprovalPort>(AGENT_APPROVAL_PORT);
+      await port.reject('call-0-purgeCache', { executedByRef: 'console-admin', reason: 'not now' });
+
+      const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      await collected;
+
+      expect(result.status).toBe('completed');
+      expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'purgeCache', status: 'rejected' });
+      expect(updateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolCallId: 'call-0-purgeCache',
+          status: 'rejected',
+          error: 'not now',
+          executedByRef: 'console-admin',
+        }),
+      );
     } finally {
       await moduleRef.close();
     }

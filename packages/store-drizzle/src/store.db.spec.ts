@@ -164,12 +164,14 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
       threadId: thread.id,
       actorRef: 'actor-run',
       agentName: 'researcher',
+      promptHash: 'abc123def456',
     });
     const [started] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-1'));
     expect(started?.status).toBe('running');
     expect(started?.retries).toBe(0);
     expect(started?.agentName).toBe('researcher');
     expect(started?.settledAt).toBeNull();
+    expect(started?.promptHash).toBe('abc123def456');
 
     // bumpRunRetries increments without a read-modify-write race (`retries + 1` in the SQL itself)
     await store.bumpRunRetries('run-1');
@@ -201,6 +203,8 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     expect(failed?.status).toBe('failed');
     expect(failed?.errorCode).toBe('timeout');
     expect(failed?.errorMessage).toBe('upstream timed out');
+    // a run started with no promptHash defaults to null
+    expect(failed?.promptHash).toBeNull();
 
     // recordRunEnd/bumpRunRetries on an unknown run are silent no-ops
     await expect(

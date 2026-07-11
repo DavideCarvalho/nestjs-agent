@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   publishAgentDelegated,
   publishAgentMessage,
@@ -351,11 +352,15 @@ export async function runAgentLoop(
   const startedAt = await hooks.step('run:started-at', () => Promise.resolve(Date.now()));
   // Optional-chained: a store without run recording makes this (and persist:run:end) a no-op.
   await hooks.step('persist:run:start', async () => {
+    // Hashed BEFORE the retrieved-context block is folded in below, so the hash identifies the
+    // prompt VERSION (agent base + contributors), not a given turn's retrieval.
+    const promptHash = createHash('sha256').update(system).digest('hex');
     await deps.store.recordRunStart?.({
       runId: hooks.runId,
       threadId: input.threadId,
       actorRef: input.actor.id,
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      promptHash,
     });
   });
 
@@ -584,6 +589,9 @@ export async function runAgentLoop(
         continue;
       }
 
+      // WHO settled an action tool: the Decision's ref (a console admin) when it carries one, else
+      // the run's own actor (the chat flow). Stamped on both the executed and rejected persists.
+      let deciderRef = input.actor.id;
       if (toolType === 'action') {
         await hooks.step(`persist:toolcall:${call.id}`, () =>
           deps.store.recordToolCall({
@@ -596,11 +604,13 @@ export async function runAgentLoop(
           }),
         );
         const decision = await hooks.awaitApproval(call, ctx);
+        deciderRef = decision.executedByRef ?? input.actor.id;
         if (!decision.approved) {
           await hooks.step(`persist:toolreject:${call.id}`, () =>
             deps.store.updateToolCall({
               toolCallId: call.id,
               status: 'rejected',
+              executedByRef: deciderRef,
               ...(decision.reason !== undefined ? { error: decision.reason } : {}),
             }),
           );
@@ -667,7 +677,7 @@ export async function runAgentLoop(
             status: 'executed',
             output,
             executionMs,
-            ...(toolType === 'action' ? { executedByRef: input.actor.id } : {}),
+            ...(toolType === 'action' ? { executedByRef: deciderRef } : {}),
           }),
         );
         results.push({ id: call.id, name: call.name, output });

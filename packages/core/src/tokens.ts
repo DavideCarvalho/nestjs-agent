@@ -49,3 +49,8 @@ export const AGENT_ACTOR_DIRECTORY = Symbol.for('@dudousxd/nestjs-agent:actor-di
  * {@link import('./spi/attachment-staging.js').AttachmentStagingStore}.
  */
 export const AGENT_ATTACHMENT_STAGING = Symbol.for('@dudousxd/nestjs-agent:attachment-staging');
+/**
+ * Console-side HITL approve/reject for the cross-thread approvals inbox. Optional — see
+ * {@link import('./spi/approval-port.js').AgentApprovalPort}.
+ */
+export const AGENT_APPROVAL_PORT = Symbol.for('@dudousxd/nestjs-agent:approval-port');

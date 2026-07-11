@@ -5,6 +5,7 @@ import type {
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
+  PendingApprovalRow,
   RecentRunRow,
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
@@ -14,6 +15,7 @@ import type {
   ThreadMeta,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -22,7 +24,11 @@ import {
   bucketByThread,
   bucketUsageTrend,
 } from '@dudousxd/nestjs-agent-core';
-import type { GovernanceRunRow, InMemoryAgentStore } from './in-memory-store.js';
+import type {
+  GovernanceRunRow,
+  GovernanceToolCallRow,
+  InMemoryAgentStore,
+} from './in-memory-store.js';
 
 /** No error code recorded on a failed run (the caller didn't classify it). Groups those together. */
 const UNCLASSIFIED_ERROR_CODE = 'unknown';
@@ -72,6 +78,14 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
   private runsInRange(range: GovernanceRange): GovernanceRunRow[] {
     return this.store.governanceRuns().filter((row) => {
       const day = row.startedAt.slice(0, 10);
+      return day >= range.fromDay && day <= range.toDay;
+    });
+  }
+
+  /** The recorded tool-call rows within the inclusive day range (bucketed by `createdAt`'s UTC day). */
+  private toolCallsInRange(range: GovernanceRange): GovernanceToolCallRow[] {
+    return this.store.governanceToolCalls().filter((row) => {
+      const day = row.createdAt.slice(0, 10);
       return day >= range.fromDay && day <= range.toDay;
     });
   }
@@ -234,6 +248,80 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         errorMessage: run.errorMessage ?? null,
         retries: run.retries,
         startedAt: run.startedAt,
+        promptHash: run.promptHash ?? null,
       }));
+  }
+
+  /**
+   * Tool calls sitting `pending_approval`, oldest first (an inbox drains from the back), capped
+   * at `limit`.
+   */
+  async pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
+    return [...this.store.governancePendingApprovals()]
+      .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+      .slice(0, limit)
+      .map((row) => ({
+        toolCallId: row.toolCallId,
+        toolName: row.toolName,
+        input: row.input,
+        threadId: row.threadId,
+        threadTitle: row.threadTitle,
+        actorRef: row.actorRef,
+        agentName: row.agentName ?? null,
+        requestedAt: row.requestedAt,
+      }));
+  }
+
+  /**
+   * Per-tool call/failure/rejection/latency rollup over the range, highest call count first.
+   * `p95ExecutionMs` is computed over calls that recorded a non-null `executionMs` (regardless of
+   * their final status); `null` when none did.
+   */
+  async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
+    const byTool = new Map<
+      string,
+      {
+        toolName: string;
+        toolType: string;
+        calls: number;
+        failed: number;
+        rejected: number;
+        executionMs: number[];
+      }
+    >();
+    for (const row of this.toolCallsInRange(range)) {
+      const key = `${row.toolName} ${row.toolType}`;
+      const bucket = byTool.get(key) ?? {
+        toolName: row.toolName,
+        toolType: row.toolType,
+        calls: 0,
+        failed: 0,
+        rejected: 0,
+        executionMs: [],
+      };
+      bucket.calls += 1;
+      bucket.failed += row.status === 'failed' ? 1 : 0;
+      bucket.rejected += row.status === 'rejected' ? 1 : 0;
+      if (row.executionMs !== undefined) {
+        bucket.executionMs.push(row.executionMs);
+      }
+      byTool.set(key, bucket);
+    }
+    const result: ToolStatRow[] = [];
+    for (const bucket of byTool.values()) {
+      bucket.executionMs.sort((left, right) => left - right);
+      result.push({
+        toolName: bucket.toolName,
+        toolType: bucket.toolType,
+        calls: bucket.calls,
+        failed: bucket.failed,
+        rejected: bucket.rejected,
+        p95ExecutionMs: percentileMs(bucket.executionMs, 0.95),
+      });
+    }
+    result.sort(
+      (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
+    );
+    return result;
   }
 }

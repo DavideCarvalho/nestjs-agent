@@ -1,4 +1,5 @@
 import type {
+  AgentApprovalPort,
   AgentPricingStore,
   AgentStore,
   AppendMessageInput,
@@ -13,7 +14,7 @@ import type {
   ThreadSummary,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
-import { AGENT_PRICING_STORE } from '@dudousxd/nestjs-agent-core';
+import { AGENT_APPROVAL_PORT, AGENT_PRICING_STORE } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -322,6 +323,33 @@ describe('AgentModule (inline)', () => {
 
     const streamed = await collected;
     expect(streamed).toContain('purged ok');
+    expect(built.store.toolCallRows()[0]).toMatchObject({
+      toolName: 'purgeCache',
+      status: 'executed',
+    });
+  });
+
+  it('binds AGENT_APPROVAL_PORT for the inline runner too — the console port resolves the same pending call', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'purged via port' };
+    const built = await buildApp(script);
+    app = built.app;
+    const { runId } = await built.service.chat({
+      actor: { id: 'u1', roles: ['ADMIN'] },
+      message: 'purge it',
+    });
+
+    const collected = collect(built.service.subscribe(runId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // No actor here at all — the port is authorized upstream (the dashboard's guards), not by
+    // owning the thread, unlike `service.approve`/`reject` below.
+    const port = app.get<AgentApprovalPort>(AGENT_APPROVAL_PORT);
+    await port.approve('call-0-purgeCache');
+
+    const streamed = await collected;
+    expect(streamed).toContain('purged via port');
     expect(built.store.toolCallRows()[0]).toMatchObject({
       toolName: 'purgeCache',
       status: 'executed',

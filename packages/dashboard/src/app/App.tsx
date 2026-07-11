@@ -1,27 +1,33 @@
 import { type ReactNode, useState } from 'react';
 import type {
+  ApprovalDecisionInput,
   ModelPrice,
+  PendingApprovalRow,
   RecentRunRow,
   ReliabilityOverview,
   SpendOverview,
   ThreadActivityRow,
   ThreadSpendRow,
   ToolCallActivityRow,
+  ToolStatRow,
   UpsertModelPriceInput,
 } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { ActorsSection } from './ActorsSection';
+import { ApprovalsSection } from './ApprovalsSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
 import { PricingSection } from './PricingSection';
 import { ReliabilitySection } from './ReliabilitySection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
+import { ToolsSection } from './ToolsSection';
 import {
   ActivityIcon,
   ChipIcon,
   DollarIcon,
+  InboxIcon,
   LogoMark,
   ShieldIcon,
   TagIcon,
@@ -29,18 +35,30 @@ import {
   WrenchIcon,
 } from './icons';
 import {
+  useApprovals,
+  useDecideApproval,
   usePricing,
   useReliability,
   useRuns,
   useSpend,
   useThreads,
   useToolCalls,
+  useToolStats,
   useTopThreads,
   useUpsertPrice,
 } from './use-governance';
 import { useLiveEvents } from './use-live-events';
 
-type SectionKey = 'spend' | 'models' | 'actors' | 'runs' | 'reliability' | 'pricing' | 'live';
+type SectionKey =
+  | 'spend'
+  | 'models'
+  | 'actors'
+  | 'runs'
+  | 'reliability'
+  | 'approvals'
+  | 'tools'
+  | 'pricing'
+  | 'live';
 
 const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'spend', label: 'Spend & usage', icon: <DollarIcon /> },
@@ -48,6 +66,8 @@ const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'actors', label: 'Actors & budgets', icon: <UsersIcon /> },
   { key: 'runs', label: 'Runs & tools', icon: <WrenchIcon /> },
   { key: 'reliability', label: 'Reliability', icon: <ShieldIcon /> },
+  { key: 'approvals', label: 'Approvals', icon: <InboxIcon /> },
+  { key: 'tools', label: 'Tools', icon: <WrenchIcon /> },
   { key: 'pricing', label: 'Pricing', icon: <TagIcon /> },
   { key: 'live', label: 'Live', icon: <ActivityIcon /> },
 ];
@@ -57,6 +77,8 @@ const EMPTY_TOOL_CALLS: ToolCallActivityRow[] = [];
 const EMPTY_THREADS: ThreadActivityRow[] = [];
 const EMPTY_TOP_THREADS: ThreadSpendRow[] = [];
 const EMPTY_PRICES: ModelPrice[] = [];
+const EMPTY_APPROVALS: PendingApprovalRow[] = [];
+const EMPTY_TOOL_STATS: ToolStatRow[] = [];
 const EMPTY_RELIABILITY: ReliabilityOverview = {
   metrics: {
     runs: 0,
@@ -91,6 +113,9 @@ export function App() {
   const threads = useThreads();
   const reliability = useReliability(range);
   const runs = useRuns();
+  const approvals = useApprovals();
+  const decideApproval = useDecideApproval();
+  const toolStats = useToolStats(range);
   const pricing = usePricing();
   const upsertPrice = useUpsertPrice();
   const live = useLiveEvents();
@@ -113,26 +138,34 @@ export function App() {
         />
 
         <nav className="mb-5 flex flex-wrap gap-1">
-          {NAV.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              onClick={() => setSection(item.key)}
-              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                section === item.key
-                  ? 'border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--text)]'
-                  : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'
-              }`}
-            >
-              {item.icon}
-              {item.label}
-              {item.key === 'live' && live.events.length > 0 && (
-                <span className="mono tnum rounded bg-[var(--accent)]/20 px-1 text-[10px] text-[var(--accent)]">
-                  {live.events.length}
-                </span>
-              )}
-            </button>
-          ))}
+          {NAV.map((item) => {
+            const badgeCount =
+              item.key === 'live'
+                ? live.events.length
+                : item.key === 'approvals'
+                  ? (approvals.data ?? EMPTY_APPROVALS).length
+                  : 0;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setSection(item.key)}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                  section === item.key
+                    ? 'border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--text)]'
+                    : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'
+                }`}
+              >
+                {item.icon}
+                {item.label}
+                {badgeCount > 0 && (
+                  <span className="mono tnum rounded bg-[var(--accent)]/20 px-1 text-[10px] text-[var(--accent)]">
+                    {badgeCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
 
         <ActiveSection
@@ -145,6 +178,11 @@ export function App() {
           threads={threads.data ?? EMPTY_THREADS}
           reliability={reliability.data ?? EMPTY_RELIABILITY}
           runs={runs.data ?? EMPTY_RUNS}
+          approvals={approvals.data ?? EMPTY_APPROVALS}
+          onDecideApproval={(toolCallId, input) =>
+            decideApproval.mutateAsync({ toolCallId, input })
+          }
+          toolStats={toolStats.data ?? EMPTY_TOOL_STATS}
           liveEvents={live.events}
           connected={live.connected}
           prices={pricing.data ?? EMPTY_PRICES}
@@ -168,6 +206,9 @@ function ActiveSection({
   threads,
   reliability,
   runs,
+  approvals,
+  onDecideApproval,
+  toolStats,
   liveEvents,
   connected,
   prices,
@@ -185,6 +226,9 @@ function ActiveSection({
   threads: ThreadActivityRow[];
   reliability: ReliabilityOverview;
   runs: RecentRunRow[];
+  approvals: PendingApprovalRow[];
+  onDecideApproval: (toolCallId: string, input: ApprovalDecisionInput) => Promise<void>;
+  toolStats: ToolStatRow[];
   liveEvents: FeedEvent[];
   connected: boolean;
   prices: ModelPrice[];
@@ -214,6 +258,10 @@ function ActiveSection({
       return <RunsToolsSection toolCalls={toolCalls} threads={threads} />;
     case 'reliability':
       return <ReliabilitySection overview={reliability} runs={runs} />;
+    case 'approvals':
+      return <ApprovalsSection approvals={approvals} onDecide={onDecideApproval} />;
+    case 'tools':
+      return <ToolsSection rows={toolStats} />;
     case 'pricing':
       return (
         <PricingSection

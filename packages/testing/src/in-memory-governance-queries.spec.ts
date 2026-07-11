@@ -1,3 +1,4 @@
+import type { ToolCallStatus } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryGovernanceQueries,
@@ -454,6 +455,214 @@ describe('InMemoryGovernanceQueries run reliability', () => {
 
       const capped = await queries.recentRuns(2);
       expect(capped.map((row) => row.runId)).toEqual(['day2-a', 'day1-b']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recordRunStart persists promptHash and recentRuns surfaces it; omitted defaults to null', async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'hank' } });
+    const queries = new InMemoryGovernanceQueries(store);
+
+    await store.recordRunStart({
+      runId: 'run-hash',
+      threadId: thread.id,
+      actorRef: 'hank',
+      promptHash: 'abc123def456',
+    });
+    await store.recordRunStart({ runId: 'run-no-hash', threadId: thread.id, actorRef: 'hank' });
+
+    const rows = await queries.recentRuns(10);
+    expect(rows.find((row) => row.runId === 'run-hash')?.promptHash).toBe('abc123def456');
+    expect(rows.find((row) => row.runId === 'run-no-hash')?.promptHash).toBeNull();
+  });
+});
+
+// pendingApprovals + toolStats, mirroring the SQL adapters' db-spec fixtures/math.
+describe('InMemoryGovernanceQueries approvals + tool stats', () => {
+  it('pendingApprovals joins message→thread for title/actorRef/agentName, oldest first, capped', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryAgentStore();
+      const queries = new InMemoryGovernanceQueries(store);
+
+      const judyThread = await store.createThread({ actor: { id: 'judy' }, title: 'Judy chat' });
+      const kyleThread = await store.createThread({ actor: { id: 'kyle' }, title: 'Kyle chat' });
+
+      // judy's first message has an agentName; her second one has none (resolves to null).
+      const messageJudyA = await store.appendMessage({
+        threadId: judyThread.id,
+        role: 'assistant',
+        content: 'deploying',
+        agentName: 'assistant-1',
+      });
+      const messageJudyB = await store.appendMessage({
+        threadId: judyThread.id,
+        role: 'assistant',
+        content: 'restarting',
+      });
+      const messageKyle = await store.appendMessage({
+        threadId: kyleThread.id,
+        role: 'assistant',
+        content: 'deleting',
+        agentName: 'assistant-2',
+      });
+
+      // Three pending approvals across the two threads, plus one already-executed call that must
+      // be excluded. Oldest first: tc-pa-1, tc-pa-2, tc-pa-3.
+      vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
+      await store.recordToolCall({
+        toolCallId: 'tc-pa-1',
+        messageId: messageJudyA.id,
+        toolName: 'deploy',
+        toolType: 'action',
+        input: { env: 'prod' },
+        status: 'pending_approval',
+      });
+
+      vi.setSystemTime(new Date('2026-07-10T10:00:00.000Z'));
+      await store.recordToolCall({
+        toolCallId: 'tc-pa-2',
+        messageId: messageKyle.id,
+        toolName: 'delete',
+        toolType: 'action',
+        input: { id: 1 },
+        status: 'pending_approval',
+      });
+
+      vi.setSystemTime(new Date('2026-07-10T11:00:00.000Z'));
+      await store.recordToolCall({
+        toolCallId: 'tc-pa-3',
+        messageId: messageJudyB.id,
+        toolName: 'restart',
+        toolType: 'action',
+        input: {},
+        status: 'pending_approval',
+      });
+
+      await store.recordToolCall({
+        toolCallId: 'tc-executed',
+        messageId: messageJudyA.id,
+        toolName: 'search',
+        toolType: 'read',
+        input: {},
+        status: 'executed',
+      });
+
+      const rows = await queries.pendingApprovals(10);
+      expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2', 'tc-pa-3']);
+
+      expect(rows[0]).toMatchObject({
+        toolName: 'deploy',
+        input: { env: 'prod' },
+        threadId: judyThread.id,
+        threadTitle: 'Judy chat',
+        actorRef: 'judy',
+        agentName: 'assistant-1',
+      });
+
+      expect(rows[1]).toMatchObject({
+        toolName: 'delete',
+        threadId: kyleThread.id,
+        threadTitle: 'Kyle chat',
+        actorRef: 'kyle',
+        agentName: 'assistant-2',
+      });
+
+      // judy's second message carries no agentName — resolves to null, not undefined.
+      expect(rows[2]).toMatchObject({
+        toolName: 'restart',
+        threadId: judyThread.id,
+        agentName: null,
+      });
+
+      const capped = await queries.pendingApprovals(2);
+      expect(capped.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('toolStats buckets by tool+type, counts failed/rejected, computes p95 execution latency, and respects range bounds', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryAgentStore();
+      const queries = new InMemoryGovernanceQueries(store);
+      const thread = await store.createThread({ actor: { id: 'judy' } });
+      const message = await store.appendMessage({
+        threadId: thread.id,
+        role: 'assistant',
+        content: 'x',
+      });
+
+      const record = async (
+        toolCallId: string,
+        toolName: string,
+        toolType: 'read' | 'action',
+        status: ToolCallStatus,
+        executionMs?: number,
+      ): Promise<void> => {
+        await store.recordToolCall({
+          toolCallId,
+          messageId: message.id,
+          toolName,
+          toolType,
+          input: {},
+          status,
+        });
+        if (executionMs !== undefined) {
+          await store.updateToolCall({ toolCallId, status, executionMs });
+        }
+      };
+
+      // search/read x3 (executed + auto_executed), deploy/action x2 (one failed, one rejected),
+      // notify/action x1 (executed but never recorded an executionMs), plus one out-of-range
+      // search call that must be excluded entirely.
+      vi.setSystemTime(new Date('2026-07-20T09:00:00.000Z'));
+      await record('tc-stats-search-1', 'search', 'read', 'executed', 50);
+      vi.setSystemTime(new Date('2026-07-20T09:05:00.000Z'));
+      await record('tc-stats-search-2', 'search', 'read', 'executed', 150);
+      vi.setSystemTime(new Date('2026-07-20T09:10:00.000Z'));
+      await record('tc-stats-search-3', 'search', 'read', 'auto_executed', 250);
+      vi.setSystemTime(new Date('2026-07-20T10:00:00.000Z'));
+      await record('tc-stats-deploy-1', 'deploy', 'action', 'failed', 500);
+      vi.setSystemTime(new Date('2026-07-20T10:05:00.000Z'));
+      await record('tc-stats-deploy-2', 'deploy', 'action', 'rejected');
+      vi.setSystemTime(new Date('2026-07-21T09:00:00.000Z'));
+      await record('tc-stats-notify-1', 'notify', 'action', 'executed');
+      vi.setSystemTime(new Date('2026-07-19T09:00:00.000Z'));
+      await record('tc-stats-search-out', 'search', 'read', 'executed', 999);
+
+      const rows = await queries.toolStats({ fromDay: '2026-07-20', toDay: '2026-07-21' });
+      expect(rows).toEqual([
+        {
+          toolName: 'search',
+          toolType: 'read',
+          calls: 3,
+          failed: 0,
+          rejected: 0,
+          p95ExecutionMs: 250,
+        },
+        {
+          toolName: 'deploy',
+          toolType: 'action',
+          calls: 2,
+          failed: 1,
+          rejected: 1,
+          p95ExecutionMs: 500,
+        },
+        {
+          toolName: 'notify',
+          toolType: 'action',
+          calls: 1,
+          failed: 0,
+          rejected: 0,
+          p95ExecutionMs: null,
+        },
+      ]);
+
+      expect(await queries.toolStats({ fromDay: '2020-01-01', toDay: '2020-01-01' })).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
