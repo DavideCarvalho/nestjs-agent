@@ -55,3 +55,63 @@ describe('AgentDashboardModule.forRoot guards', () => {
     expect(dynamicModule.imports?.length).toBeGreaterThan(0);
   });
 });
+
+describe('guard DI resolution in the API controller host module', () => {
+  // Regression: guards are DI-instantiated by the CONTROLLER's host module. AgentApiController
+  // lives in AgentApiModule, which used to be a static module receiving neither the guard
+  // providers nor the host's `imports` — a guard WITH dependencies booted fine in tests using
+  // dependency-less guards, then failed real hosts with "Nest can't resolve dependencies of the
+  // <Guard> ... in the AgentApiModule context".
+  it('threads guards + host imports into the API module so a guard with deps resolves', async () => {
+    const {
+      Inject,
+      Module: ModuleDecorator,
+      Injectable: InjectableDecorator,
+      Global: GlobalDecorator,
+    } = await import('@nestjs/common');
+    const { NestFactory } = await import('@nestjs/core');
+    const { AGENT_GOVERNANCE_QUERIES } = await import('@dudousxd/nestjs-agent-core');
+
+    @InjectableDecorator()
+    class AuthService {
+      allowed(): boolean {
+        return false;
+      }
+    }
+
+    @ModuleDecorator({ providers: [AuthService], exports: [AuthService] })
+    class HostAuthModule {}
+
+    @InjectableDecorator()
+    class GuardWithDeps implements CanActivate {
+      constructor(@Inject(AuthService) private readonly auth: AuthService) {}
+      canActivate(_context: ExecutionContext): boolean {
+        return this.auth.allowed();
+      }
+    }
+
+    // Real hosts bind the governance/pricing tokens via a @Global store module; mirror that so
+    // DashboardService (inside AgentApiModule) resolves them across the module boundary.
+    @GlobalDecorator()
+    @ModuleDecorator({
+      providers: [{ provide: AGENT_GOVERNANCE_QUERIES, useValue: {} }],
+      exports: [AGENT_GOVERNANCE_QUERIES],
+    })
+    class HostStoreModule {}
+
+    @ModuleDecorator({
+      imports: [
+        HostStoreModule,
+        AgentDashboardModule.forRoot({ guards: [GuardWithDeps], imports: [HostAuthModule] }),
+      ],
+    })
+    class HostRootModule {}
+
+    // Boot proves the wiring: guard instantiation happens per controller HOST module, so init
+    // throws "Nest can't resolve dependencies ... in the AgentApiModule context" if the guard
+    // providers/imports did not land there (the regressed behavior).
+    const app = await NestFactory.create(HostRootModule, { logger: false, abortOnError: false });
+    await app.init();
+    await app.close();
+  });
+});
