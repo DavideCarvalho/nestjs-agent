@@ -59,13 +59,29 @@ function stampGuards(guards: Type<CanActivate>[] | undefined, ...controllers: Ty
   }
 }
 
-/** Holds the JSON API + SSE controller and its read service, mounted on its own path by `forRoot`. */
-@Module({
-  controllers: [AgentApiController],
-  providers: [DashboardService],
-  exports: [DashboardService],
-})
-export class AgentApiModule {}
+/**
+ * Holds the JSON API + SSE controller and its read service, mounted on its own path by `forRoot`.
+ * Dynamic: guards are DI-instantiated by the CONTROLLER's host module, so this module — not the
+ * outer wrapper — must carry the guard classes as providers plus the host's `imports` that resolve
+ * their dependencies. A static module here made `guards: [SomeGuardWithDeps]` fail at boot with
+ * "Nest can't resolve dependencies ... in the AgentApiModule context" even when the host passed
+ * the right `imports` to `forRoot`.
+ */
+@Module({})
+export class AgentApiModule {
+  static register(options: {
+    imports?: DynamicModule['imports'];
+    guards?: Type<CanActivate>[];
+  }): DynamicModule {
+    return {
+      module: AgentApiModule,
+      imports: [...(options.imports ?? [])],
+      controllers: [AgentApiController],
+      providers: [DashboardService, ...(options.guards ?? [])],
+      exports: [DashboardService],
+    };
+  }
+}
 
 /**
  * Mounts the AI-gateway governance console: the bundled React SPA at `basePath` and its JSON + SSE
@@ -86,7 +102,9 @@ export class AgentDashboardModule {
       module: AgentDashboardModule,
       imports: [
         ...(options.imports ?? []),
-        AgentApiModule,
+        // Guards + host imports must reach the API controller's HOST module — enhancers resolve
+        // from their controller's own module, never from a parent (see AgentApiModule.register).
+        AgentApiModule.register({ imports: options.imports, guards: options.guards }),
         RouterModule.register([
           { path: basePath, module: AgentDashboardModule }, // the UI controller below
           { path: apiBasePath, module: AgentApiModule },
@@ -96,6 +114,8 @@ export class AgentDashboardModule {
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
+        // AgentUiController is hosted HERE, so its guards DI-instantiate from this module.
+        ...(options.guards ?? []),
       ],
       // Re-export the API module so its DashboardService reaches importers (e.g. the host's own controllers).
       exports: [AgentApiModule],
