@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-data",
   "version": "0.3.4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/data"
+  },
   "description": "nestjs-agent data — governed read-only SQL satellite (single-SELECT validation, fail-closed table access, tenant scoping)",
   "license": "MIT",
   "author": "Davide Carvalho",

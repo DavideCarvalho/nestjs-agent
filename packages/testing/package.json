@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-testing",
   "version": "0.4.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/testing"
+  },
   "description": "nestjs-agent testing — in-memory store/sink/quota + deterministic fake model",
   "license": "MIT",
   "author": "Davide Carvalho",

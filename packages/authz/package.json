@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-authz",
   "version": "0.3.4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/authz"
+  },
   "description": "nestjs-agent authz adapter — plug @dudousxd/nestjs-authz into tool authorization",
   "license": "MIT",
   "author": "Davide Carvalho",

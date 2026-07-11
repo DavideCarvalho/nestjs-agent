@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-store-mikro-orm",
   "version": "0.5.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/store-mikro-orm"
+  },
   "description": "nestjs-agent MikroORM agent store (threads, messages, tool calls, usage)",
   "license": "MIT",
   "author": "Davide Carvalho",

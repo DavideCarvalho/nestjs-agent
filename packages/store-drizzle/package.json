@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-store-drizzle",
   "version": "0.3.4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/store-drizzle"
+  },
   "description": "nestjs-agent Drizzle ORM agent store (threads, messages, tool calls, usage)",
   "license": "MIT",
   "author": "Davide Carvalho",

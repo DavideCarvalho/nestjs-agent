@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-dashboard",
   "version": "0.4.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/dashboard"
+  },
   "description": "Embedded AI-gateway governance console (spend, models, actors/budgets, runs/tools, live feed) for nestjs-agent — bundled React SPA served by NestJS",
   "license": "MIT",
   "author": "Davide Carvalho",

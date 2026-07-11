@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-telescope",
   "version": "0.3.4",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/telescope"
+  },
   "description": "nestjs-agent telescope extension — an 'Agent' dashboard tab",
   "license": "MIT",
   "author": "Davide Carvalho",

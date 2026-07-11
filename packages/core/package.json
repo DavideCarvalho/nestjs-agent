@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-core",
   "version": "0.4.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/core"
+  },
   "description": "nestjs-agent core — agent loop, tool registry, governance SPIs",
   "license": "MIT",
   "author": "Davide Carvalho",

@@ -1,6 +1,11 @@
 {
   "name": "@dudousxd/nestjs-agent-react",
   "version": "0.4.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/react"
+  },
   "description": "nestjs-agent React adapter — useAgentChat hook, AgentChatTransport (AI SDK v7), REST client, and styling-agnostic chat UI",
   "license": "MIT",
   "author": "Davide Carvalho",
