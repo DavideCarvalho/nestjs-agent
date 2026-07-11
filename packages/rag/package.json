@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-rag",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores",
   "license": "MIT",
   "author": "Davide Carvalho",

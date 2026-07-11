@@ -1,5 +1,27 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.4.4
+
+### Patch Changes
+
+- [`d1679b0`](https://github.com/DavideCarvalho/nestjs-agent/commit/d1679b01f65b09ab35ac2cbb304d1f21c0a1ad46) - Carry image/PDF attachments through a chat turn so a vision-capable model sees them natively. A new
+  `MessageAttachment` (`{ mediaId, url, contentType, name }`) rides an optional `attachments` field on
+  `AgentRunInput`, `AppendMessageInput`, `StoredMessage`, and `ModelMessage`: the chat controller and
+  `AgentService` accept it, the loop persists it on the user message and replays it, the MikroORM store
+  round-trips it as a JSON column on `agent_message` (auto-added by the additive schema heal — no
+  migration), and the AI-SDK adapter renders a user message with attachments as native `image`/`file`
+  content parts (`image/*` → image, else file — Bedrock Claude reads a PDF this way). The React
+  transport forwards per-send attachments via the request body
+  (`sendMessage({ text }, { body: { attachments } })`).
+
+  All fields are optional, so text-only consumers are unaffected. The lib stays provider-agnostic: it
+  passes the attachment `url` straight through as the part's source — making that URL reachable by the
+  provider (presigned S3, a proxy) is the consumer's concern; the lib never fetches bytes or talks to a
+  store.
+
+- Updated dependencies [[`d1679b0`](https://github.com/DavideCarvalho/nestjs-agent/commit/d1679b01f65b09ab35ac2cbb304d1f21c0a1ad46), [`d1679b0`](https://github.com/DavideCarvalho/nestjs-agent/commit/d1679b01f65b09ab35ac2cbb304d1f21c0a1ad46), [`d1679b0`](https://github.com/DavideCarvalho/nestjs-agent/commit/d1679b01f65b09ab35ac2cbb304d1f21c0a1ad46)]:
+  - @dudousxd/nestjs-agent-core@0.3.3
+
 ## 0.4.3
 
 ### Patch Changes
