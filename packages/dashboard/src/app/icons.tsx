@@ -63,6 +63,14 @@ export function TrendIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+export function TagIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <path d="M20.5 13.5 12.6 21.4a2 2 0 0 1-2.8 0l-6.2-6.2a2 2 0 0 1 0-2.8L11.5 4.4a2 2 0 0 1 1.4-.6H19a1.5 1.5 0 0 1 1.5 1.5v6.8a2 2 0 0 1-.6 1.4z" />
+      <circle cx="16.2" cy="7.8" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 /** The console brand mark — a governed-gateway glyph (a diamond gateway with a routed path). */
 export function LogoMark({ className }: { className?: string }) {

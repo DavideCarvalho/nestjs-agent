@@ -148,4 +148,117 @@ describe('useAgentChat', () => {
     // onThreadCreated fires exactly once, with the server id.
     expect(created).toEqual(['srv-thread']);
   });
+
+  describe('resume', () => {
+    it('fetches the thread on mount and attaches to its active run', async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/threads/thr-1')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers(),
+            text: async () =>
+              JSON.stringify({
+                id: 'thr-1',
+                title: 'Resumed thread',
+                transient: false,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                messages: [],
+                activeRunId: 'run-live',
+              }),
+          };
+        }
+        if (url.endsWith('/agent/chat/run-live/stream')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-live","threadId":"thr-1"}\n\n',
+            'data: {"kind":"step-start"}\n\n',
+            'data: {"kind":"text","text":"still going"}\n\n',
+            'data: {"kind":"step-finish"}\n\n',
+            'event: done\ndata: {}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-1',
+          resume: true,
+          fetch: fetchMock as unknown as typeof fetch,
+        }),
+      );
+
+      await waitFor(() => expect(result.current.activeRunId).toBe('run-live'));
+
+      await waitFor(() => {
+        const last = result.current.messages.at(-1);
+        expect(last?.role).toBe('assistant');
+        const text = (last?.parts ?? [])
+          .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+          .map((part) => part.text)
+          .join('');
+        expect(text).toBe('still going');
+      });
+
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).endsWith('/agent/threads/thr-1')),
+      ).toBe(true);
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).endsWith('/agent/chat/run-live/stream')),
+      ).toBe(true);
+    });
+
+    it('does not attach to a stream when the thread has no active run', async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/threads/thr-2')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers(),
+            text: async () =>
+              JSON.stringify({
+                id: 'thr-2',
+                title: 'Idle thread',
+                transient: false,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                messages: [],
+                activeRunId: null,
+              }),
+          };
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-2',
+          resume: true,
+          fetch: fetchMock as unknown as typeof fetch,
+        }),
+      );
+
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(([url]) => String(url).endsWith('/agent/threads/thr-2')),
+        ).toBe(true),
+      );
+      expect(result.current.activeRunId).toBeNull();
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/stream'))).toBe(false);
+    });
+
+    it('never fetches the thread when resume is not set (default false)', async () => {
+      const fetchMock = vi.fn(async () => jsonResponse());
+
+      renderHook(() =>
+        useAgentChat({ threadId: 'thr-3', fetch: fetchMock as unknown as typeof fetch }),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

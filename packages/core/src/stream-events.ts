@@ -11,14 +11,28 @@
  * Keeping this vocabulary neutral (not AI-SDK `UIMessageChunk`) means core never depends on `ai`:
  * the adapter owns model-parts → event, the transport owns event → UI-chunk.
  */
+import type { MessageUsage } from './types.js';
+
 export type AgentStreamEvent =
   | { kind: 'step-start' }
-  | { kind: 'step-finish' }
+  /**
+   * Closes the step opened by the matching `step-start`. Carries the model call's token usage and
+   * `costUsd` (an estimate from the bound pricing store, or `null` when unpriced/unbound — never a
+   * fabricated `0`) so a live client can render running cost without waiting for a thread re-fetch.
+   */
+  | { kind: 'step-finish'; usage?: MessageUsage; costUsd?: number | null }
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
-  | { kind: 'tool-input-start'; id: string; name: string }
+  /** `toolKind` collapses `ToolKind`'s `'agent'` into `'read'` — delegation tools auto-execute like a read tool. */
+  | { kind: 'tool-input-start'; id: string; name: string; toolKind: 'read' | 'action' }
   | { kind: 'tool-input-delta'; id: string; delta: string }
-  | { kind: 'tool-input-available'; id: string; name: string; input: unknown }
+  | {
+      kind: 'tool-input-available';
+      id: string;
+      name: string;
+      input: unknown;
+      toolKind: 'read' | 'action';
+    }
   | { kind: 'tool-output'; id: string; output: unknown }
   | { kind: 'tool-output-error'; id: string; error: string };
 

@@ -38,16 +38,20 @@ export class InlineAgentRunner implements AgentRunner {
     const deps = this.factory.forAgent(input.agentName);
     const hooks = this.topLevelHooks(runId, deps, input.actor, day);
 
-    void runAgentLoop({ ...deps, day }, input, hooks).catch(async (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
-      this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
-      publishAgentRunFailed({ runId, code, message });
-      // Terminate the live stream with a typed failure so the transport emits an error frame
-      // instead of leaking the message as assistant text.
-      const writer = await deps.sink.open(runId);
-      await writer.fail({ code, message });
-    });
+    void runAgentLoop({ ...deps, day }, input, hooks)
+      .then(() => this.store.setActiveStream(input.threadId, null))
+      .catch(async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
+        this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
+        publishAgentRunFailed({ runId, code, message });
+        // Clear the thread's active run — a failed run isn't "still running" for `activeRunForThread`.
+        await this.store.setActiveStream(input.threadId, null);
+        // Terminate the live stream with a typed failure so the transport emits an error frame
+        // instead of leaking the message as assistant text.
+        const writer = await deps.sink.open(runId);
+        await writer.fail({ code, message });
+      });
 
     return { runId };
   }
@@ -111,18 +115,24 @@ export class InlineAgentRunner implements AgentRunner {
       runAgent: (childName, childTask) =>
         this.runNested(childName, childTask, actor, day, depth + 1, sinkRunId),
     };
-    return runAgentLoop(
-      { ...deps, day },
-      {
-        threadId: subThread.id,
-        actor,
-        userText: task,
-        agentName,
-        day,
-        delegationDepth: depth,
-        sinkRunId,
-      },
-      hooks,
-    );
+    try {
+      return await runAgentLoop(
+        { ...deps, day },
+        {
+          threadId: subThread.id,
+          actor,
+          userText: task,
+          agentName,
+          day,
+          delegationDepth: depth,
+          sinkRunId,
+        },
+        hooks,
+      );
+    } finally {
+      // No durable-style suspend to worry about here (inline runs to completion synchronously from
+      // this call's point of view) — always clear so `activeRunForThread` reflects reality.
+      await this.store.setActiveStream(subThread.id, null);
+    }
   }
 }

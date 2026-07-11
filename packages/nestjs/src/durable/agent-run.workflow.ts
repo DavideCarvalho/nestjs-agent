@@ -68,9 +68,15 @@ export class AgentRunWorkflow {
       },
     };
     try {
-      return await runAgentLoop({ ...deps, day }, input, hooks);
+      const result = await runAgentLoop({ ...deps, day }, input, hooks);
+      // Genuine completion (not a suspend) — clear so `activeRunForThread` no longer reports this
+      // run. `input.threadId` is whichever thread this run's own `activate`/the top-level `chat()`
+      // call marked active, so this is correct for both a top-level run and a sub-agent's subthread.
+      await ctx.step('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      return result;
     } catch (error) {
-      // A suspend / continue-as-new is control flow, not a failure — let the engine handle it.
+      // A suspend / continue-as-new is control flow, not a failure — let the engine handle it. The
+      // thread stays "active" across the suspend, which is correct: the turn hasn't finished.
       if (error instanceof WorkflowSuspended || error instanceof ContinueAsNew) {
         throw error;
       }
@@ -81,6 +87,7 @@ export class AgentRunWorkflow {
       const message = error instanceof Error ? error.message : String(error);
       const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
       publishAgentRunFailed({ runId: ctx.runId, code, message });
+      await ctx.step('deactivate', () => this.store.setActiveStream(input.threadId, null));
       // Reuse the run's own sink resolution: a top-level run fails the watched stream; a child run's
       // writer no-ops fail, deferring the surfaced error to the ancestor whose run also unwinds.
       const writer = await hooks.openSink();

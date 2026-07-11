@@ -1,6 +1,15 @@
 export { AgentModule } from './agent.module.js';
-export type { AgentModuleOptions, AgentModuleAsyncOptions } from './agent.options.js';
+export type {
+  AgentModuleOptions,
+  AgentModuleAsyncOptions,
+  AgentAttachmentsOptions,
+} from './agent.options.js';
 export { AgentService, type ChatParams } from './agent.service.js';
+export {
+  AttachmentsController,
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES,
+} from './controller/attachments.controller.js';
 export {
   AiTool,
   type AiToolOptions,

@@ -8,6 +8,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
   ToolResult,
+  UpdateThreadInput,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
@@ -244,6 +245,49 @@ export class MikroOrmAgentStore implements AgentStore {
       thread.activeStreamId = runId;
       await em.flush();
     }
+  }
+
+  /**
+   * Patch a thread's `title` and/or `defaultAgent`. Each field is only touched when PRESENT in
+   * `patch` — `defaultAgent: null` clears it (falls back to the app default), while an omitted
+   * `defaultAgent` leaves whatever is stored untouched. A no-op (including `updatedAt`) when the
+   * thread doesn't exist or the patch is empty.
+   */
+  async updateThread(threadId: string, patch: UpdateThreadInput): Promise<void> {
+    const em = this.em.fork();
+    const thread = await em.findOne(AgentThread, { id: threadId });
+    if (thread === null) {
+      return;
+    }
+    let touched = false;
+    if (patch.title !== undefined) {
+      thread.title = patch.title;
+      touched = true;
+    }
+    if (patch.defaultAgent !== undefined) {
+      thread.defaultAgent = patch.defaultAgent;
+      touched = true;
+    }
+    if (touched) {
+      thread.updatedAt = new Date();
+      await em.flush();
+    }
+  }
+
+  /**
+   * The runId currently streaming this thread (its `activeStreamId`), or `null` if the thread is
+   * unknown, soft-deleted, or has no active run. This is the same field {@link setActiveStream} writes
+   * and {@link ownerOfActiveStream}/{@link runForToolCall} already read by runId — this is the reverse
+   * lookup, keyed by threadId.
+   */
+  async activeRunForThread(threadId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: threadId, deletedAt: null },
+      { fields: ['activeStreamId'] },
+    );
+    return thread?.activeStreamId ?? null;
   }
 
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {

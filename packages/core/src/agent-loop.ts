@@ -7,8 +7,10 @@ import {
   publishAgentRunStarted,
   publishAgentToolCall,
 } from './diagnostics.js';
+import { estimateCost } from './governance/compute.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type { ModelProvider } from './spi/model-provider.js';
+import type { AgentPricingStore, CurrentModelPrice } from './spi/pricing-store.js';
 import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
@@ -74,6 +76,27 @@ export interface AgentLoopDeps {
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
   retrievalTopK?: number;
+  /**
+   * Prices each step's token usage into `costUsd` (on the `step-finish` stream frame and the
+   * persisted assistant message's `usage`). The current price list is fetched ONCE per run (not per
+   * message/step) and reused for every step's estimate. Undefined → `costUsd` is always `null`.
+   */
+  pricingStore?: AgentPricingStore;
+}
+
+/**
+ * A step's cost: the provider's own reported figure when it has one (a gateway), else an estimate
+ * from `price` when the model has one, else `null` — never a fabricated `0` for "we don't know".
+ */
+function resolveCostUsd(
+  usage: MessageUsage,
+  reportedCostUsd: number | undefined,
+  price: CurrentModelPrice | undefined,
+): number | null {
+  if (reportedCostUsd !== undefined) {
+    return reportedCostUsd;
+  }
+  return price === undefined ? null : estimateCost(usage, price);
 }
 
 /** Renders retrieved passages as a numbered, citable context block for the system prompt. */
@@ -317,6 +340,15 @@ export async function runAgentLoop(
     publishAgentRetrieved({ runId: hooks.runId, query: input.userText, count: passages.length });
   }
 
+  // Fetched ONCE per run (not per step/message) and reused for every step's cost estimate below.
+  // Returned as a plain array (not the Map built from it) so durable replay can JSON-cache the step.
+  let prices: CurrentModelPrice[] = [];
+  if (deps.pricingStore !== undefined) {
+    const pricingStore = deps.pricingStore;
+    prices = await hooks.step('pricing:list', () => pricingStore.listCurrentPrices());
+  }
+  const priceByModel = new Map(prices.map((price) => [price.modelId, price]));
+
   // NOTE: no try/finally around this loop. A durable runner suspends by THROWING through the stack
   // at `awaitApproval` (ctx.waitForSignal); a finally would then call writer.end() on every suspend
   // and prematurely close the live stream. We only end on normal completion — the throw propagates
@@ -338,13 +370,23 @@ export async function runAgentLoop(
     const turn = await hooks.step(`llm:${i}`, () =>
       deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
     );
+    // provider-reported model wins over the configured fallback, so cost can't misattribute
+    const resolvedModelId = turn.modelId ?? deps.modelId ?? 'unknown';
+    // Provider-reported spend wins; else an estimate from the (once-per-run cached) price list; else
+    // `null` — surfaced on the stream's step-finish frame and the persisted assistant message below.
+    const costUsd = resolveCostUsd(turn.usage, turn.costUsd, priceByModel.get(resolvedModelId));
+    // Stamp each call's declared kind from the registry so thread-read consumers (and the stream
+    // frames the model adapter writes) know a call's kind without hardcoding a tool-name allowlist.
+    const toolCallsWithKind: ToolCallRequest[] = turn.toolCalls.map((call) => ({
+      ...call,
+      kind: deps.registry.spec(call.name)?.kind ?? 'read',
+    }));
 
     await hooks.step(`persist:usage:${i}`, () =>
       deps.store.recordUsage({
         threadId: input.threadId,
         actorRef: input.actor.id,
-        // provider-reported model wins over the configured fallback, so cost can't misattribute
-        modelId: turn.modelId ?? deps.modelId ?? 'unknown',
+        modelId: resolvedModelId,
         purpose: 'chat',
         usage: turn.usage,
         // persist the provider's actual cost when reported; the read-model prefers it over pricing
@@ -401,9 +443,9 @@ export async function runAgentLoop(
         threadId: input.threadId,
         role: 'assistant',
         content: turn.text,
-        usage: turn.usage,
+        usage: { ...turn.usage, costUsd },
         ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
-        ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
+        ...(toolCallsWithKind.length > 0 ? { toolCalls: toolCallsWithKind } : {}),
         ...(followUps !== undefined ? { followUps } : {}),
       }),
     );
@@ -413,7 +455,7 @@ export async function runAgentLoop(
     const assistantMessage: ModelMessage = {
       role: 'assistant',
       content: turn.text,
-      ...(turn.toolCalls.length > 0 ? { toolCalls: turn.toolCalls } : {}),
+      ...(toolCallsWithKind.length > 0 ? { toolCalls: toolCallsWithKind } : {}),
     };
     modelMessages.push(assistantMessage);
 
@@ -438,15 +480,15 @@ export async function runAgentLoop(
 
     if (isFinalTurn) {
       await hooks.step(`stream:step-finish:${i}`, async () => {
-        await writer.write(encodeStreamEvent({ kind: 'step-finish' }));
+        await writer.write(encodeStreamEvent({ kind: 'step-finish', usage: turn.usage, costUsd }));
       });
       break;
     }
 
     const results: ToolResult[] = [];
-    for (const call of turn.toolCalls) {
+    for (const call of toolCallsWithKind) {
       const spec = deps.registry.spec(call.name);
-      const toolType = spec?.kind ?? 'read';
+      const toolType = call.kind ?? 'read';
       const ctx: AiToolCtx = {
         actor: input.actor,
         threadId: input.threadId,
@@ -608,7 +650,7 @@ export async function runAgentLoop(
     });
 
     await hooks.step(`stream:step-finish:${i}`, async () => {
-      await writer.write(encodeStreamEvent({ kind: 'step-finish' }));
+      await writer.write(encodeStreamEvent({ kind: 'step-finish', usage: turn.usage, costUsd }));
     });
   }
 

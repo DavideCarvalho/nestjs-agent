@@ -1,11 +1,13 @@
-import type {
-  ThreadActivityRow,
-  ThreadSpendRow,
-  ToolCallActivityRow,
-} from '@dudousxd/nestjs-agent-core';
-import { Controller, Get, Query, Sse } from '@nestjs/common';
+import type { CurrentModelPrice, ToolCallActivityRow } from '@dudousxd/nestjs-agent-core';
+import { Body, Controller, Get, Post, Query, Sse } from '@nestjs/common';
 import type { Observable } from 'rxjs';
-import { DashboardService, type LiveAgentEvent, type SpendOverview } from './dashboard.service.js';
+import {
+  DashboardService,
+  type LiveAgentEvent,
+  type SpendOverview,
+  type ThreadActivityRowWithLabel,
+  type ThreadSpendRowWithLabel,
+} from './dashboard.service.js';
 
 const DAY_MS = 86_400_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -58,7 +60,7 @@ export class AgentApiController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('limit') limit?: string,
-  ): Promise<ThreadSpendRow[]> {
+  ): Promise<ThreadSpendRowWithLabel[]> {
     return this.dashboard.topThreads(resolveRange(from, to), parseLimit(limit, 10));
   }
 
@@ -70,8 +72,27 @@ export class AgentApiController {
 
   /** Most recent threads (default 50, max 200) with rolled-up counts. */
   @Get('threads')
-  threads(@Query('limit') limit?: string): Promise<ThreadActivityRow[]> {
+  threads(@Query('limit') limit?: string): Promise<ThreadActivityRowWithLabel[]> {
     return this.dashboard.recentThreads(parseLimit(limit, 50));
+  }
+
+  /**
+   * Current price row per model, for the pricing tab. 501s (via `DashboardService.listPrices`) when
+   * no `AGENT_PRICING_STORE` is bound.
+   */
+  @Get('pricing')
+  listPrices(): Promise<CurrentModelPrice[]> {
+    return this.dashboard.listPrices();
+  }
+
+  /**
+   * Set a model's current price. Body shape mirrors core's `ModelPriceInput`
+   * (`{ modelId, inputPricePer1m, outputPricePer1m, cacheWritePricePer1m?, cacheReadPricePer1m? }`).
+   * 501s when no `AGENT_PRICING_STORE` is bound; 400s on a malformed body.
+   */
+  @Post('pricing')
+  upsertPrice(@Body() body: unknown): Promise<void> {
+    return this.dashboard.upsertPrice(body);
   }
 
   /** Server-Sent Events stream of live `aviary:agent:*` events — the Live feed tails it. */

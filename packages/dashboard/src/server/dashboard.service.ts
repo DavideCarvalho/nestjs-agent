@@ -2,6 +2,8 @@ import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  AgentPricingStore,
+  CurrentModelPrice,
   GovernanceRange,
   ModelSpendRow,
   ThreadActivityRow,
@@ -10,16 +12,32 @@ import type {
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotImplementedException, Optional } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { AGENT_GOVERNANCE_QUERIES } from './tokens.js';
+import type { ActorDirectory } from './actor-directory.js';
+import { parsePriceInput } from './parse-price-input.js';
+import { AGENT_ACTOR_DIRECTORY, AGENT_GOVERNANCE_QUERIES, AGENT_PRICING_STORE } from './tokens.js';
+
+/** An actor-scoped row decorated with its resolved display label — `null` when unbound or unresolved. */
+export interface WithActorLabel {
+  actorLabel: string | null;
+}
+
+export type ActorSpendRowWithLabel = ActorSpendRow & WithActorLabel;
+export type ThreadSpendRowWithLabel = ThreadSpendRow & WithActorLabel;
+export type ThreadActivityRowWithLabel = ThreadActivityRow & WithActorLabel;
 
 /** The spend/usage overview the SPA renders on its headline section (`GET <api>/spend`). */
 export interface SpendOverview {
   byModel: ModelSpendRow[];
-  byActor: ActorSpendRow[];
+  byActor: ActorSpendRowWithLabel[];
   trend: UsageTrendPoint[];
 }
+
+/** The message returned as a 501 when no `AGENT_PRICING_STORE` is bound. */
+const PRICING_STORE_UNBOUND_MESSAGE =
+  'Pricing CRUD is unavailable: no AGENT_PRICING_STORE is bound. Bind a pricing store (e.g. ' +
+  'MikroOrmPricingStore from @dudousxd/nestjs-agent-store-mikro-orm) to enable it.';
 
 /** One live agent event forwarded over SSE, flattened from the `aviary:agent:*` diagnostics envelope. */
 export interface LiveAgentEvent {
@@ -66,24 +84,38 @@ function isAgentEnvelope(message: unknown): message is AgentDiagnosticEnvelope {
  *   that token — bind it via your `@dudousxd/nestjs-agent` module (global) alongside this dashboard.
  * - Live activity comes off the `aviary:agent:*` diagnostics channel, subscribed per SSE client and
  *   unsubscribed when the client disconnects.
+ * - `actorLabel` on actor-scoped rows comes from the OPTIONAL {@link AGENT_ACTOR_DIRECTORY} — `null`
+ *   on every row when nothing is bound, so the console degrades to raw `actorRef`s instead of failing.
+ * - Pricing CRUD (`listPrices`/`upsertPrice`) reads/writes the OPTIONAL {@link AGENT_PRICING_STORE} —
+ *   a 501 with a clear message when nothing is bound.
  */
 @Injectable()
 export class DashboardService {
-  constructor(@Inject(AGENT_GOVERNANCE_QUERIES) private readonly queries: AgentGovernanceQueries) {}
+  constructor(
+    @Inject(AGENT_GOVERNANCE_QUERIES) private readonly queries: AgentGovernanceQueries,
+    @Optional()
+    @Inject(AGENT_ACTOR_DIRECTORY)
+    private readonly actorDirectory?: ActorDirectory,
+    @Optional()
+    @Inject(AGENT_PRICING_STORE)
+    private readonly pricingStore?: AgentPricingStore,
+  ) {}
 
   /** Spend/usage overview for a day range: by-model + by-actor spend and the daily trend, in parallel. */
   async spend(range: GovernanceRange): Promise<SpendOverview> {
-    const [byModel, byActor, trend] = await Promise.all([
+    const [byModel, byActorRaw, trend] = await Promise.all([
       this.queries.spendByModel(range),
       this.queries.spendByActor(range),
       this.queries.usageTrend(range),
     ]);
+    const byActor = await this.withActorLabels(byActorRaw);
     return { byModel, byActor, trend };
   }
 
   /** Top threads by cost for a day range (default 10, highest cost first). */
-  topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRow[]> {
-    return this.queries.spendByThread(range, limit);
+  async topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRowWithLabel[]> {
+    const rows = await this.queries.spendByThread(range, limit);
+    return this.withActorLabels(rows);
   }
 
   /** Most recent tool calls (status/type/thread) for the Runs & tools activity feed. */
@@ -92,8 +124,48 @@ export class DashboardService {
   }
 
   /** Most recent threads with rolled-up message/token counts. */
-  recentThreads(limit: number): Promise<ThreadActivityRow[]> {
-    return this.queries.recentThreads(limit);
+  async recentThreads(limit: number): Promise<ThreadActivityRowWithLabel[]> {
+    const rows = await this.queries.recentThreads(limit);
+    return this.withActorLabels(rows);
+  }
+
+  /**
+   * Decorate actor-scoped rows with `actorLabel`, batching the distinct `actorRef`s into ONE
+   * {@link ActorDirectory.resolveDisplay} call per response. `null` for every row when no directory
+   * is bound, or for a ref the directory didn't resolve.
+   */
+  private async withActorLabels<Row extends { actorRef: string }>(
+    rows: Row[],
+  ): Promise<(Row & WithActorLabel)[]> {
+    if (rows.length === 0) {
+      return [];
+    }
+    if (this.actorDirectory === undefined) {
+      return rows.map((row) => ({ ...row, actorLabel: null }));
+    }
+    const refs = [...new Set(rows.map((row) => row.actorRef))];
+    const resolved = await this.actorDirectory.resolveDisplay(refs);
+    return rows.map((row) => ({ ...row, actorLabel: resolved[row.actorRef] ?? null }));
+  }
+
+  /** Current price row per model, for the pricing tab. 501s when no `AGENT_PRICING_STORE` is bound. */
+  async listPrices(): Promise<CurrentModelPrice[]> {
+    if (this.pricingStore === undefined) {
+      throw new NotImplementedException(PRICING_STORE_UNBOUND_MESSAGE);
+    }
+    return this.pricingStore.listCurrentPrices();
+  }
+
+  /**
+   * Set a model's current price (`POST <api>/pricing` body). 501s when no `AGENT_PRICING_STORE` is
+   * bound (checked BEFORE body validation, so an unbound store always reports as unimplemented rather
+   * than as a validation error); otherwise the body is minimally validated via {@link parsePriceInput}.
+   */
+  async upsertPrice(body: unknown): Promise<void> {
+    if (this.pricingStore === undefined) {
+      throw new NotImplementedException(PRICING_STORE_UNBOUND_MESSAGE);
+    }
+    await this.pricingStore.upsertModelPrice(parsePriceInput(body));
   }
 
   /**

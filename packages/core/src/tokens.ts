@@ -38,3 +38,14 @@ export const AGENT_EMBEDDING_PROVIDER = Symbol.for('@dudousxd/nestjs-agent:embed
 export const AGENT_DEPS_FACTORY = Symbol.for('@dudousxd/nestjs-agent:deps-factory');
 /** App-wide, ordered `@SystemPromptContributor()` functions the loop appends after the agent base. */
 export const AGENT_PROMPT_CONTRIBUTORS = Symbol.for('@dudousxd/nestjs-agent:prompt-contributors');
+/**
+ * Resolves opaque store `actorRef`s to human display labels for governance/dashboard read surfaces.
+ * Optional — see {@link import('./spi/actor-directory.js').ActorDirectory}.
+ */
+export const AGENT_ACTOR_DIRECTORY = Symbol.for('@dudousxd/nestjs-agent:actor-directory');
+/**
+ * Persists an uploaded attachment somewhere the model can fetch it from and returns a
+ * `MessageAttachment`. Optional — see
+ * {@link import('./spi/attachment-staging.js').AttachmentStagingStore}.
+ */
+export const AGENT_ATTACHMENT_STAGING = Symbol.for('@dudousxd/nestjs-agent:attachment-staging');

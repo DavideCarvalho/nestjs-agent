@@ -9,6 +9,8 @@ export {
   AgentHttpError,
   type CancelResult,
   type QuotaToday,
+  type ThreadPatch,
 } from './client.js';
+export { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 export { useAgentChat, type UseAgentChatOptions } from './use-agent-chat.js';
 export * from './components/index.js';

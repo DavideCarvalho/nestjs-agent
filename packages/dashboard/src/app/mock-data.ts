@@ -1,5 +1,6 @@
 import type {
   ActorSpendRow,
+  ModelPrice,
   ModelSpendRow,
   SpendOverview,
   ThreadActivityRow,
@@ -44,10 +45,34 @@ const MODELS: ModelSpendRow[] = [
 ];
 
 const ACTORS: ActorSpendRow[] = [
-  { actorRef: 'tenant:acme', requests: 8200, totalTokens: 18_400_000, costUsd: 78.1 },
-  { actorRef: 'user:davi@goflip.ai', requests: 3100, totalTokens: 6_900_000, costUsd: 34.2 },
-  { actorRef: 'tenant:globex', requests: 4400, totalTokens: 9_200_000, costUsd: 21.8 },
-  { actorRef: 'user:ops-bot', requests: 2100, totalTokens: 3_940_000, costUsd: 1.1 },
+  {
+    actorRef: 'tenant:acme',
+    requests: 8200,
+    totalTokens: 18_400_000,
+    costUsd: 78.1,
+    actorLabel: 'Acme Corp',
+  },
+  {
+    actorRef: 'user:davi@goflip.ai',
+    requests: 3100,
+    totalTokens: 6_900_000,
+    costUsd: 34.2,
+    actorLabel: 'Davi de Carvalho',
+  },
+  {
+    actorRef: 'tenant:globex',
+    requests: 4400,
+    totalTokens: 9_200_000,
+    costUsd: 21.8,
+    actorLabel: null,
+  },
+  {
+    actorRef: 'user:ops-bot',
+    requests: 2100,
+    totalTokens: 3_940_000,
+    costUsd: 1.1,
+    actorLabel: null,
+  },
 ];
 
 const BUDGETS: BudgetMap = {
@@ -129,6 +154,7 @@ export const MOCK_THREADS: ThreadActivityRow[] = [
     messageCount: 24,
     totalTokens: 184_000,
     lastActivityAt: new Date(Date.now() - 30_000).toISOString(),
+    actorLabel: 'Acme Corp',
   },
   {
     threadId: 'th2',
@@ -137,6 +163,7 @@ export const MOCK_THREADS: ThreadActivityRow[] = [
     messageCount: 11,
     totalTokens: 62_000,
     lastActivityAt: new Date(Date.now() - 400_000).toISOString(),
+    actorLabel: null,
   },
   {
     threadId: 'th3',
@@ -145,6 +172,7 @@ export const MOCK_THREADS: ThreadActivityRow[] = [
     messageCount: 6,
     totalTokens: 28_400,
     lastActivityAt: new Date(Date.now() - 1_800_000).toISOString(),
+    actorLabel: 'Davi de Carvalho',
   },
 ];
 
@@ -156,6 +184,7 @@ export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
     requests: 24,
     totalTokens: 184_000,
     costUsd: 18.4,
+    actorLabel: 'Acme Corp',
   },
   {
     threadId: 'th2',
@@ -164,6 +193,7 @@ export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
     requests: 11,
     totalTokens: 62_000,
     costUsd: 6.2,
+    actorLabel: null,
   },
   {
     threadId: 'th3',
@@ -172,6 +202,31 @@ export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
     requests: 6,
     totalTokens: 28_400,
     costUsd: 2.8,
+    actorLabel: 'Davi de Carvalho',
+  },
+];
+
+export const MOCK_PRICES: ModelPrice[] = [
+  {
+    modelId: 'gpt-4o',
+    inputPricePer1m: 2.5,
+    outputPricePer1m: 10,
+    cacheReadPricePer1m: 1.25,
+    effectiveFrom: new Date(Date.now() - 5 * 86_400_000).toISOString(),
+  },
+  {
+    modelId: 'claude-3-5-sonnet',
+    inputPricePer1m: 3,
+    outputPricePer1m: 15,
+    cacheWritePricePer1m: 3.75,
+    cacheReadPricePer1m: 0.3,
+    effectiveFrom: new Date(Date.now() - 12 * 86_400_000).toISOString(),
+  },
+  {
+    modelId: 'gpt-4o-mini',
+    inputPricePer1m: 0.15,
+    outputPricePer1m: 0.6,
+    effectiveFrom: new Date(Date.now() - 2 * 86_400_000).toISOString(),
   },
 ];
 

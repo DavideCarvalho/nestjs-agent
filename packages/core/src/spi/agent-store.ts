@@ -49,6 +49,13 @@ export interface UpdateToolCallInput {
   executedByRef?: string;
 }
 
+/** Patch applied by {@link AgentStore.updateThread}. An omitted key leaves that field untouched. */
+export interface UpdateThreadInput {
+  title?: string;
+  /** `null` clears the thread's default agent (falls back to the module default). */
+  defaultAgent?: string | null;
+}
+
 export interface RecordUsageInput {
   threadId: string;
   actorRef: string;
@@ -75,6 +82,21 @@ export interface AgentStore {
    */
   promoteThread(threadId: string): Promise<void>;
   setActiveStream(threadId: string, runId: string | null): Promise<void>;
+
+  /**
+   * OPTIONAL: rename a thread and/or set its default agent in one write. Absent on a store that
+   * predates this — `setTitle` still covers title-only edits, so nothing else in the lib requires
+   * this method; the REST `PATCH /threads/:id` endpoint responds 501 for a `defaultAgent` change
+   * against a store that lacks it.
+   */
+  updateThread?(threadId: string, patch: UpdateThreadInput): Promise<void>;
+  /**
+   * OPTIONAL: the runId of a currently-running turn on this thread, or `null` if none is running.
+   * Lets a client that reconnects (page refresh) discover a run to reattach to via the existing
+   * `GET /chat/:runId/stream`, instead of only being told about a run right after starting it.
+   * Absent on a store that predates this — thread read/list payloads report `activeRunId: null`.
+   */
+  activeRunForThread?(threadId: string): Promise<string | null>;
 
   /**
    * The `actorRef` that owns a thread, or `null` if no such thread exists. The authorization seam

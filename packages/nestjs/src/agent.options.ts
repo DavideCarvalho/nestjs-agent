@@ -7,8 +7,35 @@ import type {
   RolesPolicy,
   TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
-import type { InjectionToken, ModuleMetadata, OptionalFactoryDependency } from '@nestjs/common';
+import type {
+  CanActivate,
+  InjectionToken,
+  ModuleMetadata,
+  OptionalFactoryDependency,
+  Type,
+} from '@nestjs/common';
 import type { FunctionalTool } from './functional-tool.js';
+
+/**
+ * `AgentModuleOptions.attachments` — bounds and content-type allowlist for the optional
+ * `POST /agent/attachments` upload controller (see `attachments.upload`).
+ */
+export interface AgentAttachmentsOptions {
+  /** Per-file size cap. Defaults to 20 MiB. */
+  maxBytes?: number;
+  /**
+   * Allowed multipart content types. Defaults to what multimodal model providers commonly accept:
+   * `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`, `text/plain`, `text/csv`.
+   */
+  allowedContentTypes?: string[];
+  /**
+   * Mount `POST /agent/attachments`. Defaults to `false` — the controller is build-time (static)
+   * wiring, so this can't be inferred from whether `AGENT_ATTACHMENT_STAGING` ends up bound (that's
+   * a DI-time fact); set it explicitly. `true` with no `AGENT_ATTACHMENT_STAGING` provider bound
+   * fails boot loudly instead of silently mounting a controller that 501s on every request.
+   */
+  upload?: boolean;
+}
 
 export interface AgentModuleOptions {
   // --- infrastructure ---
@@ -82,6 +109,19 @@ export interface AgentModuleOptions {
    * `@Agent` is registered). Agents themselves are declared as `@Agent`-decorated providers, not here.
    */
   defaultAgent?: string;
+
+  /**
+   * Guard(s) applied uniformly to EVERY controller this module mounts (chat, threads, tool-call,
+   * quota, agents, and — when `attachments.upload` is set — attachments). Third-party controller
+   * classes can't be annotated with `@UseGuards` by consumers, so without this option every route is
+   * open beyond whatever `actorResolver` itself enforces. Guard classes are added to this module's
+   * `providers` so Nest can DI-instantiate them; if a guard has its own dependencies, make sure they
+   * resolve from this module's imports or a global module.
+   */
+  guards?: Type<CanActivate>[];
+
+  /** Bounds/allowlist for the optional attachment-upload controller. Omit → 20 MiB, the documented default types, not mounted. */
+  attachments?: AgentAttachmentsOptions;
 }
 
 export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
@@ -109,4 +149,22 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * `store` from the factory) when the store is constructed inside the factory.
    */
   externalStore?: boolean;
+
+  /**
+   * Guard(s) applied uniformly to every controller this module mounts. A STATIC field on the async
+   * config object itself — NOT part of what `useFactory` resolves — because controllers (and the
+   * enhancers bound to them) are wired at module build time, before any async factory has run. If a
+   * guard needs async-resolved config (e.g. a secret from a `ConfigService`), have the guard inject
+   * that service via DI (see `imports`/`inject` above) rather than trying to thread it through
+   * `useFactory`. Same default-open caveat as `AgentModuleOptions.guards`.
+   */
+  guards?: Type<CanActivate>[];
+
+  /**
+   * Mount `POST /agent/attachments`. Static, build-time control (same reasoning as `durable`/`path`
+   * above) — `useFactory` resolves too late to decide which controllers exist. The resolved
+   * `AgentModuleOptions.attachments` (maxBytes/allowedContentTypes) still applies at request time;
+   * only the yes/no mount decision has to live here.
+   */
+  attachmentsUpload?: boolean;
 }
