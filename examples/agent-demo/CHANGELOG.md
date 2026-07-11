@@ -7,7 +7,7 @@
 - Updated dependencies [[`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5), [`1c44152`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c4415295a6280527e762f13e6aed48099ae5ca5)]:
   - @dudousxd/nestjs-agent-core@0.5.0
   - @dudousxd/nestjs-agent@0.5.0
-  - @dudousxd/nestjs-agent-testing@1.0.0
+  - @dudousxd/nestjs-agent-testing@0.5.0
   - @dudousxd/nestjs-agent-dashboard@0.5.0
 
 ## 0.0.6

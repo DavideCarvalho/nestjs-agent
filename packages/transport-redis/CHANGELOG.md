@@ -1,6 +1,6 @@
 # @dudousxd/nestjs-agent-transport-redis
 
-## 1.0.0
+## 0.3.5
 
 ### Patch Changes
 

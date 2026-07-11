@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-transport-redis",
-  "version": "1.0.0",
+  "version": "0.3.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
