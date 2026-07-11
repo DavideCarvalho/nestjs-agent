@@ -122,7 +122,8 @@ export interface AgentLoopHooks {
    */
   runAgent?(agentName: string, task: string): Promise<{ text: string }>;
   /**
-   * Checkpoint wrapper. Inline = call fn directly; durable = ctx.step(name, fn).
+   * Checkpoint wrapper. Inline = call fn directly; durable = ctx.localStep(name, fn) — the
+   * in-process checkpointed primitive (`name` is a checkpoint identity, not a worker group).
    * EVERY side-effect and control-flow read goes through this so durable replay returns
    * cached results (stable ids, no double-write, no re-streaming).
    */

@@ -5,7 +5,9 @@ import {
 } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule, WorkflowService } from '@dudousxd/nestjs-durable';
 import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
+import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -36,7 +38,12 @@ async function buildDurableApp(script: FakeScript) {
   const store = new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
     imports: [
-      DurableModule.forRoot({ store: new InMemoryStateStore() }),
+      // Operator + worker in one process — an operator requires a transport since durable 0.31's
+      // topology roles; the event-emitter transport keeps the whole run in-process for the test.
+      DurableModule.forRoot({
+        store: new InMemoryStateStore(),
+        transport: new EventEmitterTransport(new EventEmitter2()),
+      }),
       AgentModule.forRoot({
         model: new FakeModelProvider(script),
         store,
@@ -69,7 +76,10 @@ describe('durable wiring', () => {
   it('throws a clear error when durable:true but AgentDurableModule is missing', async () => {
     const build = Test.createTestingModule({
       imports: [
-        DurableModule.forRoot({ store: new InMemoryStateStore() }),
+        DurableModule.forRoot({
+          store: new InMemoryStateStore(),
+          transport: new EventEmitterTransport(new EventEmitter2()),
+        }),
         AgentModule.forRoot({
           model: new FakeModelProvider(() => ({ text: 'x' })),
           store: new InMemoryAgentStore(),

@@ -16,7 +16,10 @@ import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
 
 /**
- * The agent turn AS a durable workflow. Each model/tool call is a checkpointed `ctx.step`, HITL is
+ * The agent turn AS a durable workflow. Each model/tool call is a checkpointed `ctx.localStep` — the
+ * in-process primitive, NOT the always-dispatched `ctx.step`: the loop's deps (model provider, store,
+ * sink) live in THIS workflow worker's DI, and the step names are dynamic checkpoint identities
+ * (`llm:0`, `persist:toolcall:<id>`), not routable worker groups. HITL is
  * `ctx.waitForSignal`, and sub-agent delegation is `ctx.child(AgentRunWorkflow)` — a replay-safe,
  * observable child run (it shows up as a node in the durable dashboard). A child streams into its
  * top-level ancestor's sink (`sinkRunId`) so the human watching the parent sees it and can approve
@@ -36,7 +39,7 @@ export class AgentRunWorkflow {
     // A sub-agent run (one with an ancestor sink) marks its subthread as streaming THIS child run,
     // so a human approving its action tool routes the signal back here (runForToolCall).
     if (input.sinkRunId !== undefined) {
-      await ctx.step('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
+      await ctx.localStep('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
     }
     const sinkRunId = input.sinkRunId ?? ctx.runId;
     const hooks: AgentLoopHooks = {
@@ -47,9 +50,9 @@ export class AgentRunWorkflow {
           ? childSinkWriter(await deps.sink.open(sinkRunId))
           : deps.sink.open(ctx.runId),
       awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
-      step: (name, fn) => ctx.step(name, fn),
+      step: (name, fn) => ctx.localStep(name, fn),
       runAgent: async (agentName, task) => {
-        const subThreadId = await ctx.step(`subthread:${agentName}`, async () => {
+        const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
             actor: input.actor,
             transient: true,
@@ -72,7 +75,7 @@ export class AgentRunWorkflow {
       // Genuine completion (not a suspend) — clear so `activeRunForThread` no longer reports this
       // run. `input.threadId` is whichever thread this run's own `activate`/the top-level `chat()`
       // call marked active, so this is correct for both a top-level run and a sub-agent's subthread.
-      await ctx.step('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
       return result;
     } catch (error) {
       // A suspend / continue-as-new is control flow, not a failure — let the engine handle it. The
@@ -87,7 +90,7 @@ export class AgentRunWorkflow {
       const message = error instanceof Error ? error.message : String(error);
       const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
       publishAgentRunFailed({ runId: ctx.runId, code, message });
-      await ctx.step('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
       // Reuse the run's own sink resolution: a top-level run fails the watched stream; a child run's
       // writer no-ops fail, deferring the surfaced error to the ancestor whose run also unwinds.
       const writer = await hooks.openSink();
