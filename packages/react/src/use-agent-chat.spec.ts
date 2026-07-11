@@ -84,10 +84,7 @@ describe('useAgentChat', () => {
   it('sends only the latest user message text in the chat request body', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith('/agent/chat')) {
-        return sseResponse([
-          'data: {"kind":"text","text":"ok"}\n\n',
-          'event: done\ndata: {}\n\n',
-        ]);
+        return sseResponse(['data: {"kind":"text","text":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
       }
       return jsonResponse();
     });

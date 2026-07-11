@@ -13,8 +13,8 @@ import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
-import { encodeStreamEvent } from './stream-events.js';
 import type { AiToolCtx } from './spi/tool.js';
+import { encodeStreamEvent } from './stream-events.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type {
   AgentRunInput,

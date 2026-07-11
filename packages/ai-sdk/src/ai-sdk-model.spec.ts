@@ -97,7 +97,9 @@ describe('aiSdkModel', () => {
     const textDeltas = events
       .filter(
         (event): event is { kind: 'text'; text: string } =>
-          typeof event === 'object' && event !== null && (event as { kind?: unknown }).kind === 'text',
+          typeof event === 'object' &&
+          event !== null &&
+          (event as { kind?: unknown }).kind === 'text',
       )
       .map((event) => event.text);
     expect(textDeltas.join('')).toBe('Hello');
@@ -239,7 +241,12 @@ describe('aiSdkModel', () => {
         content: 'what is in these?',
         attachments: [
           { mediaId: 'm1', url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' },
-          { mediaId: 'm2', url: 'https://cdn/b.pdf', contentType: 'application/pdf', name: 'b.pdf' },
+          {
+            mediaId: 'm2',
+            url: 'https://cdn/b.pdf',
+            contentType: 'application/pdf',
+            name: 'b.pdf',
+          },
         ],
       },
     ];

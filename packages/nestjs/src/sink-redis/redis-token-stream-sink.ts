@@ -77,13 +77,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     try {
       let lastId = '0';
       while (true) {
-        const response = await reader.xreadBuffer(
-          'BLOCK',
-          this.blockMs,
-          'STREAMS',
-          key,
-          lastId,
-        );
+        const response = await reader.xreadBuffer('BLOCK', this.blockMs, 'STREAMS', key, lastId);
         for (const entry of readEntries(response)) {
           lastId = entry.id;
           if (entry.field === CHUNK_FIELD && entry.value !== undefined) {
