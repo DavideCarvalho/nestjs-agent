@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-rag-media",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Auto-ingest @dudousxd/nestjs-media uploads into agent RAG — extract, chunk, embed, index, owner-scoped, with delete kept in sync. Couples via the diagnostics channel, no hard media dependency",
   "license": "MIT",
   "author": "Davide Carvalho",
