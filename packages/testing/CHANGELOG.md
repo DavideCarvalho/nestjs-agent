@@ -1,5 +1,27 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.7.0
+
+### Minor Changes
+
+- [`3d256d4`](https://github.com/DavideCarvalho/nestjs-agent/commit/3d256d4027c7ad819f8ec908425d52887e67da3f) - Console navigability + paginated, queryable lists:
+
+  - Sections live on ROUTES now — hash routing (`/ai-gateway#/reliability`, `#/approvals`, …),
+    deep-linkable on full page load, consistent with the durable console, zero new dependencies.
+  - The list surfaces (tool calls, threads, runs) are paginated and filterable end to end:
+    `AgentGovernanceQueries` grew `toolCallsPage`/`threadsPage`/`runsPage` (neutral
+    `GovernancePageQuery` with typed `where` — REQUIRED members, implemented in both bundled stores
+    with real COUNT + offset, deterministic id tiebreaks, case-insensitive title search, one-sided
+    day bounds; in-memory testing impls included). The dashboard API speaks the ecosystem's familiar
+    wire grammar (`page`, `limit`, `where[field]=value`, unknown field → 400) and the SPA tables get
+    prev/next pagination with per-table debounced filters. The latest-N reads remain for the
+    telescope bridge.
+
+### Patch Changes
+
+- Updated dependencies [[`3d256d4`](https://github.com/DavideCarvalho/nestjs-agent/commit/3d256d4027c7ad819f8ec908425d52887e67da3f)]:
+  - @dudousxd/nestjs-agent-core@0.8.0
+
 ## 0.6.1
 
 ### Patch Changes

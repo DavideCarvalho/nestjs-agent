@@ -1,5 +1,20 @@
 # @dudousxd/nestjs-agent-ai-sdk
 
+## 0.5.0
+
+### Minor Changes
+
+- [`3d256d4`](https://github.com/DavideCarvalho/nestjs-agent/commit/3d256d4027c7ad819f8ec908425d52887e67da3f) - `attachmentFetchDownloader()` — the ready-made `experimental_download` for hosts whose attachment
+  staging presigns non-public URLs (local MinIO in dev, VPC-only S3): plain-fetches unsupported URLs
+  with no hostname policy, leaves model-supported URLs to the provider, errors carry status +
+  hostname (never the full presigned URL). One line instead of the fetch boilerplate every such host
+  was about to copy. Safe only because agent attachment URLs come from the host's own staging SPI.
+
+### Patch Changes
+
+- Updated dependencies [[`3d256d4`](https://github.com/DavideCarvalho/nestjs-agent/commit/3d256d4027c7ad819f8ec908425d52887e67da3f)]:
+  - @dudousxd/nestjs-agent-core@0.8.0
+
 ## 0.4.3
 
 ### Patch Changes
