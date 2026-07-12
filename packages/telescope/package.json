@@ -37,10 +37,10 @@
     "@dudousxd/nestjs-diagnostics": "0.7.0"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-telescope": ">=1.15.0"
+    "@dudousxd/nestjs-telescope": ">=1.18.0"
   },
   "devDependencies": {
-    "@dudousxd/nestjs-telescope": "1.15.0",
+    "@dudousxd/nestjs-telescope": "1.18.0",
     "tsup": "8.3.5",
     "typescript": "5.9.3"
   }

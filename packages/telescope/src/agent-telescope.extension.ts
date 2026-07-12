@@ -17,6 +17,7 @@ import {
   agentRunsByAgentTableProvider,
   agentRunsDurationProvider,
   agentRunsFailedProvider,
+  agentRunsPagedTableProvider,
   agentRunsRetriesProvider,
   agentRunsSuccessRateProvider,
   agentRunsTotalProvider,
@@ -24,7 +25,9 @@ import {
   agentSpendByActorProvider,
   agentSpendByModelProvider,
   agentSpendTotalProvider,
+  agentThreadsPagedTableProvider,
   agentTokensTotalProvider,
+  agentToolCallsPagedTableProvider,
   agentToolStatsTableProvider,
   agentTopThreadsTableProvider,
   agentUsageTrendProvider,
@@ -39,9 +42,11 @@ import { AgentTelescopeWatcher } from './agent-telescope.watcher.js';
  * entry-type id, dashboard id, and every provider name share the `agent` prefix so the registry's
  * global-uniqueness namespaces never collide with sibling extensions.
  *
- * `threadHref`/`runHref` deep-link a table row's `threadId`/`runId` cell out to the host's own
- * thread/run viewer — passed straight through to {@link agentDashboard}, mirroring
- * `durableTelescopeExtension`'s `runHref` option.
+ * `threadHref` deep-links a table row's `threadId` cell out to the HOST's own thread viewer —
+ * passed straight through to {@link agentDashboard}, mirroring `durableTelescopeExtension`'s
+ * `runHref` option. A row's `runId` cell instead defaults to the IN-APP trace waterfall
+ * (`#/traces/{runId}`, per wave-polish-CONTRACTS.md §A2) — no host wiring needed; `runHref`
+ * overrides that default for a host that wants its own run viewer instead.
  *
  * Host wiring: the governance panels (Spend/Models/Actors/Reliability/Runs/Threads/Approvals/Tool
  * stats/Recent tool calls) resolve `AGENT_GOVERNANCE_QUERIES` from the host DI container at
@@ -80,6 +85,9 @@ export function agentTelescopeExtension(opts: { threadHref?: string; runHref?: s
       agentRecentRunsTableProvider(),
       agentRecentToolCallsTableProvider(),
       agentRecentThreadsTableProvider(),
+      agentRunsPagedTableProvider(),
+      agentToolCallsPagedTableProvider(),
+      agentThreadsPagedTableProvider(),
       agentPendingApprovalsCountProvider(),
       agentPendingApprovalsTableProvider(),
       agentToolStatsTableProvider(),

@@ -201,6 +201,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         status: agentToolCall.status,
         threadId: agentMessage.threadId,
         createdAt: agentToolCall.createdAt,
+        runId: agentToolCall.runId,
       })
       .from(agentToolCall)
       .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
@@ -213,6 +214,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       status: row.status,
       threadId: row.threadId,
       createdAt: row.createdAt.toISOString(),
+      runId: row.runId,
     }));
   }
 
@@ -389,6 +391,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         actorRef: agentThread.actorRef,
         agentName: agentMessage.agentName,
         requestedAt: agentToolCall.createdAt,
+        runId: agentToolCall.runId,
       })
       .from(agentToolCall)
       .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
@@ -405,6 +408,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       actorRef: row.actorRef,
       agentName: row.agentName ?? null,
       requestedAt: row.requestedAt.toISOString(),
+      runId: row.runId,
     }));
   }
 
@@ -511,6 +515,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         status: agentToolCall.status,
         threadId: agentMessage.threadId,
         createdAt: agentToolCall.createdAt,
+        runId: agentToolCall.runId,
       })
       .from(agentToolCall)
       .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
@@ -526,6 +531,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         status: row.status,
         threadId: row.threadId,
         createdAt: row.createdAt.toISOString(),
+        runId: row.runId,
       })),
       total: totalRow?.value ?? 0,
       page: query.page,
@@ -608,6 +614,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         ? eq(agentRun.status, filters.status)
         : undefined,
       filters?.errorCode !== undefined ? eq(agentRun.errorCode, filters.errorCode) : undefined,
+      filters?.threadId !== undefined ? eq(agentRun.threadId, filters.threadId) : undefined,
       filters?.fromDay !== undefined
         ? gte(agentRun.startedAt, dayStartUtc(filters.fromDay))
         : undefined,

@@ -47,7 +47,8 @@ const statements: string[] = [
     execution_ms INTEGER,
     error TEXT,
     created_at INTEGER NOT NULL,
-    executed_at INTEGER
+    executed_at INTEGER,
+    run_id TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS agent_token_usage (
     id TEXT PRIMARY KEY NOT NULL,

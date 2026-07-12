@@ -6,114 +6,58 @@ function col(key: string, label: string, href?: string): Column {
 }
 
 /**
+ * The default in-app trace-waterfall route a `runId` cell deep-links to — the TRACE view's
+ * confirmed URL shape (wave-polish-CONTRACTS.md §A2 / `@dudousxd/nestjs-telescope`'s `LinkSpec`
+ * doc): an in-app hash route rendered as a plain anchor, no host wiring required. `opts.runHref`
+ * overrides this for a host that wants its own run viewer instead — mirrors how
+ * `durableDashboard`'s own `runHref` defaults to an internal route (`'/durable/runs/{runId}'`)
+ * unless the host supplies one.
+ */
+const DEFAULT_TRACE_HREF = '#/traces/{runId}';
+
+/**
  * The "Agent" overview dashboard. Panels bind to the `agent.*` data providers.
  *
- * `threadHref`/`runHref` are URL templates for deep-linking a `{threadId}`/`{runId}` cell out to
- * the host's own thread/run viewer (e.g. the standalone `@dudousxd/nestjs-agent-dashboard` SPA),
- * mirroring `durableTelescopeExtension`'s `runHref` option. Every table whose rows carry a
- * `threadId`/`runId` gets a `Column.link` for it (via {@link col}); omit an option to leave that
- * column plain text.
+ * `threadHref` is a URL template for deep-linking a `{threadId}` cell out to the HOST's own thread
+ * viewer (e.g. the standalone `@dudousxd/nestjs-agent-dashboard` SPA) — omitted by default (no
+ * internal thread view exists), passed straight through when the host supplies one. `runHref` deep-
+ * links a `{runId}` cell to the trace waterfall — defaults to {@link DEFAULT_TRACE_HREF} (the
+ * in-app route), so a `runId` column works out of the box with no host option needed; a host may
+ * still override it. Every table whose rows carry a `threadId`/`runId` gets a `Column.link` for it
+ * (via {@link col}); `threadHref` left unset leaves that column plain text.
+ *
+ * Layout: six sections (Overview lean; Spend; Reliability; Activity; Approvals; Tools), each sized
+ * so its panel count is an exact multiple of its `cols` — no half-empty row. `nestjs-telescope`'s
+ * `ExtensionDashboardPage` renders a section as a `grid-cols-N` grid with one panel per cell and no
+ * `colSpan`, so a lone table in an otherwise-empty row would leave a visible gap next to it.
  */
 export function agentDashboard(
   opts: { threadHref?: string; runHref?: string } = {},
 ): DashboardSpec {
+  const runHref = opts.runHref ?? DEFAULT_TRACE_HREF;
   return {
     id: 'agent.overview',
     label: 'Agent',
     panels: [],
     sections: [
       {
+        // Lean: the headline runs/tokens/success numbers only — Reliability below has the detail.
         title: 'Overview',
-        cols: 2,
+        cols: 3,
         panels: [
           { kind: 'stat', title: 'Runs', data: { provider: 'agent.runs' } },
           { kind: 'stat', title: 'Tokens', data: { provider: 'agent.tokens' } },
-        ],
-      },
-      {
-        title: 'Reliability',
-        cols: 4,
-        panels: [
-          { kind: 'stat', title: 'Runs', data: { provider: 'agent.runs.total' } },
           {
             kind: 'stat',
             title: 'Success rate',
             data: { provider: 'agent.runs.successRate' },
             format: 'percent',
           },
-          { kind: 'stat', title: 'Failed', data: { provider: 'agent.runs.failed' } },
-          { kind: 'stat', title: 'Retries', data: { provider: 'agent.runs.retries' } },
-        ],
-      },
-      {
-        title: 'Run trends',
-        cols: 4,
-        panels: [
-          {
-            kind: 'timeseries',
-            title: 'Runs & failures',
-            data: { provider: 'agent.runs.trend' },
-            series: ['runs', 'failed'],
-            style: 'stacked',
-          },
-          // Two duration stats, not a `distribution` panel: RunMetrics carries only p50/p95 (no
-          // raw samples to bucket), so a histogram here would be a permanently-empty box.
-          {
-            kind: 'stat',
-            title: 'Duration p50',
-            data: { provider: 'agent.runs.duration', query: { metric: 'p50' } },
-            format: 'duration',
-          },
-          {
-            kind: 'stat',
-            title: 'Duration p95',
-            data: { provider: 'agent.runs.duration', query: { metric: 'p95' } },
-            format: 'duration',
-          },
-          {
-            kind: 'breakdown',
-            title: 'Run errors',
-            data: { provider: 'agent.runs.errors' },
-            style: 'donut',
-          },
-        ],
-      },
-      {
-        title: 'Runs',
-        panels: [
-          {
-            kind: 'table',
-            title: 'Runs by agent',
-            data: { provider: 'agent.runs.byAgent' },
-            columns: [
-              { key: 'agentName', label: 'Agent' },
-              { key: 'runs', label: 'Runs' },
-              { key: 'failed', label: 'Failed' },
-              { key: 'retries', label: 'Retries' },
-            ],
-          },
-          {
-            kind: 'table',
-            title: 'Recent runs',
-            data: { provider: 'agent.runs.recent' },
-            // A deliberate SUBSET of the provider's row shape: the full 11-field row overflows the
-            // card horizontally. Thread/actor/retries/errorCode detail lives in the standalone
-            // agent dashboard; the provider keeps returning the full row for other consumers.
-            columns: [
-              { key: 'startedAt', label: 'Started' },
-              col('runId', 'Run', opts.runHref),
-              { key: 'agentName', label: 'Agent' },
-              { key: 'status', label: 'Status' },
-              { key: 'durationMs', label: 'Duration (ms)' },
-              { key: 'errorMessage', label: 'Error' },
-              { key: 'promptHash', label: 'Prompt' },
-            ],
-          },
         ],
       },
       {
         title: 'Spend',
-        cols: 2,
+        cols: 4,
         panels: [
           {
             kind: 'stat',
@@ -140,11 +84,6 @@ export function agentDashboard(
             series: ['costUsd', 'totalTokens'],
             style: 'area',
           },
-        ],
-      },
-      {
-        title: 'Models',
-        panels: [
           {
             kind: 'table',
             title: 'Usage & cost by model',
@@ -157,12 +96,6 @@ export function agentDashboard(
               { key: 'costUsd', label: 'Cost (USD)' },
             ],
           },
-        ],
-      },
-      {
-        title: 'Actors',
-        cols: 2,
-        panels: [
           {
             kind: 'breakdown',
             title: 'Spend share by actor',
@@ -180,12 +113,6 @@ export function agentDashboard(
               { key: 'costUsd', label: 'Cost (USD)' },
             ],
           },
-        ],
-      },
-      {
-        title: 'Threads',
-        cols: 2,
-        panels: [
           {
             kind: 'table',
             title: 'Top threads by cost',
@@ -198,10 +125,105 @@ export function agentDashboard(
               { key: 'costUsd', label: 'Cost (USD)' },
             ],
           },
+        ],
+      },
+      {
+        title: 'Reliability',
+        cols: 3,
+        panels: [
+          { kind: 'stat', title: 'Runs', data: { provider: 'agent.runs.total' } },
+          {
+            kind: 'stat',
+            title: 'Success rate',
+            data: { provider: 'agent.runs.successRate' },
+            format: 'percent',
+          },
+          { kind: 'stat', title: 'Failed', data: { provider: 'agent.runs.failed' } },
+          { kind: 'stat', title: 'Retries', data: { provider: 'agent.runs.retries' } },
+          {
+            kind: 'stat',
+            title: 'Duration p50',
+            data: { provider: 'agent.runs.duration', query: { metric: 'p50' } },
+            format: 'duration',
+          },
+          {
+            kind: 'stat',
+            title: 'Duration p95',
+            data: { provider: 'agent.runs.duration', query: { metric: 'p95' } },
+            format: 'duration',
+          },
+          // Two duration stats above, not a `distribution` panel: RunMetrics carries only p50/p95
+          // (no raw samples to bucket), so a histogram here would be a permanently-empty box.
+          {
+            kind: 'timeseries',
+            title: 'Runs & failures',
+            data: { provider: 'agent.runs.trend' },
+            series: ['runs', 'failed'],
+            style: 'stacked',
+          },
+          {
+            kind: 'breakdown',
+            title: 'Run errors',
+            data: { provider: 'agent.runs.errors' },
+            style: 'donut',
+          },
+          {
+            kind: 'table',
+            title: 'Runs by agent',
+            data: { provider: 'agent.runs.byAgent' },
+            columns: [
+              { key: 'agentName', label: 'Agent' },
+              { key: 'runs', label: 'Runs' },
+              { key: 'failed', label: 'Failed' },
+              { key: 'retries', label: 'Retries' },
+            ],
+          },
+        ],
+      },
+      {
+        // The paged list tables: tool calls, threads, runs — each reads the paged SPI
+        // (toolCallsPage/threadsPage/runsPage via `agent.*.paged`) and opts into the renderer's
+        // pagination (`paged: true`, telescope >= 1.18): prev/next + "Page X of Y".
+        title: 'Activity',
+        cols: 3,
+        panels: [
+          {
+            kind: 'table',
+            title: 'Recent runs',
+            paged: true,
+            data: { provider: 'agent.runs.paged' },
+            // A deliberate SUBSET of the provider's row shape: the full 11-field row overflows the
+            // card horizontally. Thread/actor/retries/errorCode detail lives in the standalone
+            // agent dashboard; the provider keeps returning the full row for other consumers.
+            columns: [
+              { key: 'startedAt', label: 'Started' },
+              col('runId', 'Run', runHref),
+              { key: 'agentName', label: 'Agent' },
+              { key: 'status', label: 'Status' },
+              { key: 'durationMs', label: 'Duration (ms)' },
+              { key: 'errorMessage', label: 'Error' },
+              { key: 'promptHash', label: 'Prompt' },
+            ],
+          },
+          {
+            kind: 'table',
+            title: 'Recent tool calls',
+            paged: true,
+            data: { provider: 'agent.tools.paged' },
+            columns: [
+              { key: 'createdAt', label: 'When' },
+              { key: 'toolName', label: 'Tool' },
+              { key: 'toolType', label: 'Type' },
+              { key: 'status', label: 'Status' },
+              col('runId', 'Run', runHref),
+              col('threadId', 'Thread', opts.threadHref),
+            ],
+          },
           {
             kind: 'table',
             title: 'Recently active threads',
-            data: { provider: 'agent.threads.recent' },
+            paged: true,
+            data: { provider: 'agent.threads.paged' },
             columns: [
               col('threadId', 'Thread', opts.threadHref),
               { key: 'title', label: 'Title' },
@@ -215,7 +237,7 @@ export function agentDashboard(
       },
       {
         title: 'Approvals',
-        cols: 3,
+        cols: 2,
         panels: [
           {
             kind: 'stat',
@@ -231,6 +253,7 @@ export function agentDashboard(
               { key: 'toolName', label: 'Tool' },
               { key: 'threadTitle', label: 'Thread' },
               col('threadId', 'Thread id', opts.threadHref),
+              col('runId', 'Run', runHref),
               { key: 'actorRef', label: 'Actor' },
               { key: 'agentName', label: 'Agent' },
             ],
@@ -258,18 +281,6 @@ export function agentDashboard(
               { key: 'failed', label: 'Failed' },
               { key: 'rejected', label: 'Rejected' },
               { key: 'p95ExecutionMs', label: 'p95 (ms)' },
-            ],
-          },
-          {
-            kind: 'table',
-            title: 'Recent tool calls',
-            data: { provider: 'agent.tools.recent' },
-            columns: [
-              { key: 'createdAt', label: 'When' },
-              { key: 'toolName', label: 'Tool' },
-              { key: 'toolType', label: 'Type' },
-              { key: 'status', label: 'Status' },
-              col('threadId', 'Thread', opts.threadHref),
             ],
           },
         ],

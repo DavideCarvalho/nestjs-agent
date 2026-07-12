@@ -161,6 +161,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         status: row.status,
         threadId: row.threadId,
         createdAt: row.createdAt,
+        runId: row.runId ?? null,
       }));
   }
 
@@ -305,6 +306,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         actorRef: row.actorRef,
         agentName: row.agentName ?? null,
         requestedAt: row.requestedAt,
+        runId: row.runId ?? null,
       }));
   }
 
@@ -397,6 +399,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         status: row.status,
         threadId: row.threadId,
         createdAt: row.createdAt,
+        runId: row.runId ?? null,
       })),
       query,
     );
@@ -458,6 +461,9 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         return false;
       }
       if (filters?.errorCode !== undefined && run.errorCode !== filters.errorCode) {
+        return false;
+      }
+      if (filters?.threadId !== undefined && run.threadId !== filters.threadId) {
         return false;
       }
       return dayWithinBounds(run.startedAt.slice(0, 10), filters?.fromDay, filters?.toDay);

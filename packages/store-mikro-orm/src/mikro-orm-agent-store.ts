@@ -403,6 +403,7 @@ export class MikroOrmAgentStore implements AgentStore {
       input: input.input,
       status: input.status,
       createdAt: new Date(),
+      runId: input.runId ?? null,
     });
     em.persist(toolCall);
     await em.flush();

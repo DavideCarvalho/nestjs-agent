@@ -72,6 +72,7 @@ async function seed(): Promise<{ store: InMemoryAgentStore; today: string }> {
     toolType: 'action',
     input: {},
     status: 'pending_approval',
+    runId: 'run-deploy',
   });
 
   return { store, today };
@@ -256,10 +257,13 @@ describe('InMemoryGovernanceQueries', () => {
     expect(search?.toolName).toBe('search');
     expect(search?.toolType).toBe('read');
     expect(search?.threadId).toBeTruthy();
+    // recorded with no runId — resolves to null, not undefined, for the telescope bridge's link column.
+    expect(search?.runId).toBeNull();
 
     const deploy = rows.find((row) => row.toolCallId === 'tc-deploy');
     expect(deploy?.status).toBe('pending_approval');
     expect(deploy?.threadId).not.toBe(search?.threadId);
+    expect(deploy?.runId).toBe('run-deploy');
 
     expect(await queries.recentToolCalls(1)).toHaveLength(1);
   });
@@ -519,6 +523,7 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
         toolType: 'action',
         input: { env: 'prod' },
         status: 'pending_approval',
+        runId: 'run-pa-1',
       });
 
       vi.setSystemTime(new Date('2026-07-10T10:00:00.000Z'));
@@ -560,6 +565,7 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
         threadTitle: 'Judy chat',
         actorRef: 'judy',
         agentName: 'assistant-1',
+        runId: 'run-pa-1',
       });
 
       expect(rows[1]).toMatchObject({
@@ -568,6 +574,8 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
         threadTitle: 'Kyle chat',
         actorRef: 'kyle',
         agentName: 'assistant-2',
+        // recorded with no runId — resolves to null, not undefined.
+        runId: null,
       });
 
       // judy's second message carries no agentName — resolves to null, not undefined.
@@ -738,6 +746,7 @@ describe('InMemoryGovernanceQueries toolCallsPage', () => {
       toolType: 'action',
       input: {},
       status: 'rejected',
+      runId: 'run-tc-5',
     });
 
     return { store, queries, threadA: threadA.id, threadB: threadB.id };
@@ -752,6 +761,9 @@ describe('InMemoryGovernanceQueries toolCallsPage', () => {
       expect(page1.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-4']);
       expect(page1.total).toBe(5);
       expect(page1.rows).toHaveLength(2);
+      // tc-5 was recorded with a runId (for the telescope bridge's trace link); tc-4 was not → null.
+      expect(page1.rows[0]?.runId).toBe('run-tc-5');
+      expect(page1.rows[1]?.runId).toBeNull();
 
       const page2 = await queries.toolCallsPage({ page: 2, pageSize: 2 });
       expect(page2.rows.map((row) => row.toolCallId)).toEqual(['tc-3', 'tc-2']);
@@ -989,10 +1001,13 @@ describe('InMemoryGovernanceQueries runsPage', () => {
   async function seed(): Promise<{
     store: InMemoryAgentStore;
     queries: InMemoryGovernanceQueries;
+    otherThreadId: string;
   }> {
     const store = new InMemoryAgentStore();
     const queries = new InMemoryGovernanceQueries(store);
     const thread = await store.createThread({ actor: { id: 'hank' } });
+    // A second thread so `threadId` filtering is meaningful (r1..r5 all live on `thread`).
+    const otherThread = await store.createThread({ actor: { id: 'ida' } });
 
     // Newest-first order is r5, r4, r3, r2, r1.
     vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
@@ -1035,29 +1050,54 @@ describe('InMemoryGovernanceQueries runsPage', () => {
     });
     await store.recordRunEnd({ runId: 'r5', status: 'failed', errorCode: 'timeout' });
 
-    return { store, queries };
+    vi.setSystemTime(new Date('2026-07-15T09:00:00.000Z'));
+    await store.recordRunStart({
+      runId: 'r-other-thread',
+      threadId: otherThread.id,
+      actorRef: 'ida',
+    });
+    await store.recordRunEnd({ runId: 'r-other-thread', status: 'completed', durationMs: 400 });
+
+    return { store, queries, otherThreadId: otherThread.id };
   }
 
   it('paginates newest-first: page 2 rows + total, past-end empty page, pageSize respected', async () => {
     vi.useFakeTimers();
     try {
+      // Six runs total: r1..r5 on the seed thread plus `r-other-thread` (newest) on a second thread.
       const { queries } = await seed();
 
       const page1 = await queries.runsPage({ page: 1, pageSize: 2 });
-      expect(page1.rows.map((row) => row.runId)).toEqual(['r5', 'r4']);
-      expect(page1.total).toBe(5);
+      expect(page1.rows.map((row) => row.runId)).toEqual(['r-other-thread', 'r5']);
+      expect(page1.total).toBe(6);
       expect(page1.rows).toHaveLength(2);
 
       const page2 = await queries.runsPage({ page: 2, pageSize: 2 });
-      expect(page2.rows.map((row) => row.runId)).toEqual(['r3', 'r2']);
-      expect(page2.total).toBe(5);
+      expect(page2.rows.map((row) => row.runId)).toEqual(['r4', 'r3']);
+      expect(page2.total).toBe(6);
 
       const page3 = await queries.runsPage({ page: 3, pageSize: 2 });
-      expect(page3.rows.map((row) => row.runId)).toEqual(['r1']);
+      expect(page3.rows.map((row) => row.runId)).toEqual(['r2', 'r1']);
 
       const pastEnd = await queries.runsPage({ page: 4, pageSize: 2 });
       expect(pastEnd.rows).toEqual([]);
-      expect(pastEnd.total).toBe(5);
+      expect(pastEnd.total).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by threadId', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries, otherThreadId } = await seed();
+      const page = await queries.runsPage({
+        page: 1,
+        pageSize: 10,
+        where: { threadId: otherThreadId },
+      });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r-other-thread']);
+      expect(page.total).toBe(1);
     } finally {
       vi.useRealTimers();
     }

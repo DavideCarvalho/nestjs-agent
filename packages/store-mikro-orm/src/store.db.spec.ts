@@ -84,6 +84,7 @@ describe('MikroOrmAgentStore (sqlite)', () => {
       toolType: 'read',
       input: { q: 'weather' },
       status: 'pending_approval',
+      runId: 'run-tc-1',
     });
     await store.updateToolCall({
       toolCallId: 'tc-1',
@@ -99,6 +100,20 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     expect(toolCall?.executionMs).toBe(12);
     expect(toolCall?.executedByRef).toBe('worker-1');
     expect(toolCall?.executedAt).toBeInstanceOf(Date);
+    // runId round-trips from recordToolCall through to the persisted row
+    expect(toolCall?.runId).toBe('run-tc-1');
+
+    // recordToolCall without a runId persists NULL, not undefined — a pre-rollout-shaped call
+    await store.recordToolCall({
+      toolCallId: 'tc-no-run',
+      messageId: assistantMessage.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+    const noRunToolCall = await orm.em.fork().findOne(AgentToolCall, { id: 'tc-no-run' });
+    expect(noRunToolCall?.runId).toBeNull();
 
     // ownerOfThread / ownerOfToolCall resolve the owning actorRef for the authz checks
     expect(await store.ownerOfThread(thread.id)).toBe('actor-1');

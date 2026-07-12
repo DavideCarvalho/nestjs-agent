@@ -192,6 +192,48 @@ describe('runAgentLoop', () => {
     expect(rows[0]?.output).toEqual({ tempC: 21, city: 'Recife' });
   });
 
+  it('stamps every recordToolCall with hooks.runId — read, action, delegated, and retrieval calls alike', async () => {
+    const readScript: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'it is 21C in Recife' };
+    const { store: readStore } = await run(readScript);
+    expect(readStore.toolCallRows()[0]?.runId).toBe('run-1');
+
+    const actionScript: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'done' };
+    const { store: actionStore } = await run(actionScript, () => ({ approved: true }));
+    expect(actionStore.toolCallRows()[0]?.runId).toBe('run-1');
+
+    const delegateScript: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'asking the sub-agent', toolCall: { name: 'askSub', input: { task: 'q' } } }
+        : { text: 'answered' };
+    const { store: delegateStore } = await run(
+      delegateScript,
+      () => ({ approved: true }),
+      undefined,
+      async () => ({ text: 'sub-agent answer' }),
+    );
+    expect(delegateStore.toolCallRows()[0]?.runId).toBe('run-1');
+
+    // The synthetic `retrieve` tool call (inject-mode RAG) is recorded via the same code path.
+    const retriever: Retriever = {
+      retrieve: async () => [{ id: 'p1', text: 'some retrieved passage', score: 0.9 }],
+    };
+    const { store: retrievalStore } = await run(
+      () => ({ text: 'hello' }),
+      undefined,
+      undefined,
+      undefined,
+      { retriever },
+    );
+    const retrieveRow = retrievalStore.toolCallRows().find((row) => row.toolName === 'retrieve');
+    expect(retrieveRow?.runId).toBe('run-1');
+  });
+
   it('halts an action tool for approval, then executes on approve', async () => {
     const script: FakeScript = (_args, turnIndex) =>
       turnIndex === 0

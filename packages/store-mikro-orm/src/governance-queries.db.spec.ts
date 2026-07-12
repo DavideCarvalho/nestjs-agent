@@ -93,6 +93,8 @@ beforeAll(async () => {
     status: 'executed',
     createdAt: new Date('2026-07-01T09:06:00.000Z'),
   });
+  // Carries a runId — recentToolCalls must surface it for the telescope bridge's trace link; the
+  // sibling `olderToolCall` above records no runId at all (a pre-rollout-shaped row) → null.
   const newerToolCall = em.create(AgentToolCall, {
     id: 'tc-deploy',
     message: bobMessage,
@@ -100,6 +102,7 @@ beforeAll(async () => {
     toolType: 'action',
     status: 'pending_approval',
     createdAt: new Date('2026-07-02T09:06:00.000Z'),
+    runId: 'run-deploy',
   });
 
   // A: alice/gpt-x 2026-07-01 → cost 1*3 + 0.5*15 = 10.5
@@ -255,8 +258,9 @@ describe('MikroOrmGovernanceQueries (sqlite)', () => {
       toolType: 'action',
       status: 'pending_approval',
       threadId: 'thread-bob',
+      runId: 'run-deploy',
     });
-    expect(rows[1]).toMatchObject({ toolName: 'search', threadId: 'thread-alice' });
+    expect(rows[1]).toMatchObject({ toolName: 'search', threadId: 'thread-alice', runId: null });
   });
 
   it('recentThreads rolls up message count + all-time tokens, newest activity first', async () => {
@@ -875,6 +879,7 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
       input: { env: 'prod' },
       status: 'pending_approval',
       createdAt: new Date('2026-07-10T09:00:00.000Z'),
+      runId: 'run-pa-1',
     });
     const pendingMiddle = em.create(AgentToolCall, {
       id: 'tc-pa-2',
@@ -1005,6 +1010,7 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
       threadTitle: 'Judy chat',
       actorRef: 'judy',
       agentName: 'assistant-1',
+      runId: 'run-pa-1',
     });
 
     expect(rows[1]).toMatchObject({
@@ -1013,6 +1019,8 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
       threadTitle: 'Kyle chat',
       actorRef: 'kyle',
       agentName: 'assistant-2',
+      // recorded with no runId — resolves to null, not undefined.
+      runId: null,
     });
 
     // judy's second message carries no agentName — resolves to null, not undefined.
@@ -1157,6 +1165,7 @@ describe('MikroOrmGovernanceQueries toolCallsPage (sqlite)', () => {
         toolType: 'action',
         status: 'rejected',
         createdAt: new Date('2026-07-13T09:00:00.000Z'),
+        runId: 'run-tc-5',
       }),
     ];
 
@@ -1173,6 +1182,9 @@ describe('MikroOrmGovernanceQueries toolCallsPage (sqlite)', () => {
     expect(page1.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-4']);
     expect(page1.total).toBe(5);
     expect(page1.rows).toHaveLength(2);
+    // tc-5 was recorded with a runId (for the telescope bridge's trace link); tc-4 was not → null.
+    expect(page1.rows[0]?.runId).toBe('run-tc-5');
+    expect(page1.rows[1]?.runId).toBeNull();
 
     const page2 = await toolCallsPageQueries.toolCallsPage({ page: 2, pageSize: 2 });
     expect(page2.rows.map((row) => row.toolCallId)).toEqual(['tc-3', 'tc-2']);
@@ -1448,6 +1460,15 @@ describe('MikroOrmGovernanceQueries runsPage (sqlite)', () => {
       createdAt: new Date('2026-07-10T08:00:00.000Z'),
       updatedAt: new Date('2026-07-10T08:00:00.000Z'),
     });
+    // A second thread so `threadId` filtering is meaningful (r1..r5 all live on `runThread`).
+    const otherThread = em.create(AgentThread, {
+      id: 'paged-run-thread-other',
+      actorRef: 'ida',
+      title: 'Ida chat',
+      transient: false,
+      createdAt: new Date('2026-07-10T08:00:00.000Z'),
+      updatedAt: new Date('2026-07-10T08:00:00.000Z'),
+    });
 
     // Five runs — newest-first order is r5, r4, r3, r2, r1.
     const runs = [
@@ -1500,9 +1521,18 @@ describe('MikroOrmGovernanceQueries runsPage (sqlite)', () => {
         retries: 0,
         startedAt: new Date('2026-07-14T09:00:00.000Z'),
       }),
+      em.create(AgentRun, {
+        id: 'r-other-thread',
+        thread: otherThread,
+        actorRef: 'ida',
+        status: 'completed',
+        durationMs: 400,
+        retries: 0,
+        startedAt: new Date('2026-07-15T09:00:00.000Z'),
+      }),
     ];
 
-    em.persist([runThread, ...runs]);
+    em.persist([runThread, otherThread, ...runs]);
     await em.flush();
   });
 
@@ -1511,21 +1541,32 @@ describe('MikroOrmGovernanceQueries runsPage (sqlite)', () => {
   });
 
   it('paginates newest-first: page 2 rows + total, past-end empty page, pageSize respected', async () => {
+    // Six runs total: r1..r5 on `runThread` plus `r-other-thread` (newest) on a second thread.
     const page1 = await runsPageQueries.runsPage({ page: 1, pageSize: 2 });
-    expect(page1.rows.map((row) => row.runId)).toEqual(['r5', 'r4']);
-    expect(page1.total).toBe(5);
+    expect(page1.rows.map((row) => row.runId)).toEqual(['r-other-thread', 'r5']);
+    expect(page1.total).toBe(6);
     expect(page1.rows).toHaveLength(2);
 
     const page2 = await runsPageQueries.runsPage({ page: 2, pageSize: 2 });
-    expect(page2.rows.map((row) => row.runId)).toEqual(['r3', 'r2']);
-    expect(page2.total).toBe(5);
+    expect(page2.rows.map((row) => row.runId)).toEqual(['r4', 'r3']);
+    expect(page2.total).toBe(6);
 
     const page3 = await runsPageQueries.runsPage({ page: 3, pageSize: 2 });
-    expect(page3.rows.map((row) => row.runId)).toEqual(['r1']);
+    expect(page3.rows.map((row) => row.runId)).toEqual(['r2', 'r1']);
 
     const pastEnd = await runsPageQueries.runsPage({ page: 4, pageSize: 2 });
     expect(pastEnd.rows).toEqual([]);
-    expect(pastEnd.total).toBe(5);
+    expect(pastEnd.total).toBe(6);
+  });
+
+  it('filters by threadId', async () => {
+    const page = await runsPageQueries.runsPage({
+      page: 1,
+      pageSize: 10,
+      where: { threadId: 'paged-run-thread-other' },
+    });
+    expect(page.rows.map((row) => row.runId)).toEqual(['r-other-thread']);
+    expect(page.total).toBe(1);
   });
 
   it('filters by agentName', async () => {

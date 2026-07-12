@@ -62,6 +62,8 @@ export interface ToolCallActivityRow {
   status: string;
   threadId: string;
   createdAt: string;
+  /** The run this call belongs to, for a trace deep-link; `null` for a call recorded before this shipped. */
+  runId: string | null;
 }
 
 /** A recent thread with rolled-up activity. */
@@ -139,6 +141,8 @@ export interface PendingApprovalRow {
   agentName: string | null;
   /** ISO timestamp. */
   requestedAt: string;
+  /** The run this call belongs to, for a trace deep-link; `null` for a call recorded before this shipped. */
+  runId: string | null;
 }
 
 /** Governance rollup for one tool over a range. */
@@ -200,6 +204,7 @@ export interface RunWhere {
   agentName?: string;
   status?: string;
   errorCode?: string;
+  threadId?: string;
   fromDay?: string;
   toDay?: string;
 }

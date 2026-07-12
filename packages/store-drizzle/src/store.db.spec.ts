@@ -66,6 +66,7 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
       toolType: 'read',
       input: { q: 'weather' },
       status: 'pending_approval',
+      runId: 'run-tc-1',
     });
     await store.updateToolCall({
       toolCallId: 'tc-1',
@@ -78,6 +79,23 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     const [toolCall] = await db.select().from(agentToolCall).where(eq(agentToolCall.id, 'tc-1'));
     expect(toolCall?.status).toBe('executed');
     expect(toolCall?.output).toEqual({ result: 'sunny' });
+    // runId round-trips from recordToolCall through to the persisted row
+    expect(toolCall?.runId).toBe('run-tc-1');
+
+    // recordToolCall without a runId persists NULL, not undefined — a pre-rollout-shaped call
+    await store.recordToolCall({
+      toolCallId: 'tc-no-run',
+      messageId: assistantMessage.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+    const [noRunToolCall] = await db
+      .select()
+      .from(agentToolCall)
+      .where(eq(agentToolCall.id, 'tc-no-run'));
+    expect(noRunToolCall?.runId).toBeNull();
 
     // ownerOfThread / ownerOfToolCall resolve the owning actorRef for the authz checks
     expect(await store.ownerOfThread(thread.id)).toBe('actor-1');

@@ -617,6 +617,7 @@ export async function runAgentLoop(
           toolType: 'read',
           input: { query: input.userText },
           status: 'auto_executed',
+          runId: hooks.runId,
         });
         await deps.store.updateToolCall({ toolCallId, status: 'executed', output: { passages } });
       });
@@ -656,6 +657,7 @@ export async function runAgentLoop(
             toolType: 'read',
             input: call.input,
             status: 'auto_executed',
+            runId: hooks.runId,
           }),
         );
         // Cap nesting so a mis-wired delegation cycle can't spawn runs without bound.
@@ -692,6 +694,7 @@ export async function runAgentLoop(
             toolType: 'action',
             input: call.input,
             status: 'pending_approval',
+            runId: hooks.runId,
           }),
         );
         const decision = await hooks.awaitApproval(call, ctx);
@@ -728,6 +731,7 @@ export async function runAgentLoop(
             toolType: 'read',
             input: call.input,
             status: 'auto_executed',
+            runId: hooks.runId,
           }),
         );
       }

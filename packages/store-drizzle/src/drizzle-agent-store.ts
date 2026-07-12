@@ -318,6 +318,7 @@ export class DrizzleAgentStore implements AgentStore {
       error: null,
       createdAt: new Date(),
       executedAt: null,
+      runId: input.runId ?? null,
     });
   }
 

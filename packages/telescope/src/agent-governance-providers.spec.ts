@@ -1,6 +1,8 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  GovernancePage,
+  GovernancePageQuery,
   GovernanceRange,
   ModelSpendRow,
   PendingApprovalRow,
@@ -9,9 +11,12 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -30,13 +35,16 @@ import {
   agentRunsByAgentTableProvider,
   agentRunsDurationProvider,
   agentRunsFailedProvider,
+  agentRunsPagedTableProvider,
   agentRunsRetriesProvider,
   agentRunsSuccessRateProvider,
   agentRunsTotalProvider,
   agentRunsTrendProvider,
   agentSpendByModelProvider,
   agentSpendTotalProvider,
+  agentThreadsPagedTableProvider,
   agentTokensTotalProvider,
+  agentToolCallsPagedTableProvider,
   agentToolStatsTableProvider,
   agentTopThreadsTableProvider,
   agentUsageTrendProvider,
@@ -49,6 +57,8 @@ import {
   toModelSpendRows,
   toModelSpendSegments,
   toRecentRunTableRows,
+  toRecentThreadTableRows,
+  toRecentToolCallRows,
   toRunAgentTableRows,
   toRunErrorSegments,
   toRunTrendRows,
@@ -150,6 +160,7 @@ const TOOL_CALL_ROWS: ToolCallActivityRow[] = [
     status: 'executed',
     threadId: 'th1',
     createdAt: '2026-07-01T00:00:00.000Z',
+    runId: 'run1',
   },
 ];
 
@@ -174,6 +185,7 @@ const PENDING_APPROVAL_ROWS: PendingApprovalRow[] = [
     actorRef: 'user:1',
     agentName: null,
     requestedAt: '2026-07-01T00:00:00.000Z',
+    runId: null,
   },
 ];
 
@@ -188,6 +200,13 @@ const TOOL_STAT_ROWS: ToolStatRow[] = [
     p95ExecutionMs: null,
   },
 ];
+
+// Fixture pages for the paged SPI reads (toolCallsPage/threadsPage/runsPage). `total`/the fixture
+// rows are fixed; `page`/`pageSize` echo back whatever the provider requested, so a test can assert
+// the provider passed `query.page`/`query.limit` through untouched.
+const TOOL_CALLS_PAGE_TOTAL = 7;
+const THREADS_PAGE_TOTAL = 3;
+const RUNS_PAGE_TOTAL = 9;
 
 /** A fully-implementing stub of the read-model; each method ignores its range and echoes fixtures. */
 function stubQueries(): AgentGovernanceQueries {
@@ -230,6 +249,30 @@ function stubQueries(): AgentGovernanceQueries {
     },
     async toolStats(_range: GovernanceRange) {
       return TOOL_STAT_ROWS;
+    },
+    async toolCallsPage(query: GovernancePageQuery<ToolCallWhere>) {
+      return {
+        rows: TOOL_CALL_ROWS,
+        total: TOOL_CALLS_PAGE_TOTAL,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
+    },
+    async threadsPage(query: GovernancePageQuery<ThreadWhere>) {
+      return {
+        rows: THREAD_ACTIVITY_ROWS,
+        total: THREADS_PAGE_TOTAL,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
+    },
+    async runsPage(query: GovernancePageQuery<RunWhere>) {
+      return {
+        rows: RECENT_RUN_ROWS,
+        total: RUNS_PAGE_TOTAL,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
     },
   };
 }
@@ -500,6 +543,7 @@ describe('reliability + tools + approvals providers', () => {
           actorRef: 'user:1',
           agentName: '—',
           requestedAt: '2026-07-01T00:00:00.000Z',
+          runId: null,
         },
       ],
     });
@@ -539,6 +583,78 @@ describe('reliability + tools + approvals providers', () => {
     const ctx = contextWith(stubQueries());
     await expect(agentRecentRunsTableProvider().resolve({ limit: 10_000 }, ctx)).resolves.toEqual({
       rows: toRecentRunTableRows(RECENT_RUN_ROWS),
+    });
+  });
+});
+
+// The three paged-table providers (A1's convention): each reads `query.page`/`query.limit` and
+// returns `{ rows, total, page, limit }` via the paged SPI reads (toolCallsPage/threadsPage/
+// runsPage), NOT the capped `recentX` reads. Pinned against wave-polish-CONTRACTS.md §A1 — see the
+// "Paged-table providers" comment in agent-governance-providers.ts for why the shipped dashboard
+// panels don't set `paged: true` yet.
+describe('paged-table providers (A1)', () => {
+  it('passes query.page/query.limit through to toolCallsPage and returns the paged shape', async () => {
+    const ctx = contextWith(stubQueries());
+    await expect(
+      agentToolCallsPagedTableProvider().resolve({ page: 3, limit: 20 }, ctx),
+    ).resolves.toEqual({
+      rows: toRecentToolCallRows(TOOL_CALL_ROWS),
+      total: TOOL_CALLS_PAGE_TOTAL,
+      page: 3,
+      limit: 20,
+    });
+  });
+
+  it('passes query.page/query.limit through to threadsPage and returns the paged shape', async () => {
+    const ctx = contextWith(stubQueries());
+    await expect(
+      agentThreadsPagedTableProvider().resolve({ page: 2, limit: 10 }, ctx),
+    ).resolves.toEqual({
+      rows: toRecentThreadTableRows(THREAD_ACTIVITY_ROWS),
+      total: THREADS_PAGE_TOTAL,
+      page: 2,
+      limit: 10,
+    });
+  });
+
+  it('passes query.page/query.limit through to runsPage and returns the paged shape', async () => {
+    const ctx = contextWith(stubQueries());
+    await expect(
+      agentRunsPagedTableProvider().resolve({ page: 1, limit: 5 }, ctx),
+    ).resolves.toEqual({
+      rows: toRecentRunTableRows(RECENT_RUN_ROWS),
+      total: RUNS_PAGE_TOTAL,
+      page: 1,
+      limit: 5,
+    });
+  });
+
+  it('defaults page to 1 and limit to the recent-feed default when the query omits them', async () => {
+    const ctx = contextWith(stubQueries());
+    await expect(agentToolCallsPagedTableProvider().resolve(undefined, ctx)).resolves.toMatchObject(
+      { page: 1, limit: 50 },
+    );
+  });
+
+  it('degrades to an empty page (not a throw) when the read-model is unbound', async () => {
+    const ctx = contextWith(MISSING_BINDING);
+    await expect(agentToolCallsPagedTableProvider().resolve({ page: 2 }, ctx)).resolves.toEqual({
+      rows: [],
+      total: 0,
+      page: 2,
+      limit: 50,
+    });
+    await expect(agentThreadsPagedTableProvider().resolve({}, ctx)).resolves.toEqual({
+      rows: [],
+      total: 0,
+      page: 1,
+      limit: 50,
+    });
+    await expect(agentRunsPagedTableProvider().resolve({}, ctx)).resolves.toEqual({
+      rows: [],
+      total: 0,
+      page: 1,
+      limit: 50,
     });
   });
 });

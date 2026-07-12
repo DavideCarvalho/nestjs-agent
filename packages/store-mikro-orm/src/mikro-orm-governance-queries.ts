@@ -205,6 +205,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       status: toolCall.status,
       threadId: toolCall.message.thread.id,
       createdAt: toolCall.createdAt.toISOString(),
+      runId: toolCall.runId ?? null,
     }));
   }
 
@@ -376,6 +377,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       actorRef: toolCall.message.thread.actorRef,
       agentName: toolCall.message.agentName ?? null,
       requestedAt: toolCall.createdAt.toISOString(),
+      runId: toolCall.runId ?? null,
     }));
   }
 
@@ -484,6 +486,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
         status: toolCall.status,
         threadId: toolCall.message.thread.id,
         createdAt: toolCall.createdAt.toISOString(),
+        runId: toolCall.runId ?? null,
       })),
       total,
       page: query.page,
@@ -558,6 +561,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
         ? { status: filters.status }
         : {}),
       ...(filters?.errorCode !== undefined ? { errorCode: filters.errorCode } : {}),
+      ...(filters?.threadId !== undefined ? { thread: filters.threadId } : {}),
       ...(filters?.fromDay !== undefined || filters?.toDay !== undefined
         ? {
             startedAt: {

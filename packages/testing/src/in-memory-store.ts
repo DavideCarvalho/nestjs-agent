@@ -30,6 +30,8 @@ interface ToolCallRow {
   error?: string;
   executionMs?: number;
   createdAt: string;
+  /** The run this call belongs to; `undefined` when the caller didn't supply one. */
+  runId?: string;
 }
 
 interface UsageRow {
@@ -72,6 +74,8 @@ export interface GovernanceToolCallRow {
   /** Wall-clock milliseconds the tool took to run; undefined when it never recorded one. */
   executionMs?: number;
   createdAt: string;
+  /** The run this call belongs to; undefined when the caller didn't supply one. */
+  runId?: string;
 }
 
 /** A tool call awaiting a HITL decision, joined to its thread + message for the approvals inbox. */
@@ -84,6 +88,8 @@ export interface GovernancePendingApprovalRow {
   actorRef: string;
   agentName?: string;
   requestedAt: string;
+  /** The run this call belongs to; undefined when the caller didn't supply one. */
+  runId?: string;
 }
 
 /** Thread metadata exposed to the governance read-model (title/actor/count/last activity). */
@@ -370,6 +376,7 @@ export class InMemoryAgentStore implements AgentStore {
       input: input.input,
       status: input.status,
       createdAt: this.now(),
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
     });
   }
 
@@ -455,6 +462,7 @@ export class InMemoryAgentStore implements AgentStore {
       threadId: row.threadId,
       createdAt: row.createdAt,
       ...(row.executionMs !== undefined ? { executionMs: row.executionMs } : {}),
+      ...(row.runId !== undefined ? { runId: row.runId } : {}),
     }));
   }
 
@@ -482,6 +490,7 @@ export class InMemoryAgentStore implements AgentStore {
         actorRef: thread.actorRef,
         requestedAt: call.createdAt,
         ...(message?.agentName !== undefined ? { agentName: message.agentName } : {}),
+        ...(call.runId !== undefined ? { runId: call.runId } : {}),
       });
     }
     return rows;
@@ -526,11 +535,12 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   /** Test helper: read the recorded tool-call rows. */
-  toolCallRows(): { toolName: string; status: ToolCallStatus; output?: unknown }[] {
+  toolCallRows(): { toolName: string; status: ToolCallStatus; output?: unknown; runId?: string }[] {
     return [...this.toolCalls.values()].map((row) => ({
       toolName: row.toolName,
       status: row.status,
       ...(row.output !== undefined ? { output: row.output } : {}),
+      ...(row.runId !== undefined ? { runId: row.runId } : {}),
     }));
   }
 

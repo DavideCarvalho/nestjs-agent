@@ -1,6 +1,7 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  GovernancePage,
   GovernanceRange,
   ModelSpendRow,
   PendingApprovalRow,
@@ -98,7 +99,10 @@ function isGovernanceQueries(value: unknown): value is AgentGovernanceQueries {
     typeof value.runTrend === 'function' &&
     typeof value.recentRuns === 'function' &&
     typeof value.pendingApprovals === 'function' &&
-    typeof value.toolStats === 'function'
+    typeof value.toolStats === 'function' &&
+    typeof value.toolCallsPage === 'function' &&
+    typeof value.threadsPage === 'function' &&
+    typeof value.runsPage === 'function'
   );
 }
 
@@ -316,7 +320,12 @@ export function toRecentThreadTableRows(rows: ThreadActivityRow[]): ThreadActivi
   return rows;
 }
 
-/** One row of the pending-approvals inbox table, `input` stringified for display. */
+/**
+ * One row of the pending-approvals inbox table, `input` stringified for display. `runId` is kept
+ * raw (not NO_VALUE-substituted, unlike `agentName`) so the trace-link column's `{runId}` template
+ * substitutes a real value when present; a `null` row (recorded before this shipped) renders an
+ * empty, inert link cell instead — the `Column.link` primitive has no per-row conditional.
+ */
 interface PendingApprovalTableRow {
   toolCallId: string;
   toolName: string;
@@ -325,6 +334,7 @@ interface PendingApprovalTableRow {
   actorRef: string;
   agentName: string;
   requestedAt: string;
+  runId: string | null;
 }
 
 /** Pending-approvals rows as table rows (drops the raw `input` — not renderable in a table cell). */
@@ -337,6 +347,7 @@ export function toPendingApprovalTableRows(rows: PendingApprovalRow[]): PendingA
     actorRef: row.actorRef,
     agentName: row.agentName ?? NO_VALUE,
     requestedAt: row.requestedAt,
+    runId: row.runId,
   }));
 }
 
@@ -596,6 +607,64 @@ function governanceLimitProvider<TRow>(
   };
 }
 
+// ─── Paged-table providers (tool calls / threads / runs) ─────────────────────
+//
+// Pinned against wave-polish-CONTRACTS.md §A1 (the ext-dashboard paged-table convention: a table
+// panel opts in with `paged: true`, the UI then re-resolves with `query.page`/`query.limit` and
+// expects `{ rows, total, page, limit }` back instead of a bare rows array). The convention is
+// implemented here at the DATA layer — these three providers already read `query.page`/`query.limit`
+// and return the paged shape — but the three list-table panels in `agent-dashboard.spec-data.ts`
+// don't yet set `paged: true`: the installed `@dudousxd/nestjs-telescope` (1.15.0) predates that
+// field on the table `Panel` variant, so setting it would fail typecheck (excess-property error on
+// the discriminated union). Once nestjs-agent bumps its `@dudousxd/nestjs-telescope` dependency to a
+// version that publishes `paged`, flip the three panels below to `paged: true` — no other change
+// needed, the provider side is already ready.
+
+/** Clamp a panel-supplied `page` to `[1, Infinity)`, defaulting to 1 when absent/invalid. */
+function resolvePage(query: Record<string, unknown> | undefined): number {
+  const raw = query?.page;
+  const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 1;
+  return Math.max(1, Math.trunc(value));
+}
+
+/** The page/limit shape the paged-table providers below build — none of these panels filter by `where`. */
+interface PagedQuery {
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Build a governance `DataProvider` for a PAGED list table (A1's convention): reads `query.page`/
+ * `query.limit` (clamped, mirroring {@link governanceLimitProvider}'s `limit` handling) and returns
+ * `{ rows, total, page, limit }` instead of a bare rows array. Degrades to an empty page (`total: 0`)
+ * when the read-model isn't bound.
+ */
+function governancePagedTableProvider<TRow>(
+  name: string,
+  defaultLimit: number,
+  fetch: (queries: AgentGovernanceQueries, query: PagedQuery) => Promise<GovernancePage<TRow>>,
+  format: (rows: TRow[]) => unknown[],
+): DataProvider {
+  return {
+    name,
+    async resolve(query, ctx) {
+      const queries = resolveGovernanceQueries(ctx);
+      const page = resolvePage(query);
+      const limit = resolveLimit(query, defaultLimit);
+      if (!queries) {
+        return { rows: [], total: 0, page, limit };
+      }
+      const resolved = await fetch(queries, { page, pageSize: limit });
+      return {
+        rows: format(resolved.rows),
+        total: resolved.total,
+        page: resolved.page,
+        limit: resolved.pageSize,
+      };
+    },
+  };
+}
+
 /**
  * table → most recent runs (newest first), errorMessage capped and promptHash shortened to a chip
  * — see {@link capErrorMessage} for why the cap happens here rather than downstream.
@@ -630,6 +699,47 @@ export function agentRecentThreadsTableProvider(): DataProvider {
     DEFAULT_RECENT_LIMIT,
     (queries, limit) => queries.recentThreads(limit),
     (rows) => ({ rows: toRecentThreadTableRows(rows) }),
+  );
+}
+
+/**
+ * table (paged, A1) → tool-call activity, newest first, via {@link AgentGovernanceQueries.toolCallsPage}
+ * rather than the capped `recentToolCalls`. See the "Paged-table providers" section above for why
+ * the panel wiring can't set `paged: true` yet.
+ */
+export function agentToolCallsPagedTableProvider(): DataProvider {
+  return governancePagedTableProvider(
+    'agent.tools.paged',
+    DEFAULT_RECENT_LIMIT,
+    (queries, query) => queries.toolCallsPage(query),
+    toRecentToolCallRows,
+  );
+}
+
+/**
+ * table (paged, A1) → thread activity, newest first, via {@link AgentGovernanceQueries.threadsPage}
+ * rather than the capped `recentThreads`.
+ */
+export function agentThreadsPagedTableProvider(): DataProvider {
+  return governancePagedTableProvider(
+    'agent.threads.paged',
+    DEFAULT_RECENT_LIMIT,
+    (queries, query) => queries.threadsPage(query),
+    toRecentThreadTableRows,
+  );
+}
+
+/**
+ * table (paged, A1) → run activity, newest first, via {@link AgentGovernanceQueries.runsPage} rather
+ * than the capped `recentRuns`. Rows are shaped identically to {@link agentRecentRunsTableProvider}
+ * (errorMessage capped, promptHash shortened).
+ */
+export function agentRunsPagedTableProvider(): DataProvider {
+  return governancePagedTableProvider(
+    'agent.runs.paged',
+    DEFAULT_RECENT_LIMIT,
+    (queries, query) => queries.runsPage(query),
+    toRecentRunTableRows,
   );
 }
 

@@ -85,6 +85,8 @@ export const agentToolCall = sqliteTable('agent_tool_call', {
   error: text('error'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
+  /** The run (turn) this call belongs to, for a trace deep-link; null for a pre-rollout row. */
+  runId: text('run_id'),
 });
 
 /** A token-usage ledger row, summed per actor per day by `quotaToday`. */

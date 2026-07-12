@@ -25,6 +25,7 @@ describe('agentTelescopeExtension', () => {
         'agent.runs.duration',
         'agent.runs.errors',
         'agent.runs.failed',
+        'agent.runs.paged',
         'agent.runs.recent',
         'agent.runs.retries',
         'agent.runs.successRate',
@@ -36,10 +37,12 @@ describe('agentTelescopeExtension', () => {
         'agent.spend.byModelTable',
         'agent.spend.totalCost',
         'agent.spend.totalTokens',
+        'agent.threads.paged',
         'agent.threads.recent',
         'agent.threads.topSpend',
         'agent.tokens',
         'agent.toolStatus',
+        'agent.tools.paged',
         'agent.tools.recent',
         'agent.tools.stats',
         'agent.usage.trend',
@@ -73,6 +76,9 @@ describe('agentTelescopeExtension', () => {
         : undefined;
     expect(threadIdColumn?.link).toEqual({ href: '/agent/threads/{threadId}' });
 
+    // No opts.runHref → the runId column still links, defaulting to the in-app trace waterfall
+    // (no host wiring needed); no opts.threadHref → the threadId column stays plain text (there's
+    // no internal thread view to default to).
     const withoutHrefs = agentTelescopeExtension();
     const plainDashboard = withoutHrefs.dashboards?.(ctx)[0];
     const plainRecentRuns = plainDashboard?.sections
@@ -82,6 +88,15 @@ describe('agentTelescopeExtension', () => {
       plainRecentRuns?.kind === 'table'
         ? plainRecentRuns.columns.find((c) => c.key === 'runId')
         : undefined;
-    expect(plainRunIdColumn?.link).toBeUndefined();
+    expect(plainRunIdColumn?.link).toEqual({ href: '#/traces/{runId}' });
+
+    const plainRecentThreads = plainDashboard?.sections
+      ?.flatMap((s) => s.panels)
+      .find((p) => p.kind === 'table' && p.title === 'Recently active threads');
+    const plainThreadIdColumn =
+      plainRecentThreads?.kind === 'table'
+        ? plainRecentThreads.columns.find((c) => c.key === 'threadId')
+        : undefined;
+    expect(plainThreadIdColumn?.link).toBeUndefined();
   });
 });

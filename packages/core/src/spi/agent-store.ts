@@ -38,6 +38,12 @@ export interface RecordToolCallInput {
   toolType: 'read' | 'action';
   input: unknown;
   status: ToolCallStatus;
+  /**
+   * The run (turn) this tool call belongs to — enables a governance surface to deep-link a tool
+   * call out to its trace waterfall. Optional so a caller predating this (or a store's own
+   * synthetic tool calls) can omit it; the store persists it as `null` when absent.
+   */
+  runId?: string;
 }
 
 export interface UpdateToolCallInput {

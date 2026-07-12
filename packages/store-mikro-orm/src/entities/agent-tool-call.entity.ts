@@ -16,6 +16,8 @@ export class AgentToolCall {
   error?: string | null;
   createdAt!: Date;
   executedAt?: Date | null;
+  /** The run (turn) this call belongs to, for a trace deep-link; `null` for a pre-rollout row. */
+  runId?: string | null;
 }
 
 /** Builds the `agent_tool_call` schema. `message` cascades on delete (§5). */
@@ -43,6 +45,7 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
       error: { type: 'text', nullable: true, ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
       executedAt: { type: 'datetime', nullable: true, fieldName: 'executed_at' },
+      runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
     },
   });
 }
