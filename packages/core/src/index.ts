@@ -37,3 +37,4 @@ export {
   type AgentLoopHooks,
 } from './agent-loop.js';
 export * from './diagnostics.js';
+export * from './tool-retry.js';

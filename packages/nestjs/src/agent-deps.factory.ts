@@ -95,6 +95,9 @@ export class AgentDepsFactory {
       ...(this.options.toolTimeoutMs !== undefined
         ? { toolTimeoutMs: this.options.toolTimeoutMs }
         : {}),
+      ...(this.options.toolTransientRetry !== undefined
+        ? { toolTransientRetry: this.options.toolTransientRetry }
+        : {}),
       ...(followUpsCount !== undefined ? { followUpsCount } : {}),
       ...(retrieval?.mode === 'inject'
         ? {

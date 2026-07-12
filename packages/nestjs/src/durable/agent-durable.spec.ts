@@ -19,6 +19,7 @@ import { Test } from '@nestjs/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from '../agent.module.js';
+import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
@@ -53,6 +54,30 @@ class FailingTool {
 }
 
 /**
+ * Throws a classified-transient (deadlock) error on its first invocation, then succeeds — exercises
+ * `invokeWithTransientRetry` at the dispatched (`AgentRunSteps.tool`) execution site. A plain
+ * `@Injectable()` field as the attempt counter: Nest gives each test's own `moduleRef` a fresh
+ * instance, so there's no cross-test leakage.
+ */
+@AiTool({
+  name: 'flakyDeadlock',
+  kind: 'read',
+  description: 'throws a deadlock once, then succeeds',
+  input: z.object({}),
+})
+@Injectable()
+class FlakyDeadlockTool {
+  attempts = 0;
+  async execute(): Promise<{ recovered: boolean; attempts: number }> {
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      throw new Error('Deadlock found when trying to get lock; try restarting transaction');
+    }
+    return { recovered: true, attempts: this.attempts };
+  }
+}
+
+/**
  * Simulates the BullMQ thin-worker runtime's dispatch suspend surfacing through the loop:
  * durable-worker's `Suspend` is a DIFFERENT class from durable-core's `WorkflowSuspended` (only the
  * `Symbol.for` control-flow marker is shared), so an instanceof-based catch misclassifies it.
@@ -80,7 +105,11 @@ class DefaultAgent {}
  * an explicit `true` to state the default outright (the dispatched suite below does, so its tests
  * keep meaning the same thing independent of what the default is).
  */
-async function buildDurableApp(script: FakeScript, dispatchedSteps?: boolean) {
+async function buildDurableApp(
+  script: FakeScript,
+  dispatchedSteps?: boolean,
+  toolTransientRetry?: AgentModuleOptions['toolTransientRetry'],
+) {
   const store = new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -96,10 +125,17 @@ async function buildDurableApp(script: FakeScript, dispatchedSteps?: boolean) {
         durable: true,
         defaultAgent: 'default',
         ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
+        ...(toolTransientRetry !== undefined ? { toolTransientRetry } : {}),
       }),
       AgentDurableModule,
     ],
-    providers: [PurgeCacheTool, FailingTool, ThinWorkerSuspendTool, DefaultAgent],
+    providers: [
+      PurgeCacheTool,
+      FailingTool,
+      ThinWorkerSuspendTool,
+      FlakyDeadlockTool,
+      DefaultAgent,
+    ],
   }).compile();
   await moduleRef.init();
   return {
@@ -465,6 +501,65 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       // The tool-output-error stream frame carries the same message string persist:toolfail writes.
       expect(streamed).toContain('tool exploded');
       expect(streamed).not.toContain('workflow suspended');
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  // Exercises invokeWithTransientRetry at the DISPATCHED execution site (AgentRunSteps.tool): the
+  // default `toolTransientRetry` policy (attempts: 2) retries the deadlock in place — same step,
+  // no new checkpoint — so the tool call ends up 'executed', not 'failed'.
+  it('retries a transient (deadlock) tool error via the dispatched step and completes the run', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
+        : { text: 'recovered from the deadlock' };
+    const { moduleRef, service, engine, store } = await buildDurableApp(script, true);
+    try {
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'go',
+      });
+      const collected = collect(service.subscribe(runId));
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      const streamed = await collected;
+
+      expect(result.status).toBe('completed');
+      expect(streamed).toContain('recovered from the deadlock');
+      expect(store.toolCallRows()[0]).toMatchObject({
+        toolName: 'flakyDeadlock',
+        status: 'executed',
+      });
+      expect(store.toolCallRows()[0]?.output).toEqual({ recovered: true, attempts: 2 });
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  // `toolTransientRetry: false` at the module level disables the retry entirely, even at the
+  // dispatched site — the first (and only) attempt's deadlock surfaces as an ordinary tool failure.
+  it('toolTransientRetry: false disables the dispatched retry — the deadlock fails the call outright', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
+        : { text: 'could not recover' };
+    const { moduleRef, service, engine, store } = await buildDurableApp(script, true, false);
+    try {
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'go',
+      });
+      const collected = collect(service.subscribe(runId));
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      const streamed = await collected;
+
+      expect(result.status).toBe('completed');
+      expect(store.toolCallRows()[0]).toMatchObject({
+        toolName: 'flakyDeadlock',
+        status: 'failed',
+      });
+      // The undisguised deadlock message streams as the tool's (one-shot) error — no retry happened.
+      expect(streamed).toContain('Deadlock');
     } finally {
       await moduleRef.close();
     }

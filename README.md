@@ -129,6 +129,39 @@ real durable suspend: the run is checkpointed to the state store on `ctx.waitFor
 on approval — surviving restarts, replay-safe. Without durable, an in-process runner holds the turn
 open. Either way the wire protocol is identical.
 
+### Transient tool errors
+
+A tool call gets **no durable step retries** by default — a bare `@Step()`, since a tool may not be
+idempotent. But when a tool's own invocation throws a *classified-transient* error — a DB deadlock,
+a lock-wait timeout, a serialization failure — the server already rolled that work back, so
+re-invoking it is safe. `toolTransientRetry` retries exactly that class, in place: same tool-call
+step, no new checkpoint, in both the in-process loop and the durable-dispatched path
+(`AgentRunSteps.tool`).
+
+```ts
+AgentModule.forRoot({
+  // …
+  toolTransientRetry: { attempts: 3, backoffMs: 200 }, // widen the window (default: { attempts: 2, backoffMs: 150 })
+  // toolTransientRetry: { classify: (error) => isTransientToolError(error) || isMyDriversTimeout(error) },
+  // toolTransientRetry: false, // disable entirely — a tool's own error always surfaces immediately
+});
+```
+
+- **Default ON**: `{ attempts: 2, backoffMs: 150 }` (total attempts, including the first try; the
+  wait before attempt N+1 is `backoffMs * N`), classified by the built-in `isTransientToolError` —
+  MySQL (`ER_LOCK_DEADLOCK` / `ER_LOCK_WAIT_TIMEOUT`, codes `1213`/`1205`), Postgres (SQLSTATE
+  `40001`/`40P01`), `SQLITE_BUSY`, or a matching `deadlock|lock wait timeout|serialization failure`
+  message — checked on the error and one level of `cause`.
+- **Widen or narrow** with `classify: (error) => boolean` to recognize another driver's shape, or to
+  stop retrying a class the default would otherwise catch.
+- **Disable** entirely with `toolTransientRetry: false`.
+- **Non-goal**: a tool's other (non-transient) failures are unaffected — they remain a one-shot
+  business outcome recorded as `status: 'failed'`, exactly as before. This is retry for a rolled-back
+  side effect, not a general reliability net for tools that fail for ordinary reasons.
+
+Each retry emits an `aviary:agent:tool.retry` point event (`{ toolName, toolCallId, attempt,
+message }`) — see [Observability](#observability-diagnostics) below.
+
 ## Multi-agent (orchestrator → sub-agents)
 
 Register named agents with `forFeature`; declare which agents an orchestrator may call via
@@ -204,9 +237,10 @@ const chat = useAgentChat({ getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-r
 ## Observability (diagnostics)
 
 The agent emits `aviary:agent:*` events (`run.started`, `message`, `tool-call`, `delegated`,
-`quota.exceeded`, `run.finished`) on Node's `diagnostics_channel`. `@dudousxd/nestjs-agent-telescope`
-consumes them for a dashboard tab; any app can subscribe for its own metrics, alerts, or an
-orchestration graph — the library instruments nothing in your code.
+`quota.exceeded`, `run.finished`, `run.failed`, `retrieved`, `tool.retry`) on Node's
+`diagnostics_channel`. `@dudousxd/nestjs-agent-telescope` consumes them for a dashboard tab; any app
+can subscribe for its own metrics, alerts, or an orchestration graph — the library instruments
+nothing in your code.
 
 ## Cost & governance
 

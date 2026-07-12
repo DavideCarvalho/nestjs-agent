@@ -1,4 +1,5 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
 export interface Actor {
@@ -343,4 +344,13 @@ export interface ToolStepEnvelope {
   ctx: ToolStepCtx;
   /** Applied INSIDE the handler (`withToolTimeout`) — never as a durable step `timeoutMs`. */
   timeoutMs?: number;
+  /**
+   * The numeric half of `toolTransientRetry` (resolved by the loop from `AgentLoopDeps`, always a
+   * definite value — `false` when disabled, else concrete `{ attempts, backoffMs }` with defaults
+   * already filled in) — never `undefined`, so the dispatched handler gets the SAME policy the
+   * loop would have used locally. The `classify` function is deliberately absent: it isn't
+   * wire-safe, so the handler resolves its own from its local module options (see
+   * `AgentRunSteps.tool`) instead of trying to serialize a function.
+   */
+  transientRetry: ToolTransientRetryNumbers | false;
 }

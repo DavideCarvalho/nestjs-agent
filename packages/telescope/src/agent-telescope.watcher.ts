@@ -12,7 +12,7 @@ interface DiagnosticEnvelope {
  * Records `aviary:agent:*` diagnostics events as Telescope entries of type `agent`. It depends
  * only on the diagnostics channel — not on the agent runtime — so it stays fully decoupled.
  *
- * Iterates {@link AGENT_DIAGNOSTIC_EVENTS} (all 8 point events on `ChannelRegistry['agent']`)
+ * Iterates {@link AGENT_DIAGNOSTIC_EVENTS} (all point events on `ChannelRegistry['agent']`)
  * rather than a hand-written literal, so `run.failed`/`delegated`/`retrieved` are recorded and
  * tagged — filterable in the Telescope UI — like every other agent event.
  *

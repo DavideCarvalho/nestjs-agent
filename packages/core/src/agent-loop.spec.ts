@@ -1,3 +1,4 @@
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -6,6 +7,7 @@ import {
   InMemoryQuotaStore,
   InMemoryTokenStreamSink,
 } from '@dudousxd/nestjs-agent-testing';
+import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -25,9 +27,34 @@ import {
   type Retriever,
   ToolRegistry,
   type ToolStepEnvelope,
+  type ToolTransientRetrySetting,
   type UpdateToolCallInput,
   runAgentLoop,
 } from './index.js';
+
+/** A `read`-kind tool that throws a classified-transient deadlock error `failCount` times, then succeeds. */
+function buildFlakyRegistry(failCount: number): ToolRegistry {
+  const reg = new ToolRegistry();
+  let attempts = 0;
+  reg.register(
+    {
+      name: 'flakyDeadlock',
+      kind: 'read',
+      description: 'flaky',
+      inputSchema: z.object({}),
+    },
+    {
+      execute: async () => {
+        attempts += 1;
+        if (attempts <= failCount) {
+          throw Object.assign(new Error('deadlock found'), { code: 'ER_LOCK_DEADLOCK' });
+        }
+        return { recovered: true, attempts };
+      },
+    },
+  );
+  return reg;
+}
 
 function buildRegistry(): ToolRegistry {
   const reg = new ToolRegistry();
@@ -95,8 +122,12 @@ interface RunOverrides {
   model?: ModelProvider;
   pricingStore?: AgentPricingStore;
   toolTimeoutMs?: number;
+  toolTransientRetry?: ToolTransientRetrySetting;
   dispatchLlm?: AgentLoopHooks['dispatchLlm'];
   dispatchTool?: AgentLoopHooks['dispatchTool'];
+  isControlFlowError?: AgentLoopHooks['isControlFlowError'];
+  /** Swaps the shared `buildRegistry()` for a test-specific one (e.g. a flaky tool). */
+  registry?: ToolRegistry;
   /** Decorates the store the LOOP sees (thread setup + assertions still use the inner store). */
   wrapStore?: (store: InMemoryAgentStore) => AgentStore;
   /** Inject-mode RAG (Feature 3 prompt-hash tests exercise this to prove the hash is pre-retrieval). */
@@ -121,7 +152,7 @@ async function run(
   const deps: AgentLoopDeps = {
     model: overrides.model ?? new FakeModelProvider(script),
     store: overrides.wrapStore !== undefined ? overrides.wrapStore(store) : store,
-    registry: buildRegistry(),
+    registry: overrides.registry ?? buildRegistry(),
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
     day: '2026-06-30',
@@ -132,6 +163,9 @@ async function run(
       : {}),
     ...(overrides.pricingStore !== undefined ? { pricingStore: overrides.pricingStore } : {}),
     ...(overrides.toolTimeoutMs !== undefined ? { toolTimeoutMs: overrides.toolTimeoutMs } : {}),
+    ...(overrides.toolTransientRetry !== undefined
+      ? { toolTransientRetry: overrides.toolTransientRetry }
+      : {}),
     ...(overrides.retriever !== undefined ? { retriever: overrides.retriever } : {}),
   };
   const hooks: AgentLoopHooks = {
@@ -145,6 +179,9 @@ async function run(
     ...(runAgent !== undefined ? { runAgent } : {}),
     ...(overrides.dispatchLlm !== undefined ? { dispatchLlm: overrides.dispatchLlm } : {}),
     ...(overrides.dispatchTool !== undefined ? { dispatchTool: overrides.dispatchTool } : {}),
+    ...(overrides.isControlFlowError !== undefined
+      ? { isControlFlowError: overrides.isControlFlowError }
+      : {}),
   };
 
   const result = await runAgentLoop(
@@ -674,6 +711,134 @@ describe('dispatched turn steps (dispatchLlm / dispatchTool)', () => {
     seen.length = 0;
     await run(script, undefined, undefined, undefined, { dispatchTool });
     expect(seen[0]).not.toHaveProperty('timeoutMs');
+  });
+
+  it('carries the resolved deps.toolTransientRetry as envelope.transientRetry (default, custom, false)', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'it is 21C in Recife' };
+    const seen: ToolStepEnvelope[] = [];
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async (_call, envelope) => {
+      seen.push(envelope);
+      return { tempC: 21, city: 'Recife' };
+    };
+
+    // Undefined (not set) → resolves to the concrete default, never omitted.
+    await run(script, undefined, undefined, undefined, { dispatchTool });
+    expect(seen[0]?.transientRetry).toEqual({ attempts: 2, backoffMs: 150 });
+
+    // A custom numeric setting rides through — its `classify` (not wire-safe) does NOT.
+    seen.length = 0;
+    await run(script, undefined, undefined, undefined, {
+      dispatchTool,
+      toolTransientRetry: { attempts: 5, backoffMs: 10, classify: () => true },
+    });
+    expect(seen[0]?.transientRetry).toEqual({ attempts: 5, backoffMs: 10 });
+    expect(seen[0]).not.toHaveProperty('transientRetry.classify');
+
+    // `false` rides through as `false`, not omitted.
+    seen.length = 0;
+    await run(script, undefined, undefined, undefined, { dispatchTool, toolTransientRetry: false });
+    expect(seen[0]?.transientRetry).toBe(false);
+  });
+
+  it('local path: retries a transient tool error in place, without adding a new checkpoint', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
+        : { text: 'recovered' };
+    const { result, store, stepNames } = await run(script, undefined, undefined, undefined, {
+      registry: buildFlakyRegistry(1),
+    });
+    expect(result.text).toBe('recovered');
+    // Exactly one `tool:<call.id>` step — the retry happened INSIDE it, not as a second checkpoint.
+    expect(stepNames.filter((name) => name.startsWith('tool:'))).toHaveLength(1);
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'flakyDeadlock', status: 'executed' });
+    expect(rows[0]?.output).toEqual({ recovered: true, attempts: 2 });
+  });
+
+  it('local path: emits a tool.retry point event per retry', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
+        : { text: 'recovered' };
+    const name = channelName('agent', 'tool.retry');
+    const seen: unknown[] = [];
+    const handler = (message: unknown) => seen.push(message);
+    subscribe(name, handler);
+    try {
+      await run(script, undefined, undefined, undefined, { registry: buildFlakyRegistry(1) });
+    } finally {
+      unsubscribe(name, handler);
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      payload: { toolName: 'flakyDeadlock', attempt: 1, message: 'deadlock found' },
+    });
+  });
+
+  it('local path: toolTransientRetry: false disables retry — the first deadlock fails the call', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
+        : { text: 'could not recover' };
+    const { store } = await run(script, undefined, undefined, undefined, {
+      registry: buildFlakyRegistry(1),
+      toolTransientRetry: false,
+    });
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'flakyDeadlock', status: 'failed' });
+  });
+
+  it('local path: a non-transient tool error is not retried (attempts exhausted only applies to transient errors)', async () => {
+    const registry = new ToolRegistry();
+    let calls = 0;
+    registry.register(
+      { name: 'alwaysBusiness', kind: 'read', description: 'x', inputSchema: z.object({}) },
+      {
+        execute: async () => {
+          calls += 1;
+          throw new Error('business rule violated');
+        },
+      },
+    );
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'alwaysBusiness', input: {} } }
+        : { text: 'handled' };
+    const { store } = await run(script, undefined, undefined, undefined, { registry });
+    expect(calls).toBe(1);
+    const rows = store.toolCallRows();
+    expect(rows[0]).toMatchObject({ toolName: 'alwaysBusiness', status: 'failed' });
+  });
+
+  it('local path: never retries when the error is a control-flow signal, even if classify says transient', async () => {
+    class FakeSuspendSignal extends Error {}
+    const registry = new ToolRegistry();
+    let calls = 0;
+    registry.register(
+      { name: 'suspendy', kind: 'read', description: 'x', inputSchema: z.object({}) },
+      {
+        execute: async () => {
+          calls += 1;
+          throw new FakeSuspendSignal('suspend');
+        },
+      },
+    );
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'suspendy', input: {} } }
+        : { text: 'unused' };
+    await expect(
+      run(script, undefined, undefined, undefined, {
+        registry,
+        toolTransientRetry: { classify: () => true },
+        isControlFlowError: (error) => error instanceof FakeSuspendSignal,
+      }),
+    ).rejects.toThrow(FakeSuspendSignal);
+    expect(calls).toBe(1);
   });
 
   it('rethrows a control-flow rejection untouched — no toolfail persisted, loop halted', async () => {

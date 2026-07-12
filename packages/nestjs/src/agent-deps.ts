@@ -10,6 +10,7 @@ import type {
   SinkWriter,
   TokenStreamSink,
   ToolRegistry,
+  ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
@@ -30,6 +31,11 @@ export interface AgentDeps {
   toolAllowList?: string[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
   toolTimeoutMs?: number;
+  /**
+   * Transient-tool-error retry policy (from module options). Undefined → default ON
+   * (`{ attempts: 2, backoffMs: 150 }` with the default classifier); `false` → disabled.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
   /** How many follow-up suggestions to generate after the final turn. Undefined/0 → off. */
   followUpsCount?: number;
   /** Inject-mode retriever (from `forRoot({ retrieval })`). Undefined → no prompt augmentation. */

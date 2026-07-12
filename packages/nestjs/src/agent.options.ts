@@ -6,6 +6,7 @@ import type {
   Retriever,
   RolesPolicy,
   TokenStreamSink,
+  ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
 import type {
   CanActivate,
@@ -105,6 +106,16 @@ export interface AgentModuleOptions {
    * model receives the timeout as its result and can adapt) instead of hanging the turn. Omit → none.
    */
   toolTimeoutMs?: number;
+  /**
+   * Retries a tool's own invocation, in place, when it throws a classified-transient error (a DB
+   * deadlock, a lock-wait timeout, a serialization failure) — never a new durable checkpoint, just
+   * repeated attempts inside the same tool-call step. Default ON: `{ attempts: 2, backoffMs: 150 }`
+   * with the default classifier. Set `{ classify }` to widen/narrow which errors count as transient
+   * (checked in BOTH the inline and durable-dispatched execution paths via DI, since the classify
+   * function itself can't ride a durable step's wire envelope), or `false` to disable entirely. A
+   * tool's other (non-transient) failures are unaffected — they remain a one-shot business outcome.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
   /**
    * Suggest follow-up questions after the final turn. `true` → 3 suggestions; `{ count }` → that many.
    * Costs one extra model call per turn (recorded as `follow_ups` usage), stored on the assistant

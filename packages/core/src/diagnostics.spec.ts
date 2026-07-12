@@ -7,6 +7,7 @@ import {
   type AgentDiagnosticKey,
   agentDiagnosticKey,
   publishAgentRunStarted,
+  publishAgentToolRetry,
 } from './index.js';
 
 describe('diagnostics', () => {
@@ -23,6 +24,32 @@ describe('diagnostics', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ payload: { runId: 'r1', threadId: 't1', actorId: 'u1' } });
   });
+
+  it('emits on aviary:agent:tool.retry as a POINT event (not a span)', () => {
+    const name = channelName('agent', 'tool.retry');
+    const seen: unknown[] = [];
+    const handler = (message: unknown) => seen.push(message);
+    subscribe(name, handler);
+    try {
+      publishAgentToolRetry({
+        toolName: 'executeSql',
+        toolCallId: 'call-1',
+        attempt: 1,
+        message: 'Deadlock found when trying to get lock',
+      });
+    } finally {
+      unsubscribe(name, handler);
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      payload: {
+        toolName: 'executeSql',
+        toolCallId: 'call-1',
+        attempt: 1,
+        message: 'Deadlock found when trying to get lock',
+      },
+    });
+  });
 });
 
 describe('AGENT_DIAGNOSTIC_EVENTS', () => {
@@ -37,10 +64,11 @@ describe('AGENT_DIAGNOSTIC_EVENTS', () => {
     'run.failed',
     'delegated',
     'retrieved',
+    'tool.retry',
   ];
 
-  it("lists all 8 ChannelRegistry['agent'] events, in a stable order", () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(8);
+  it("lists all 9 ChannelRegistry['agent'] point events, in a stable order", () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(9);
     expect(AGENT_DIAGNOSTIC_EVENTS).toEqual(expectedEvents);
   });
 

@@ -10,6 +10,7 @@ import {
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
+  publishAgentToolRetry,
 } from './diagnostics.js';
 import { estimateCost } from './governance/compute.js';
 import type { AgentStore } from './spi/agent-store.js';
@@ -22,6 +23,8 @@ import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
 import { encodeStreamEvent } from './stream-events.js';
 import type { ToolRegistry } from './tool-registry.js';
+import { invokeWithTransientRetry, resolveToolTransientRetryNumbers } from './tool-retry.js';
+import type { ToolTransientRetrySetting } from './tool-retry.js';
 import type {
   AgentRunInput,
   Decision,
@@ -69,6 +72,16 @@ export interface AgentLoopDeps {
    * Undefined → no timeout.
    */
   toolTimeoutMs?: number;
+  /**
+   * Retries a tool's own invocation, in place, when it throws a classified-transient error (a DB
+   * deadlock, a lock-wait timeout, a serialization failure — see `isTransientToolError`) — never a
+   * new durable step/checkpoint, just repeated attempts inside the same `tool:<call.id>` step body.
+   * Default ON (`{ attempts: 2, backoffMs: 150 }` with the default classifier) when undefined; set
+   * `{ classify }` to widen/narrow which errors count as transient, or `false` to disable entirely.
+   * A tool's other (non-transient) failures are unaffected — they remain a one-shot business
+   * outcome, exactly as before.
+   */
+  toolTransientRetry?: ToolTransientRetrySetting;
   /**
    * When set, after the final turn the loop makes one extra model call to propose up to this many
    * short follow-up questions, stored on the assistant message's `followUps`. Costs an extra call
@@ -753,15 +766,37 @@ export async function runAgentLoop(
             input: call.input,
             ctx: stepCtx,
             ...(deps.toolTimeoutMs !== undefined ? { timeoutMs: deps.toolTimeoutMs } : {}),
+            // Numeric-only: the handler applies withToolTimeout AND its own local `classify` — see
+            // ToolStepEnvelope.transientRetry.
+            transientRetry: resolveToolTransientRetryNumbers(deps.toolTransientRetry),
           };
-          // The handler applies withToolTimeout itself — no loop-side wrap for a dispatched call.
+          // The handler applies withToolTimeout (and the retry loop) itself — no loop-side wrap for
+          // a dispatched call.
           output = await hooks.dispatchTool(call, envelope);
         } else {
           const invocation = hooks.step(`tool:${call.id}`, () =>
             traceToolExecution(
               hooks.runId,
               { toolCallId: call.id, toolName: call.name, toolType },
-              () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+              () =>
+                invokeWithTransientRetry(
+                  () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+                  deps.toolTransientRetry ?? {},
+                  {
+                    ...(hooks.isControlFlowError !== undefined
+                      ? { isControlFlowError: hooks.isControlFlowError }
+                      : {}),
+                    onRetry: (attempt, retryError) => {
+                      publishAgentToolRetry({
+                        toolName: call.name,
+                        toolCallId: call.id,
+                        attempt,
+                        message:
+                          retryError instanceof Error ? retryError.message : String(retryError),
+                      });
+                    },
+                  },
+                ),
             ),
           );
           output =

@@ -4,6 +4,9 @@ import {
   type LlmStepEnvelope,
   type ModelTurnResult,
   type ToolStepEnvelope,
+  type ToolTransientRetrySetting,
+  invokeWithTransientRetry,
+  publishAgentToolRetry,
   traceLlmTurn,
   traceToolExecution,
   withToolTimeout,
@@ -95,9 +98,14 @@ export class AgentRunSteps {
   }
 
   /**
-   * No retries — a tool may not be idempotent (a bare `@Step()` carries none, unlike `llm` above).
-   * The timeout is applied HERE, handler-side, via `withToolTimeout` — never as a durable dispatch
-   * `timeoutMs`, which bounds engine liveness (retryable) rather than the tool's own business outcome.
+   * NO DURABLE retries — a tool may not be idempotent (a bare `@Step()` carries none, unlike `llm`
+   * above). What it does retry, in place, is a CLASSIFIED-TRANSIENT error from the tool's own
+   * invocation (a DB deadlock, a lock-wait timeout — see `isTransientToolError`): the server rolled
+   * that work back, so re-invoking it is safe, and doing it here (inside this one step, never a new
+   * checkpoint) is exactly how the non-dispatched loop path handles it too. The timeout is applied
+   * HERE, handler-side, via `withToolTimeout` — never as a durable dispatch `timeoutMs`, which
+   * bounds engine liveness (retryable) rather than the tool's own business outcome — and per
+   * ATTEMPT, so a retried invocation gets its own fresh timeout window.
    */
   @Step()
   async tool(input: DispatchedToolInput): Promise<unknown> {
@@ -105,17 +113,51 @@ export class AgentRunSteps {
     // AgentDeps carries no `host` today (AgentDepsFactory never populates one), so the rebuilt ctx
     // is exactly `input.ctx` — no narrower than what the non-dispatched path already threads through.
     const ctx: AiToolCtx = { ...input.ctx };
+    // The envelope carries the numeric half (attempts/backoffMs) the dispatching loop already
+    // resolved — the SAME policy as the non-dispatched path. `classify` isn't wire-safe, so it's
+    // resolved from THIS worker's own local module options instead (same DI re-resolution as
+    // `registry`/`rolesPolicy` above) — a custom classifier applies host-side in both processes.
+    const localClassify =
+      deps.toolTransientRetry !== false ? deps.toolTransientRetry?.classify : undefined;
+    const transientRetry: ToolTransientRetrySetting =
+      input.transientRetry === false
+        ? false
+        : {
+            attempts: input.transientRetry.attempts,
+            backoffMs: input.transientRetry.backoffMs,
+            ...(localClassify !== undefined ? { classify: localClassify } : {}),
+          };
     // Span-wrapped HERE like `llm` above (same replay-safety-by-construction reasoning) — the
-    // timeout sits INSIDE the span so a timed-out tool surfaces as the span's error phase.
+    // timeout AND the retry loop sit INSIDE the span so every attempt (and a timed-out attempt)
+    // surfaces under the span's error phase.
     return traceToolExecution(
       input.ctx.runId,
       { toolCallId: input.toolCallId, toolName: input.toolName, toolType: input.toolType },
-      () => {
-        const invocation = deps.registry.invoke(input.toolName, input.input, ctx, deps.rolesPolicy);
-        return input.timeoutMs !== undefined
-          ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
-          : invocation;
-      },
+      () =>
+        invokeWithTransientRetry(
+          () => {
+            const invocation = deps.registry.invoke(
+              input.toolName,
+              input.input,
+              ctx,
+              deps.rolesPolicy,
+            );
+            return input.timeoutMs !== undefined
+              ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
+              : invocation;
+          },
+          transientRetry,
+          {
+            onRetry: (attempt, error) => {
+              publishAgentToolRetry({
+                toolName: input.toolName,
+                toolCallId: input.toolCallId,
+                attempt,
+                message: error instanceof Error ? error.message : String(error),
+              });
+            },
+          },
+        ),
     );
   }
 }

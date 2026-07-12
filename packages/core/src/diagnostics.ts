@@ -51,6 +51,18 @@ export interface AgentRetrieved {
   /** How many passages the retriever returned. */
   count: number;
 }
+/**
+ * A transient-classified tool error being retried in place (no new checkpoint) — see
+ * `invokeWithTransientRetry`. Emitted once per retry (not for the final, non-retried outcome).
+ */
+export interface AgentToolRetry {
+  toolName: string;
+  toolCallId: string;
+  /** 1-based ordinal of the attempt that just failed and is about to be retried. */
+  attempt: number;
+  /** The failed attempt's error message. */
+  message: string;
+}
 
 // --- Span (trace) payloads — the START-phase payload of each traced operation. Metadata only:
 // token counts / lengths / names, never prompt or output text (the point events' redaction
@@ -97,6 +109,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'run.failed': AgentRunFailed;
       delegated: AgentDelegated;
       retrieved: AgentRetrieved;
+      'tool.retry': AgentToolRetry;
       // Span-only events (published via trace() on :start/:end/:asyncStart/:asyncEnd/:error
       // sub-channels, never as point events) — see AgentSpanEvent below.
       'llm.turn': AgentLlmTurnSpan;
@@ -131,6 +144,9 @@ export function publishAgentDelegated(payload: AgentDelegated): void {
 export function publishAgentRetrieved(payload: AgentRetrieved): void {
   emit('agent', 'retrieved', payload);
 }
+export function publishAgentToolRetry(payload: AgentToolRetry): void {
+  emit('agent', 'tool.retry', payload);
+}
 
 /**
  * Events published ONLY as spans — via `trace('agent', ...)` on the five `:start`/`:end`/
@@ -160,7 +176,7 @@ void agentSpanEventsAreRegistered;
 export type AgentDiagnosticEvent = Exclude<keyof ChannelRegistry['agent'], AgentSpanEvent>;
 
 /**
- * All 8 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
+ * All 9 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
  * subscribers (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). Span-only events (see
  * {@link AgentSpanEvent}) are excluded. A drift between this list and the registry is a compile
  * error in both directions: an extra/misspelled entry fails this array's own
@@ -176,6 +192,7 @@ export const AGENT_DIAGNOSTIC_EVENTS: readonly AgentDiagnosticEvent[] = [
   'run.failed',
   'delegated',
   'retrieved',
+  'tool.retry',
 ];
 
 /** Compile-time-only check: every point event of `ChannelRegistry['agent']` must appear above. */

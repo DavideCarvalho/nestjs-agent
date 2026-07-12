@@ -8,6 +8,7 @@ import {
   publishAgentRunFinished,
   publishAgentRunStarted,
   publishAgentToolCall,
+  publishAgentToolRetry,
 } from '@dudousxd/nestjs-agent-core';
 import { isDiagnosticClaimed } from '@dudousxd/nestjs-diagnostics';
 import type { WatcherContext } from '@dudousxd/nestjs-telescope';
@@ -27,8 +28,8 @@ describe('AgentTelescopeWatcher', () => {
     expect(new AgentTelescopeWatcher().type).toBe('agent');
   });
 
-  it('subscribes all 8 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(8);
+  it('subscribes all 9 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(9);
 
     const ctx = mockCtx();
     watcher = new AgentTelescopeWatcher();
@@ -49,8 +50,14 @@ describe('AgentTelescopeWatcher', () => {
     publishAgentRunFailed({ runId: 'r1', code: 'run_failed', message: 'boom' });
     publishAgentDelegated({ runId: 'r1', toAgent: 'triage' });
     publishAgentRetrieved({ runId: 'r1', query: 'q', count: 3 });
+    publishAgentToolRetry({
+      toolName: 'search',
+      toolCallId: 'call-1',
+      attempt: 1,
+      message: 'deadlock',
+    });
 
-    expect(ctx.record).toHaveBeenCalledTimes(8);
+    expect(ctx.record).toHaveBeenCalledTimes(9);
     const events = ctx.record.mock.calls.map(
       ([input]) => (input.content as { event: string }).event,
     );
