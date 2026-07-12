@@ -5,6 +5,8 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   CurrentModelPrice,
+  GovernancePage,
+  GovernancePageQuery,
   GovernanceRange,
   ModelSpendRow,
   PendingApprovalRow,
@@ -13,9 +15,12 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -170,6 +175,18 @@ export class DashboardService {
     return this.queries.recentToolCalls(limit);
   }
 
+  /** Paged, filterable tool calls for the Runs & tools activity table. */
+  toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    return this.queries.toolCallsPage(query);
+  }
+
+  /** Paged, filterable runs for the Reliability recent-runs table. */
+  runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
+    return this.queries.runsPage(query);
+  }
+
   /** Tool calls sitting `pending_approval`, oldest first, for the cross-thread approvals inbox. */
   pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
     return this.queries.pendingApprovals(limit);
@@ -212,6 +229,18 @@ export class DashboardService {
   async recentThreads(limit: number): Promise<ThreadActivityRowWithLabel[]> {
     const rows = await this.queries.recentThreads(limit);
     return this.withActorLabels(rows);
+  }
+
+  /**
+   * Paged, filterable threads for the Runs & tools threads table — actor-labeled the same way
+   * {@link recentThreads} is.
+   */
+  async threadsPage(
+    query: GovernancePageQuery<ThreadWhere>,
+  ): Promise<GovernancePage<ThreadActivityRowWithLabel>> {
+    const page = await this.queries.threadsPage(query);
+    const rows = await this.withActorLabels(page.rows);
+    return { ...page, rows };
   }
 
   /**

@@ -1,18 +1,31 @@
-import type { RecentRunRow, ReliabilityOverview } from '../client/agent-client';
+import type {
+  GovernancePage,
+  RecentRunRow,
+  ReliabilityOverview,
+  RunWhere,
+} from '../client/agent-client';
 import { errorSegments } from '../client/error-breakdown';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
 import { Donut, colorAt } from './Donut';
 import { RunTrendChart } from './RunTrendChart';
 import { ActivityIcon, AlertIcon, ClockIcon, RetryIcon } from './icons';
-import { Empty, Panel, Stat, StatusPill, relTime } from './ui';
+import { Empty, FilterInput, Pagination, Panel, Stat, StatusPill, relTime } from './ui';
 
-/** Run success rate, failure breakdown, run/failure trend and the recent-runs feed. */
+/** Run success rate, failure breakdown, run/failure trend and a paged, filterable recent-runs table. */
 export function ReliabilitySection({
   overview,
-  runs,
+  runsPage,
+  runsWhere,
+  onRunsStatusChange,
+  onRunsAgentNameChange,
+  onRunsPageChange,
 }: {
   overview: ReliabilityOverview;
-  runs: RecentRunRow[];
+  runsPage: GovernancePage<RecentRunRow>;
+  runsWhere: RunWhere;
+  onRunsStatusChange: (value: string) => void;
+  onRunsAgentNameChange: (value: string) => void;
+  onRunsPageChange: (page: number) => void;
 }) {
   const { metrics, byAgent, errors, trend } = overview;
   const errorRate = metrics.runs > 0 ? metrics.failed / metrics.runs : 0;
@@ -115,8 +128,25 @@ export function ReliabilitySection({
           )}
         </Panel>
 
-        <Panel title="Recent runs" subtitle="Latest run outcomes across threads">
-          {runs.length === 0 ? (
+        <Panel
+          title="Recent runs"
+          subtitle="Latest run outcomes across threads"
+          right={
+            <div className="flex items-center gap-1.5">
+              <FilterInput
+                value={runsWhere.status ?? ''}
+                placeholder="status"
+                onChange={onRunsStatusChange}
+              />
+              <FilterInput
+                value={runsWhere.agentName ?? ''}
+                placeholder="agent"
+                onChange={onRunsAgentNameChange}
+              />
+            </div>
+          }
+        >
+          {runsPage.rows.length === 0 ? (
             <Empty label="No runs yet" />
           ) : (
             <div className="overflow-x-auto">
@@ -132,7 +162,7 @@ export function ReliabilitySection({
                   </tr>
                 </thead>
                 <tbody className="mono tnum">
-                  {runs.map((run) => (
+                  {runsPage.rows.map((run) => (
                     <tr key={run.runId} className="border-b border-[var(--line-soft)]">
                       <td className="py-2.5 pr-4">
                         <StatusPill status={run.status} />
@@ -176,6 +206,12 @@ export function ReliabilitySection({
                   ))}
                 </tbody>
               </table>
+              <Pagination
+                page={runsPage.page}
+                pageSize={runsPage.pageSize}
+                total={runsPage.total}
+                onPage={onRunsPageChange}
+              />
             </div>
           )}
         </Panel>

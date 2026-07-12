@@ -5,6 +5,7 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   CurrentModelPrice,
+  GovernancePage,
   GovernanceRange,
   ModelPriceInput,
   ModelSpendRow,
@@ -14,9 +15,12 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -53,6 +57,14 @@ interface QueriesOverrides {
   recentRuns?: RecentRunRow[];
   pendingApprovals?: PendingApprovalRow[];
   toolStats?: ToolStatRow[];
+  toolCallsPage?: GovernancePage<ToolCallActivityRow>;
+  threadsPage?: GovernancePage<ThreadActivityRow>;
+  runsPage?: GovernancePage<RecentRunRow>;
+}
+
+/** An empty `GovernancePage` — the shape a store without the backing data returns. */
+function emptyPage<TRow>(page: number, pageSize: number): GovernancePage<TRow> {
+  return { rows: [], total: 0, page, pageSize };
 }
 
 /** A `AgentGovernanceQueries` fake — records each call and returns the override (or `[]`). */
@@ -110,6 +122,18 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
     async toolStats(_range: GovernanceRange) {
       record('toolStats');
       return overrides.toolStats ?? [];
+    },
+    async toolCallsPage(query: { page: number; pageSize: number; where?: ToolCallWhere }) {
+      record('toolCallsPage');
+      return overrides.toolCallsPage ?? emptyPage(query.page, query.pageSize);
+    },
+    async threadsPage(query: { page: number; pageSize: number; where?: ThreadWhere }) {
+      record('threadsPage');
+      return overrides.threadsPage ?? emptyPage(query.page, query.pageSize);
+    },
+    async runsPage(query: { page: number; pageSize: number; where?: RunWhere }) {
+      record('runsPage');
+      return overrides.runsPage ?? emptyPage(query.page, query.pageSize);
     },
   };
 }
@@ -297,6 +321,126 @@ describe('DashboardService', () => {
 
     expect(rows[0]?.threadId).toBe('th1');
     expect(rows[0]?.costUsd).toBe(0.5);
+  });
+
+  it('toolCallsPage() passes the query through to the read-model', async () => {
+    const calls: string[] = [];
+    const page: GovernancePage<ToolCallActivityRow> = {
+      rows: [
+        {
+          toolCallId: 't1',
+          toolName: 'search',
+          toolType: 'read',
+          status: 'ok',
+          threadId: 'th1',
+          createdAt: '2026-07-05T00:00:00.000Z',
+        },
+      ],
+      total: 40,
+      page: 2,
+      pageSize: 25,
+    };
+    const service = new DashboardService(
+      fakeQueries({ record: (call) => calls.push(call), toolCallsPage: page }),
+    );
+
+    const result = await service.toolCallsPage({
+      page: 2,
+      pageSize: 25,
+      where: { toolName: 'search' },
+    });
+
+    expect(calls).toEqual(['toolCallsPage']);
+    expect(result).toEqual(page);
+  });
+
+  it('runsPage() passes the query through to the read-model', async () => {
+    const calls: string[] = [];
+    const page: GovernancePage<RecentRunRow> = {
+      rows: [
+        {
+          runId: 'r1',
+          threadId: 'th1',
+          actorRef: 'user:1',
+          agentName: 'analyst',
+          status: 'failed',
+          durationMs: 1200,
+          errorCode: 'TIMEOUT',
+          errorMessage: 'upstream timed out',
+          retries: 1,
+          startedAt: '2026-07-05T00:00:00.000Z',
+          promptHash: null,
+        },
+      ],
+      total: 3,
+      page: 1,
+      pageSize: 25,
+    };
+    const service = new DashboardService(
+      fakeQueries({ record: (call) => calls.push(call), runsPage: page }),
+    );
+
+    const result = await service.runsPage({ page: 1, pageSize: 25, where: { status: 'failed' } });
+
+    expect(calls).toEqual(['runsPage']);
+    expect(result).toEqual(page);
+  });
+
+  it('threadsPage() decorates rows with actorLabel, batching the distinct refs, and preserves paging', async () => {
+    const seenRefs: string[][] = [];
+    const page: GovernancePage<ThreadActivityRow> = {
+      rows: [
+        {
+          threadId: 'th1',
+          title: 'hello',
+          actorRef: 'user:1',
+          messageCount: 4,
+          totalTokens: 20,
+          lastActivityAt: '2026-07-05T00:00:00.000Z',
+        },
+      ],
+      total: 12,
+      page: 1,
+      pageSize: 25,
+    };
+    const service = new DashboardService(
+      fakeQueries({ threadsPage: page }),
+      fakeActorDirectory({ 'user:1': 'Ada Lovelace' }, seenRefs),
+    );
+
+    const result = await service.threadsPage({ page: 1, pageSize: 25, where: { title: 'hel' } });
+
+    expect(result.total).toBe(12);
+    expect(result.page).toBe(1);
+    expect(result.pageSize).toBe(25);
+    expect(result.rows[0]?.actorLabel).toBe('Ada Lovelace');
+    expect(seenRefs).toEqual([['user:1']]);
+  });
+
+  it('threadsPage() leaves actorLabel null on every row when no ActorDirectory is bound', async () => {
+    const service = new DashboardService(
+      fakeQueries({
+        threadsPage: {
+          rows: [
+            {
+              threadId: 'th1',
+              title: 'hello',
+              actorRef: 'user:1',
+              messageCount: 4,
+              totalTokens: 20,
+              lastActivityAt: '2026-07-05T00:00:00.000Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 25,
+        },
+      }),
+    );
+
+    const result = await service.threadsPage({ page: 1, pageSize: 25 });
+
+    expect(result.rows[0]?.actorLabel).toBeNull();
   });
 
   it('streamEvents() forwards a live agent diagnostics event to a subscriber', async () => {

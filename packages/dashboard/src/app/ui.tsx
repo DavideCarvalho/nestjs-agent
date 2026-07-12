@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 /** A titled surface with an optional right-aligned control and subtitle. */
 export function Panel({
@@ -106,6 +106,83 @@ export function Empty({ label }: { label: string }) {
     <div className="grid place-items-center rounded-lg border border-dashed border-[var(--line)] py-10 text-xs text-[var(--muted)]">
       {label}
     </div>
+  );
+}
+
+/** Prev/next pager with "page X of Y" (derived from `total`/`pageSize`) — disables at either bound. */
+export function Pagination({
+  page,
+  pageSize,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPage: (page: number) => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div className="mono mt-3 flex items-center justify-end gap-2 text-[11px] text-[var(--muted)]">
+      <button
+        type="button"
+        disabled={page <= 1}
+        onClick={() => onPage(page - 1)}
+        className="rounded-md border border-[var(--line)] px-2 py-1 transition-colors hover:text-[var(--text)] disabled:opacity-40"
+      >
+        Prev
+      </button>
+      <span className="tnum">
+        page {page} of {pageCount}
+      </span>
+      <button
+        type="button"
+        disabled={page >= pageCount}
+        onClick={() => onPage(page + 1)}
+        className="rounded-md border border-[var(--line)] px-2 py-1 transition-colors hover:text-[var(--text)] disabled:opacity-40"
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+/**
+ * A debounced text filter input: the caller only sees `onChange` `delayMs` after typing stops, so a
+ * table filter doesn't refetch on every keystroke. Re-syncs its draft when `value` changes externally
+ * (e.g. a "clear filters" action).
+ */
+export function FilterInput({
+  value,
+  placeholder,
+  onChange,
+  delayMs = 300,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+  delayMs?: number;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => setDraft(value), [value]);
+
+  // Only `draft` should re-arm the debounce timer — re-running on `onChange`/`value`/`delayMs`
+  // identity would either fire early or loop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally draft-only, see above.
+  useEffect(() => {
+    if (draft === value) return;
+    const timer = setTimeout(() => onChange(draft), delayMs);
+    return () => clearTimeout(timer);
+  }, [draft]);
+
+  return (
+    <input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      placeholder={placeholder}
+      className="mono w-28 rounded-md border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-[11px] text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)]/50"
+    />
   );
 }
 

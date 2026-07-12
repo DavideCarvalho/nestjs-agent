@@ -1,14 +1,18 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import type {
   ApprovalDecisionInput,
+  GovernancePage,
   ModelPrice,
   PendingApprovalRow,
   RecentRunRow,
   ReliabilityOverview,
+  RunWhere,
   SpendOverview,
   ThreadActivityRow,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UpsertModelPriceInput,
 } from '../client/agent-client';
@@ -23,6 +27,7 @@ import { ReliabilitySection } from './ReliabilitySection';
 import { RunsToolsSection } from './RunsToolsSection';
 import { SpendSection } from './SpendSection';
 import { ToolsSection } from './ToolsSection';
+import { DEFAULT_SECTION, type SectionKey, hashForSection, sectionFromHash } from './hash-section';
 import {
   ActivityIcon,
   ChipIcon,
@@ -39,26 +44,16 @@ import {
   useDecideApproval,
   usePricing,
   useReliability,
-  useRuns,
+  useRunsPage,
   useSpend,
-  useThreads,
+  useThreadsPage,
   useToolCalls,
+  useToolCallsPage,
   useToolStats,
   useTopThreads,
   useUpsertPrice,
 } from './use-governance';
 import { useLiveEvents } from './use-live-events';
-
-type SectionKey =
-  | 'spend'
-  | 'models'
-  | 'actors'
-  | 'runs'
-  | 'reliability'
-  | 'approvals'
-  | 'tools'
-  | 'pricing'
-  | 'live';
 
 const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'spend', label: 'Spend & usage', icon: <DollarIcon /> },
@@ -72,9 +67,29 @@ const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'live', label: 'Live', icon: <ActivityIcon /> },
 ];
 
+/** The page size every paged table opens on — no pageSize selector, matching the contract's default. */
+const PAGE_SIZE = 25;
+
 const EMPTY_SPEND: SpendOverview = { byModel: [], byActor: [], trend: [] };
 const EMPTY_TOOL_CALLS: ToolCallActivityRow[] = [];
-const EMPTY_THREADS: ThreadActivityRow[] = [];
+const EMPTY_TOOL_CALLS_PAGE: GovernancePage<ToolCallActivityRow> = {
+  rows: [],
+  total: 0,
+  page: 1,
+  pageSize: PAGE_SIZE,
+};
+const EMPTY_THREADS_PAGE: GovernancePage<ThreadActivityRow> = {
+  rows: [],
+  total: 0,
+  page: 1,
+  pageSize: PAGE_SIZE,
+};
+const EMPTY_RUNS_PAGE: GovernancePage<RecentRunRow> = {
+  rows: [],
+  total: 0,
+  page: 1,
+  pageSize: PAGE_SIZE,
+};
 const EMPTY_TOP_THREADS: ThreadSpendRow[] = [];
 const EMPTY_PRICES: ModelPrice[] = [];
 const EMPTY_APPROVALS: PendingApprovalRow[] = [];
@@ -93,10 +108,30 @@ const EMPTY_RELIABILITY: ReliabilityOverview = {
   errors: [],
   trend: [],
 };
-const EMPTY_RUNS: RecentRunRow[] = [];
 
 /** HTTP status the pricing API 501s with when no `AGENT_PRICING_STORE` is bound. */
 const PRICING_UNAVAILABLE_STATUS = '501';
+
+/**
+ * The active `SectionKey` reflects `location.hash` (`#/reliability` etc., see `hash-section.ts`) —
+ * read on mount for a working deep link, kept in sync via the `hashchange` listener. Nav items are
+ * real anchors, so clicking one is a normal hash navigation; no router dependency.
+ */
+function useHashSection(): SectionKey {
+  const [section, setSection] = useState<SectionKey>(() =>
+    typeof window === 'undefined' ? DEFAULT_SECTION : sectionFromHash(window.location.hash),
+  );
+
+  useEffect(() => {
+    function onHashChange() {
+      setSection(sectionFromHash(window.location.hash));
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  return section;
+}
 
 /**
  * The AI-gateway console shell: brand, section nav, a UTC day-range picker, and the live-connection
@@ -105,20 +140,64 @@ const PRICING_UNAVAILABLE_STATUS = '501';
  */
 export function App() {
   const [range, setRange] = useState(defaultRange());
-  const [section, setSection] = useState<SectionKey>('spend');
+  const section = useHashSection();
 
   const spend = useSpend(range);
   const topThreads = useTopThreads(range);
   const toolCalls = useToolCalls();
-  const threads = useThreads();
   const reliability = useReliability(range);
-  const runs = useRuns();
   const approvals = useApprovals();
   const decideApproval = useDecideApproval();
   const toolStats = useToolStats(range);
   const pricing = usePricing();
   const upsertPrice = useUpsertPrice();
   const live = useLiveEvents();
+
+  const [toolCallsPageNum, setToolCallsPageNum] = useState(1);
+  const [toolCallsToolName, setToolCallsToolName] = useState('');
+  const [toolCallsStatus, setToolCallsStatus] = useState('');
+  const toolCallsWhere: ToolCallWhere = {
+    ...(toolCallsToolName !== '' ? { toolName: toolCallsToolName } : {}),
+    ...(toolCallsStatus !== '' ? { status: toolCallsStatus } : {}),
+  };
+  const toolCallsPageQuery = useToolCallsPage(toolCallsPageNum, PAGE_SIZE, toolCallsWhere);
+
+  const [threadsPageNum, setThreadsPageNum] = useState(1);
+  const [threadsTitle, setThreadsTitle] = useState('');
+  const threadsWhere: ThreadWhere = {
+    ...(threadsTitle !== '' ? { title: threadsTitle } : {}),
+  };
+  const threadsPageQuery = useThreadsPage(threadsPageNum, PAGE_SIZE, threadsWhere);
+
+  const [runsPageNum, setRunsPageNum] = useState(1);
+  const [runsStatus, setRunsStatus] = useState('');
+  const [runsAgentName, setRunsAgentName] = useState('');
+  const runsWhere: RunWhere = {
+    ...(runsStatus !== '' ? { status: runsStatus } : {}),
+    ...(runsAgentName !== '' ? { agentName: runsAgentName } : {}),
+  };
+  const runsPageQuery = useRunsPage(runsPageNum, PAGE_SIZE, runsWhere);
+
+  function onToolCallsToolNameChange(value: string) {
+    setToolCallsToolName(value);
+    setToolCallsPageNum(1);
+  }
+  function onToolCallsStatusChange(value: string) {
+    setToolCallsStatus(value);
+    setToolCallsPageNum(1);
+  }
+  function onThreadsTitleChange(value: string) {
+    setThreadsTitle(value);
+    setThreadsPageNum(1);
+  }
+  function onRunsStatusChange(value: string) {
+    setRunsStatus(value);
+    setRunsPageNum(1);
+  }
+  function onRunsAgentNameChange(value: string) {
+    setRunsAgentName(value);
+    setRunsPageNum(1);
+  }
 
   const overview = spend.data ?? EMPTY_SPEND;
   const pricingUnavailable =
@@ -146,10 +225,9 @@ export function App() {
                   ? (approvals.data ?? EMPTY_APPROVALS).length
                   : 0;
             return (
-              <button
+              <a
                 key={item.key}
-                type="button"
-                onClick={() => setSection(item.key)}
+                href={hashForSection(item.key)}
                 className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
                   section === item.key
                     ? 'border-[var(--accent)]/50 bg-[var(--accent)]/10 text-[var(--text)]'
@@ -163,7 +241,7 @@ export function App() {
                     {badgeCount}
                   </span>
                 )}
-              </button>
+              </a>
             );
           })}
         </nav>
@@ -175,9 +253,21 @@ export function App() {
           loadingSpend={spend.isLoading}
           errorSpend={spend.isError}
           toolCalls={toolCalls.data ?? EMPTY_TOOL_CALLS}
-          threads={threads.data ?? EMPTY_THREADS}
+          toolCallsPage={toolCallsPageQuery.data ?? EMPTY_TOOL_CALLS_PAGE}
+          toolCallsWhere={toolCallsWhere}
+          onToolCallsToolNameChange={onToolCallsToolNameChange}
+          onToolCallsStatusChange={onToolCallsStatusChange}
+          onToolCallsPageChange={setToolCallsPageNum}
+          threadsPage={threadsPageQuery.data ?? EMPTY_THREADS_PAGE}
+          threadsWhere={threadsWhere}
+          onThreadsTitleChange={onThreadsTitleChange}
+          onThreadsPageChange={setThreadsPageNum}
           reliability={reliability.data ?? EMPTY_RELIABILITY}
-          runs={runs.data ?? EMPTY_RUNS}
+          runsPage={runsPageQuery.data ?? EMPTY_RUNS_PAGE}
+          runsWhere={runsWhere}
+          onRunsStatusChange={onRunsStatusChange}
+          onRunsAgentNameChange={onRunsAgentNameChange}
+          onRunsPageChange={setRunsPageNum}
           approvals={approvals.data ?? EMPTY_APPROVALS}
           onDecideApproval={(toolCallId, input) =>
             decideApproval.mutateAsync({ toolCallId, input })
@@ -203,9 +293,21 @@ function ActiveSection({
   loadingSpend,
   errorSpend,
   toolCalls,
-  threads,
+  toolCallsPage,
+  toolCallsWhere,
+  onToolCallsToolNameChange,
+  onToolCallsStatusChange,
+  onToolCallsPageChange,
+  threadsPage,
+  threadsWhere,
+  onThreadsTitleChange,
+  onThreadsPageChange,
   reliability,
-  runs,
+  runsPage,
+  runsWhere,
+  onRunsStatusChange,
+  onRunsAgentNameChange,
+  onRunsPageChange,
   approvals,
   onDecideApproval,
   toolStats,
@@ -223,9 +325,21 @@ function ActiveSection({
   loadingSpend: boolean;
   errorSpend: boolean;
   toolCalls: ToolCallActivityRow[];
-  threads: ThreadActivityRow[];
+  toolCallsPage: GovernancePage<ToolCallActivityRow>;
+  toolCallsWhere: ToolCallWhere;
+  onToolCallsToolNameChange: (value: string) => void;
+  onToolCallsStatusChange: (value: string) => void;
+  onToolCallsPageChange: (page: number) => void;
+  threadsPage: GovernancePage<ThreadActivityRow>;
+  threadsWhere: ThreadWhere;
+  onThreadsTitleChange: (value: string) => void;
+  onThreadsPageChange: (page: number) => void;
   reliability: ReliabilityOverview;
-  runs: RecentRunRow[];
+  runsPage: GovernancePage<RecentRunRow>;
+  runsWhere: RunWhere;
+  onRunsStatusChange: (value: string) => void;
+  onRunsAgentNameChange: (value: string) => void;
+  onRunsPageChange: (page: number) => void;
   approvals: PendingApprovalRow[];
   onDecideApproval: (toolCallId: string, input: ApprovalDecisionInput) => Promise<void>;
   toolStats: ToolStatRow[];
@@ -255,9 +369,31 @@ function ActiveSection({
     case 'actors':
       return <ActorsSection rows={overview.byActor} />;
     case 'runs':
-      return <RunsToolsSection toolCalls={toolCalls} threads={threads} />;
+      return (
+        <RunsToolsSection
+          toolCalls={toolCalls}
+          toolCallsPage={toolCallsPage}
+          toolCallsWhere={toolCallsWhere}
+          onToolCallsToolNameChange={onToolCallsToolNameChange}
+          onToolCallsStatusChange={onToolCallsStatusChange}
+          onToolCallsPageChange={onToolCallsPageChange}
+          threadsPage={threadsPage}
+          threadsWhere={threadsWhere}
+          onThreadsTitleChange={onThreadsTitleChange}
+          onThreadsPageChange={onThreadsPageChange}
+        />
+      );
     case 'reliability':
-      return <ReliabilitySection overview={reliability} runs={runs} />;
+      return (
+        <ReliabilitySection
+          overview={reliability}
+          runsPage={runsPage}
+          runsWhere={runsWhere}
+          onRunsStatusChange={onRunsStatusChange}
+          onRunsAgentNameChange={onRunsAgentNameChange}
+          onRunsPageChange={onRunsPageChange}
+        />
+      );
     case 'approvals':
       return <ApprovalsSection approvals={approvals} onDecide={onDecideApproval} />;
     case 'tools':

@@ -138,6 +138,53 @@ export interface ApprovalDecisionInput {
   reason?: string;
 }
 
+/** Neutral paged query for the governance list reads (mirrors core's `GovernancePageQuery`). */
+export interface GovernancePageQuery<TWhere> {
+  /** 1-based. */
+  page: number;
+  /** Rows per page, clamped server-side to 1..200. */
+  pageSize: number;
+  /** Equality/range filters; absent field = no constraint. */
+  where?: TWhere;
+}
+
+/** One page of a governance list read (mirrors core's `GovernancePage`). */
+export interface GovernancePage<TRow> {
+  rows: TRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Filters for `GET tool-calls-page` (the Runs & tools tool-calls table). */
+export interface ToolCallWhere {
+  toolName?: string;
+  toolType?: string;
+  status?: string;
+  threadId?: string;
+  /** Inclusive UTC day bounds, `YYYY-MM-DD`. */
+  fromDay?: string;
+  toDay?: string;
+}
+
+/** Filters for `GET threads-page` (the Runs & tools threads table). */
+export interface ThreadWhere {
+  actorRef?: string;
+  /** Substring match on the title (case-insensitive). */
+  title?: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+/** Filters for `GET runs-page` (the Reliability recent-runs table). */
+export interface RunWhere {
+  agentName?: string;
+  status?: string;
+  errorCode?: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
 /** Governance rollup for one tool over a range, for the Tools section. */
 export interface ToolStatRow {
   toolName: string;
@@ -211,6 +258,19 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** `page`/`limit`/`where[field]=value` query params for a paged governance read. */
+function pageQueryParams<TWhere extends object>(
+  query: GovernancePageQuery<TWhere>,
+): URLSearchParams {
+  const params = new URLSearchParams({ page: `${query.page}`, limit: `${query.pageSize}` });
+  if (query.where !== undefined) {
+    for (const [field, value] of Object.entries(query.where)) {
+      if (typeof value === 'string' && value !== '') params.set(`where[${field}]`, value);
+    }
+  }
+  return params;
+}
+
 export const agentClient = {
   /** Spend/usage overview for a day range: `{ byModel, byActor, trend }`. */
   spend(range: GovernanceRange): Promise<SpendOverview> {
@@ -234,6 +294,12 @@ export const agentClient = {
   /** Most recent tool calls (default 50). */
   toolCalls(limit = 50): Promise<ToolCallActivityRow[]> {
     return http<ToolCallActivityRow[]>(`/tool-calls?limit=${limit}`);
+  },
+  /** A page of tool calls, filtered by `where` — the Runs & tools tool-calls table. */
+  toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    return http<GovernancePage<ToolCallActivityRow>>(`/tool-calls-page?${pageQueryParams(query)}`);
   },
   /** Tool calls sitting `pending_approval`, oldest first (default 50) — the approvals inbox. */
   approvals(limit = 50): Promise<PendingApprovalRow[]> {
@@ -260,6 +326,14 @@ export const agentClient = {
   /** Most recent threads (default 50). */
   threads(limit = 50): Promise<ThreadActivityRow[]> {
     return http<ThreadActivityRow[]>(`/threads?limit=${limit}`);
+  },
+  /** A page of threads, filtered by `where` — the Runs & tools threads table. */
+  threadsPage(query: GovernancePageQuery<ThreadWhere>): Promise<GovernancePage<ThreadActivityRow>> {
+    return http<GovernancePage<ThreadActivityRow>>(`/threads-page?${pageQueryParams(query)}`);
+  },
+  /** A page of runs, filtered by `where` — the Reliability recent-runs table. */
+  runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
+    return http<GovernancePage<RecentRunRow>>(`/runs-page?${pageQueryParams(query)}`);
   },
   /** Current price row per model. 501s if the host has no pricing store bound. */
   pricing(): Promise<ModelPrice[]> {

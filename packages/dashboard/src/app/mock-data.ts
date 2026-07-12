@@ -1,5 +1,6 @@
 import type {
   ActorSpendRow,
+  GovernancePage,
   ModelPrice,
   ModelSpendRow,
   PendingApprovalRow,
@@ -371,6 +372,30 @@ export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
     actorLabel: 'Davi de Carvalho',
   },
 ];
+
+/** Page 1 (of several — `total` exceeds `rows.length`) of the paged tool-calls table for the preview. */
+export const MOCK_TOOL_CALLS_PAGE: GovernancePage<ToolCallActivityRow> = {
+  rows: MOCK_TOOL_CALLS,
+  total: 137,
+  page: 1,
+  pageSize: 25,
+};
+
+/** Page 1 (of several) of the paged threads table for the preview. */
+export const MOCK_THREADS_PAGE: GovernancePage<ThreadActivityRow> = {
+  rows: MOCK_THREADS,
+  total: 46,
+  page: 1,
+  pageSize: 25,
+};
+
+/** Page 1 (of several) of the paged recent-runs table for the preview. */
+export const MOCK_RUNS_PAGE: GovernancePage<RecentRunRow> = {
+  rows: MOCK_RUNS,
+  total: 482,
+  page: 1,
+  pageSize: 25,
+};
 
 export const MOCK_PRICES: ModelPrice[] = [
   {

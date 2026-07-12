@@ -2,6 +2,8 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   AgentPricingStore,
+  GovernancePage,
+  GovernancePageQuery,
   GovernanceRange,
   GovernanceUsageInput,
   ModelPrice,
@@ -12,10 +14,13 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadMeta,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -26,8 +31,11 @@ import {
   bucketUsageTrend,
   dayBoundsUtc,
 } from '@dudousxd/nestjs-agent-core';
+import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
+import { sql } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
+import type { AgentRunStatus } from './entities/agent-run.entity';
 import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
@@ -49,6 +57,47 @@ function percentileMs(sortedDurationsMs: number[], p: number): number | null {
   }
   const offset = Math.min(sortedDurationsMs.length - 1, Math.floor(p * sortedDurationsMs.length));
   return sortedDurationsMs[offset] ?? null;
+}
+
+// The paged where-builders below narrow a wire-typed `string` filter value down to the entity's
+// literal-union column type before it's assigned into a MikroORM filter object (an unnarrowed
+// `string` isn't assignable to e.g. `AgentToolCall['status']`). An unrecognized value can never
+// match a row anyway (the column only ever holds these literals), so the paged method short-circuits
+// to an empty page instead of querying with a value that would trivially return nothing.
+const TOOL_CALL_STATUSES: readonly string[] = [
+  'auto_executed',
+  'pending_approval',
+  'executed',
+  'rejected',
+  'failed',
+];
+function isToolCallStatus(value: string): value is ToolCallStatus {
+  return TOOL_CALL_STATUSES.includes(value);
+}
+
+const TOOL_KINDS: readonly string[] = ['read', 'action', 'agent'];
+function isToolKind(value: string): value is ToolKind {
+  return TOOL_KINDS.includes(value);
+}
+
+const RUN_STATUSES: readonly string[] = ['running', 'completed', 'failed'];
+function isRunStatus(value: string): value is AgentRunStatus {
+  return RUN_STATUSES.includes(value);
+}
+
+/** Inclusive UTC day start, reusing {@link dayBoundsUtc}'s date math so both bounds parse identically. */
+function dayStartUtc(day: string): Date {
+  return dayBoundsUtc({ fromDay: day, toDay: day }).start;
+}
+
+/** Inclusive UTC day end, reusing {@link dayBoundsUtc}'s date math so both bounds parse identically. */
+function dayEndUtc(day: string): Date {
+  return dayBoundsUtc({ fromDay: day, toDay: day }).end;
+}
+
+/** An empty page for the given query's page/pageSize — the shape every paged read falls back to. */
+function emptyPage<TRow>(query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
+  return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
 }
 
 /** Map a MikroORM usage entity onto the shared bucketer input (thread via relation, day via `createdAt`). */
@@ -384,5 +433,162 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
     );
     return result;
+  }
+
+  /**
+   * Paged, filterable tool-call activity, newest-first (same ordering as {@link recentToolCalls}).
+   * `toolType`/`status` values outside the known literals can never match a row — short-circuits to
+   * an empty page rather than issuing a query. `threadId` filters through the `message` relation
+   * (a tool call has no direct `threadId` column).
+   */
+  async toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    const filters = query.where;
+    if (filters?.status !== undefined && !isToolCallStatus(filters.status)) {
+      return emptyPage(query);
+    }
+    if (filters?.toolType !== undefined && !isToolKind(filters.toolType)) {
+      return emptyPage(query);
+    }
+    const em = this.em.fork();
+    const where = {
+      ...(filters?.toolName !== undefined ? { toolName: filters.toolName } : {}),
+      ...(filters?.toolType !== undefined && isToolKind(filters.toolType)
+        ? { toolType: filters.toolType }
+        : {}),
+      ...(filters?.status !== undefined && isToolCallStatus(filters.status)
+        ? { status: filters.status }
+        : {}),
+      ...(filters?.threadId !== undefined ? { message: { thread: filters.threadId } } : {}),
+      ...(filters?.fromDay !== undefined || filters?.toDay !== undefined
+        ? {
+            createdAt: {
+              ...(filters.fromDay !== undefined ? { $gte: dayStartUtc(filters.fromDay) } : {}),
+              ...(filters.toDay !== undefined ? { $lte: dayEndUtc(filters.toDay) } : {}),
+            },
+          }
+        : {}),
+    };
+    const [rows, total] = await em.findAndCount(AgentToolCall, where, {
+      orderBy: { createdAt: 'desc', id: 'desc' },
+      limit: query.pageSize,
+      offset: (query.page - 1) * query.pageSize,
+      populate: ['message'],
+    });
+    return {
+      rows: rows.map((toolCall) => ({
+        toolCallId: toolCall.id,
+        toolName: toolCall.toolName,
+        toolType: toolCall.toolType,
+        status: toolCall.status,
+        threadId: toolCall.message.thread.id,
+        createdAt: toolCall.createdAt.toISOString(),
+      })),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  /**
+   * Paged, filterable thread activity, newest-first (same ordering as {@link recentThreads}).
+   * `title` is a case-insensitive substring match via `sql.lower` (portable across MySQL/Postgres/
+   * SQLite, regardless of the entity's own collation). Soft-deleted threads are excluded, mirroring
+   * `recentThreads`.
+   */
+  async threadsPage(
+    query: GovernancePageQuery<ThreadWhere>,
+  ): Promise<GovernancePage<ThreadActivityRow>> {
+    const filters = query.where;
+    const em = this.em.fork();
+    const where = {
+      deletedAt: null,
+      ...(filters?.actorRef !== undefined ? { actorRef: filters.actorRef } : {}),
+      ...(filters?.title !== undefined
+        ? { [sql.lower('title')]: { $like: `%${filters.title.toLowerCase()}%` } }
+        : {}),
+      ...(filters?.fromDay !== undefined || filters?.toDay !== undefined
+        ? {
+            updatedAt: {
+              ...(filters?.fromDay !== undefined ? { $gte: dayStartUtc(filters.fromDay) } : {}),
+              ...(filters?.toDay !== undefined ? { $lte: dayEndUtc(filters.toDay) } : {}),
+            },
+          }
+        : {}),
+    };
+    const [threads, total] = await em.findAndCount(AgentThread, where, {
+      orderBy: { updatedAt: 'desc', id: 'desc' },
+      limit: query.pageSize,
+      offset: (query.page - 1) * query.pageSize,
+    });
+    const rows: ThreadActivityRow[] = [];
+    for (const thread of threads) {
+      const messageCount = await em.count(AgentMessage, { thread });
+      const usageRows = await em.find(AgentTokenUsage, { thread });
+      const totalTokens = usageRows.reduce(
+        (sum, row) => sum + row.inputTokens + row.outputTokens,
+        0,
+      );
+      rows.push({
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount,
+        totalTokens,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      });
+    }
+    return { rows, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  /**
+   * Paged, filterable run activity, newest-first (same ordering as {@link recentRuns}). `status`
+   * values outside the known literals can never match a row — short-circuits to an empty page.
+   */
+  async runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
+    const filters = query.where;
+    if (filters?.status !== undefined && !isRunStatus(filters.status)) {
+      return emptyPage(query);
+    }
+    const em = this.em.fork();
+    const where = {
+      ...(filters?.agentName !== undefined ? { agentName: filters.agentName } : {}),
+      ...(filters?.status !== undefined && isRunStatus(filters.status)
+        ? { status: filters.status }
+        : {}),
+      ...(filters?.errorCode !== undefined ? { errorCode: filters.errorCode } : {}),
+      ...(filters?.fromDay !== undefined || filters?.toDay !== undefined
+        ? {
+            startedAt: {
+              ...(filters.fromDay !== undefined ? { $gte: dayStartUtc(filters.fromDay) } : {}),
+              ...(filters.toDay !== undefined ? { $lte: dayEndUtc(filters.toDay) } : {}),
+            },
+          }
+        : {}),
+    };
+    const [runs, total] = await em.findAndCount(AgentRun, where, {
+      orderBy: { startedAt: 'desc', id: 'desc' },
+      limit: query.pageSize,
+      offset: (query.page - 1) * query.pageSize,
+    });
+    return {
+      rows: runs.map((run) => ({
+        runId: run.id,
+        threadId: run.thread.id,
+        actorRef: run.actorRef,
+        agentName: run.agentName ?? null,
+        status: run.status,
+        durationMs: run.durationMs ?? null,
+        errorCode: run.errorCode ?? null,
+        errorMessage: run.errorMessage ?? null,
+        retries: run.retries,
+        startedAt: run.startedAt.toISOString(),
+        promptHash: run.promptHash ?? null,
+      })),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 }

@@ -153,6 +153,58 @@ export interface ToolStatRow {
 }
 
 /**
+ * Neutral paged query for the governance list reads (`toolCallsPage`/`threadsPage`/`runsPage`). The
+ * WIRE format a host exposes over HTTP mirrors `@dudousxd/nestjs-filter`'s conventions (`page`,
+ * `limit`, `where[field][op]`) so consumers see one grammar across the ecosystem, but this SPI stays
+ * neutral/typed — no filter-builder or ORM coupling here.
+ */
+export interface GovernancePageQuery<TWhere> {
+  /** 1-based. */
+  page: number;
+  /** Rows per page, already clamped by the caller (the dashboard clamps to 200). */
+  pageSize: number;
+  /** Equality/range filters; absent field = no constraint. */
+  where?: TWhere;
+}
+
+/** One page of a governance list read, with the total row count for prev/next + "page X of Y" UI. */
+export interface GovernancePage<TRow> {
+  rows: TRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** Filters for {@link AgentGovernanceQueries.toolCallsPage}. */
+export interface ToolCallWhere {
+  toolName?: string;
+  toolType?: string;
+  status?: string;
+  threadId?: string;
+  /** Inclusive UTC day bounds, `YYYY-MM-DD`. */
+  fromDay?: string;
+  toDay?: string;
+}
+
+/** Filters for {@link AgentGovernanceQueries.threadsPage}. */
+export interface ThreadWhere {
+  actorRef?: string;
+  /** Substring match on the title (case-insensitive). */
+  title?: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+/** Filters for {@link AgentGovernanceQueries.runsPage}. */
+export interface RunWhere {
+  agentName?: string;
+  status?: string;
+  errorCode?: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+/**
  * The governance read-model. Cost is `inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 *
  * outputPricePer1m` against the current pricing row per model; an unpriced model contributes 0 cost
  * (its tokens still count).
@@ -166,7 +218,8 @@ export interface AgentGovernanceQueries {
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
   recentThreads(limit: number): Promise<ThreadActivityRow[]>;
   // Run reliability. An adapter backed by a store without run recording (no `recordRunStart`)
-  // returns zeros/empty from all five — the dashboard renders an empty reliability surface.
+  // returns zeros/empty from all five (plus `runsPage`, below) — the dashboard renders an empty
+  // reliability surface.
   runMetrics(range: GovernanceRange): Promise<RunMetrics>;
   runsByAgent(range: GovernanceRange): Promise<RunAgentBreakdownRow[]>;
   runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]>;
@@ -176,4 +229,21 @@ export interface AgentGovernanceQueries {
   pendingApprovals(limit: number): Promise<PendingApprovalRow[]>;
   /** Per-tool call/failure/rejection/latency rollup over the range, highest call count first. */
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]>;
+  /**
+   * Paged, filterable tool-call activity, newest-first (same ordering as `recentToolCalls`). An
+   * adapter without the backing data returns an empty page (`total: 0`) rather than throwing.
+   */
+  toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>>;
+  /**
+   * Paged, filterable thread activity, newest-first (same ordering as `recentThreads`). An adapter
+   * without the backing data returns an empty page (`total: 0`) rather than throwing.
+   */
+  threadsPage(query: GovernancePageQuery<ThreadWhere>): Promise<GovernancePage<ThreadActivityRow>>;
+  /**
+   * Paged, filterable run activity, newest-first (same ordering as `recentRuns`). An adapter backed
+   * by a store without run recording (no `recordRunStart`) returns an empty page (`total: 0`).
+   */
+  runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>>;
 }

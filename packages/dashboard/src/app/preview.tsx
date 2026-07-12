@@ -16,10 +16,11 @@ import {
   MOCK_PENDING_APPROVALS,
   MOCK_PRICES,
   MOCK_RELIABILITY,
-  MOCK_RUNS,
+  MOCK_RUNS_PAGE,
   MOCK_SPEND,
-  MOCK_THREADS,
+  MOCK_THREADS_PAGE,
   MOCK_TOOL_CALLS,
+  MOCK_TOOL_CALLS_PAGE,
   MOCK_TOOL_STATS,
   MOCK_TOP_THREADS,
 } from './mock-data';
@@ -56,10 +57,28 @@ function Preview() {
           <ActorsSection rows={MOCK_SPEND.byActor} budgets={MOCK_BUDGETS} />
         </Group>
         <Group label="Runs & tools">
-          <RunsToolsSection toolCalls={MOCK_TOOL_CALLS} threads={MOCK_THREADS} />
+          <RunsToolsSection
+            toolCalls={MOCK_TOOL_CALLS}
+            toolCallsPage={MOCK_TOOL_CALLS_PAGE}
+            toolCallsWhere={{}}
+            onToolCallsToolNameChange={() => {}}
+            onToolCallsStatusChange={() => {}}
+            onToolCallsPageChange={() => {}}
+            threadsPage={MOCK_THREADS_PAGE}
+            threadsWhere={{}}
+            onThreadsTitleChange={() => {}}
+            onThreadsPageChange={() => {}}
+          />
         </Group>
         <Group label="Reliability">
-          <ReliabilitySection overview={MOCK_RELIABILITY} runs={MOCK_RUNS} />
+          <ReliabilitySection
+            overview={MOCK_RELIABILITY}
+            runsPage={MOCK_RUNS_PAGE}
+            runsWhere={{}}
+            onRunsStatusChange={() => {}}
+            onRunsAgentNameChange={() => {}}
+            onRunsPageChange={() => {}}
+          />
         </Group>
         <Group label="Approvals">
           <ApprovalsSection approvals={MOCK_PENDING_APPROVALS} onDecide={async () => {}} />

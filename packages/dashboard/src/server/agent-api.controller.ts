@@ -1,6 +1,7 @@
 import type {
   ActorResolver,
   CurrentModelPrice,
+  GovernancePage,
   PendingApprovalRow,
   RecentRunRow,
   ToolCallActivityRow,
@@ -28,6 +29,12 @@ import {
   type ThreadActivityRowWithLabel,
   type ThreadSpendRowWithLabel,
 } from './dashboard.service.js';
+import {
+  parsePageNumber,
+  parseRunWhere,
+  parseThreadWhere,
+  parseToolCallWhere,
+} from './parse-page-query.js';
 import { AGENT_ACTOR_RESOLVER, DASHBOARD_APPROVAL_ACTOR_REF } from './tokens.js';
 
 const DAY_MS = 86_400_000;
@@ -112,10 +119,48 @@ export class AgentApiController {
     return this.dashboard.recentRuns(parseLimit(limit, 50));
   }
 
+  /**
+   * Paged, filterable runs for the Reliability recent-runs table. `page` (default 1), `limit`
+   * (default 25, max 200), and `where[agentName]`/`where[status]`/`where[errorCode]`/
+   * `where[fromDay]`/`where[toDay]` (`YYYY-MM-DD`) — an unknown `where` field 400s naming it.
+   */
+  @Get('runs-page')
+  runsPage(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('where') where?: Record<string, string>,
+  ): Promise<GovernancePage<RecentRunRow>> {
+    const parsedWhere = parseRunWhere(where);
+    return this.dashboard.runsPage({
+      page: parsePageNumber(page),
+      pageSize: parseLimit(limit, 25),
+      ...(parsedWhere !== undefined ? { where: parsedWhere } : {}),
+    });
+  }
+
   /** Most recent tool calls (default 50, max 200) for the activity feed. */
   @Get('tool-calls')
   toolCalls(@Query('limit') limit?: string): Promise<ToolCallActivityRow[]> {
     return this.dashboard.recentToolCalls(parseLimit(limit, 50));
+  }
+
+  /**
+   * Paged, filterable tool calls for the Runs & tools activity table. `page` (default 1), `limit`
+   * (default 25, max 200), and `where[toolName]`/`where[toolType]`/`where[status]`/`where[threadId]`/
+   * `where[fromDay]`/`where[toDay]` (`YYYY-MM-DD`) — an unknown `where` field 400s naming it.
+   */
+  @Get('tool-calls-page')
+  toolCallsPage(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('where') where?: Record<string, string>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    const parsedWhere = parseToolCallWhere(where);
+    return this.dashboard.toolCallsPage({
+      page: parsePageNumber(page),
+      pageSize: parseLimit(limit, 25),
+      ...(parsedWhere !== undefined ? { where: parsedWhere } : {}),
+    });
   }
 
   /** Tool calls sitting `pending_approval` (default 50, max 200), oldest first — the approvals inbox. */
@@ -170,6 +215,25 @@ export class AgentApiController {
   @Get('threads')
   threads(@Query('limit') limit?: string): Promise<ThreadActivityRowWithLabel[]> {
     return this.dashboard.recentThreads(parseLimit(limit, 50));
+  }
+
+  /**
+   * Paged, filterable threads for the Runs & tools threads table. `page` (default 1), `limit`
+   * (default 25, max 200), and `where[actorRef]`/`where[title]` (case-insensitive substring)/
+   * `where[fromDay]`/`where[toDay]` (`YYYY-MM-DD`) — an unknown `where` field 400s naming it.
+   */
+  @Get('threads-page')
+  threadsPage(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('where') where?: Record<string, string>,
+  ): Promise<GovernancePage<ThreadActivityRowWithLabel>> {
+    const parsedWhere = parseThreadWhere(where);
+    return this.dashboard.threadsPage({
+      page: parsePageNumber(page),
+      pageSize: parseLimit(limit, 25),
+      ...(parsedWhere !== undefined ? { where: parsedWhere } : {}),
+    });
   }
 
   /**

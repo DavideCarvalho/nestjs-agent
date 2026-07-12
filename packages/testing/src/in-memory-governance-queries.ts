@@ -1,6 +1,8 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  GovernancePage,
+  GovernancePageQuery,
   GovernanceRange,
   GovernanceUsageInput,
   ModelPrice,
@@ -11,10 +13,13 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadMeta,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallWhere,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -34,6 +39,37 @@ import type {
 const UNCLASSIFIED_ERROR_CODE = 'unknown';
 /** Bucket key for a run with no `agentName` (mirrors {@link RunAgentBreakdownRow}'s contract). */
 const DEFAULT_AGENT_BUCKET = '(default)';
+
+/**
+ * Whether a `YYYY-MM-DD` day falls within an inclusive, independently-optional day range — unlike
+ * {@link GovernanceRange} (both bounds required), a paged where's `fromDay`/`toDay` are each
+ * optional, so an absent bound imposes no constraint on that side. Lexicographic string comparison
+ * is valid because the days are zero-padded ISO dates.
+ */
+function dayWithinBounds(
+  day: string,
+  fromDay: string | undefined,
+  toDay: string | undefined,
+): boolean {
+  if (fromDay !== undefined && day < fromDay) {
+    return false;
+  }
+  if (toDay !== undefined && day > toDay) {
+    return false;
+  }
+  return true;
+}
+
+/** A page slice (`rows`/`total`/`page`/`pageSize`) over an already-filtered, already-sorted array. */
+function paginate<TRow>(sorted: TRow[], query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
+  const offset = (query.page - 1) * query.pageSize;
+  return {
+    rows: sorted.slice(offset, offset + query.pageSize),
+    total: sorted.length,
+    page: query.page,
+    pageSize: query.pageSize,
+  };
+}
 
 /**
  * MySQL-compatible percentile (no `PERCENTILE_CONT`): index into an ascending-sorted array by
@@ -323,5 +359,128 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
     );
     return result;
+  }
+
+  /**
+   * Paged, filterable tool-call activity, newest-first (same ordering as `recentToolCalls`, with a
+   * `toolCallId` tiebreak for deterministic paging across equal timestamps).
+   */
+  async toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    const filters = query.where;
+    const filtered = this.store.governanceToolCalls().filter((row) => {
+      if (filters?.toolName !== undefined && row.toolName !== filters.toolName) {
+        return false;
+      }
+      if (filters?.toolType !== undefined && row.toolType !== filters.toolType) {
+        return false;
+      }
+      if (filters?.status !== undefined && row.status !== filters.status) {
+        return false;
+      }
+      if (filters?.threadId !== undefined && row.threadId !== filters.threadId) {
+        return false;
+      }
+      return dayWithinBounds(row.createdAt.slice(0, 10), filters?.fromDay, filters?.toDay);
+    });
+    filtered.sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.toolCallId.localeCompare(left.toolCallId),
+    );
+    return paginate(
+      filtered.map((row) => ({
+        toolCallId: row.toolCallId,
+        toolName: row.toolName,
+        toolType: row.toolType,
+        status: row.status,
+        threadId: row.threadId,
+        createdAt: row.createdAt,
+      })),
+      query,
+    );
+  }
+
+  /**
+   * Paged, filterable thread activity, newest-first (same ordering as `recentThreads`, with a
+   * `threadId` tiebreak). `title` is a case-insensitive substring match.
+   */
+  async threadsPage(
+    query: GovernancePageQuery<ThreadWhere>,
+  ): Promise<GovernancePage<ThreadActivityRow>> {
+    const filters = query.where;
+    const usage = this.store.governanceUsage();
+    const filtered = this.store.governanceThreads().filter((thread) => {
+      if (filters?.actorRef !== undefined && thread.actorRef !== filters.actorRef) {
+        return false;
+      }
+      if (
+        filters?.title !== undefined &&
+        !thread.title.toLowerCase().includes(filters.title.toLowerCase())
+      ) {
+        return false;
+      }
+      return dayWithinBounds(thread.updatedAt.slice(0, 10), filters?.fromDay, filters?.toDay);
+    });
+    filtered.sort(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.threadId.localeCompare(left.threadId),
+    );
+    const rows: ThreadActivityRow[] = filtered.map((thread) => {
+      const totalTokens = usage
+        .filter((row) => row.threadId === thread.threadId)
+        .reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
+      return {
+        threadId: thread.threadId,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: thread.messageCount,
+        totalTokens,
+        lastActivityAt: thread.updatedAt,
+      };
+    });
+    return paginate(rows, query);
+  }
+
+  /**
+   * Paged, filterable run activity, newest-first (same ordering as `recentRuns`, with a `runId`
+   * tiebreak).
+   */
+  async runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
+    const filters = query.where;
+    const filtered = this.store.governanceRuns().filter((run) => {
+      if (filters?.agentName !== undefined && run.agentName !== filters.agentName) {
+        return false;
+      }
+      if (filters?.status !== undefined && run.status !== filters.status) {
+        return false;
+      }
+      if (filters?.errorCode !== undefined && run.errorCode !== filters.errorCode) {
+        return false;
+      }
+      return dayWithinBounds(run.startedAt.slice(0, 10), filters?.fromDay, filters?.toDay);
+    });
+    filtered.sort(
+      (left, right) =>
+        right.startedAt.localeCompare(left.startedAt) || right.runId.localeCompare(left.runId),
+    );
+    return paginate(
+      filtered.map((run) => ({
+        runId: run.runId,
+        threadId: run.threadId,
+        actorRef: run.actorRef,
+        agentName: run.agentName ?? null,
+        status: run.status,
+        durationMs: run.durationMs ?? null,
+        errorCode: run.errorCode ?? null,
+        errorMessage: run.errorMessage ?? null,
+        retries: run.retries,
+        startedAt: run.startedAt,
+        promptHash: run.promptHash ?? null,
+      })),
+      query,
+    );
   }
 }

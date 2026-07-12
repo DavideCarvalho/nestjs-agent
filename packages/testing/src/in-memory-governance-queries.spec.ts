@@ -668,3 +668,474 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
     }
   });
 });
+
+// toolCallsPage/threadsPage/runsPage — real total + offset pagination and every where field,
+// mirroring the SQL adapters' db-spec fixtures/math.
+describe('InMemoryGovernanceQueries toolCallsPage', () => {
+  async function seed(): Promise<{
+    store: InMemoryAgentStore;
+    queries: InMemoryGovernanceQueries;
+    threadA: string;
+    threadB: string;
+  }> {
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(store);
+    const threadA = await store.createThread({ actor: { id: 'alice' } });
+    const threadB = await store.createThread({ actor: { id: 'bob' } });
+    const messageA = await store.appendMessage({
+      threadId: threadA.id,
+      role: 'assistant',
+      content: 'x',
+    });
+    const messageB = await store.appendMessage({
+      threadId: threadB.id,
+      role: 'assistant',
+      content: 'y',
+    });
+
+    // Newest-first order is tc-5, tc-4, tc-3, tc-2, tc-1.
+    vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'tc-1',
+      messageId: messageA.id,
+      toolName: 'search',
+      toolType: 'read',
+      input: {},
+      status: 'executed',
+    });
+    vi.setSystemTime(new Date('2026-07-10T10:00:00.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'tc-2',
+      messageId: messageA.id,
+      toolName: 'deploy',
+      toolType: 'action',
+      input: {},
+      status: 'pending_approval',
+    });
+    vi.setSystemTime(new Date('2026-07-11T09:00:00.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'tc-3',
+      messageId: messageB.id,
+      toolName: 'search',
+      toolType: 'read',
+      input: {},
+      status: 'failed',
+    });
+    vi.setSystemTime(new Date('2026-07-12T09:00:00.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'tc-4',
+      messageId: messageB.id,
+      toolName: 'notify',
+      toolType: 'action',
+      input: {},
+      status: 'executed',
+    });
+    vi.setSystemTime(new Date('2026-07-13T09:00:00.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'tc-5',
+      messageId: messageA.id,
+      toolName: 'search',
+      toolType: 'action',
+      input: {},
+      status: 'rejected',
+    });
+
+    return { store, queries, threadA: threadA.id, threadB: threadB.id };
+  }
+
+  it('paginates newest-first: page 2 rows + total, past-end empty page, pageSize respected', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+
+      const page1 = await queries.toolCallsPage({ page: 1, pageSize: 2 });
+      expect(page1.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-4']);
+      expect(page1.total).toBe(5);
+      expect(page1.rows).toHaveLength(2);
+
+      const page2 = await queries.toolCallsPage({ page: 2, pageSize: 2 });
+      expect(page2.rows.map((row) => row.toolCallId)).toEqual(['tc-3', 'tc-2']);
+      expect(page2.total).toBe(5);
+
+      const page3 = await queries.toolCallsPage({ page: 3, pageSize: 2 });
+      expect(page3.rows.map((row) => row.toolCallId)).toEqual(['tc-1']);
+
+      const pastEnd = await queries.toolCallsPage({ page: 4, pageSize: 2 });
+      expect(pastEnd.rows).toEqual([]);
+      expect(pastEnd.total).toBe(5);
+      expect(pastEnd.page).toBe(4);
+      expect(pastEnd.pageSize).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by toolName', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { toolName: 'search' },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-3', 'tc-1']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by toolType', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { toolType: 'action' },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-4', 'tc-2']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by status', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { status: 'executed' },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-4', 'tc-1']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by threadId', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries, threadA } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { threadId: threadA },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-2', 'tc-1']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by inclusive fromDay/toDay bounds', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { fromDay: '2026-07-11', toDay: '2026-07-12' },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-4', 'tc-3']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('combines filters (toolName + threadId)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries, threadA } = await seed();
+      const page = await queries.toolCallsPage({
+        page: 1,
+        pageSize: 10,
+        where: { toolName: 'search', threadId: threadA },
+      });
+      expect(page.rows.map((row) => row.toolCallId)).toEqual(['tc-5', 'tc-1']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('InMemoryGovernanceQueries threadsPage', () => {
+  async function seed(): Promise<{
+    store: InMemoryAgentStore;
+    queries: InMemoryGovernanceQueries;
+  }> {
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(store);
+
+    // Newest-first order is t5, t4, t3, t2, t1.
+    vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
+    await store.createThread({ actor: { id: 'erin' }, title: 'Erin Chat One' });
+    vi.setSystemTime(new Date('2026-07-11T09:00:00.000Z'));
+    // Mixed case, to prove the title match is case-insensitive.
+    await store.createThread({ actor: { id: 'erin' }, title: 'ERIN Chat Two' });
+    vi.setSystemTime(new Date('2026-07-12T09:00:00.000Z'));
+    await store.createThread({ actor: { id: 'frank' }, title: 'Frank Notes' });
+    vi.setSystemTime(new Date('2026-07-13T09:00:00.000Z'));
+    await store.createThread({ actor: { id: 'frank' }, title: 'Something else' });
+    vi.setSystemTime(new Date('2026-07-14T09:00:00.000Z'));
+    await store.createThread({ actor: { id: 'erin' }, title: 'Random Notes' });
+
+    return { store, queries };
+  }
+
+  it('paginates newest-first: page 2 rows + total, past-end empty page, pageSize respected', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+
+      const page1 = await queries.threadsPage({ page: 1, pageSize: 2 });
+      expect(page1.rows.map((row) => row.title)).toEqual(['Random Notes', 'Something else']);
+      expect(page1.total).toBe(5);
+      expect(page1.rows).toHaveLength(2);
+
+      const page2 = await queries.threadsPage({ page: 2, pageSize: 2 });
+      expect(page2.rows.map((row) => row.title)).toEqual(['Frank Notes', 'ERIN Chat Two']);
+      expect(page2.total).toBe(5);
+
+      const page3 = await queries.threadsPage({ page: 3, pageSize: 2 });
+      expect(page3.rows.map((row) => row.title)).toEqual(['Erin Chat One']);
+
+      const pastEnd = await queries.threadsPage({ page: 4, pageSize: 2 });
+      expect(pastEnd.rows).toEqual([]);
+      expect(pastEnd.total).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by actorRef', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.threadsPage({
+        page: 1,
+        pageSize: 10,
+        where: { actorRef: 'erin' },
+      });
+      expect(page.rows.map((row) => row.title)).toEqual([
+        'Random Notes',
+        'ERIN Chat Two',
+        'Erin Chat One',
+      ]);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by title, case-insensitively', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.threadsPage({
+        page: 1,
+        pageSize: 10,
+        where: { title: 'chat' },
+      });
+      expect(page.rows.map((row) => row.title)).toEqual(['ERIN Chat Two', 'Erin Chat One']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by inclusive fromDay/toDay bounds', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.threadsPage({
+        page: 1,
+        pageSize: 10,
+        where: { fromDay: '2026-07-12', toDay: '2026-07-13' },
+      });
+      expect(page.rows.map((row) => row.title)).toEqual(['Something else', 'Frank Notes']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('combines filters (actorRef + title)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.threadsPage({
+        page: 1,
+        pageSize: 10,
+        where: { actorRef: 'erin', title: 'notes' },
+      });
+      expect(page.rows.map((row) => row.title)).toEqual(['Random Notes']);
+      expect(page.total).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('InMemoryGovernanceQueries runsPage', () => {
+  async function seed(): Promise<{
+    store: InMemoryAgentStore;
+    queries: InMemoryGovernanceQueries;
+  }> {
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(store);
+    const thread = await store.createThread({ actor: { id: 'hank' } });
+
+    // Newest-first order is r5, r4, r3, r2, r1.
+    vi.setSystemTime(new Date('2026-07-10T09:00:00.000Z'));
+    await store.recordRunStart({
+      runId: 'r1',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'researcher',
+    });
+    await store.recordRunEnd({ runId: 'r1', status: 'completed', durationMs: 100 });
+
+    vi.setSystemTime(new Date('2026-07-11T09:00:00.000Z'));
+    await store.recordRunStart({
+      runId: 'r2',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'researcher',
+    });
+    await store.recordRunEnd({ runId: 'r2', status: 'failed', errorCode: 'timeout' });
+
+    vi.setSystemTime(new Date('2026-07-12T09:00:00.000Z'));
+    await store.recordRunStart({ runId: 'r3', threadId: thread.id, actorRef: 'hank' });
+    await store.recordRunEnd({ runId: 'r3', status: 'completed', durationMs: 300 });
+
+    vi.setSystemTime(new Date('2026-07-13T09:00:00.000Z'));
+    await store.recordRunStart({
+      runId: 'r4',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'planner',
+    });
+    await store.recordRunEnd({ runId: 'r4', status: 'failed', errorCode: 'validation' });
+
+    vi.setSystemTime(new Date('2026-07-14T09:00:00.000Z'));
+    await store.recordRunStart({
+      runId: 'r5',
+      threadId: thread.id,
+      actorRef: 'hank',
+      agentName: 'researcher',
+    });
+    await store.recordRunEnd({ runId: 'r5', status: 'failed', errorCode: 'timeout' });
+
+    return { store, queries };
+  }
+
+  it('paginates newest-first: page 2 rows + total, past-end empty page, pageSize respected', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+
+      const page1 = await queries.runsPage({ page: 1, pageSize: 2 });
+      expect(page1.rows.map((row) => row.runId)).toEqual(['r5', 'r4']);
+      expect(page1.total).toBe(5);
+      expect(page1.rows).toHaveLength(2);
+
+      const page2 = await queries.runsPage({ page: 2, pageSize: 2 });
+      expect(page2.rows.map((row) => row.runId)).toEqual(['r3', 'r2']);
+      expect(page2.total).toBe(5);
+
+      const page3 = await queries.runsPage({ page: 3, pageSize: 2 });
+      expect(page3.rows.map((row) => row.runId)).toEqual(['r1']);
+
+      const pastEnd = await queries.runsPage({ page: 4, pageSize: 2 });
+      expect(pastEnd.rows).toEqual([]);
+      expect(pastEnd.total).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by agentName', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.runsPage({
+        page: 1,
+        pageSize: 10,
+        where: { agentName: 'researcher' },
+      });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r5', 'r2', 'r1']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by status', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.runsPage({ page: 1, pageSize: 10, where: { status: 'failed' } });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r5', 'r4', 'r2']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by errorCode', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.runsPage({
+        page: 1,
+        pageSize: 10,
+        where: { errorCode: 'timeout' },
+      });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r5', 'r2']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('filters by inclusive fromDay/toDay bounds', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.runsPage({
+        page: 1,
+        pageSize: 10,
+        where: { fromDay: '2026-07-11', toDay: '2026-07-13' },
+      });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r4', 'r3', 'r2']);
+      expect(page.total).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('combines filters (agentName + status)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { queries } = await seed();
+      const page = await queries.runsPage({
+        page: 1,
+        pageSize: 10,
+        where: { agentName: 'researcher', status: 'failed' },
+      });
+      expect(page.rows.map((row) => row.runId)).toEqual(['r5', 'r2']);
+      expect(page.total).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

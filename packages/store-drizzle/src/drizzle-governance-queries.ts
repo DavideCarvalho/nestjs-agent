@@ -2,6 +2,8 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   AgentPricingStore,
+  GovernancePage,
+  GovernancePageQuery,
   GovernanceRange,
   GovernanceUsageInput,
   ModelPrice,
@@ -12,10 +14,15 @@ import type {
   RunErrorBreakdownRow,
   RunMetrics,
   RunTrendPoint,
+  RunWhere,
   ThreadActivityRow,
   ThreadMeta,
   ThreadSpendRow,
+  ThreadWhere,
   ToolCallActivityRow,
+  ToolCallStatus,
+  ToolCallWhere,
+  ToolKind,
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
@@ -26,9 +33,10 @@ import {
   bucketUsageTrend,
   dayBoundsUtc,
 } from '@dudousxd/nestjs-agent-core';
-import { and, count, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, like, lte, sql } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
+  type AgentRunStatus,
   agentMessage,
   agentRun,
   agentThread,
@@ -40,6 +48,47 @@ import {
 const UNCLASSIFIED_ERROR_CODE = 'unknown';
 /** Bucket key for a run with no `agentName` (mirrors {@link RunAgentBreakdownRow}'s contract). */
 const DEFAULT_AGENT_BUCKET = '(default)';
+
+// The paged where-builders below narrow a wire-typed `string` filter value down to the schema
+// column's literal-union `$type<...>()` before it's used in an `eq()` comparison (an unnarrowed
+// `string` isn't assignable to e.g. `agentToolCall.status`'s type). An unrecognized value can never
+// match a row anyway (the column only ever holds these literals), so the paged method short-circuits
+// to an empty page instead of querying with a value that would trivially return nothing.
+const TOOL_CALL_STATUSES: readonly string[] = [
+  'auto_executed',
+  'pending_approval',
+  'executed',
+  'rejected',
+  'failed',
+];
+function isToolCallStatus(value: string): value is ToolCallStatus {
+  return TOOL_CALL_STATUSES.includes(value);
+}
+
+const TOOL_KINDS: readonly string[] = ['read', 'action', 'agent'];
+function isToolKind(value: string): value is ToolKind {
+  return TOOL_KINDS.includes(value);
+}
+
+const RUN_STATUSES: readonly string[] = ['running', 'completed', 'failed'];
+function isRunStatus(value: string): value is AgentRunStatus {
+  return RUN_STATUSES.includes(value);
+}
+
+/** Inclusive UTC day start, reusing {@link dayBoundsUtc}'s date math so both bounds parse identically. */
+function dayStartUtc(day: string): Date {
+  return dayBoundsUtc({ fromDay: day, toDay: day }).start;
+}
+
+/** Inclusive UTC day end, reusing {@link dayBoundsUtc}'s date math so both bounds parse identically. */
+function dayEndUtc(day: string): Date {
+  return dayBoundsUtc({ fromDay: day, toDay: day }).end;
+}
+
+/** An empty page for the given query's page/pageSize — the shape every paged read falls back to. */
+function emptyPage<TRow>(query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
+  return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
+}
 
 /** Map a Drizzle usage row onto the shared bucketer input (day derived from `createdAt`). */
 function toUsageInput(row: typeof agentTokenUsage.$inferSelect): GovernanceUsageInput {
@@ -415,5 +464,180 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       (left, right) => right.calls - left.calls || left.toolName.localeCompare(right.toolName),
     );
     return result;
+  }
+
+  /**
+   * Paged, filterable tool-call activity, newest-first (same ordering as {@link recentToolCalls}).
+   * `toolType`/`status` values outside the known literals can never match a row — short-circuits to
+   * an empty page rather than issuing a query. Joins `agent_message` unconditionally (like
+   * `recentToolCalls`) to resolve `threadId` and to support the `threadId` filter.
+   */
+  async toolCallsPage(
+    query: GovernancePageQuery<ToolCallWhere>,
+  ): Promise<GovernancePage<ToolCallActivityRow>> {
+    const filters = query.where;
+    if (filters?.status !== undefined && !isToolCallStatus(filters.status)) {
+      return emptyPage(query);
+    }
+    if (filters?.toolType !== undefined && !isToolKind(filters.toolType)) {
+      return emptyPage(query);
+    }
+    const whereClause = and(
+      filters?.toolName !== undefined ? eq(agentToolCall.toolName, filters.toolName) : undefined,
+      filters?.toolType !== undefined && isToolKind(filters.toolType)
+        ? eq(agentToolCall.toolType, filters.toolType)
+        : undefined,
+      filters?.status !== undefined && isToolCallStatus(filters.status)
+        ? eq(agentToolCall.status, filters.status)
+        : undefined,
+      filters?.threadId !== undefined ? eq(agentMessage.threadId, filters.threadId) : undefined,
+      filters?.fromDay !== undefined
+        ? gte(agentToolCall.createdAt, dayStartUtc(filters.fromDay))
+        : undefined,
+      filters?.toDay !== undefined
+        ? lte(agentToolCall.createdAt, dayEndUtc(filters.toDay))
+        : undefined,
+    );
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .where(whereClause);
+    const rows = await this.db
+      .select({
+        toolCallId: agentToolCall.id,
+        toolName: agentToolCall.toolName,
+        toolType: agentToolCall.toolType,
+        status: agentToolCall.status,
+        threadId: agentMessage.threadId,
+        createdAt: agentToolCall.createdAt,
+      })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .where(whereClause)
+      .orderBy(desc(agentToolCall.createdAt), desc(agentToolCall.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+    return {
+      rows: rows.map((row) => ({
+        toolCallId: row.toolCallId,
+        toolName: row.toolName,
+        toolType: row.toolType,
+        status: row.status,
+        threadId: row.threadId,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      total: totalRow?.value ?? 0,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  /**
+   * Paged, filterable thread activity, newest-first (same ordering as {@link recentThreads}).
+   * `title` is a case-insensitive substring match via `lower(...)` on both sides (portable across
+   * dialects, regardless of the underlying column collation). Soft-deleted threads are excluded,
+   * mirroring `recentThreads`.
+   */
+  async threadsPage(
+    query: GovernancePageQuery<ThreadWhere>,
+  ): Promise<GovernancePage<ThreadActivityRow>> {
+    const filters = query.where;
+    const whereClause = and(
+      isNull(agentThread.deletedAt),
+      filters?.actorRef !== undefined ? eq(agentThread.actorRef, filters.actorRef) : undefined,
+      filters?.title !== undefined
+        ? like(sql`lower(${agentThread.title})`, `%${filters.title.toLowerCase()}%`)
+        : undefined,
+      filters?.fromDay !== undefined
+        ? gte(agentThread.updatedAt, dayStartUtc(filters.fromDay))
+        : undefined,
+      filters?.toDay !== undefined
+        ? lte(agentThread.updatedAt, dayEndUtc(filters.toDay))
+        : undefined,
+    );
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(agentThread)
+      .where(whereClause);
+    const threads = await this.db
+      .select()
+      .from(agentThread)
+      .where(whereClause)
+      .orderBy(desc(agentThread.updatedAt), desc(agentThread.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+    const rows: ThreadActivityRow[] = [];
+    for (const thread of threads) {
+      const [messageCountRow] = await this.db
+        .select({ value: count() })
+        .from(agentMessage)
+        .where(eq(agentMessage.threadId, thread.id));
+      const usageRows = await this.db
+        .select()
+        .from(agentTokenUsage)
+        .where(eq(agentTokenUsage.threadId, thread.id));
+      const totalTokens = usageRows.reduce(
+        (sum, row) => sum + row.inputTokens + row.outputTokens,
+        0,
+      );
+      rows.push({
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: messageCountRow?.value ?? 0,
+        totalTokens,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      });
+    }
+    return { rows, total: totalRow?.value ?? 0, page: query.page, pageSize: query.pageSize };
+  }
+
+  /**
+   * Paged, filterable run activity, newest-first (same ordering as {@link recentRuns}). `status`
+   * values outside the known literals can never match a row — short-circuits to an empty page.
+   */
+  async runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
+    const filters = query.where;
+    if (filters?.status !== undefined && !isRunStatus(filters.status)) {
+      return emptyPage(query);
+    }
+    const whereClause = and(
+      filters?.agentName !== undefined ? eq(agentRun.agentName, filters.agentName) : undefined,
+      filters?.status !== undefined && isRunStatus(filters.status)
+        ? eq(agentRun.status, filters.status)
+        : undefined,
+      filters?.errorCode !== undefined ? eq(agentRun.errorCode, filters.errorCode) : undefined,
+      filters?.fromDay !== undefined
+        ? gte(agentRun.startedAt, dayStartUtc(filters.fromDay))
+        : undefined,
+      filters?.toDay !== undefined ? lte(agentRun.startedAt, dayEndUtc(filters.toDay)) : undefined,
+    );
+    const [totalRow] = await this.db.select({ value: count() }).from(agentRun).where(whereClause);
+    const runs = await this.db
+      .select()
+      .from(agentRun)
+      .where(whereClause)
+      .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+    return {
+      rows: runs.map((run) => ({
+        runId: run.id,
+        threadId: run.threadId,
+        actorRef: run.actorRef,
+        agentName: run.agentName ?? null,
+        status: run.status,
+        durationMs: run.durationMs ?? null,
+        errorCode: run.errorCode ?? null,
+        errorMessage: run.errorMessage ?? null,
+        retries: run.retries,
+        startedAt: run.startedAt.toISOString(),
+        promptHash: run.promptHash ?? null,
+      })),
+      total: totalRow?.value ?? 0,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 }

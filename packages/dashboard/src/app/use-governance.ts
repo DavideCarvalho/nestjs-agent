@@ -1,7 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type ApprovalDecisionInput,
   type GovernanceRange,
+  type RunWhere,
+  type ThreadWhere,
+  type ToolCallWhere,
   type UpsertModelPriceInput,
   agentClient,
 } from '../client/agent-client';
@@ -38,6 +41,15 @@ export function useRuns(limit = 50) {
   });
 }
 
+/** Poll a page of the recent-runs table, filtered by `where`. See {@link useToolCallsPage}. */
+export function useRunsPage(page: number, pageSize: number, where: RunWhere) {
+  return useQuery({
+    queryKey: ['runs-page', page, pageSize, where],
+    queryFn: () => agentClient.runsPage({ page, pageSize, where }),
+    placeholderData: keepPreviousData,
+  });
+}
+
 /** Poll the recent tool-calls feed. */
 export function useToolCalls(limit = 50) {
   return useQuery({
@@ -46,11 +58,32 @@ export function useToolCalls(limit = 50) {
   });
 }
 
+/**
+ * Poll a page of the tool-calls table, filtered by `where`. `page`/`where` drive the query key, so
+ * a page change or a filter change refetches; `keepPreviousData` avoids a loading flash between pages.
+ */
+export function useToolCallsPage(page: number, pageSize: number, where: ToolCallWhere) {
+  return useQuery({
+    queryKey: ['tool-calls-page', page, pageSize, where],
+    queryFn: () => agentClient.toolCallsPage({ page, pageSize, where }),
+    placeholderData: keepPreviousData,
+  });
+}
+
 /** Poll the recent threads feed. */
 export function useThreads(limit = 50) {
   return useQuery({
     queryKey: ['threads', limit],
     queryFn: () => agentClient.threads(limit),
+  });
+}
+
+/** Poll a page of the threads table, filtered by `where`. See {@link useToolCallsPage}. */
+export function useThreadsPage(page: number, pageSize: number, where: ThreadWhere) {
+  return useQuery({
+    queryKey: ['threads-page', page, pageSize, where],
+    queryFn: () => agentClient.threadsPage({ page, pageSize, where }),
+    placeholderData: keepPreviousData,
   });
 }
 
