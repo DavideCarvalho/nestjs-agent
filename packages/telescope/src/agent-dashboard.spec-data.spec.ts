@@ -9,19 +9,37 @@ describe('agentDashboard', () => {
     expect(titles).toContain('Run trends');
     expect(titles).toContain('Approvals');
     const kinds = dashboard.sections?.flatMap((s) => s.panels.map((p) => p.kind)) ?? [];
-    expect(kinds).toContain('distribution');
     expect(kinds).toContain('breakdown');
+    // No distribution panel: RunMetrics has no raw duration samples, so a histogram would render
+    // as a permanently-empty box — duration is two stat panels instead.
+    expect(kinds).not.toContain('distribution');
   });
 
-  it('maps the duration distribution panel to markers [p50, p95]', () => {
+  it('renders run duration as p50/p95 stat panels bound by query.metric', () => {
     const dashboard = agentDashboard();
-    const duration = dashboard.sections
+    const panels = dashboard.sections?.flatMap((s) => s.panels) ?? [];
+    const p50 = panels.find((p) => p.title === 'Duration p50');
+    const p95 = panels.find((p) => p.title === 'Duration p95');
+    expect(p50?.kind).toBe('stat');
+    expect(p50?.data).toEqual({ provider: 'agent.runs.duration', query: { metric: 'p50' } });
+    expect(p95?.kind).toBe('stat');
+    expect(p95?.data).toEqual({ provider: 'agent.runs.duration', query: { metric: 'p95' } });
+  });
+
+  it('keeps the recent-runs table slim (7 columns; detail lives in the standalone dashboard)', () => {
+    const dashboard = agentDashboard();
+    const recentRuns = dashboard.sections
       ?.flatMap((s) => s.panels)
-      .find((p) => p.kind === 'distribution' && p.title === 'Run duration');
-    expect(duration?.kind).toBe('distribution');
-    expect(duration?.kind === 'distribution' ? duration.markers : undefined).toEqual([
-      'p50',
-      'p95',
+      .find((p) => p.kind === 'table' && p.title === 'Recent runs');
+    const keys = recentRuns?.kind === 'table' ? recentRuns.columns.map((column) => column.key) : [];
+    expect(keys).toEqual([
+      'startedAt',
+      'runId',
+      'agentName',
+      'status',
+      'durationMs',
+      'errorMessage',
+      'promptHash',
     ]);
   });
 

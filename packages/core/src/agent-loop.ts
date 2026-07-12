@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
+import { trace } from '@dudousxd/nestjs-diagnostics';
+import type { PayloadOf } from '@dudousxd/nestjs-diagnostics';
 import {
+  type AgentSpanEvent,
   publishAgentDelegated,
   publishAgentMessage,
   publishAgentQuotaExceeded,
@@ -271,6 +274,73 @@ async function generateFollowUps(
 }
 
 /**
+ * Wrap a genuinely-executing operation in an `aviary:agent:<event>` span (the diagnostics
+ * `trace()` API — five `:start`/`:end`/`:asyncStart`/`:asyncEnd`/`:error` sub-channels),
+ * correlated to its run by `traceId = runId`, WITHOUT letting the operation's raw return value
+ * ride the span envelope: `trace` publishes the traced fn's return as the span's `result`, so the
+ * traced fn returns only `summarize`d metadata (token counts / lengths / names — never prompt or
+ * output text, the point events' redaction posture) while the real value is handed back to the
+ * caller through the closure. Zero-cost when no span sub-channel has a subscriber.
+ *
+ * REPLAY SAFETY: call sites MUST sit INSIDE a `hooks.step` body (or another genuinely-executed
+ * path). Durable replay skips step bodies and returns checkpoints, which is exactly what keeps a
+ * replayed run from re-emitting spans. Never wrap a `hooks.step(...)`/`hooks.dispatch*(...)`
+ * CALL — those run (and resolve from cache) on every replay.
+ */
+async function spanned<TEvent extends AgentSpanEvent, T>(
+  event: TEvent,
+  runId: string,
+  payload: PayloadOf<'agent', TEvent>,
+  run: () => Promise<T>,
+  summarize: (value: T) => Record<string, unknown>,
+): Promise<T> {
+  let value!: T;
+  await trace(
+    'agent',
+    event,
+    async () => {
+      value = await run();
+      return summarize(value);
+    },
+    payload,
+    { traceId: runId },
+  );
+  return value;
+}
+
+/**
+ * Span-wrap one model call (`aviary:agent:llm.turn`). Exported so the durable dispatched-step
+ * handler (which executes the genuine remote llm step) can emit the same span — core cannot wrap
+ * `hooks.dispatchLlm` itself, because that call also runs (from cache) on replay.
+ */
+export function traceLlmTurn(
+  runId: string,
+  step: number,
+  run: () => Promise<ModelTurnResult>,
+): Promise<ModelTurnResult> {
+  return spanned('llm.turn', runId, { runId, step }, run, (turn) => ({
+    ...(turn.modelId !== undefined ? { modelId: turn.modelId } : {}),
+    inputTokens: turn.usage.inputTokens,
+    outputTokens: turn.usage.outputTokens,
+    textLength: turn.text.length,
+    toolCalls: turn.toolCalls.length,
+  }));
+}
+
+/**
+ * Span-wrap one tool invocation (`aviary:agent:tool.execution`). The tool's raw output never
+ * rides the span (only the start payload's name/type metadata + duration). Exported for the
+ * durable dispatched-step handler, like {@link traceLlmTurn}.
+ */
+export function traceToolExecution<T>(
+  runId: string,
+  call: { toolCallId: string; toolName: string; toolType: 'read' | 'action' },
+  run: () => Promise<T>,
+): Promise<T> {
+  return spanned('tool.execution', runId, { runId, ...call }, run, () => ({}));
+}
+
+/**
  * The provider-agnostic agent turn, reused by both the inline and durable runners.
  * It drives the model→tools→model iteration; the runner supplies the `step`/`awaitApproval`
  * hooks that make the same loop body either in-process or a replay-safe durable workflow.
@@ -370,8 +440,15 @@ export async function runAgentLoop(
   let injectedPassages: Passage[] | undefined;
   if (deps.retriever !== undefined) {
     const retriever = deps.retriever;
+    const topK = deps.retrievalTopK ?? 5;
     const passages = await hooks.step('retrieve', () =>
-      retriever.retrieve(input.userText, { topK: deps.retrievalTopK ?? 5 }),
+      spanned(
+        'retrieval',
+        hooks.runId,
+        { runId: hooks.runId, queryLength: input.userText.length, topK },
+        () => retriever.retrieve(input.userText, { topK }),
+        (retrieved) => ({ count: retrieved.length }),
+      ),
     );
     if (passages.length > 0) {
       injectedPassages = passages;
@@ -418,7 +495,9 @@ export async function runAgentLoop(
         deps.toolAllowList,
       );
       turn = await hooks.step(`llm:${i}`, () =>
-        deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+        traceLlmTurn(hooks.runId, i, () =>
+          deps.model.runTurn({ system, messages: modelMessages, tools, sink: writer }),
+        ),
       );
     }
     // provider-reported model wins over the configured fallback, so cost can't misattribute
@@ -471,10 +550,22 @@ export async function runAgentLoop(
       // Stays on hooks.step (not dispatchLlm) — a short, non-streamed call, deliberately not
       // dispatched as a routed remote step.
       const generated = await hooks.step(`followups:${i}`, () =>
-        generateFollowUps(
-          deps.model,
-          [...modelMessages, { role: 'assistant', content: turn.text }],
-          count,
+        spanned(
+          'follow-ups',
+          hooks.runId,
+          { runId: hooks.runId, step: i, count },
+          () =>
+            generateFollowUps(
+              deps.model,
+              [...modelMessages, { role: 'assistant', content: turn.text }],
+              count,
+            ),
+          (result) => ({
+            followUps: result.followUps.length,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
+          }),
         ),
       );
       if (generated.followUps.length > 0) {
@@ -663,7 +754,11 @@ export async function runAgentLoop(
           output = await hooks.dispatchTool(call, envelope);
         } else {
           const invocation = hooks.step(`tool:${call.id}`, () =>
-            deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+            traceToolExecution(
+              hooks.runId,
+              { toolCallId: call.id, toolName: call.name, toolType },
+              () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+            ),
           );
           output =
             deps.toolTimeoutMs !== undefined

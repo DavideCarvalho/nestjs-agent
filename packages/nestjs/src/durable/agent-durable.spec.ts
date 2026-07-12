@@ -1,5 +1,10 @@
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { Suspend } from '@dudousxd/durable-worker';
-import { AGENT_APPROVAL_PORT, type AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
+import {
+  AGENT_APPROVAL_PORT,
+  AGENT_SPAN_EVENTS,
+  type AgentApprovalPort,
+} from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -474,5 +479,99 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
         // durable intentionally omitted (defaults to false)
       }),
     ).toThrow(/requires durable: true/);
+  });
+});
+
+/**
+ * The five span sub-channels for one agent span event — mirrors diagnostics' `traceChannelNames`
+ * (`aviary:<lib>:<event>` base + the five phase suffixes). Hand-built here because
+ * `@dudousxd/nestjs-diagnostics` is core's dependency, not this package's, and the wire names ARE
+ * the cross-package contract this test observes.
+ */
+function agentSpanChannels(event: string): string[] {
+  const base = `aviary:agent:${event}`;
+  return [
+    `${base}:start`,
+    `${base}:end`,
+    `${base}:asyncStart`,
+    `${base}:asyncEnd`,
+    `${base}:error`,
+  ];
+}
+
+/** The slice of diagnostics' span phase envelope the assertions below read. */
+interface SpanEnvelope {
+  event: string;
+  phase: string;
+  traceId?: string;
+  payload?: Record<string, unknown>;
+}
+
+function isSpanEnvelope(message: unknown): message is SpanEnvelope {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    'event' in message &&
+    typeof message.event === 'string' &&
+    'phase' in message &&
+    typeof message.phase === 'string'
+  );
+}
+
+describe('dispatched-step span emission (traceLlmTurn / traceToolExecution from the handlers)', () => {
+  it('a dispatched turn emits llm.turn and tool.execution spans with traceId = runId', async () => {
+    const seen: SpanEnvelope[] = [];
+    const listeners: Array<{ channel: string; handler: (message: unknown) => void }> = [];
+    for (const event of AGENT_SPAN_EVENTS) {
+      for (const channel of agentSpanChannels(event)) {
+        const handler = (message: unknown) => {
+          if (isSpanEnvelope(message)) seen.push(message);
+        };
+        subscribe(channel, handler);
+        listeners.push({ channel, handler });
+      }
+    }
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'purged durably' };
+    const { moduleRef, service, engine } = await buildDurableApp(script, true);
+    try {
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'purge it',
+      });
+      const collected = collect(service.subscribe(runId));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      await collected;
+      expect(result.status).toBe('completed');
+
+      const starts = seen.filter((envelope) => envelope.phase === 'start');
+      // Two model calls (tool turn + final turn) served by the dispatched llm handler, each
+      // carrying its threaded turn index...
+      const llmStarts = starts.filter((envelope) => envelope.event === 'llm.turn');
+      expect(llmStarts).toHaveLength(2);
+      expect(llmStarts.map((envelope) => envelope.payload?.step)).toEqual([0, 1]);
+      // ...and ONE tool execution served by the dispatched tool handler — genuine dispatch only:
+      // the post-approval resume replays llm:0 from its checkpoint without re-emitting its span.
+      const toolStarts = starts.filter((envelope) => envelope.event === 'tool.execution');
+      expect(toolStarts).toHaveLength(1);
+      expect(toolStarts[0]?.payload).toMatchObject({
+        runId,
+        toolCallId: 'call-0-purgeCache',
+        toolName: 'purgeCache',
+        toolType: 'action',
+      });
+      // Every phase envelope of every span correlates to the run.
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((envelope) => envelope.traceId === runId)).toBe(true);
+    } finally {
+      for (const listener of listeners) {
+        unsubscribe(listener.channel, listener.handler);
+      }
+      await moduleRef.close();
+    }
   });
 });

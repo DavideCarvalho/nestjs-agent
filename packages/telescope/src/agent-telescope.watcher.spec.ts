@@ -9,6 +9,7 @@ import {
   publishAgentRunStarted,
   publishAgentToolCall,
 } from '@dudousxd/nestjs-agent-core';
+import { isDiagnosticClaimed } from '@dudousxd/nestjs-diagnostics';
 import type { WatcherContext } from '@dudousxd/nestjs-telescope';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentTelescopeWatcher } from './agent-telescope.watcher.js';
@@ -81,5 +82,39 @@ describe('AgentTelescopeWatcher', () => {
     publishAgentRetrieved({ runId: 'r1', query: 'q', count: 3 });
 
     expect(ctx.record).not.toHaveBeenCalled();
+  });
+
+  it('claims every recorded key on register and releases the claim on dispose', () => {
+    for (const event of AGENT_DIAGNOSTIC_EVENTS) {
+      expect(isDiagnosticClaimed('agent', event)).toBe(false);
+    }
+
+    watcher = new AgentTelescopeWatcher();
+    watcher.register(mockCtx());
+    for (const event of AGENT_DIAGNOSTIC_EVENTS) {
+      expect(isDiagnosticClaimed('agent', event)).toBe(true);
+    }
+
+    watcher.dispose();
+    for (const event of AGENT_DIAGNOSTIC_EVENTS) {
+      expect(isDiagnosticClaimed('agent', event)).toBe(false);
+    }
+  });
+
+  it('claims are refcounted across two watcher instances (dispose of one keeps the other claimed)', () => {
+    watcher = new AgentTelescopeWatcher();
+    watcher.register(mockCtx());
+    const second = new AgentTelescopeWatcher();
+    second.register(mockCtx());
+
+    second.dispose();
+    for (const event of AGENT_DIAGNOSTIC_EVENTS) {
+      expect(isDiagnosticClaimed('agent', event)).toBe(true);
+    }
+
+    watcher.dispose();
+    for (const event of AGENT_DIAGNOSTIC_EVENTS) {
+      expect(isDiagnosticClaimed('agent', event)).toBe(false);
+    }
   });
 });

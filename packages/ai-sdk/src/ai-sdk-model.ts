@@ -14,6 +14,7 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/sp
 import {
   type AssistantContent,
   type CallSettings,
+  type Experimental_DownloadFunction,
   type FilePart,
   type FlexibleSchema,
   type ImagePart,
@@ -38,7 +39,17 @@ import type { ZodTypeAny } from 'zod';
  * `maxOutputTokens`, `providerOptions`, …). `model`, `instructions`, `messages`, `tools`, and
  * `abortSignal` are owned by the adapter and always win over anything set here.
  */
-export type AiSdkModelOptions = CallSettings;
+export type AiSdkModelOptions = CallSettings & {
+  /**
+   * Override the AI SDK's file/attachment downloader (`experimental_download` on `streamText`).
+   * The SDK's DEFAULT downloader refuses localhost/private hostnames (SSRF guard), which breaks
+   * attachment parts whose staging presigns against a local object store (e.g. MinIO in dev) —
+   * the model call dies with `AI_DownloadError: URL with hostname localhost is not allowed`.
+   * Attachment URLs come from the host's own staging SPI — never from user input — so relaxing
+   * the guard with a plain fetch is the host's legitimate call.
+   */
+  experimental_download?: Experimental_DownloadFunction;
+};
 
 /**
  * Adapt a Vercel AI SDK v7 `LanguageModel` to the core `ModelProvider` SPI so a host app writes

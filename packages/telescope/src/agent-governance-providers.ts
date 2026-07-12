@@ -516,17 +516,22 @@ export function agentRunsRetriesProvider(): DataProvider {
 }
 
 /**
- * distribution → run duration. `RunMetrics` exposes only the two percentiles (no raw per-run
- * samples), so there is nothing to bucket into a histogram — the panel renders its `p50`/`p95`
- * markers over an empty bucket series. `exactOptionalPropertyTypes` means a `null` percentile is
- * omitted from the result rather than carried as an explicit `undefined`.
+ * stat → run duration percentile, selected by `query.metric` (`'p95'` for p95, anything else —
+ * including omitted — for p50), mirroring `durable.duration`'s stat shortcut. NOT a
+ * `distribution` panel: `RunMetrics` exposes only the two percentiles (no raw per-run samples to
+ * bucket into a histogram), so a distribution here would render as a permanently-empty box. A
+ * `null` percentile (no settled runs in range) resolves to 0.
  */
 export function agentRunsDurationProvider(): DataProvider {
-  return governanceRunMetricsProvider('agent.runs.duration', (metrics) => ({
-    buckets: [],
-    ...(metrics.durationP50Ms !== null ? { p50: metrics.durationP50Ms } : {}),
-    ...(metrics.durationP95Ms !== null ? { p95: metrics.durationP95Ms } : {}),
-  }));
+  return {
+    name: 'agent.runs.duration',
+    async resolve(query, ctx) {
+      const queries = resolveGovernanceQueries(ctx);
+      const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
+      const value = query?.metric === 'p95' ? metrics.durationP95Ms : metrics.durationP50Ms;
+      return { value: value ?? 0 };
+    },
+  };
 }
 
 /** table → run/failure/retry rollup per agent. */

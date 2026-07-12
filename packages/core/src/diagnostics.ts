@@ -52,7 +52,40 @@ export interface AgentRetrieved {
   count: number;
 }
 
-/** Declaration-merge so `emit('agent', ...)` and telescope infer the agent payloads. */
+// --- Span (trace) payloads — the START-phase payload of each traced operation. Metadata only:
+// token counts / lengths / names, never prompt or output text (the point events' redaction
+// posture). The traced result rides the `end`/`asyncEnd` envelope; see agent-loop's span helpers.
+
+/** START payload of an `aviary:agent:llm.turn:*` span — one model call within a run. */
+export interface AgentLlmTurnSpan {
+  runId: string;
+  /** Zero-based model-call index within the run (the loop's step counter). */
+  step: number;
+}
+/** START payload of an `aviary:agent:tool.execution:*` span — one tool invocation. */
+export interface AgentToolExecutionSpan {
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  toolType: 'read' | 'action';
+}
+/** START payload of an `aviary:agent:retrieval:*` span — inject-mode RAG retrieval. */
+export interface AgentRetrievalSpan {
+  runId: string;
+  /** Length of the retrieval query in characters — never the query text itself. */
+  queryLength: number;
+  topK: number;
+}
+/** START payload of an `aviary:agent:follow-ups:*` span — the extra follow-up-suggestions call. */
+export interface AgentFollowUpsSpan {
+  runId: string;
+  /** Zero-based model-call index of the final turn the follow-ups ride on. */
+  step: number;
+  /** How many follow-up questions were requested. */
+  count: number;
+}
+
+/** Declaration-merge so `emit('agent', ...)`, `trace('agent', ...)` and telescope infer the agent payloads. */
 declare module '@dudousxd/nestjs-diagnostics' {
   interface ChannelRegistry {
     agent: {
@@ -64,6 +97,12 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'run.failed': AgentRunFailed;
       delegated: AgentDelegated;
       retrieved: AgentRetrieved;
+      // Span-only events (published via trace() on :start/:end/:asyncStart/:asyncEnd/:error
+      // sub-channels, never as point events) — see AgentSpanEvent below.
+      'llm.turn': AgentLlmTurnSpan;
+      'tool.execution': AgentToolExecutionSpan;
+      retrieval: AgentRetrievalSpan;
+      'follow-ups': AgentFollowUpsSpan;
     };
   }
 }
@@ -93,13 +132,38 @@ export function publishAgentRetrieved(payload: AgentRetrieved): void {
   emit('agent', 'retrieved', payload);
 }
 
-/** Every event key declared on `ChannelRegistry['agent']` above — derived, not hand-copied. */
-export type AgentDiagnosticEvent = keyof ChannelRegistry['agent'];
+/**
+ * Events published ONLY as spans — via `trace('agent', ...)` on the five `:start`/`:end`/
+ * `:asyncStart`/`:asyncEnd`/`:error` sub-channels — never as point events on the base channel.
+ * They are deliberately NOT in {@link AGENT_DIAGNOSTIC_EVENTS}: the point-event watcher has
+ * nothing to subscribe to on their base channels, and claiming their keys would be meaningless
+ * (the generic bridge only records point traffic).
+ */
+export type AgentSpanEvent = 'llm.turn' | 'tool.execution' | 'retrieval' | 'follow-ups';
+
+/** All span-only events, in a stable order — for a future span recorder to derive sub-channels from. */
+export const AGENT_SPAN_EVENTS: readonly AgentSpanEvent[] = [
+  'llm.turn',
+  'tool.execution',
+  'retrieval',
+  'follow-ups',
+];
+
+/** Compile-time-only check: every span event must be declared on `ChannelRegistry['agent']`. */
+type AgentSpanEventsAreRegistered = [AgentSpanEvent] extends [keyof ChannelRegistry['agent']]
+  ? true
+  : ["AGENT_SPAN_EVENTS names an event not declared on ChannelRegistry['agent']"];
+const agentSpanEventsAreRegistered: AgentSpanEventsAreRegistered = true;
+void agentSpanEventsAreRegistered;
+
+/** Every POINT event key declared on `ChannelRegistry['agent']` above — derived, not hand-copied. */
+export type AgentDiagnosticEvent = Exclude<keyof ChannelRegistry['agent'], AgentSpanEvent>;
 
 /**
- * All 8 events on `ChannelRegistry['agent']`, in a stable order — handy for wiring subscribers
- * (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). A drift between this list and the registry is
- * a compile error in both directions: an extra/misspelled entry fails this array's own
+ * All 8 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
+ * subscribers (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). Span-only events (see
+ * {@link AgentSpanEvent}) are excluded. A drift between this list and the registry is a compile
+ * error in both directions: an extra/misspelled entry fails this array's own
  * `readonly AgentDiagnosticEvent[]` annotation immediately; a missing entry fails the
  * {@link AgentDiagnosticEventsCoverAllKeys} check below.
  */
@@ -114,7 +178,7 @@ export const AGENT_DIAGNOSTIC_EVENTS: readonly AgentDiagnosticEvent[] = [
   'retrieved',
 ];
 
-/** Compile-time-only check: every key of `ChannelRegistry['agent']` must appear in the array above. */
+/** Compile-time-only check: every point event of `ChannelRegistry['agent']` must appear above. */
 type AgentDiagnosticEventsCoverAllKeys = [AgentDiagnosticEvent] extends [
   (typeof AGENT_DIAGNOSTIC_EVENTS)[number],
 ]
@@ -122,7 +186,7 @@ type AgentDiagnosticEventsCoverAllKeys = [AgentDiagnosticEvent] extends [
   : ["AGENT_DIAGNOSTIC_EVENTS is missing a key declared on ChannelRegistry['agent']"];
 
 // If this line stops typechecking, an event was added to (or renamed on) ChannelRegistry['agent']
-// without a matching update to AGENT_DIAGNOSTIC_EVENTS above.
+// without a matching update to AGENT_DIAGNOSTIC_EVENTS (point events) or AgentSpanEvent (spans).
 const agentDiagnosticEventsCoverAllKeys: AgentDiagnosticEventsCoverAllKeys = true;
 void agentDiagnosticEventsCoverAllKeys;
 

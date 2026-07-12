@@ -52,6 +52,24 @@ export interface UseAgentChatOptions {
    * even before the consumer navigates.
    */
   onThreadCreated?: (threadId: string) => void;
+  /**
+   * Fired exactly once per run when its stream settles — normally (`'completed'`) or via a thrown
+   * failure / the backend's `event: error` frame (`'failed'`) — including a RESUMED stream's own
+   * completion. By the time this fires, the server has already derived and persisted the thread's
+   * title (and the run's terminal state), so it's the signal `onFinish` doesn't give you: `onFinish`
+   * only says "a turn rendered," never "the server is done writing" — without this, a host has no
+   * reason to refetch the thread/list queries, and the header/sidebar title is stuck on "Untitled".
+   *
+   * Skipped when the attempt never got far enough to learn a run id (e.g. the initial POST itself
+   * failed before any response headers/meta frame arrived) — nothing was created server-side, so
+   * there's nothing to refetch.
+   *
+   * A user-initiated `cancel()`/`stop()` reports `'completed'` here (the AI SDK's own abort signal
+   * doesn't set its `isError` flag) — the server-side cancel already recorded its own terminal run
+   * state; this callback only reflects whether the CLIENT's stream loop exited with or without an
+   * error, not why it stopped.
+   */
+  onRunSettled?: (outcome: { runId: string; status: 'completed' | 'failed' }) => void;
 }
 
 interface AddToolResultArgs {
@@ -73,6 +91,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const [runId, setRunId] = useState<string | undefined>(options.resumeRunId);
   const runIdRef = useRef<string | undefined>(runId);
   runIdRef.current = runId;
+
+  // The run id learned (via the `meta` frame) during the CURRENT in-flight attempt only — reset to
+  // `undefined` by the transport's `onAttemptStart` the instant a new attempt starts (send OR
+  // resume), synchronously and before any network call, then set by `onMeta` if that attempt gets
+  // far enough to learn one. `onRunSettled` reads THIS (not `runIdRef`, which can still hold a PRIOR
+  // run's id) so an attempt that fails before ever learning a run id never misattributes its outcome
+  // to the run that just finished.
+  const settlingRunIdRef = useRef<string | undefined>(undefined);
 
   // Auto-resume (`resume: true`): the run id discovered from the thread's `activeRunId`, read by
   // the transport's `getResumeRunId` alongside the explicit `resumeRunId` option. A ref, not state
@@ -132,6 +158,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
   const transport = useMemo(() => {
     function onMeta(meta: AgentStreamMeta): void {
+      settlingRunIdRef.current = meta.runId;
       setRunId(meta.runId);
       // A threadless chat just had its thread created server-side — remember it so subsequent sends
       // reuse it, and tell the consumer once so it can sync its URL. An explicit threadId option owns
@@ -167,6 +194,9 @@ export function useAgentChat(options: UseAgentChatOptions) {
       },
       getResumeRunId: () => latest.current.resumeRunId ?? autoResumeRunIdRef.current,
       onMeta,
+      onAttemptStart: () => {
+        settlingRunIdRef.current = undefined;
+      },
     });
   }, []);
 
@@ -175,8 +205,18 @@ export function useAgentChat(options: UseAgentChatOptions) {
     resume: options.resumeRunId !== undefined || autoResume,
     ...(options.threadId !== undefined ? { id: options.threadId } : {}),
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
-    onFinish: () => {
+    onFinish: ({ isError }) => {
       latest.current.onFinish?.();
+      // Only the run learned DURING this attempt — see `settlingRunIdRef`'s comment. `undefined`
+      // means the attempt never got a run id (failed before any header/meta frame), so there's
+      // nothing server-side to report settling.
+      const settledRunId = settlingRunIdRef.current;
+      if (settledRunId !== undefined) {
+        latest.current.onRunSettled?.({
+          runId: settledRunId,
+          status: isError ? 'failed' : 'completed',
+        });
+      }
     },
   });
 

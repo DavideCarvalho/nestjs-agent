@@ -40,6 +40,14 @@ export interface AgentChatTransportOptions {
   getResumeRunId?: () => string | undefined;
   /** Fires whenever a stream emits its `meta` frame. */
   onMeta?: (meta: AgentStreamMeta) => void;
+  /**
+   * Fires synchronously at the very start of `sendMessages`/`reconnectToStream`, before any network
+   * call — i.e. strictly before that attempt's own `onMeta` (if any) can fire. Lets a caller reset
+   * "which run is THIS attempt settling" state without racing React's render/effect timing: a
+   * consumer that also read `onMeta` to learn the current run id would otherwise risk misattributing
+   * an early failure (no meta ever arrives) to a PRIOR attempt's id.
+   */
+  onAttemptStart?: () => void;
   /** Injectable for tests / non-browser runtimes. Defaults to global fetch. */
   fetch?: typeof fetch;
 }
@@ -83,6 +91,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
+    this.options.onAttemptStart?.();
     const lastMessage = options.messages.at(-1);
     const message = lastMessage ? extractText(lastMessage) : '';
     const body: Record<string, unknown> = {
@@ -112,6 +121,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   async reconnectToStream(
     options: Parameters<ChatTransport<UIMessage>['reconnectToStream']>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
+    this.options.onAttemptStart?.();
     const runId = this.options.getResumeRunId?.();
     // No buffered run → resolve null without a network round-trip so we
     // never surface a 404 from a doomed resume GET.

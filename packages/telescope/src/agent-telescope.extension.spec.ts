@@ -56,17 +56,21 @@ describe('agentTelescopeExtension', () => {
       runHref: '/agent/runs/{runId}',
     });
     const dashboard = withHrefs.dashboards?.(ctx)[0];
-    const recentRuns = dashboard?.sections
-      ?.flatMap((s) => s.panels)
-      .find((p) => p.kind === 'table' && p.title === 'Recent runs');
+    const panels = dashboard?.sections?.flatMap((s) => s.panels) ?? [];
+    const recentRuns = panels.find((p) => p.kind === 'table' && p.title === 'Recent runs');
     expect(recentRuns?.kind).toBe('table');
     const runIdColumn =
       recentRuns?.kind === 'table' ? recentRuns.columns.find((c) => c.key === 'runId') : undefined;
-    const threadIdColumn =
-      recentRuns?.kind === 'table'
-        ? recentRuns.columns.find((c) => c.key === 'threadId')
-        : undefined;
     expect(runIdColumn?.link).toEqual({ href: '/agent/runs/{runId}' });
+    // The slimmed recent-runs table has no threadId column; the thread deep-link lives on the
+    // thread-bearing tables (recently active threads, approvals inbox, recent tool calls).
+    const recentThreads = panels.find(
+      (p) => p.kind === 'table' && p.title === 'Recently active threads',
+    );
+    const threadIdColumn =
+      recentThreads?.kind === 'table'
+        ? recentThreads.columns.find((c) => c.key === 'threadId')
+        : undefined;
     expect(threadIdColumn?.link).toEqual({ href: '/agent/threads/{threadId}' });
 
     const withoutHrefs = agentTelescopeExtension();

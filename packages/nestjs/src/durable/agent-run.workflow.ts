@@ -89,15 +89,25 @@ export class AgentRunWorkflow {
       // core's dispatchLlm signature stays sink-topology-agnostic, so we add them here, not in core.
       ...(this.dispatchedSteps
         ? {
-            dispatchLlm: (_index: number, envelope: LlmStepEnvelope) =>
+            dispatchLlm: (index: number, envelope: LlmStepEnvelope) =>
               ctx.step(this.steps.llm, {
                 ...envelope,
                 runId: ctx.runId,
+                step: index,
                 sinkRunId,
                 childSink: input.sinkRunId !== undefined,
               }),
-            dispatchTool: (_call: ToolCallRequest, envelope: ToolStepEnvelope) =>
-              ctx.step(this.steps.tool, envelope),
+            // Fold the call identity (`toolCallId`/`toolType`) into the wire payload — the handler
+            // emits the `tool.execution` span with it. Only read/action calls reach dispatchTool
+            // ('agent'-kind delegations branch to runAgent earlier in the loop), so anything that
+            // isn't 'action' is defensively 'read' — the same posture core takes for an
+            // unresolvable `kind`.
+            dispatchTool: (call: ToolCallRequest, envelope: ToolStepEnvelope) =>
+              ctx.step(this.steps.tool, {
+                ...envelope,
+                toolCallId: call.id,
+                toolType: call.kind === 'action' ? 'action' : 'read',
+              }),
           }
         : {}),
     };

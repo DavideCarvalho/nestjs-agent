@@ -47,7 +47,7 @@ export function agentDashboard(
       },
       {
         title: 'Run trends',
-        cols: 3,
+        cols: 4,
         panels: [
           {
             kind: 'timeseries',
@@ -56,11 +56,18 @@ export function agentDashboard(
             series: ['runs', 'failed'],
             style: 'stacked',
           },
+          // Two duration stats, not a `distribution` panel: RunMetrics carries only p50/p95 (no
+          // raw samples to bucket), so a histogram here would be a permanently-empty box.
           {
-            kind: 'distribution',
-            title: 'Run duration',
-            data: { provider: 'agent.runs.duration' },
-            markers: ['p50', 'p95'],
+            kind: 'stat',
+            title: 'Duration p50',
+            data: { provider: 'agent.runs.duration', query: { metric: 'p50' } },
+            format: 'duration',
+          },
+          {
+            kind: 'stat',
+            title: 'Duration p95',
+            data: { provider: 'agent.runs.duration', query: { metric: 'p95' } },
             format: 'duration',
           },
           {
@@ -89,16 +96,15 @@ export function agentDashboard(
             kind: 'table',
             title: 'Recent runs',
             data: { provider: 'agent.runs.recent' },
+            // A deliberate SUBSET of the provider's row shape: the full 11-field row overflows the
+            // card horizontally. Thread/actor/retries/errorCode detail lives in the standalone
+            // agent dashboard; the provider keeps returning the full row for other consumers.
             columns: [
               { key: 'startedAt', label: 'Started' },
               col('runId', 'Run', opts.runHref),
-              col('threadId', 'Thread', opts.threadHref),
-              { key: 'actorRef', label: 'Actor' },
               { key: 'agentName', label: 'Agent' },
               { key: 'status', label: 'Status' },
               { key: 'durationMs', label: 'Duration (ms)' },
-              { key: 'retries', label: 'Retries' },
-              { key: 'errorCode', label: 'Error code' },
               { key: 'errorMessage', label: 'Error' },
               { key: 'promptHash', label: 'Prompt' },
             ],

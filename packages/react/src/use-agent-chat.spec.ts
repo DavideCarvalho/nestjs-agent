@@ -261,4 +261,165 @@ describe('useAgentChat', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
+
+  describe('onRunSettled', () => {
+    it('fires once with status "completed" when the stream ends on a normal `done` frame', async () => {
+      const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/chat')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-1","threadId":"thr-1"}\n\n',
+            'data: {"kind":"text","text":"hi"}\n\n',
+            'event: done\ndata: {}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-1',
+          fetch: fetchMock as unknown as typeof fetch,
+          onRunSettled: (outcome) => settled.push(outcome),
+        }),
+      );
+
+      await act(async () => {
+        await result.current.sendMessage({ text: 'hi' });
+      });
+
+      await waitFor(() => expect(settled).toEqual([{ runId: 'run-1', status: 'completed' }]));
+    });
+
+    it('fires once with status "failed" when the stream ends on an `event: error` frame', async () => {
+      const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/chat')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-2","threadId":"thr-2"}\n\n',
+            'data: {"kind":"text","text":"partial"}\n\n',
+            'event: error\ndata: {"code":"boom","message":"model unavailable"}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-2',
+          fetch: fetchMock as unknown as typeof fetch,
+          onRunSettled: (outcome) => settled.push(outcome),
+        }),
+      );
+
+      await act(async () => {
+        await result.current.sendMessage({ text: 'hi' }).catch(() => undefined);
+      });
+
+      await waitFor(() => expect(settled).toEqual([{ runId: 'run-2', status: 'failed' }]));
+    });
+
+    it('is not called again per additional send beyond the one fired for that turn', async () => {
+      const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/chat')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-3","threadId":"thr-3"}\n\n',
+            'data: {"kind":"text","text":"ok"}\n\n',
+            'event: done\ndata: {}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-3',
+          fetch: fetchMock as unknown as typeof fetch,
+          onRunSettled: (outcome) => settled.push(outcome),
+        }),
+      );
+
+      await act(async () => {
+        await result.current.sendMessage({ text: 'hi' });
+      });
+
+      await waitFor(() => expect(settled).toHaveLength(1));
+      expect(settled).toEqual([{ runId: 'run-3', status: 'completed' }]);
+    });
+
+    it('fires on a resumed stream reaching its own `done` frame', async () => {
+      const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/threads/thr-4')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers(),
+            text: async () =>
+              JSON.stringify({
+                id: 'thr-4',
+                title: 'Resumed thread',
+                transient: false,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                messages: [],
+                activeRunId: 'run-resumed',
+              }),
+          };
+        }
+        if (url.endsWith('/agent/chat/run-resumed/stream')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-resumed","threadId":"thr-4"}\n\n',
+            'data: {"kind":"text","text":"still going"}\n\n',
+            'event: done\ndata: {}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+
+      renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-4',
+          resume: true,
+          fetch: fetchMock as unknown as typeof fetch,
+          onRunSettled: (outcome) => settled.push(outcome),
+        }),
+      );
+
+      await waitFor(() => expect(settled).toEqual([{ runId: 'run-resumed', status: 'completed' }]));
+    });
+
+    it('does not fire when the attempt fails before any run id was ever learned', async () => {
+      const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith('/agent/chat')) {
+          return {
+            ok: false,
+            status: 500,
+            statusText: 'Internal Server Error',
+            body: null,
+            headers: new Headers(),
+          };
+        }
+        return jsonResponse();
+      });
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-5',
+          fetch: fetchMock as unknown as typeof fetch,
+          onRunSettled: (outcome) => settled.push(outcome),
+        }),
+      );
+
+      await act(async () => {
+        await result.current.sendMessage({ text: 'hi' }).catch(() => undefined);
+      });
+
+      await waitFor(() => expect(result.current.error).toBeDefined());
+      expect(settled).toEqual([]);
+    });
+  });
 });

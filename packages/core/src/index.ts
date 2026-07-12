@@ -31,6 +31,8 @@ export {
   runAgentLoop,
   QuotaExceededError,
   withToolTimeout,
+  traceLlmTurn,
+  traceToolExecution,
   type AgentLoopDeps,
   type AgentLoopHooks,
 } from './agent-loop.js';

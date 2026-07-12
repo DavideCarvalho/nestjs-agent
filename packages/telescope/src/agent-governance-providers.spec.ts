@@ -461,10 +461,13 @@ describe('reliability + tools + approvals providers', () => {
     await expect(agentRunsSuccessRateProvider().resolve({}, ctx)).resolves.toEqual({ value: 0.75 });
     await expect(agentRunsFailedProvider().resolve({}, ctx)).resolves.toEqual({ value: 3 });
     await expect(agentRunsRetriesProvider().resolve({}, ctx)).resolves.toEqual({ value: 4 });
-    await expect(agentRunsDurationProvider().resolve({}, ctx)).resolves.toEqual({
-      buckets: [],
-      p50: 820,
-      p95: 4_100,
+    // p50 is the default metric; 'p95' selects the other percentile (durable.duration's pattern).
+    await expect(agentRunsDurationProvider().resolve({}, ctx)).resolves.toEqual({ value: 820 });
+    await expect(agentRunsDurationProvider().resolve({ metric: 'p50' }, ctx)).resolves.toEqual({
+      value: 820,
+    });
+    await expect(agentRunsDurationProvider().resolve({ metric: 'p95' }, ctx)).resolves.toEqual({
+      value: 4_100,
     });
     await expect(agentRunsByAgentTableProvider().resolve({}, ctx)).resolves.toEqual({
       rows: RUN_AGENT_ROWS,
@@ -511,7 +514,10 @@ describe('reliability + tools + approvals providers', () => {
     await expect(agentRunsSuccessRateProvider().resolve({}, ctx)).resolves.toEqual({ value: 0 });
     await expect(agentRunsFailedProvider().resolve({}, ctx)).resolves.toEqual({ value: 0 });
     await expect(agentRunsRetriesProvider().resolve({}, ctx)).resolves.toEqual({ value: 0 });
-    await expect(agentRunsDurationProvider().resolve({}, ctx)).resolves.toEqual({ buckets: [] });
+    await expect(agentRunsDurationProvider().resolve({}, ctx)).resolves.toEqual({ value: 0 });
+    await expect(agentRunsDurationProvider().resolve({ metric: 'p95' }, ctx)).resolves.toEqual({
+      value: 0,
+    });
     await expect(agentRunsByAgentTableProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });
     await expect(agentRunErrorsProvider().resolve({}, ctx)).resolves.toEqual({ segments: [] });
     await expect(agentRunsTrendProvider().resolve({}, ctx)).resolves.toEqual({ rows: [] });

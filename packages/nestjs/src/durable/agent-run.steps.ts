@@ -4,6 +4,8 @@ import {
   type LlmStepEnvelope,
   type ModelTurnResult,
   type ToolStepEnvelope,
+  traceLlmTurn,
+  traceToolExecution,
   withToolTimeout,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
@@ -26,10 +28,24 @@ export interface DispatchedLlmInput extends LlmStepEnvelope {
    * wire-contract change once the durable runtime exposes the attempt.
    */
   runId: string;
+  /** The turn index within the run (`llm:<step>`) — the `llm.turn` span's `step` metadata. */
+  step: number;
   /** The stream target: `input.sinkRunId ?? ctx.runId` of the dispatching workflow. */
   sinkRunId: string;
   /** True for a sub-agent run — wrap the writer with {@link childSinkWriter} (no end/fail). */
   childSink: boolean;
+}
+
+/**
+ * Serializable input for the dispatched `tool` step: a {@link ToolStepEnvelope} plus the call
+ * identity the `tool.execution` span needs (`toolCallId`/`toolType`) — core's
+ * `AgentLoopHooks.dispatchTool` passes those on the separate `ToolCallRequest` argument, so the
+ * workflow folds them into the wire payload when it dispatches (same pattern as
+ * {@link DispatchedLlmInput}'s sink routing).
+ */
+export interface DispatchedToolInput extends ToolStepEnvelope {
+  toolCallId: string;
+  toolType: 'read' | 'action';
 }
 
 /**
@@ -63,12 +79,19 @@ export class AgentRunSteps {
     );
     const opened = await deps.sink.open(input.sinkRunId);
     const writer = input.childSink ? childSinkWriter(opened) : opened;
-    return deps.model.runTurn({
-      system: input.system,
-      messages: input.messages,
-      tools,
-      sink: writer,
-    });
+    // Span-wrapped HERE (the genuine execution site), emitting the identical `aviary:agent:llm.turn`
+    // span core's non-dispatched branch emits — from whichever worker actually serves the step.
+    // Replay-safe by construction: a dispatched step's handler only runs on genuine dispatch (replay
+    // resolves the step from its checkpoint without re-invoking a worker), which is exactly why core
+    // exports the helper instead of wrapping the `hooks.dispatchLlm` CALL site itself.
+    return traceLlmTurn(input.runId, input.step, () =>
+      deps.model.runTurn({
+        system: input.system,
+        messages: input.messages,
+        tools,
+        sink: writer,
+      }),
+    );
   }
 
   /**
@@ -77,14 +100,22 @@ export class AgentRunSteps {
    * `timeoutMs`, which bounds engine liveness (retryable) rather than the tool's own business outcome.
    */
   @Step()
-  async tool(input: ToolStepEnvelope): Promise<unknown> {
+  async tool(input: DispatchedToolInput): Promise<unknown> {
     const deps = this.factory.forAgent(input.ctx.agentName);
     // AgentDeps carries no `host` today (AgentDepsFactory never populates one), so the rebuilt ctx
     // is exactly `input.ctx` — no narrower than what the non-dispatched path already threads through.
     const ctx: AiToolCtx = { ...input.ctx };
-    const invocation = deps.registry.invoke(input.toolName, input.input, ctx, deps.rolesPolicy);
-    return input.timeoutMs !== undefined
-      ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
-      : invocation;
+    // Span-wrapped HERE like `llm` above (same replay-safety-by-construction reasoning) — the
+    // timeout sits INSIDE the span so a timed-out tool surfaces as the span's error phase.
+    return traceToolExecution(
+      input.ctx.runId,
+      { toolCallId: input.toolCallId, toolName: input.toolName, toolType: input.toolType },
+      () => {
+        const invocation = deps.registry.invoke(input.toolName, input.input, ctx, deps.rolesPolicy);
+        return input.timeoutMs !== undefined
+          ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
+          : invocation;
+      },
+    );
   }
 }
