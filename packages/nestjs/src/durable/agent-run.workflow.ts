@@ -13,7 +13,7 @@ import {
   runAgentLoop,
 } from '@dudousxd/nestjs-agent-core';
 import { Workflow } from '@dudousxd/nestjs-durable';
-import { ContinueAsNew, type WorkflowCtx, WorkflowSuspended } from '@dudousxd/nestjs-durable-core';
+import { type WorkflowCtx, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
@@ -60,9 +60,11 @@ export class AgentRunWorkflow {
           : deps.sink.open(ctx.runId),
       awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
       step: (name, fn) => ctx.localStep(name, fn),
-      // Dispatched-step suspends must escape the loop's tool catch — control flow, not a tool failure.
-      isControlFlowError: (error) =>
-        error instanceof WorkflowSuspended || error instanceof ContinueAsNew,
+      // Dispatched-step suspends must escape the loop's tool catch — control flow, not a tool
+      // failure. Marker-based predicate, NOT instanceof: the signal's CLASS differs by runtime
+      // (engine in-process throws durable-core's WorkflowSuspended/ContinueAsNew; the BullMQ thin
+      // worker throws durable-worker's own Suspend), so only the Symbol.for marker is reliable.
+      isControlFlowError: (error) => isWorkflowControlFlowSignal(error),
       runAgent: async (agentName, task) => {
         const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
@@ -109,7 +111,14 @@ export class AgentRunWorkflow {
     } catch (error) {
       // A suspend / continue-as-new is control flow, not a failure — let the engine handle it. The
       // thread stays "active" across the suspend, which is correct: the turn hasn't finished.
-      if (error instanceof WorkflowSuspended || error instanceof ContinueAsNew) {
+      // Marker-based predicate, NOT instanceof: control-flow signals differ BY CLASS across the two
+      // runtimes (the in-process engine throws durable-core's WorkflowSuspended/ContinueAsNew; the
+      // BullMQ thin worker throws durable-worker's own Suspend). An instanceof check here
+      // misclassified a thin-worker dispatch suspend as a real failure and ran the failure path
+      // DURING the suspend — corrupting the run's history with extra checkpoints, so the resume
+      // died with NondeterminismError. Only the Symbol.for marker is reliable cross-runtime (and
+      // across duplicated module copies).
+      if (isWorkflowControlFlowSignal(error)) {
         throw error;
       }
       // A real failure (e.g. quota exceeded, which throws before the sink is even opened) would

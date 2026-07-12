@@ -8,9 +8,27 @@ import {
   Inject,
   NotFoundException,
   Param,
+  Req,
+  Res,
   StreamableFile,
 } from '@nestjs/common';
 import { DASHBOARD_API_PATH, DASHBOARD_BASE_PATH } from './tokens.js';
+
+/**
+ * The slice of the express request the Inertia bounce below reads — structural, so the package
+ * needs no express dependency (the API controller similarly takes `@Req() req: unknown`).
+ */
+interface UiPageRequest {
+  headers: Record<string, string | string[] | undefined>;
+  /** Path + query as received (express `originalUrl`) — what the full-page visit must reload. */
+  originalUrl: string;
+}
+
+/** The slice of the express response the Inertia bounce writes (passthrough mode — Nest still sends). */
+interface UiPageResponse {
+  status(code: number): unknown;
+  setHeader(name: string, value: string): unknown;
+}
 
 /** The base the SPA bundle was built with (Vite `base`); rewritten to the configured base at serve time. */
 const BUILD_BASE = '/ai-gateway';
@@ -49,7 +67,19 @@ export class AgentUiController {
   @Get()
   @Header('Content-Type', 'text/html; charset=utf-8')
   @Header('Cache-Control', 'no-store, must-revalidate')
-  index(): string {
+  index(@Req() req: UiPageRequest, @Res({ passthrough: true }) res: UiPageResponse): string {
+    // An Inertia <Link> in the host app visits this page route as an XHR expecting an Inertia JSON
+    // page object; serving the SPA's HTML instead lands it in the Inertia client's `srcdoc` error
+    // modal, where the page's relative asset URLs die on CORS (origin null). The protocol's own
+    // escape hatch for "this URL is not an Inertia page" is a 409 Conflict carrying
+    // `X-Inertia-Location`: the client responds with a full `window.location` visit, which renders
+    // the console normally. Only HTML page routes need this — asset binaries are never fetched with
+    // the header.
+    if (req.headers['x-inertia'] !== undefined) {
+      res.status(409);
+      res.setHeader('X-Inertia-Location', req.originalUrl);
+      return '';
+    }
     const indexPath = join(this.dir, 'index.html');
     if (!existsSync(indexPath)) {
       throw new NotFoundException('Dashboard is not built. Run the package build.');

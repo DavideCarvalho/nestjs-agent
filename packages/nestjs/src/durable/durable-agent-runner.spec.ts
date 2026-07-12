@@ -1,3 +1,4 @@
+import { Suspend } from '@dudousxd/durable-worker';
 import type { AgentRunInput } from '@dudousxd/nestjs-agent-core';
 import type { WorkflowService } from '@dudousxd/nestjs-durable';
 import { WorkflowSuspended } from '@dudousxd/nestjs-durable-core';
@@ -33,6 +34,21 @@ describe('DurableAgentRunner.start', () => {
     expect(runId.length).toBeGreaterThan(0);
     // The generated id is the one handed to the engine, so the sink/stream key matches the run.
     expect(start).toHaveBeenCalledWith(expect.anything(), expect.anything(), runId);
+  });
+
+  it("returns the run id when the thin-worker runtime's OWN Suspend class surfaces on start", async () => {
+    // durable-worker's Suspend is a different class from durable-core's WorkflowSuspended — only
+    // the Symbol.for control-flow marker is shared, so an instanceof check here would rethrow it
+    // as a start failure. Same cross-runtime hazard the workflow's catch had.
+    const start = vi.fn(async () => {
+      throw new Suspend();
+    });
+    const runner = runnerWith(start as unknown as WorkflowService['start']);
+
+    const { runId } = await runner.start(runInput());
+
+    expect(typeof runId).toBe('string');
+    expect(runId.length).toBeGreaterThan(0);
   });
 
   it('propagates a real start failure (not a suspend)', async () => {

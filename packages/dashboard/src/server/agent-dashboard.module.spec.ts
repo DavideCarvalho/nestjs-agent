@@ -54,6 +54,18 @@ describe('AgentDashboardModule.forRoot guards', () => {
     const dynamicModule = AgentDashboardModule.forRoot();
     expect(dynamicModule.imports?.length).toBeGreaterThan(0);
   });
+
+  it('accepts a request-typed approvalActorRef via the TReq generic (no unknown-narrowing needed)', () => {
+    interface ConsoleRequest {
+      user?: { id: string };
+    }
+    // The point is the compile: `req` arrives as ConsoleRequest, so the extractor reads its
+    // principal directly — mirroring core's ActorResolver<TReq> convention.
+    const dynamicModule = AgentDashboardModule.forRoot<ConsoleRequest>({
+      approvalActorRef: (req) => req.user?.id,
+    });
+    expect(dynamicModule.module).toBe(AgentDashboardModule);
+  });
 });
 
 describe('guard DI resolution in the API controller host module', () => {

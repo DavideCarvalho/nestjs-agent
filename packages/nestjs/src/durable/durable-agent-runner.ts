@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentRunInput, AgentRunner, Decision } from '@dudousxd/nestjs-agent-core';
 import { WorkflowService } from '@dudousxd/nestjs-durable';
-import { WorkflowSuspended } from '@dudousxd/nestjs-durable-core';
+import { isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Injectable } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
@@ -23,12 +23,14 @@ export class DurableAgentRunner implements AgentRunner {
       await this.workflows.start(AgentRunWorkflow, stamped, runId);
     } catch (error) {
       // A run that suspends on its FIRST step (waiting on the model/tool worker, a signal, or a
-      // sleep) surfaces the engine's internal `WorkflowSuspended` signal here whenever the start ran
-      // under a DRIVING dispatcher (e.g. a durable tenant/worker) rather than the enqueue-only one.
-      // That is expected control flow, NOT a failure: the run is already persisted and a worker will
-      // resume it, while the caller streams the sink meanwhile. Swallow it and return the run id;
-      // any other error is a real start failure and propagates.
-      if (!(error instanceof WorkflowSuspended)) {
+      // sleep) surfaces the runtime's internal suspend signal here whenever the start ran under a
+      // DRIVING dispatcher (e.g. a durable tenant/worker) rather than the enqueue-only one. That is
+      // expected control flow, NOT a failure: the run is already persisted and a worker will resume
+      // it, while the caller streams the sink meanwhile. Swallow it and return the run id; any
+      // other error is a real start failure and propagates. Marker-based predicate, NOT instanceof:
+      // the signal's CLASS differs by runtime (engine in-process WorkflowSuspended vs the BullMQ
+      // thin worker's own Suspend), so only the Symbol.for marker is reliable.
+      if (!isWorkflowControlFlowSignal(error)) {
         throw error;
       }
     }

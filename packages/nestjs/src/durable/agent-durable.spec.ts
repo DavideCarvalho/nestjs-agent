@@ -1,3 +1,4 @@
+import { Suspend } from '@dudousxd/durable-worker';
 import { AGENT_APPROVAL_PORT, type AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
@@ -46,6 +47,24 @@ class FailingTool {
   }
 }
 
+/**
+ * Simulates the BullMQ thin-worker runtime's dispatch suspend surfacing through the loop:
+ * durable-worker's `Suspend` is a DIFFERENT class from durable-core's `WorkflowSuspended` (only the
+ * `Symbol.for` control-flow marker is shared), so an instanceof-based catch misclassifies it.
+ */
+@AiTool({
+  name: 'thinWorkerSuspend',
+  kind: 'read',
+  description: 'throws the thin-worker suspend signal',
+  input: z.object({}),
+})
+@Injectable()
+class ThinWorkerSuspendTool {
+  async execute(): Promise<never> {
+    throw new Suspend();
+  }
+}
+
 @Agent({ name: 'default', systemPrompt: 'durable test agent', model: 'fake-1' })
 @Injectable()
 class DefaultAgent {}
@@ -75,7 +94,7 @@ async function buildDurableApp(script: FakeScript, dispatchedSteps?: boolean) {
       }),
       AgentDurableModule,
     ],
-    providers: [PurgeCacheTool, FailingTool, DefaultAgent],
+    providers: [PurgeCacheTool, FailingTool, ThinWorkerSuspendTool, DefaultAgent],
   }).compile();
   await moduleRef.init();
   return {
@@ -317,6 +336,44 @@ describe('dispatchedSteps default (ON under durable: true)', () => {
       // The behavioral coverage of the localStep path is the first suite above (all pinned to
       // `false`); this just asserts the opt-out actually lands on the wiring flag.
       expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(false);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+});
+
+describe('cross-runtime control-flow signals (thin-worker Suspend)', () => {
+  // Regression for flip's live incident: on the BullMQ thin-worker runtime, dispatch suspends throw
+  // durable-worker's `Suspend` — NOT durable-core's `WorkflowSuspended` — and the workflow's old
+  // instanceof catch misclassified it as a real failure, running persist:run:fail + deactivate +
+  // writer.fail DURING the suspend. The extra checkpoints corrupted the run's history, so the
+  // resume died with NonDeterminismError. The marker predicate must rethrow it untouched.
+  it('rethrows durable-worker Suspend untouched — no failure path runs mid-suspend', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'dispatching', toolCall: { name: 'thinWorkerSuspend', input: {} } }
+        : { text: 'never reached' };
+    const { moduleRef, service, engine, store } = await buildDurableApp(script, false);
+    try {
+      // Installed BEFORE the run so any failure-path write would be captured.
+      const runEndSpy = vi.spyOn(store, 'recordRunEnd');
+      const updateSpy = vi.spyOn(store, 'updateToolCall');
+
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'go',
+      });
+      // This in-process harness engine does not own durable-worker's Suspend, so the run settles
+      // however IT classifies the escaped signal — irrelevant here. The assertion target is the
+      // WORKFLOW (and the loop's isControlFlowError hook): both must rethrow untouched.
+      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' }).catch(() => undefined);
+
+      // No persist:run:fail — the workflow's catch recognized the signal as control flow...
+      expect(runEndSpy).not.toHaveBeenCalled();
+      // ...and no bogus persist:toolfail checkpoint — the loop's catch recognized it too.
+      expect(updateSpy).not.toHaveBeenCalled();
+      // The run row is still 'running': started, never settled by the agent's failure path.
+      expect(store.governanceRuns()[0]).toMatchObject({ runId, status: 'running' });
     } finally {
       await moduleRef.close();
     }

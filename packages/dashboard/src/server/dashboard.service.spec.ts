@@ -1,4 +1,5 @@
 import type {
+  ActorResolver,
   ActorSpendRow,
   AgentApprovalPort,
   AgentGovernanceQueries,
@@ -23,6 +24,7 @@ import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
 import { NotImplementedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import type { ActorDirectory } from './actor-directory';
+import { AgentApiController } from './agent-api.controller';
 import { DashboardService, type LiveAgentEvent } from './dashboard.service';
 
 /** A zeroed `RunMetrics` — the shape a store without run recording returns. */
@@ -195,6 +197,7 @@ describe('DashboardService', () => {
             errorMessage: 'upstream timed out',
             retries: 1,
             startedAt: '2026-07-05T00:00:00.000Z',
+            promptHash: null,
           },
         ],
       }),
@@ -531,5 +534,75 @@ describe('DashboardService.decideApproval', () => {
 
     await expect(service.decideApproval('tc1', { approved: 'yes' }, undefined)).rejects.toThrow();
     await expect(service.decideApproval('tc1', null, undefined)).rejects.toThrow();
+  });
+});
+
+/**
+ * The API controller with a call-recording approval port behind it, plus the two decider-attribution
+ * seams under test: the explicit `approvalActorRef` extractor and the app's `ActorResolver` fallback.
+ */
+function buildApiController(
+  overrides: {
+    extractor?: (req: unknown) => string | undefined;
+    resolver?: ActorResolver;
+  } = {},
+) {
+  const calls: { method: 'approve' | 'reject'; toolCallId: string; opts?: unknown }[] = [];
+  const service = new DashboardService(
+    fakeQueries(),
+    undefined,
+    undefined,
+    fakeApprovalPort(calls),
+  );
+  const controller = new AgentApiController(service, overrides.extractor, overrides.resolver);
+  return { calls, controller };
+}
+
+describe('AgentApiController decider attribution (POST approvals/:toolCallId → executedByRef)', () => {
+  it("defaults to the AgentModule actor resolver — the resolved actor's id stamps executedByRef", async () => {
+    const { calls, controller } = buildApiController({
+      resolver: { resolve: () => ({ id: 'user-7', roles: ['ADMIN'] }) },
+    });
+
+    await controller.decideApproval('tc1', { approved: true }, { headers: {} });
+
+    expect(calls).toEqual([
+      { method: 'approve', toolCallId: 'tc1', opts: { executedByRef: 'user-7' } },
+    ]);
+  });
+
+  it('a throwing resolver (unauthenticated request) omits executedByRef instead of failing the decision', async () => {
+    const { calls, controller } = buildApiController({
+      resolver: {
+        resolve: () => {
+          throw new Error('no principal on request');
+        },
+      },
+    });
+
+    await controller.decideApproval('tc1', { approved: true }, {});
+
+    expect(calls).toEqual([{ method: 'approve', toolCallId: 'tc1', opts: {} }]);
+  });
+
+  it('an explicit approvalActorRef override wins outright over the resolver', async () => {
+    const { calls, controller } = buildApiController({
+      extractor: () => 'console-9',
+      resolver: { resolve: () => ({ id: 'user-7', roles: ['ADMIN'] }) },
+    });
+
+    await controller.decideApproval('tc1', { approved: false, reason: 'nope' }, {});
+
+    expect(calls).toEqual([
+      { method: 'reject', toolCallId: 'tc1', opts: { executedByRef: 'console-9', reason: 'nope' } },
+    ]);
+  });
+
+  it('neither an override nor a resolver → executedByRef omitted (the pre-fallback behavior)', async () => {
+    const { calls, controller } = buildApiController();
+
+    await controller.decideApproval('tc1', { approved: true }, {});
+
+    expect(calls).toEqual([{ method: 'approve', toolCallId: 'tc1', opts: {} }]);
   });
 });

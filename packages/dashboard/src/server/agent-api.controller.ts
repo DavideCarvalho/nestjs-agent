@@ -1,4 +1,5 @@
 import type {
+  ActorResolver,
   CurrentModelPrice,
   PendingApprovalRow,
   RecentRunRow,
@@ -11,6 +12,7 @@ import {
   Get,
   HttpCode,
   Inject,
+  Optional,
   Param,
   Post,
   Query,
@@ -26,7 +28,7 @@ import {
   type ThreadActivityRowWithLabel,
   type ThreadSpendRowWithLabel,
 } from './dashboard.service.js';
-import { DASHBOARD_APPROVAL_ACTOR_REF } from './tokens.js';
+import { AGENT_ACTOR_RESOLVER, DASHBOARD_APPROVAL_ACTOR_REF } from './tokens.js';
 
 const DAY_MS = 86_400_000;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -71,6 +73,12 @@ export class AgentApiController {
     // is always bound; see DASHBOARD_APPROVAL_ACTOR_REF's TSDoc).
     @Inject(DASHBOARD_APPROVAL_ACTOR_REF)
     private readonly approvalActorRef: ((req: unknown) => string | undefined) | undefined,
+    // The app's identity seam, bound + exported by the (global) AgentModule — the DEFAULT decider
+    // attribution when no `approvalActorRef` override is configured. Genuinely `@Optional()`: the
+    // dashboard can be mounted without AgentModule (read-model only), where nothing binds it.
+    @Optional()
+    @Inject(AGENT_ACTOR_RESOLVER)
+    private readonly actorResolver?: ActorResolver,
   ) {}
 
   /** `{ byModel, byActor, trend }` for a day range (defaults to the last 30 days). */
@@ -119,7 +127,7 @@ export class AgentApiController {
   /**
    * Decide a pending HITL tool call. Body `{ approved: boolean; reason?: string }`. 501s (via
    * `DashboardService.decideApproval`) when no `AGENT_APPROVAL_PORT` is bound. `executedByRef`
-   * comes from the host's `approvalActorRef` extractor run against the live request, when configured.
+   * comes from {@link deciderRef} run against the live request.
    */
   @Post('approvals/:toolCallId')
   @HttpCode(204)
@@ -128,7 +136,28 @@ export class AgentApiController {
     @Body() body: unknown,
     @Req() req: unknown,
   ): Promise<void> {
-    await this.dashboard.decideApproval(toolCallId, body, this.approvalActorRef?.(req));
+    await this.dashboard.decideApproval(toolCallId, body, await this.deciderRef(req));
+  }
+
+  /**
+   * WHO decided, as an opaque ref: an explicit `approvalActorRef` override wins outright (no
+   * resolver fallback, even when it returns `undefined`); otherwise the AgentModule-configured
+   * actor resolver — the same identity seam chat requests use. A resolver that throws is an
+   * unauthenticated/unreadable request, not an error to surface: the decision itself was already
+   * authorized by the dashboard's guards, so the ref is simply omitted.
+   */
+  private async deciderRef(req: unknown): Promise<string | undefined> {
+    if (this.approvalActorRef !== undefined) {
+      return this.approvalActorRef(req);
+    }
+    if (this.actorResolver === undefined) {
+      return undefined;
+    }
+    try {
+      return (await this.actorResolver.resolve(req)).id;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Per-tool call/failure/rejection/latency rollup for a day range (defaults to the last 30 days). */

@@ -39,6 +39,15 @@ export const AGENT_PRICING_STORE = Symbol.for('@dudousxd/nestjs-agent:pricing-st
  */
 export const AGENT_APPROVAL_PORT = Symbol.for('@dudousxd/nestjs-agent:approval-port');
 
+/**
+ * The app's request-identity seam (`ActorResolver`), owned by `@dudousxd/nestjs-agent-core` and
+ * bound + exported by the (global) `AgentModule` from the host's `actorResolver` option. Re-declared
+ * here BY VALUE for the same reason as {@link AGENT_GOVERNANCE_QUERIES} above. Optional: the default
+ * decider attribution for `POST <api>/approvals/:toolCallId` — absent (or throwing, i.e.
+ * unauthenticated), `executedByRef` is simply omitted.
+ */
+export const AGENT_ACTOR_RESOLVER = Symbol.for('@dudousxd/nestjs-agent:actor-resolver');
+
 /** DI token carrying the UI mount base (e.g. `/ai-gateway`). */
 export const DASHBOARD_BASE_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:base-path');
 
@@ -47,9 +56,11 @@ export const DASHBOARD_API_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:a
 
 /**
  * DI token carrying the host-provided {@link AgentDashboardOptions.approvalActorRef} extractor (or
- * `undefined` when the host didn't set one). Threaded to `AgentApiModule` (where the API controller
- * actually lives) same as the pattern above — `useValue` even when `undefined`, so injecting it
- * needs no `@Optional()` (mirrors `AGENT_QUOTA_STORE`'s factory in `@dudousxd/nestjs-agent`).
+ * `undefined` when the host didn't set one — the controller then falls back to
+ * {@link AGENT_ACTOR_RESOLVER} for decider attribution). Threaded to `AgentApiModule` (where the API
+ * controller actually lives) same as the pattern above — `useValue` even when `undefined`, so
+ * injecting it needs no `@Optional()` (mirrors `AGENT_QUOTA_STORE`'s factory in
+ * `@dudousxd/nestjs-agent`).
  */
 export const DASHBOARD_APPROVAL_ACTOR_REF = Symbol.for(
   '@dudousxd/nestjs-agent-dashboard:approval-actor-ref',

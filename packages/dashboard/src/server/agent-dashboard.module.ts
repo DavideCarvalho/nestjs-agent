@@ -16,7 +16,13 @@ import { DASHBOARD_API_PATH, DASHBOARD_APPROVAL_ACTOR_REF, DASHBOARD_BASE_PATH }
  */
 const GUARDS_METADATA = '__guards__';
 
-export interface AgentDashboardOptions {
+/**
+ * `TReq` mirrors core's `ActorResolver<TReq>` convention: the transport request type
+ * {@link AgentDashboardOptions.approvalActorRef} receives. Defaults to `unknown` so untyped usage
+ * compiles unchanged; a host may narrow it (e.g. `forRoot<Request>({ approvalActorRef: ... })`)
+ * instead of writing its own `unknown`-narrowing type guard.
+ */
+export interface AgentDashboardOptions<TReq = unknown> {
   /**
    * Where the SPA (UI) is served. Default `/ai-gateway`. This is a page route — keep it out of an
    * `/api` prefix so it reads as a UI, not an endpoint.
@@ -46,13 +52,17 @@ export interface AgentDashboardOptions {
    */
   imports?: DynamicModule['imports'];
   /**
-   * Extracts WHO is deciding a HITL approval from the live request — invoked on the incoming
+   * OVERRIDE for WHO is deciding a HITL approval — invoked on the incoming
    * `POST <api>/approvals/:toolCallId` request to stamp `AgentApprovalPort`'s `opts.executedByRef`.
-   * Typically pulls the authenticated principal your own auth guard/middleware already attached to
-   * the request (e.g. `(req) => (req as { user?: { id: string } }).user?.id`). Omit to leave
-   * `executedByRef` unset — the decision still goes through, just without a recorded decider ref.
+   *
+   * DEFAULT (option omitted): the AgentModule-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is
+   * consulted — the same identity seam chat requests use — and its actor id becomes the decider ref
+   * (a throwing resolver, i.e. an unauthenticated request, just omits the ref). Set this only when
+   * console auth differs from chat auth (e.g. the console sits behind a separate SSO whose principal
+   * the chat resolver can't read); returning `undefined` leaves `executedByRef` unset — the explicit
+   * override wins outright, with no resolver fallback.
    */
-  approvalActorRef?: (req: unknown) => string | undefined;
+  approvalActorRef?: (req: TReq) => string | undefined;
 }
 
 /** Leading slash, no trailing slash. */
@@ -77,10 +87,10 @@ function stampGuards(guards: Type<CanActivate>[] | undefined, ...controllers: Ty
  */
 @Module({})
 export class AgentApiModule {
-  static register(options: {
+  static register<TReq = unknown>(options: {
     imports?: DynamicModule['imports'];
     guards?: Type<CanActivate>[];
-    approvalActorRef?: (req: unknown) => string | undefined;
+    approvalActorRef?: (req: TReq) => string | undefined;
   }): DynamicModule {
     return {
       module: AgentApiModule,
@@ -106,10 +116,16 @@ export class AgentApiModule {
  * (global), which must provide `AGENT_GOVERNANCE_QUERIES` (bound by a store adapter). Front the
  * routes with the first-class `guards` option (plus `imports` for the guards' own dependencies) —
  * see {@link AgentDashboardOptions.guards}.
+ *
+ * Inertia hosts: the console is a full-page app, not an Inertia page. An in-app `<Link>` visit to
+ * `basePath` (an XHR carrying `X-Inertia`) is bounced with the protocol's own external-redirect
+ * mechanism — `409 Conflict` + `X-Inertia-Location: <the visited URL>` — so the Inertia client
+ * performs a full `window.location` load and the console renders normally. In-app links to the
+ * console therefore just work; no host-side special-casing needed.
  */
 @Module({})
 export class AgentDashboardModule {
-  static forRoot(options: AgentDashboardOptions = {}): DynamicModule {
+  static forRoot<TReq = unknown>(options: AgentDashboardOptions<TReq> = {}): DynamicModule {
     const basePath = normalize(options.basePath ?? '/ai-gateway');
     const apiBasePath = normalize(options.apiBasePath ?? `${basePath}/api`);
     stampGuards(options.guards, AgentApiController, AgentUiController);
