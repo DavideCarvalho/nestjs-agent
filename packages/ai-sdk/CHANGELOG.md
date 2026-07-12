@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-ai-sdk
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [[`70114eb`](https://github.com/DavideCarvalho/nestjs-agent/commit/70114ebb9a7a3702d2efdb11e0dea6956a7ba8db)]:
+  - @dudousxd/nestjs-agent-core@0.10.0
+
 ## 0.5.1
 
 ### Patch Changes
