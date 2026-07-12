@@ -1,5 +1,17 @@
 # @dudousxd/nestjs-agent-ai-sdk
 
+## 1.0.0
+
+### Patch Changes
+
+- [`6263338`](https://github.com/DavideCarvalho/nestjs-agent/commit/6263338cf86df7b51cb082d5d2d575987cd13383) - `AiSdkModelOptions` accepts `experimental_download` — the AI SDK's default downloader refuses
+  localhost/private hostnames (SSRF guard), so attachment parts staged against a local object store
+  (MinIO in dev) killed the model call with `AI_DownloadError: URL with hostname localhost is not
+allowed`. Hosts whose staging presigns non-public URLs supply their own fetch; attachment URLs come
+  from the host's own staging SPI, never user input.
+- Updated dependencies [[`6263338`](https://github.com/DavideCarvalho/nestjs-agent/commit/6263338cf86df7b51cb082d5d2d575987cd13383)]:
+  - @dudousxd/nestjs-agent-core@0.7.0
+
 ## 0.4.2
 
 ### Patch Changes
