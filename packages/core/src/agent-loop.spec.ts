@@ -884,9 +884,15 @@ describe('action decision attribution (Decision.executedByRef)', () => {
 
   it('persists the Decision ref on an approved action tool (console approval)', async () => {
     const { updates, wrapStore } = captureToolCallUpdates();
-    await run(purgeScript, () => ({ approved: true, executedByRef: 'admin-9' }), undefined, undefined, {
-      wrapStore,
-    });
+    await run(
+      purgeScript,
+      () => ({ approved: true, executedByRef: 'admin-9' }),
+      undefined,
+      undefined,
+      {
+        wrapStore,
+      },
+    );
     const executed = updates.find((update) => update.status === 'executed');
     expect(executed?.executedByRef).toBe('admin-9');
   });

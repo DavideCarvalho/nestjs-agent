@@ -1,5 +1,44 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.6.0
+
+### Minor Changes
+
+- [`eb3aaff`](https://github.com/DavideCarvalho/nestjs-agent/commit/eb3aaff531cc923de1d0bccebb2b0690b4c92263) - Governance wave — approvals inbox, tool stats, prompt hash:
+
+  - **HITL approvals inbox**: new `AGENT_APPROVAL_PORT` SPI (`AgentApprovalPort`) bound by the agent
+    runtime — console-side approve/reject routed through the SAME decision path chat approvals use
+    (durable signal or inline resolution), WITHOUT re-authorization (the console's own guards front
+    it). `Decision` gained optional `executedByRef`; the loop persists the decider on both executed
+    and rejected action tools (`decision.executedByRef ?? the run's actor`). Governance read
+    `pendingApprovals(limit)` (oldest first, joined to thread/actor). Dashboard: Approvals section
+    (pending list, approve/reject with reason, nav badge) + `GET approvals` / `POST
+approvals/:toolCallId`; new `approvalActorRef` dashboard option stamps WHO decided from the live
+    request; the API returns 501 (and the SPA renders read-only) when no port is bound.
+  - **Tool governance**: `toolStats(range)` — per-tool calls/failed/rejected + p95 executionMs —
+    and a dashboard Tools section.
+  - **Prompt hash**: each run records the sha256 of its resolved system prompt (pre-RAG, so it
+    identifies the prompt VERSION), surfaced on recent runs in the dashboard — correlate error-rate
+    shifts with prompt changes.
+
+- [`781a30f`](https://github.com/DavideCarvalho/nestjs-agent/commit/781a30f6579d5b9a69f341b8eeac02c273dbb8a1) - Telescope bridge catches up with the governance data (audit items 1-8, 10):
+
+  - The Agent tab surfaces the durable governance reads: Reliability (success/error rate stats, run
+    duration as a `distribution` panel with p50/p95 markers, runs-by-agent, error breakdown, run
+    trend, recent runs with promptHash chips and 500-char-capped errorMessage — `DataProvider`
+    output bypasses Telescope's entry-level `redact()`, so the provider self-caps), durable recent
+    tool calls / threads, pending-approvals count + table, and tool stats.
+  - The watcher now records ALL agent diagnostics events — `run.failed`, `delegated`, and
+    `retrieved` were silently dropped — driven by the new canonical `AGENT_DIAGNOSTIC_EVENTS` export
+    (compile-time-checked against the channel registry) + `agentDiagnosticKey()` helper (core). Pass
+    those keys to the generic diagnostics bridge's `exclude` to avoid double-recording (doc note
+    added, mirroring the media bridge).
+  - `agentTelescopeExtension({ threadHref?, runHref? })` — deep-link columns on every thread/run
+    table, matching the durable/media bridges' convention. The watcher gained `dispose()`.
+  - The ephemeral event-storage tools provider is deprecated and no longer bundled: the durable
+    writes always land before the diagnostics event fires, and only the durable read-model sees
+    `pending_approval`, so the ephemeral view had no unique value left.
+
 ## 0.5.0
 
 ### Minor Changes
