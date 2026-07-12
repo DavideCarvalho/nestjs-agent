@@ -1,5 +1,26 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.8.0
+
+### Minor Changes
+
+- [`107fcc2`](https://github.com/DavideCarvalho/nestjs-agent/commit/107fcc2c0079f97c3cc9ff8c83f2dc41070244d5) - Trace navigation + paged Agent tab + headless docs:
+
+  - Tool calls carry their `runId` end to end (RecordToolCallInput → both stores' nullable run_id →
+    ToolCallActivityRow/PendingApprovalRow), and `RunWhere.threadId` filters runs by thread — every
+    activity row can now deep-link to its run's trace.
+  - Telescope Agent tab: tool-call/run rows link to the TRACES waterfall (`#/traces/{runId}`,
+    internal default); the three activity tables use the paged SPI reads with real pagination
+    controls (`paged: true`, telescope >= 1.18, dep floor raised); the dashboard regrouped into six
+    coherent sections with no orphan half-width panels.
+  - react README documents "Bring your own UI" — the package is headless by design; the snippets
+    compile against the current API.
+
+### Patch Changes
+
+- Updated dependencies [[`107fcc2`](https://github.com/DavideCarvalho/nestjs-agent/commit/107fcc2c0079f97c3cc9ff8c83f2dc41070244d5)]:
+  - @dudousxd/nestjs-agent-core@0.9.0
+
 ## 0.7.0
 
 ### Minor Changes
