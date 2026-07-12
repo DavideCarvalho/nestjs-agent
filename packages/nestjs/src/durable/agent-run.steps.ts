@@ -33,9 +33,9 @@ export interface DispatchedLlmInput extends LlmStepEnvelope {
 }
 
 /**
- * The two long steps `AgentRunWorkflow` dispatches as routed remote steps when
- * `dispatchedSteps: true` (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of running them
- * in-process under `ctx.localStep`. Both re-resolve their deps from THIS worker's own DI via
+ * The two long steps `AgentRunWorkflow` dispatches as routed remote steps (`AgentRunSteps.llm` /
+ * `AgentRunSteps.tool`) — the default under `durable: true`; `dispatchedSteps: false` runs them
+ * in-process under `ctx.localStep` instead. Both re-resolve their deps from THIS worker's own DI via
  * `AGENT_DEPS_FACTORY.forAgent` — a step can be served by any worker in the fleet, not just the one
  * that started the run. Always provided by `AgentDurableModule` regardless of `dispatchedSteps`, so
  * the worker group is never orphaned.

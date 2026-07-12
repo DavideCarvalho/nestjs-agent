@@ -215,8 +215,9 @@ function routerFor(path: string): DynamicModule {
 
 /**
  * `dispatchedSteps` routes the turn's model/tool calls through `AgentRunSteps` — a durable-only
- * worker group. Without `durable: true` there is no workflow to dispatch from, so this would silently
- * no-op; fail loudly at build time instead of at first request.
+ * worker group. It defaults ON under `durable: true` (see `AgentModuleOptions.dispatchedSteps`), but
+ * an EXPLICIT `dispatchedSteps: true` without `durable: true` is still a config error: there is no
+ * workflow to dispatch from, so it would silently no-op — fail loudly at build time instead.
  */
 function assertDispatchedStepsRequiresDurable(dispatchedSteps: boolean, durable: boolean): void {
   if (dispatchedSteps && !durable) {
@@ -273,7 +274,17 @@ export class AgentModule {
       providers: [
         {
           provide: AGENT_OPTIONS,
-          useFactory: options.useFactory,
+          // Stamp the STATIC wiring flags onto the factory result: `durable`/`dispatchedSteps` are
+          // authoritative on the async config object (they decided the actual wiring above), and
+          // `AgentDurableModule` derives the effective dispatched-steps value from AGENT_OPTIONS —
+          // without this stamp, an async host would get in-process localSteps despite durable: true.
+          useFactory: async (...args: never[]) => ({
+            ...(await options.useFactory(...args)),
+            durable: options.durable ?? false,
+            ...(options.dispatchedSteps !== undefined
+              ? { dispatchedSteps: options.dispatchedSteps }
+              : {}),
+          }),
           inject: options.inject ?? [],
         },
         ...sharedProviders(options.durable ?? false, includeStore),

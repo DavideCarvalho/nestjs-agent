@@ -21,14 +21,16 @@ import { AgentRunSteps } from './agent-run.steps.js';
 import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 
 /**
- * The agent turn AS a durable workflow. Each model/tool call is a checkpointed `ctx.localStep` — the
- * in-process primitive, NOT the always-dispatched `ctx.step`: the loop's deps (model provider, store,
- * sink) live in THIS workflow worker's DI, and the step names are dynamic checkpoint identities
- * (`llm:0`, `persist:toolcall:<id>`), not routable worker groups. HITL is
- * `ctx.waitForSignal`, and sub-agent delegation is `ctx.child(AgentRunWorkflow)` — a replay-safe,
- * observable child run (it shows up as a node in the durable dashboard). A child streams into its
- * top-level ancestor's sink (`sinkRunId`) so the human watching the parent sees it and can approve
- * its action tools; the approval routes to the child's own run via `runForToolCall`.
+ * The agent turn AS a durable workflow. Persist/stream checkpoints are `ctx.localStep`s — the
+ * in-process primitive, NOT the always-dispatched `ctx.step`: their names are dynamic checkpoint
+ * identities (`persist:toolcall:<id>`), not routable worker groups, and their deps (store, sink)
+ * live in THIS workflow worker's DI. The two LONG steps (model call, tool execution) are dispatched
+ * through `AgentRunSteps` by default (`AGENT_DISPATCHED_STEPS`, ON under `durable: true`) so the
+ * run isn't pinned to this pod while they execute; `dispatchedSteps: false` keeps them localSteps
+ * too. HITL is `ctx.waitForSignal`, and sub-agent delegation is `ctx.child(AgentRunWorkflow)` — a
+ * replay-safe, observable child run (it shows up as a node in the durable dashboard). A child
+ * streams into its top-level ancestor's sink (`sinkRunId`) so the human watching the parent sees it
+ * and can approve its action tools; the approval routes to the child's own run via `runForToolCall`.
  */
 @Injectable()
 @Workflow({ name: 'agent.run', version: '1' })

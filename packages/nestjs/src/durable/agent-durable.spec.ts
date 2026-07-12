@@ -17,6 +17,7 @@ import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { AgentDurableModule } from './agent-durable.module.js';
+import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 
 @AiTool({
   name: 'purgeCache',
@@ -49,8 +50,13 @@ class FailingTool {
 @Injectable()
 class DefaultAgent {}
 
-/** `dispatchedSteps` defaults to `false` — set `true` to exercise the routed-remote-step path. */
-async function buildDurableApp(script: FakeScript, dispatchedSteps = false) {
+/**
+ * `dispatchedSteps` OMITTED (undefined) leaves the key off the options — exercising the durable
+ * DEFAULT, which is dispatch ON. Pass an explicit `false` to pin the in-process localStep path, or
+ * an explicit `true` to state the default outright (the dispatched suite below does, so its tests
+ * keep meaning the same thing independent of what the default is).
+ */
+async function buildDurableApp(script: FakeScript, dispatchedSteps?: boolean) {
   const store = new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -65,7 +71,7 @@ async function buildDurableApp(script: FakeScript, dispatchedSteps = false) {
         store,
         durable: true,
         defaultAgent: 'default',
-        ...(dispatchedSteps ? { dispatchedSteps: true } : {}),
+        ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
       }),
       AgentDurableModule,
     ],
@@ -112,11 +118,14 @@ describe('durable wiring', () => {
   });
 });
 
-describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
+// Explicit `dispatchedSteps: false` throughout — this suite pins the opt-out localStep path (the
+// pre-default-on behavior). The dispatched path is the durable default, covered further down.
+describe('AgentDurableModule (the agent turn as a durable workflow, dispatchedSteps: false)', () => {
   it('runs a no-tool turn as a durable run and streams it', async () => {
-    const { moduleRef, service, workflows, store } = await buildDurableApp(() => ({
-      text: 'hello durable',
-    }));
+    const { moduleRef, service, workflows, store } = await buildDurableApp(
+      () => ({ text: 'hello durable' }),
+      false,
+    );
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -141,7 +150,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
   it('records a failed run end when the model provider throws', async () => {
     const { moduleRef, service, workflows, store } = await buildDurableApp(() => {
       throw new Error('model unavailable');
-    });
+    }, false);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -167,7 +176,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow)', () => {
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script);
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -196,7 +205,9 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script);
+    // Pinned to the localStep path (`false`) — the port's mechanics are dispatch-agnostic and the
+    // `workflows.waitForRun` settled-wait below is only reliable without dispatched-step suspends.
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -236,7 +247,9 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'not purging' };
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script);
+    // Pinned to the localStep path (`false`) — the port's mechanics are dispatch-agnostic and the
+    // `workflows.waitForRun` settled-wait below is only reliable without dispatched-step suspends.
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -264,6 +277,46 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
           executedByRef: 'console-admin',
         }),
       );
+    } finally {
+      await moduleRef.close();
+    }
+  });
+});
+
+describe('dispatchedSteps default (ON under durable: true)', () => {
+  it('durable: true with NO dispatchedSteps key runs the turn via the dispatched path', async () => {
+    // No second argument — the key is genuinely absent from the options.
+    const { moduleRef, service, engine, store } = await buildDurableApp(() => ({
+      text: 'hello default dispatch',
+    }));
+    try {
+      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(true);
+
+      const { runId } = await service.chat({
+        actor: { id: 'u1', roles: ['ADMIN'] },
+        message: 'hi',
+      });
+      const collected = collect(service.subscribe(runId));
+      // Dispatched `ctx.step`s momentarily suspend the run — `until: 'terminal'` polls through
+      // those hops (see the dispatched suite below for the full explanation).
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      const streamed = await collected;
+
+      expect(result.status).toBe('completed');
+      expect(streamed).toContain('hello default dispatch');
+      const detail = await store.getThread((await store.listThreads('u1'))[0]?.id ?? '');
+      expect(detail?.messages.map((m) => m.role)).toContain('assistant');
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('dispatchedSteps: false opts back into in-process localSteps', async () => {
+    const { moduleRef } = await buildDurableApp(() => ({ text: 'x' }), false);
+    try {
+      // The behavioral coverage of the localStep path is the first suite above (all pinned to
+      // `false`); this just asserts the opt-out actually lands on the wiring flag.
+      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(false);
     } finally {
       await moduleRef.close();
     }

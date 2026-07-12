@@ -81,12 +81,17 @@ export interface AgentModuleOptions {
   durable?: boolean;
   /**
    * Dispatch the turn's model call and tool executions as routed durable steps
-   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of in-process `ctx.localStep`s. Requires
-   * `durable: true` (module build throws otherwise). Multi-pod fleets MUST wire a cross-process
-   * token sink (e.g. a Redis pub/sub `TokenStreamSink`) — the dispatched `llm` step streams from
-   * whichever worker serves it, not necessarily the one running this workflow. STATIC top-level flag
-   * (like `durable`/`attachments.upload`): it changes what gets registered and how the workflow
-   * dispatches, decided at module build time.
+   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of in-process `ctx.localStep`s.
+   * DEFAULT `true` under `durable: true` — dispatching moves the run off its pod during the two
+   * long steps (the correct production posture), and `AgentRunSteps` is always registered so the
+   * routed groups are never unserved. Set `false` to keep the turn's steps in-process localSteps.
+   * `true` without `durable: true` throws at module build.
+   *
+   * The cross-process-sink requirement is a property of `durable: true` itself, not of this flag:
+   * the turn already runs on whichever worker takes `agent.run`, which may not be the pod holding
+   * the SSE connection — multi-pod fleets MUST wire a cross-process token sink (e.g. a Redis
+   * pub/sub `TokenStreamSink`) either way. STATIC top-level flag (like `durable`/
+   * `attachments.upload`): it decides how the workflow dispatches at module build time.
    */
   dispatchedSteps?: boolean;
   /**
@@ -149,10 +154,12 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    */
   durable?: boolean;
   /**
-   * Dispatch the turn's model call and tool executions as routed durable steps. Same static-wiring
-   * reasoning as `durable` above — it lives here (not in the async factory result) because it decides
-   * how `AgentRunWorkflow` builds its hooks at module build time. Requires `durable: true` (module
-   * build throws otherwise). See `AgentModuleOptions.dispatchedSteps` for the full contract.
+   * Dispatch the turn's model call and tool executions as routed durable steps. DEFAULT `true`
+   * under `durable: true`; set `false` to keep the turn's steps in-process localSteps. Same
+   * static-wiring reasoning as `durable` above — it lives here (not in the async factory result)
+   * because it decides how `AgentRunWorkflow` builds its hooks at module build time. `true` without
+   * `durable: true` throws at module build. See `AgentModuleOptions.dispatchedSteps` for the full
+   * contract.
    */
   dispatchedSteps?: boolean;
   /**

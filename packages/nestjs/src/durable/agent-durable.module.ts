@@ -34,17 +34,25 @@ const logger = new Logger('AgentDurableModule');
     {
       provide: AGENT_DISPATCHED_STEPS,
       useFactory: (options: AgentModuleOptions, sink: TokenStreamSink) => {
-        const enabled = options.dispatchedSteps ?? false;
+        // Default ON under durable: dispatching moves the run off its pod during the two long
+        // steps (the correct production posture) and AgentRunSteps is always registered, so the
+        // routed groups are never unserved. `dispatchedSteps: false` opts back into localSteps.
+        const enabled = options.durable === true && options.dispatchedSteps !== false;
         // The default sink only buffers in-process: a dispatched `llm` step served by another
         // worker has no way to reach a buffer that lives in THIS process's memory. Detectable only
         // via `instanceof` (the sink SPI carries no "am I cross-process" capability) — good enough
         // for the built-in default, silent for any custom sink (which may well be cross-process).
+        // Keyed off the EFFECTIVE value, so it fires for the durable default too — desired: the
+        // cross-process-sink requirement is really a property of durable itself (any worker may
+        // take agent.run), dispatch just widens how much of the turn runs elsewhere.
         if (enabled && sink instanceof InProcessTokenStreamSink) {
           logger.warn(
-            'dispatchedSteps is enabled with the default InProcessTokenStreamSink, which only ' +
-              'buffers tokens in-process. A dispatched `llm` step served by a different worker ' +
-              'cannot stream into this buffer. Wire a cross-process TokenStreamSink (e.g. a Redis ' +
-              'pub/sub sink) via AgentModule.forRoot({ sink }) before running multi-pod.',
+            'Dispatched steps are active (the default under durable: true) with the default ' +
+              'InProcessTokenStreamSink, which only buffers tokens in-process. A dispatched `llm` ' +
+              'step served by a different worker cannot stream into this buffer. Wire a ' +
+              'cross-process TokenStreamSink (e.g. a Redis pub/sub sink) via ' +
+              'AgentModule.forRoot({ sink }) before running multi-pod, or set ' +
+              'dispatchedSteps: false to keep the turn in-process localSteps.',
           );
         }
         return enabled;

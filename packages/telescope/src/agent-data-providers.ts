@@ -57,7 +57,22 @@ export function agentTokensProvider(): DataProvider {
   };
 }
 
-/** table → recent tool calls. */
+/**
+ * table → recent tool calls, from Telescope's own ephemeral event storage.
+ *
+ * @deprecated Superseded in the shipped dashboard by `agentRecentToolCallsTableProvider`
+ * (`agent.tools.recent`, in `agent-governance-providers.ts`), which reads the durable,
+ * restart-surviving `AGENT_GOVERNANCE_QUERIES.recentToolCalls` read-model. That durable route is
+ * never behind this ephemeral one: `agent-loop.ts` always awaits `store.recordToolCall` /
+ * `store.updateToolCall` (the durable write) BEFORE calling `publishAgentToolCall` (the event this
+ * provider reads), so a row is durably queryable strictly before the ephemeral entry exists. The
+ * durable route also captures the `pending_approval` state this ephemeral channel never emits at
+ * all (no `publishAgentToolCall` call sits between `recordToolCall(status: 'pending_approval')`
+ * and the eventual terminal transition) — so there's no in-flight state left for this table to
+ * uniquely show. Kept exported (not removed — that would be a breaking export change) for hosts
+ * that use `agentTelescopeExtension()` without wiring `AGENT_GOVERNANCE_QUERIES`, or that compose
+ * a custom extension from these lower-level provider functions directly.
+ */
 export function agentToolsProvider(): DataProvider {
   return {
     name: 'agent.tools',
