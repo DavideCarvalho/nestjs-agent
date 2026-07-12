@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-transport-redis
 
+## 0.3.6
+
+### Patch Changes
+
+- Updated dependencies [[`eb3aaff`](https://github.com/DavideCarvalho/nestjs-agent/commit/eb3aaff531cc923de1d0bccebb2b0690b4c92263), [`781a30f`](https://github.com/DavideCarvalho/nestjs-agent/commit/781a30f6579d5b9a69f341b8eeac02c273dbb8a1)]:
+  - @dudousxd/nestjs-agent-core@0.6.0
+
 ## 0.3.5
 
 ### Patch Changes
