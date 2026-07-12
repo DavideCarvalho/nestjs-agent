@@ -1,6 +1,6 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
-## 1.0.0
+## 0.7.1
 
 ### Patch Changes
 
