@@ -1,6 +1,6 @@
 # @dudousxd/nestjs-agent-ai-sdk
 
-## 1.0.0
+## 0.5.2
 
 ### Patch Changes
 

@@ -8,7 +8,7 @@
   - @dudousxd/nestjs-agent-core@0.10.0
   - @dudousxd/nestjs-agent@0.9.0
   - @dudousxd/nestjs-agent-dashboard@0.8.0
-  - @dudousxd/nestjs-agent-testing@1.0.0
+  - @dudousxd/nestjs-agent-testing@0.8.1
 
 ## 0.0.12
 
