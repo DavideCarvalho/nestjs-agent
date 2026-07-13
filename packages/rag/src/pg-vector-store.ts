@@ -86,7 +86,7 @@ export class PgVectorStore implements VectorStore {
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
-    const hasFilter = filter !== undefined && Object.keys(filter).length > 0;
+    const where = buildWhere(filter, 1);
     // DISTINCT ON collapses chunks to one row per document; all chunks share the doc's metadata.
     const rows = await this.client.query<{
       doc_id: string;
@@ -94,9 +94,9 @@ export class PgVectorStore implements VectorStore {
     }>(
       `SELECT DISTINCT ON (${DOCUMENT_ID_FROM_CHUNK}) ${DOCUMENT_ID_FROM_CHUNK} AS doc_id, metadata
        FROM ${this.table}
-       ${hasFilter ? 'WHERE metadata @> $1::jsonb' : ''}
+       ${where.sql}
        ORDER BY ${DOCUMENT_ID_FROM_CHUNK}`,
-      hasFilter ? [JSON.stringify(filter)] : [],
+      where.params,
     );
     return rows.map((row) => ({
       id: row.doc_id,
@@ -106,14 +106,15 @@ export class PgVectorStore implements VectorStore {
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
     const vector = toVectorLiteral(embedding);
-    const hasFilter = options.filter !== undefined && Object.keys(options.filter).length > 0;
+    // $1 = query vector, $2 = topK; metadata-filter params start at $3.
+    const where = buildWhere(options.filter, 3);
     const rows = await this.client.query<PgRow>(
       `SELECT id, text, source, metadata, 1 - (embedding <=> $1::vector) AS score
        FROM ${this.table}
-       ${hasFilter ? 'WHERE metadata @> $3::jsonb' : ''}
+       ${where.sql}
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      hasFilter ? [vector, options.topK, JSON.stringify(options.filter)] : [vector, options.topK],
+      [vector, options.topK, ...where.params],
     );
     return rows.map((row) => ({
       id: row.id,
@@ -131,6 +132,54 @@ interface PgRow {
   source: string | null;
   metadata: Record<string, unknown> | null;
   score: number | string;
+}
+
+/**
+ * Build the `WHERE` fragment for a metadata `filter`, with parameter placeholders numbered from
+ * `startIndex`. Scalar values collapse into a single `@>` jsonb-containment check (exact-match, as
+ * before). An **array** value is a **match-any** (OR / set membership) check via jsonb `?|`: the
+ * record matches when its value for that key — scalar or array — shares an element with the filter
+ * array. An empty array can never match (deny primitive). Keys are passed as parameters (`metadata->$k`)
+ * so a caller-supplied metadata key can't inject SQL. Returns `{ sql: '', params: [] }` when there is
+ * no filter, preserving the previous unfiltered query shape.
+ */
+function buildWhere(
+  filter: Record<string, unknown> | undefined,
+  startIndex: number,
+): { sql: string; params: unknown[] } {
+  if (filter === undefined || Object.keys(filter).length === 0) {
+    return { sql: '', params: [] };
+  }
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  const scalar: Record<string, unknown> = {};
+  let index = startIndex;
+  for (const [key, value] of Object.entries(filter)) {
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        clauses.push('false');
+        continue;
+      }
+      const keyParam = `$${index}`;
+      params.push(key);
+      index += 1;
+      const arrParam = `$${index}`;
+      params.push(value.map(String));
+      index += 1;
+      clauses.push(
+        `(CASE WHEN jsonb_typeof(metadata->${keyParam}) = 'array' ` +
+          `THEN metadata->${keyParam} ELSE jsonb_build_array(metadata->${keyParam}) END) ?| ${arrParam}::text[]`,
+      );
+    } else {
+      scalar[key] = value;
+    }
+  }
+  if (Object.keys(scalar).length > 0) {
+    clauses.push(`metadata @> $${index}::jsonb`);
+    params.push(JSON.stringify(scalar));
+    index += 1;
+  }
+  return { sql: `WHERE ${clauses.join(' AND ')}`, params };
 }
 
 /**

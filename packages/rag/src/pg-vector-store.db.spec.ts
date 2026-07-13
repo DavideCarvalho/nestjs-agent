@@ -57,6 +57,32 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(passages.some((passage) => passage.id === 'x')).toBe(true);
   });
 
+  it('an array filter value is OR / set membership (incl. array metadata); empty array denies', async () => {
+    await store.upsert([
+      { id: 'or-x', text: 'tenant or-t1', embedding: [0, 0, 1], metadata: { tenant: 'or-t1' } },
+      { id: 'or-y', text: 'tenant or-t2', embedding: [0, 0, 1], metadata: { tenant: 'or-t2' } },
+      // array-valued metadata: this document carries both or-t2 and or-t3
+      {
+        id: 'or-z',
+        text: 'tenant or-t2 and or-t3',
+        embedding: [0, 0, 1],
+        metadata: { tenant: ['or-t2', 'or-t3'] },
+      },
+    ]);
+
+    const hits = await store.search([0, 0, 1], {
+      topK: 50,
+      filter: { tenant: ['or-t1', 'or-t3'] },
+    });
+    const ids = hits.map((passage) => passage.id);
+    expect(ids).toContain('or-x'); // matches or-t1
+    expect(ids).toContain('or-z'); // matches or-t3 via its array-valued metadata
+    expect(ids).not.toContain('or-y'); // only or-t2 — not requested
+
+    const denied = await store.search([0, 0, 1], { topK: 50, filter: { tenant: [] } });
+    expect(denied).toEqual([]);
+  });
+
   it('remove() deletes every chunk of a document and leaves siblings untouched', async () => {
     await store.upsert([
       { id: 'del#0', text: 'part zero', embedding: [1, 0, 0] },

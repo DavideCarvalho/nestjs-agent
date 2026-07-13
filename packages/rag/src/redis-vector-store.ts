@@ -108,7 +108,11 @@ export class RedisVectorStore implements VectorStore {
         for (const field of this.filterableFields) {
           const value = record.metadata[field];
           if (value !== undefined) {
-            args.push(`meta_${field}`, String(value));
+            // Array metadata is stored as a multi-valued TAG (comma-separated, RediSearch's default
+            // separator) so a document can carry several capability tokens; individual values must
+            // therefore not contain commas.
+            const tag = Array.isArray(value) ? value.map(String).join(',') : String(value);
+            args.push(`meta_${field}`, tag);
           }
         }
       }
@@ -141,6 +145,9 @@ export class RedisVectorStore implements VectorStore {
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
+    if (filterMatchesNothing(filter)) {
+      return [];
+    }
     const query = buildFilter(filter);
     const documents = new Map<string, IndexedDocument>();
     const batchSize = 1000;
@@ -180,6 +187,9 @@ export class RedisVectorStore implements VectorStore {
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
+    if (filterMatchesNothing(options.filter)) {
+      return [];
+    }
     const query = `${buildFilter(options.filter)}=>[KNN ${options.topK} @embedding $BLOB AS vector_score]`;
     const reply = await this.client.sendCommand([
       'FT.SEARCH',
@@ -213,15 +223,34 @@ function encodeVector(embedding: number[]): Buffer {
   return Buffer.from(new Float32Array(embedding).buffer);
 }
 
-/** `*` for no filter, else an AND of TAG clauses like `(@meta_owner:{u1} @meta_tenant:{t1})`. */
+/**
+ * `*` for no filter, else an AND of TAG clauses. A scalar value is an exact tag match
+ * (`@meta_owner:{u1}`); an **array** value is a TAG alternation — match-any / OR
+ * (`@meta_audience:{public|role\:ADMIN}`), the capability-ACL primitive. RediSearch TAG fields are
+ * multi-valued per document, so this also matches documents carrying several of the tags.
+ */
 function buildFilter(filter?: Record<string, unknown>): string {
   if (filter === undefined || Object.keys(filter).length === 0) {
     return '*';
   }
-  const clauses = Object.entries(filter).map(
-    ([key, value]) => `@meta_${key}:{${escapeTag(String(value))}}`,
-  );
+  const clauses = Object.entries(filter).map(([key, value]) => {
+    const values = Array.isArray(value) ? value : [value];
+    const alternation = values.map((entry) => escapeTag(String(entry))).join('|');
+    return `@meta_${key}:{${alternation}}`;
+  });
   return `(${clauses.join(' ')})`;
+}
+
+/**
+ * A filter with an empty-array value can never match (nothing is a member of the empty set) — and
+ * RediSearch has no valid empty-tag syntax, so callers short-circuit to an empty result instead of
+ * emitting a broken query. This is the deny primitive (e.g. an actor with no capability tokens).
+ */
+function filterMatchesNothing(filter?: Record<string, unknown>): boolean {
+  if (filter === undefined) {
+    return false;
+  }
+  return Object.values(filter).some((value) => Array.isArray(value) && value.length === 0);
 }
 
 /** Escape RediSearch TAG punctuation so an id/tenant value matches literally. */
