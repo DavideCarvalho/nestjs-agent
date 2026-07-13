@@ -14,7 +14,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Workflow } from '@dudousxd/nestjs-durable';
 import { type WorkflowCtx, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
 import { AgentRunSteps } from './agent-run.steps.js';
@@ -38,13 +38,26 @@ export class AgentRunWorkflow {
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    private readonly steps: AgentRunSteps,
+    // OPTIONAL: `AgentDurableModule.forRoot({ surface: 'http' })` registers this workflow (so
+    // `WorkflowService.start(AgentRunWorkflow, …)` finds it locally-registered — required even on
+    // an enqueue-only pod, since `engine.start` validates registration before persisting the run)
+    // but deliberately does NOT provide `AgentRunSteps` — an http pod that also registered the
+    // dispatched-step handlers would subscribe their queues and run LLM/tool work it shouldn't (the
+    // flip incident this module's `surface` option exists to prevent). `@Optional()` lets this
+    // class construct without it; see the `steps === undefined` branch below.
+    @Optional() private readonly steps: AgentRunSteps | undefined,
     @Inject(AGENT_DISPATCHED_STEPS) private readonly dispatchedSteps: boolean,
   ) {}
 
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<{ text: string }> {
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
+    // `undefined` on a pod that never provided AgentRunSteps (`surface: 'http'`) — this workflow is
+    // registered there ONLY so `start()` can enqueue it (see the constructor comment); it must never
+    // actually EXECUTE this far on that pod (pair `surface: 'http'` with the durable `drive: false`
+    // enqueue-only DurableModule config). If it somehow does, fall back to non-dispatched inline
+    // execution rather than crash — degraded, not broken.
+    const dispatchSteps = this.dispatchedSteps ? this.steps : undefined;
     // A sub-agent run (one with an ancestor sink) marks its subthread as streaming THIS child run,
     // so a human approving its action tool routes the signal back here (runForToolCall).
     if (input.sinkRunId !== undefined) {
@@ -87,10 +100,10 @@ export class AgentRunWorkflow {
       // `ctx.localStep`s, so a turn isn't pinned to this workflow worker for the model call or a tool
       // execution. `sinkRunId`/`childSink` are sink routing this workflow already resolved above —
       // core's dispatchLlm signature stays sink-topology-agnostic, so we add them here, not in core.
-      ...(this.dispatchedSteps
+      ...(dispatchSteps !== undefined
         ? {
             dispatchLlm: (index: number, envelope: LlmStepEnvelope) =>
-              ctx.step(this.steps.llm, {
+              ctx.step(dispatchSteps.llm, {
                 ...envelope,
                 runId: ctx.runId,
                 step: index,
@@ -103,7 +116,7 @@ export class AgentRunWorkflow {
             // isn't 'action' is defensively 'read' — the same posture core takes for an
             // unresolvable `kind`.
             dispatchTool: (call: ToolCallRequest, envelope: ToolStepEnvelope) =>
-              ctx.step(this.steps.tool, {
+              ctx.step(dispatchSteps.tool, {
                 ...envelope,
                 toolCallId: call.id,
                 toolType: call.kind === 'action' ? 'action' : 'read',

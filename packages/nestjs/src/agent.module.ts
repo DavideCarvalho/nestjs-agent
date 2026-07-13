@@ -29,7 +29,7 @@ import {
 } from '@nestjs/common';
 import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
-import type { AgentModuleAsyncOptions, AgentModuleOptions } from './agent.options.js';
+import type { AgentModuleAsyncOptions, AgentModuleOptions, AgentSurface } from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
@@ -175,6 +175,18 @@ function controllersFor(mountAttachments: boolean): Type<object>[] {
 }
 
 /**
+ * `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic, so its
+ * routes (and whatever guards they'd carry) have no business existing there. `'http'`/`'both'`
+ * (and the omitted default) mount the same set `controllersFor` always has.
+ */
+function controllersForSurface(
+  surface: AgentSurface | undefined,
+  mountAttachments: boolean,
+): Type<object>[] {
+  return surface === 'engine' ? [] : controllersFor(mountAttachments);
+}
+
+/**
  * Nest's `GUARDS_METADATA` key (`@nestjs/common/constants`), inlined as a literal: `@nestjs/common`
  * has no `exports` map and its ESM-facing files are CJS, so a deep `import ... from
  * '@nestjs/common/constants'` in our ESM build is emitted extensionless and rejected by Node's
@@ -244,7 +256,7 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersFor(options.attachments?.upload === true),
+      controllers: controllersForSurface(options.surface, options.attachments?.upload === true),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false, includeStore),
@@ -270,17 +282,21 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersFor(options.attachmentsUpload === true),
+      controllers: controllersForSurface(options.surface, options.attachmentsUpload === true),
       providers: [
         {
           provide: AGENT_OPTIONS,
-          // Stamp the STATIC wiring flags onto the factory result: `durable`/`dispatchedSteps` are
-          // authoritative on the async config object (they decided the actual wiring above), and
-          // `AgentDurableModule` derives the effective dispatched-steps value from AGENT_OPTIONS —
-          // without this stamp, an async host would get in-process localSteps despite durable: true.
+          // Stamp the STATIC wiring flags onto the factory result: `durable`/`dispatchedSteps`/
+          // `surface` are authoritative on the async config object (they decided the actual wiring
+          // above), and `AgentDurableModule` derives the effective dispatched-steps value from
+          // AGENT_OPTIONS — without this stamp, an async host would get in-process localSteps
+          // despite durable: true. `surface` isn't read back by anything today (AgentDurableModule
+          // takes its own mirror option — see its doc for why), but it's stamped here too so the
+          // EFFECTIVE value is always observable off AGENT_OPTIONS, sync or async alike.
           useFactory: async (...args: never[]) => ({
             ...(await options.useFactory(...args)),
             durable: options.durable ?? false,
+            surface: options.surface ?? 'both',
             ...(options.dispatchedSteps !== undefined
               ? { dispatchedSteps: options.dispatchedSteps }
               : {}),

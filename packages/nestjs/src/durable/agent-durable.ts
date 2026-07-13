@@ -12,8 +12,14 @@ import { AgentDurableModule } from './agent-durable.module.js';
  *
  * It wires `AgentModule.forRoot({ ...options, durable: true })` together with `AgentDurableModule`,
  * the equivalent of importing both by hand. A configured `DurableModule` is still required. The
- * durable runner has no configuration of its own, so `options` is exactly the agent options.
+ * durable runner has no configuration of its own beyond the agent options, so `options` is exactly
+ * `AgentModuleOptions` — including `surface`, which this helper threads to BOTH calls so a consumer
+ * sets it in exactly one place (see `AgentModuleOptions.surface` / `AgentDurableModuleOptions.surface`
+ * for why each needs its own copy of the value rather than one reading it off the other via DI).
  */
 export function agentDurable(options: AgentModuleOptions): DynamicModule[] {
-  return [AgentModule.forRoot({ ...options, durable: true }), AgentDurableModule.forRoot()];
+  return [
+    AgentModule.forRoot({ ...options, durable: true }),
+    AgentDurableModule.forRoot(options.surface !== undefined ? { surface: options.surface } : {}),
+  ];
 }

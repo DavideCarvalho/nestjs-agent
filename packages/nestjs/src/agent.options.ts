@@ -18,6 +18,27 @@ import type {
 import type { FunctionalTool } from './functional-tool.js';
 
 /**
+ * Which half of the module this process mounts — the split that lets an API pod and a WORKER pod
+ * each load `AgentModule` without either one doing the other's job:
+ *
+ * - `'both'` (default): today's behavior, unconditionally — every controller AND the full durable
+ *   engine wiring (when `durable: true`). Zero-config single-pod deployments never touch this.
+ * - `'http'`: mounts every controller (chat/threads/tool-call/quota/agents/attachments) so the HTTP
+ *   surface is fully functional, but under `durable: true` this pod must never EXECUTE agent work —
+ *   see `AgentDurableModuleOptions.surface` (`@dudousxd/nestjs-agent/durable`), which is where the
+ *   actual step-handler exclusion happens; this flag only controls the controllers here.
+ * - `'engine'`: mounts NO controllers (an API pod's routes have no business existing on a worker
+ *   pod that never receives HTTP traffic) — everything else (registry/tools/model/store/sinks, the
+ *   `agent.run` workflow, and its dispatched steps under `AgentDurableModule`) stays wired exactly
+ *   as `'both'`.
+ *
+ * A durable deployment mirrors this on `AgentDurableModule.forRoot({ surface })` too — see that
+ * module's doc for why the split can't be inferred from this option alone (Nest's static module
+ * metadata can't be computed from a runtime-injected value).
+ */
+export type AgentSurface = 'http' | 'engine' | 'both';
+
+/**
  * `AgentModuleOptions.attachments` — bounds and content-type allowlist for the optional
  * `POST /agent/attachments` upload controller (see `attachments.upload`).
  */
@@ -148,6 +169,13 @@ export interface AgentModuleOptions {
 
   /** Bounds/allowlist for the optional attachment-upload controller. Omit → 20 MiB, the documented default types, not mounted. */
   attachments?: AgentAttachmentsOptions;
+
+  /**
+   * Which half of the module this process mounts (see {@link AgentSurface}). Omit → `'both'`,
+   * today's behavior with zero change. STATIC top-level field (like `durable`/`path`) — it decides
+   * which controllers exist at module-build time, not something a request can flip.
+   */
+  surface?: AgentSurface;
 }
 
 export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
@@ -202,4 +230,11 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * only the yes/no mount decision has to live here.
    */
   attachmentsUpload?: boolean;
+
+  /**
+   * Which half of the module this process mounts (see {@link AgentSurface}). Same static-wiring
+   * reasoning as `attachmentsUpload`/`durable` above — `useFactory` resolves too late to decide
+   * which controllers exist. Omit → `'both'`, today's behavior with zero change.
+   */
+  surface?: AgentSurface;
 }

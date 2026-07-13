@@ -4,6 +4,7 @@ export type {
   AgentModuleOptions,
   AgentModuleAsyncOptions,
   AgentAttachmentsOptions,
+  AgentSurface,
 } from './agent.options.js';
 export { AgentService, type ChatParams } from './agent.service.js';
 export {
