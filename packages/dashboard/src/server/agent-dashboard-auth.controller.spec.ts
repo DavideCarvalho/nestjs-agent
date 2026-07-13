@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentDashboardAuthController } from './agent-dashboard-auth.controller.js';
 import type { ResolvedDashboardAuth } from './auth/dashboard-auth-config.js';
 import { SESSION_COOKIE_NAME } from './auth/session-cookie-io.js';
@@ -169,6 +169,75 @@ describe('AgentDashboardAuthController', () => {
 
       expect(unknownUser.statuses).toEqual(wrongPassword.statuses);
       expect(unknownUser.headers.location).toBe(wrongPassword.headers.location);
+    });
+
+    it('password is optional: an empty password reaches the hook AS-IS (spy sees "")', async () => {
+      const loginSpy = vi.fn(() => null);
+      const controller = new AgentDashboardAuthController(makeAuth(loginSpy), BASE_PATH);
+      const { req, res } = fakeReqRes();
+
+      await controller.login({ username: 'admin@example.com', password: '' }, req, res);
+
+      expect(loginSpy).toHaveBeenCalledWith('admin@example.com', '');
+    });
+
+    it('password is optional: an omitted password reaches the hook as "" too', async () => {
+      const loginSpy = vi.fn(() => null);
+      const controller = new AgentDashboardAuthController(makeAuth(loginSpy), BASE_PATH);
+      const { req, res } = fakeReqRes();
+
+      await controller.login({ username: 'admin@example.com' }, req, res);
+
+      expect(loginSpy).toHaveBeenCalledWith('admin@example.com', '');
+    });
+
+    it('a hook that rejects an empty password still uniform-fails (no cookie, generic redirect)', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeAuth((username, password) =>
+          username === 'admin' && password === 'correct-horse' ? { id: 'ops' } : null,
+        ),
+        BASE_PATH,
+      );
+      const { req, res, statuses, headers } = fakeReqRes();
+
+      await controller.login({ username: 'admin', password: '' }, req, res);
+
+      expect(statuses).toEqual([303]);
+      expect(headers.location).toMatch(/^\/ai-gateway\/auth\/login\?error=1&returnTo=/);
+      expect(headers['set-cookie']).toBeUndefined();
+    });
+
+    it('a hook that accepts an empty password (username/email-only policy) mints the session', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeAuth((username, password) =>
+          username === 'admin@example.com' && password === '' ? { id: 'ops' } : null,
+        ),
+        BASE_PATH,
+      );
+      const { req, res, statuses, headers, setCookie } = fakeReqRes();
+
+      await controller.login(
+        { username: 'admin@example.com', password: '', returnTo: '/ai-gateway/runs' },
+        req,
+        res,
+      );
+
+      expect(statuses).toEqual([302]);
+      expect(headers.location).toBe('/ai-gateway/runs');
+      expect(setCookie()).toContain(`${SESSION_COOKIE_NAME}=`);
+    });
+
+    it('rejects a malformed password shape (not a string) with the generic redirect', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeAuth(() => ({ id: 'ops' })),
+        BASE_PATH,
+      );
+      const { req, res, statuses, headers } = fakeReqRes();
+
+      await controller.login({ username: 'admin', password: ['x'] }, req, res);
+
+      expect(statuses).toEqual([303]);
+      expect(headers['set-cookie']).toBeUndefined();
     });
 
     it('a login hook that throws is treated as a denial, not a 500', async () => {

@@ -114,6 +114,25 @@ describe('dashboardAuth — end-to-end login round-trip', () => {
     expect(wrongPassword.headers['set-cookie']).toBeUndefined();
   });
 
+  it('password is optional: a username/email-only login hook accepts an empty password over HTTP', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: 'sekret-key',
+        // Mirrors flip's email-only policy: password is deliberately ignored by the host hook.
+        login: (username: string) => (username === 'admin@example.com' ? { id: 'ops' } : null),
+      },
+    });
+    const server = app.getHttpServer();
+
+    const login = await request(server)
+      .post('/ai-gateway/auth/login')
+      .type('form')
+      .send({ username: 'admin@example.com', password: '' })
+      .expect(302);
+
+    expect(login.headers['set-cookie']).toBeDefined();
+  });
+
   it('good credentials mint a cookie that grants BOTH the page and the API', async () => {
     app = await boot({ dashboardAuth: { secret: 'sekret-key', login: loginHook } });
     const server = app.getHttpServer();

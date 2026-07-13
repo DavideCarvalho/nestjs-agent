@@ -109,6 +109,8 @@ AgentDashboardModule.forRoot({
 
 Open `/ai-gateway`, enter the credentials, and you're in. Bad credentials get a **uniform** redirect back to the login page — the response is identical for an unknown user and a wrong password, so the endpoint never reveals which one was wrong. `POST <basePath>/auth/logout` clears the cookie.
 
+Only `username` is required (non-empty) — the password is passed through to `login` verbatim, including empty, so a host that authenticates by username/email alone (password deliberately ignored) can use the built-in screen unmodified; the hook owns whether an empty password is accepted or rejected.
+
 Need the `login` hook to reach a DB (e.g. an `EntityManager`)? Use `forRootAsync` — `basePath`/`apiBasePath`/`guards` stay static (needed at module-build time for routing), only the auth config is resolved through DI:
 
 ```ts

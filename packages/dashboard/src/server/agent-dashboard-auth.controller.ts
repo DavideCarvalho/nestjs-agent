@@ -43,7 +43,11 @@ interface LoginFormBody {
 }
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value !== '';
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }
 
 /**
@@ -106,11 +110,15 @@ export class AgentDashboardAuthController {
     const returnTo = sanitizeReturnTo(this.basePath, body?.returnTo);
     const username = body?.username;
     const password = body?.password;
-    if (!isNonEmptyString(username) || !isNonEmptyString(password)) {
+    // Username is required (non-empty, trimmed). Password is OPTIONAL end-to-end: it reaches the
+    // host `login` hook AS-IS — `''` when blank/omitted — because some hosts gate on username
+    // alone (e.g. flip: email must belong to an active ADMIN, password deliberately ignored). Only
+    // reject here on a malformed shape (password present but not a string), never on emptiness.
+    if (!isNonEmptyString(username) || (password !== undefined && !isString(password))) {
       this.redirectToLoginError(res, returnTo);
       return '';
     }
-    const user = await this.runLoginHook(auth, username, password);
+    const user = await this.runLoginHook(auth, username.trim(), isString(password) ? password : '');
     if (!user) {
       this.redirectToLoginError(res, returnTo);
       return '';
