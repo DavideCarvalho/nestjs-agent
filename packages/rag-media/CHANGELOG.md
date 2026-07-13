@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-rag-media
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [[`bd5b15c`](https://github.com/DavideCarvalho/nestjs-agent/commit/bd5b15cc7db3375d54ba41acbf159a28292f0c50)]:
+  - @dudousxd/nestjs-agent-rag@0.4.0
+
 ## 0.3.10
 
 ### Patch Changes
