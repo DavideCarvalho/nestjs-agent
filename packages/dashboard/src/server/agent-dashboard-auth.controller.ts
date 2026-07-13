@@ -1,0 +1,181 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  Inject,
+  Logger,
+  NotFoundException,
+  Optional,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
+import { parseCookieHeader } from './auth/cookie-header.js';
+import type { ResolvedDashboardAuth } from './auth/dashboard-auth-config.js';
+import { readCookieHeader } from './auth/http-request.js';
+import { renderLoginPage } from './auth/login-page.js';
+import { sanitizeReturnTo } from './auth/sanitize-return-to.js';
+import {
+  SESSION_COOKIE_NAME,
+  clearSessionCookie,
+  issueSessionCookie,
+} from './auth/session-cookie-io.js';
+import { type DashboardSessionUser, verifySessionCookie } from './auth/session-cookie.js';
+import { DASHBOARD_AUTH, DASHBOARD_BASE_PATH } from './tokens.js';
+
+/** The slice of the platform request this controller reads — structural, no Express/Fastify dependency. */
+interface AuthPageRequest {
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/** The slice of the platform response this controller writes (passthrough mode — Nest still sends). */
+interface AuthPageResponse {
+  status(code: number): unknown;
+  setHeader(name: string, value: string): unknown;
+}
+
+interface LoginFormBody {
+  username?: unknown;
+  password?: unknown;
+  returnTo?: unknown;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/**
+ * Mounted directly on `AgentDashboardModule` at `<basePath>/auth/*` — a SEPARATE controller from
+ * `AgentUiController`/`AgentApiController` so it carries neither `DashboardAuthPageGuard`,
+ * `DashboardAuthGuard`, nor any host `guards`: these routes MINT (and clear) the session cookie the
+ * built-in gates check for, so they can never be made to require the very auth they grant. Mirrors
+ * `@dudousxd/nestjs-telescope`'s own auth controller staying outside its `stampGuards` call.
+ *
+ * A dependency-free, server-rendered login form (GET/POST) rather than a JSON API + client-side
+ * screen — the bundled React SPA in this package is a built Vite artifact with no auth-aware UI of
+ * its own, so gating the actual page navigation needs a self-contained flow that doesn't touch it.
+ *
+ * 404s every route when `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to `null`) — no
+ * dangling login page when the feature is off.
+ */
+@Controller('auth')
+export class AgentDashboardAuthController {
+  private readonly logger = new Logger(AgentDashboardAuthController.name);
+  /** Warn once (not per request) so a broken hook can't be used to flood the logs. */
+  private warnedLoginHookThrow = false;
+
+  constructor(
+    @Optional() @Inject(DASHBOARD_AUTH) private readonly auth: ResolvedDashboardAuth | null,
+    @Inject(DASHBOARD_BASE_PATH) private readonly basePath: string,
+  ) {}
+
+  @Get('login')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @Header('Cache-Control', 'no-store')
+  loginPage(
+    @Req() req: AuthPageRequest,
+    @Res({ passthrough: true }) res: AuthPageResponse,
+    @Query('returnTo') returnToQuery?: string,
+    @Query('error') error?: string,
+  ): string {
+    this.requireAuth();
+    const returnTo = sanitizeReturnTo(this.basePath, returnToQuery);
+    // Already signed in — a fresh GET (e.g. a bookmarked login URL) just goes back in, no need to
+    // re-prompt for credentials.
+    if (this.currentSession(req)) {
+      res.status(302);
+      res.setHeader('Location', returnTo);
+      return '';
+    }
+    return renderLoginPage({
+      actionUrl: `${this.basePath}/auth/login`,
+      returnTo,
+      error: error !== undefined,
+    });
+  }
+
+  @Post('login')
+  async login(
+    @Body() body: LoginFormBody,
+    @Req() req: unknown,
+    @Res({ passthrough: true }) res: AuthPageResponse,
+  ): Promise<string> {
+    const auth = this.requireAuth();
+    const returnTo = sanitizeReturnTo(this.basePath, body?.returnTo);
+    const username = body?.username;
+    const password = body?.password;
+    if (!isNonEmptyString(username) || !isNonEmptyString(password)) {
+      this.redirectToLoginError(res, returnTo);
+      return '';
+    }
+    const user = await this.runLoginHook(auth, username, password);
+    if (!user) {
+      this.redirectToLoginError(res, returnTo);
+      return '';
+    }
+    issueSessionCookie(user, { auth, request: req, response: res });
+    res.status(302);
+    res.setHeader('Location', returnTo);
+    return '';
+  }
+
+  @Post('logout')
+  logout(@Req() req: unknown, @Res({ passthrough: true }) res: AuthPageResponse): string {
+    // Best-effort: clearing is harmless even without dashboardAuth configured.
+    clearSessionCookie({ request: req, response: res });
+    res.status(302);
+    res.setHeader('Location', `${this.basePath}/auth/login`);
+    return '';
+  }
+
+  /** Uniform failure: same redirect (generic error flag) whether the user is unknown or the password is wrong. */
+  private redirectToLoginError(res: AuthPageResponse, returnTo: string): void {
+    res.status(303);
+    res.setHeader(
+      'Location',
+      `${this.basePath}/auth/login?error=1&returnTo=${encodeURIComponent(returnTo)}`,
+    );
+  }
+
+  private currentSession(req: AuthPageRequest): boolean {
+    const auth = this.auth;
+    if (!auth) return false;
+    const cookieValue = parseCookieHeader(readCookieHeader(req))[SESSION_COOKIE_NAME];
+    if (cookieValue === undefined) return false;
+    return verifySessionCookie(cookieValue, { secret: auth.secret }) !== null;
+  }
+
+  /**
+   * Run the host's `login` hook defensively: a throw (sync or async) is treated as a denial
+   * (`null`) and warn-logged ONCE, so a buggy/unreachable hook never 500s the endpoint into a
+   * stack-trace leak nor floods the logs.
+   */
+  private async runLoginHook(
+    auth: ResolvedDashboardAuth,
+    username: string,
+    password: string,
+  ): Promise<DashboardSessionUser | null> {
+    try {
+      return (await auth.login(username, password)) ?? null;
+    } catch (error) {
+      if (!this.warnedLoginHookThrow) {
+        this.warnedLoginHookThrow = true;
+        this.logger.warn(
+          `AgentDashboardModule dashboardAuth login hook threw; treating as denial. ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return null;
+    }
+  }
+
+  private requireAuth(): ResolvedDashboardAuth {
+    // The auth controller only does anything useful when dashboardAuth is configured — a
+    // defensive 404 rather than a reachable runtime path for a properly-wired module.
+    if (!this.auth) throw new NotFoundException();
+    return this.auth;
+  }
+}

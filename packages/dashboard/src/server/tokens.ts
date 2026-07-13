@@ -65,3 +65,12 @@ export const DASHBOARD_API_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:a
 export const DASHBOARD_APPROVAL_ACTOR_REF = Symbol.for(
   '@dudousxd/nestjs-agent-dashboard:approval-actor-ref',
 );
+
+/**
+ * DI token carrying the resolved `dashboardAuth` config (`ResolvedDashboardAuth | null`) — `null`
+ * when the host didn't configure it (the built-in guards are then a no-op, today's behavior
+ * byte-for-byte). Bound once by `AgentApiModule.register` and re-exported so `AgentUiController`
+ * and `AgentDashboardAuthController` (hosted directly by `AgentDashboardModule`, which imports
+ * `AgentApiModule`) resolve the SAME instance rather than re-running a host's async factory twice.
+ */
+export const DASHBOARD_AUTH = Symbol.for('@dudousxd/nestjs-agent-dashboard:dashboard-auth');

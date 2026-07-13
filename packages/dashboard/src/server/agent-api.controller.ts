@@ -19,8 +19,10 @@ import {
   Query,
   Req,
   Sse,
+  UseGuards,
 } from '@nestjs/common';
 import type { Observable } from 'rxjs';
+import { DashboardAuthGuard } from './auth/dashboard-auth.guard.js';
 import {
   DashboardService,
   type LiveAgentEvent,
@@ -71,8 +73,13 @@ function parseLimit(value: string | undefined, fallback: number): number {
 /**
  * JSON + SSE API consumed by the AI-gateway console SPA. Mounted at `apiBasePath` (set by
  * `RouterModule` in {@link AgentDashboardModule.forRoot}), so the controller routes are relative.
+ *
+ * `@UseGuards(DashboardAuthGuard)` is a NO-OP unless the host configured `dashboardAuth` — see
+ * that guard's own doc. Host `guards` (see {@link AgentDashboardOptions.guards}) are APPENDED onto
+ * this baseline by `stampGuards` (`./guards.js`), never replacing it.
  */
 @Controller()
+@UseGuards(DashboardAuthGuard)
 export class AgentApiController {
   constructor(
     private readonly dashboard: DashboardService,

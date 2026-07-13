@@ -196,6 +196,12 @@ importers:
       '@nestjs/core':
         specifier: 11.1.6
         version: 11.1.6(@nestjs/common@11.1.6(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/platform-express@11.1.6)(reflect-metadata@0.2.2)(rxjs@7.8.1)
+      '@nestjs/platform-express':
+        specifier: 11.1.6
+        version: 11.1.6(@nestjs/common@11.1.6(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@11.1.6)
+      '@nestjs/testing':
+        specifier: 11.1.6
+        version: 11.1.6(@nestjs/common@11.1.6(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@11.1.6)(@nestjs/platform-express@11.1.6)
       '@swc/core':
         specifier: 1.15.41
         version: 1.15.41
@@ -208,6 +214,9 @@ importers:
       '@types/react-dom':
         specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.5)
+      '@types/supertest':
+        specifier: 6.0.2
+        version: 6.0.2
       '@vitejs/plugin-react':
         specifier: 4.3.4
         version: 4.3.4(vite@5.4.21(@types/node@22.19.20))
@@ -229,6 +238,9 @@ importers:
       rxjs:
         specifier: 7.8.1
         version: 7.8.1
+      supertest:
+        specifier: 7.0.0
+        version: 7.0.0
       tailwindcss:
         specifier: 3.4.17
         version: 3.4.17

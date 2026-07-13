@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { AgentApiController } from './agent-api.controller.js';
 import { AgentDashboardModule } from './agent-dashboard.module.js';
 import { AgentUiController } from './agent-ui.controller.js';
+import { DashboardAuthPageGuard } from './auth/dashboard-auth-page.guard.js';
+import { DashboardAuthGuard } from './auth/dashboard-auth.guard.js';
 
 /** The literal `agent-dashboard.module.ts` inlines instead of deep-importing '@nestjs/common/constants'. */
 const INLINED_GUARDS_METADATA = '__guards__';
@@ -24,19 +26,31 @@ describe('GUARDS_METADATA drift', () => {
 });
 
 describe('AgentDashboardModule.forRoot guards', () => {
-  it('stamps the given guards on BOTH controllers (REPLACE semantics)', () => {
+  it('appends the given guards onto the built-in dashboardAuth baseline (never replacing it)', () => {
     AgentDashboardModule.forRoot({ guards: [FakeGuard] });
 
-    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentApiController)).toEqual([FakeGuard]);
-    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentUiController)).toEqual([FakeGuard]);
+    // Baseline is each controller's OWN `@UseGuards` decorator — the built-in, always-present
+    // (no-op unless `dashboardAuth` is set) session gate — with the host's `guards` appended.
+    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentApiController)).toEqual([
+      DashboardAuthGuard,
+      FakeGuard,
+    ]);
+    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentUiController)).toEqual([
+      DashboardAuthPageGuard,
+      FakeGuard,
+    ]);
   });
 
-  it('a later forRoot() with no guards clears (not appends to) a prior stamp', () => {
+  it('a later forRoot() with no guards resets to just the built-in baseline (not a stale prior stamp)', () => {
     AgentDashboardModule.forRoot({ guards: [FakeGuard] });
     AgentDashboardModule.forRoot();
 
-    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentApiController)).toEqual([]);
-    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentUiController)).toEqual([]);
+    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentApiController)).toEqual([
+      DashboardAuthGuard,
+    ]);
+    expect(Reflect.getMetadata(REAL_GUARDS_METADATA, AgentUiController)).toEqual([
+      DashboardAuthPageGuard,
+    ]);
   });
 
   it('passes an `imports` passthrough into the dynamic module for guard-dependency resolution', () => {

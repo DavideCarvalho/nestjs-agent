@@ -39,8 +39,91 @@ The controllers are **path-relative and guard-frontable** — front `basePath`/`
 
 ```ts
 AgentDashboardModule.forRoot({
-  basePath?: string;    // where the SPA is served. Default '/ai-gateway'
-  apiBasePath?: string; // where the JSON/SSE API is mounted. Default '<basePath>/api'
+  basePath?: string;             // where the SPA is served. Default '/ai-gateway'
+  apiBasePath?: string;          // where the JSON/SSE API is mounted. Default '<basePath>/api'
+  guards?: Type<CanActivate>[];  // bring-your-own auth — see "Console auth" below
+  dashboardAuth?: DashboardAuthOptions; // built-in login screen — see "Console auth" below
+  imports?: DynamicModule['imports'];
+  approvalActorRef?: (req) => string | undefined;
+});
+```
+
+## Console auth
+
+The console has no auth of its own by default — pick one of three postures, or combine them:
+
+| Posture | When to use | Setup |
+| ------- | ----------- | ----- |
+| **Open** (default) | Local dev only. Never mount this way in production. | Omit both `guards` and `dashboardAuth`. |
+| **`guards`** | You already have auth the console can reuse — an existing cookie-session guard, an SSO/OIDC session, a header your reverse proxy injects. | Pass guard classes; see below. |
+| **`dashboardAuth`** | You have no ready-made guard for the console — e.g. your app authenticates with a header-only Bearer token a browser navigation can't attach — and want the simplest path to a protected console with zero SSO setup. | Pass `{ secret, login }`; see below. |
+
+Both `guards` and `dashboardAuth` can be set together — **AND semantics**: a request must pass BOTH. `dashboardAuth`'s own gate runs first; a denied request never reaches your `guards`.
+
+### Option A — `guards` (bring your own)
+
+Front `basePath`/`apiBasePath` with a guard that reads YOUR app's session. A full-page navigation to `basePath` carries only cookies (never an `Authorization` header), so the guard must be able to authenticate from a cookie:
+
+```ts
+import { CanActivate, ExecutionContext, Injectable, Module } from '@nestjs/common';
+import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+
+@Injectable()
+class ConsoleSessionGuard implements CanActivate {
+  constructor(private readonly sessions: SessionService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const session = await this.sessions.verify(request.cookies?.appSession);
+    return session?.roles.includes('admin') ?? false;
+  }
+}
+
+@Module({
+  imports: [
+    AgentDashboardModule.forRoot({
+      guards: [ConsoleSessionGuard],
+      imports: [SessionModule], // resolves ConsoleSessionGuard's own dependencies
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+### Option B — `dashboardAuth` (built-in login screen)
+
+Gates the console behind a stateless, signed session cookie (HMAC-SHA256, `node:crypto` only — no JWT dependency, no session store, mirrors `@dudousxd/nestjs-telescope`'s `dashboardAuth`). An unauthenticated page visit is redirected (302) to a built-in login form at `<basePath>/auth/login`; an unauthenticated API call gets `401`.
+
+```ts
+AgentDashboardModule.forRoot({
+  dashboardAuth: {
+    secret: process.env.AI_GATEWAY_AUTH_SECRET, // REQUIRED — 32+ bytes recommended. Missing => boot error.
+    ttl: '8h',                                  // optional, default '8h'; sliding renewal past 50% TTL
+    login: async (username, password) => {
+      const user = await users.verify(username, password);
+      return user ? { id: user.id, name: user.name, roles: user.roles } : null; // null => generic failure
+    },
+  },
+});
+```
+
+Open `/ai-gateway`, enter the credentials, and you're in. Bad credentials get a **uniform** redirect back to the login page — the response is identical for an unknown user and a wrong password, so the endpoint never reveals which one was wrong. `POST <basePath>/auth/logout` clears the cookie.
+
+Need the `login` hook to reach a DB (e.g. an `EntityManager`)? Use `forRootAsync` — `basePath`/`apiBasePath`/`guards` stay static (needed at module-build time for routing), only the auth config is resolved through DI:
+
+```ts
+AgentDashboardModule.forRootAsync({
+  imports: [DatabaseModule],
+  inject: [EntityManager],
+  useDashboardAuth: (em: EntityManager) => ({
+    secret: process.env.AI_GATEWAY_AUTH_SECRET,
+    login: async (username, password) => {
+      const admin = await em.findOne(AdminUser, { username });
+      return admin && (await admin.verifyPassword(password))
+        ? { id: admin.id, name: admin.name, roles: ['admin'] }
+        : null;
+    },
+  }),
 });
 ```
 
