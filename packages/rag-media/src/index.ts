@@ -6,6 +6,7 @@ export {
   defaultTextExtractor,
   decodeUtf8,
   extractHtmlText,
+  mimeFromFileName,
 } from './text-extractor.js';
 export {
   type MediaAttachEvent,

@@ -66,6 +66,39 @@ export function decodeUtf8(bytes: Buffer): string {
   return bytes.toString('utf8');
 }
 
+/**
+ * Extension → mime type, for the common document formats. A fallback for when the upload path didn't
+ * record a content type (S3 objects frequently arrive as `application/octet-stream` or nothing at
+ * all), so ingestion can still pick the right extractor instead of skipping the file.
+ *
+ * Unknown extensions yield `application/octet-stream`, which no default extractor handles — the file
+ * is skipped rather than indexed as garbage.
+ */
+const EXTENSION_MIME_TYPES: Record<string, string> = {
+  txt: 'text/plain',
+  text: 'text/plain',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  csv: 'text/csv',
+  tsv: 'text/tab-separated-values',
+  json: 'application/json',
+  html: 'text/html',
+  htm: 'text/html',
+  xml: 'text/xml',
+  yaml: 'text/yaml',
+  yml: 'text/yaml',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  pdf: 'application/pdf',
+};
+
+export function mimeFromFileName(fileName: string): string {
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+  return EXTENSION_MIME_TYPES[extension] ?? 'application/octet-stream';
+}
+
 /** Decode UTF-8 then strip HTML: drop `<script>`/`<style>` bodies and tags, decode common entities. */
 export function extractHtmlText(bytes: Buffer): string {
   return bytes

@@ -38,6 +38,20 @@ export interface MediaIngestionDeps {
   chunk?: ChunkOptions;
   /** Skip (don't read) files larger than this many bytes. Default 25 MB. */
   maxBytes?: number;
+  /**
+   * Extra metadata stamped on every chunk, merged OVER the defaults (`mediaId`, `ownerType`,
+   * `ownerId`, `collection`, `size`) so a host can add its own keys or override a default one.
+   * Opaque to this package — whatever you return is handed to the vector store as-is.
+   *
+   * This is the seam for host-defined retrieval scoping. A capability-token ACL, for example, stamps
+   * the tokens that gate the document and filters on them at query time, without this package ever
+   * knowing what a token means:
+   *
+   * ```ts
+   * metadata: (event) => ({ collectionId: event.collection, audience: tokensFor(event) })
+   * ```
+   */
+  metadata?: (event: MediaAttachEvent) => Record<string, unknown>;
 }
 
 export type MediaIngestSkipReason = 'unsupported-type' | 'too-large' | 'empty-text';
@@ -104,6 +118,9 @@ export async function ingestMediaFile(
           // fingerprint the reconciler compares against the live media record to catch a content
           // change a missed attach event would otherwise leave stale.
           size: event.size,
+          // Host-supplied keys win, so a caller can add retrieval-scoping metadata (or correct a
+          // default) without this package knowing what any of it means.
+          ...deps.metadata?.(event),
         },
       },
     ],
