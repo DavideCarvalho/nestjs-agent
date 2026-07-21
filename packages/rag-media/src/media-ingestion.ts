@@ -141,6 +141,9 @@ export async function ingestMediaFile(
     ownerType: event.ownerType,
     ownerId: event.ownerId,
     collection: event.collection,
+    source: event.path,
+    size: event.size,
+    mimeType: event.mimeType,
     chunks: count,
   });
   return { status: 'ingested', chunks: count };

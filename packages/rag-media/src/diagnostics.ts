@@ -10,6 +10,10 @@ export interface RagMediaIngestedPayload {
   ownerType: string;
   ownerId: string;
   collection: string;
+  /** Citation-facing origin (the media record's `path`). */
+  source: string;
+  size: number;
+  mimeType: string;
   chunks: number;
 }
 export interface RagMediaRemovedPayload {

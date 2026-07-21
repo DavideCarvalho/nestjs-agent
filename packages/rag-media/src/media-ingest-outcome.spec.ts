@@ -88,6 +88,26 @@ describe('skip diagnostics carry the collection', () => {
   });
 });
 
+describe('ingested diagnostics carry the outcome coordinates', () => {
+  it('attributes a successful ingestion to its source, size, and mime type', async () => {
+    const ingested = capture('media.ingested');
+    await ingestMediaFile(EVENT, deps());
+
+    // same outcome coordinates the skipped/failed payloads carry — so a log row for a SUCCESSFUL
+    // document isn't the only one left with null source/size/mimeType.
+    expect(ingested[0]).toMatchObject({
+      mediaId: 'doc-1',
+      ownerType: 'user',
+      ownerId: 'u1',
+      collection: 'knowledge-base',
+      source: 'notes.txt',
+      size: 11,
+      mimeType: 'text/plain',
+      chunks: 1,
+    });
+  });
+});
+
 describe('runMediaIngestJob', () => {
   it('returns the ingest result and publishes nothing on the failure channel', async () => {
     const failed = capture('media.failed');
