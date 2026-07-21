@@ -139,6 +139,39 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
     expect(failuresOnly.map((row) => row.documentId)).toEqual(['b']);
   });
 
+  it('pages, and reports the unpaginated total alongside the page', async () => {
+    for (const id of ['a', 'b', 'c']) {
+      await publish('media.ingested', { mediaId: id, collection: 'col-1', chunks: 1 });
+    }
+
+    const page = await log.listPage({ collection: 'col-1', limit: 2 });
+    expect(page.rows).toHaveLength(2);
+    // the point: 2 rows returned but 3 exist, so a caller can say so instead of implying completeness
+    expect(page.total).toBe(3);
+
+    const second = await log.listPage({ collection: 'col-1', limit: 2, offset: 2 });
+    expect(second.rows).toHaveLength(1);
+    expect(second.total).toBe(3);
+  });
+
+  it('removes one document record, and reports whether there was one', async () => {
+    await publish('media.ingested', { mediaId: 'gone', collection: 'col-1', chunks: 1 });
+
+    expect(await log.remove('gone')).toBe(true);
+    expect(await log.get('gone')).toBeNull();
+    expect(await log.remove('gone')).toBe(false);
+  });
+
+  it('removes every record of a collection, leaving other collections alone', async () => {
+    await publish('media.ingested', { mediaId: 'x', collection: 'col-1', chunks: 1 });
+    await publish('media.ingested', { mediaId: 'y', collection: 'col-1', chunks: 1 });
+    await publish('media.ingested', { mediaId: 'z', collection: 'col-2', chunks: 1 });
+
+    expect(await log.removeByCollection('col-1')).toBe(2);
+    expect(await log.list({ collection: 'col-1' })).toHaveLength(0);
+    expect(await log.list({ collection: 'col-2' })).toHaveLength(1);
+  });
+
   it('ignores a payload with no document id instead of throwing', async () => {
     await publish('media.ingested', { collection: 'col-1', chunks: 1 });
     expect(await log.list({ collection: 'col-1' })).toHaveLength(0);
