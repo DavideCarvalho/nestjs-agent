@@ -1,7 +1,7 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import { publishRagMediaFailed } from './diagnostics.js';
+import { outcomeContext, publishRagMediaFailed } from './diagnostics.js';
 import {
   type MediaAttachEvent,
   type MediaConversionEvent,
@@ -10,7 +10,7 @@ import {
   isMediaConversionEvent,
   isMediaDeleteEvent,
 } from './media-events.js';
-import { type MediaIngestJob, applyMediaIngestJob } from './media-ingest-job.js';
+import { type MediaIngestJob, runMediaIngestJob } from './media-ingest-job.js';
 import type { MediaIngestionDeps } from './media-ingestion.js';
 
 /**
@@ -147,17 +147,21 @@ export class AgentMediaIngestionService implements OnModuleInit, OnModuleDestroy
    * so the two can't drift.
    */
   private async dispatch(job: MediaIngestJob): Promise<void> {
-    try {
-      if (this.enqueue !== undefined) {
+    const action = job.type === 'ingest' ? 'ingestion' : 'delete-sync';
+    if (this.enqueue !== undefined) {
+      try {
         await this.enqueue(job);
-      } else {
-        await applyMediaIngestJob(job, this.config);
+      } catch (error) {
+        const message = errorMessage(error);
+        this.logger.error(`RAG ${action} enqueue failed for media ${job.event.id}: ${message}`);
+        publishRagMediaFailed({ ...outcomeContext(job.event), error: message });
       }
-    } catch (error) {
-      const action = job.type === 'ingest' ? 'ingestion' : 'delete-sync';
-      const message = errorMessage(error);
-      this.logger.error(`RAG ${action} failed for media ${job.event.id}: ${message}`);
-      publishRagMediaFailed({ mediaId: job.event.id, error: message });
+      return;
+    }
+    // shares the boundary with every other direct caller, so the `failed` diagnostic can't drift.
+    const outcome = await runMediaIngestJob(job, this.config);
+    if (outcome.status === 'failed') {
+      this.logger.error(`RAG ${action} failed for media ${job.event.id}: ${outcome.error}`);
     }
   }
 

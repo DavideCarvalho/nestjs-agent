@@ -12,6 +12,7 @@ const AGENT_TABLE_NAMES = new Set([
   'agent_token_usage',
   'agent_model_pricing',
   'agent_run',
+  'rag_ingestion_log',
 ]);
 
 /**

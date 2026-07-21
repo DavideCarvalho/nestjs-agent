@@ -32,7 +32,9 @@ export {
 export { AgentMediaIngestionModule } from './media-ingestion.module.js';
 export {
   type MediaIngestJob,
+  type MediaIngestOutcome,
   applyMediaIngestJob,
+  runMediaIngestJob,
 } from './media-ingest-job.js';
 export {
   type ReconcileQuery,
@@ -46,6 +48,8 @@ export {
   type RagMediaRemovedPayload,
   type RagMediaSkippedPayload,
   type RagMediaFailedPayload,
+  type RagMediaOutcomeContext,
+  outcomeContext,
   publishRagMediaIngested,
   publishRagMediaRemoved,
   publishRagMediaSkipped,

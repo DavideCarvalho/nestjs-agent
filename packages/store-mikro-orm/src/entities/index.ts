@@ -5,7 +5,9 @@ import { agentRunSchema } from './agent-run.entity';
 import { agentThreadSchema } from './agent-thread.entity';
 import { agentTokenUsageSchema } from './agent-token-usage.entity';
 import { agentToolCallSchema } from './agent-tool-call.entity';
+import { ragIngestionLogSchema } from './rag-ingestion-log.entity';
 
+export * from './rag-ingestion-log.entity';
 export * from './agent-thread.entity';
 export * from './agent-message.entity';
 export * from './agent-tool-call.entity';
@@ -17,7 +19,7 @@ export * from './agent-run.entity';
 export const AGENT_COLLATION = 'utf8mb4_unicode_ci';
 
 /**
- * Builds the six agent entity schemas. Pass `collation` to stamp string columns for
+ * Builds the seven agent entity schemas. Pass `collation` to stamp string columns for
  * MySQL parity; omit it for engines (e.g. SQLite) that reject named collations.
  */
 export function agentEntities(options: { collation?: string } = {}): EntitySchema[] {
@@ -28,6 +30,7 @@ export function agentEntities(options: { collation?: string } = {}): EntitySchem
     agentTokenUsageSchema(options.collation),
     agentModelPricingSchema(options.collation),
     agentRunSchema(options.collation),
+    ragIngestionLogSchema(options.collation),
   ];
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { agentManagedTables } from './ensure-schema';
 
 describe('agentManagedTables', () => {
-  it('returns the six agent table names', () => {
+  it('returns every table this store owns', () => {
     expect(agentManagedTables().sort()).toEqual([
       'agent_message',
       'agent_model_pricing',
@@ -10,6 +10,9 @@ describe('agentManagedTables', () => {
       'agent_thread',
       'agent_token_usage',
       'agent_tool_call',
+      // not an `agent_` table, but this store creates and manages it all the same — a host's
+      // migration differ must skip it or it will try to drop it.
+      'rag_ingestion_log',
     ]);
   });
 
