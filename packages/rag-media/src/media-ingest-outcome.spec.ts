@@ -1,7 +1,7 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { MemoryVectorStore } from '@dudousxd/nestjs-agent-rag';
-import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { FakeEmbeddingProvider } from '@dudousxd/nestjs-agent-testing';
+import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MediaAttachEvent } from './media-events.js';
 import { runMediaIngestJob } from './media-ingest-job.js';
