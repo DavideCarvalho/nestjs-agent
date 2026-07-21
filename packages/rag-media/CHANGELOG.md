@@ -1,5 +1,23 @@
 # @dudousxd/nestjs-agent-rag-media
 
+## 0.4.0
+
+### Minor Changes
+
+- [#20](https://github.com/DavideCarvalho/nestjs-agent/pull/20) [`fc2981f`](https://github.com/DavideCarvalho/nestjs-agent/commit/fc2981f2ed56ddb46ed7adaa5ea1b65b35d9cbbe) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Make ingestion outcomes observable from outside the package.
+
+  `skipped` and `failed` diagnostics now carry the owner/collection coordinates the `ingested` payload
+  already had (via the new `RagMediaOutcomeContext` and the `outcomeContext(event)` helper), so a
+  subscriber can attribute an outcome to the collection it belongs to instead of a bare media id.
+
+  New `runMediaIngestJob(job, deps)`: `applyMediaIngestJob` with the error boundary attached. It never
+  throws and returns a `MediaIngestOutcome` covering all four terminal states (`ingested`, `skipped`,
+  `removed`, `failed`), publishing `aviary:rag:media.failed` on the way out. Previously that boundary
+  lived inside `AgentMediaIngestionService`'s private `dispatch()`, so anything calling
+  `ingestMediaFile` directly — a diagnostics-channel subscriber, a queue consumer, a fire-and-forget
+  upload hook — got no failure signal beyond an unhandled rejection. The service now routes through the
+  same function, so the inline and direct paths cannot drift.
+
 ## 1.1.0
 
 ### Minor Changes
