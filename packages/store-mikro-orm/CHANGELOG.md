@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.11.1
+
+### Patch Changes
+
+- [#24](https://github.com/DavideCarvalho/nestjs-agent/pull/24) [`287a720`](https://github.com/DavideCarvalho/nestjs-agent/commit/287a7209a1a89e540f237afd771c65d155601a5e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The RAG ingestion-log recorder now writes via MikroORM's native `em.upsert(...)` instead of find-then-insert. Two concurrent events for the same new document could race to a duplicate-key insert, which the best-effort catch degraded to a warning — silently dropping the row. The upsert makes insert-or-update atomic while preserving the existing contracts: coordinates a sparser later event omits are left untouched, the outcome-specific columns (`chunks`/`reason`/`error`) stay exclusive per status, and `createdAt` is preserved on update via `onConflictExcludeFields`.
+
 ## 0.11.0
 
 ### Minor Changes
