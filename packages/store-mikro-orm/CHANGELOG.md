@@ -1,5 +1,18 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.11.0
+
+### Minor Changes
+
+- [#22](https://github.com/DavideCarvalho/nestjs-agent/pull/22) [`faa6c01`](https://github.com/DavideCarvalho/nestjs-agent/commit/faa6c014a1972a3cebac82d87a2b5c382d5c551b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Round out `MikroOrmRagIngestionLog` with the operations a document listing actually needs.
+
+  - `remove(documentId)` / `removeByCollection(collection)` — deleting a document from a knowledge base
+    has to clear its record too, and deleting a collection has to clear all of them. Without these a
+    caller had to reach past the service into the entity manager.
+  - `listPage()` returns `{ rows, total }`, and `list()` accepts `offset`. The existing `list()` capped
+    at 200 with no way to tell a full result from a truncated one, so a caller rendering it had no
+    way to know it was showing a partial list — silent truncation reads as completeness.
+
 ## 0.10.0
 
 ### Minor Changes
