@@ -42,6 +42,7 @@ export interface RagIngestionLogQuery {
   collection?: string;
   status?: RagIngestionStatus;
   limit?: number;
+  offset?: number;
 }
 
 /**
@@ -94,20 +95,50 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
 
   /** The latest recorded outcome per document, newest first. */
   async list(query: RagIngestionLogQuery = {}): Promise<RagIngestionLog[]> {
+    return this.em.fork().find(RagIngestionLog, this.where(query), {
+      orderBy: { updatedAt: 'desc' },
+      limit: query.limit ?? 200,
+      ...(query.offset !== undefined ? { offset: query.offset } : {}),
+    });
+  }
+
+  /**
+   * The same page plus the unpaginated total, so a caller can tell "these are all of them" from
+   * "these are the first N". A list that silently truncates reads as complete when it isn't.
+   */
+  async listPage(
+    query: RagIngestionLogQuery = {},
+  ): Promise<{ rows: RagIngestionLog[]; total: number }> {
     const em = this.em.fork();
-    return em.find(
-      RagIngestionLog,
-      {
-        ...(query.collection !== undefined ? { collection: query.collection } : {}),
-        ...(query.status !== undefined ? { status: query.status } : {}),
-      },
-      { orderBy: { updatedAt: 'desc' }, limit: query.limit ?? 200 },
-    );
+    const [rows, total] = await em.findAndCount(RagIngestionLog, this.where(query), {
+      orderBy: { updatedAt: 'desc' },
+      limit: query.limit ?? 200,
+      ...(query.offset !== undefined ? { offset: query.offset } : {}),
+    });
+    return { rows, total };
   }
 
   /** The latest recorded outcome for one document, or null if it was never attempted. */
   async get(documentId: string): Promise<RagIngestionLog | null> {
     return this.em.fork().findOne(RagIngestionLog, { documentId });
+  }
+
+  /** Forget one document's record. Returns whether a row was actually removed. */
+  async remove(documentId: string): Promise<boolean> {
+    const deleted = await this.em.fork().nativeDelete(RagIngestionLog, { documentId });
+    return deleted > 0;
+  }
+
+  /** Forget every record for a collection — for when the collection itself is deleted. */
+  async removeByCollection(collection: string): Promise<number> {
+    return this.em.fork().nativeDelete(RagIngestionLog, { collection });
+  }
+
+  private where(query: RagIngestionLogQuery): Record<string, unknown> {
+    return {
+      ...(query.collection !== undefined ? { collection: query.collection } : {}),
+      ...(query.status !== undefined ? { status: query.status } : {}),
+    };
   }
 
   /**
