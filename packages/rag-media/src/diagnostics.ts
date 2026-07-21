@@ -1,4 +1,5 @@
 import { emit } from '@dudousxd/nestjs-diagnostics';
+import type { MediaAttachEvent, MediaDeleteEvent } from './media-events.js';
 
 /**
  * Diagnostics this package publishes on `aviary:rag:*`, so ingestion is observable (Telescope's
@@ -16,14 +17,53 @@ export interface RagMediaRemovedPayload {
   ownerType: string;
   ownerId: string;
 }
-export interface RagMediaSkippedPayload {
+/**
+ * The owner/collection coordinates every ingestion outcome carries, so a subscriber can attribute a
+ * skip or a failure to the collection it belongs to — not just to a bare media id. Optional because
+ * the delete path knows the owner but not the collection, and an `enqueue` failure may only have the
+ * job's event.
+ */
+export interface RagMediaOutcomeContext {
+  ownerType?: string;
+  ownerId?: string;
+  collection?: string;
+  /** Citation-facing origin (the media record's `path`). */
+  source?: string;
+  size?: number;
+}
+
+export interface RagMediaSkippedPayload extends RagMediaOutcomeContext {
   mediaId: string;
   mimeType: string;
   reason: 'unsupported-type' | 'too-large' | 'empty-text';
 }
-export interface RagMediaFailedPayload {
+export interface RagMediaFailedPayload extends RagMediaOutcomeContext {
   mediaId: string;
   error: string;
+  mimeType?: string;
+}
+
+/**
+ * The outcome coordinates of a media event, for the `skipped`/`failed` payloads. An attach event
+ * carries the full set; a delete event only knows its owner.
+ */
+export function outcomeContext(
+  event: MediaAttachEvent | MediaDeleteEvent,
+): RagMediaOutcomeContext & { mediaId: string; mimeType?: string } {
+  const attach = 'collection' in event ? event : undefined;
+  return {
+    mediaId: event.id,
+    ownerType: event.ownerType,
+    ownerId: event.ownerId,
+    ...(attach !== undefined
+      ? {
+          collection: attach.collection,
+          source: attach.path,
+          size: attach.size,
+          mimeType: attach.mimeType,
+        }
+      : {}),
+  };
 }
 
 export function publishRagMediaIngested(payload: RagMediaIngestedPayload): void {

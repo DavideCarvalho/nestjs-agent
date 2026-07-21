@@ -16,6 +16,7 @@ import { ensureAgentSchema } from './ensure-schema';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
+import { MikroOrmRagIngestionLog } from './mikro-orm-rag-ingestion-log';
 
 export interface MikroOrmAgentStoreOptions {
   /**
@@ -31,6 +32,13 @@ export interface MikroOrmAgentStoreOptions {
    * truth (e.g. a versioned admin-curated pricing table) without touching `agent_model_pricing`.
    */
   pricingStore?: Type<AgentPricingStore>;
+  /**
+   * Record every RAG ingestion outcome into `rag_ingestion_log` by subscribing to the `aviary:rag:*`
+   * diagnostics channels (default `true`). This is the only place a *failed* or *skipped* document is
+   * visible — one that produced no chunks doesn't exist as far as `VectorStore.listDocuments()` is
+   * concerned. Set `false` if you don't ingest media into RAG, or record outcomes yourself.
+   */
+  ragIngestionLog?: boolean;
 }
 
 /** Runs {@link ensureAgentSchema} once the app is up. Registered only when `autoSchema` is on. */
@@ -84,11 +92,22 @@ export class MikroOrmAgentStoreModule {
               inject: [MikroORM],
             },
           ];
+    const ragProviders: Provider[] =
+      options.ragIngestionLog === false
+        ? []
+        : [
+            {
+              provide: MikroOrmRagIngestionLog,
+              useFactory: (em: EntityManager) => new MikroOrmRagIngestionLog(em),
+              inject: [EntityManager],
+            },
+          ];
     return {
       module: MikroOrmAgentStoreModule,
       global: true,
       providers: [
         ...schemaProviders,
+        ...ragProviders,
         {
           provide: MikroOrmAgentStore,
           useFactory: (em: EntityManager) => new MikroOrmAgentStore(em),
@@ -114,6 +133,7 @@ export class MikroOrmAgentStoreModule {
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: MikroOrmGovernanceQueries },
       ],
       exports: [
+        ...(options.ragIngestionLog === false ? [] : [MikroOrmRagIngestionLog]),
         MikroOrmAgentStore,
         AGENT_STORE,
         MikroOrmGovernanceQueries,

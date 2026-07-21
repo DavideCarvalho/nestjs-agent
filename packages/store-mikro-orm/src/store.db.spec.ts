@@ -4,7 +4,7 @@ import type { StoredMessage, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
-import { ensureAgentSchema } from './ensure-schema';
+import { agentManagedTables, ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
 import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
@@ -374,7 +374,7 @@ describe('ensureAgentSchema (fingerprint-gated autoSchema)', () => {
 });
 
 describe('agentSchemaSql', () => {
-  it('renders create-only DDL for the six agent tables, applying `if not exists` to tables', async () => {
+  it('renders create-only DDL for every managed table, applying `if not exists` to tables', async () => {
     const statements = await agentSchemaSql(orm);
     const joined = statements.join('\n');
     for (const table of [
@@ -384,11 +384,13 @@ describe('agentSchemaSql', () => {
       'agent_token_usage',
       'agent_model_pricing',
       'agent_run',
+      'rag_ingestion_log',
     ]) {
       expect(joined).toContain(table);
     }
     const creates = statements.filter((sql) => /^create table/i.test(sql));
-    expect(creates).toHaveLength(6);
+    // pinned to the managed-table set, so adding an entity without updating it can't slip through
+    expect(creates).toHaveLength(agentManagedTables().length);
     // every create table is guarded; indexes stay plain (MySQL has no `create index if not exists`)
     expect(creates.every((sql) => /^create table if not exists/i.test(sql))).toBe(true);
     expect(statements.some((sql) => /^create index/i.test(sql))).toBe(true);

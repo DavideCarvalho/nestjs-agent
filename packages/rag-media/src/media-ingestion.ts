@@ -6,6 +6,7 @@ import {
   ingestChunks,
 } from '@dudousxd/nestjs-agent-rag';
 import {
+  outcomeContext,
   publishRagMediaIngested,
   publishRagMediaRemoved,
   publishRagMediaSkipped,
@@ -76,7 +77,11 @@ export async function ingestMediaFile(
 ): Promise<MediaIngestResult> {
   const maxBytes = deps.maxBytes ?? DEFAULT_MAX_BYTES;
   if (event.size > maxBytes) {
-    publishRagMediaSkipped({ mediaId: event.id, mimeType: event.mimeType, reason: 'too-large' });
+    publishRagMediaSkipped({
+      ...outcomeContext(event),
+      mimeType: event.mimeType,
+      reason: 'too-large',
+    });
     return { status: 'skipped', reason: 'too-large' };
   }
 
@@ -88,7 +93,7 @@ export async function ingestMediaFile(
   } catch (error) {
     if (error instanceof UnsupportedMimeTypeError) {
       publishRagMediaSkipped({
-        mediaId: event.id,
+        ...outcomeContext(event),
         mimeType: event.mimeType,
         reason: 'unsupported-type',
       });
@@ -98,7 +103,11 @@ export async function ingestMediaFile(
   }
 
   if (text.trim() === '') {
-    publishRagMediaSkipped({ mediaId: event.id, mimeType: event.mimeType, reason: 'empty-text' });
+    publishRagMediaSkipped({
+      ...outcomeContext(event),
+      mimeType: event.mimeType,
+      reason: 'empty-text',
+    });
     return { status: 'skipped', reason: 'empty-text' };
   }
 
