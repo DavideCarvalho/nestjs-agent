@@ -1,5 +1,5 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
-import { EntityManager } from '@mikro-orm/core';
+import { type EntityData, EntityManager } from '@mikro-orm/core';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
 
@@ -155,29 +155,38 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
       // forked EM: this runs outside any request, so it must not touch the shared context.
       const em = this.em.fork();
       const now = new Date();
-      const existing = await em.findOne(RagIngestionLog, { documentId });
-      const row =
-        existing ??
-        em.create(RagIngestionLog, { documentId, status, createdAt: now, updatedAt: now });
-
-      row.status = status;
-      row.updatedAt = now;
-      // Only overwrite coordinates the payload actually carries — a `removed` event knows the owner
-      // but not the collection, and must not blank out what an earlier `ingested` recorded.
-      row.collection = str(payload.collection) ?? row.collection ?? null;
-      row.ownerType = str(payload.ownerType) ?? row.ownerType ?? null;
-      row.ownerId = str(payload.ownerId) ?? row.ownerId ?? null;
-      row.source = str(payload.source) ?? row.source ?? null;
-      row.mimeType = str(payload.mimeType) ?? row.mimeType ?? null;
-      row.size = num(payload.size) ?? row.size ?? null;
-      // The three outcome-specific columns are exclusive: clear the ones this status doesn't own, so
-      // a successful retry can't leave the previous attempt's error sitting on an `ingested` row.
-      row.chunks = status === 'ingested' ? num(payload.chunks) : null;
-      row.reason = status === 'skipped' ? str(payload.reason) : null;
-      row.error = status === 'failed' ? str(payload.error) : null;
-
-      em.persist(row);
-      await em.flush();
+      // Only include coordinates the payload actually carries. An omitted field is left out of the
+      // conflict-merge set, so `em.upsert` leaves it untouched on update — a sparser later event
+      // (e.g. `removed`, which knows the owner but not the collection) can't blank out what an
+      // earlier `ingested` recorded.
+      const collection = str(payload.collection);
+      const ownerType = str(payload.ownerType);
+      const ownerId = str(payload.ownerId);
+      const source = str(payload.source);
+      const mimeType = str(payload.mimeType);
+      const size = num(payload.size);
+      const data: EntityData<RagIngestionLog> = {
+        documentId,
+        status,
+        // The three outcome-specific columns are exclusive: null out the ones this status doesn't
+        // own on every write, so a successful retry clears the previous attempt's error rather than
+        // leaving it next to a working document. Always present → always in the merge set.
+        chunks: status === 'ingested' ? num(payload.chunks) : null,
+        reason: status === 'skipped' ? str(payload.reason) : null,
+        error: status === 'failed' ? str(payload.error) : null,
+        createdAt: now,
+        updatedAt: now,
+        ...(collection !== null ? { collection } : {}),
+        ...(ownerType !== null ? { ownerType } : {}),
+        ...(ownerId !== null ? { ownerId } : {}),
+        ...(source !== null ? { source } : {}),
+        ...(mimeType !== null ? { mimeType } : {}),
+        ...(size !== null ? { size } : {}),
+      };
+      // Atomic insert-or-update keyed by the document id (the PK). Two concurrent events for the same
+      // NEW document can't race to a duplicate-key insert the way find-then-insert did. `createdAt`
+      // is set on insert but excluded from the merge, so an update never overwrites it.
+      await em.upsert(RagIngestionLog, data, { onConflictExcludeFields: ['createdAt'] });
     } catch (error) {
       this.logger.warn(
         `Could not record RAG ingestion outcome for ${documentId}: ${
