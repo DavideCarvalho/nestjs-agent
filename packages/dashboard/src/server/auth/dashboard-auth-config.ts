@@ -1,16 +1,44 @@
 // packages/dashboard/src/server/auth/dashboard-auth-config.ts
 import type { DashboardSessionUser } from './session-cookie.js';
 
-/** Host hook: validates submitted credentials for the built-in login screen. */
+/**
+ * Host hook for Mode A: validates the host's own auth on the raw request POSTed to
+ * `<basePath>/auth/session`. Return the session user to grant access, or `null` to deny.
+ */
+export type SessionHook = (
+  request: unknown,
+) => Promise<DashboardSessionUser | null> | DashboardSessionUser | null;
+
+/** Host hook for Mode B: validates submitted credentials for the built-in login screen. */
 export type LoginHook = (
   username: string,
   password: string,
 ) => Promise<DashboardSessionUser | null> | DashboardSessionUser | null;
 
 /**
+ * Re-checks a LIVE session when the cookie is slid forward. Runs at most once per `ttl/2` PER
+ * COOKIE GENERATION, per in-flight request — the gate is on the inbound cookie's `iat`, so every
+ * request still carrying a not-yet-renewed cookie invokes this hook, not just the first: a page
+ * load that fires N parallel API calls can trigger up to N calls before the refreshed cookie lands
+ * on the client. Bounded and cheap for typical console traffic, but not a per-session-lifetime
+ * cap — a slow or expensive check should debounce/cache on its own. Return `false` to revoke (the
+ * cookie is cleared and the request denied). Distinct from `session`: that hook reads the host's
+ * auth off a fresh request, which a console XHR does not carry — this one receives the
+ * already-minted session.
+ */
+export type RevalidateHook = (session: DashboardSessionUser) => Promise<boolean> | boolean;
+
+/** Which `dashboardAuth` hook(s) a resolved config was given — see `resolveDashboardAuth`. */
+export type AuthMode = 'session' | 'login';
+
+/**
  * Author-facing `dashboardAuth` option (see `AgentDashboardOptions.dashboardAuth`). Gates the
- * console (SPA + API) behind a built-in cookie-session login screen — no host frontend changes,
- * no SSO required. Mirrors `@dudousxd/nestjs-telescope`'s `dashboardAuth` Mode B (`login`).
+ * console (SPA + API) behind a signed session cookie. Two ways to mint that cookie: Mode A
+ * (`session`) — the host frontend, already carrying its own auth, POSTs to
+ * `<basePath>/auth/session` and the host hook decides — or Mode B (`login`) — the built-in,
+ * dependency-free server-rendered login screen. Mirrors `@dudousxd/nestjs-telescope`'s
+ * `dashboardAuth` two-mode shape. At least one of the two is required so an un-mintable gate is a
+ * boot error, not a silently-open (or silently-stuck) console.
  */
 export interface DashboardAuthOptions {
   /** REQUIRED HMAC-SHA256 signing key (32+ bytes recommended). Missing/empty => boot error (fail closed). */
@@ -18,18 +46,30 @@ export interface DashboardAuthOptions {
   /** Cookie TTL (duration string `'<n><ms|s|m|h|d>'`, e.g. `'30m'`, `'7d'`). Default `'8h'`. */
   ttl?: string;
   /**
-   * Validates submitted username/password. Return the session user to grant access, or `null` to
-   * deny — the login endpoint responds identically (generic failure) for an unknown user and a
-   * wrong password, so it never reveals which one was wrong.
+   * Mode A: validates the host's own auth on the raw request POSTed to `<basePath>/auth/session`.
+   * Return the session user to grant access, or `null` to deny. No credential reaches this
+   * library — the host decides from whatever it already has (a header, an SSO cookie, ...).
    */
-  login: LoginHook;
+  session?: SessionHook;
+  /**
+   * Mode B: validates submitted username/password. Return the session user to grant access, or
+   * `null` to deny — the login endpoint responds identically (generic failure) for an unknown user
+   * and a wrong password, so it never reveals which one was wrong.
+   */
+  login?: LoginHook;
+  /** Re-checks a live session on sliding renewal; see `RevalidateHook`. Not a mode — it cannot
+   *  mint a session, only revoke one already minted by `session`/`login`. */
+  revalidate?: RevalidateHook;
 }
 
 /** Resolved, validated `dashboardAuth` config used by the guards/controller. */
 export interface ResolvedDashboardAuth {
   secret: string;
   ttlMs: number;
-  login: LoginHook;
+  modes: AuthMode[];
+  session?: SessionHook;
+  login?: LoginHook;
+  revalidate?: RevalidateHook;
 }
 
 const DEFAULT_TTL = '8h';
@@ -66,8 +106,9 @@ function durationToMs(duration: string): number {
 /**
  * Validate + resolve `dashboardAuth`. Returns `null` when unconfigured (behavior unchanged — the
  * console stays open, front it with your own `guards`). Throws at boot (fail closed) when
- * configured but missing a secret or a `login` hook — the host learns immediately rather than
- * shipping an open or un-mintable console.
+ * configured but missing a secret, when neither `session` nor `login` is given, or when a given
+ * hook isn't a function — the host learns immediately rather than shipping an open, stuck, or
+ * un-mintable console.
  */
 export function resolveDashboardAuth(
   options: DashboardAuthOptions | undefined,
@@ -79,15 +120,35 @@ export function resolveDashboardAuth(
         '(HMAC-SHA256 signing key, 32+ bytes recommended). Failing closed.',
     );
   }
-  if (typeof options.login !== 'function') {
+  const modes: AuthMode[] = [];
+  if (options.session !== undefined) {
+    if (typeof options.session !== 'function') {
+      throw new Error('AgentDashboardModule dashboardAuth: `session` must be a function.');
+    }
+    modes.push('session');
+  }
+  if (options.login !== undefined) {
+    if (typeof options.login !== 'function') {
+      throw new Error('AgentDashboardModule dashboardAuth: `login` must be a function.');
+    }
+    modes.push('login');
+  }
+  if (options.revalidate !== undefined && typeof options.revalidate !== 'function') {
+    throw new Error('AgentDashboardModule dashboardAuth: `revalidate` must be a function.');
+  }
+  if (modes.length === 0) {
     throw new Error(
-      'AgentDashboardModule dashboardAuth: `login` is required (validates submitted credentials ' +
-        'for the built-in login screen). Failing closed.',
+      'AgentDashboardModule dashboardAuth: at least one of `session` (the host mints the session ' +
+        'from its own auth) or `login` (the built-in login screen) is required — otherwise the ' +
+        'cookie can never be minted. Failing closed.',
     );
   }
   return {
     secret: options.secret,
     ttlMs: durationToMs(options.ttl ?? DEFAULT_TTL),
-    login: options.login,
+    modes,
+    ...(options.session !== undefined ? { session: options.session } : {}),
+    ...(options.login !== undefined ? { login: options.login } : {}),
+    ...(options.revalidate !== undefined ? { revalidate: options.revalidate } : {}),
   };
 }

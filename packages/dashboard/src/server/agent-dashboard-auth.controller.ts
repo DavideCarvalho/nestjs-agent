@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Header,
+  HttpCode,
   Inject,
   Logger,
   NotFoundException,
@@ -11,11 +12,12 @@ import {
   Query,
   Req,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { parseCookieHeader } from './auth/cookie-header.js';
 import type { ResolvedDashboardAuth } from './auth/dashboard-auth-config.js';
 import { readCookieHeader } from './auth/http-request.js';
-import { renderLoginPage } from './auth/login-page.js';
+import { renderLoginPage, renderSessionRequiredPage } from './auth/login-page.js';
 import { sanitizeReturnTo } from './auth/sanitize-return-to.js';
 import {
   SESSION_COOKIE_NAME,
@@ -57,18 +59,20 @@ function isString(value: unknown): value is string {
  * built-in gates check for, so they can never be made to require the very auth they grant. Mirrors
  * `@dudousxd/nestjs-telescope`'s own auth controller staying outside its `stampGuards` call.
  *
- * A dependency-free, server-rendered login form (GET/POST) rather than a JSON API + client-side
- * screen — the bundled React SPA in this package is a built Vite artifact with no auth-aware UI of
- * its own, so gating the actual page navigation needs a self-contained flow that doesn't touch it.
- *
- * 404s every route when `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to `null`) — no
- * dangling login page when the feature is off.
+ * Two ways to mint that cookie, matching `resolveDashboardAuth`'s modes: Mode A (`session`) — the
+ * host frontend, already carrying its own auth, POSTs to `<basePath>/auth/session` and the host
+ * hook decides — or Mode B (`login`), a dependency-free, server-rendered login form (GET/POST) —
+ * the bundled React SPA in this package is a built Vite artifact with no auth-aware UI of its own,
+ * so gating the actual page navigation needs a self-contained flow that doesn't touch it. Each
+ * mode's routes 404 when that mode isn't configured (`auth.session`/`auth.login` absent), and
+ * every route 404s outright when `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to
+ * `null`) — no dangling login page when the feature is off.
  */
 @Controller('auth')
 export class AgentDashboardAuthController {
   private readonly logger = new Logger(AgentDashboardAuthController.name);
-  /** Warn once (not per request) so a broken hook can't be used to flood the logs. */
-  private warnedLoginHookThrow = false;
+  /** Warn once PER HOOK KIND (not per request) so a broken hook can't be used to flood the logs. */
+  private readonly warnedHooks = new Set<string>();
 
   constructor(
     @Optional() @Inject(DASHBOARD_AUTH) private readonly auth: ResolvedDashboardAuth | null,
@@ -84,7 +88,9 @@ export class AgentDashboardAuthController {
     @Query('returnTo') returnToQuery?: string,
     @Query('error') error?: string,
   ): string {
-    this.requireAuth();
+    const auth = this.requireAuth();
+    // Mode A only: no login screen exists — the host mints the session.
+    if (!auth.login) throw new NotFoundException();
     const returnTo = sanitizeReturnTo(this.basePath, returnToQuery);
     // Already signed in — a fresh GET (e.g. a bookmarked login URL) just goes back in, no need to
     // re-prompt for credentials.
@@ -107,6 +113,7 @@ export class AgentDashboardAuthController {
     @Res({ passthrough: true }) res: AuthPageResponse,
   ): Promise<string> {
     const auth = this.requireAuth();
+    if (!auth.login) throw new NotFoundException();
     const returnTo = sanitizeReturnTo(this.basePath, body?.returnTo);
     const username = body?.username;
     const password = body?.password;
@@ -118,7 +125,10 @@ export class AgentDashboardAuthController {
       this.redirectToLoginError(res, returnTo);
       return '';
     }
-    const user = await this.runLoginHook(auth, username.trim(), isString(password) ? password : '');
+    const user = await this.runHook(
+      'login',
+      () => auth.login?.(username.trim(), isString(password) ? password : '') ?? null,
+    );
     if (!user) {
       this.redirectToLoginError(res, returnTo);
       return '';
@@ -134,8 +144,45 @@ export class AgentDashboardAuthController {
     // Best-effort: clearing is harmless even without dashboardAuth configured.
     clearSessionCookie({ request: req, response: res });
     res.status(302);
-    res.setHeader('Location', `${this.basePath}/auth/login`);
+    // Runs WITHOUT requireAuth() (logout must succeed even when auth is off/misconfigured), so
+    // read `this.auth?.login` directly rather than calling it. Mirrors `DashboardAuthPageGuard`'s
+    // `deny()` mode check: Mode-A-only has no login screen to land on (`loginPage` above 404s
+    // under Mode A), so bounce to the instruction page instead. When `dashboardAuth` isn't
+    // configured at all, `this.auth` is `null` and today's target is preserved unchanged.
+    res.setHeader(
+      'Location',
+      this.auth && !this.auth.login
+        ? `${this.basePath}/auth/session-required`
+        : `${this.basePath}/auth/login`,
+    );
     return '';
+  }
+
+  // Mode A: the host frontend (carrying its own auth) POSTs here; the host hook validates the raw
+  // request and returns the session user, or `null` to deny. No credential reaches this library.
+  @Post('session')
+  @HttpCode(204)
+  async session(
+    @Req() request: unknown,
+    @Res({ passthrough: true }) response: unknown,
+  ): Promise<void> {
+    const auth = this.requireAuth();
+    if (!auth.session) throw new NotFoundException();
+    const user = await this.runHook('session', () => auth.session?.(request) ?? null);
+    if (!user) throw new UnauthorizedException();
+    issueSessionCookie(user, { auth, request, response });
+  }
+
+  // Mode-A-only landing: the host mints the session, so there is nothing to submit here. Serves
+  // as the redirect target `DashboardAuthPageGuard` bounces to instead of `/auth/login`, which
+  // 404s under Mode A (see `loginPage` above).
+  @Get('session-required')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @Header('Cache-Control', 'no-store, must-revalidate')
+  sessionRequiredPage(): string {
+    const auth = this.requireAuth();
+    if (auth.login) throw new NotFoundException();
+    return renderSessionRequiredPage();
   }
 
   /** Uniform failure: same redirect (generic error flag) whether the user is unknown or the password is wrong. */
@@ -156,22 +203,21 @@ export class AgentDashboardAuthController {
   }
 
   /**
-   * Run the host's `login` hook defensively: a throw (sync or async) is treated as a denial
-   * (`null`) and warn-logged ONCE, so a buggy/unreachable hook never 500s the endpoint into a
-   * stack-trace leak nor floods the logs.
+   * Run a host hook (`login` or `session`) defensively: a throw (sync or async) is treated as a
+   * denial (`null`) and warn-logged ONCE PER KIND, so a buggy/unreachable hook never 500s the
+   * endpoint into a stack-trace leak nor floods the logs on repeated bad attempts.
    */
-  private async runLoginHook(
-    auth: ResolvedDashboardAuth,
-    username: string,
-    password: string,
+  private async runHook(
+    kind: string,
+    run: () => Promise<DashboardSessionUser | null> | DashboardSessionUser | null,
   ): Promise<DashboardSessionUser | null> {
     try {
-      return (await auth.login(username, password)) ?? null;
+      return (await run()) ?? null;
     } catch (error) {
-      if (!this.warnedLoginHookThrow) {
-        this.warnedLoginHookThrow = true;
+      if (!this.warnedHooks.has(kind)) {
+        this.warnedHooks.add(kind);
         this.logger.warn(
-          `AgentDashboardModule dashboardAuth login hook threw; treating as denial. ${
+          `AgentDashboardModule dashboardAuth ${kind} hook threw; treating as denial. ${
             error instanceof Error ? error.message : String(error)
           }`,
         );

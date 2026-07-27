@@ -20,22 +20,20 @@ export interface LoginPageOptions {
 }
 
 /**
- * A dependency-free, server-rendered login page — no build step, no client JS framework. The
- * visual language (dark zinc card, mono type, emerald accent) mirrors
- * `@dudousxd/nestjs-telescope`'s built-in `AuthScreen` so the two consoles feel like one family.
+ * Shared HTML shell for the `dashboardAuth` server-rendered pages (the Mode B login form below and
+ * `renderSessionRequiredPage`'s Mode A instruction page) — same dark zinc card, mono type, emerald
+ * accent, so every auth-adjacent page in this console reads as one product. `content` is placed
+ * inside the `.card` div verbatim — always caller-controlled static/escaped markup, never raw user
+ * input, so this sidesteps HTML-escaping entirely.
  */
-export function renderLoginPage(options: LoginPageOptions): string {
-  const action = escapeHtml(options.actionUrl);
-  const returnTo = escapeHtml(options.returnTo);
-  const errorBanner =
-    options.error === true ? '<p role="alert" class="error">Invalid username or password.</p>' : '';
+function pageShell(content: string, title: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex, nofollow" />
-<title>Sign in — AI Gateway</title>
+<title>${title}</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -66,6 +64,13 @@ export function renderLoginPage(options: LoginPageOptions): string {
     font-weight: 600;
     color: #34d399;
   }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #f4f4f5;
+  }
+  p { margin: 0 0 16px; color: #a1a1aa; }
   form { display: flex; flex-direction: column; gap: 16px; }
   label { display: flex; flex-direction: column; gap: 6px; }
   .field-label {
@@ -104,7 +109,24 @@ export function renderLoginPage(options: LoginPageOptions): string {
 </head>
 <body>
   <div class="card">
-    <p class="brand">AI Gateway</p>
+    ${content}
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * A dependency-free, server-rendered login page — no build step, no client JS framework. The
+ * visual language (dark zinc card, mono type, emerald accent) mirrors
+ * `@dudousxd/nestjs-telescope`'s built-in `AuthScreen` so the two consoles feel like one family.
+ */
+export function renderLoginPage(options: LoginPageOptions): string {
+  const action = escapeHtml(options.actionUrl);
+  const returnTo = escapeHtml(options.returnTo);
+  const errorBanner =
+    options.error === true ? '<p role="alert" class="error">Invalid username or password.</p>' : '';
+  return pageShell(
+    `<p class="brand">AI Gateway</p>
     <form method="post" action="${action}">
       <input type="hidden" name="returnTo" value="${returnTo}" />
       <label>
@@ -117,8 +139,25 @@ export function renderLoginPage(options: LoginPageOptions): string {
       </label>
       ${errorBanner}
       <button type="submit">Sign in</button>
-    </form>
-  </div>
-</body>
-</html>`;
+    </form>`,
+    'Sign in — AI Gateway',
+  );
+}
+
+/**
+ * Mode-A-only landing (`GET <basePath>/auth/login` 404s under Mode A — see
+ * `AgentDashboardAuthController.loginPage`): what `DashboardAuthPageGuard` bounces an
+ * unauthenticated page navigation to instead, since there is no login form to redirect to — the
+ * host mints the session itself, typically from its own console launcher. Static and
+ * parameter-free: nothing on this page varies per request, so there's no `basePath` (or anything
+ * else) to interpolate — no `<script>`/inline handler either, so the page stays inert under a host
+ * CSP that omits `'unsafe-inline'` from `script-src`.
+ */
+export function renderSessionRequiredPage(): string {
+  return pageShell(
+    `<p class="brand">AI Gateway</p>
+    <h1>Open this console from your application</h1>
+    <p>Your session is minted by the host app. Use its console launcher to sign in, then reload.</p>`,
+    'Sign in — AI Gateway',
+  );
 }

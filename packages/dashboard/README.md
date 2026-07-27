@@ -42,7 +42,7 @@ AgentDashboardModule.forRoot({
   basePath?: string;             // where the SPA is served. Default '/ai-gateway'
   apiBasePath?: string;          // where the JSON/SSE API is mounted. Default '<basePath>/api'
   guards?: Type<CanActivate>[];  // bring-your-own auth — see "Console auth" below
-  dashboardAuth?: DashboardAuthOptions; // built-in login screen — see "Console auth" below
+  dashboardAuth?: DashboardAuthOptions; // signed-cookie gate (Mode A session / Mode B login) — see "Console auth" below
   imports?: DynamicModule['imports'];
   approvalActorRef?: (req) => string | undefined;
 });
@@ -56,7 +56,7 @@ The console has no auth of its own by default — pick one of three postures, or
 | ------- | ----------- | ----- |
 | **Open** (default) | Local dev only. Never mount this way in production. | Omit both `guards` and `dashboardAuth`. |
 | **`guards`** | You already have auth the console can reuse — an existing cookie-session guard, an SSO/OIDC session, a header your reverse proxy injects. | Pass guard classes; see below. |
-| **`dashboardAuth`** | You have no ready-made guard for the console — e.g. your app authenticates with a header-only Bearer token a browser navigation can't attach — and want the simplest path to a protected console with zero SSO setup. | Pass `{ secret, login }`; see below. |
+| **`dashboardAuth`** | You have no ready-made guard for the console — e.g. your app authenticates with a header-only Bearer token a browser navigation can't attach — and want a protected console without building a whole `CanActivate`. Two modes: `session` (host mints the cookie from its own auth) or `login` (built-in login screen). | Pass `{ secret, session }` and/or `{ secret, login }`; see below. |
 
 Both `guards` and `dashboardAuth` can be set together — **AND semantics**: a request must pass BOTH. `dashboardAuth`'s own gate runs first; a denied request never reaches your `guards`.
 
@@ -90,9 +90,31 @@ class ConsoleSessionGuard implements CanActivate {
 export class AppModule {}
 ```
 
-### Option B — `dashboardAuth` (built-in login screen)
+### Option B — `dashboardAuth` (signed session cookie)
 
-Gates the console behind a stateless, signed session cookie (HMAC-SHA256, `node:crypto` only — no JWT dependency, no session store, mirrors `@dudousxd/nestjs-telescope`'s `dashboardAuth`). An unauthenticated page visit is redirected (302) to a built-in login form at `<basePath>/auth/login`; an unauthenticated API call gets `401`.
+Gates the console behind a stateless, signed session cookie (HMAC-SHA256, `node:crypto` only — no JWT dependency, no session store, mirrors `@dudousxd/nestjs-telescope`'s `dashboardAuth`). Two ways to mint that cookie — **Mode A** (`session`) and **Mode B** (`login`). At least one is required, or `forRoot`/`forRootAsync` throws at boot (an un-mintable gate is a boot error, not a silently-open console); you can also configure both together (e.g. Mode A for normal use, Mode B as a break-glass fallback). An unauthenticated API call always gets `401`, regardless of mode.
+
+#### Mode A — `session` (the host mints the cookie)
+
+Your host app already has its own auth (SSO/OIDC/whatever) — no need to teach this library a second credential. The host frontend, carrying that auth, `POST`s to `<basePath>/auth/session`; your `session` hook validates the raw request and returns the session user, or `null` to deny (`401`). No credential this library understands ever exists.
+
+```ts
+AgentDashboardModule.forRoot({
+  dashboardAuth: {
+    secret: process.env.AI_GATEWAY_AUTH_SECRET, // REQUIRED — 32+ bytes recommended. Missing => boot error.
+    session: async (request) => {
+      const user = await sessions.verifyFromCookie(request); // read YOUR app's own session
+      return user ? { id: user.id, name: user.name, roles: user.roles } : null; // null => 401
+    },
+  },
+});
+```
+
+Have your host frontend call `POST <basePath>/auth/session` once it knows the visitor is signed in — no body this library reads. Success is `204` with the `Set-Cookie`; a denial is `401` and no cookie is set. An unauthenticated PAGE navigation under Mode-A-only has nowhere to redirect to (there's no login form) — it's served a small, static instruction page at `<basePath>/auth/session-required` instead, telling the visitor to sign in through the host app and reload.
+
+#### Mode B — `login` (built-in login screen)
+
+No host frontend/IdP to lean on — the console serves its own small, dependency-free, server-rendered login page. An unauthenticated page visit is redirected (302) to a built-in login form at `<basePath>/auth/login`.
 
 ```ts
 AgentDashboardModule.forRoot({
@@ -107,7 +129,7 @@ AgentDashboardModule.forRoot({
 });
 ```
 
-Open `/ai-gateway`, enter the credentials, and you're in. Bad credentials get a **uniform** redirect back to the login page — the response is identical for an unknown user and a wrong password, so the endpoint never reveals which one was wrong. `POST <basePath>/auth/logout` clears the cookie.
+Open `/ai-gateway`, enter the credentials, and you're in. Bad credentials get a **uniform** redirect back to the login page — the response is identical for an unknown user and a wrong password, so the endpoint never reveals which one was wrong. `POST <basePath>/auth/logout` clears the cookie (redirecting back to the login form, or — Mode-A-only — to the `session-required` instruction page above).
 
 Only `username` is required (non-empty) — the password is passed through to `login` verbatim, including empty, so a host that authenticates by username/email alone (password deliberately ignored) can use the built-in screen unmodified; the hook owns whether an empty password is accepted or rejected.
 
@@ -126,6 +148,20 @@ AgentDashboardModule.forRootAsync({
         : null;
     },
   }),
+});
+```
+
+#### Session lifetime: `ttl`, sliding renewal, and `revalidate`
+
+Any request carrying a valid cookie past 50% of its `ttl` gets a freshly re-signed one, so an active tab never expires mid-use. `revalidate?: (session) => boolean | Promise<boolean>` hooks into that same sliding-renewal path — a chance to re-check a *live* session (e.g. "is this user still active?") before the fresh cookie ships, so a deactivated or demoted operator loses access instead of riding a self-renewing cookie for as long as the tab stays open. Return `false` (or throw) to revoke: the cookie is cleared and the request denied, the same treatment as an absent cookie. It runs at most once per `ttl/2` per cookie generation, per in-flight request — concurrent requests still carrying the same not-yet-renewed cookie each invoke it (a page load firing several parallel API calls can trigger several calls before the refreshed cookie lands), so size it for occasional concurrent invocations, not a strict once-per-session cap. `revalidate` alone can't mint a session — it doesn't count toward the `session`/`login` "at least one" requirement.
+
+```ts
+AgentDashboardModule.forRoot({
+  dashboardAuth: {
+    secret: process.env.AI_GATEWAY_AUTH_SECRET,
+    session: async (request) => /* ... */,
+    revalidate: async (session) => (await users.findActive(session.id)) !== null,
+  },
 });
 ```
 
