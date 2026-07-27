@@ -11,7 +11,7 @@ import { DASHBOARD_AUTH } from '../tokens.js';
 import { parseCookieHeader } from './cookie-header.js';
 import type { ResolvedDashboardAuth } from './dashboard-auth-config.js';
 import { attachSession, readCookieHeader } from './http-request.js';
-import { SESSION_COOKIE_NAME, issueSessionCookie } from './session-cookie-io.js';
+import { SESSION_COOKIE_NAME, maybeRenewSession } from './session-cookie-io.js';
 import { type DashboardSession, verifySessionCookie } from './session-cookie.js';
 
 /**
@@ -30,14 +30,17 @@ export class DashboardAuthGuard implements CanActivate {
     @Optional() @Inject(DASHBOARD_AUTH) private readonly auth: ResolvedDashboardAuth | null,
   ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     if (!this.auth) return true;
     const http = context.switchToHttp();
     const request = http.getRequest<unknown>();
     const session = this.verifyRequestSession(request);
     if (!session) throw new UnauthorizedException();
     attachSession(request, session);
-    this.maybeRenew(http.getResponse<unknown>(), request, session);
+    if (!(await maybeRenewSession(this.auth, session, request, http.getResponse<unknown>()))) {
+      // Revoked mid-session: same 401 as an absent cookie.
+      throw new UnauthorizedException();
+    }
     return true;
   }
 
@@ -47,24 +50,5 @@ export class DashboardAuthGuard implements CanActivate {
     const cookieValue = parseCookieHeader(readCookieHeader(request))[SESSION_COOKIE_NAME];
     if (cookieValue === undefined) return null;
     return verifySessionCookie(cookieValue, { secret: auth.secret });
-  }
-
-  /**
-   * Sliding renewal: a valid cookie past 50% of its TTL is transparently re-issued on the
-   * response, so an active user never gets logged out mid-session.
-   */
-  private maybeRenew(response: unknown, request: unknown, session: DashboardSession): void {
-    const auth = this.auth;
-    if (!auth) return;
-    const now = Date.now();
-    if (now - session.iat <= auth.ttlMs / 2) return;
-    issueSessionCookie(
-      {
-        id: session.sub,
-        ...(session.name !== undefined ? { name: session.name } : {}),
-        roles: session.roles,
-      },
-      { auth, request, response, now },
-    );
   }
 }

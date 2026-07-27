@@ -3,7 +3,11 @@ import { serializeSetCookie } from './cookie-header.js';
 import type { ResolvedDashboardAuth } from './dashboard-auth-config.js';
 import { isHttpsRequest } from './http-request.js';
 import { appendSetCookie } from './response.js';
-import { type DashboardSessionUser, signSessionCookie } from './session-cookie.js';
+import {
+  type DashboardSession,
+  type DashboardSessionUser,
+  signSessionCookie,
+} from './session-cookie.js';
 
 /** Cookie name carrying the signed dashboard session. */
 export const SESSION_COOKIE_NAME = 'agent_dashboard_session';
@@ -52,4 +56,42 @@ export function clearSessionCookie(context: { request: unknown; response: unknow
     clear: true,
   });
   appendSetCookie(context.response, cookie);
+}
+
+/**
+ * Sliding renewal + revalidation. When a valid cookie is past 50% of its TTL, re-issue a fresh one
+ * so an active session never expires mid-use — but first give the host's `revalidate` hook a say,
+ * so a deactivated or demoted user loses access instead of riding a self-renewing cookie forever.
+ *
+ * Returns `false` when the session was revoked (the clearing `Set-Cookie` is already queued and the
+ * caller must deny the request); `true` otherwise, including when no renewal was due.
+ */
+export async function maybeRenewSession(
+  auth: ResolvedDashboardAuth,
+  session: DashboardSession,
+  request: unknown,
+  response: unknown,
+  now: number = Date.now(),
+): Promise<boolean> {
+  if (now - session.iat <= auth.ttlMs / 2) return true;
+  const user: DashboardSessionUser = {
+    id: session.sub,
+    ...(session.name !== undefined ? { name: session.name } : {}),
+    roles: session.roles,
+  };
+  if (auth.revalidate) {
+    let allowed: boolean;
+    try {
+      allowed = await auth.revalidate(user);
+    } catch {
+      // Fail closed: a throwing hook revokes rather than silently extending the session.
+      allowed = false;
+    }
+    if (!allowed) {
+      clearSessionCookie({ request, response });
+      return false;
+    }
+  }
+  issueSessionCookie(user, { auth, request, response, now });
+  return true;
 }

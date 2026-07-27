@@ -15,6 +15,14 @@ export type LoginHook = (
   password: string,
 ) => Promise<DashboardSessionUser | null> | DashboardSessionUser | null;
 
+/**
+ * Re-checks a LIVE session when the cookie is slid forward. Runs at most once per `ttl/2` per
+ * session, so a DB round-trip here is cheap. Return `false` to revoke (the cookie is cleared and
+ * the request denied). Distinct from `session`: that hook reads the host's auth off a fresh
+ * request, which a console XHR does not carry — this one receives the already-minted session.
+ */
+export type RevalidateHook = (session: DashboardSessionUser) => Promise<boolean> | boolean;
+
 /** Which `dashboardAuth` hook(s) a resolved config was given — see `resolveDashboardAuth`. */
 export type AuthMode = 'session' | 'login';
 
@@ -44,6 +52,9 @@ export interface DashboardAuthOptions {
    * and a wrong password, so it never reveals which one was wrong.
    */
   login?: LoginHook;
+  /** Re-checks a live session on sliding renewal; see `RevalidateHook`. Not a mode — it cannot
+   *  mint a session, only revoke one already minted by `session`/`login`. */
+  revalidate?: RevalidateHook;
 }
 
 /** Resolved, validated `dashboardAuth` config used by the guards/controller. */
@@ -53,6 +64,7 @@ export interface ResolvedDashboardAuth {
   modes: AuthMode[];
   session?: SessionHook;
   login?: LoginHook;
+  revalidate?: RevalidateHook;
 }
 
 const DEFAULT_TTL = '8h';
@@ -116,6 +128,9 @@ export function resolveDashboardAuth(
     }
     modes.push('login');
   }
+  if (options.revalidate !== undefined && typeof options.revalidate !== 'function') {
+    throw new Error('AgentDashboardModule dashboardAuth: `revalidate` must be a function.');
+  }
   if (modes.length === 0) {
     throw new Error(
       'AgentDashboardModule dashboardAuth: at least one of `session` (the host mints the session ' +
@@ -129,5 +144,6 @@ export function resolveDashboardAuth(
     modes,
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.login !== undefined ? { login: options.login } : {}),
+    ...(options.revalidate !== undefined ? { revalidate: options.revalidate } : {}),
   };
 }
