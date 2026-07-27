@@ -7,7 +7,12 @@ import { DashboardAuthGuard } from './dashboard-auth.guard.js';
 import { SESSION_COOKIE_NAME } from './session-cookie-io.js';
 import { signSessionCookie } from './session-cookie.js';
 
-const AUTH: ResolvedDashboardAuth = { secret: 'secret', ttlMs: 60_000, login: () => null };
+const AUTH: ResolvedDashboardAuth = {
+  secret: 'secret',
+  ttlMs: 60_000,
+  modes: ['login'],
+  login: () => null,
+};
 
 /** A minimal ExecutionContext wrapping a fake req/res pair, matching what `switchToHttp()` reads. */
 function fakeContext(
