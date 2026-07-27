@@ -33,18 +33,37 @@ export class DashboardAuthPageGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     if (!this.auth) return true;
+    const auth = this.auth;
     const http = context.switchToHttp();
     const request = http.getRequest<unknown>();
     const session = this.verifyRequestSession(request);
-    if (!session) {
-      const returnTo = readOriginalUrl(request);
-      throw new DashboardAuthRedirect(
-        `${this.basePath}/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
-      );
-    }
+    if (!session) this.deny(auth, request);
     attachSession(request, session);
     this.maybeRenew(http.getResponse<unknown>(), request, session);
     return true;
+  }
+
+  /**
+   * No valid session: bounce the browser navigation onward. Under Mode B (`login` configured)
+   * that's the built-in login screen, carrying `returnTo` back to the page that was requested.
+   * Under Mode-A-only there is no login screen to redirect to — the host mints the session
+   * itself — so this instead serves the instruction page rather than redirecting into a 404.
+   * Pulled out of `canActivate` so a later revalidate-driven revocation path (see the sibling
+   * `maybeRenew` — not this task) can reuse the exact same mode-aware deny logic.
+   *
+   * Takes `auth` explicitly rather than reading `this.auth`: `canActivate`'s `!this.auth` early
+   * return narrows the field within that method only — TS doesn't carry it across a method call —
+   * so the caller passes the already-narrowed value instead of this method re-deriving (or
+   * asserting away) the nullability.
+   */
+  private deny(auth: ResolvedDashboardAuth, request: unknown): never {
+    if (!auth.login) {
+      throw new DashboardAuthRedirect(`${this.basePath}/auth/session-required`);
+    }
+    const returnTo = readOriginalUrl(request);
+    throw new DashboardAuthRedirect(
+      `${this.basePath}/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+    );
   }
 
   private verifyRequestSession(request: unknown): DashboardSession | null {

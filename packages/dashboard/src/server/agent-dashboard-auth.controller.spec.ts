@@ -1,7 +1,11 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentDashboardAuthController } from './agent-dashboard-auth.controller.js';
-import type { ResolvedDashboardAuth } from './auth/dashboard-auth-config.js';
+import type {
+  LoginHook,
+  ResolvedDashboardAuth,
+  SessionHook,
+} from './auth/dashboard-auth-config.js';
 import { SESSION_COOKIE_NAME } from './auth/session-cookie-io.js';
 import { signSessionCookie } from './auth/session-cookie.js';
 
@@ -32,8 +36,12 @@ function fakeReqRes(cookieHeader?: string) {
   };
 }
 
-function makeAuth(login: ResolvedDashboardAuth['login']): ResolvedDashboardAuth {
-  return { secret: 'secret', ttlMs: 60_000, login };
+function makeAuth(login: LoginHook): ResolvedDashboardAuth {
+  return { secret: 'secret', ttlMs: 60_000, modes: ['login'], login };
+}
+
+function makeSessionAuth(session: SessionHook): ResolvedDashboardAuth {
+  return { secret: 'secret', ttlMs: 60_000, modes: ['session'], session };
 }
 
 describe('AgentDashboardAuthController', () => {
@@ -292,6 +300,66 @@ describe('AgentDashboardAuthController', () => {
       expect(statuses).toEqual([302]);
       expect(headers.location).toBe('/ai-gateway/auth/login');
       expect(setCookie()).toContain('Max-Age=0');
+    });
+  });
+
+  describe('POST session (Mode A)', () => {
+    it('mints the cookie when the hook returns a user', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeSessionAuth(() => ({ id: 'ops' })),
+        BASE_PATH,
+      );
+      const { req, res, setCookie } = fakeReqRes();
+
+      await controller.session(req, res);
+
+      expect(setCookie()).toContain(`${SESSION_COOKIE_NAME}=`);
+    });
+
+    it('401s when the hook returns null', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeSessionAuth(() => null),
+        BASE_PATH,
+      );
+      const { req, res, headers } = fakeReqRes();
+
+      await expect(controller.session(req, res)).rejects.toThrow(UnauthorizedException);
+      expect(headers['set-cookie']).toBeUndefined();
+    });
+
+    it('401s rather than 500s when the hook throws', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeSessionAuth(() => {
+          throw new Error('upstream identity provider is down');
+        }),
+        BASE_PATH,
+      );
+      const { req, res, headers } = fakeReqRes();
+
+      await expect(controller.session(req, res)).rejects.toThrow(UnauthorizedException);
+      expect(headers['set-cookie']).toBeUndefined();
+    });
+
+    it('404s when only Mode B (login) is configured', async () => {
+      const controller = new AgentDashboardAuthController(
+        makeAuth(() => null),
+        BASE_PATH,
+      );
+      const { req, res } = fakeReqRes();
+
+      await expect(controller.session(req, res)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('GET login (Mode-A-only mount)', () => {
+    it('404s when only Mode A (session) is configured', () => {
+      const controller = new AgentDashboardAuthController(
+        makeSessionAuth(() => null),
+        BASE_PATH,
+      );
+      const { req, res } = fakeReqRes();
+
+      expect(() => controller.loginPage(req, res)).toThrow(NotFoundException);
     });
   });
 });

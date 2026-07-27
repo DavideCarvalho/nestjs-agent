@@ -2,12 +2,18 @@ import 'reflect-metadata';
 import type { ExecutionContext } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import type { ResolvedDashboardAuth } from './dashboard-auth-config.js';
+import { resolveDashboardAuth } from './dashboard-auth-config.js';
 import { DashboardAuthPageGuard } from './dashboard-auth-page.guard.js';
 import { DashboardAuthRedirect } from './dashboard-auth-redirect.js';
 import { SESSION_COOKIE_NAME } from './session-cookie-io.js';
 import { signSessionCookie } from './session-cookie.js';
 
-const AUTH: ResolvedDashboardAuth = { secret: 'secret', ttlMs: 60_000, login: () => null };
+const AUTH: ResolvedDashboardAuth = {
+  secret: 'secret',
+  ttlMs: 60_000,
+  modes: ['login'],
+  login: () => null,
+};
 const BASE_PATH = '/ai-gateway';
 
 function fakeContext(
@@ -65,5 +71,15 @@ describe('DashboardAuthPageGuard (page — 302 redirect)', () => {
 
     expect(guard.canActivate(fakeContext(request))).toBe(true);
     expect(request.dashboardSession).toMatchObject({ sub: 'user-1' });
+  });
+
+  it('redirects to the session-required page when only Mode A is configured', () => {
+    const guard = new DashboardAuthPageGuard(
+      resolveDashboardAuth({ secret: 's3cr3t', session: () => null }),
+      '/ai-gateway',
+    );
+    expect(() => guard.canActivate(fakeContext({ headers: {} }))).toThrow(
+      expect.objectContaining({ redirectTo: '/ai-gateway/auth/session-required' }),
+    );
   });
 });

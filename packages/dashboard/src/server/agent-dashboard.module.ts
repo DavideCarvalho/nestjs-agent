@@ -83,22 +83,37 @@ export interface AgentDashboardOptions<TReq = unknown> {
    */
   approvalActorRef?: (req: TReq) => string | undefined;
   /**
-   * Gate the console (SPA + API) behind a BUILT-IN cookie-session login screen — the simplest way
-   * to protect `basePath` when the host has no ready-made guard (e.g. header-only auth that a
-   * browser navigation can't attach). Omit to leave the console open, or fronted only by
-   * {@link guards}. When set, an unauthenticated page navigation is redirected (302) to
-   * `<basePath>/auth/login`; an unauthenticated API call gets a `401`. Composes with `guards` —
-   * BOTH gates must pass. See `DashboardAuthOptions` for the `secret`/`ttl`/`login` shape.
+   * Gate the console (SPA + API) behind a built-in, signed session cookie. Two ways to mint it:
+   *
+   * - **Mode A (`session`, recommended)**: your host app already has its own auth (SSO/OIDC/
+   *   whatever) — the host frontend, carrying that auth, POSTs to `<basePath>/auth/session`, your
+   *   `session` hook validates the raw request and returns the session user, and this library
+   *   mints its cookie from that. No credential this library understands ever exists; you keep
+   *   your own identity provider as the source of truth. A page-level request with no valid
+   *   session (and only Mode A configured) gets a small server-rendered instruction page telling
+   *   the visitor to sign in through your host app, since there is no login page to redirect to.
+   * - **Mode B (`login`, standalone fallback)**: no host frontend/IdP to lean on — the console
+   *   serves its own small, dependency-free, server-rendered login page (`GET
+   *   <basePath>/auth/login`) and your `login` hook validates submitted username/password. A
+   *   missing/invalid/expired session redirects a page-level request to that login page with
+   *   `?returnTo=<original url>`.
+   *
+   * Either mode can be used alone, or both together (e.g. Mode A for normal use, Mode B as a
+   * break-glass fallback) — at least one is required, or `forRoot`/`forRootAsync` throws at boot
+   * (an un-mintable gate is a boot error, not a silently-open or silently-stuck console). An
+   * unauthenticated API call always gets a plain `401`, regardless of mode — the caller reads the
+   * status code, not HTML. Composes with `guards` — BOTH gates must pass. See
+   * `DashboardAuthOptions` for the `secret`/`ttl`/`session`/`login` shape.
    */
   dashboardAuth?: DashboardAuthOptions;
 }
 
 /**
- * Async variant of {@link AgentDashboardOptions}, for a `login` hook that needs injected services
- * (e.g. an EntityManager to check credentials against a DB). Everything else stays static/sync —
- * `basePath`/`apiBasePath`/`guards` are needed at module-build time (the same constraint
- * `@dudousxd/nestjs-telescope`'s and `@dudousxd/nestjs-media`'s own `forRootAsync`s document), so
- * only the auth piece itself is resolved through DI.
+ * Async variant of {@link AgentDashboardOptions}, for a `session`/`login` hook that needs injected
+ * services (e.g. an EntityManager to check credentials against a DB). Everything else stays
+ * static/sync — `basePath`/`apiBasePath`/`guards` are needed at module-build time (the same
+ * constraint `@dudousxd/nestjs-telescope`'s and `@dudousxd/nestjs-media`'s own `forRootAsync`s
+ * document), so only the auth piece itself is resolved through DI.
  */
 export interface AgentDashboardAsyncOptions<TReq = unknown> {
   basePath?: string;
@@ -163,13 +178,15 @@ export class AgentApiModule {
 
 /**
  * Mounts the AI-gateway governance console: the bundled React SPA at `basePath` and its JSON + SSE
- * API at `apiBasePath` (default `<basePath>/api`), plus the built-in login screen's routes at
- * `<basePath>/auth/*` when {@link AgentDashboardOptions.dashboardAuth} is set.
+ * API at `apiBasePath` (default `<basePath>/api`), plus the built-in `dashboardAuth` routes at
+ * `<basePath>/auth/*` when {@link AgentDashboardOptions.dashboardAuth} is set — `POST
+ * <basePath>/auth/session` for Mode A (the host mints the session from its own auth) and/or `GET`/
+ * `POST <basePath>/auth/login` for Mode B (the built-in login screen).
  *
  * Import via `AgentDashboardModule.forRoot(...)` alongside your `@dudousxd/nestjs-agent` module
  * (global), which must provide `AGENT_GOVERNANCE_QUERIES` (bound by a store adapter). Front the
  * routes with the first-class `guards` option (plus `imports` for the guards' own dependencies) —
- * see {@link AgentDashboardOptions.guards} — and/or the built-in `dashboardAuth` cookie login.
+ * see {@link AgentDashboardOptions.guards} — and/or the built-in `dashboardAuth` session cookie.
  *
  * Inertia hosts: the console is a full-page app, not an Inertia page. An in-app `<Link>` visit to
  * `basePath` (an XHR carrying `X-Inertia`) is bounced with the protocol's own external-redirect

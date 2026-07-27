@@ -10,7 +10,7 @@ describe('resolveDashboardAuth', () => {
     const login = () => null;
     const resolved = resolveDashboardAuth({ secret: 's3cr3t', ttl: '30m', login });
 
-    expect(resolved).toEqual({ secret: 's3cr3t', ttlMs: 30 * 60_000, login });
+    expect(resolved).toEqual({ secret: 's3cr3t', ttlMs: 30 * 60_000, modes: ['login'], login });
   });
 
   it('defaults ttl to 8h when omitted', () => {
@@ -23,14 +23,53 @@ describe('resolveDashboardAuth', () => {
     expect(() => resolveDashboardAuth({ secret: '', login: () => null })).toThrow(/secret/i);
   });
 
-  it('throws (fail closed) when login is missing', () => {
-    // @ts-expect-error — exercising the runtime guard for a host that skips the required hook
-    expect(() => resolveDashboardAuth({ secret: 's3cr3t' })).toThrow(/login/i);
-  });
-
   it('throws on an unparseable ttl', () => {
     expect(() =>
       resolveDashboardAuth({ secret: 's3cr3t', ttl: 'banana', login: () => null }),
     ).toThrow(/ttl/i);
+  });
+
+  it('resolves with only a session hook (Mode A)', () => {
+    const session = () => null;
+    const resolved = resolveDashboardAuth({ secret: 's3cr3t', session });
+    expect(resolved).toEqual({
+      secret: 's3cr3t',
+      ttlMs: 8 * 60 * 60 * 1000,
+      modes: ['session'],
+      session,
+    });
+  });
+
+  it('resolves with both hooks and reports both modes', () => {
+    const resolved = resolveDashboardAuth({
+      secret: 's3cr3t',
+      session: () => null,
+      login: () => null,
+    });
+    expect(resolved?.modes).toEqual(['session', 'login']);
+  });
+
+  it('throws (fail closed) when neither hook is given', () => {
+    expect(() => resolveDashboardAuth({ secret: 's3cr3t' })).toThrow(/at least one of/i);
+  });
+
+  it('throws (fail closed) when session is present but not a function', () => {
+    expect(() =>
+      resolveDashboardAuth({
+        secret: 's3cr3t',
+        // @ts-expect-error — exercising the runtime guard for a non-TS caller
+        session: 'not-a-function',
+      }),
+    ).toThrow(/`session` must be a function/);
+  });
+
+  it('throws (fail closed) when login is present but not a function', () => {
+    expect(() =>
+      resolveDashboardAuth({
+        secret: 's3cr3t',
+        // @ts-expect-error — exercising the runtime guard for a non-TS caller
+        login: 'not-a-function',
+      }),
+    ).toThrow(/`login` must be a function/);
   });
 });
