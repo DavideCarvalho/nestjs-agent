@@ -12,6 +12,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentDashboardModule } from './agent-dashboard.module.js';
 import { SESSION_COOKIE_NAME } from './auth/session-cookie-io.js';
+import { signSessionCookie } from './auth/session-cookie.js';
 
 /** Bare governance read-model — only `recentRuns` is exercised by these specs (`GET /runs`). */
 @Global()
@@ -210,5 +211,120 @@ describe('dashboardAuth — end-to-end login round-trip', () => {
 
     // No session cookie at all — even though the host guard allows everything, dashboardAuth still denies.
     await request(server).get('/ai-gateway/api/runs').expect(401);
+  });
+});
+
+describe('dashboardAuth — Mode A + revalidate end-to-end', () => {
+  let app: INestApplication;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  const SECRET = 'sekret-key';
+  /** Matches `resolveDashboardAuth`'s default `ttl` ('8h') so the stale-cookie helper below lines up. */
+  const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000;
+
+  /** A signed cookie header value issued far enough in the past to be due for sliding renewal. */
+  function staleSessionCookieHeader(ttlMs: number = DEFAULT_TTL_MS): string {
+    const value = signSessionCookie(
+      { id: 'ops', roles: ['admin'] },
+      { secret: SECRET, ttlMs, now: Date.now() - ttlMs * 0.75 },
+    );
+    return `${SESSION_COOKIE_NAME}=${value}`;
+  }
+
+  function firstSetCookie(response: request.Response): string {
+    const raw = response.headers['set-cookie'];
+    const first = Array.isArray(raw) ? raw[0] : raw;
+    if (first === undefined) throw new Error('no Set-Cookie header was written');
+    return first;
+  }
+
+  it('Mode-A-only page navigation redirects to session-required, which serves the instruction page', async () => {
+    app = await boot({ dashboardAuth: { secret: SECRET, session: () => null } });
+    const server = app.getHttpServer();
+
+    const page = await request(server).get('/ai-gateway').expect(302);
+    expect(page.headers.location).toBe('/ai-gateway/auth/session-required');
+
+    // Follow the redirect target as a literal (not `page.headers.location`, typed
+    // `string | undefined` by supertest) — the assertion above already pins it exactly.
+    const instructions = await request(server).get('/ai-gateway/auth/session-required').expect(200);
+    expect(instructions.text).toContain('Open this console from your application');
+  });
+
+  it('POST /auth/session mints a cookie that grants API access', async () => {
+    app = await boot({
+      dashboardAuth: { secret: SECRET, session: () => ({ id: 'ops', roles: ['admin'] }) },
+    });
+    const server = app.getHttpServer();
+
+    const session = await request(server).post('/ai-gateway/auth/session').expect(204);
+    const cookie = firstSetCookie(session);
+    expect(cookie).toContain(`${SESSION_COOKIE_NAME}=`);
+
+    await request(server).get('/ai-gateway/api/runs').set('Cookie', cookie).expect(200);
+  });
+
+  it('Mode-B-only: session-required and POST /auth/session both 404 (no Mode A configured)', async () => {
+    app = await boot({ dashboardAuth: { secret: SECRET, login: loginHook } });
+    const server = app.getHttpServer();
+
+    await request(server).get('/ai-gateway/auth/session-required').expect(404);
+    await request(server).post('/ai-gateway/auth/session').expect(404);
+  });
+
+  it('revalidate returning false on the API: 401 + a clearing (Max-Age=0) cookie', async () => {
+    app = await boot({
+      dashboardAuth: { secret: SECRET, login: loginHook, revalidate: () => false },
+    });
+    const server = app.getHttpServer();
+
+    const response = await request(server)
+      .get('/ai-gateway/api/runs')
+      .set('Cookie', staleSessionCookieHeader())
+      .expect(401);
+
+    expect(firstSetCookie(response)).toContain('Max-Age=0');
+  });
+
+  it('revalidate returning false on a Mode-A page navigation: 302 to session-required + a clearing cookie', async () => {
+    app = await boot({
+      dashboardAuth: { secret: SECRET, session: () => null, revalidate: () => false },
+    });
+    const server = app.getHttpServer();
+
+    const response = await request(server)
+      .get('/ai-gateway')
+      .set('Cookie', staleSessionCookieHeader())
+      .expect(302);
+
+    expect(response.headers.location).toBe('/ai-gateway/auth/session-required');
+    expect(firstSetCookie(response)).toContain('Max-Age=0');
+  });
+
+  it('both modes configured: page nav redirects to the login screen, session-required 404s, POST /auth/session still 204s', async () => {
+    app = await boot({
+      dashboardAuth: { secret: SECRET, login: loginHook, session: () => ({ id: 'ops' }) },
+    });
+    const server = app.getHttpServer();
+
+    const page = await request(server).get('/ai-gateway').expect(302);
+    expect(page.headers.location).toBe('/ai-gateway/auth/login?returnTo=%2Fai-gateway');
+
+    await request(server).get('/ai-gateway/auth/session-required').expect(404);
+    await request(server).post('/ai-gateway/auth/session').expect(204);
+  });
+
+  it('Mode-A-only logout redirects to session-required (not the 404-ing login page), and following it resolves', async () => {
+    app = await boot({ dashboardAuth: { secret: SECRET, session: () => ({ id: 'ops' }) } });
+    const server = app.getHttpServer();
+
+    const logout = await request(server).post('/ai-gateway/auth/logout').expect(302);
+    expect(logout.headers.location).toBe('/ai-gateway/auth/session-required');
+
+    // Literal, not `logout.headers.location` (typed `string | undefined`) — see the assertion above.
+    await request(server).get('/ai-gateway/auth/session-required').expect(200);
   });
 });

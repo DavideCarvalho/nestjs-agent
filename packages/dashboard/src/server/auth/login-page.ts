@@ -148,16 +148,16 @@ export function renderLoginPage(options: LoginPageOptions): string {
  * Mode-A-only landing (`GET <basePath>/auth/login` 404s under Mode A — see
  * `AgentDashboardAuthController.loginPage`): what `DashboardAuthPageGuard` bounces an
  * unauthenticated page navigation to instead, since there is no login form to redirect to — the
- * host mints the session itself, typically from its own console launcher. `basePath` isn't
- * otherwise interpolated (nothing on this static page links back to it), but the param mirrors
- * `renderLoginPage`'s signature for symmetry between the two dashboardAuth pages.
+ * host mints the session itself, typically from its own console launcher. Static and
+ * parameter-free: nothing on this page varies per request, so there's no `basePath` (or anything
+ * else) to interpolate — no `<script>`/inline handler either, so the page stays inert under a host
+ * CSP that omits `'unsafe-inline'` from `script-src`.
  */
-export function renderSessionRequiredPage(basePath: string): string {
+export function renderSessionRequiredPage(): string {
   return pageShell(
     `<p class="brand">AI Gateway</p>
     <h1>Open this console from your application</h1>
-    <p>Your session is minted by the host app. Use its console launcher to sign in, then reload.</p>
-    <button type="button" onclick="location.reload()">Retry</button>`,
+    <p>Your session is minted by the host app. Use its console launcher to sign in, then reload.</p>`,
     'Sign in — AI Gateway',
   );
 }

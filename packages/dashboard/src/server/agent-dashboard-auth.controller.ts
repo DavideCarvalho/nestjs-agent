@@ -144,7 +144,17 @@ export class AgentDashboardAuthController {
     // Best-effort: clearing is harmless even without dashboardAuth configured.
     clearSessionCookie({ request: req, response: res });
     res.status(302);
-    res.setHeader('Location', `${this.basePath}/auth/login`);
+    // Runs WITHOUT requireAuth() (logout must succeed even when auth is off/misconfigured), so
+    // read `this.auth?.login` directly rather than calling it. Mirrors `DashboardAuthPageGuard`'s
+    // `deny()` mode check: Mode-A-only has no login screen to land on (`loginPage` above 404s
+    // under Mode A), so bounce to the instruction page instead. When `dashboardAuth` isn't
+    // configured at all, `this.auth` is `null` and today's target is preserved unchanged.
+    res.setHeader(
+      'Location',
+      this.auth && !this.auth.login
+        ? `${this.basePath}/auth/session-required`
+        : `${this.basePath}/auth/login`,
+    );
     return '';
   }
 
@@ -172,7 +182,7 @@ export class AgentDashboardAuthController {
   sessionRequiredPage(): string {
     const auth = this.requireAuth();
     if (auth.login) throw new NotFoundException();
-    return renderSessionRequiredPage(this.basePath);
+    return renderSessionRequiredPage();
   }
 
   /** Uniform failure: same redirect (generic error flag) whether the user is unknown or the password is wrong. */

@@ -286,7 +286,7 @@ describe('AgentDashboardAuthController', () => {
   });
 
   describe('POST logout', () => {
-    it('clears the cookie and redirects to the login page', () => {
+    it('clears the cookie and redirects to the login page (Mode B / both modes)', () => {
       const controller = new AgentDashboardAuthController(
         makeAuth(() => null),
         BASE_PATH,
@@ -299,6 +299,22 @@ describe('AgentDashboardAuthController', () => {
 
       expect(statuses).toEqual([302]);
       expect(headers.location).toBe('/ai-gateway/auth/login');
+      expect(setCookie()).toContain('Max-Age=0');
+    });
+
+    it('redirects to session-required (not the 404-ing login page) under Mode-A-only', () => {
+      const controller = new AgentDashboardAuthController(
+        makeSessionAuth(() => null),
+        BASE_PATH,
+      );
+      const { req, res, statuses, headers, setCookie } = fakeReqRes(
+        `${SESSION_COOKIE_NAME}=whatever`,
+      );
+
+      controller.logout(req, res);
+
+      expect(statuses).toEqual([302]);
+      expect(headers.location).toBe('/ai-gateway/auth/session-required');
       expect(setCookie()).toContain('Max-Age=0');
     });
   });
