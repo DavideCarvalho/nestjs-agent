@@ -17,14 +17,15 @@ export type LoginHook = (
 
 /**
  * Re-checks a LIVE session when the cookie is slid forward. Runs at most once per `ttl/2` PER
- * COOKIE GENERATION, per in-flight request — the gate is on the inbound cookie's `iat`, so every
- * request still carrying a not-yet-renewed cookie invokes this hook, not just the first: a page
- * load that fires N parallel API calls can trigger up to N calls before the refreshed cookie lands
- * on the client. Bounded and cheap for typical console traffic, but not a per-session-lifetime
- * cap — a slow or expensive check should debounce/cache on its own. Return `false` to revoke (the
- * cookie is cleared and the request denied). Distinct from `session`: that hook reads the host's
- * auth off a fresh request, which a console XHR does not carry — this one receives the
- * already-minted session.
+ * COOKIE GENERATION — the gate is on the inbound cookie's `iat`, so every request still carrying a
+ * not-yet-renewed cookie would, on its own, invoke this hook again; `maybeRenewSession` de-dupes
+ * concurrent calls for the same session (`sub` + `iat`) into a single in-flight call, so a page
+ * load that fires N parallel API calls still costs exactly ONE host round-trip, not N. Still not a
+ * per-session-lifetime cap — this can run again every `ttl/2` as the session keeps sliding, so a
+ * slow or expensive check should still debounce/cache across renewal windows on its own. Return
+ * `false` to revoke (the cookie is cleared and the request denied). Distinct from `session`: that
+ * hook reads the host's auth off a fresh request, which a console XHR does not carry — this one
+ * receives the already-minted session.
  */
 export type RevalidateHook = (session: DashboardSessionUser) => Promise<boolean> | boolean;
 

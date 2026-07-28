@@ -59,9 +59,58 @@ export function clearSessionCookie(context: { request: unknown; response: unknow
 }
 
 /**
+ * In-flight `revalidate()` calls, keyed by session identity (`sub:iat` — the exact cookie
+ * generation), so concurrent requests carrying the same not-yet-renewed cookie share ONE host
+ * round-trip instead of each starting their own. Entries are removed as soon as they settle (see
+ * `getOrStartRevalidation`), so this never accumulates beyond "sessions currently mid-revalidation"
+ * — bounded by concurrent in-flight requests, not by session count over time.
+ */
+const inFlightRevalidations = new Map<string, Promise<boolean>>();
+
+/** The exact cookie generation being revalidated — a renewal mints a new `iat`, so this can't
+ *  collide across generations of the same user's session. */
+function revalidationKey(session: DashboardSession): string {
+  return `${session.sub}:${session.iat}`;
+}
+
+/**
+ * Runs (or joins an already-running) `revalidate` call for this exact session. Cleans up on BOTH
+ * resolve and reject (`finally`) so a rejecting/throwing hook can't wedge the session behind a
+ * dead cached promise — the next call after a failure reaches the host again, not a stale rejection.
+ */
+function getOrStartRevalidation(
+  auth: ResolvedDashboardAuth,
+  session: DashboardSession,
+  user: DashboardSessionUser,
+): Promise<boolean> {
+  const hook = auth.revalidate;
+  if (!hook) return Promise.resolve(true);
+  const key = revalidationKey(session);
+  const inFlight = inFlightRevalidations.get(key);
+  if (inFlight) return inFlight;
+  const outcome = (async () => {
+    try {
+      return await hook(user);
+    } catch {
+      // Fail closed: a throwing hook revokes rather than silently extending the session.
+      return false;
+    }
+  })().finally(() => {
+    inFlightRevalidations.delete(key);
+  });
+  inFlightRevalidations.set(key, outcome);
+  return outcome;
+}
+
+/**
  * Sliding renewal + revalidation. When a valid cookie is past 50% of its TTL, re-issue a fresh one
  * so an active session never expires mid-use — but first give the host's `revalidate` hook a say,
  * so a deactivated or demoted user loses access instead of riding a self-renewing cookie forever.
+ *
+ * Concurrent requests carrying the same past-half-life cookie share ONE `revalidate` call (see
+ * `getOrStartRevalidation`) — a page load firing N parallel API calls costs the host one round-trip,
+ * not N, matching `RevalidateHook`'s documented "at most once per `ttl/2`" cost. Each caller still
+ * gets its own `Set-Cookie` written to its own response; only the host round-trip is shared.
  *
  * Returns `false` when the session was revoked (the clearing `Set-Cookie` is already queued and the
  * caller must deny the request); `true` otherwise, including when no renewal was due.
@@ -79,18 +128,10 @@ export async function maybeRenewSession(
     ...(session.name !== undefined ? { name: session.name } : {}),
     roles: session.roles,
   };
-  if (auth.revalidate) {
-    let allowed: boolean;
-    try {
-      allowed = await auth.revalidate(user);
-    } catch {
-      // Fail closed: a throwing hook revokes rather than silently extending the session.
-      allowed = false;
-    }
-    if (!allowed) {
-      clearSessionCookie({ request, response });
-      return false;
-    }
+  const allowed = await getOrStartRevalidation(auth, session, user);
+  if (!allowed) {
+    clearSessionCookie({ request, response });
+    return false;
   }
   issueSessionCookie(user, { auth, request, response, now });
   return true;
