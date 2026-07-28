@@ -328,3 +328,151 @@ describe('dashboardAuth — Mode A + revalidate end-to-end', () => {
     await request(server).get('/ai-gateway/auth/session-required').expect(200);
   });
 });
+
+describe('dashboardAuth — unauthenticatedPage (host-rendered) end-to-end', () => {
+  let app: INestApplication;
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  const SECRET = 'sekret-key';
+
+  /** Express `Response` surface the hooks below use; the spec never imports Express itself. */
+  interface HostResponse {
+    status(code: number): HostResponse;
+    type(value: string): HostResponse;
+    send(body: string): unknown;
+  }
+
+  it('serves the host page at session-required instead of the built-in card', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        session: () => null,
+        unauthenticatedPage: ({ response }) => {
+          (response as HostResponse)
+            .status(401)
+            .type('html')
+            .send('<html><body>Open the AI gateway from /ctrl/consoles</body></html>');
+        },
+      },
+    });
+    const server = app.getHttpServer();
+
+    // The flow that reaches the page is unchanged: a denied navigation still bounces here.
+    const page = await request(server).get('/ai-gateway').expect(302);
+    expect(page.headers.location).toBe('/ai-gateway/auth/session-required');
+
+    const hosted = await request(server).get('/ai-gateway/auth/session-required').expect(401);
+    // What changed is the CONTENT: the host's bytes, and none of the library's.
+    expect(hosted.text).toContain('Open the AI gateway from /ctrl/consoles');
+    expect(hosted.text).not.toContain('Open this console from your application');
+  });
+
+  it('receives the basePath and the live request/response', async () => {
+    let seen: { basePath: string; hasRequest: boolean; hasResponse: boolean } | undefined;
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        session: () => null,
+        unauthenticatedPage: ({ request: req, response, basePath }) => {
+          seen = {
+            basePath,
+            hasRequest: typeof (req as { url?: unknown })?.url === 'string',
+            hasResponse: typeof (response as HostResponse)?.send === 'function',
+          };
+          (response as HostResponse).status(401).send('ok');
+        },
+      },
+    });
+
+    await request(app.getHttpServer()).get('/ai-gateway/auth/session-required').expect(401);
+    expect(seen).toEqual({ basePath: '/ai-gateway', hasRequest: true, hasResponse: true });
+  });
+
+  it('awaits an async host page rather than racing it', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        session: () => null,
+        unauthenticatedPage: async ({ response }) => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          (response as HostResponse).status(401).send('<html>async host page</html>');
+        },
+      },
+    });
+
+    // Without the await, the built-in page would be written the moment the hook yielded — a bug
+    // that a synchronous hook can never reveal.
+    const hosted = await request(app.getHttpServer())
+      .get('/ai-gateway/auth/session-required')
+      .expect(401);
+    expect(hosted.text).toContain('async host page');
+  });
+
+  it('falls back to the built-in page when the host page throws', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        session: () => null,
+        unauthenticatedPage: () => {
+          throw new Error('template blew up');
+        },
+      },
+    });
+
+    // A broken host page must not turn a denial into a 500 — and above all must not open the
+    // console. The visitor still gets a page.
+    const fallback = await request(app.getHttpServer())
+      .get('/ai-gateway/auth/session-required')
+      .expect(200);
+    expect(fallback.text).toContain('Open this console from your application');
+  });
+
+  it('falls back to the built-in page when the host page writes nothing', async () => {
+    app = await boot({
+      dashboardAuth: { secret: SECRET, session: () => null, unauthenticatedPage: () => {} },
+    });
+
+    // Otherwise the request hangs until the client gives up, with nothing logged anywhere.
+    const fallback = await request(app.getHttpServer())
+      .get('/ai-gateway/auth/session-required')
+      .expect(200);
+    expect(fallback.text).toContain('Open this console from your application');
+  });
+
+  it('still 404s under Mode B, where there is no session-required page to customise', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        login: () => ({ id: 'ops' }),
+        unauthenticatedPage: ({ response }) => {
+          (response as HostResponse).status(401).send('should never render');
+        },
+      },
+    });
+
+    // Mode B denies a navigation by redirecting to its own login form; session-required does not
+    // exist. Configuring a page hook must not conjure the route into being.
+    await request(app.getHttpServer()).get('/ai-gateway/auth/session-required').expect(404);
+  });
+
+  it('cannot grant access: the API stays 401 and the console stays closed', async () => {
+    app = await boot({
+      dashboardAuth: {
+        secret: SECRET,
+        session: () => null,
+        unauthenticatedPage: ({ response }) => {
+          (response as HostResponse).status(200).send('<html>my page</html>');
+        },
+      },
+    });
+    const server = app.getHttpServer();
+
+    // Even with the host answering 200 on its own page, nothing about the gate moved: the API is
+    // still 401 and a page navigation is still bounced.
+    await request(server).get('/ai-gateway/api/runs').expect(401);
+    await request(server).get('/ai-gateway').expect(302);
+  });
+});

@@ -112,6 +112,30 @@ AgentDashboardModule.forRoot({
 
 Have your host frontend call `POST <basePath>/auth/session` once it knows the visitor is signed in — no body this library reads. Success is `204` with the `Set-Cookie`; a denial is `401` and no cookie is set. An unauthenticated PAGE navigation under Mode-A-only has nowhere to redirect to (there's no login form) — it's served a small, static instruction page at `<basePath>/auth/session-required` instead, telling the visitor to sign in through the host app and reload.
 
+##### `unauthenticatedPage` — render that instruction page yourself
+
+The built-in page cannot know who hosts the console, so it can only say "open this console from your application" in the abstract — it can't name your launcher, link to it, or look like the rest of your product. Pass `unauthenticatedPage` and the whole response is yours:
+
+```ts
+AgentDashboardModule.forRoot({
+  dashboardAuth: {
+    secret: process.env.AGENT_DASHBOARD_SECRET,
+    session: (request) => resolveAdmin(request),
+    unauthenticatedPage: ({ request, response, basePath }) => {
+      // `request`/`response` are your platform's own objects (Express here). Render however you
+      // already render — a template engine, @dudousxd/nestjs-inertia, a plain string.
+      (response as Response).status(401).render('console-locked', { returnTo: basePath });
+    },
+  },
+});
+```
+
+The hook **owns** the response: it must write AND end it. It replaces what `<basePath>/auth/session-required` *contains*, not the flow that reaches it — a denied navigation is still redirected there.
+
+It cannot open the console: it only ever runs on a request that has already been denied. If it throws, or returns without writing, the library logs one warning and falls back to the built-in page, so a broken page can't hang the request or turn a denial into a `500`. It is also not a mode — `unauthenticatedPage` alone still fails boot on the "at least one of `session` or `login`" check.
+
+Under Mode B this route stays `404`: there is no session-required page to customise, because a denied navigation goes to the login form instead. To ship your own **login** UI, combine Mode A with this hook and `POST <basePath>/auth/session` from your page — that mint endpoint is the supported primitive for it.
+
 #### Mode B — `login` (built-in login screen)
 
 No host frontend/IdP to lean on — the console serves its own small, dependency-free, server-rendered login page. An unauthenticated page visit is redirected (302) to a built-in login form at `<basePath>/auth/login`.
