@@ -5,7 +5,7 @@ import {
   parseRunWhere,
   parseThreadWhere,
   parseToolCallWhere,
-} from './parse-page-query';
+} from './parse-page-query.js';
 
 describe('parsePageNumber', () => {
   it('defaults to 1 when absent', () => {

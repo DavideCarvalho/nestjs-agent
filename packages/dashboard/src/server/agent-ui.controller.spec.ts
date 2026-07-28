@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { AgentUiController } from './agent-ui.controller';
+import { AgentUiController } from './agent-ui.controller.js';
 
 /** A recording req/res pair matching the structural slices the controller reads/writes. */
 function fakeReqRes(headers: Record<string, string | undefined>, originalUrl: string) {
