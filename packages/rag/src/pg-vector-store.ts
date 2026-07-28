@@ -27,6 +27,24 @@ export interface PgVectorStoreOptions {
  * A pgvector-backed {@link VectorStore} — the production reference adapter. Cosine distance via the
  * `<=>` operator over an HNSW index; metadata in a `jsonb` column filtered with `@>`. Call
  * {@link PgVectorStore.ensureSchema} once at boot to create the extension, table, and index.
+ *
+ * This store does **not** implement the optional
+ * {@link import('./vector-store.js').LexicalVectorStore} capability, unlike
+ * {@link import('./redis-vector-store.js').RedisVectorStore}. That is a deliberate omission, not an
+ * oversight: RediSearch already indexes the chunk text (the schema declares it `TEXT`), so BM25 is
+ * free there, whereas the table below indexes nothing lexically — `text` is a plain column with no
+ * `tsvector` and no GIN index. Adding one is not a transparent upgrade:
+ *
+ * - it is new DDL in `ensureSchema`, and `CREATE INDEX` (non-concurrently, as this method must, since
+ *   `CONCURRENTLY` cannot run in a transaction) takes a write lock on an already-populated chunks
+ *   table — a boot-time stall proportional to corpus size for every existing deployment;
+ * - it forces a text-search-configuration choice (`english` vs `simple` vs …) that must match between
+ *   the index expression and every query, or Postgres silently ignores the index and sequentially
+ *   scans the corpus — a failure mode that stays *correct* while quietly getting slower with scale.
+ *
+ * Both want a migration a consumer runs and observes, not a side effect of upgrading the library. The
+ * capability interface is open, so a `PgLexicalVectorStore` (or an option here, gated on an
+ * explicitly-created index) can be added later without changing anything else.
  */
 export class PgVectorStore implements VectorStore {
   private readonly table: string;

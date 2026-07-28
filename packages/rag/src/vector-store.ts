@@ -43,6 +43,41 @@ export interface VectorStore {
   listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]>;
 }
 
+/**
+ * An **optional** capability a {@link VectorStore} may also implement: full-text (lexical) search
+ * over the chunk text it already stores, using the backing engine's own keyword index — RediSearch's
+ * BM25 over the `TEXT` field, say. Its point is the multi-process deployment: when ingestion runs on
+ * a worker and search runs on an API pod, the API process never sees the chunks, so the in-process
+ * {@link import('./keyword-retriever.js').KeywordRetriever} has nothing to index. A store that
+ * implements this needs no second index, no corpus in JS heap, and no refresh window — a chunk is
+ * lexically findable the moment it is upserted.
+ *
+ * Wrap it as a core `Retriever` with {@link import('./lexical-retriever.js').LexicalRetriever}.
+ *
+ * Implementations MUST apply `options.filter` with exactly the same semantics as
+ * {@link VectorStore.search} — including the empty-array deny primitive — because the filter is
+ * routinely an access-control boundary, not a hint.
+ */
+export interface LexicalVectorStore extends VectorStore {
+  /**
+   * Rank stored chunks against a natural-language `query` by keyword relevance. `options.filter`
+   * narrows exactly as in {@link VectorStore.search}. The returned `score` is the engine's own
+   * relevance score (BM25), which shares no scale with `search`'s cosine similarity — fuse the two
+   * with {@link import('./hybrid-retriever.js').HybridRetriever}, whose RRF is rank-based and so
+   * needs no common scale.
+   */
+  searchText(query: string, options: VectorSearchOptions): Promise<Passage[]>;
+}
+
+/**
+ * Does this store carry the optional {@link LexicalVectorStore} capability? Lets a consumer pick the
+ * store-backed lexical leg when available and fall back to `KeywordRetriever` (or to dense-only)
+ * when it is not, without knowing which adapter it was handed.
+ */
+export function isLexicalVectorStore(store: VectorStore): store is LexicalVectorStore {
+  return typeof (store as Partial<LexicalVectorStore>).searchText === 'function';
+}
+
 /** A distinct source document as seen by the index — its id plus a representative chunk's metadata. */
 export interface IndexedDocument {
   id: string;
