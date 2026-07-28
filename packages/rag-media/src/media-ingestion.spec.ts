@@ -83,6 +83,46 @@ describe('ingestMediaFile', () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it('skips a file whose REAL bytes are oversized even though it declared size 0', async () => {
+    // `size` reaches this package from the attach record, which in most hosts is filled in by the
+    // client that opened the upload session — so it can be a lie, and `0` walks past any limit.
+    const oversized = Buffer.alloc(64, 'a');
+    const extract = vi.fn(async () => 'should never be extracted');
+    const { deps, store } = buildDeps(
+      {},
+      { readFile: async () => oversized, maxBytes: 10, extractor: { extract } },
+    );
+
+    const result = await ingestMediaFile(attachEvent({ size: 0 }), deps);
+
+    expect(result).toEqual({ status: 'skipped', reason: 'too-large' });
+    expect(extract).not.toHaveBeenCalled();
+    expect(await store.listDocuments()).toEqual([]);
+  });
+
+  it('consults statFile (when wired) so an oversized object is never downloaded', async () => {
+    const readFile = vi.fn(async () => Buffer.alloc(64, 'a'));
+    const statFile = vi.fn(async () => 64);
+    const { deps } = buildDeps({}, { readFile, statFile, maxBytes: 10 });
+
+    const result = await ingestMediaFile(attachEvent({ size: 0 }), deps);
+
+    expect(result).toEqual({ status: 'skipped', reason: 'too-large' });
+    expect(statFile).toHaveBeenCalledWith('s3', 'docs/policy.txt');
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it('stamps the REAL byte length into chunk metadata when the declared size disagrees', async () => {
+    const bytes = Buffer.from('Refunds are issued within thirty days.');
+    const { deps, store } = buildDeps({ 's3:docs/policy.txt': bytes });
+
+    // the attach record claims 0; the fingerprint the reconciler compares must not inherit that
+    await ingestMediaFile(attachEvent({ size: 0 }), deps);
+
+    const [document] = await store.listDocuments();
+    expect(document?.metadata?.size).toBe(bytes.byteLength);
+  });
+
   it('skips a file whose extracted text is blank', async () => {
     const { deps } = buildDeps({ 's3:docs/policy.txt': Buffer.from('   \n\t ') });
     expect(await ingestMediaFile(attachEvent(), deps)).toEqual({

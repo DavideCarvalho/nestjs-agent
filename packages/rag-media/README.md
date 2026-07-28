@@ -30,6 +30,8 @@ import { openai } from '@ai-sdk/openai';
       collections: ['knowledge-base'], // omit = every collection
       // the only glue: read a file's bytes from its media disk
       readFile: (disk, path) => media.disk(disk).get(path),
+      // optional, recommended: lets the size limit reject an oversized object before downloading it
+      statFile: (disk, path) => media.disk(disk).size(path),
     }),
   ],
 })
@@ -52,6 +54,19 @@ const base = new EmbeddingRetriever(embedder, store);
 const forThisUser = new FilteredRetriever(base, { ownerId: actor.id });
 // pass forThisUser to createRetrievalTool(...) or forRoot({ retrieval })
 ```
+
+## The size limit
+
+`maxBytes` (default 25 MB) is enforced against the file's **real** byte length, not the `size` the
+attach event declares — that number reaches this package from the media record, which in most hosts is
+filled in by the client that opened the upload session. A declared size over the limit still
+short-circuits early (cheap), but a declared size under it authorizes nothing: the bytes are
+re-checked after the read, before extraction and embedding, and it's the real length that gets stamped
+into chunk metadata as the fingerprint `reconcileMediaRag` compares against.
+
+Wiring `statFile` moves that authoritative check ahead of the download, so an oversized object is
+never fetched at all — and `reconcileMediaRag` uses it too, keeping its drift check honest when a
+declared size disagrees with the bytes.
 
 ## Text extraction
 

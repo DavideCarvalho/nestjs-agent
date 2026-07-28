@@ -5,7 +5,7 @@ import { type RedisClientType, createClient } from 'redis';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RedisSearchClient } from './redis-vector-store.js';
-import { RedisVectorStore } from './redis-vector-store.js';
+import { RedisVectorSchemaMismatchError, RedisVectorStore } from './redis-vector-store.js';
 
 let container: StartedTestContainer;
 let client: RedisClientType;
@@ -142,5 +142,90 @@ describe('RedisVectorStore (real RediSearch)', () => {
     const allIds = (await store.listDocuments()).map((document) => document.id).sort();
     expect(allIds).toContain('ld-a');
     expect(allIds).toContain('ld-b');
+  });
+});
+
+describe('ensureSchema against an index that already exists (drift)', () => {
+  /** A fresh store on its own index, so each drift case starts from a known FT.CREATE. */
+  function storeOn(
+    name: string,
+    options: { dimensions?: number; filterableFields?: string[] } = {},
+    onCommand?: (args: (string | Buffer)[]) => void,
+  ): RedisVectorStore {
+    const search: RedisSearchClient = {
+      sendCommand: (args) => {
+        onCommand?.(args);
+        return client.sendCommand(args);
+      },
+    };
+    return new RedisVectorStore(search, {
+      index: name,
+      prefix: `${name}:`,
+      dimensions: options.dimensions ?? 3,
+      ...(options.filterableFields !== undefined
+        ? { filterableFields: options.filterableFields }
+        : {}),
+    });
+  }
+
+  it('repairs a filterable field declared after the index was created, via FT.ALTER', async () => {
+    await storeOn('drift_add_idx', { filterableFields: ['tenant'] }).ensureSchema();
+
+    // a later deploy adds `audience` to filterableFields — the index predates it
+    const widened = storeOn('drift_add_idx', { filterableFields: ['tenant', 'audience'] });
+    await widened.ensureSchema();
+
+    const info: unknown = await client.sendCommand(['FT.INFO', 'drift_add_idx']);
+    const { attributes } = info as { attributes: { attribute: string; type: string }[] };
+    expect(attributes.find((field) => field.attribute === 'meta_audience')?.type).toBe('TAG');
+
+    // and the repaired TAG really is filterable, not just present in FT.INFO
+    await widened.upsert([
+      { id: 'w1', text: 'admin only', embedding: [1, 0, 0], metadata: { audience: 'role:ADMIN' } },
+      { id: 'w2', text: 'everyone', embedding: [1, 0, 0], metadata: { audience: 'public' } },
+    ]);
+    const hits = await widened.search([1, 0, 0], { topK: 10, filter: { audience: 'role:ADMIN' } });
+    expect(hits.map((passage) => passage.id)).toEqual(['w1']);
+  });
+
+  it('reports a dimension change loudly instead of leaving the index on the old width', async () => {
+    await storeOn('drift_dim_idx', { dimensions: 3 }).ensureSchema();
+
+    // the embedding model was swapped (3 → 5): not repairable in place
+    const swapped = storeOn('drift_dim_idx', { dimensions: 5 });
+
+    await expect(swapped.ensureSchema()).rejects.toBeInstanceOf(RedisVectorSchemaMismatchError);
+    await expect(swapped.ensureSchema()).rejects.toMatchObject({
+      index: 'drift_dim_idx',
+      field: 'embedding',
+      expected: 'DIM 5',
+      actual: 'DIM 3',
+    });
+  });
+
+  it('is a no-op when the live index already matches: no FT.CREATE, no FT.ALTER', async () => {
+    await storeOn('drift_same_idx', { filterableFields: ['tenant'] }).ensureSchema();
+
+    const commands: string[] = [];
+    const again = storeOn('drift_same_idx', { filterableFields: ['tenant'] }, (args) =>
+      commands.push(String(args[0])),
+    );
+    await again.ensureSchema();
+
+    expect(commands).toEqual(['FT.INFO']);
+  });
+
+  it('still creates the index when it does not exist yet', async () => {
+    const commands: string[] = [];
+    const fresh = storeOn('drift_new_idx', { filterableFields: ['tenant'] }, (args) =>
+      commands.push(String(args[0])),
+    );
+    await fresh.ensureSchema();
+
+    expect(commands).toEqual(['FT.INFO', 'FT.CREATE']);
+    await fresh.upsert([
+      { id: 'n1', text: 'created', embedding: [0, 1, 0], metadata: { tenant: 'n' } },
+    ]);
+    expect(await fresh.search([0, 1, 0], { topK: 5, filter: { tenant: 'n' } })).toHaveLength(1);
   });
 });

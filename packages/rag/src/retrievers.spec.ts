@@ -42,6 +42,86 @@ describe('KeywordRetriever (BM25)', () => {
   });
 });
 
+describe('KeywordRetriever.remove (delete-sync with the vector store)', () => {
+  it('a removed document is gone from retrieve — every chunk of it, text and all', async () => {
+    const keyword = new KeywordRetriever();
+    // multi-chunk, so the `${documentId}#<n>` collapse is what has to do the work
+    keyword.add(
+      chunkDocuments([{ id: 'cats', text: DOCS[0]?.text ?? '' }], { chunkSize: 20, overlap: 0 }),
+    );
+    expect(keyword.size).toBeGreaterThan(1);
+
+    keyword.remove('cats');
+
+    expect(keyword.size).toBe(0);
+    expect(await keyword.retrieve('domestic felines chase mice', { topK: 10 })).toEqual([]);
+  });
+
+  it('removing one document leaves the others intact', async () => {
+    const keyword = new KeywordRetriever();
+    keyword.add(chunkDocuments(DOCS));
+
+    keyword.remove('cats');
+
+    const passages = await keyword.retrieve('domestic', { topK: 10 });
+    const ids = passages.map((passage) => passage.id);
+    expect(ids).not.toContain('cats#0');
+    expect(ids).toContain('dogs#0');
+    expect(keyword.size).toBe(2);
+  });
+
+  it('spares a different document that merely shares the id prefix', async () => {
+    const keyword = new KeywordRetriever();
+    keyword.add([
+      { id: 'gone#0', text: 'alpha' },
+      { id: 'gone', text: 'alpha' },
+      { id: 'goner#0', text: 'alpha' },
+    ]);
+
+    keyword.remove('gone');
+
+    expect((await keyword.retrieve('alpha', { topK: 10 })).map((passage) => passage.id)).toEqual([
+      'goner#0',
+    ]);
+  });
+
+  it('removing an unknown id is a no-op', async () => {
+    const keyword = new KeywordRetriever();
+    keyword.add(chunkDocuments(DOCS));
+
+    keyword.remove('never-indexed');
+
+    expect(keyword.size).toBe(3);
+    expect(await keyword.retrieve('domestic felines chase mice', { topK: 3 })).not.toHaveLength(0);
+  });
+
+  it('keeps BM25 statistics consistent: scores match a corpus built without the removed doc', async () => {
+    const removed = new KeywordRetriever();
+    removed.add(chunkDocuments(DOCS));
+    removed.remove('cats');
+
+    const fresh = new KeywordRetriever();
+    fresh.add(chunkDocuments(DOCS.filter((doc) => doc.id !== 'cats')));
+
+    expect(await removed.retrieve('domestic canines', { topK: 5 })).toEqual(
+      await fresh.retrieve('domestic canines', { topK: 5 }),
+    );
+  });
+
+  it('clear() empties the index', async () => {
+    const keyword = new KeywordRetriever();
+    keyword.add(chunkDocuments(DOCS));
+
+    keyword.clear();
+
+    expect(keyword.size).toBe(0);
+    expect(await keyword.retrieve('domestic', { topK: 5 })).toEqual([]);
+    // and it is reusable afterwards — the corpus stats reset with it
+    keyword.add(chunkDocuments(DOCS));
+    expect(keyword.size).toBe(3);
+  });
+});
+
 describe('HybridRetriever (RRF)', () => {
   it('fuses vector + keyword and dedupes by id', async () => {
     const embedder = new FakeEmbeddingProvider();

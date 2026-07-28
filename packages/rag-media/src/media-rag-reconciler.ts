@@ -70,7 +70,7 @@ export async function reconcileMediaRag(
       if ((await ingestMediaFile(event, deps)).status === 'ingested') {
         ingested.push(event.id);
       }
-    } else if (existing.metadata?.size !== event.size) {
+    } else if (existing.metadata?.size !== (await mediaSize(event, deps))) {
       // content changed under a stable id (or was indexed before size was tracked) → re-ingest.
       if ((await ingestMediaFile(event, deps)).status === 'ingested') {
         reingested.push(event.id);
@@ -79,4 +79,15 @@ export async function reconcileMediaRag(
   }
 
   return { ingested, reingested, removed };
+}
+
+/**
+ * The size to compare against the indexed fingerprint. Ingestion stamps the REAL byte length, so the
+ * comparison has to be like-for-like: `statFile` (authoritative, no download) when the host wires it,
+ * otherwise the declared `MediaAttachEvent.size`. Without `statFile`, a declared size that disagrees
+ * with the actual bytes reads as permanent drift and re-ingests the document on every pass — wiring
+ * `statFile` is the cheap fix.
+ */
+async function mediaSize(event: MediaAttachEvent, deps: MediaRagReconcilerDeps): Promise<number> {
+  return deps.statFile === undefined ? event.size : deps.statFile(event.disk, event.path);
 }
