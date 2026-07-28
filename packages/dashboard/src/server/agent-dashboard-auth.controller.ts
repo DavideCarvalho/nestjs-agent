@@ -64,9 +64,10 @@ function isString(value: unknown): value is string {
  * hook decides — or Mode B (`login`), a dependency-free, server-rendered login form (GET/POST) —
  * the bundled React SPA in this package is a built Vite artifact with no auth-aware UI of its own,
  * so gating the actual page navigation needs a self-contained flow that doesn't touch it. Each
- * mode's routes 404 when that mode isn't configured (`auth.session`/`auth.login` absent), and
- * every route 404s outright when `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to
- * `null`) — no dangling login page when the feature is off.
+ * mode's routes 404 when that mode isn't listed in `auth.modes` — the single source of truth for
+ * which mode(s) are configured, not hook-presence truthiness — and every route 404s outright when
+ * `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to `null`) — no dangling login page
+ * when the feature is off.
  */
 @Controller('auth')
 export class AgentDashboardAuthController {
@@ -90,7 +91,7 @@ export class AgentDashboardAuthController {
   ): string {
     const auth = this.requireAuth();
     // Mode A only: no login screen exists — the host mints the session.
-    if (!auth.login) throw new NotFoundException();
+    if (!auth.modes.includes('login')) throw new NotFoundException();
     const returnTo = sanitizeReturnTo(this.basePath, returnToQuery);
     // Already signed in — a fresh GET (e.g. a bookmarked login URL) just goes back in, no need to
     // re-prompt for credentials.
@@ -113,7 +114,7 @@ export class AgentDashboardAuthController {
     @Res({ passthrough: true }) res: AuthPageResponse,
   ): Promise<string> {
     const auth = this.requireAuth();
-    if (!auth.login) throw new NotFoundException();
+    if (!auth.modes.includes('login')) throw new NotFoundException();
     const returnTo = sanitizeReturnTo(this.basePath, body?.returnTo);
     const username = body?.username;
     const password = body?.password;
@@ -151,7 +152,7 @@ export class AgentDashboardAuthController {
     // configured at all, `this.auth` is `null` and today's target is preserved unchanged.
     res.setHeader(
       'Location',
-      this.auth && !this.auth.login
+      this.auth && !this.auth.modes.includes('login')
         ? `${this.basePath}/auth/session-required`
         : `${this.basePath}/auth/login`,
     );
@@ -167,7 +168,7 @@ export class AgentDashboardAuthController {
     @Res({ passthrough: true }) response: unknown,
   ): Promise<void> {
     const auth = this.requireAuth();
-    if (!auth.session) throw new NotFoundException();
+    if (!auth.modes.includes('session')) throw new NotFoundException();
     const user = await this.runHook('session', () => auth.session?.(request) ?? null);
     if (!user) throw new UnauthorizedException();
     issueSessionCookie(user, { auth, request, response });
@@ -181,7 +182,7 @@ export class AgentDashboardAuthController {
   @Header('Cache-Control', 'no-store, must-revalidate')
   sessionRequiredPage(): string {
     const auth = this.requireAuth();
-    if (auth.login) throw new NotFoundException();
+    if (auth.modes.includes('login')) throw new NotFoundException();
     return renderSessionRequiredPage();
   }
 

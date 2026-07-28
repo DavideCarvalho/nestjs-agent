@@ -60,7 +60,7 @@ export class DashboardAuthPageGuard implements CanActivate {
    * asserting away) the nullability.
    */
   private deny(auth: ResolvedDashboardAuth, request: unknown): never {
-    if (!auth.login) {
+    if (!auth.modes.includes('login')) {
       throw new DashboardAuthRedirect(`${this.basePath}/auth/session-required`);
     }
     const returnTo = readOriginalUrl(request);

@@ -123,4 +123,22 @@ describe('DashboardAuthPageGuard (page — 302 redirect)', () => {
       expect.objectContaining({ redirectTo: '/ai-gateway/auth/session-required' }),
     );
   });
+
+  it('follows `auth.modes` — not hook-presence truthiness — when deciding the deny target', async () => {
+    // A hand-built config (as a host authoring the type directly, not through
+    // `resolveDashboardAuth`, would produce) where `modes` says Mode A only but a `login` hook is
+    // also present. If the guard branched on `!!auth.login` this would redirect to `/auth/login`;
+    // reading `auth.modes` it must treat this as Mode-A-only and serve session-required instead.
+    const modeAOnlyByModes: ResolvedDashboardAuth = {
+      secret: 's3cr3t',
+      ttlMs: 60_000,
+      modes: ['session'],
+      login: () => null,
+    };
+    const guard = new DashboardAuthPageGuard(modeAOnlyByModes, BASE_PATH);
+
+    await expect(guard.canActivate(fakeContext({ headers: {} }))).rejects.toThrow(
+      expect.objectContaining({ redirectTo: `${BASE_PATH}/auth/session-required` }),
+    );
+  });
 });
