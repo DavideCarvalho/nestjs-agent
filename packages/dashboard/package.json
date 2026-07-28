@@ -35,7 +35,7 @@
   ],
   "scripts": {
     "build": "vite build && tsup && tsc -p tsconfig.client.json",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.app.json --noEmit"
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.server.spec.json --noEmit && tsc -p tsconfig.app.json --noEmit"
   },
   "peerDependencies": {
     "@dudousxd/nestjs-agent-core": ">=0.1.0 <1.0.0",

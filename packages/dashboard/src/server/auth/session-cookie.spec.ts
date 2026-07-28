@@ -162,4 +162,81 @@ describe('maybeRenewSession (sliding renewal + revalidation)', () => {
       maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse()),
     ).resolves.toBe(true);
   });
+
+  describe('de-duplicates concurrent revalidations of the same session', () => {
+    it('N concurrent renewals of the same session produce ONE host call, and each still gets its own cookie', async () => {
+      let resolveHook: (value: boolean) => void = () => {};
+      const revalidate = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveHook = resolve;
+          }),
+      );
+      const auth = resolveAuth({ secret: 's'.repeat(32), session: () => null, revalidate });
+      const responseA = mockResponse();
+      const responseB = mockResponse();
+      const responseC = mockResponse();
+
+      // Three concurrent requests, same session identity (sub+iat) — a fresh object per call,
+      // so dedup can only be working off session identity, not object reference.
+      const callA = maybeRenewSession(auth, { ...HALF_LIFE_PASSED }, { headers: {} }, responseA);
+      const callB = maybeRenewSession(auth, { ...HALF_LIFE_PASSED }, { headers: {} }, responseB);
+      const callC = maybeRenewSession(auth, { ...HALF_LIFE_PASSED }, { headers: {} }, responseC);
+
+      // Let all three reach (and share) the pending revalidate() call before resolving it.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(revalidate).toHaveBeenCalledTimes(1);
+
+      resolveHook(true);
+      await expect(Promise.all([callA, callB, callC])).resolves.toEqual([true, true, true]);
+      // Each caller still gets its OWN Set-Cookie on its OWN response — dedup only collapses the
+      // host round-trip, never the per-request side effect.
+      expect(setCookiesOn(responseA)[0]).toContain('agent_dashboard_session=');
+      expect(setCookiesOn(responseB)[0]).toContain('agent_dashboard_session=');
+      expect(setCookiesOn(responseC)[0]).toContain('agent_dashboard_session=');
+    });
+
+    it('does not de-dupe across DIFFERENT sessions (different sub) — each gets its own host call', async () => {
+      const revalidate = vi.fn().mockResolvedValue(true);
+      const auth = resolveAuth({ secret: 's'.repeat(32), session: () => null, revalidate });
+      const other = { ...HALF_LIFE_PASSED, sub: '9' };
+
+      await Promise.all([
+        maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse()),
+        maybeRenewSession(auth, other, { headers: {} }, mockResponse()),
+      ]);
+
+      expect(revalidate).toHaveBeenCalledTimes(2);
+    });
+
+    it('clears the in-flight entry once settled — a later, non-overlapping call re-invokes the host hook', async () => {
+      const revalidate = vi.fn().mockResolvedValue(true);
+      const auth = resolveAuth({ secret: 's'.repeat(32), session: () => null, revalidate });
+
+      await maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse());
+      await maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse());
+
+      expect(revalidate).toHaveBeenCalledTimes(2);
+    });
+
+    it('clears the in-flight entry on REJECTION too — a later call is not stuck replaying a dead promise', async () => {
+      const revalidate = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValueOnce(true);
+      const auth = resolveAuth({ secret: 's'.repeat(32), session: () => null, revalidate });
+
+      await expect(
+        maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse()),
+      ).resolves.toBe(false);
+      await expect(
+        maybeRenewSession(auth, HALF_LIFE_PASSED, { headers: {} }, mockResponse()),
+      ).resolves.toBe(true);
+
+      // If the rejected promise were left cached, the second call would replay it (still 1 call)
+      // instead of reaching the host again.
+      expect(revalidate).toHaveBeenCalledTimes(2);
+    });
+  });
 });

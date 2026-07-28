@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { parseApprovalDecision } from './parse-approval-decision';
+import { parseApprovalDecision } from './parse-approval-decision.js';
 
 describe('parseApprovalDecision', () => {
   it('accepts an approve body with no reason', () => {

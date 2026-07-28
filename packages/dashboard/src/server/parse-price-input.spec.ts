@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import { parsePriceInput } from './parse-price-input';
+import { parsePriceInput } from './parse-price-input.js';
 
 describe('parsePriceInput', () => {
   it('accepts the minimal required shape', () => {

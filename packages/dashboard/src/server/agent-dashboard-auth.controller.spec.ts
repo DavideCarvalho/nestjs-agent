@@ -378,4 +378,76 @@ describe('AgentDashboardAuthController', () => {
       expect(() => controller.loginPage(req, res)).toThrow(NotFoundException);
     });
   });
+
+  describe('`auth.modes` — not hook-presence truthiness — decides route availability', () => {
+    // Hand-built (not through `resolveDashboardAuth`) so `modes` and hook presence can be made to
+    // disagree, proving each route reads `modes` rather than `!!auth.login`/`!!auth.session`.
+
+    it('loginPage 404s when `modes` omits login, even though a `login` hook is present', () => {
+      const auth: ResolvedDashboardAuth = {
+        secret: 'secret',
+        ttlMs: 60_000,
+        modes: ['session'],
+        login: () => null,
+      };
+      const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+      const { req, res } = fakeReqRes();
+
+      expect(() => controller.loginPage(req, res)).toThrow(NotFoundException);
+    });
+
+    it('POST login 404s when `modes` omits login, even though a `login` hook is present', async () => {
+      const auth: ResolvedDashboardAuth = {
+        secret: 'secret',
+        ttlMs: 60_000,
+        modes: ['session'],
+        login: () => null,
+      };
+      const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+      const { req, res } = fakeReqRes();
+
+      await expect(controller.login({}, req, res)).rejects.toThrow(NotFoundException);
+    });
+
+    it('POST session 404s when `modes` omits session, even though a `session` hook is present', async () => {
+      const auth: ResolvedDashboardAuth = {
+        secret: 'secret',
+        ttlMs: 60_000,
+        modes: ['login'],
+        login: () => null,
+        session: () => ({ id: 'ops' }),
+      };
+      const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+      const { req, res } = fakeReqRes();
+
+      await expect(controller.session(req, res)).rejects.toThrow(NotFoundException);
+    });
+
+    it('sessionRequiredPage serves (does not 404) when `modes` omits login, even though a `login` hook is present', () => {
+      const auth: ResolvedDashboardAuth = {
+        secret: 'secret',
+        ttlMs: 60_000,
+        modes: ['session'],
+        login: () => null,
+      };
+      const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+
+      expect(() => controller.sessionRequiredPage()).not.toThrow();
+    });
+
+    it('logout redirects to session-required when `modes` omits login, even though a `login` hook is present', () => {
+      const auth: ResolvedDashboardAuth = {
+        secret: 'secret',
+        ttlMs: 60_000,
+        modes: ['session'],
+        login: () => null,
+      };
+      const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+      const { req, res, headers } = fakeReqRes(`${SESSION_COOKIE_NAME}=whatever`);
+
+      controller.logout(req, res);
+
+      expect(headers.location).toBe('/ai-gateway/auth/session-required');
+    });
+  });
 });

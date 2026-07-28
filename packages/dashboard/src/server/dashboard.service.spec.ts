@@ -27,9 +27,9 @@ import type {
 import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
 import { NotImplementedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
-import type { ActorDirectory } from './actor-directory';
-import { AgentApiController } from './agent-api.controller';
-import { DashboardService, type LiveAgentEvent } from './dashboard.service';
+import type { ActorDirectory } from './actor-directory.js';
+import { AgentApiController } from './agent-api.controller.js';
+import { DashboardService, type LiveAgentEvent } from './dashboard.service.js';
 
 /** A zeroed `RunMetrics` — the shape a store without run recording returns. */
 const EMPTY_RUN_METRICS: RunMetrics = {
@@ -241,6 +241,7 @@ describe('DashboardService', () => {
             status: 'ok',
             threadId: 'th1',
             createdAt: '2026-07-05T00:00:00.000Z',
+            runId: 'r1',
           },
         ],
         recentThreads: [
@@ -273,6 +274,7 @@ describe('DashboardService', () => {
             actorRef: 'user:1',
             agentName: 'analyst',
             requestedAt: '2026-07-05T00:00:00.000Z',
+            runId: 'r1',
           },
         ],
       }),
@@ -334,6 +336,7 @@ describe('DashboardService', () => {
           status: 'ok',
           threadId: 'th1',
           createdAt: '2026-07-05T00:00:00.000Z',
+          runId: 'r1',
         },
       ],
       total: 40,
@@ -446,7 +449,9 @@ describe('DashboardService', () => {
   it('streamEvents() forwards a live agent diagnostics event to a subscriber', async () => {
     const service = new DashboardService(fakeQueries());
     const seen: LiveAgentEvent[] = [];
-    const subscription = service.streamEvents().subscribe((message) => seen.push(message.data));
+    const subscription = service
+      .streamEvents()
+      .subscribe((message: { data: LiveAgentEvent }) => seen.push(message.data));
 
     publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'ok' });
 
@@ -460,7 +465,9 @@ describe('DashboardService', () => {
   it('streamEvents() stops forwarding after unsubscribe', () => {
     const service = new DashboardService(fakeQueries());
     const seen: LiveAgentEvent[] = [];
-    const subscription = service.streamEvents().subscribe((message) => seen.push(message.data));
+    const subscription = service
+      .streamEvents()
+      .subscribe((message: { data: LiveAgentEvent }) => seen.push(message.data));
     subscription.unsubscribe();
 
     publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'ok' });
