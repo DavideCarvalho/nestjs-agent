@@ -3,6 +3,17 @@
 // is dependency-free for an external front-end that only wants to call the API.
 
 /** Inclusive UTC day range, each `YYYY-MM-DD`. */
+// Headless console-launcher primitives (path derivation + mint-then-navigate). Re-exported here
+// because `./client` resolves to this file — see the package's `exports` map.
+export {
+  ConsoleSessionError,
+  agentConsoleSessionUrl,
+  agentConsoleUrl,
+  mintAgentConsoleSession,
+  openAgentConsole,
+  type OpenConsoleOptions,
+} from './console-session.js';
+
 export interface GovernanceRange {
   fromDay: string;
   toDay: string;
