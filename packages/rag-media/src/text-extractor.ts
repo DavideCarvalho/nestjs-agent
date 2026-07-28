@@ -19,27 +19,46 @@ export class UnsupportedMimeTypeError extends Error {
 export type ExtractFn = (bytes: Buffer, mimeType: string) => string | Promise<string>;
 
 /**
+ * Reduce a `Content-Type` to the bare media type used as a dispatch key: RFC 2045 puts the media type
+ * before the first `;`, so `text/csv; charset=utf-8` and `TEXT/CSV` are both `text/csv`.
+ *
+ * Applied to registration keys AND to lookups, deliberately — one rule, so the two sides can't drift.
+ * If registration skipped it, `.register('TEXT/*', …)` or `.register('application/csv; charset=utf-8', …)`
+ * would store a key that no normalized lookup can ever hit: a dead extractor that reports itself as an
+ * unsupported type, which ingestion records as a *skip*. The document then vanishes with no error for
+ * the operator to see — and a silent skip is far worse than a loud failure.
+ */
+export function normalizeMimeType(mimeType: string): string {
+  return (mimeType.split(';')[0] ?? mimeType).trim().toLowerCase();
+}
+
+/**
  * A {@link TextExtractor} that dispatches by mime type. Register exact types (`application/json`) or a
  * whole family (`text/*`); an exact match always wins over a family. Unregistered types throw
  * {@link UnsupportedMimeTypeError}. This is the extension point: `.register('application/pdf', pdfFn)`.
+ *
+ * Both sides of the dispatch run through {@link normalizeMimeType}, so parameters and casing are
+ * irrelevant on the way in and on the way out.
  */
 export class MimeTextExtractor implements TextExtractor {
   private readonly exact = new Map<string, ExtractFn>();
   private readonly families: { prefix: string; fn: ExtractFn }[] = [];
 
   register(mimeType: string, fn: ExtractFn): this {
-    if (mimeType.endsWith('/*')) {
+    const normalized = normalizeMimeType(mimeType);
+    if (normalized.endsWith('/*')) {
       // "text/*" → match anything starting "text/"
-      this.families.push({ prefix: mimeType.slice(0, -1), fn });
+      this.families.push({ prefix: normalized.slice(0, -1), fn });
     } else {
-      this.exact.set(mimeType.toLowerCase(), fn);
+      this.exact.set(normalized, fn);
     }
     return this;
   }
 
   async extract(bytes: Buffer, mimeType: string): Promise<string> {
-    // strip any `; charset=…` parameter and normalize
-    const normalized = (mimeType.split(';')[0] ?? mimeType).trim().toLowerCase();
+    // A client-supplied Content-Type legitimately carries `; charset=…` / `; boundary=…`; match on the
+    // media type alone so a parameter can't turn a supported document into a silent skip.
+    const normalized = normalizeMimeType(mimeType);
     const fn = this.resolve(normalized);
     if (fn === undefined) {
       throw new UnsupportedMimeTypeError(mimeType);
@@ -47,6 +66,7 @@ export class MimeTextExtractor implements TextExtractor {
     return fn(bytes, normalized);
   }
 
+  /** Takes an already-{@link normalizeMimeType}d type — the family prefix match relies on it. */
   private resolve(mimeType: string): ExtractFn | undefined {
     const exact = this.exact.get(mimeType);
     if (exact !== undefined) {

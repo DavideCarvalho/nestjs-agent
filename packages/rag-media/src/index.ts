@@ -3,6 +3,7 @@ export {
   type ExtractFn,
   MimeTextExtractor,
   UnsupportedMimeTypeError,
+  normalizeMimeType,
   defaultTextExtractor,
   decodeUtf8,
   extractHtmlText,
