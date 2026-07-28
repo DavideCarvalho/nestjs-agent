@@ -29,6 +29,46 @@ export type LoginHook = (
  */
 export type RevalidateHook = (session: DashboardSessionUser) => Promise<boolean> | boolean;
 
+/** What `unauthenticatedPage` receives. An object (not positional args) so fields can be added later. */
+export interface UnauthenticatedPageContext {
+  /**
+   * The platform-native request — Express' `Request`, Fastify's `FastifyRequest`. Typed `unknown`
+   * for the same reason `SessionHook`'s is: this package refuses to depend on either platform.
+   * Cast it to whatever your app actually runs on.
+   */
+  request: unknown;
+  /**
+   * The platform-native response. The hook OWNS it: it must write AND end it (`res.render(...)`,
+   * `res.status(401).send(...)`, an Inertia render, ...). If the hook returns without writing, the
+   * library falls back to its own built-in page rather than leaving the request hanging.
+   */
+  response: unknown;
+  /** Where this console is mounted (e.g. `/ai-gateway`) — useful for a "back to the console" link. */
+  basePath: string;
+}
+
+/**
+ * Host-owned page for an unauthenticated navigation to the console.
+ *
+ * The built-in page cannot know who hosts the console, so it can only say "open this console from
+ * your application" in the abstract — it can't name the launcher, link to it, or look like the rest
+ * of the host's product. This hook hands the whole response to the host instead: render through
+ * your own template engine, your own Inertia page, whatever.
+ *
+ * Served at `<basePath>/auth/session-required`, which is where `DashboardAuthPageGuard` already
+ * redirects a denied Mode-A navigation today — this hook changes what that page CONTAINS, not the
+ * flow that reaches it.
+ *
+ * Deliberately NOT a replacement for Mode B's built-in login form. A host that wants its own login
+ * UI uses Mode A plus this hook, and posts to `<basePath>/auth/session` from its own page — the
+ * mint endpoint is the supported primitive for that.
+ *
+ * Fail-closed by construction: it only ever runs on a request that has ALREADY been denied. A hook
+ * that throws, or that returns without writing, falls back to the built-in page — it cannot let
+ * anyone in.
+ */
+export type UnauthenticatedPageHook = (context: UnauthenticatedPageContext) => void | Promise<void>;
+
 /** Which `dashboardAuth` hook(s) a resolved config was given — see `resolveDashboardAuth`. */
 export type AuthMode = 'session' | 'login';
 
@@ -61,6 +101,9 @@ export interface DashboardAuthOptions {
   /** Re-checks a live session on sliding renewal; see `RevalidateHook`. Not a mode — it cannot
    *  mint a session, only revoke one already minted by `session`/`login`. */
   revalidate?: RevalidateHook;
+  /** Renders the host's own page for an unauthenticated navigation, in place of the built-in
+   *  "open this console from your application" card; see `UnauthenticatedPageHook`. */
+  unauthenticatedPage?: UnauthenticatedPageHook;
 }
 
 /** Resolved, validated `dashboardAuth` config used by the guards/controller. */
@@ -71,6 +114,7 @@ export interface ResolvedDashboardAuth {
   session?: SessionHook;
   login?: LoginHook;
   revalidate?: RevalidateHook;
+  unauthenticatedPage?: UnauthenticatedPageHook;
 }
 
 const DEFAULT_TTL = '8h';
@@ -137,6 +181,14 @@ export function resolveDashboardAuth(
   if (options.revalidate !== undefined && typeof options.revalidate !== 'function') {
     throw new Error('AgentDashboardModule dashboardAuth: `revalidate` must be a function.');
   }
+  if (
+    options.unauthenticatedPage !== undefined &&
+    typeof options.unauthenticatedPage !== 'function'
+  ) {
+    throw new Error(
+      'AgentDashboardModule dashboardAuth: `unauthenticatedPage` must be a function.',
+    );
+  }
   if (modes.length === 0) {
     throw new Error(
       'AgentDashboardModule dashboardAuth: at least one of `session` (the host mints the session ' +
@@ -151,5 +203,8 @@ export function resolveDashboardAuth(
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.login !== undefined ? { login: options.login } : {}),
     ...(options.revalidate !== undefined ? { revalidate: options.revalidate } : {}),
+    ...(options.unauthenticatedPage !== undefined
+      ? { unauthenticatedPage: options.unauthenticatedPage }
+      : {}),
   };
 }

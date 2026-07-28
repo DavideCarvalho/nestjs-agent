@@ -69,6 +69,35 @@ function resolveRawResponse(response: unknown): RawNodeResponse | null {
 }
 
 /**
+ * Did something already write to this response?
+ *
+ * Used to decide whether a host's `unauthenticatedPage` hook actually produced a page. A hook that
+ * returns without writing (an early `return`, a forgotten `await`, a template that resolved to
+ * nothing) would otherwise leave the request hanging forever — the browser spins until it times
+ * out, with no error anywhere. Checking this lets the caller fall back to the built-in page.
+ */
+export function responseAlreadyWritten(response: unknown): boolean {
+  const raw = resolveRawResponse(response) as (RawNodeResponse & { headersSent?: boolean }) | null;
+  return raw?.headersSent === true;
+}
+
+/**
+ * Write a full HTML page on the raw response and END it — the `unauthenticatedPage` fallback path,
+ * where the handler owns the entire response (non-passthrough) rather than returning a body for
+ * Nest to send.
+ */
+export function sendHtml(response: unknown, status: number, html: string): void {
+  const raw = resolveRawResponse(response);
+  if (!raw) return;
+  raw.statusCode = status;
+  raw.setHeader('content-type', 'text/html; charset=utf-8');
+  // Reflects live session state, so it must never be served stale from a cache — same reasoning as
+  // the `@Header('Cache-Control', 'no-store, must-revalidate')` this route carried as a decorator.
+  raw.setHeader('cache-control', 'no-store, must-revalidate');
+  raw.end(html);
+}
+
+/**
  * Fully send a redirect response (status + `Location` + end the response) — used by the guard's
  * exception-filter path, which owns the ENTIRE response (unlike a passthrough controller handler
  * that can just set headers and return a body for Nest to send). No-ops gracefully if the

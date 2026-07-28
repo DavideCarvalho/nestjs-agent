@@ -18,6 +18,7 @@ import { parseCookieHeader } from './auth/cookie-header.js';
 import type { ResolvedDashboardAuth } from './auth/dashboard-auth-config.js';
 import { readCookieHeader } from './auth/http-request.js';
 import { renderLoginPage, renderSessionRequiredPage } from './auth/login-page.js';
+import { responseAlreadyWritten, sendHtml } from './auth/response.js';
 import { sanitizeReturnTo } from './auth/sanitize-return-to.js';
 import {
   SESSION_COOKIE_NAME,
@@ -177,13 +178,44 @@ export class AgentDashboardAuthController {
   // Mode-A-only landing: the host mints the session, so there is nothing to submit here. Serves
   // as the redirect target `DashboardAuthPageGuard` bounces to instead of `/auth/login`, which
   // 404s under Mode A (see `loginPage` above).
+  //
+  // Non-passthrough `@Res()` (unlike its sibling routes) because `dashboardAuth.unauthenticatedPage`
+  // hands the response to the HOST, which writes and ends it itself — there is no return value for
+  // Nest to send, and letting Nest also send one would double-write. The `Content-Type` /
+  // `Cache-Control` this route used to carry as decorators move into `sendHtml` for the built-in
+  // path; the host owns its own headers on the hook path.
   @Get('session-required')
-  @Header('Content-Type', 'text/html; charset=utf-8')
-  @Header('Cache-Control', 'no-store, must-revalidate')
-  sessionRequiredPage(): string {
+  async sessionRequiredPage(@Req() req: AuthPageRequest, @Res() res: unknown): Promise<void> {
     const auth = this.requireAuth();
     if (auth.modes.includes('login')) throw new NotFoundException();
-    return renderSessionRequiredPage();
+
+    const hook = auth.unauthenticatedPage;
+    if (hook) {
+      try {
+        await hook({ request: req, response: res, basePath: this.basePath });
+        // The hook owns the response; if it wrote one, we are done.
+        if (responseAlreadyWritten(res)) return;
+        // It did not write. Falling through to the built-in page is the only outcome that neither
+        // hangs the request forever nor invents a page the host did not ask for — but it is almost
+        // certainly a bug in the hook, so say so.
+        this.warnHookOnce(
+          'unauthenticatedPage',
+          'dashboardAuth.unauthenticatedPage returned without writing a response; falling back to ' +
+            'the built-in page. The hook must write AND end the response it is given.',
+        );
+      } catch (error) {
+        // A broken host page must not turn a denial into a 500, and must never open the console.
+        this.warnHookOnce(
+          'unauthenticatedPage',
+          `dashboardAuth.unauthenticatedPage threw; falling back to the built-in page. ${String(error)}`,
+        );
+        // It may have written headers before throwing, in which case there is nothing left to do:
+        // writing again would raise ERR_HTTP_HEADERS_SENT on top of the original failure.
+        if (responseAlreadyWritten(res)) return;
+      }
+    }
+
+    sendHtml(res, 200, renderSessionRequiredPage());
   }
 
   /** Uniform failure: same redirect (generic error flag) whether the user is unknown or the password is wrong. */
@@ -215,16 +247,24 @@ export class AgentDashboardAuthController {
     try {
       return (await run()) ?? null;
     } catch (error) {
-      if (!this.warnedHooks.has(kind)) {
-        this.warnedHooks.add(kind);
-        this.logger.warn(
-          `AgentDashboardModule dashboardAuth ${kind} hook threw; treating as denial. ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+      this.warnHookOnce(
+        kind,
+        `AgentDashboardModule dashboardAuth ${kind} hook threw; treating as denial. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       return null;
     }
+  }
+
+  /**
+   * Warn once per hook kind for the life of the process, not once per request: a broken hook fires
+   * on every denied navigation and would otherwise flood the logs.
+   */
+  private warnHookOnce(kind: string, message: string): void {
+    if (this.warnedHooks.has(kind)) return;
+    this.warnedHooks.add(kind);
+    this.logger.warn(message);
   }
 
   private requireAuth(): ResolvedDashboardAuth {

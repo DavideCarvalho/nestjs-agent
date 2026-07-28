@@ -15,17 +15,29 @@ const BASE_PATH = '/ai-gateway';
 function fakeReqRes(cookieHeader?: string) {
   const statuses: number[] = [];
   const headers: Record<string, string | string[]> = {};
+  // `end` + `statusCode` + `headersSent` are what the RAW writers in `auth/response.ts` need
+  // (`sendHtml`, used by the non-passthrough `sessionRequiredPage`); the passthrough routes only
+  // ever touch `status`/`setHeader`, so both shapes are served by this one stub.
+  const sent = { body: undefined as string | undefined };
+  const res = {
+    statusCode: 200,
+    headersSent: false,
+    status: (code: number) => statuses.push(code),
+    setHeader: (name: string, value: string | string[]) => {
+      headers[name.toLowerCase()] = value;
+    },
+    getHeader: (name: string) => headers[name.toLowerCase()],
+    end: (chunk?: string) => {
+      res.headersSent = true;
+      sent.body = chunk;
+    },
+  };
   return {
     req: { headers: cookieHeader !== undefined ? { cookie: cookieHeader } : {} },
-    res: {
-      status: (code: number) => statuses.push(code),
-      setHeader: (name: string, value: string | string[]) => {
-        headers[name.toLowerCase()] = value;
-      },
-      getHeader: (name: string) => headers[name.toLowerCase()],
-    },
+    res,
     statuses,
     headers,
+    sent,
     /** The single `Set-Cookie` string written (this controller only ever issues/clears ONE cookie per response). */
     setCookie: (): string => {
       const value = headers['set-cookie'];
@@ -423,7 +435,7 @@ describe('AgentDashboardAuthController', () => {
       await expect(controller.session(req, res)).rejects.toThrow(NotFoundException);
     });
 
-    it('sessionRequiredPage serves (does not 404) when `modes` omits login, even though a `login` hook is present', () => {
+    it('sessionRequiredPage serves (does not 404) when `modes` omits login, even though a `login` hook is present', async () => {
       const auth: ResolvedDashboardAuth = {
         secret: 'secret',
         ttlMs: 60_000,
@@ -431,8 +443,12 @@ describe('AgentDashboardAuthController', () => {
         login: () => null,
       };
       const controller = new AgentDashboardAuthController(auth, BASE_PATH);
+      const { req, res, sent } = fakeReqRes();
 
-      expect(() => controller.sessionRequiredPage()).not.toThrow();
+      await expect(controller.sessionRequiredPage(req, res)).resolves.toBeUndefined();
+      // The route now writes the response itself (non-passthrough `@Res()`, so the host's
+      // `unauthenticatedPage` can own it), so assert on the written body rather than a return value.
+      expect(sent.body).toContain('Open this console from your application');
     });
 
     it('logout redirects to session-required when `modes` omits login, even though a `login` hook is present', () => {
