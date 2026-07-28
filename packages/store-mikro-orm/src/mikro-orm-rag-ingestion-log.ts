@@ -38,6 +38,18 @@ function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * The paging order: newest first, tiebroken on the primary key.
+ *
+ * `updatedAt` alone is not a total order — a bulk upload stamps every document of the batch with the
+ * same second — and a database is free to return tied rows in a different sequence for each
+ * LIMIT/OFFSET query. A tie straddling a page boundary then hands a caller sweeping the table a row
+ * in *neither* page (or the same row twice), which is how an orphan-sweep leaves an S3 object behind
+ * with its log row already gone, and how a reconcile re-embeds documents it already has. `documentId`
+ * is the entity's primary key, so appending it makes the order total and the pages disjoint.
+ */
+const PAGE_ORDER = { updatedAt: 'desc', documentId: 'asc' } as const;
+
 export interface RagIngestionLogQuery {
   collection?: string;
   status?: RagIngestionStatus;
@@ -96,7 +108,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   /** The latest recorded outcome per document, newest first. */
   async list(query: RagIngestionLogQuery = {}): Promise<RagIngestionLog[]> {
     return this.em.fork().find(RagIngestionLog, this.where(query), {
-      orderBy: { updatedAt: 'desc' },
+      orderBy: PAGE_ORDER,
       limit: query.limit ?? 200,
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
     });
@@ -111,7 +123,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ rows: RagIngestionLog[]; total: number }> {
     const em = this.em.fork();
     const [rows, total] = await em.findAndCount(RagIngestionLog, this.where(query), {
-      orderBy: { updatedAt: 'desc' },
+      orderBy: PAGE_ORDER,
       limit: query.limit ?? 200,
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
     });
