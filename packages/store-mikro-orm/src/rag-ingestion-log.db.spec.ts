@@ -154,6 +154,40 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
     expect(second.total).toBe(3);
   });
 
+  it('pages a batch sharing one updatedAt without dropping or repeating a row', async () => {
+    // inserted out of alphabetical order on purpose: insertion order must not be what decides the
+    // page boundaries, only the declared tiebreaker may
+    const inserted = ['doc-c', 'doc-a', 'doc-e', 'doc-b', 'doc-d'];
+    for (const id of inserted) {
+      await publish('media.ingested', { mediaId: id, collection: 'col-1', chunks: 1 });
+    }
+    // a bulk upload stamps the whole batch with the same second, so every row ties on the ordering
+    // column and only the tiebreaker keeps consecutive pages disjoint
+    await orm.em
+      .fork()
+      .nativeUpdate(RagIngestionLog, {}, { updatedAt: new Date('2026-01-01T00:00:00Z') });
+
+    const paged: string[] = [];
+    const listed: string[] = [];
+    for (let offset = 0; offset < inserted.length; offset += 2) {
+      const page = await log.listPage({ collection: 'col-1', limit: 2, offset });
+      expect(page.total).toBe(inserted.length);
+      paged.push(...page.rows.map((row) => row.documentId));
+      const rows = await log.list({ collection: 'col-1', limit: 2, offset });
+      listed.push(...rows.map((row) => row.documentId));
+    }
+
+    const byTiebreaker = [...inserted].sort();
+    // the guarantee that was broken: a sweep sees every row exactly once — none lost between two
+    // pages, none returned twice — which is what makes an orphan sweep or a reconcile correct
+    expect(paged.slice().sort()).toEqual(byTiebreaker);
+    expect(listed.slice().sort()).toEqual(byTiebreaker);
+    // and the reason it holds: with the ordering column fully tied, the primary key alone decides
+    // the sequence, so consecutive pages cannot overlap or leave a gap
+    expect(paged).toEqual(byTiebreaker);
+    expect(listed).toEqual(byTiebreaker);
+  });
+
   it('removes one document record, and reports whether there was one', async () => {
     await publish('media.ingested', { mediaId: 'gone', collection: 'col-1', chunks: 1 });
 
