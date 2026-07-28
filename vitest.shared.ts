@@ -27,8 +27,14 @@ export const plugins: Plugin[] = [
   swc.vite({
     jsc: {
       target: 'es2022',
-      parser: { syntax: 'typescript', decorators: true },
-      transform: { legacyDecorator: true, decoratorMetadata: true },
+      parser: { syntax: 'typescript', tsx: true, decorators: true },
+      transform: {
+        legacyDecorator: true,
+        decoratorMetadata: true,
+        // React's automatic JSX runtime (matches the dashboard's `jsx: react-jsx`). Without it swc
+        // emits `React.createElement` and every .tsx render spec dies on an undefined `React`.
+        react: { runtime: 'automatic' },
+      },
     },
   }),
 ];

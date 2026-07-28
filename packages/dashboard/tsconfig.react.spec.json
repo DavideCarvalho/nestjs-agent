@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.react.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["react", "react-dom"]
+  },
+  "include": ["src/react/**/*.ts", "src/react/**/*.tsx", "src/client/console-session.ts"],
+  "exclude": []
+}
