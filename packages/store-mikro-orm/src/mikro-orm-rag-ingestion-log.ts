@@ -1,5 +1,5 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
-import { type EntityData, EntityManager } from '@mikro-orm/core';
+import { type EntityData, EntityManager, type FilterQuery, type QueryOrderMap } from '@mikro-orm/core';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
 
@@ -47,14 +47,52 @@ function num(value: unknown): number | null {
  * in *neither* page (or the same row twice), which is how an orphan-sweep leaves an S3 object behind
  * with its log row already gone, and how a reconcile re-embeds documents it already has. `documentId`
  * is the entity's primary key, so appending it makes the order total and the pages disjoint.
+ *
+ * Exported because it is a contract, not an implementation detail: a caller that polls page 1 for a
+ * document it just rewrote depends on `updatedAt desc`, and a caller that pages depends on the
+ * tiebreaker. Pass it explicitly to {@link MikroOrmRagIngestionLog.listPage} to say so in code —
+ * and to keep `iterate`'s keyset arithmetic, which is derived from exactly this order, in view.
  */
-const PAGE_ORDER = { updatedAt: 'desc', documentId: 'asc' } as const;
+export const RAG_INGESTION_LOG_PAGE_ORDER = { updatedAt: 'desc', documentId: 'asc' } as const;
 
-export interface RagIngestionLogQuery {
+/** Default rows per round-trip for {@link MikroOrmRagIngestionLog.iterate}. */
+const DEFAULT_BATCH_SIZE = 200;
+
+/** The coordinates half of a log query: which rows, with nothing said about paging. */
+export interface RagIngestionLogWhere {
   collection?: string;
   status?: RagIngestionStatus;
+}
+
+export interface RagIngestionLogQuery extends RagIngestionLogWhere {
   limit?: number;
   offset?: number;
+}
+
+export interface RagIngestionLogPageQuery extends RagIngestionLogQuery {
+  /**
+   * Overrides {@link RAG_INGESTION_LOG_PAGE_ORDER}. Only override it with an order that is *total*
+   * (i.e. ends in `documentId`) — anything less and consecutive pages can overlap or leave a gap on
+   * tied rows, which is the whole reason the default has a tiebreaker.
+   */
+  orderBy?: QueryOrderMap<RagIngestionLog> | QueryOrderMap<RagIngestionLog>[];
+}
+
+/**
+ * Where a sweep left off: the ordering column plus the primary key, i.e. one point in
+ * {@link RAG_INGESTION_LOG_PAGE_ORDER}. Not an opaque token — it is two column values, so a caller
+ * may persist it across processes and resume from it.
+ */
+export interface RagIngestionLogCursor {
+  updatedAt: Date;
+  documentId: string;
+}
+
+export interface RagIngestionLogIterateOptions {
+  /** Rows fetched per round-trip. Defaults to {@link DEFAULT_BATCH_SIZE}; clamped to at least 1. */
+  batchSize?: number;
+  /** Resume strictly after this point in the order, e.g. a cursor persisted by an earlier sweep. */
+  after?: RagIngestionLogCursor;
 }
 
 /**
@@ -108,7 +146,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   /** The latest recorded outcome per document, newest first. */
   async list(query: RagIngestionLogQuery = {}): Promise<RagIngestionLog[]> {
     return this.em.fork().find(RagIngestionLog, this.where(query), {
-      orderBy: PAGE_ORDER,
+      orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
       limit: query.limit ?? 200,
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
     });
@@ -117,17 +155,129 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   /**
    * The same page plus the unpaginated total, so a caller can tell "these are all of them" from
    * "these are the first N". A list that silently truncates reads as complete when it isn't.
+   *
+   * Ordered by {@link RAG_INGESTION_LOG_PAGE_ORDER} unless `query.orderBy` says otherwise.
+   *
+   * Offset paging is only sound over a table nobody is deleting from underneath you: a row removed
+   * behind the cursor shifts everything after it back by one, so the next page starts one row late
+   * and that row is never seen. Use {@link iterate} for any sweep that deletes.
    */
   async listPage(
-    query: RagIngestionLogQuery = {},
+    query: RagIngestionLogPageQuery = {},
   ): Promise<{ rows: RagIngestionLog[]; total: number }> {
     const em = this.em.fork();
     const [rows, total] = await em.findAndCount(RagIngestionLog, this.where(query), {
-      orderBy: PAGE_ORDER,
+      orderBy: query.orderBy ?? RAG_INGESTION_LOG_PAGE_ORDER,
       limit: query.limit ?? 200,
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
     });
     return { rows, total };
+  }
+
+  /**
+   * Every matching row, newest first, streamed in batches — the sweep-safe way to walk this table.
+   *
+   * Paging is *keyset*, not offset: each batch asks for the rows that sort strictly after the last
+   * row yielded, using `(updatedAt, documentId)` — one point in
+   * {@link RAG_INGESTION_LOG_PAGE_ORDER}, which is total because it ends in the primary key. A
+   * cursor made of column values does not move when rows leave the table, which is what makes this
+   * delete-safe *by construction* rather than by the caller carefully advancing an offset by only
+   * the rows it kept.
+   *
+   * What you can rely on:
+   * - **Deleting rows while iterating is safe.** Delete any row you like — the one just yielded,
+   *   a batch of them, rows you have not reached yet — and the remaining rows are still each
+   *   visited exactly once. Nothing is skipped and nothing is repeated, because no surviving row's
+   *   `(updatedAt, documentId)` changed.
+   * - **Ties are safe.** A bulk upload stamps a whole batch with the same `updatedAt`; the
+   *   `documentId` tiebreaker keeps consecutive batches disjoint even when every row ties.
+   * - **Each row is yielded at most once**, for as long as timestamps only move forward — which is
+   *   what `record()` does, since it always stamps `now`.
+   *
+   * What this is **not**: a snapshot, or a repeatable read. The sweep observes the table as it is
+   * when each batch is fetched, so:
+   * - A row **inserted** mid-sweep is stamped `now`, which sorts *newer* than a cursor already past
+   *   — so it lands behind the sweep and is not visited. A sweep therefore never sees documents
+   *   ingested after it started, which is the behaviour an orphan sweep wants: a document that
+   *   arrived while you were sweeping is not an orphan.
+   * - A row **re-ingested** mid-sweep has its `updatedAt` bumped to `now`, moving it behind the
+   *   cursor for the same reason. If the sweep had already passed it, it is not visited twice; if it
+   *   had not, it is **missed for this pass**. That is the honest limit: `iterate` guarantees "at
+   *   most once", not "at least once", against concurrent writers. Sweeps that must not miss a
+   *   concurrently-rewritten row should be idempotent and run again.
+   * - Only a row whose `updatedAt` is moved *backwards* — which nothing in this class does, and
+   *   which needs a direct write — can be yielded twice.
+   * - `collection` / `status` are re-evaluated per batch, so a row that stops matching mid-sweep
+   *   stops being visited.
+   *
+   * Each batch runs on a **fresh forked EntityManager**. `list`/`listPage` fork per call, which is
+   * enough for one bounded page; a sweep is unbounded and long-lived, and holding one identity map
+   * across it would retain every row it ever saw. Forking per batch keeps the working set to one
+   * batch. The consequence for callers: yielded entities are not managed by any live context —
+   * treat them as data, not as something to mutate and flush.
+   */
+  async *iterate(
+    where: RagIngestionLogWhere = {},
+    options: RagIngestionLogIterateOptions = {},
+  ): AsyncGenerator<RagIngestionLog, void, undefined> {
+    const batchSize = Math.max(1, Math.trunc(options.batchSize ?? DEFAULT_BATCH_SIZE));
+    let cursor = options.after;
+    for (;;) {
+      const rows = await this.em.fork().find(RagIngestionLog, this.keyset(where, cursor), {
+        orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
+        limit: batchSize,
+      });
+      const last = rows.at(-1);
+      if (last === undefined) {
+        return;
+      }
+      for (const row of rows) {
+        yield row;
+      }
+      // Advance only after the batch is consumed, so a caller that breaks out leaves the cursor on
+      // the last row it actually saw.
+      cursor = { updatedAt: last.updatedAt, documentId: last.documentId };
+      // Deliberately NOT `if (rows.length < batchSize) return`: a short batch means "nothing after
+      // the cursor *right now*", not "nothing ever". One extra empty query per sweep buys the
+      // guarantee above holding for a writer that lands a row late.
+    }
+  }
+
+  /**
+   * Just the document ids of the matching rows, in {@link RAG_INGESTION_LOG_PAGE_ORDER}.
+   *
+   * Returns **all** of them — no 200-row cap, unlike `list` — by sweeping with {@link iterate}'s
+   * keyset internally, so it is correct against concurrent deletes for the same reason `iterate`
+   * is. What the cap protects against is hydrating an unbounded number of wide entities (`error` is
+   * a TEXT column); this selects two columns — the id, plus the `updatedAt` the cursor needs — and
+   * keeps only the ids, so the result is a list of strings whose size is the answer the caller
+   * asked for.
+   *
+   * For callers that need the id set of a collection and nothing else: an orphan sweep unioning the
+   * log against the vector store's own document list.
+   */
+  async listDocumentIds(
+    where: RagIngestionLogWhere = {},
+    options: { batchSize?: number } = {},
+  ): Promise<string[]> {
+    const batchSize = Math.max(1, Math.trunc(options.batchSize ?? DEFAULT_BATCH_SIZE));
+    const ids: string[] = [];
+    let cursor: RagIngestionLogCursor | undefined;
+    for (;;) {
+      const rows = await this.em.fork().find(RagIngestionLog, this.keyset(where, cursor), {
+        orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
+        limit: batchSize,
+        fields: ['documentId', 'updatedAt'],
+      });
+      const last = rows.at(-1);
+      if (last === undefined) {
+        return ids;
+      }
+      for (const row of rows) {
+        ids.push(row.documentId);
+      }
+      cursor = { updatedAt: last.updatedAt, documentId: last.documentId };
+    }
   }
 
   /** The latest recorded outcome for one document, or null if it was never attempted. */
@@ -146,10 +296,35 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     return this.em.fork().nativeDelete(RagIngestionLog, { collection });
   }
 
-  private where(query: RagIngestionLogQuery): Record<string, unknown> {
+  private where(query: RagIngestionLogWhere): FilterQuery<RagIngestionLog> {
     return {
       ...(query.collection !== undefined ? { collection: query.collection } : {}),
       ...(query.status !== undefined ? { status: query.status } : {}),
+    };
+  }
+
+  /**
+   * The coordinates filter AND'd with "strictly after `cursor` in
+   * {@link RAG_INGESTION_LOG_PAGE_ORDER}".
+   *
+   * The order is `updatedAt desc, documentId asc`, so "after" means an older timestamp, or the same
+   * timestamp and a larger id. Both halves are needed: the `$lt` alone would re-yield every row
+   * tied with the cursor, and dropping the tie branch would skip them instead.
+   */
+  private keyset(
+    where: RagIngestionLogWhere,
+    cursor: RagIngestionLogCursor | undefined,
+  ): FilterQuery<RagIngestionLog> {
+    const base = this.where(where);
+    if (cursor === undefined) {
+      return base;
+    }
+    return {
+      ...base,
+      $or: [
+        { updatedAt: { $lt: cursor.updatedAt } },
+        { updatedAt: cursor.updatedAt, documentId: { $gt: cursor.documentId } },
+      ],
     };
   }
 

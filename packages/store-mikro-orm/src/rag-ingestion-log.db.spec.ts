@@ -5,11 +5,49 @@ import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
-import { RagIngestionLog } from './entities/rag-ingestion-log.entity';
-import { MikroOrmRagIngestionLog } from './mikro-orm-rag-ingestion-log';
+import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
+import {
+  MikroOrmRagIngestionLog,
+  RAG_INGESTION_LOG_PAGE_ORDER,
+} from './mikro-orm-rag-ingestion-log';
 
 let orm: MikroORM;
 let log: MikroOrmRagIngestionLog;
+
+const EPOCH = Date.parse('2026-01-01T00:00:00Z');
+
+/**
+ * Insert rows straight into the table rather than through the diagnostics channel: these sweep
+ * tests need dozens of rows with *controlled* `updatedAt` values, and the recorder deliberately
+ * stamps `now`.
+ */
+async function seed(
+  count: number,
+  options: { collection?: string; status?: RagIngestionStatus; sameUpdatedAt?: boolean } = {},
+): Promise<string[]> {
+  const ids = Array.from({ length: count }, (_, i) => `doc-${String(i).padStart(3, '0')}`);
+  await orm.em.fork().insertMany(
+    RagIngestionLog,
+    ids.map((documentId, i) => ({
+      documentId,
+      status: options.status ?? ('ingested' as RagIngestionStatus),
+      collection: options.collection ?? 'col-1',
+      chunks: 1,
+      createdAt: new Date(EPOCH),
+      // distinct timestamps by default; all-tied when the test is about the tiebreaker
+      updatedAt: new Date(options.sameUpdatedAt === true ? EPOCH : EPOCH + i * 1000),
+    })),
+  );
+  return ids;
+}
+
+/** The ids currently in the table, in the paging order. */
+async function idsInOrder(): Promise<string[]> {
+  const rows = await orm.em
+    .fork()
+    .find(RagIngestionLog, {}, { orderBy: RAG_INGESTION_LOG_PAGE_ORDER });
+  return rows.map((row) => row.documentId);
+}
 
 /**
  * Publish on a rag channel and wait for the recorder's write to land. Publishes the raw
