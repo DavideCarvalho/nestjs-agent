@@ -22,6 +22,7 @@ export {
   type MediaIngestResult,
   type MediaIngestSkipReason,
   type ReadFile,
+  type StatFile,
   ingestMediaFile,
   removeMedia,
 } from './media-ingestion.js';

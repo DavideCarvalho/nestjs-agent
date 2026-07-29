@@ -69,10 +69,45 @@ const store = new PgVectorStore(
 await store.ensureSchema(); // CREATE EXTENSION vector + table + HNSW cosine index
 ```
 
+## Hybrid search — and deleting from it
+
+Hybrid search means chunking once and feeding the SAME chunks to both halves, so their ids line up
+and `HybridRetriever` can fuse the rankings:
+
+```ts
+const chunks = chunkDocuments(docs);
+await ingestChunks(chunks, { embedder, store });
+keyword.add(chunks);
+
+const retriever = new HybridRetriever([new EmbeddingRetriever(embedder, store), keyword]);
+```
+
+Because there are two indexes, **deletes have to hit both**. `KeywordRetriever` keeps its own copy of
+each chunk's text, so a document dropped from the vector store alone stays fully retrievable —
+`retrieve` will keep returning the removed passage:
+
+```ts
+await store.remove(documentId);
+keyword.remove(documentId); // ← the other half. Same document id; chunk ids collapse for you.
+```
+
+`KeywordRetriever` also exposes `clear()` and `size` for rebuilding the index wholesale.
+
+## RediSearch store
+
+`RedisVectorStore` needs `ensureSchema()` at boot. It creates the index if missing — and if the index
+already exists, it compares it against your configuration rather than assuming they agree. A
+`filterableFields` entry added after the index was created is repaired in place with
+`FT.ALTER … SCHEMA ADD` (chunks written before the repair only become filterable on that key once
+re-ingested). A changed `dimensions` — a model swap — can't be repaired without a full reindex, so it
+throws `RedisVectorSchemaMismatchError` instead of silently leaving the index on the old width.
+
 ## API
 
 - `chunkText(text, { chunkSize?, overlap? })` — overlapping, boundary-aware chunks.
 - `ingestDocuments(docs, { embedder, store, chunkSize?, overlap? })` — chunk → embed → upsert.
 - `EmbeddingRetriever(embedder, store)` — the core `Retriever` from an embedder + vector store.
-- `MemoryVectorStore` / `PgVectorStore` — `VectorStore` adapters.
+- `KeywordRetriever` — BM25 lexical half of hybrid search: `add(chunks)`, `remove(documentId)`,
+  `clear()`, `size`.
+- `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters.
 - `createRetrievalTool(retriever, { name?, description?, topK? })` — the agentic-retrieval tool.
