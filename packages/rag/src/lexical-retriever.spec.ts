@@ -211,6 +211,7 @@ describe('LexicalRetriever', () => {
       upsert: async () => undefined,
       search: async () => [],
       remove: async () => undefined,
+      updateMetadata: async () => 0,
       listDocuments: async () => [],
       listDocumentIds: async () => [],
       removeMany: async () => undefined,

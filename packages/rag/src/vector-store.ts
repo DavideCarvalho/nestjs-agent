@@ -1,4 +1,5 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
+import type { MetadataPatch } from './metadata-patch.js';
 
 /** A stored, embedded chunk. `embedding` length must match the store's configured dimensions. */
 export interface VectorRecord {
@@ -27,9 +28,10 @@ export interface VectorSearchOptions {
  * precedent:
  *
  * - **Required, on this interface**, when every backend *can* implement it from what it already
- *   stores. {@link VectorStore.listDocumentIds}, {@link VectorStore.removeMany},
- *   {@link VectorStore.removeWhere} and {@link VectorStore.countChunks} are CRUD over the records the
- *   store already holds — the same footing as {@link VectorStore.remove} and
+ *   stores. {@link VectorStore.updateMetadata}, {@link VectorStore.listDocumentIds},
+ *   {@link VectorStore.removeMany}, {@link VectorStore.removeWhere} and
+ *   {@link VectorStore.countChunks} are CRUD over the records the store already holds — the same
+ *   footing as {@link VectorStore.remove} and
  *   {@link VectorStore.listDocuments}. Making them optional would buy nothing but a permanent
  *   `if (supported)` at every call site plus an unreachable "and if it isn't?" branch.
  * - **Optional, in a capability interface**, when some backend genuinely *cannot* without
@@ -57,6 +59,38 @@ export interface VectorStore {
    * without a preceding `remove` leaves the old tail orphaned.
    */
   remove(documentId: string): Promise<void>;
+  /**
+   * Rewrite a document's metadata **without touching its text or its embeddings** — the update path
+   * for a dimension that is genuinely mutable (which bases a document is relevant to, who may see it,
+   * what it was reclassified as) rather than derived from its content.
+   *
+   * Without this, a consumer whose documents get re-classified has exactly two options, and both are
+   * bad: re-embed the whole document — paying the model bill, and burning the ingestion budget, to
+   * change a string — or refuse to stamp the dimension onto chunks at all and resolve it at query
+   * time instead, which turns a filter the index could have applied into a join the caller has to.
+   *
+   * `patch` is applied to **every chunk** of the document (metadata is a document-level property that
+   * happens to be stored per chunk), with the merge semantics documented on {@link MetadataPatch}:
+   * partial merge, `null` to remove a key, `undefined` ignored, values — including arrays — replaced
+   * wholesale.
+   *
+   * Returns **the number of chunks written**. An unknown `documentId` updates nothing and returns
+   * `0`; it does not throw. That is deliberate and matches {@link VectorStore.remove}, which is
+   * likewise silent on a document that isn't there: this is a reconciliation-shaped API, called by a
+   * loop diffing a source of truth against the index, and such a loop races with ingestion and
+   * deletion by construction. Turning "the document was removed between the diff and the write" into
+   * an exception would make the ordinary case an error, and the caller would have to catch and
+   * swallow it to get back the behaviour it wanted. The count gives the same information without
+   * that: `0` means nothing was there. (An empty patch also writes nothing and returns `0` — the
+   * return counts chunks *written*, not chunks *matched*.)
+   *
+   * Implementations MUST keep every representation of the metadata in step. A store that keeps both
+   * a filterable projection and a returned blob (RediSearch's `meta_*` TAGs beside its
+   * `metadata_json`) and updates only one makes the store lie to itself: a chunk that *filters* as
+   * one value but *reports* another, where which half you notice depends on whether you searched or
+   * read.
+   */
+  updateMetadata(documentId: string, patch: MetadataPatch): Promise<number>;
   /**
    * List the distinct source documents currently indexed (chunk ids collapsed back to their document
    * by stripping the trailing `#<n>`), each with a representative chunk's `metadata`, optionally

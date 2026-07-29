@@ -1,5 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
+import { type MetadataPatch, isEmptyMetadataPatch, splitMetadataPatch } from './metadata-patch.js';
 import type {
   IndexedDocument,
   VectorRecord,
@@ -107,6 +108,33 @@ export class PgVectorStore implements VectorStore {
     await this.client.query(`DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1`, [
       documentId,
     ]);
+  }
+
+  /**
+   * Rewrite a document's metadata without re-embedding it. See {@link VectorStore.updateMetadata}
+   * for the semantics; here the whole thing is one statement, because jsonb already *is* the merge:
+   * `||` is a shallow key-wise merge (right side wins, arrays replaced wholesale — precisely
+   * {@link MetadataPatch}) and `- text[]` drops the keys the patch removed. `COALESCE` covers a chunk
+   * ingested with no metadata at all, so a patch can create the object rather than no-op on `NULL`.
+   *
+   * Unlike RediSearch there is no second representation to keep in step — the `metadata` column is
+   * both what `search` filters on and what it returns — so the correctness trap the Redis adapter has
+   * to work for simply does not exist here. `RETURNING id` is what supplies the chunk count, since
+   * {@link PgClient} is a rows-only surface with no `rowCount`.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    if (isEmptyMetadataPatch(patch)) {
+      return 0;
+    }
+    const { set, remove } = splitMetadataPatch(patch);
+    const rows = await this.client.query<{ id: string }>(
+      `UPDATE ${this.table}
+          SET metadata = (COALESCE(metadata, '{}'::jsonb) || $2::jsonb) - $3::text[]
+        WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1
+        RETURNING id`,
+      [documentId, JSON.stringify(set), remove],
+    );
+    return rows.length;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {

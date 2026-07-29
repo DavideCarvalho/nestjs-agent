@@ -120,6 +120,68 @@ describe('PgVectorStore (real pgvector)', () => {
   });
 });
 
+// updateMetadata is one jsonb statement here — `||` IS the shallow merge and `- text[]` the removal —
+// so what needs proving against a real Postgres is that those operators mean what the API promises.
+describe('PgVectorStore.updateMetadata (real jsonb)', () => {
+  async function seed(): Promise<void> {
+    await store.upsert([
+      {
+        id: 'um-doc#0',
+        text: 'zero',
+        embedding: [1, 0, 0],
+        source: 'docs/policy',
+        metadata: { owner: 'u1', bases: ['A', 'B'], title: 'quarterly' },
+      },
+      {
+        id: 'um-doc#1',
+        text: 'one',
+        embedding: [1, 0, 0],
+        source: 'docs/policy',
+        metadata: { owner: 'u1', bases: ['A', 'B'], title: 'quarterly' },
+      },
+      // a different document sharing the `um-doc` prefix — must not be touched
+      { id: 'um-docs#0', text: 'sibling', embedding: [1, 0, 0], metadata: { bases: ['A'] } },
+    ]);
+  }
+
+  it('merges the patch into every chunk, replacing arrays wholesale, sparing prefix-siblings', async () => {
+    await seed();
+    expect(await store.updateMetadata('um-doc', { bases: ['B', 'C'] })).toBe(2);
+
+    const found = await store.search([1, 0, 0], { topK: 50, filter: { bases: ['C'] } });
+    expect(found.map((passage) => passage.id).sort()).toEqual(['um-doc#0', 'um-doc#1']);
+    for (const passage of found) {
+      expect(passage.metadata).toEqual({ owner: 'u1', bases: ['B', 'C'], title: 'quarterly' });
+      expect(passage.source).toBe('docs/policy'); // text/source/embedding untouched
+      expect(passage.text.length).toBeGreaterThan(0);
+    }
+
+    // the old value no longer matches the patched document — only the untouched sibling
+    const old = await store.search([1, 0, 0], { topK: 50, filter: { bases: ['A'] } });
+    expect(old.map((passage) => passage.id)).toEqual(['um-docs#0']);
+  });
+
+  it('removes a key on an explicit null and ignores undefined', async () => {
+    expect(await store.updateMetadata('um-doc', { title: null, owner: undefined })).toBe(2);
+    const [document] = await store.listDocuments({ bases: ['C'] });
+    expect(document?.metadata).toEqual({ owner: 'u1', bases: ['B', 'C'] });
+  });
+
+  it('creates metadata on a chunk ingested without any', async () => {
+    await store.upsert([{ id: 'um-bare', text: 'no metadata', embedding: [1, 0, 0] }]);
+    expect(await store.updateMetadata('um-bare', { owner: 'u9' })).toBe(1);
+    expect(await store.listDocuments({ owner: 'u9' })).toEqual([
+      { id: 'um-bare', metadata: { owner: 'u9' } },
+    ]);
+  });
+
+  it('returns 0 for an unknown document and for a patch that writes nothing', async () => {
+    expect(await store.updateMetadata('never-ingested', { owner: 'u1' })).toBe(0);
+    expect(await store.updateMetadata('um-doc', {})).toBe(0);
+    expect(await store.updateMetadata('um-doc', { owner: undefined })).toBe(0);
+  });
+});
+
 /** The enumeration capability on its own table, so a destructive case can't reach the suite above. */
 describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
   let enumStore: PgVectorStore;

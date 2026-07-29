@@ -1,5 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing, matchesFilter } from './filter.js';
+import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import {
   type IndexedDocument,
   UnsafeRemovalError,
@@ -34,6 +35,27 @@ export class MemoryVectorStore implements VectorStore {
         this.records.delete(id);
       }
     }
+  }
+
+  /**
+   * Merge `patch` into every chunk of `documentId`, leaving `text` and `embedding` untouched. The
+   * record is *replaced* rather than mutated: `upsert` stores the caller's own object, and patching
+   * it in place would edit an object the caller still holds — a surprise no out-of-process store
+   * could reproduce, and therefore one this reference adapter must not teach.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    if (isEmptyMetadataPatch(patch)) {
+      return 0;
+    }
+    let updated = 0;
+    for (const [id, record] of this.records) {
+      if (documentIdOf(id) !== documentId) {
+        continue;
+      }
+      this.records.set(id, { ...record, metadata: applyMetadataPatch(record.metadata, patch) });
+      updated += 1;
+    }
+    return updated;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
