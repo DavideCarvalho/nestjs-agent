@@ -1,5 +1,70 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.13.0
+
+### Minor Changes
+
+- [#56](https://github.com/DavideCarvalho/nestjs-agent/pull/56) [`7c27376`](https://github.com/DavideCarvalho/nestjs-agent/commit/7c273763eeb6d5841028612d81acc63b2a8dd4eb) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Page the approvals inbox, open a run or a thread, and report p50 next to p95
+
+  The governance read-model could answer "what happened" but not "how much of it is there" or
+  "what happened _here_". Three gaps, one shape of fix.
+
+  **The approvals inbox was capped and silently truncating.** `pendingApprovals(limit)` returns a
+  capped list with no total, so a backlog past the cap was invisible — nothing on screen said so.
+  That is the worst failure a human-in-the-loop queue can have. `approvalsPage` gives it the same
+  paged treatment `runsPage`/`threadsPage`/`toolCallsPage` already have, with a `total` and filters
+  on `toolName`/`threadId`/`actorRef`/`agentName`/day bounds, exposed as `GET approvals-page`.
+  Ordering is `createdAt asc, id asc` — the `id` makes it a total order, and ascending means a newly
+  requested approval appends past the last page instead of shifting the page an operator is reading.
+  `GET approvals` stays: the console's own SPA still calls it, and telescope's inbox table reads the
+  SPI method directly. Telescope's pending-approvals STAT now reads `approvalsPage(...).total`, which
+  replaces an explicitly-documented undercount (it counted a 500-row capped list).
+
+  **Every table row was a dead end.** `runDetail(runId)` returns a run, its owning thread's headline
+  and its tool calls; `threadDetail({ threadId, messageLimit, runLimit })` returns a thread, its
+  lifetime token/cost rollup, its newest runs and its newest messages. One round trip each, and a
+  fixed query count inside — per-message tool-call counts are one batched read, not one per message.
+  Exposed as `GET runs/:runId` and `GET threads/:threadId`, 404 on an unknown id (a console that
+  renders an empty detail instead sends an operator hunting a bug that isn't there). A soft-deleted
+  thread is returned flagged `deleted: true` rather than 404'd — an audit needs the thread it just
+  lost. Run detail carries no cost figure: the token ledger has no run column, so per-run spend is
+  not attributable without a store migration, and inventing a number would be worse than omitting it.
+
+  **`toolStats` reported only a tail.** It had p95 and no measure of the typical call, so a tool whose
+  median is 100ms and whose p95 is 10s looked the same as one that is uniformly slow. Added
+  `p50ExecutionMs` alongside. Not a mean: latency is long-tailed, and an average of nine 100ms calls
+  and one 10s call is ~1s — a number no call in the sample ever produced. Percentiles stay in-process
+  off the sorted sample, as they already were, because MySQL has no `PERCENTILE_CONT` and one portable
+  implementation beats three dialect-specific ones.
+
+  Also in this change:
+
+  - `where[threadId]` on `GET runs-page` now works. Every adapter's `RunWhere` already supported it;
+    only the query parser rejected it, so "show me this thread's runs" 400'd with "Unknown where
+    field" — exactly the follow-up query a drill-down leads to.
+  - `recentThreads`/`threadsPage` no longer issue two queries per row. Both SQL adapters batch the
+    message counts and token totals across the whole page, so a 200-row page costs two statements
+    instead of four hundred round trips.
+  - The typed client (`@dudousxd/nestjs-agent-dashboard/client`) gains `approvalsPage`, `runDetail`
+    and `threadDetail`, and picks up `runId` on the tool-call and pending-approval rows — the server
+    had been sending it and the mirror had drifted.
+
+  `AgentGovernanceQueries` gains three required methods (`approvalsPage`, `runDetail`,
+  `threadDetail`), matching how the paged reads were added. An out-of-tree adapter implementing the
+  interface must add them; all three in-tree adapters (MikroORM, Drizzle, in-memory) do.
+
+### Patch Changes
+
+- [#59](https://github.com/DavideCarvalho/nestjs-agent/pull/59) [`d115cb7`](https://github.com/DavideCarvalho/nestjs-agent/commit/d115cb7973aafa539eafbb1e488259044a562069) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Stop a `core` minor from promoting half the monorepo to 1.0.0.
+
+  Five packages declared their peer dependency on `@dudousxd/nestjs-agent-core` as `workspace:*`. Changesets treats a peer-dependency bump as breaking for the dependent, and "breaking" on a `0.x` package means `1.0.0` — so the moment `core` took a minor, `ai-sdk`, `rag`, `store-mikro-orm`, `testing` and `transport-redis` were all queued to publish as `1.0.0`. `rag-media` went with them by cascade: its own range on `core` was correct, but its `>=0.4.0 <1.0.0` on `rag` stopped being satisfied once `rag` majored.
+
+  The ranges are now `>=0.10.0 <1.0.0`, matching what `dashboard` and `rag-media` already declared. `onlyUpdatePeerDependentsWhenOutOfRange` is already set in the changesets config, and with a range that a `0.11.0` core still satisfies it does its job. `dashboard` is the control: it peer-depends on `core` too, and it was the one package that did _not_ major, because its range was written this way from the start.
+
+  Verified by running `changeset version` against the same set of changesets before and after: six `1.0.0` bumps become the minors and patches those changesets actually asked for.
+
+  Consumers would have felt this as silence rather than breakage. A dependant on `^0.7.0` of `rag` does not match `1.0.0`, so it simply stops receiving updates, with nothing failing anywhere to say so.
+
 ## 0.12.0
 
 ### Minor Changes
