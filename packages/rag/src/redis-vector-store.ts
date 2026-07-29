@@ -1,7 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
 import {
-  type EnumerableVectorStore,
   type IndexedDocument,
   type LexicalVectorStore,
   UnsafeRemovalError,
@@ -81,7 +80,7 @@ export interface RedisVectorStoreOptions {
  * {@link LexicalVectorStore}: {@link RedisVectorStore.searchText} is BM25 over that same index —
  * the lexical half of hybrid search with no second index to build, feed, or invalidate.
  */
-export class RedisVectorStore implements LexicalVectorStore, EnumerableVectorStore {
+export class RedisVectorStore implements LexicalVectorStore {
   private readonly index: string;
   private readonly prefix: string;
   private readonly dimensions: number;

@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PgClient } from './pg-vector-store.js';
 import { PgVectorStore } from './pg-vector-store.js';
-import { UnsafeRemovalError, isEnumerableVectorStore } from './vector-store.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -149,10 +149,6 @@ describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
   });
 
   beforeEach(seed);
-
-  it('advertises the capability', () => {
-    expect(isEnumerableVectorStore(enumStore)).toBe(true);
-  });
 
   it('countChunks and listDocumentIds agree with the metadata-carrying enumeration', async () => {
     expect(await enumStore.countChunks()).toBe(5);

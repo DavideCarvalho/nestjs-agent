@@ -1,7 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
 import type {
-  EnumerableVectorStore,
   IndexedDocument,
   VectorRecord,
   VectorSearchOptions,
@@ -49,11 +48,11 @@ export interface PgVectorStoreOptions {
  * capability interface is open, so a `PgLexicalVectorStore` (or an option here, gated on an
  * explicitly-created index) can be added later without changing anything else.
  *
- * It *does* carry the optional {@link EnumerableVectorStore} capability, and unlike the lexical one
- * that needs nothing new: enumeration and bulk deletion are `DISTINCT`, `= ANY($1)`, `DELETE … WHERE`
+ * The enumeration and bulk-deletion methods {@link VectorStore} requires need nothing new here,
+ * unlike the lexical capability above: enumeration and bulk deletion are `DISTINCT`, `= ANY($1)`, `DELETE … WHERE`
  * and `count(*)` over the table and index that already exist. No DDL, no boot-time lock, no migration.
  */
-export class PgVectorStore implements VectorStore, EnumerableVectorStore {
+export class PgVectorStore implements VectorStore {
   private readonly table: string;
   private readonly dimensions: number;
 
@@ -157,7 +156,7 @@ export class PgVectorStore implements VectorStore, EnumerableVectorStore {
   }
 
   /**
-   * See {@link EnumerableVectorStore.removeWhere}: empty filter object throws, empty-array value
+   * See {@link VectorStore.removeWhere}: empty filter object throws, empty-array value
    * deletes nothing. The count comes from `RETURNING id` rather than a driver-specific `rowCount`,
    * because {@link PgClient} is deliberately just "run SQL, get rows".
    */

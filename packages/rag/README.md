@@ -194,28 +194,23 @@ library upgrade. The interface is open, so it can be added later without changin
 - `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` — RRF fusion of the two.
 - `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.
-- `isEnumerableVectorStore(store)` — type guard for the optional `EnumerableVectorStore` capability.
 - `createRetrievalTool(retriever, { name?, description?, topK? })` — the agentic-retrieval tool.
 
-## Collection maintenance (`EnumerableVectorStore`)
+## Collection maintenance
 
-The base `VectorStore` can only enumerate documents *with* their metadata and delete them *one at a
-time*, which makes routine maintenance quadratic-ish: dropping a 2 000-document collection is one
-`listDocuments()` that parses a metadata blob per chunk, then 2 000 `remove()` calls — and on Redis
-each of those is a `SCAN` over the whole keyspace, queues and app cache included.
+`remove` and `listDocuments` can only enumerate documents *with* their metadata and delete them *one
+at a time*, which makes routine maintenance quadratic-ish: dropping a 2 000-document collection that
+way is one `listDocuments()` that parses a metadata blob per chunk, then 2 000 `remove()` calls — and
+on Redis each of those is a `SCAN` over the whole keyspace, queues and app cache included.
 
-All three shipped adapters also implement the optional `EnumerableVectorStore` capability, which does
-the same work as one filtered query:
+So `VectorStore` **requires** four more methods, each doing the same work as one filtered query. They
+are not an optional capability and there is nothing to narrow to — every store has them:
 
 ```ts
-import { isEnumerableVectorStore } from '@dudousxd/nestjs-agent-rag';
-
-if (isEnumerableVectorStore(store)) {
-  await store.countChunks({ collection: 'handbook' });   // FT.SEARCH LIMIT 0 0 / count(*)
-  await store.listDocumentIds({ collection: 'handbook' }); // ids only — no metadata round-trip
-  await store.removeWhere({ collection: 'handbook' });     // one query, returns chunks removed
-  await store.removeMany(['doc-a', 'doc-b']);              // N documents, one pass
-}
+await store.countChunks({ collection: 'handbook' });     // FT.SEARCH LIMIT 0 0 / count(*)
+await store.listDocumentIds({ collection: 'handbook' }); // ids only — no metadata round-trip
+await store.removeWhere({ collection: 'handbook' });     // one query, returns chunks removed
+await store.removeMany(['doc-a', 'doc-b']);              // N documents, one pass
 ```
 
 `removeWhere` is the destructive one, so it has two rules worth knowing before you call it:
@@ -234,3 +229,18 @@ Deliberate mass deletion is still available; it just has to be spelled out:
 would mean stamping the document id as an indexed field at write time, and chunks written before that
 change carry no such field — the search would find none of them and `remove` would silently stop
 deleting. The methods above need no new field, so they have no migration.
+
+### Why these are required and `searchText` is optional
+
+A method is **required on `VectorStore`** when every backend can implement it from what it already
+stores. Enumeration and bulk deletion are CRUD over records the store already holds — the same
+footing as `remove` and `listDocuments` — so making them optional would only cost every consumer a
+permanent `if (supported)` and an unreachable "and if it isn't?" branch.
+
+A method goes in an **optional capability interface** when some backend genuinely *cannot* provide it
+without infrastructure the consumer has to adopt. `LexicalVectorStore.searchText` is the only one
+today, and it earns it: RediSearch has BM25 natively, Postgres needs a `tsvector` column, a GIN index
+and a migration you run and watch, and `MemoryVectorStore` would have to implement BM25 itself.
+
+The test is whether a backend can do it at all — not whether adding it would inconvenience an
+implementer who has already shipped.

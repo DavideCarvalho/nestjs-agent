@@ -37,7 +37,7 @@ export function matchesFilter(
  *
  * It is exported from this module rather than reimplemented per adapter precisely because getting it
  * wrong is *silent*: a read path that ignores it over-returns, and a **write** path that ignores it
- * (see {@link import('./vector-store.js').EnumerableVectorStore.removeWhere}) deletes the corpus a
+ * (see {@link import('./vector-store.js').VectorStore.removeWhere}) deletes the corpus a
  * deny was supposed to protect.
  */
 export function filterMatchesNothing(filter?: Record<string, unknown>): boolean {

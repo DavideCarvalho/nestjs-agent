@@ -1,7 +1,6 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing, matchesFilter } from './filter.js';
 import {
-  type EnumerableVectorStore,
   type IndexedDocument,
   UnsafeRemovalError,
   type VectorRecord,
@@ -14,13 +13,13 @@ import {
  * An in-process {@link VectorStore} — cosine similarity over a Map, no infra. The reference adapter
  * for tests and small/embedded corpora; for production scale use `PgVectorStore` (or your own).
  *
- * It also carries the optional {@link EnumerableVectorStore} capability. There is no performance
- * argument for it here — every method below is a loop over the same Map — but a store that tests are
+ * It implements the enumeration and bulk-deletion half of {@link VectorStore} too. There is no
+ * performance argument for it here — every method below is a loop over the same Map — but a store that tests are
  * written against has to behave identically to the one production runs, and the semantics that matter
  * (`removeWhere` refusing an empty filter, an empty-array filter deleting nothing) are behavioural,
  * not incidental to Redis.
  */
-export class MemoryVectorStore implements VectorStore, EnumerableVectorStore {
+export class MemoryVectorStore implements VectorStore {
   private readonly records = new Map<string, VectorRecord>();
 
   async upsert(records: VectorRecord[]): Promise<void> {
@@ -81,7 +80,7 @@ export class MemoryVectorStore implements VectorStore, EnumerableVectorStore {
   }
 
   /**
-   * See {@link EnumerableVectorStore.removeWhere}. The empty-array short-circuit below is redundant
+   * See {@link VectorStore.removeWhere}. The empty-array short-circuit below is redundant
    * against `matchesFilter` (which already matches nothing for an empty array) and is kept anyway:
    * this is the method where "the filter accidentally means everything" destroys data, so the deny is
    * stated where a reader can see it rather than inferred from another module's truth table.

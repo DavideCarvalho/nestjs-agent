@@ -1,18 +1,12 @@
 export { chunkText, type ChunkOptions } from './chunk.js';
 export type {
-  EnumerableVectorStore,
   IndexedDocument,
   LexicalVectorStore,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
 } from './vector-store.js';
-export {
-  UnsafeRemovalError,
-  documentIdOf,
-  isEnumerableVectorStore,
-  isLexicalVectorStore,
-} from './vector-store.js';
+export { UnsafeRemovalError, documentIdOf, isLexicalVectorStore } from './vector-store.js';
 export { MemoryVectorStore } from './memory-vector-store.js';
 export {
   PgVectorStore,

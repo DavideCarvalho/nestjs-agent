@@ -10,11 +10,7 @@ import { HybridRetriever } from './hybrid-retriever.js';
 import { LexicalRetriever } from './lexical-retriever.js';
 import type { RedisSearchClient } from './redis-vector-store.js';
 import { RedisVectorSchemaMismatchError, RedisVectorStore } from './redis-vector-store.js';
-import {
-  UnsafeRemovalError,
-  isEnumerableVectorStore,
-  isLexicalVectorStore,
-} from './vector-store.js';
+import { UnsafeRemovalError, isLexicalVectorStore } from './vector-store.js';
 
 let container: StartedTestContainer;
 let client: RedisClientType;
@@ -357,10 +353,6 @@ describe('RedisVectorStore enumeration + bulk deletion (real RediSearch)', () =>
   });
 
   beforeEach(seed);
-
-  it('advertises the EnumerableVectorStore capability', () => {
-    expect(isEnumerableVectorStore(enumStore)).toBe(true);
-  });
 
   it('countChunks counts chunks without fetching them', async () => {
     expect(await enumStore.countChunks()).toBe(6);

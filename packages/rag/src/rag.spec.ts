@@ -6,7 +6,7 @@ import { FilteredRetriever } from './filtered-retriever.js';
 import { chunkDocuments, ingestChunks, ingestDocuments } from './ingest.js';
 import { MemoryVectorStore } from './memory-vector-store.js';
 import { createRetrievalTool } from './retrieval-tool.js';
-import { UnsafeRemovalError, type VectorStore, isEnumerableVectorStore } from './vector-store.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 describe('chunkText', () => {
   it('returns the whole text as one chunk when under the size limit', () => {
@@ -142,7 +142,7 @@ describe('MemoryVectorStore.listDocuments', () => {
   });
 });
 
-describe('MemoryVectorStore enumeration + bulk deletion (EnumerableVectorStore)', () => {
+describe('MemoryVectorStore enumeration + bulk deletion', () => {
   async function corpus(): Promise<MemoryVectorStore> {
     const embedder = new FakeEmbeddingProvider();
     const store = new MemoryVectorStore();
@@ -164,18 +164,6 @@ describe('MemoryVectorStore enumeration + bulk deletion (EnumerableVectorStore)'
     );
     return store;
   }
-
-  it('advertises the capability; a store that only implements the base interface does not', async () => {
-    expect(isEnumerableVectorStore(await corpus())).toBe(true);
-    // a host-written store predating this capability — must keep working, must not be narrowed into
-    const baseOnly: VectorStore = {
-      upsert: async () => undefined,
-      search: async () => [],
-      remove: async () => undefined,
-      listDocuments: async () => [],
-    };
-    expect(isEnumerableVectorStore(baseOnly)).toBe(false);
-  });
 
   it('listDocumentIds returns the ids listDocuments would, without the metadata', async () => {
     const store = await corpus();
