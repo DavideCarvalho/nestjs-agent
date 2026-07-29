@@ -1,5 +1,8 @@
 import { emit } from '@dudousxd/nestjs-diagnostics';
 import type { MediaAttachEvent, MediaDeleteEvent } from './media-events.js';
+// type-only, so the media-ingestion.ts ↔ diagnostics.ts edge is erased at compile time and no
+// runtime import cycle exists.
+import type { MediaIngestFailureKind } from './media-ingestion.js';
 
 /**
  * Diagnostics this package publishes on `aviary:rag:*`, so ingestion is observable (Telescope's
@@ -45,6 +48,17 @@ export interface RagMediaFailedPayload extends RagMediaOutcomeContext {
   mediaId: string;
   error: string;
   mimeType?: string;
+  /**
+   * Which phase threw. A plain string, so it survives cloning and persistence — unlike the `cause`
+   * on {@link import('./media-ingest-job.js').MediaIngestOutcome}, which is in-process only and is
+   * deliberately absent here.
+   *
+   * Optional, unlike on the outcome: the enqueue-failure path in
+   * {@link import('./agent-media-ingestion.service.js').AgentMediaIngestionService} publishes
+   * `media.failed` when the job never reached a worker at all, so no phase ever ran and there is
+   * honestly nothing to report.
+   */
+  kind?: MediaIngestFailureKind;
 }
 
 /**
