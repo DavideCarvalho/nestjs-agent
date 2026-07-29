@@ -33,7 +33,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-agent-core": "workspace:*"
+    "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
