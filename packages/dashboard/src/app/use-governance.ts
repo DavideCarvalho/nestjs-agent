@@ -187,12 +187,33 @@ export function useApprovalsPage(page: number, pageSize: number, where: Approval
  * `pageSize: 1` because only `total` is read; the single row that comes back is the price of the
  * endpoint not having a count-only form. Its key is deliberately NOT a prefix of `approvals-page`,
  * so paging the inbox never evicts the badge and vice versa.
+ *
+ * **This is the one query that still polls, and it is the one that has to.** Everything else here
+ * refetches on focus, which is right for a number an operator reads when they look at it. This badge
+ * is the opposite: its whole job is to be true while they are looking somewhere else, so
+ * focus-driven refetching cannot reach it — an approval arriving while the tab is in the background
+ * would sit invisible until someone happened to come back.
+ *
+ * The obvious alternative is to invalidate it from the live SSE stream, and that does not work
+ * today: no event is published when a tool call enters `pending_approval`. `agent-loop.ts` persists
+ * that status through a plain `hooks.step(...)`, the `tool.execution` span wraps the execution that
+ * only happens *after* approval, and `publishAgentToolCall` fires on the decision. The stream simply
+ * does not carry the moment this number changes. Making it live properly means publishing a new
+ * event at that persist — a change in `core`'s agent loop, worth doing, but not a client-side
+ * follow-up and not something to pretend is already possible.
+ *
+ * 20s rather than the old global 5s: this is one indexed count, not the eleven-query fan-out that
+ * interval used to drive, and 20 seconds of latency on a queue that waits for a human to walk over
+ * and read it is not the bottleneck.
  */
 export function useApprovalsCount() {
   return useQuery({
     queryKey: ['approvals-count'],
     queryFn: async () => (await agentClient.approvalsPage({ page: 1, pageSize: 1 })).total,
     staleTime: STALE.queue,
+    refetchInterval: 20_000,
+    // Keep counting while the operator is in another tab — that is the entire point of this query.
+    refetchIntervalInBackground: true,
   });
 }
 
