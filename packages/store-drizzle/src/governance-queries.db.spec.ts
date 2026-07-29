@@ -2,6 +2,7 @@
 // drizzle-orm/better-sqlite3). Seeds a priced model (`gpt-x`, with a superseded non-current pricing
 // row) and an unpriced model (`free-y`) plus an out-of-range ledger row, then asserts the
 // read-model aggregations. Runs only under `pnpm test:db`.
+import { THREAD_DETAIL_CONTENT_CHARS } from '@dudousxd/nestjs-agent-core';
 import Database from 'better-sqlite3';
 import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -935,7 +936,7 @@ describe('DrizzleGovernanceQueries approvals + tool stats (better-sqlite3)', () 
     expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2']);
   });
 
-  it('toolStats buckets by tool+type, counts failed/rejected, and computes p95 execution latency', async () => {
+  it('toolStats buckets by tool+type, counts failed/rejected, and computes p50/p95 latency', async () => {
     const rows = await toolQueries.toolStats({ fromDay: '2026-07-20', toDay: '2026-07-21' });
     expect(rows).toEqual([
       {
@@ -944,6 +945,8 @@ describe('DrizzleGovernanceQueries approvals + tool stats (better-sqlite3)', () 
         calls: 3,
         failed: 0,
         rejected: 0,
+        // sample [50, 150, 250] — identical math to the MikroORM adapter's db spec.
+        p50ExecutionMs: 150,
         p95ExecutionMs: 250,
       },
       {
@@ -952,6 +955,7 @@ describe('DrizzleGovernanceQueries approvals + tool stats (better-sqlite3)', () 
         calls: 2,
         failed: 1,
         rejected: 1,
+        p50ExecutionMs: 500,
         p95ExecutionMs: 500,
       },
       {
@@ -960,6 +964,7 @@ describe('DrizzleGovernanceQueries approvals + tool stats (better-sqlite3)', () 
         calls: 1,
         failed: 0,
         rejected: 0,
+        p50ExecutionMs: null,
         p95ExecutionMs: null,
       },
     ]);
@@ -1481,5 +1486,522 @@ describe('DrizzleGovernanceQueries runsPage (better-sqlite3)', () => {
       where: { status: 'not-a-real-status' },
     });
     expect(page).toEqual({ rows: [], total: 0, page: 1, pageSize: 10 });
+  });
+});
+
+// The paged approvals inbox, mirroring the MikroORM adapter's db spec fixture-for-fixture so both
+// SQL adapters are held to the same numbers. Two fixtures share a `created_at` to the millisecond;
+// the assertions pin the order the `id` tiebreak produces. Same honesty as over there: SQLite's plan
+// here is stable, so these pass with the tiebreak removed — they pin the contract, not the engine.
+describe('DrizzleGovernanceQueries approvalsPage (better-sqlite3)', () => {
+  let approvalsDb: BetterSQLite3Database<typeof agentSchema>;
+  let approvalsQueries: DrizzleGovernanceQueries;
+
+  beforeAll(async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    approvalsDb = drizzle(sqlite, { schema: agentSchema });
+    await ensureAgentSchema(approvalsDb);
+    approvalsQueries = new DrizzleGovernanceQueries(
+      approvalsDb,
+      new DrizzlePricingStore(approvalsDb),
+    );
+
+    await approvalsDb.insert(agentThread).values([
+      {
+        id: 'thread-ops',
+        actorRef: 'ops',
+        title: 'Ops thread',
+        transient: false,
+        createdAt: new Date('2026-08-01T08:00:00.000Z'),
+        updatedAt: new Date('2026-08-01T08:00:00.000Z'),
+      },
+      {
+        id: 'thread-finance',
+        actorRef: 'finance',
+        title: 'Finance thread',
+        transient: false,
+        createdAt: new Date('2026-08-01T08:00:00.000Z'),
+        updatedAt: new Date('2026-08-01T08:00:00.000Z'),
+      },
+    ]);
+    await approvalsDb.insert(agentMessage).values([
+      {
+        id: 'msg-ops',
+        threadId: 'thread-ops',
+        role: 'assistant',
+        content: 'awaiting approval',
+        agentName: 'ops-agent',
+        createdAt: new Date('2026-08-01T08:30:00.000Z'),
+      },
+      {
+        id: 'msg-finance',
+        threadId: 'thread-finance',
+        role: 'assistant',
+        content: 'awaiting approval',
+        agentName: 'finance-agent',
+        createdAt: new Date('2026-08-01T08:30:00.000Z'),
+      },
+    ]);
+    await approvalsDb.insert(agentToolCall).values([
+      ...[
+        { id: 'ap-1', at: '2026-08-01T09:00:00.000Z', tool: 'deploy', messageId: 'msg-ops' },
+        { id: 'ap-2', at: '2026-08-01T09:01:00.000Z', tool: 'deploy', messageId: 'msg-finance' },
+        { id: 'ap-3a', at: '2026-08-01T09:02:00.000Z', tool: 'refund', messageId: 'msg-ops' },
+        { id: 'ap-3b', at: '2026-08-01T09:02:00.000Z', tool: 'refund', messageId: 'msg-finance' },
+        { id: 'ap-4', at: '2026-08-02T09:03:00.000Z', tool: 'restart', messageId: 'msg-ops' },
+        { id: 'ap-5', at: '2026-08-03T09:04:00.000Z', tool: 'restart', messageId: 'msg-finance' },
+      ].map((row) => ({
+        id: row.id,
+        messageId: row.messageId,
+        toolName: row.tool,
+        toolType: 'action' as const,
+        input: { id: row.id },
+        status: 'pending_approval' as const,
+        createdAt: new Date(row.at),
+        runId: `run-${row.id}`,
+      })),
+      // Already decided — must never appear in the inbox regardless of filters.
+      {
+        id: 'ap-decided',
+        messageId: 'msg-ops',
+        toolName: 'deploy',
+        toolType: 'action' as const,
+        status: 'executed' as const,
+        createdAt: new Date('2026-08-01T09:00:30.000Z'),
+      },
+    ]);
+  });
+
+  it('reports the whole backlog as total even when the page shows a slice of it', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 2 });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-2']);
+    expect(page).toMatchObject({ total: 6, page: 1, pageSize: 2 });
+  });
+
+  it('pages oldest-first with a total order — no row on two pages, none skipped', async () => {
+    const seen: string[] = [];
+    for (const page of [1, 2, 3, 4]) {
+      const result = await approvalsQueries.approvalsPage({ page, pageSize: 2 });
+      seen.push(...result.rows.map((row) => row.toolCallId));
+    }
+    expect(seen).toEqual(['ap-1', 'ap-2', 'ap-3a', 'ap-3b', 'ap-4', 'ap-5']);
+    expect(new Set(seen).size).toBe(6);
+  });
+
+  it('returns an empty page past the end, keeping the total', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 9, pageSize: 2 });
+    expect(page).toEqual({ rows: [], total: 6, page: 9, pageSize: 2 });
+  });
+
+  it('carries the same joined fields pendingApprovals does', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 1 });
+    expect(page.rows[0]).toEqual({
+      toolCallId: 'ap-1',
+      toolName: 'deploy',
+      input: { id: 'ap-1' },
+      threadId: 'thread-ops',
+      threadTitle: 'Ops thread',
+      actorRef: 'ops',
+      agentName: 'ops-agent',
+      requestedAt: '2026-08-01T09:00:00.000Z',
+      runId: 'run-ap-1',
+    });
+  });
+
+  it('never surfaces an already-decided call', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 50 });
+    expect(page.rows.map((row) => row.toolCallId)).not.toContain('ap-decided');
+    expect(page.total).toBe(6);
+  });
+
+  it('filters by toolName / threadId / actorRef / agentName', async () => {
+    const byTool = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { toolName: 'refund' },
+    });
+    expect(byTool.rows.map((row) => row.toolCallId)).toEqual(['ap-3a', 'ap-3b']);
+    expect(byTool.total).toBe(2);
+
+    const byThread = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { threadId: 'thread-finance' },
+    });
+    expect(byThread.rows.map((row) => row.toolCallId)).toEqual(['ap-2', 'ap-3b', 'ap-5']);
+    expect(byThread.total).toBe(3);
+
+    const byActor = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { actorRef: 'ops' },
+    });
+    expect(byActor.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-3a', 'ap-4']);
+    expect(byActor.total).toBe(3);
+
+    const byAgent = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { agentName: 'finance-agent' },
+    });
+    expect(byAgent.rows.map((row) => row.toolCallId)).toEqual(['ap-2', 'ap-3b', 'ap-5']);
+    expect(byAgent.total).toBe(3);
+  });
+
+  it('filters by inclusive fromDay/toDay bounds on the request time', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { fromDay: '2026-08-02', toDay: '2026-08-03' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-4', 'ap-5']);
+    expect(page.total).toBe(2);
+  });
+
+  it('combines filters (actorRef + toolName)', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { actorRef: 'ops', toolName: 'restart' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-4']);
+    expect(page.total).toBe(1);
+  });
+
+  it('a filter that matches nothing is an empty page, not an error', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { toolName: 'no-such-tool' },
+    });
+    expect(page).toEqual({ rows: [], total: 0, page: 1, pageSize: 10 });
+  });
+});
+
+// The two drill-downs, mirroring the MikroORM adapter's db spec.
+describe('DrizzleGovernanceQueries runDetail + threadDetail (better-sqlite3)', () => {
+  let detailDb: BetterSQLite3Database<typeof agentSchema>;
+  let detailQueries: DrizzleGovernanceQueries;
+
+  beforeAll(async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.pragma('foreign_keys = ON');
+    detailDb = drizzle(sqlite, { schema: agentSchema });
+    await ensureAgentSchema(detailDb);
+    detailQueries = new DrizzleGovernanceQueries(detailDb, new DrizzlePricingStore(detailDb));
+
+    await detailDb.insert(agentModelPricing).values([
+      {
+        id: 'price-detail',
+        modelId: 'gpt-x',
+        inputPricePer1m: 3,
+        outputPricePer1m: 15,
+        effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+        isCurrent: true,
+      },
+    ]);
+    await detailDb.insert(agentThread).values([
+      {
+        id: 'thread-detail',
+        actorRef: 'erin',
+        title: 'Detail thread',
+        transient: false,
+        createdAt: new Date('2026-09-01T08:00:00.000Z'),
+        updatedAt: new Date('2026-09-01T12:00:00.000Z'),
+      },
+      {
+        id: 'thread-gone',
+        actorRef: 'erin',
+        title: 'Deleted thread',
+        transient: false,
+        createdAt: new Date('2026-09-01T08:00:00.000Z'),
+        updatedAt: new Date('2026-09-01T08:30:00.000Z'),
+        deletedAt: new Date('2026-09-01T09:00:00.000Z'),
+      },
+      {
+        id: 'thread-other',
+        actorRef: 'frank',
+        title: 'Other thread',
+        transient: false,
+        createdAt: new Date('2026-09-01T08:00:00.000Z'),
+        updatedAt: new Date('2026-09-01T08:00:00.000Z'),
+      },
+    ]);
+    await detailDb.insert(agentMessage).values([
+      {
+        id: 'msg-detail-user',
+        threadId: 'thread-detail',
+        role: 'user',
+        content: 'ship it',
+        createdAt: new Date('2026-09-01T09:00:00.000Z'),
+      },
+      {
+        id: 'msg-detail-assistant',
+        threadId: 'thread-detail',
+        role: 'assistant',
+        // Longer than THREAD_DETAIL_CONTENT_CHARS so the cap and its `truncated` flag are exercised.
+        content: 'x'.repeat(THREAD_DETAIL_CONTENT_CHARS + 500),
+        agentName: 'shipper',
+        createdAt: new Date('2026-09-01T09:01:00.000Z'),
+      },
+      {
+        id: 'msg-other',
+        threadId: 'thread-other',
+        role: 'assistant',
+        content: 'unrelated',
+        createdAt: new Date('2026-09-01T09:00:00.000Z'),
+      },
+    ]);
+    await detailDb.insert(agentRun).values([
+      {
+        id: 'run-failed',
+        threadId: 'thread-detail',
+        actorRef: 'erin',
+        agentName: 'shipper',
+        status: 'failed',
+        durationMs: 4200,
+        errorCode: 'tool_failed',
+        errorMessage: 'deploy blew up',
+        retries: 2,
+        startedAt: new Date('2026-09-01T09:01:30.000Z'),
+        settledAt: new Date('2026-09-01T09:05:30.000Z'),
+        promptHash: 'abc123',
+      },
+      {
+        id: 'run-ok',
+        threadId: 'thread-detail',
+        actorRef: 'erin',
+        status: 'completed',
+        durationMs: 900,
+        retries: 0,
+        startedAt: new Date('2026-09-01T09:06:00.000Z'),
+      },
+      {
+        id: 'run-gone',
+        threadId: 'thread-gone',
+        actorRef: 'erin',
+        status: 'completed',
+        durationMs: 100,
+        retries: 0,
+        startedAt: new Date('2026-09-01T08:45:00.000Z'),
+      },
+      {
+        id: 'run-other-thread',
+        threadId: 'thread-other',
+        actorRef: 'frank',
+        status: 'completed',
+        durationMs: 100,
+        retries: 0,
+        startedAt: new Date('2026-09-01T09:07:00.000Z'),
+      },
+    ]);
+    // Two calls on the failed run, one attributed to no run (pre-rollout shape), one on another run.
+    await detailDb.insert(agentToolCall).values([
+      {
+        id: 'tc-detail-a',
+        messageId: 'msg-detail-assistant',
+        toolName: 'deploy',
+        toolType: 'action',
+        status: 'failed',
+        executionMs: 1200,
+        executedByRef: 'user:erin',
+        error: 'upstream 503',
+        createdAt: new Date('2026-09-01T09:02:00.000Z'),
+        runId: 'run-failed',
+      },
+      {
+        id: 'tc-detail-b',
+        messageId: 'msg-detail-assistant',
+        toolName: 'search',
+        toolType: 'read',
+        status: 'executed',
+        executionMs: 40,
+        createdAt: new Date('2026-09-01T09:03:00.000Z'),
+        runId: 'run-failed',
+      },
+      {
+        id: 'tc-detail-orphan',
+        messageId: 'msg-detail-assistant',
+        toolName: 'notify',
+        toolType: 'action',
+        status: 'executed',
+        createdAt: new Date('2026-09-01T09:04:00.000Z'),
+      },
+      {
+        id: 'tc-detail-other-run',
+        messageId: 'msg-detail-assistant',
+        toolName: 'notify',
+        toolType: 'action',
+        status: 'executed',
+        createdAt: new Date('2026-09-01T09:05:00.000Z'),
+        runId: 'run-ok',
+      },
+    ]);
+    // 1M in / 0.5M out on gpt-x → 3 + 7.5 = 10.5; the second row is on the other thread.
+    await detailDb.insert(agentTokenUsage).values([
+      {
+        id: 'usage-detail',
+        threadId: 'thread-detail',
+        actorRef: 'erin',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 1_000_000,
+        outputTokens: 500_000,
+        createdAt: new Date('2026-09-01T09:02:00.000Z'),
+      },
+      {
+        id: 'usage-other',
+        threadId: 'thread-other',
+        actorRef: 'frank',
+        modelId: 'gpt-x',
+        purpose: 'chat',
+        inputTokens: 9_000_000,
+        outputTokens: 9_000_000,
+        createdAt: new Date('2026-09-01T09:02:00.000Z'),
+      },
+    ]);
+  });
+
+  it('runDetail returns the run, its thread headline and only its own tool calls, oldest first', async () => {
+    const detail = await detailQueries.runDetail('run-failed');
+    expect(detail?.run).toEqual({
+      runId: 'run-failed',
+      threadId: 'thread-detail',
+      actorRef: 'erin',
+      agentName: 'shipper',
+      status: 'failed',
+      durationMs: 4200,
+      errorCode: 'tool_failed',
+      errorMessage: 'deploy blew up',
+      retries: 2,
+      startedAt: '2026-09-01T09:01:30.000Z',
+      promptHash: 'abc123',
+    });
+    expect(detail?.thread).toEqual({
+      threadId: 'thread-detail',
+      title: 'Detail thread',
+      actorRef: 'erin',
+      deleted: false,
+    });
+    expect(detail?.toolCalls.map((row) => row.toolCallId)).toEqual(['tc-detail-a', 'tc-detail-b']);
+    expect(detail?.toolCalls[0]).toEqual({
+      toolCallId: 'tc-detail-a',
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'failed',
+      executionMs: 1200,
+      executedByRef: 'user:erin',
+      error: 'upstream 503',
+      createdAt: '2026-09-01T09:02:00.000Z',
+    });
+    expect(detail?.toolCalls[1]).toMatchObject({ executedByRef: null, error: null });
+  });
+
+  it('runDetail reports no tool calls for a run nothing was attributed to', async () => {
+    const detail = await detailQueries.runDetail('run-gone');
+    expect(detail?.run.runId).toBe('run-gone');
+    expect(detail?.toolCalls).toEqual([]);
+    expect(detail?.thread).toMatchObject({ threadId: 'thread-gone', deleted: true });
+  });
+
+  it('runDetail is null for an unknown run id', async () => {
+    expect(await detailQueries.runDetail('run-does-not-exist')).toBeNull();
+  });
+
+  it('threadDetail rolls up lifetime usage, runs and messages for one thread only', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.thread).toEqual({
+      threadId: 'thread-detail',
+      title: 'Detail thread',
+      actorRef: 'erin',
+      messageCount: 2,
+      totalTokens: 1_500_000,
+      lastActivityAt: '2026-09-01T12:00:00.000Z',
+    });
+    expect(detail?.deleted).toBe(false);
+    expect(detail?.usage).toMatchObject({
+      requests: 1,
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      totalTokens: 1_500_000,
+    });
+    expect(detail?.usage.costUsd).toBeCloseTo(10.5, 6);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok', 'run-failed']);
+    expect(detail?.runTotal).toBe(2);
+    expect(detail?.messages.map((row) => row.messageId)).toEqual([
+      'msg-detail-assistant',
+      'msg-detail-user',
+    ]);
+  });
+
+  it('threadDetail counts each message tool calls without a query per message', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.messages.find((row) => row.messageId === 'msg-detail-assistant')).toMatchObject({
+      role: 'assistant',
+      agentName: 'shipper',
+      toolCallCount: 4,
+    });
+    expect(detail?.messages.find((row) => row.messageId === 'msg-detail-user')).toMatchObject({
+      role: 'user',
+      agentName: null,
+      toolCallCount: 0,
+    });
+  });
+
+  it('threadDetail truncates a long message body and says that it did', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    const assistant = detail?.messages.find((row) => row.messageId === 'msg-detail-assistant');
+    expect(assistant?.content).toHaveLength(THREAD_DETAIL_CONTENT_CHARS);
+    expect(assistant?.truncated).toBe(true);
+    expect(detail?.messages.find((row) => row.messageId === 'msg-detail-user')).toMatchObject({
+      content: 'ship it',
+      truncated: false,
+    });
+  });
+
+  it('threadDetail caps runs and messages while still reporting the true totals', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 1,
+      runLimit: 1,
+    });
+    expect(detail?.messages.map((row) => row.messageId)).toEqual(['msg-detail-assistant']);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok']);
+    expect(detail?.runTotal).toBe(2);
+    expect(detail?.thread.messageCount).toBe(2);
+  });
+
+  it('threadDetail returns a soft-deleted thread, flagged — an audit still needs it', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-gone',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.thread.threadId).toBe('thread-gone');
+    expect(detail?.deleted).toBe(true);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-gone']);
+  });
+
+  it('threadDetail is null for an unknown thread id', async () => {
+    expect(
+      await detailQueries.threadDetail({
+        threadId: 'thread-does-not-exist',
+        messageLimit: 10,
+        runLimit: 10,
+      }),
+    ).toBeNull();
   });
 });

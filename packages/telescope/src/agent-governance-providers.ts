@@ -99,10 +99,13 @@ function isGovernanceQueries(value: unknown): value is AgentGovernanceQueries {
     typeof value.runTrend === 'function' &&
     typeof value.recentRuns === 'function' &&
     typeof value.pendingApprovals === 'function' &&
+    typeof value.approvalsPage === 'function' &&
     typeof value.toolStats === 'function' &&
     typeof value.toolCallsPage === 'function' &&
     typeof value.threadsPage === 'function' &&
-    typeof value.runsPage === 'function'
+    typeof value.runsPage === 'function' &&
+    typeof value.runDetail === 'function' &&
+    typeof value.threadDetail === 'function'
   );
 }
 
@@ -351,13 +354,14 @@ export function toPendingApprovalTableRows(rows: PendingApprovalRow[]): PendingA
   }));
 }
 
-/** One row of the per-tool stats table, `p95ExecutionMs` falling back to {@link NO_VALUE}. */
+/** One row of the per-tool stats table, each latency falling back to {@link NO_VALUE}. */
 interface ToolStatTableRow {
   toolName: string;
   toolType: string;
   calls: number;
   failed: number;
   rejected: number;
+  p50ExecutionMs: number | string;
   p95ExecutionMs: number | string;
 }
 
@@ -369,6 +373,7 @@ export function toToolStatTableRows(rows: ToolStatRow[]): ToolStatTableRow[] {
     calls: row.calls,
     failed: row.failed,
     rejected: row.rejected,
+    p50ExecutionMs: row.p50ExecutionMs ?? NO_VALUE,
     p95ExecutionMs: row.p95ExecutionMs ?? NO_VALUE,
   }));
 }
@@ -743,23 +748,22 @@ export function agentRunsPagedTableProvider(): DataProvider {
   );
 }
 
-/** Row cap used to approximate a "pending approvals" COUNT (the SPI only exposes a capped list —
- * see {@link agentPendingApprovalsCountProvider}). */
-const PENDING_APPROVALS_COUNT_LIMIT = 500;
-
 /**
- * stat → count of tool calls sitting `pending_approval` across every thread. The SPI's
- * `pendingApprovals` only returns a capped list, not a true count, so this undercounts a backlog
- * larger than {@link PENDING_APPROVALS_COUNT_LIMIT} — a backlog that size signals a bigger
- * operational problem than an off-by-N stat, so the approximation is an acceptable tradeoff.
+ * stat → count of tool calls sitting `pending_approval` across every thread. Reads `approvalsPage`
+ * for the smallest possible page and takes its `total`: an EXACT count, where the previous
+ * `pendingApprovals(500).length` silently undercounted any backlog past its row cap — precisely the
+ * backlog an operator most needs the stat to be right about.
  */
 export function agentPendingApprovalsCountProvider(): DataProvider {
   return {
     name: 'agent.approvals.pending',
     async resolve(_query, ctx) {
       const queries = resolveGovernanceQueries(ctx);
-      const rows = queries ? await queries.pendingApprovals(PENDING_APPROVALS_COUNT_LIMIT) : [];
-      return { value: rows.length };
+      if (queries === null) {
+        return { value: 0 };
+      }
+      const page = await queries.approvalsPage({ page: 1, pageSize: 1 });
+      return { value: page.total };
     },
   };
 }

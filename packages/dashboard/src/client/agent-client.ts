@@ -65,6 +65,12 @@ export interface ToolCallActivityRow {
   status: string;
   threadId: string;
   createdAt: string;
+  /**
+   * The run this call belongs to, for a trace deep-link; `null` for a call recorded before this
+   * shipped. Optional in this mirror ONLY so existing row literals (the preview's mock data) still
+   * typecheck — the server has always sent it. Tighten to required once those literals supply it.
+   */
+  runId?: string | null;
 }
 
 /** A recent thread with rolled-up activity. */
@@ -141,6 +147,9 @@ export interface PendingApprovalRow {
   agentName: string | null;
   /** ISO timestamp. */
   requestedAt: string;
+  /** The run this call belongs to, for a trace deep-link; `null` for a pre-rollout row. Optional in
+   * this mirror for the same reason as {@link ToolCallActivityRow.runId}. */
+  runId?: string | null;
 }
 
 /** Body for `POST <api>/approvals/:toolCallId` — decide a pending HITL tool call. */
@@ -192,6 +201,20 @@ export interface RunWhere {
   agentName?: string;
   status?: string;
   errorCode?: string;
+  /** Every run on one thread — the follow-up query a drill-down leads to. */
+  threadId?: string;
+  fromDay?: string;
+  toDay?: string;
+}
+
+/** Filters for `GET approvals-page` (the paged approvals inbox). */
+export interface ApprovalWhere {
+  toolName?: string;
+  threadId?: string;
+  /** The requesting thread's owner. */
+  actorRef?: string;
+  agentName?: string;
+  /** Inclusive UTC day bounds on when the approval was requested, `YYYY-MM-DD`. */
   fromDay?: string;
   toDay?: string;
 }
@@ -203,8 +226,96 @@ export interface ToolStatRow {
   calls: number;
   failed: number;
   rejected: number;
+  /**
+   * p50 (median) of executionMs across calls that recorded one; null when none carry it. Paired with
+   * p95 rather than a mean — tool latency is long-tailed, so "typical" and "tail" are two numbers.
+   * Optional in this mirror ONLY so existing row literals (the preview's mock data) still typecheck;
+   * the server always sends it.
+   */
+  p50ExecutionMs?: number | null;
   /** p95 of executionMs across executed calls; null when none carry it. */
   p95ExecutionMs: number | null;
+}
+
+// ─── Drill-downs ────────────────────────────────────────────────────────────
+//
+// One request per drill-down, not one per row it renders.
+
+/** One tool call inside a `RunDetail`, with the execution outcome a list row can't afford to carry. */
+export interface RunToolCallRow {
+  toolCallId: string;
+  toolName: string;
+  toolType: string;
+  status: string;
+  /** Wall time of the execution; null for a call that never executed. */
+  executionMs: number | null;
+  /** Who executed/decided it, when the store recorded an attribution. */
+  executedByRef: string | null;
+  /** The failure text for a `failed` call; null otherwise. */
+  error: string | null;
+  createdAt: string;
+}
+
+/** The owning thread's headline, carried on a drill-down so it can be named without a second read. */
+export interface DetailThreadRef {
+  threadId: string;
+  title: string;
+  actorRef: string;
+  /** True when the thread is soft-deleted — its history is still readable, the thread is not. */
+  deleted: boolean;
+  /** Human-readable label resolved from `actorRef` (an `ActorDirectory`), when one is bound server-side. */
+  actorLabel: string | null;
+}
+
+/**
+ * The `GET <api>/runs/:runId` response. `toolCalls` is empty for a run recorded before tool calls
+ * carried a run id — indistinguishable, from here, from a run that called no tools. There is no cost
+ * figure: the token ledger has no run column, so per-run spend is not attributable.
+ */
+export interface RunDetail {
+  run: RecentRunRow;
+  thread: DetailThreadRef;
+  /** The run's tool calls, oldest first — the order they were requested in. */
+  toolCalls: RunToolCallRow[];
+}
+
+/** One message inside a `ThreadDetail`. `content` is capped server-side. */
+export interface ThreadMessageRow {
+  messageId: string;
+  role: string;
+  /** Message text, capped server-side; see `truncated`. */
+  content: string;
+  /** True when `content` was cut — render an explicit "…" rather than implying the tail. */
+  truncated: boolean;
+  agentName: string | null;
+  /** How many tool calls this message requested. */
+  toolCallCount: number;
+  createdAt: string;
+}
+
+/** Token/cost rollup across a thread's whole ledger (lifetime, not range-scoped). */
+export interface ThreadUsageRollup {
+  /** Ledger rows, i.e. billed turns. */
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+/** The `GET <api>/threads/:threadId` response. */
+export interface ThreadDetail {
+  /** The thread's activity row (`messageCount` is the thread total, not the `messages` cap below). */
+  thread: ThreadActivityRow;
+  /** True when the thread is soft-deleted. */
+  deleted: boolean;
+  usage: ThreadUsageRollup;
+  /** The thread's runs, newest first, capped by the `runs` query param. */
+  runs: RecentRunRow[];
+  /** Runs on this thread in total — `runs.length < runTotal` means the cap bit. */
+  runTotal: number;
+  /** The thread's messages, newest first, capped by the `messages` query param. */
+  messages: ThreadMessageRow[];
 }
 
 /** The `GET <api>/reliability` response. */
@@ -312,9 +423,38 @@ export const agentClient = {
   ): Promise<GovernancePage<ToolCallActivityRow>> {
     return http<GovernancePage<ToolCallActivityRow>>(`/tool-calls-page?${pageQueryParams(query)}`);
   },
-  /** Tool calls sitting `pending_approval`, oldest first (default 50) — the approvals inbox. */
+  /**
+   * Tool calls sitting `pending_approval`, oldest first (default 50) — the approvals inbox.
+   *
+   * Capped with NO total: a backlog past `limit` is invisible in this response. Prefer
+   * {@link agentClient.approvalsPage}, which reports how many are off-screen.
+   */
   approvals(limit = 50): Promise<PendingApprovalRow[]> {
     return http<PendingApprovalRow[]>(`/approvals?limit=${limit}`);
+  },
+  /** A page of the approvals inbox with the backlog `total` — oldest first, filtered by `where`. */
+  approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    return http<GovernancePage<PendingApprovalRow>>(`/approvals-page?${pageQueryParams(query)}`);
+  },
+  /** One run with its thread and its tool calls, in one request. Rejects with `404 …` if unknown. */
+  runDetail(runId: string): Promise<RunDetail> {
+    return http<RunDetail>(`/runs/${encodeURIComponent(runId)}`);
+  },
+  /**
+   * One thread with its lifetime usage rollup, newest runs and newest messages, in one request.
+   * `messages`/`runs` cap the two lists (server clamps to 1..200). Rejects with `404 …` if unknown.
+   */
+  threadDetail(
+    threadId: string,
+    opts: { messages?: number; runs?: number } = {},
+  ): Promise<ThreadDetail> {
+    const q = new URLSearchParams();
+    if (opts.messages !== undefined) q.set('messages', `${opts.messages}`);
+    if (opts.runs !== undefined) q.set('runs', `${opts.runs}`);
+    const suffix = q.size > 0 ? `?${q.toString()}` : '';
+    return http<ThreadDetail>(`/threads/${encodeURIComponent(threadId)}${suffix}`);
   },
   /**
    * Decide a pending HITL tool call. 501s (a plain `Error` whose message starts with `501`, like

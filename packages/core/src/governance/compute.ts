@@ -3,6 +3,7 @@ import type {
   GovernanceRange,
   ModelSpendRow,
   ThreadSpendRow,
+  ThreadUsageRollup,
   UsageTrendPoint,
 } from '../spi/governance-queries.js';
 
@@ -191,6 +192,32 @@ export function bucketByThread(
     (left, right) => right.costUsd - left.costUsd || left.threadId.localeCompare(right.threadId),
   );
   return result.slice(0, options.limit);
+}
+
+/**
+ * Sum an already-scoped set of usage rows into one rollup — the thread drill-down's headline. Same
+ * `rowCost` as every bucketer above (provider-reported cost wins, else the cache-aware estimate), so
+ * a thread's detail cost and its row in the by-thread ranking can never disagree.
+ */
+export function rollupThreadUsage(
+  rows: GovernanceUsageInput[],
+  prices: ReadonlyMap<string, ModelPrice>,
+): ThreadUsageRollup {
+  const rollup: ThreadUsageRollup = {
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+  };
+  for (const row of rows) {
+    rollup.requests += 1;
+    rollup.inputTokens += row.inputTokens;
+    rollup.outputTokens += row.outputTokens;
+    rollup.totalTokens += row.inputTokens + row.outputTokens;
+    rollup.costUsd += rowCost(row, prices);
+  }
+  return rollup;
 }
 
 /** Aggregate usage rows into a daily token/cost trend, ascending by day. */

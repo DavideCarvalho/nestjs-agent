@@ -27,11 +27,14 @@ import {
   DashboardService,
   type LiveAgentEvent,
   type ReliabilityOverview,
+  type RunDetailWithLabel,
   type SpendOverview,
   type ThreadActivityRowWithLabel,
+  type ThreadDetailWithLabel,
   type ThreadSpendRowWithLabel,
 } from './dashboard.service.js';
 import {
+  parseApprovalWhere,
   parsePageNumber,
   parseRunWhere,
   parseThreadWhere,
@@ -145,6 +148,18 @@ export class AgentApiController {
     });
   }
 
+  /**
+   * One run drill-down: the run, its owning thread's headline (actor-labeled) and its tool calls, in
+   * ONE round trip. 404s on an unknown run id.
+   *
+   * Declared AFTER `runs-page` so the literal route wins over this parameterised one regardless of
+   * how the router orders same-prefix paths.
+   */
+  @Get('runs/:runId')
+  runDetail(@Param('runId') runId: string): Promise<RunDetailWithLabel> {
+    return this.dashboard.runDetail(runId);
+  }
+
   /** Most recent tool calls (default 50, max 200) for the activity feed. */
   @Get('tool-calls')
   toolCalls(@Query('limit') limit?: string): Promise<ToolCallActivityRow[]> {
@@ -170,10 +185,37 @@ export class AgentApiController {
     });
   }
 
-  /** Tool calls sitting `pending_approval` (default 50, max 200), oldest first — the approvals inbox. */
+  /**
+   * Tool calls sitting `pending_approval` (default 50, max 200), oldest first — the approvals inbox.
+   *
+   * Capped with NO total, so a backlog past `limit` is invisible from the response alone. Kept
+   * because the SPA still calls it; anything new should call `approvals-page` instead.
+   */
   @Get('approvals')
   approvals(@Query('limit') limit?: string): Promise<PendingApprovalRow[]> {
     return this.dashboard.pendingApprovals(parseLimit(limit, 50));
+  }
+
+  /**
+   * Paged, filterable approvals inbox, oldest first. `page` (default 1), `limit` (default 25, max
+   * 200), and `where[toolName]`/`where[threadId]`/`where[actorRef]`/`where[agentName]`/
+   * `where[fromDay]`/`where[toDay]` (`YYYY-MM-DD`) — an unknown `where` field 400s naming it.
+   *
+   * Unlike `GET approvals` this reports `total`, so the console can say "showing N of M" instead of
+   * silently hiding pending decisions behind a row cap.
+   */
+  @Get('approvals-page')
+  approvalsPage(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('where') where?: Record<string, string>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    const parsedWhere = parseApprovalWhere(where);
+    return this.dashboard.approvalsPage({
+      page: parsePageNumber(page),
+      pageSize: parseLimit(limit, 25),
+      ...(parsedWhere !== undefined ? { where: parsedWhere } : {}),
+    });
   }
 
   /**
@@ -240,6 +282,28 @@ export class AgentApiController {
       page: parsePageNumber(page),
       pageSize: parseLimit(limit, 25),
       ...(parsedWhere !== undefined ? { where: parsedWhere } : {}),
+    });
+  }
+
+  /**
+   * One thread drill-down: the thread (actor-labeled), its lifetime token/cost rollup, its newest
+   * runs and its newest messages, in ONE round trip. `messages` (default 50, max 200) and `runs`
+   * (default 25, max 200) cap the two lists; `runTotal` and `thread.messageCount` report the true
+   * sizes so the console can say what the caps hid. 404s on an unknown thread id.
+   *
+   * A soft-deleted thread is still returned, flagged `deleted: true` — an audit needs the thread it
+   * just lost, and the alternative is a drill-down that 404s on exactly the interesting case.
+   */
+  @Get('threads/:threadId')
+  threadDetail(
+    @Param('threadId') threadId: string,
+    @Query('messages') messages?: string,
+    @Query('runs') runs?: string,
+  ): Promise<ThreadDetailWithLabel> {
+    return this.dashboard.threadDetail({
+      threadId,
+      messageLimit: parseLimit(messages, 50),
+      runLimit: parseLimit(runs, 25),
     });
   }
 

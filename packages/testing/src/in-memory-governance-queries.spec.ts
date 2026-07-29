@@ -1,5 +1,5 @@
-import type { ToolCallStatus } from '@dudousxd/nestjs-agent-core';
-import { describe, expect, it, vi } from 'vitest';
+import { THREAD_DETAIL_CONTENT_CHARS, type ToolCallStatus } from '@dudousxd/nestjs-agent-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   InMemoryGovernanceQueries,
   type InMemoryModelPrice,
@@ -592,7 +592,7 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
     }
   });
 
-  it('toolStats buckets by tool+type, counts failed/rejected, computes p95 execution latency, and respects range bounds', async () => {
+  it('toolStats buckets by tool+type, counts failed/rejected, computes p50/p95 execution latency, and respects range bounds', async () => {
     vi.useFakeTimers();
     try {
       const store = new InMemoryAgentStore();
@@ -650,6 +650,8 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
           calls: 3,
           failed: 0,
           rejected: 0,
+          // sample [50, 150, 250] — same math as the SQL adapters' db specs.
+          p50ExecutionMs: 150,
           p95ExecutionMs: 250,
         },
         {
@@ -658,6 +660,7 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
           calls: 2,
           failed: 1,
           rejected: 1,
+          p50ExecutionMs: 500,
           p95ExecutionMs: 500,
         },
         {
@@ -666,6 +669,7 @@ describe('InMemoryGovernanceQueries approvals + tool stats', () => {
           calls: 1,
           failed: 0,
           rejected: 0,
+          p50ExecutionMs: null,
           p95ExecutionMs: null,
         },
       ]);
@@ -1177,5 +1181,297 @@ describe('InMemoryGovernanceQueries runsPage', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// approvalsPage + the two drill-downs. Same shape of assertions as the SQL adapters' db specs, so a
+// test that swaps this double for a real store sees the same numbers.
+describe('InMemoryGovernanceQueries approvalsPage', () => {
+  async function seed(): Promise<{
+    store: InMemoryAgentStore;
+    queries: InMemoryGovernanceQueries;
+  }> {
+    vi.setSystemTime(new Date('2026-08-01T08:00:00.000Z'));
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(store);
+    const ops = await store.createThread({ actor: { id: 'ops' } });
+    const finance = await store.createThread({ actor: { id: 'finance' } });
+    const opsMessage = await store.appendMessage({
+      threadId: ops.id,
+      role: 'assistant',
+      content: 'awaiting approval',
+      agentName: 'ops-agent',
+    });
+    const financeMessage = await store.appendMessage({
+      threadId: finance.id,
+      role: 'assistant',
+      content: 'awaiting approval',
+      agentName: 'finance-agent',
+    });
+
+    const pending = [
+      { id: 'ap-1', at: '2026-08-01T09:00:00.000Z', tool: 'deploy', messageId: opsMessage.id },
+      { id: 'ap-2', at: '2026-08-01T09:01:00.000Z', tool: 'deploy', messageId: financeMessage.id },
+      { id: 'ap-3a', at: '2026-08-01T09:02:00.000Z', tool: 'refund', messageId: opsMessage.id },
+      { id: 'ap-3b', at: '2026-08-01T09:02:00.000Z', tool: 'refund', messageId: financeMessage.id },
+      { id: 'ap-4', at: '2026-08-02T09:03:00.000Z', tool: 'restart', messageId: opsMessage.id },
+      { id: 'ap-5', at: '2026-08-03T09:04:00.000Z', tool: 'restart', messageId: financeMessage.id },
+    ];
+    for (const row of pending) {
+      vi.setSystemTime(new Date(row.at));
+      await store.recordToolCall({
+        toolCallId: row.id,
+        messageId: row.messageId,
+        toolName: row.tool,
+        toolType: 'action',
+        input: { id: row.id },
+        status: 'pending_approval',
+        runId: `run-${row.id}`,
+      });
+    }
+    vi.setSystemTime(new Date('2026-08-01T09:00:30.000Z'));
+    await store.recordToolCall({
+      toolCallId: 'ap-decided',
+      messageId: opsMessage.id,
+      toolName: 'deploy',
+      toolType: 'action',
+      input: {},
+      status: 'executed',
+    });
+    return { store, queries };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reports the whole backlog as total even when the page shows a slice of it', async () => {
+    const { queries } = await seed();
+    const page = await queries.approvalsPage({ page: 1, pageSize: 2 });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-2']);
+    expect(page).toMatchObject({ total: 6, page: 1, pageSize: 2 });
+  });
+
+  it('pages oldest-first with a total order — no row on two pages, none skipped', async () => {
+    const { queries } = await seed();
+    const seen: string[] = [];
+    for (const page of [1, 2, 3, 4]) {
+      const result = await queries.approvalsPage({ page, pageSize: 2 });
+      seen.push(...result.rows.map((row) => row.toolCallId));
+    }
+    expect(seen).toEqual(['ap-1', 'ap-2', 'ap-3a', 'ap-3b', 'ap-4', 'ap-5']);
+    expect(new Set(seen).size).toBe(6);
+  });
+
+  it('never surfaces an already-decided call', async () => {
+    const { queries } = await seed();
+    const page = await queries.approvalsPage({ page: 1, pageSize: 50 });
+    expect(page.rows.map((row) => row.toolCallId)).not.toContain('ap-decided');
+    expect(page.total).toBe(6);
+  });
+
+  it('filters by toolName / actorRef / agentName and day bounds', async () => {
+    const { queries } = await seed();
+    expect(
+      (await queries.approvalsPage({ page: 1, pageSize: 10, where: { toolName: 'refund' } })).rows
+        .length,
+    ).toBe(2);
+    expect(
+      (await queries.approvalsPage({ page: 1, pageSize: 10, where: { actorRef: 'ops' } })).total,
+    ).toBe(3);
+    expect(
+      (
+        await queries.approvalsPage({
+          page: 1,
+          pageSize: 10,
+          where: { agentName: 'finance-agent' },
+        })
+      ).total,
+    ).toBe(3);
+    const ranged = await queries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { fromDay: '2026-08-02', toDay: '2026-08-03' },
+    });
+    expect(ranged.rows.map((row) => row.toolCallId)).toEqual(['ap-4', 'ap-5']);
+  });
+
+  it('a filter that matches nothing is an empty page, not an error', async () => {
+    const { queries } = await seed();
+    expect(
+      await queries.approvalsPage({ page: 1, pageSize: 10, where: { toolName: 'nope' } }),
+    ).toEqual({ rows: [], total: 0, page: 1, pageSize: 10 });
+  });
+});
+
+describe('InMemoryGovernanceQueries runDetail + threadDetail', () => {
+  async function seed(): Promise<{
+    queries: InMemoryGovernanceQueries;
+    threadId: string;
+    otherThreadId: string;
+  }> {
+    const store = new InMemoryAgentStore();
+    const queries = new InMemoryGovernanceQueries(
+      store,
+      new Map([['gpt-x', { inputPricePer1m: 3, outputPricePer1m: 15 }]]),
+    );
+    const thread = await store.createThread({ actor: { id: 'erin' } });
+    const other = await store.createThread({ actor: { id: 'frank' } });
+    await store.appendMessage({ threadId: thread.id, role: 'user', content: 'ship it' });
+    const assistant = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'x'.repeat(THREAD_DETAIL_CONTENT_CHARS + 500),
+      agentName: 'shipper',
+    });
+
+    await store.recordRunStart({
+      runId: 'run-failed',
+      threadId: thread.id,
+      actorRef: 'erin',
+      agentName: 'shipper',
+    });
+    await store.recordRunEnd({
+      runId: 'run-failed',
+      status: 'failed',
+      durationMs: 4200,
+      errorCode: 'tool_failed',
+      errorMessage: 'deploy blew up',
+    });
+    await store.recordRunStart({ runId: 'run-ok', threadId: thread.id, actorRef: 'erin' });
+    await store.recordRunEnd({ runId: 'run-ok', status: 'completed', durationMs: 900 });
+    await store.recordRunStart({ runId: 'run-other', threadId: other.id, actorRef: 'frank' });
+
+    await store.recordToolCall({
+      toolCallId: 'tc-a',
+      messageId: assistant.id,
+      toolName: 'deploy',
+      toolType: 'action',
+      input: {},
+      status: 'failed',
+      runId: 'run-failed',
+    });
+    await store.updateToolCall({
+      toolCallId: 'tc-a',
+      status: 'failed',
+      executionMs: 1200,
+      error: 'upstream 503',
+    });
+    await store.recordToolCall({
+      toolCallId: 'tc-b',
+      messageId: assistant.id,
+      toolName: 'search',
+      toolType: 'read',
+      input: {},
+      status: 'executed',
+      runId: 'run-failed',
+    });
+    // Attributed to no run at all — must not show up under run-failed.
+    await store.recordToolCall({
+      toolCallId: 'tc-orphan',
+      messageId: assistant.id,
+      toolName: 'notify',
+      toolType: 'action',
+      input: {},
+      status: 'executed',
+    });
+
+    await store.recordUsage({
+      threadId: thread.id,
+      actorRef: 'erin',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 1_000_000, outputTokens: 500_000 },
+    });
+    await store.recordUsage({
+      threadId: other.id,
+      actorRef: 'frank',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      usage: { inputTokens: 9_000_000, outputTokens: 9_000_000 },
+    });
+    return { queries, threadId: thread.id, otherThreadId: other.id };
+  }
+
+  it('runDetail returns the run, its thread headline and only its own tool calls', async () => {
+    const { queries, threadId } = await seed();
+    const detail = await queries.runDetail('run-failed');
+    expect(detail?.run).toMatchObject({
+      runId: 'run-failed',
+      threadId,
+      status: 'failed',
+      errorCode: 'tool_failed',
+      durationMs: 4200,
+    });
+    expect(detail?.thread).toMatchObject({ threadId, actorRef: 'erin', deleted: false });
+    expect(detail?.toolCalls.map((row) => row.toolCallId)).toEqual(['tc-a', 'tc-b']);
+    expect(detail?.toolCalls[0]).toMatchObject({
+      toolName: 'deploy',
+      status: 'failed',
+      executionMs: 1200,
+      error: 'upstream 503',
+      // This store records no decider attribution on a tool call — documented as always null here.
+      executedByRef: null,
+    });
+  });
+
+  it('runDetail is null for an unknown run id', async () => {
+    const { queries } = await seed();
+    expect(await queries.runDetail('nope')).toBeNull();
+  });
+
+  it('threadDetail rolls up lifetime usage, runs and messages for one thread only', async () => {
+    const { queries, threadId } = await seed();
+    const detail = await queries.threadDetail({ threadId, messageLimit: 10, runLimit: 10 });
+    expect(detail?.thread).toMatchObject({ threadId, messageCount: 2, totalTokens: 1_500_000 });
+    // The other thread's 18M-token row must not leak into this rollup.
+    expect(detail?.usage).toMatchObject({
+      requests: 1,
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      totalTokens: 1_500_000,
+    });
+    expect(detail?.usage.costUsd).toBeCloseTo(10.5, 6);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok', 'run-failed']);
+    expect(detail?.runTotal).toBe(2);
+    // Both messages land in the same millisecond here (the store stamps `new Date()`), so their
+    // order is decided by the messageId tiebreak — assert the CONTENT, not the position.
+    expect(detail?.messages.map((row) => row.role).sort()).toEqual(['assistant', 'user']);
+    expect(detail?.messages.find((row) => row.role === 'assistant')).toMatchObject({
+      agentName: 'shipper',
+      toolCallCount: 3,
+    });
+  });
+
+  it('threadDetail truncates a long message body and says that it did', async () => {
+    const { queries, threadId } = await seed();
+    const detail = await queries.threadDetail({ threadId, messageLimit: 10, runLimit: 10 });
+    const assistant = detail?.messages.find((row) => row.role === 'assistant');
+    expect(assistant?.content).toHaveLength(THREAD_DETAIL_CONTENT_CHARS);
+    expect(assistant?.truncated).toBe(true);
+    expect(detail?.messages.find((row) => row.role === 'user')).toMatchObject({
+      content: 'ship it',
+      truncated: false,
+    });
+  });
+
+  it('threadDetail caps runs and messages while still reporting the true totals', async () => {
+    const { queries, threadId } = await seed();
+    const detail = await queries.threadDetail({ threadId, messageLimit: 1, runLimit: 1 });
+    expect(detail?.messages).toHaveLength(1);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok']);
+    expect(detail?.runTotal).toBe(2);
+    expect(detail?.thread.messageCount).toBe(2);
+  });
+
+  it('threadDetail is null for an unknown thread id', async () => {
+    const { queries } = await seed();
+    expect(
+      await queries.threadDetail({ threadId: 'nope', messageLimit: 10, runLimit: 10 }),
+    ).toBeNull();
   });
 });

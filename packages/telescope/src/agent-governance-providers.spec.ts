@@ -1,9 +1,11 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  ApprovalWhere,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
+  GovernanceThreadDetailQuery,
   ModelSpendRow,
   PendingApprovalRow,
   RecentRunRow,
@@ -190,13 +192,22 @@ const PENDING_APPROVAL_ROWS: PendingApprovalRow[] = [
 ];
 
 const TOOL_STAT_ROWS: ToolStatRow[] = [
-  { toolName: 'search', toolType: 'read', calls: 10, failed: 1, rejected: 0, p95ExecutionMs: 250 },
+  {
+    toolName: 'search',
+    toolType: 'read',
+    calls: 10,
+    failed: 1,
+    rejected: 0,
+    p50ExecutionMs: 80,
+    p95ExecutionMs: 250,
+  },
   {
     toolName: 'send_email',
     toolType: 'action',
     calls: 3,
     failed: 0,
     rejected: 1,
+    p50ExecutionMs: null,
     p95ExecutionMs: null,
   },
 ];
@@ -207,6 +218,9 @@ const TOOL_STAT_ROWS: ToolStatRow[] = [
 const TOOL_CALLS_PAGE_TOTAL = 7;
 const THREADS_PAGE_TOTAL = 3;
 const RUNS_PAGE_TOTAL = 9;
+// Deliberately larger than PENDING_APPROVAL_ROWS.length: the pending-approvals STAT must report this
+// total, not the row count it happened to receive.
+const APPROVALS_PAGE_TOTAL = 812;
 
 /** A fully-implementing stub of the read-model; each method ignores its range and echoes fixtures. */
 function stubQueries(): AgentGovernanceQueries {
@@ -247,6 +261,14 @@ function stubQueries(): AgentGovernanceQueries {
     async pendingApprovals(_limit: number) {
       return PENDING_APPROVAL_ROWS;
     },
+    async approvalsPage(query: GovernancePageQuery<ApprovalWhere>) {
+      return {
+        rows: PENDING_APPROVAL_ROWS,
+        total: APPROVALS_PAGE_TOTAL,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
+    },
     async toolStats(_range: GovernanceRange) {
       return TOOL_STAT_ROWS;
     },
@@ -273,6 +295,12 @@ function stubQueries(): AgentGovernanceQueries {
         page: query.page,
         pageSize: query.pageSize,
       };
+    },
+    async runDetail(_runId: string) {
+      return null;
+    },
+    async threadDetail(_query: GovernanceThreadDetailQuery) {
+      return null;
     },
   };
 }
@@ -475,7 +503,7 @@ describe('reliability data-shaping', () => {
     });
   });
 
-  it('falls back p95ExecutionMs to — when unmeasured', () => {
+  it('falls back each latency percentile to — when unmeasured', () => {
     expect(toToolStatTableRows(TOOL_STAT_ROWS)).toEqual([
       {
         toolName: 'search',
@@ -483,6 +511,7 @@ describe('reliability data-shaping', () => {
         calls: 10,
         failed: 1,
         rejected: 0,
+        p50ExecutionMs: 80,
         p95ExecutionMs: 250,
       },
       {
@@ -491,6 +520,7 @@ describe('reliability data-shaping', () => {
         calls: 3,
         failed: 0,
         rejected: 1,
+        p50ExecutionMs: '—',
         p95ExecutionMs: '—',
       },
     ]);
@@ -530,8 +560,10 @@ describe('reliability + tools + approvals providers', () => {
     await expect(agentRecentThreadsTableProvider().resolve({}, ctx)).resolves.toEqual({
       rows: THREAD_ACTIVITY_ROWS,
     });
+    // The EXACT backlog off `approvalsPage.total` — not the length of the row list it was handed,
+    // which is what the old `pendingApprovals(500).length` approximation reported.
     await expect(agentPendingApprovalsCountProvider().resolve({}, ctx)).resolves.toEqual({
-      value: 1,
+      value: APPROVALS_PAGE_TOTAL,
     });
     await expect(agentPendingApprovalsTableProvider().resolve({}, ctx)).resolves.toEqual({
       rows: [

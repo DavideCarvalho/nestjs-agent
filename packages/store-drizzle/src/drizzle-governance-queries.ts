@@ -2,9 +2,13 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   AgentPricingStore,
+  ApprovalWhere,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
+  GovernanceRunDetail,
+  GovernanceThreadDetail,
+  GovernanceThreadDetailQuery,
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
@@ -13,9 +17,11 @@ import type {
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
   RunMetrics,
+  RunToolCallRow,
   RunTrendPoint,
   RunWhere,
   ThreadActivityRow,
+  ThreadMessageRow,
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
@@ -32,8 +38,10 @@ import {
   bucketByThread,
   bucketUsageTrend,
   dayBoundsUtc,
+  rollupThreadUsage,
+  truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
-import { and, count, desc, eq, gte, inArray, isNull, like, lte, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, sql, sum } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   type AgentRunStatus,
@@ -88,6 +96,37 @@ function dayEndUtc(day: string): Date {
 /** An empty page for the given query's page/pageSize — the shape every paged read falls back to. */
 function emptyPage<TRow>(query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
   return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
+}
+
+/** Map a run row onto the SPI row. Shared by `recentRuns`/`runsPage`/`runDetail`/`threadDetail`. */
+function toRecentRunRow(run: typeof agentRun.$inferSelect): RecentRunRow {
+  return {
+    runId: run.id,
+    threadId: run.threadId,
+    actorRef: run.actorRef,
+    agentName: run.agentName ?? null,
+    status: run.status,
+    durationMs: run.durationMs ?? null,
+    errorCode: run.errorCode ?? null,
+    errorMessage: run.errorMessage ?? null,
+    retries: run.retries,
+    startedAt: run.startedAt.toISOString(),
+    promptHash: run.promptHash ?? null,
+  };
+}
+
+/** Map a tool-call row onto the run drill-down's row (execution outcome, not activity-feed shape). */
+function toRunToolCallRow(toolCall: typeof agentToolCall.$inferSelect): RunToolCallRow {
+  return {
+    toolCallId: toolCall.id,
+    toolName: toolCall.toolName,
+    toolType: toolCall.toolType,
+    status: toolCall.status,
+    executionMs: toolCall.executionMs ?? null,
+    executedByRef: toolCall.executedByRef ?? null,
+    error: toolCall.error ?? null,
+    createdAt: toolCall.createdAt.toISOString(),
+  };
 }
 
 /** Map a Drizzle usage row onto the shared bucketer input (day derived from `createdAt`). */
@@ -218,6 +257,68 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     }));
   }
 
+  /**
+   * Message counts and token totals for a whole set of threads in TWO grouped queries, not two per
+   * thread — a 200-row page used to cost four hundred round trips. Mirrors the MikroORM adapter's
+   * `threadRollups`, which reaches the same numbers without a QueryBuilder.
+   */
+  private async threadRollups(
+    threadIds: string[],
+  ): Promise<Map<string, { messageCount: number; totalTokens: number }>> {
+    const rollups = new Map<string, { messageCount: number; totalTokens: number }>(
+      threadIds.map((threadId) => [threadId, { messageCount: 0, totalTokens: 0 }]),
+    );
+    if (threadIds.length === 0) {
+      return rollups;
+    }
+    const messageCounts = await this.db
+      .select({ threadId: agentMessage.threadId, value: count() })
+      .from(agentMessage)
+      .where(inArray(agentMessage.threadId, threadIds))
+      .groupBy(agentMessage.threadId);
+    for (const row of messageCounts) {
+      const bucket = rollups.get(row.threadId);
+      if (bucket !== undefined) {
+        bucket.messageCount = row.value;
+      }
+    }
+    const usageTotals = await this.db
+      .select({
+        threadId: agentTokenUsage.threadId,
+        inputTokens: sum(agentTokenUsage.inputTokens),
+        outputTokens: sum(agentTokenUsage.outputTokens),
+      })
+      .from(agentTokenUsage)
+      .where(inArray(agentTokenUsage.threadId, threadIds))
+      .groupBy(agentTokenUsage.threadId);
+    for (const row of usageTotals) {
+      const bucket = rollups.get(row.threadId);
+      if (bucket !== undefined) {
+        // Drizzle types SUM() as string|null (a dialect can widen it past a JS number).
+        bucket.totalTokens = Number(row.inputTokens ?? 0) + Number(row.outputTokens ?? 0);
+      }
+    }
+    return rollups;
+  }
+
+  /** Decorate an ordered thread list with its batched rollups, preserving the incoming order. */
+  private async toThreadActivityRows(
+    threads: (typeof agentThread.$inferSelect)[],
+  ): Promise<ThreadActivityRow[]> {
+    const rollups = await this.threadRollups(threads.map((thread) => thread.id));
+    return threads.map((thread) => {
+      const rollup = rollups.get(thread.id);
+      return {
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: rollup?.messageCount ?? 0,
+        totalTokens: rollup?.totalTokens ?? 0,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      };
+    });
+  }
+
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
     const threads = await this.db
       .select()
@@ -225,30 +326,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .where(isNull(agentThread.deletedAt))
       .orderBy(desc(agentThread.updatedAt), desc(agentThread.id))
       .limit(limit);
-    const result: ThreadActivityRow[] = [];
-    for (const thread of threads) {
-      const [messageCountRow] = await this.db
-        .select({ value: count() })
-        .from(agentMessage)
-        .where(eq(agentMessage.threadId, thread.id));
-      const usageRows = await this.db
-        .select()
-        .from(agentTokenUsage)
-        .where(eq(agentTokenUsage.threadId, thread.id));
-      const totalTokens = usageRows.reduce(
-        (sum, row) => sum + row.inputTokens + row.outputTokens,
-        0,
-      );
-      result.push({
-        threadId: thread.id,
-        title: thread.title,
-        actorRef: thread.actorRef,
-        messageCount: messageCountRow?.value ?? 0,
-        totalTokens,
-        lastActivityAt: thread.updatedAt.toISOString(),
-      });
-    }
-    return result;
+    return this.toThreadActivityRows(threads);
   }
 
   private async runsInRange(range: GovernanceRange): Promise<(typeof agentRun.$inferSelect)[]> {
@@ -360,19 +438,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .from(agentRun)
       .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
       .limit(limit);
-    return runs.map((run) => ({
-      runId: run.id,
-      threadId: run.threadId,
-      actorRef: run.actorRef,
-      agentName: run.agentName ?? null,
-      status: run.status,
-      durationMs: run.durationMs ?? null,
-      errorCode: run.errorCode ?? null,
-      errorMessage: run.errorMessage ?? null,
-      retries: run.retries,
-      startedAt: run.startedAt.toISOString(),
-      promptHash: run.promptHash ?? null,
-    }));
+    return runs.map(toRecentRunRow);
   }
 
   /**
@@ -414,8 +480,10 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
 
   /**
    * Per-tool call/failure/rejection/latency rollup over the range, highest call count first.
-   * `p95ExecutionMs` is computed over calls that recorded a non-null `executionMs` (regardless of
-   * their final status); `null` when none did.
+   * `p50ExecutionMs`/`p95ExecutionMs` are computed over calls that recorded a non-null `executionMs`
+   * (regardless of their final status); both `null` when none did. Percentiles are taken in-process
+   * off the sorted sample rather than in SQL, matching the MikroORM adapter — MySQL has no
+   * `PERCENTILE_CONT` and one portable implementation beats three dialect-specific ones.
    */
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const { start, end } = dayBoundsUtc(range);
@@ -461,6 +529,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         calls: bucket.calls,
         failed: bucket.failed,
         rejected: bucket.rejected,
+        p50ExecutionMs: percentileMs(bucket.executionMs, 0.5),
         p95ExecutionMs: percentileMs(bucket.executionMs, 0.95),
       });
     }
@@ -573,29 +642,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .orderBy(desc(agentThread.updatedAt), desc(agentThread.id))
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
-    const rows: ThreadActivityRow[] = [];
-    for (const thread of threads) {
-      const [messageCountRow] = await this.db
-        .select({ value: count() })
-        .from(agentMessage)
-        .where(eq(agentMessage.threadId, thread.id));
-      const usageRows = await this.db
-        .select()
-        .from(agentTokenUsage)
-        .where(eq(agentTokenUsage.threadId, thread.id));
-      const totalTokens = usageRows.reduce(
-        (sum, row) => sum + row.inputTokens + row.outputTokens,
-        0,
-      );
-      rows.push({
-        threadId: thread.id,
-        title: thread.title,
-        actorRef: thread.actorRef,
-        messageCount: messageCountRow?.value ?? 0,
-        totalTokens,
-        lastActivityAt: thread.updatedAt.toISOString(),
-      });
-    }
+    const rows = await this.toThreadActivityRows(threads);
     return { rows, total: totalRow?.value ?? 0, page: query.page, pageSize: query.pageSize };
   }
 
@@ -629,22 +676,201 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
     return {
-      rows: runs.map((run) => ({
-        runId: run.id,
-        threadId: run.threadId,
-        actorRef: run.actorRef,
-        agentName: run.agentName ?? null,
-        status: run.status,
-        durationMs: run.durationMs ?? null,
-        errorCode: run.errorCode ?? null,
-        errorMessage: run.errorMessage ?? null,
-        retries: run.retries,
-        startedAt: run.startedAt.toISOString(),
-        promptHash: run.promptHash ?? null,
+      rows: runs.map(toRecentRunRow),
+      total: totalRow?.value ?? 0,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  /**
+   * Paged, filterable approvals inbox, oldest first — the same ordering as {@link pendingApprovals},
+   * now with the `total` that method structurally cannot report. The join to `agent_message` /
+   * `agent_thread` is unconditional (it already resolves title/actor/agentName), so the `threadId`/
+   * `actorRef`/`agentName` filters cost nothing extra.
+   *
+   * The order is TOTAL (`created_at asc, id asc`, and `id` is the primary key), so no row can land on
+   * two pages or on none for a given snapshot. Ascending order also means a newly requested approval
+   * appends past the last page instead of shifting the page an operator is currently reading.
+   */
+  async approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    const filters = query.where;
+    const whereClause = and(
+      eq(agentToolCall.status, 'pending_approval'),
+      filters?.toolName !== undefined ? eq(agentToolCall.toolName, filters.toolName) : undefined,
+      filters?.threadId !== undefined ? eq(agentThread.id, filters.threadId) : undefined,
+      filters?.actorRef !== undefined ? eq(agentThread.actorRef, filters.actorRef) : undefined,
+      filters?.agentName !== undefined ? eq(agentMessage.agentName, filters.agentName) : undefined,
+      filters?.fromDay !== undefined
+        ? gte(agentToolCall.createdAt, dayStartUtc(filters.fromDay))
+        : undefined,
+      filters?.toDay !== undefined
+        ? lte(agentToolCall.createdAt, dayEndUtc(filters.toDay))
+        : undefined,
+    );
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .where(whereClause);
+    const rows = await this.db
+      .select({
+        toolCallId: agentToolCall.id,
+        toolName: agentToolCall.toolName,
+        input: agentToolCall.input,
+        threadId: agentThread.id,
+        threadTitle: agentThread.title,
+        actorRef: agentThread.actorRef,
+        agentName: agentMessage.agentName,
+        requestedAt: agentToolCall.createdAt,
+        runId: agentToolCall.runId,
+      })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .where(whereClause)
+      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize);
+    return {
+      rows: rows.map((row) => ({
+        toolCallId: row.toolCallId,
+        toolName: row.toolName,
+        input: row.input,
+        threadId: row.threadId,
+        threadTitle: row.threadTitle,
+        actorRef: row.actorRef,
+        agentName: row.agentName ?? null,
+        requestedAt: row.requestedAt.toISOString(),
+        runId: row.runId,
       })),
       total: totalRow?.value ?? 0,
       page: query.page,
       pageSize: query.pageSize,
     };
+  }
+
+  /**
+   * One run, its owning thread's headline and its tool calls — TWO queries regardless of how many
+   * tools the run called. `toolCalls` comes off `agent_tool_call.run_id`, so a run recorded before
+   * that column was written reports none.
+   */
+  async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
+    const [row] = await this.db
+      .select({ run: agentRun, thread: agentThread })
+      .from(agentRun)
+      .innerJoin(agentThread, eq(agentRun.threadId, agentThread.id))
+      .where(eq(agentRun.id, runId))
+      .limit(1);
+    if (row === undefined) {
+      return null;
+    }
+    const toolCalls = await this.db
+      .select()
+      .from(agentToolCall)
+      .where(eq(agentToolCall.runId, runId))
+      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id));
+    return {
+      run: toRecentRunRow(row.run),
+      thread: {
+        threadId: row.thread.id,
+        title: row.thread.title,
+        actorRef: row.thread.actorRef,
+        deleted: row.thread.deletedAt != null,
+      },
+      toolCalls: toolCalls.map(toRunToolCallRow),
+    };
+  }
+
+  /**
+   * One thread with its lifetime usage rollup, its newest runs and its newest messages. A fixed six
+   * queries (thread, usage, message count, message page, that page's tool-call counts, runs+count) —
+   * the per-message tool-call counts are ONE grouped read over the returned message ids, not one per
+   * message. Soft-deleted threads are returned with `deleted: true`; an audit still needs them.
+   */
+  async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
+    const [thread] = await this.db
+      .select()
+      .from(agentThread)
+      .where(eq(agentThread.id, query.threadId))
+      .limit(1);
+    if (thread === undefined) {
+      return null;
+    }
+    const pricing = await this.loadPricing();
+    const usageRows = await this.db
+      .select()
+      .from(agentTokenUsage)
+      .where(eq(agentTokenUsage.threadId, thread.id));
+    const usage = rollupThreadUsage(usageRows.map(toUsageInput), pricing);
+    const [messageCountRow] = await this.db
+      .select({ value: count() })
+      .from(agentMessage)
+      .where(eq(agentMessage.threadId, thread.id));
+    const messages = await this.db
+      .select()
+      .from(agentMessage)
+      .where(eq(agentMessage.threadId, thread.id))
+      .orderBy(desc(agentMessage.createdAt), desc(agentMessage.id))
+      .limit(query.messageLimit);
+    const toolCallCounts = await this.toolCallCountsByMessage(
+      messages.map((message) => message.id),
+    );
+    const [runTotalRow] = await this.db
+      .select({ value: count() })
+      .from(agentRun)
+      .where(eq(agentRun.threadId, thread.id));
+    const runs = await this.db
+      .select()
+      .from(agentRun)
+      .where(eq(agentRun.threadId, thread.id))
+      .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
+      .limit(query.runLimit);
+    return {
+      thread: {
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: messageCountRow?.value ?? 0,
+        totalTokens: usage.totalTokens,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      },
+      deleted: thread.deletedAt != null,
+      usage,
+      runs: runs.map(toRecentRunRow),
+      runTotal: runTotalRow?.value ?? 0,
+      messages: messages.map((message): ThreadMessageRow => {
+        const { content, truncated } = truncateDetailContent(message.content);
+        return {
+          messageId: message.id,
+          role: message.role,
+          content,
+          truncated,
+          agentName: message.agentName ?? null,
+          toolCallCount: toolCallCounts.get(message.id) ?? 0,
+          createdAt: message.createdAt.toISOString(),
+        };
+      }),
+    };
+  }
+
+  /** Tool-call counts for a set of messages in ONE grouped query — the detail view's no-N+1 guarantee. */
+  private async toolCallCountsByMessage(messageIds: string[]): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (messageIds.length === 0) {
+      return counts;
+    }
+    const rows = await this.db
+      .select({ messageId: agentToolCall.messageId, value: count() })
+      .from(agentToolCall)
+      .where(inArray(agentToolCall.messageId, messageIds))
+      .groupBy(agentToolCall.messageId);
+    for (const row of rows) {
+      counts.set(row.messageId, row.value);
+    }
+    return counts;
   }
 }

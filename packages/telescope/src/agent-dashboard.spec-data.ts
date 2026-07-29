@@ -280,6 +280,7 @@ export function agentDashboard(
               { key: 'calls', label: 'Calls' },
               { key: 'failed', label: 'Failed' },
               { key: 'rejected', label: 'Rejected' },
+              { key: 'p50ExecutionMs', label: 'p50 (ms)' },
               { key: 'p95ExecutionMs', label: 'p95 (ms)' },
             ],
           },
