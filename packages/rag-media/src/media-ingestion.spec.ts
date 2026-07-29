@@ -140,7 +140,7 @@ describe('ingestMediaFile', () => {
       chunk: { chunkSize: 12, overlap: 0 },
     });
     // second attach of the same media id, now much shorter
-    const files = { 's3:docs/policy.txt': Buffer.from('tiny') };
+    const files: Record<string, Buffer> = { 's3:docs/policy.txt': Buffer.from('tiny') };
     await ingestMediaFile(attachEvent(), {
       ...deps,
       readFile: async (disk, path) => files[`${disk}:${path}`] ?? Buffer.from(''),
