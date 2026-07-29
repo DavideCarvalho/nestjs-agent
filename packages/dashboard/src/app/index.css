@@ -143,3 +143,26 @@ body {
   border: 3px solid var(--bg);
   border-radius: 999px;
 }
+
+/*
+ * The drill-down drawer is a native <dialog> opened with showModal(): the focus trap, the inert
+ * background and Esc-to-close come from the platform. What the UA gives it by default is a centred
+ * auto-sized box, so these rules turn it into a full-height panel pinned to the right edge.
+ */
+.drawer {
+  margin: 0 0 0 auto;
+  width: 100%;
+  max-width: 720px;
+  height: 100dvh;
+  max-height: 100dvh;
+  padding: 0;
+  border: none;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+.drawer::backdrop {
+  background: rgb(0 0 0 / 60%);
+  backdrop-filter: blur(2px);
+}

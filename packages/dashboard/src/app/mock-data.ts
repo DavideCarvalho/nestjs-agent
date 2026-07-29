@@ -6,9 +6,11 @@ import type {
   PendingApprovalRow,
   RecentRunRow,
   ReliabilityOverview,
+  RunDetail,
   RunTrendPoint,
   SpendOverview,
   ThreadActivityRow,
+  ThreadDetail,
   ThreadSpendRow,
   ToolCallActivityRow,
   ToolStatRow,
@@ -142,6 +144,21 @@ export const MOCK_RELIABILITY: ReliabilityOverview = {
   trend: buildRunTrend(),
 };
 
+/** The failed run every drill-down example opens — named so the detail fixture can't drift from the row. */
+const FAILED_RUN: RecentRunRow = {
+  runId: 'r-7c31',
+  threadId: 'th2',
+  actorRef: 'user:ops-bot',
+  agentName: 'billing-agent',
+  status: 'failed',
+  durationMs: 4_200,
+  errorCode: 'TIMEOUT',
+  errorMessage: 'upstream model request timed out after 3 attempts',
+  retries: 2,
+  startedAt: new Date(Date.now() - 210_000).toISOString(),
+  promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
+};
+
 export const MOCK_RUNS: RecentRunRow[] = [
   {
     runId: 'r-9f2a',
@@ -156,19 +173,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     startedAt: new Date(Date.now() - 40_000).toISOString(),
     promptHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef01234',
   },
-  {
-    runId: 'r-7c31',
-    threadId: 'th2',
-    actorRef: 'user:ops-bot',
-    agentName: 'billing-agent',
-    status: 'failed',
-    durationMs: 4_200,
-    errorCode: 'TIMEOUT',
-    errorMessage: 'upstream model request timed out after 3 attempts',
-    retries: 2,
-    startedAt: new Date(Date.now() - 210_000).toISOString(),
-    promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
-  },
+  FAILED_RUN,
   {
     runId: 'r-a114',
     threadId: 'th3',
@@ -213,6 +218,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
 export const MOCK_PENDING_APPROVALS: PendingApprovalRow[] = [
   {
     toolCallId: 'tc-approve-1',
+    runId: 'r-c447',
     toolName: 'delete_asset',
     input: { assetId: 'asset-42', reason: 'stale' },
     threadId: 'th2',
@@ -223,6 +229,7 @@ export const MOCK_PENDING_APPROVALS: PendingApprovalRow[] = [
   },
   {
     toolCallId: 'tc-approve-2',
+    runId: 'r-9f2a',
     toolName: 'send_email',
     input: { to: 'finance@acme.example', subject: 'Q3 invoice adjustment' },
     threadId: 'th1',
@@ -240,6 +247,7 @@ export const MOCK_TOOL_STATS: ToolStatRow[] = [
     calls: 420,
     failed: 6,
     rejected: 0,
+    p50ExecutionMs: 42,
     p95ExecutionMs: 180,
   },
   {
@@ -248,6 +256,7 @@ export const MOCK_TOOL_STATS: ToolStatRow[] = [
     calls: 34,
     failed: 1,
     rejected: 4,
+    p50ExecutionMs: 310,
     p95ExecutionMs: 620,
   },
   {
@@ -256,6 +265,7 @@ export const MOCK_TOOL_STATS: ToolStatRow[] = [
     calls: 58,
     failed: 2,
     rejected: 2,
+    p50ExecutionMs: 96,
     p95ExecutionMs: 410,
   },
   {
@@ -264,6 +274,7 @@ export const MOCK_TOOL_STATS: ToolStatRow[] = [
     calls: 210,
     failed: 0,
     rejected: 0,
+    p50ExecutionMs: 88,
     p95ExecutionMs: 95,
   },
 ];
@@ -273,6 +284,7 @@ export const MOCK_BUDGETS = BUDGETS;
 export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
   {
     toolCallId: 'tc1',
+    runId: 'r-9f2a',
     toolName: 'search_records',
     toolType: 'read',
     status: 'ok',
@@ -281,6 +293,7 @@ export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
   },
   {
     toolCallId: 'tc2',
+    runId: 'r-7c31',
     toolName: 'delete_asset',
     toolType: 'action',
     status: 'forbidden',
@@ -289,6 +302,7 @@ export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
   },
   {
     toolCallId: 'tc3',
+    runId: 'r-9f2a',
     toolName: 'fetch_pricing',
     toolType: 'read',
     status: 'ok',
@@ -297,6 +311,7 @@ export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
   },
   {
     toolCallId: 'tc4',
+    runId: 'r-a114',
     toolName: 'send_email',
     toolType: 'action',
     status: 'failed',
@@ -305,6 +320,7 @@ export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
   },
   {
     toolCallId: 'tc5',
+    runId: null,
     toolName: 'summarize_thread',
     toolType: 'read',
     status: 'ok',
@@ -312,6 +328,17 @@ export const MOCK_TOOL_CALLS: ToolCallActivityRow[] = [
     createdAt: new Date(Date.now() - 1_200_000).toISOString(),
   },
 ];
+
+/** The thread the drill-down example opens — see {@link FAILED_RUN}. */
+const INCIDENT_THREAD: ThreadActivityRow = {
+  threadId: 'th2',
+  title: 'Incident triage',
+  actorRef: 'user:ops-bot',
+  messageCount: 11,
+  totalTokens: 62_000,
+  lastActivityAt: new Date(Date.now() - 400_000).toISOString(),
+  actorLabel: null,
+};
 
 export const MOCK_THREADS: ThreadActivityRow[] = [
   {
@@ -323,15 +350,7 @@ export const MOCK_THREADS: ThreadActivityRow[] = [
     lastActivityAt: new Date(Date.now() - 30_000).toISOString(),
     actorLabel: 'Acme Corp',
   },
-  {
-    threadId: 'th2',
-    title: 'Incident triage',
-    actorRef: 'user:ops-bot',
-    messageCount: 11,
-    totalTokens: 62_000,
-    lastActivityAt: new Date(Date.now() - 400_000).toISOString(),
-    actorLabel: null,
-  },
+  INCIDENT_THREAD,
   {
     threadId: 'th3',
     title: 'Contract summary',
@@ -395,6 +414,107 @@ export const MOCK_RUNS_PAGE: GovernancePage<RecentRunRow> = {
   total: 482,
   page: 1,
   pageSize: 25,
+};
+
+/**
+ * Page 1 of the paged approvals inbox. `total` deliberately exceeds `rows.length` so the preview
+ * shows the "N of M" line the unpaged inbox could never say.
+ */
+export const MOCK_APPROVALS_PAGE: GovernancePage<PendingApprovalRow> = {
+  rows: MOCK_PENDING_APPROVALS,
+  total: 7,
+  page: 1,
+  pageSize: 25,
+};
+
+/** A failed run's drill-down — the case the console had no way to open. */
+export const MOCK_RUN_DETAIL: RunDetail = {
+  run: FAILED_RUN,
+  thread: {
+    threadId: 'th2',
+    title: 'Incident triage',
+    actorRef: 'user:ops-bot',
+    deleted: false,
+    actorLabel: null,
+  },
+  toolCalls: [
+    {
+      toolCallId: 'tc2',
+      toolName: 'delete_asset',
+      toolType: 'action',
+      status: 'forbidden',
+      executionMs: null,
+      executedByRef: 'user:davi@goflip.ai',
+      error: null,
+      createdAt: new Date(Date.now() - 215_000).toISOString(),
+    },
+    {
+      toolCallId: 'tc9',
+      toolName: 'fetch_pricing',
+      toolType: 'read',
+      status: 'ok',
+      executionMs: 96,
+      executedByRef: null,
+      error: null,
+      createdAt: new Date(Date.now() - 213_000).toISOString(),
+    },
+    {
+      toolCallId: 'tc10',
+      toolName: 'search_records',
+      toolType: 'read',
+      status: 'failed',
+      executionMs: 3_980,
+      executedByRef: null,
+      error: 'upstream returned 500 after 3 attempts',
+      createdAt: new Date(Date.now() - 212_000).toISOString(),
+    },
+  ],
+};
+
+/** A thread drill-down whose `runTotal` exceeds the returned `runs` — the "see all runs" path. */
+export const MOCK_THREAD_DETAIL: ThreadDetail = {
+  thread: INCIDENT_THREAD,
+  deleted: false,
+  usage: {
+    requests: 11,
+    inputTokens: 48_000,
+    outputTokens: 14_000,
+    totalTokens: 62_000,
+    costUsd: 6.2,
+  },
+  runs: MOCK_RUNS.filter((run) => run.threadId === 'th2'),
+  runTotal: 34,
+  messages: [
+    {
+      messageId: 'm1',
+      role: 'user',
+      content: 'The billing sync failed again overnight — can you find out which asset broke it?',
+      truncated: false,
+      agentName: null,
+      toolCallCount: 0,
+      createdAt: new Date(Date.now() - 400_000).toISOString(),
+    },
+    {
+      messageId: 'm2',
+      role: 'assistant',
+      content:
+        'I found 3 assets with a null billing code. Asset-42 is the only one touched by last night’s sync, so I want to delete it — that needs your approval.',
+      truncated: false,
+      agentName: 'billing-agent',
+      toolCallCount: 2,
+      createdAt: new Date(Date.now() - 380_000).toISOString(),
+    },
+    {
+      messageId: 'm3',
+      role: 'assistant',
+      content:
+        'Here is the full audit trail for asset-42 across the last 90 days, starting with the ingest that first assigned it a billing code and continuing through every subsequent',
+      truncated: true,
+      agentName: 'billing-agent',
+      toolCallCount: 1,
+      createdAt: new Date(Date.now() - 360_000).toISOString(),
+    },
+  ],
 };
 
 export const MOCK_PRICES: ModelPrice[] = [

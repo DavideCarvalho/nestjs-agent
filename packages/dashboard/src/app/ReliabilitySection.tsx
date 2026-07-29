@@ -1,32 +1,35 @@
-import type {
-  GovernancePage,
-  RecentRunRow,
-  ReliabilityOverview,
-  RunWhere,
-} from '../client/agent-client';
+import type { RecentRunRow, ReliabilityOverview, RunWhere } from '../client/agent-client';
 import { errorSegments } from '../client/error-breakdown';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
 import { Donut, colorAt } from './Donut';
 import { RunTrendChart } from './RunTrendChart';
-import { ActivityIcon, AlertIcon, ClockIcon, RetryIcon } from './icons';
+import { InlineError } from './SectionBoundary';
+import { ActivityIcon, AlertIcon, ClockIcon, RetryIcon, XIcon } from './icons';
+import type { PagedTable } from './paged-table';
 import { Empty, FilterInput, Pagination, Panel, Stat, StatusPill, relTime } from './ui';
 
 /** Run success rate, failure breakdown, run/failure trend and a paged, filterable recent-runs table. */
 export function ReliabilitySection({
   overview,
-  runsPage,
+  runsTable,
   runsWhere,
   onRunsStatusChange,
   onRunsAgentNameChange,
+  onRunsThreadIdClear,
   onRunsPageChange,
+  onOpenRun,
 }: {
   overview: ReliabilityOverview;
-  runsPage: GovernancePage<RecentRunRow>;
+  runsTable: PagedTable<RecentRunRow>;
   runsWhere: RunWhere;
   onRunsStatusChange: (value: string) => void;
   onRunsAgentNameChange: (value: string) => void;
+  /** Drops the `threadId` filter a thread drill-down deep-linked in. */
+  onRunsThreadIdClear: () => void;
   onRunsPageChange: (page: number) => void;
+  onOpenRun?: ((runId: string) => void) | undefined;
 }) {
+  const runsPage = runsTable.page;
   const { metrics, byAgent, errors, trend } = overview;
   const errorRate = metrics.runs > 0 ? metrics.failed / metrics.runs : 0;
   const segments = errorSegments(errors);
@@ -147,6 +150,23 @@ export function ReliabilitySection({
             </div>
           }
         >
+          {/* A thread drill-down links in here with `?threadId=…`. Shown as a removable chip rather
+              than a silent filter — a table quietly showing one thread's runs looks like an outage. */}
+          {runsWhere.threadId !== undefined && (
+            <button
+              type="button"
+              onClick={onRunsThreadIdClear}
+              className="mono mb-3 flex items-center gap-1.5 rounded-md border border-[var(--accent)]/50 bg-[var(--accent)]/10 px-2 py-1 text-[10px] text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20"
+            >
+              thread {runsWhere.threadId}
+              <XIcon />
+            </button>
+          )}
+          {runsTable.error !== null && (
+            <div className="mb-3">
+              <InlineError label="Runs" error={runsTable.error} onRetry={runsTable.retry} />
+            </div>
+          )}
           {runsPage.rows.length === 0 ? (
             <Empty label="No runs yet" />
           ) : (
@@ -164,9 +184,25 @@ export function ReliabilitySection({
                 </thead>
                 <tbody className="mono tnum">
                   {runsPage.rows.map((run) => (
-                    <tr key={run.runId} className="border-b border-[var(--line-soft)]">
+                    <tr
+                      key={run.runId}
+                      className="border-b border-[var(--line-soft)] hover:bg-[var(--panel-2)]"
+                    >
+                      {/* The status pill is the row's handle: it is the first thing an operator
+                          reads and the reason they want the run open. */}
                       <td className="py-2.5 pr-4">
-                        <StatusPill status={run.status} />
+                        {onOpenRun === undefined ? (
+                          <StatusPill status={run.status} />
+                        ) : (
+                          <button
+                            type="button"
+                            title={`Open run ${run.runId}`}
+                            onClick={() => onOpenRun(run.runId)}
+                            className="underline decoration-[var(--line)] decoration-dotted underline-offset-4 transition-colors hover:decoration-[var(--accent)]"
+                          >
+                            <StatusPill status={run.status} />
+                          </button>
+                        )}
                       </td>
                       <td className="py-2.5 pr-4 text-[var(--muted)]">
                         {run.agentName ?? '(default)'}

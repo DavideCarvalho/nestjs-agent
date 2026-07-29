@@ -65,12 +65,8 @@ export interface ToolCallActivityRow {
   status: string;
   threadId: string;
   createdAt: string;
-  /**
-   * The run this call belongs to, for a trace deep-link; `null` for a call recorded before this
-   * shipped. Optional in this mirror ONLY so existing row literals (the preview's mock data) still
-   * typecheck — the server has always sent it. Tighten to required once those literals supply it.
-   */
-  runId?: string | null;
+  /** The run this call belongs to, for a trace deep-link; `null` for a call recorded before this shipped. */
+  runId: string | null;
 }
 
 /** A recent thread with rolled-up activity. */
@@ -147,9 +143,8 @@ export interface PendingApprovalRow {
   agentName: string | null;
   /** ISO timestamp. */
   requestedAt: string;
-  /** The run this call belongs to, for a trace deep-link; `null` for a pre-rollout row. Optional in
-   * this mirror for the same reason as {@link ToolCallActivityRow.runId}. */
-  runId?: string | null;
+  /** The run this call belongs to, for a trace deep-link; `null` for a pre-rollout row. */
+  runId: string | null;
 }
 
 /** Body for `POST <api>/approvals/:toolCallId` — decide a pending HITL tool call. */
@@ -229,10 +224,8 @@ export interface ToolStatRow {
   /**
    * p50 (median) of executionMs across calls that recorded one; null when none carry it. Paired with
    * p95 rather than a mean — tool latency is long-tailed, so "typical" and "tail" are two numbers.
-   * Optional in this mirror ONLY so existing row literals (the preview's mock data) still typecheck;
-   * the server always sends it.
    */
-  p50ExecutionMs?: number | null;
+  p50ExecutionMs: number | null;
   /** p95 of executionMs across executed calls; null when none carry it. */
   p95ExecutionMs: number | null;
 }

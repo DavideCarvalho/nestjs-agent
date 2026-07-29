@@ -2,7 +2,14 @@ import type { ToolStatRow } from '../client/agent-client';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
 import { Empty, Panel } from './ui';
 
-/** Governance rollup per tool over a range: volume, failure/rejection rate, p95 execution time. */
+/**
+ * Governance rollup per tool over a range: volume, failure/rejection rate, and BOTH latency
+ * percentiles.
+ *
+ * p95 alone cannot tell a tool whose median is 100ms and whose tail is 10s from one that is
+ * uniformly slow, and those are different problems with different fixes. Showing p50 next to it
+ * costs one column and answers "is this tool slow, or does it occasionally hang?".
+ */
 export function ToolsSection({ rows }: { rows: ToolStatRow[] }) {
   return (
     <Panel
@@ -13,7 +20,7 @@ export function ToolsSection({ rows }: { rows: ToolStatRow[] }) {
         <Empty label="No tool calls in this range" />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-xs">
+          <table className="w-full min-w-[700px] text-left text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
               <tr className="border-b border-[var(--line)]">
                 <th className="py-2 font-medium">Tool</th>
@@ -21,6 +28,7 @@ export function ToolsSection({ rows }: { rows: ToolStatRow[] }) {
                 <th className="py-2 text-right font-medium">Calls</th>
                 <th className="py-2 text-right font-medium">Failure rate</th>
                 <th className="py-2 text-right font-medium">Rejected</th>
+                <th className="py-2 pl-4 text-right font-medium">p50 exec</th>
                 <th className="py-2 pl-4 text-right font-medium">p95 exec</th>
               </tr>
             </thead>
@@ -49,6 +57,9 @@ export function ToolsSection({ rows }: { rows: ToolStatRow[] }) {
                       {formatPercent(failureRate)}
                     </td>
                     <td className="py-2.5 text-right text-[var(--muted)]">{row.rejected}</td>
+                    <td className="py-2.5 pl-4 text-right text-[var(--text)]">
+                      {formatDurationMs(row.p50ExecutionMs)}
+                    </td>
                     <td className="py-2.5 pl-4 text-right text-[var(--muted)]">
                       {formatDurationMs(row.p95ExecutionMs)}
                     </td>
