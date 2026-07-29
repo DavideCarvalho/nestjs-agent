@@ -1,7 +1,10 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
+import { filterMatchesNothing } from './filter.js';
 import {
+  type EnumerableVectorStore,
   type IndexedDocument,
   type LexicalVectorStore,
+  UnsafeRemovalError,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
@@ -78,7 +81,7 @@ export interface RedisVectorStoreOptions {
  * {@link LexicalVectorStore}: {@link RedisVectorStore.searchText} is BM25 over that same index —
  * the lexical half of hybrid search with no second index to build, feed, or invalidate.
  */
-export class RedisVectorStore implements LexicalVectorStore {
+export class RedisVectorStore implements LexicalVectorStore, EnumerableVectorStore {
   private readonly index: string;
   private readonly prefix: string;
   private readonly dimensions: number;
@@ -229,6 +232,26 @@ export class RedisVectorStore implements LexicalVectorStore {
     }
   }
 
+  /**
+   * Single-document deletion, by `SCAN … MATCH`.
+   *
+   * This deliberately stays a keyspace scan even though the rest of this class no longer needs one.
+   * The obvious optimisation is to stamp each chunk with its document id as an implicit filterable
+   * TAG at {@link RedisVectorStore.upsert} and turn `remove` into an `FT.SEARCH` — and that is exactly
+   * the change that must not ship, because chunks written *before* it carry no such field. `FT.SEARCH`
+   * would find zero of them, `remove` would return happily, and a document that has been "deleted"
+   * would go on being retrieved. A delete that silently stops deleting is worse than a slow one, and
+   * the library cannot tell a fully-migrated corpus from an unmigrated one: both look like "this
+   * document has no indexed chunks". Nor is a search-then-fall-back-to-scan hybrid safe — a document
+   * re-ingested after the upgrade has *some* stamped chunks, so the search finds hits, the fallback
+   * never runs, and the unstamped tail survives. That is the same silent failure with a smaller blast
+   * radius, which makes it harder to notice rather than less wrong.
+   *
+   * The consumer pain this was measured against — deleting a whole collection, one `remove` per
+   * document — is answered instead by {@link RedisVectorStore.removeWhere} (one filtered query, no
+   * keyspace scan at all) and {@link RedisVectorStore.removeMany} (one scan for N documents rather
+   * than N scans). Neither depends on a field that older chunks lack, so neither has a migration.
+   */
   async remove(documentId: string): Promise<void> {
     const keys = new Set<string>([`${this.prefix}${documentId}`]);
     const pattern = `${this.prefix}${escapeGlob(documentId)}#*`;
@@ -293,6 +316,192 @@ export class RedisVectorStore implements LexicalVectorStore {
       offset += batchSize;
     }
     return [...documents.values()];
+  }
+
+  /**
+   * The id-only half of {@link RedisVectorStore.listDocuments}, served by `FT.SEARCH … NOCONTENT`:
+   * RediSearch returns bare keys, so nothing carries `metadata_json` over the wire and nothing is
+   * JSON-parsed. `listDocuments` has to parse one metadata blob per *chunk* — thousands of parses to
+   * produce a few hundred ids it then throws the metadata away from — and this does none of it.
+   *
+   * The collapse to document ids still happens client-side. RediSearch can group server-side
+   * (`FT.AGGREGATE … GROUPBY`), but only over an indexed *field*, and a chunk's document id lives in
+   * its key, not in a field — deriving it would mean stamping one at write time, which is the
+   * migration {@link RedisVectorStore.remove} explains this class refuses. Deduplicating a page of
+   * keys in JS is free by comparison.
+   */
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    if (filterMatchesNothing(filter)) {
+      return [];
+    }
+    const query = buildFilter(filter);
+    const documents = new Set<string>();
+    let offset = 0;
+    for (;;) {
+      const reply = await this.client.sendCommand([
+        'FT.SEARCH',
+        this.index,
+        query,
+        'NOCONTENT',
+        'LIMIT',
+        String(offset),
+        String(SCAN_PAGE),
+        'DIALECT',
+        '2',
+      ]);
+      const keys = parseSearchKeys(reply);
+      for (const key of keys) {
+        documents.add(documentIdOf(stripPrefix(key, this.prefix)));
+      }
+      if (keys.length < SCAN_PAGE) {
+        break;
+      }
+      offset += SCAN_PAGE;
+    }
+    return [...documents];
+  }
+
+  /**
+   * Bulk deletion by document id — **one** keyspace scan for N documents, where N calls to
+   * {@link RedisVectorStore.remove} would be N of them. The scan is `MATCH ${prefix}*`, so Redis still
+   * filters to this store's own keys server-side; membership is then decided in JS against a `Set`,
+   * which is what lets a single pass serve any number of ids.
+   *
+   * It deletes by key, exactly as `remove` does, so it is correct on chunks written by any version of
+   * this library — there is no field it needs the corpus to already carry.
+   */
+  async removeMany(documentIds: string[]): Promise<void> {
+    if (documentIds.length === 0) {
+      return;
+    }
+    const wanted = new Set(documentIds);
+    // A document may have been stored under its bare id (no `#n` suffix); those keys are exact and
+    // need no scan to find, so seed them and let the scan add the chunked ones.
+    let pending = documentIds.map((id) => `${this.prefix}${id}`);
+    let cursor = '0';
+    do {
+      const reply = await this.client.sendCommand([
+        'SCAN',
+        cursor,
+        'MATCH',
+        `${escapeGlob(this.prefix)}*`,
+        'COUNT',
+        String(SCAN_PAGE),
+      ]);
+      const page = parseScanReply(reply);
+      cursor = page.cursor;
+      for (const key of page.keys) {
+        if (wanted.has(documentIdOf(stripPrefix(key, this.prefix)))) {
+          pending.push(key);
+        }
+      }
+      if (pending.length >= DELETE_BATCH) {
+        await this.client.sendCommand(['DEL', ...pending]);
+        pending = [];
+      }
+    } while (cursor !== '0');
+    if (pending.length > 0) {
+      await this.client.sendCommand(['DEL', ...pending]);
+    }
+  }
+
+  /**
+   * Delete every chunk matching `filter`, via `FT.SEARCH … NOCONTENT` + `DEL` — no keyspace scan at
+   * all, so dropping a collection costs one indexed query per page instead of one full pass per
+   * document. Resolves the number of chunk keys actually deleted.
+   *
+   * The two refusals, in this order, before any query is issued:
+   *
+   * 1. **An empty filter object throws** {@link UnsafeRemovalError}. `buildFilter({})` is `*`, and `*`
+   *    here would mean "delete the corpus" — far too destructive an outcome for the shape a filter
+   *    degenerates to when it is built wrong.
+   * 2. **An empty-array value deletes nothing** and resolves `0`. This is the package's deny primitive
+   *    (an actor with no capability tokens), and it is the one that has to be gated *explicitly*: a
+   *    plausible-looking "normalise the filter first" refactor that drops empty arrays turns a deny
+   *    into `*` and wipes everything the deny existed to protect.
+   *
+   * Then one more, which is specific to RediSearch: every filter key must be a declared
+   * `filterableFields` entry. `search` lets the engine reject an unknown field, which is fine for a
+   * read; for a delete the check is worth making up front and by name.
+   *
+   * Deletion happens page by page, always re-querying from offset 0 — the rows just deleted are gone
+   * from the index, so paging forward would skip their replacements. If a page comes back non-empty
+   * but `DEL` reports nothing removed (keys expired between query and delete, or the index is stale),
+   * the loop stops rather than spinning on results it can never consume.
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    const keys = Object.keys(filter);
+    if (keys.length === 0) {
+      throw new UnsafeRemovalError(
+        'empty-filter',
+        'removeWhere() refuses an empty filter: it would delete every chunk in the index. ' +
+          'Pass a filter that scopes the removal, or delete deliberately with ' +
+          'removeMany(await store.listDocumentIds()).',
+      );
+    }
+    const unindexed = keys.filter((key) => !this.filterableFields.includes(key));
+    if (unindexed.length > 0) {
+      const named = unindexed.map((key) => `"${key}"`).join(', ');
+      const declared = this.filterableFields.join(', ') || 'none';
+      throw new UnsafeRemovalError(
+        'unindexed-field',
+        `removeWhere() cannot scope on ${named}: not declared in this store's filterableFields (${declared}), so RediSearch has no TAG to match on.`,
+      );
+    }
+    // THE guard. Removing it turns the deny primitive into an unfiltered delete — see the db spec's
+    // "an empty-array filter deletes NOTHING" case, which exists to fail loudly if this ever goes.
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+
+    const query = buildFilter(filter);
+    let removed = 0;
+    for (;;) {
+      const reply = await this.client.sendCommand([
+        'FT.SEARCH',
+        this.index,
+        query,
+        'NOCONTENT',
+        'LIMIT',
+        '0',
+        String(DELETE_BATCH),
+        'DIALECT',
+        '2',
+      ]);
+      const page = parseSearchKeys(reply);
+      if (page.length === 0) {
+        break;
+      }
+      const deleted = Number(await this.client.sendCommand(['DEL', ...page]));
+      if (!Number.isFinite(deleted) || deleted === 0) {
+        break;
+      }
+      removed += deleted;
+    }
+    return removed;
+  }
+
+  /**
+   * Count matching chunks with `FT.SEARCH … LIMIT 0 0` — RediSearch returns the total and no
+   * documents, so the cost is the query, not the corpus. An empty-array filter value denies and
+   * yields `0`, same as every other filtered path here.
+   */
+  async countChunks(filter?: Record<string, unknown>): Promise<number> {
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+    const reply = await this.client.sendCommand([
+      'FT.SEARCH',
+      this.index,
+      buildFilter(filter),
+      'NOCONTENT',
+      'LIMIT',
+      '0',
+      '0',
+      'DIALECT',
+      '2',
+    ]);
+    return parseSearchTotal(reply);
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {
@@ -367,6 +576,50 @@ export class RedisVectorStore implements LexicalVectorStore {
     ]);
     return parseSearchReply(reply, this.prefix, 'lexical');
   }
+}
+
+/** Page size for `SCAN COUNT` and for the id-only `FT.SEARCH` pages. */
+const SCAN_PAGE = 1000;
+
+/** How many keys to hand a single `DEL`, and therefore how big a `removeWhere` page is. */
+const DELETE_BATCH = 512;
+
+/** Recover a chunk id from its Redis key. */
+function stripPrefix(key: string, prefix: string): string {
+  return key.startsWith(prefix) ? key.slice(prefix.length) : key;
+}
+
+/**
+ * Parse the keys out of an `FT.SEARCH … NOCONTENT` reply, tolerating both wire shapes: the RESP2 array
+ * `[total, key, key, …]` and the RESP3 object `{ total_results, results: [{ id }] }`. Keys come back
+ * whole (prefix included) — callers strip it.
+ */
+function parseSearchKeys(reply: unknown): string[] {
+  if (Array.isArray(reply)) {
+    return reply.slice(1).map(toStr);
+  }
+  if (typeof reply === 'object' && reply !== null && 'results' in reply) {
+    const results = (reply as { results: unknown }).results;
+    return Array.isArray(results) ? results.map(readId) : [];
+  }
+  return [];
+}
+
+/**
+ * Parse the match count out of an `FT.SEARCH … LIMIT 0 0` reply — element 0 in RESP2, `total_results`
+ * in the RESP3 object. An unrecognised shape counts as 0 rather than `NaN`, so a caller comparing
+ * against a threshold can't be handed something that fails every comparison silently.
+ */
+function parseSearchTotal(reply: unknown): number {
+  if (Array.isArray(reply)) {
+    const total = Number(toStr(reply[0]));
+    return Number.isFinite(total) ? total : 0;
+  }
+  if (typeof reply === 'object' && reply !== null && 'total_results' in reply) {
+    const total = Number((reply as { total_results: unknown }).total_results);
+    return Number.isFinite(total) ? total : 0;
+  }
+  return 0;
 }
 
 /** One attribute as the live index reports it — enough to spot the drift that matters. */
@@ -456,18 +709,6 @@ function buildFilter(filter?: Record<string, unknown>): string {
     return `@meta_${key}:{${alternation}}`;
   });
   return `(${clauses.join(' ')})`;
-}
-
-/**
- * A filter with an empty-array value can never match (nothing is a member of the empty set) — and
- * RediSearch has no valid empty-tag syntax, so callers short-circuit to an empty result instead of
- * emitting a broken query. This is the deny primitive (e.g. an actor with no capability tokens).
- */
-function filterMatchesNothing(filter?: Record<string, unknown>): boolean {
-  if (filter === undefined) {
-    return false;
-  }
-  return Object.values(filter).some((value) => Array.isArray(value) && value.length === 0);
 }
 
 /**

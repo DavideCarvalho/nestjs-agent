@@ -1,7 +1,9 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import { matchesFilter } from './filter.js';
+import { filterMatchesNothing, matchesFilter } from './filter.js';
 import {
+  type EnumerableVectorStore,
   type IndexedDocument,
+  UnsafeRemovalError,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
@@ -11,8 +13,14 @@ import {
 /**
  * An in-process {@link VectorStore} — cosine similarity over a Map, no infra. The reference adapter
  * for tests and small/embedded corpora; for production scale use `PgVectorStore` (or your own).
+ *
+ * It also carries the optional {@link EnumerableVectorStore} capability. There is no performance
+ * argument for it here — every method below is a loop over the same Map — but a store that tests are
+ * written against has to behave identically to the one production runs, and the semantics that matter
+ * (`removeWhere` refusing an empty filter, an empty-array filter deleting nothing) are behavioural,
+ * not incidental to Redis.
  */
-export class MemoryVectorStore implements VectorStore {
+export class MemoryVectorStore implements VectorStore, EnumerableVectorStore {
   private readonly records = new Map<string, VectorRecord>();
 
   async upsert(records: VectorRecord[]): Promise<void> {
@@ -44,6 +52,73 @@ export class MemoryVectorStore implements VectorStore {
       }
     }
     return [...documents.values()];
+  }
+
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    if (filterMatchesNothing(filter)) {
+      return [];
+    }
+    const documents = new Set<string>();
+    for (const record of this.records.values()) {
+      if (filter !== undefined && !matchesFilter(record.metadata, filter)) {
+        continue;
+      }
+      documents.add(documentIdOf(record.id));
+    }
+    return [...documents];
+  }
+
+  async removeMany(documentIds: string[]): Promise<void> {
+    if (documentIds.length === 0) {
+      return;
+    }
+    const wanted = new Set(documentIds);
+    for (const id of this.records.keys()) {
+      if (wanted.has(documentIdOf(id))) {
+        this.records.delete(id);
+      }
+    }
+  }
+
+  /**
+   * See {@link EnumerableVectorStore.removeWhere}. The empty-array short-circuit below is redundant
+   * against `matchesFilter` (which already matches nothing for an empty array) and is kept anyway:
+   * this is the method where "the filter accidentally means everything" destroys data, so the deny is
+   * stated where a reader can see it rather than inferred from another module's truth table.
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    if (Object.keys(filter).length === 0) {
+      throw new UnsafeRemovalError(
+        'empty-filter',
+        'removeWhere() refuses an empty filter: it would delete every chunk in the store. ' +
+          'Pass a filter that scopes the removal, or delete deliberately with ' +
+          'removeMany(await store.listDocumentIds()).',
+      );
+    }
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+    let removed = 0;
+    for (const [id, record] of this.records) {
+      if (matchesFilter(record.metadata, filter)) {
+        this.records.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  async countChunks(filter?: Record<string, unknown>): Promise<number> {
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+    let count = 0;
+    for (const record of this.records.values()) {
+      if (filter === undefined || matchesFilter(record.metadata, filter)) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

@@ -78,6 +78,107 @@ export function isLexicalVectorStore(store: VectorStore): store is LexicalVector
   return typeof (store as Partial<LexicalVectorStore>).searchText === 'function';
 }
 
+/**
+ * An **optional** capability a {@link VectorStore} may also implement: *targeted* enumeration and
+ * *bulk* deletion, for the collection-maintenance work {@link VectorStore.remove} and
+ * {@link VectorStore.listDocuments} can only express one document at a time.
+ *
+ * The gap it closes is asymptotic, not cosmetic. Dropping a collection through the base interface is
+ * `listDocuments()` (which fetches and JSON-parses every chunk's metadata just to collapse it away)
+ * followed by one `remove` per document — and on the Redis adapter each of those removes is a `SCAN`
+ * that walks the whole keyspace, which in a real deployment also holds queues, workflow state and the
+ * app cache. Two thousand documents is two thousand full passes. The methods here do the same work as
+ * one filtered query.
+ *
+ * It is a separate interface, on the {@link LexicalVectorStore} precedent, so that adding it stays
+ * additive: a host that wrote its own `VectorStore` keeps compiling, and narrows with
+ * {@link isEnumerableVectorStore} when it wants the fast path.
+ *
+ * Implementations MUST apply filters with exactly the same semantics as {@link VectorStore.search} —
+ * including the empty-array deny primitive — because the filter is routinely an access-control
+ * boundary. On {@link EnumerableVectorStore.removeWhere} that is not a correctness nicety but the
+ * single most destructive thing this interface could get wrong.
+ */
+export interface EnumerableVectorStore extends VectorStore {
+  /**
+   * The distinct source document ids currently indexed, optionally narrowed by a metadata `filter` —
+   * {@link VectorStore.listDocuments} without the metadata. Use it when you only need the id set (a
+   * reconciliation diff against your source of truth, a count, a delete list): implementations are
+   * expected to skip fetching and parsing per-chunk metadata entirely, which is most of the cost of
+   * `listDocuments` on a large corpus.
+   *
+   * An empty-array filter value denies, yielding `[]`.
+   */
+  listDocumentIds(filter?: Record<string, unknown>): Promise<string[]>;
+
+  /**
+   * Delete every chunk of every one of `documentIds`, with the same per-document semantics as
+   * {@link VectorStore.remove} — but as one bulk operation rather than N independent ones. An empty
+   * array is a no-op.
+   */
+  removeMany(documentIds: string[]): Promise<void>;
+
+  /**
+   * Delete every chunk matching a metadata `filter`, and resolve the number of **chunks** removed
+   * (not documents). The collection-maintenance primitive: dropping a collection, evicting a tenant,
+   * purging a retired audience.
+   *
+   * Two guard rails, because this is the one method here that destroys data:
+   *
+   * - **The empty-array deny is honoured, and it means "delete nothing".** `removeWhere({ audience: [] })`
+   *   removes zero chunks. Treating a deny as "no filter" would delete the entire corpus, which is
+   *   exactly inverted from what the caller asked for.
+   * - **The filter must be non-empty.** `removeWhere({})` throws {@link UnsafeRemovalError} rather
+   *   than wiping the store, because an empty object is overwhelmingly more likely to be a filter that
+   *   got built wrong (a dropped key, an `undefined` scope) than a deliberate request to delete
+   *   everything. Deliberate mass deletion stays available and stays explicit:
+   *   `removeMany(await store.listDocumentIds())`, or the backend's own drop.
+   *
+   * What it removes is exactly what a {@link VectorStore.search} carrying the same filter could
+   * reach — no more (it cannot escape the filter) and no less.
+   */
+  removeWhere(filter: Record<string, unknown>): Promise<number>;
+
+  /**
+   * How many **chunks** match `filter` (all of them when it is omitted) — a counted query, without
+   * transferring the chunks. Sizing a reindex, reporting a collection's footprint, and confirming a
+   * {@link EnumerableVectorStore.removeWhere} did what you expected. An empty-array filter value
+   * denies, yielding `0`.
+   */
+  countChunks(filter?: Record<string, unknown>): Promise<number>;
+}
+
+/**
+ * Does this store carry the optional {@link EnumerableVectorStore} capability? All three adapters this
+ * package ships do; a host-written store may not, and should keep working either way.
+ */
+export function isEnumerableVectorStore(store: VectorStore): store is EnumerableVectorStore {
+  const candidate = store as Partial<EnumerableVectorStore>;
+  return (
+    typeof candidate.listDocumentIds === 'function' &&
+    typeof candidate.removeMany === 'function' &&
+    typeof candidate.removeWhere === 'function' &&
+    typeof candidate.countChunks === 'function'
+  );
+}
+
+/**
+ * A destructive call was refused because its scope could not be trusted. Thrown by
+ * {@link EnumerableVectorStore.removeWhere} — never for something that merely matched nothing (that
+ * is a legitimate result of `0`), only for a filter that would have deleted *more* than the caller
+ * plausibly meant.
+ */
+export class UnsafeRemovalError extends Error {
+  constructor(
+    /** Why the removal was refused. */
+    readonly reason: 'empty-filter' | 'unindexed-field',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'UnsafeRemovalError';
+  }
+}
+
 /** A distinct source document as seen by the index — its id plus a representative chunk's metadata. */
 export interface IndexedDocument {
   id: string;
