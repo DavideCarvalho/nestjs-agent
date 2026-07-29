@@ -73,6 +73,7 @@ export function ReliabilitySection({
                 centerLabel={`${metrics.failed}`}
                 centerSub="failed"
                 label="failures by error code"
+                formatValue={(value) => `${value} runs`}
               />
               <ul className="flex-1 space-y-1.5">
                 {errors.map((row, index) => (

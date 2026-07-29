@@ -3,7 +3,7 @@ import type { SpendOverview, ThreadSpendRow } from '../client/agent-client';
 import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatUsd } from '../client/format-usd';
 import { donutSegments, summarizeSpend, withShares } from '../client/spend-summary';
-import type { TrendMetric } from '../client/trend-path';
+import type { TrendMetric } from '../client/trend-summary';
 import { Donut, colorAt } from './Donut';
 import { TopThreadsSection } from './TopThreadsSection';
 import { TrendChart } from './TrendChart';
@@ -63,6 +63,7 @@ export function SpendSection({
                 segments={segments}
                 centerLabel={formatUsd(totals.costUsd)}
                 centerSub="total"
+                formatValue={formatUsd}
               />
               <ul className="flex-1 space-y-1.5">
                 {shares.slice(0, 8).map((row, index) => (
