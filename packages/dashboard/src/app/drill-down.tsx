@@ -4,7 +4,8 @@ import { RunDetailPanel } from './RunDetailPanel';
 import { InlineError } from './SectionBoundary';
 import { ThreadDetailPanel } from './ThreadDetailPanel';
 import { hashForSection } from './hash-section';
-import { Empty } from './ui';
+import { Card } from './ui/card';
+import { Empty } from './ui/kit';
 import { useRunDetail, useThreadDetail } from './use-governance';
 
 /** What a drill-down opens onto. */
@@ -160,8 +161,8 @@ function DetailFailure({
 
 function DetailSkeleton({ label }: { label: string }) {
   return (
-    <div className="panel animate-pulse p-6 text-sm text-[var(--muted)]" aria-busy="true">
+    <Card className="animate-pulse p-6 text-sm text-muted-foreground" aria-busy="true">
       Loading {label}…
-    </div>
+    </Card>
   );
 }

@@ -79,11 +79,9 @@ export function Donut({
         <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
           <div>
             {centerLabel && (
-              <div className="mono tnum text-lg font-semibold text-[var(--text)]">
-                {centerLabel}
-              </div>
+              <div className="mono tnum text-lg font-semibold text-foreground">{centerLabel}</div>
             )}
-            {centerSub && <div className="mono text-[10px] text-[var(--muted)]">{centerSub}</div>}
+            {centerSub && <div className="mono text-[10px] text-muted-foreground">{centerSub}</div>}
           </div>
         </div>
       )}

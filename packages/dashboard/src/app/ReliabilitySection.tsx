@@ -6,7 +6,35 @@ import { RunTrendChart } from './RunTrendChart';
 import { InlineError } from './SectionBoundary';
 import { ActivityIcon, AlertIcon, ClockIcon, RetryIcon, XIcon } from './icons';
 import type { PagedTable } from './paged-table';
-import { Empty, FilterInput, Pagination, Panel, Stat, StatusPill, relTime } from './ui';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Empty, FilterInput, Pagination, Panel, Stat, StatusPill, relTime } from './ui/kit';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeadRow,
+  TableHeader,
+  TableRow,
+} from './ui/table';
+
+/**
+ * A run's status is a CLOSED set — `governance-queries.ts` documents `RecentRunRow.status` as
+ * 'running' | 'completed' | 'failed' — so the filter offers the three rather than asking an operator
+ * to guess the spelling of a value they cannot see.
+ *
+ * Note the deliberate asymmetry with the tool-call status filter in `RunsToolsSection`, which stays
+ * a free-text box: `ToolCallActivityRow.status` is typed as a bare `string` that a store may fill
+ * however it likes, and a dropdown there would silently hide whatever it does not list.
+ */
+const RUN_STATUS_OPTIONS = [
+  { value: '', label: 'any status' },
+  { value: 'running', label: 'running' },
+  { value: 'completed', label: 'completed' },
+  { value: 'failed', label: 'failed' },
+] as const;
 
 /** Run success rate, failure breakdown, run/failure trend and a paged, filterable recent-runs table. */
 export function ReliabilitySection({
@@ -85,10 +113,10 @@ export function ReliabilitySection({
                       className="h-2.5 w-2.5 shrink-0 rounded-sm"
                       style={{ background: colorAt(index) }}
                     />
-                    <span className="mono min-w-0 flex-1 truncate text-[var(--text)]">
+                    <span className="mono min-w-0 flex-1 truncate text-foreground">
                       {row.errorCode}
                     </span>
-                    <span className="mono tnum ml-auto shrink-0 text-[var(--muted)]">
+                    <span className="mono tnum ml-auto shrink-0 text-muted-foreground">
                       {row.count}
                     </span>
                   </li>
@@ -120,10 +148,10 @@ export function ReliabilitySection({
               {byAgent.map((row) => (
                 <li
                   key={row.agentName}
-                  className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
+                  className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2"
                 >
-                  <span className="mono truncate text-[var(--text)]">{row.agentName}</span>
-                  <span className="mono tnum ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                  <span className="mono truncate text-foreground">{row.agentName}</span>
+                  <span className="mono tnum ml-auto shrink-0 text-[10px] text-muted-foreground">
                     {row.runs} runs · {row.failed} failed · {row.retries} retries
                   </span>
                 </li>
@@ -137,11 +165,26 @@ export function ReliabilitySection({
           subtitle="Latest run outcomes across threads"
           right={
             <div className="flex items-center gap-1.5">
-              <FilterInput
+              <Select
+                // `items` is not optional decoration: without it the trigger can only read a label
+                // off a MOUNTED item, so a closed select renders blank on first paint.
+                items={RUN_STATUS_OPTIONS}
                 value={runsWhere.status ?? ''}
-                placeholder="status"
-                onChange={onRunsStatusChange}
-              />
+                onValueChange={(value) => onRunsStatusChange(String(value ?? ''))}
+              >
+                <SelectTrigger aria-label="Filter by run status" className="w-28">
+                  {/* No placeholder: "any status" IS the empty value, so the trigger shows that
+                      option's own label rather than a separate placeholder string. */}
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RUN_STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <FilterInput
                 value={runsWhere.agentName ?? ''}
                 placeholder="agent"
@@ -153,14 +196,10 @@ export function ReliabilitySection({
           {/* A thread drill-down links in here with `?threadId=…`. Shown as a removable chip rather
               than a silent filter — a table quietly showing one thread's runs looks like an outage. */}
           {runsWhere.threadId !== undefined && (
-            <button
-              type="button"
-              onClick={onRunsThreadIdClear}
-              className="mono mb-3 flex items-center gap-1.5 rounded-md border border-[var(--accent)]/50 bg-[var(--accent)]/10 px-2 py-1 text-[10px] text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20"
-            >
+            <Button variant="accent" size="xs" onClick={onRunsThreadIdClear} className="mono mb-3">
               thread {runsWhere.threadId}
               <XIcon />
-            </button>
+            </Button>
           )}
           {runsTable.error !== null && (
             <div className="mb-3">
@@ -170,27 +209,24 @@ export function ReliabilitySection({
           {runsPage.rows.length === 0 ? (
             <Empty label="No runs yet" />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-left text-xs">
-                <thead className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-                  <tr className="border-b border-[var(--line)]">
-                    <th className="py-2 font-medium">Status</th>
-                    <th className="py-2 font-medium">Agent</th>
-                    <th className="py-2 text-right font-medium">Duration</th>
-                    <th className="py-2 pl-4 font-medium">Error</th>
-                    <th className="py-2 pl-4 font-medium">Prompt</th>
-                    <th className="py-2 pl-4 text-right font-medium">Started</th>
-                  </tr>
-                </thead>
-                <tbody className="mono tnum">
+            <>
+              <Table className="min-w-[520px]">
+                <TableHeader>
+                  <TableHeadRow>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Agent</TableHead>
+                    <TableHead className="text-right">Duration</TableHead>
+                    <TableHead className="pl-4">Error</TableHead>
+                    <TableHead className="pl-4">Prompt</TableHead>
+                    <TableHead className="pl-4 text-right">Started</TableHead>
+                  </TableHeadRow>
+                </TableHeader>
+                <TableBody>
                   {runsPage.rows.map((run) => (
-                    <tr
-                      key={run.runId}
-                      className="border-b border-[var(--line-soft)] hover:bg-[var(--panel-2)]"
-                    >
+                    <TableRow key={run.runId} className="hover:bg-panel-2">
                       {/* The status pill is the row's handle: it is the first thing an operator
                           reads and the reason they want the run open. */}
-                      <td className="py-2.5 pr-4">
+                      <TableCell className="pr-4">
                         {onOpenRun === undefined ? (
                           <StatusPill status={run.status} />
                         ) : (
@@ -198,22 +234,20 @@ export function ReliabilitySection({
                             type="button"
                             title={`Open run ${run.runId}`}
                             onClick={() => onOpenRun(run.runId)}
-                            className="underline decoration-[var(--line)] decoration-dotted underline-offset-4 transition-colors hover:decoration-[var(--accent)]"
+                            className="underline decoration-line decoration-dotted underline-offset-4 transition-colors hover:decoration-brand"
                           >
                             <StatusPill status={run.status} />
                           </button>
                         )}
-                      </td>
-                      <td className="py-2.5 pr-4 text-[var(--muted)]">
-                        {run.agentName ?? '(default)'}
-                      </td>
-                      <td className="py-2.5 text-right text-[var(--muted)]">
+                      </TableCell>
+                      <TableCell className="pr-4">{run.agentName ?? '(default)'}</TableCell>
+                      <TableCell className="text-right">
                         {formatDurationMs(run.durationMs)}
-                      </td>
-                      <td className="py-2.5 pl-4">
+                      </TableCell>
+                      <TableCell className="pl-4">
                         {run.errorMessage ? (
                           <span
-                            className="block max-w-[220px] truncate text-[var(--bad)]"
+                            className="block max-w-[220px] truncate text-bad"
                             title={run.errorMessage}
                           >
                             {run.errorCode
@@ -221,35 +255,30 @@ export function ReliabilitySection({
                               : run.errorMessage}
                           </span>
                         ) : (
-                          <span className="text-[var(--muted)]">—</span>
+                          '—'
                         )}
-                      </td>
-                      <td className="py-2.5 pl-4">
+                      </TableCell>
+                      <TableCell className="pl-4">
                         {run.promptHash ? (
-                          <span
-                            title={run.promptHash}
-                            className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]"
-                          >
-                            {run.promptHash.slice(0, 8)}
-                          </span>
+                          <Badge title={run.promptHash}>{run.promptHash.slice(0, 8)}</Badge>
                         ) : (
-                          <span className="text-[var(--muted)]">—</span>
+                          '—'
                         )}
-                      </td>
-                      <td className="py-2.5 pl-4 text-right text-[10px] text-[var(--muted)]">
+                      </TableCell>
+                      <TableCell className="pl-4 text-right text-[10px]">
                         {relTime(run.startedAt)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
               <Pagination
                 page={runsPage.page}
                 pageSize={runsPage.pageSize}
                 total={runsPage.total}
                 onPage={onRunsPageChange}
               />
-            </div>
+            </>
           )}
         </Panel>
       </div>

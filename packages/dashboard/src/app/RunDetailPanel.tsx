@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import type { RunDetail } from '../client/agent-client';
 import { formatDurationMs } from '../client/format-usd';
-import { Empty, Panel, StatusPill, relTime } from './ui';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Empty, Panel, StatusPill, relTime } from './ui/kit';
 
 /**
  * A run drill-down: the run's outcome, the FULL error text a table row could only truncate, and the
@@ -35,23 +37,23 @@ export function RunDetailPanel({
         </dl>
 
         {run.errorMessage !== null && (
-          <div className="mt-3 rounded-lg border border-[var(--bad)]/40 bg-[var(--bad)]/5 p-3">
+          <div className="mt-3 rounded-lg border border-bad/40 bg-bad/5 p-3">
             {run.errorCode !== null && (
-              <div className="mono text-[10px] uppercase tracking-wider text-[var(--bad)]">
+              <div className="mono text-[10px] uppercase tracking-wider text-bad">
                 {run.errorCode}
               </div>
             )}
             {/* Wrapped, not truncated: the table row already truncated it, and opening the row is
                 the whole reason an operator is here. */}
-            <pre className="mono mt-1 whitespace-pre-wrap break-words text-[11px] text-[var(--text)]">
+            <pre className="mono mt-1 whitespace-pre-wrap break-words text-[11px] text-foreground">
               {run.errorMessage}
             </pre>
           </div>
         )}
 
         {run.promptHash !== null && (
-          <div className="mono mt-3 text-[10px] text-[var(--muted)]">
-            prompt sha256 <span className="text-[var(--text)]">{run.promptHash}</span>
+          <div className="mono mt-3 text-[10px] text-muted-foreground">
+            prompt sha256 <span className="text-foreground">{run.promptHash}</span>
           </div>
         )}
       </Panel>
@@ -61,26 +63,18 @@ export function RunDetailPanel({
         subtitle="The conversation this run belongs to"
         right={
           onOpenThread && (
-            <button
-              type="button"
-              onClick={() => onOpenThread(thread.threadId)}
-              className="rounded-md border border-[var(--line)] px-2 py-1 text-[10px] text-[var(--muted)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--text)]"
-            >
+            <Button size="xs" onClick={() => onOpenThread(thread.threadId)}>
               Open thread
-            </button>
+            </Button>
           )
         }
       >
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-[var(--text)]">{thread.title || thread.threadId}</span>
-          <span className="mono text-[10px] text-[var(--muted)]">
+          <span className="text-foreground">{thread.title || thread.threadId}</span>
+          <span className="mono text-[10px] text-muted-foreground">
             {thread.actorLabel ?? thread.actorRef}
           </span>
-          {thread.deleted && (
-            <span className="mono rounded border border-[var(--warn)]/50 px-1 text-[10px] text-[var(--warn)]">
-              deleted
-            </span>
-          )}
+          {thread.deleted && <Badge variant="warn">deleted</Badge>}
         </div>
       </Panel>
 
@@ -88,7 +82,7 @@ export function RunDetailPanel({
         title="Tool calls"
         subtitle="Every call this run requested, oldest first"
         right={
-          <span className="mono tnum text-[10px] text-[var(--muted)]">{toolCalls.length}</span>
+          <span className="mono tnum text-[10px] text-muted-foreground">{toolCalls.length}</span>
         }
       >
         {toolCalls.length === 0 ? (
@@ -100,24 +94,22 @@ export function RunDetailPanel({
             {toolCalls.map((call) => (
               <li
                 key={call.toolCallId}
-                className="rounded-md border border-[var(--line-soft)] px-2.5 py-2 text-xs"
+                className="rounded-md border border-line-soft px-2.5 py-2 text-xs"
               >
                 <div className="flex flex-wrap items-center gap-2.5">
                   <StatusPill status={call.status} />
-                  <span className="mono truncate text-[var(--text)]">{call.toolName}</span>
-                  <span className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
-                    {call.toolType}
-                  </span>
-                  <span className="mono tnum ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                  <span className="mono truncate text-foreground">{call.toolName}</span>
+                  <Badge>{call.toolType}</Badge>
+                  <span className="mono tnum ml-auto shrink-0 text-[10px] text-muted-foreground">
                     {formatDurationMs(call.executionMs)}
                   </span>
                 </div>
-                <div className="mono mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted)]">
+                <div className="mono mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
                   <span>{relTime(call.createdAt)}</span>
                   {call.executedByRef !== null && <span>· by {call.executedByRef}</span>}
                 </div>
                 {call.error !== null && (
-                  <pre className="mono mt-1.5 whitespace-pre-wrap break-words text-[10px] text-[var(--bad)]">
+                  <pre className="mono mt-1.5 whitespace-pre-wrap break-words text-[10px] text-bad">
                     {call.error}
                   </pre>
                 )}
@@ -133,8 +125,8 @@ export function RunDetailPanel({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-[10px] uppercase tracking-wider text-[var(--muted)]">{label}</dt>
-      <dd className="mono mt-1 truncate text-[var(--text)]">{children}</dd>
+      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</dt>
+      <dd className="mono mt-1 truncate text-foreground">{children}</dd>
     </div>
   );
 }

@@ -3,7 +3,10 @@ import type { ApprovalDecisionInput, PendingApprovalRow } from '../client/agent-
 import { InlineError } from './SectionBoundary';
 import { AlertIcon, CheckIcon, XIcon } from './icons';
 import type { PagedTable } from './paged-table';
-import { Empty, OpenCell, Pagination, Panel, relTime } from './ui';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
+import { Empty, OpenCell, Pagination, Panel, relTime } from './ui/kit';
 
 /** The status prefix `agentClient.decideApproval` throws with when no `AGENT_APPROVAL_PORT` is bound. */
 const APPROVAL_PORT_UNAVAILABLE_STATUS = '501';
@@ -12,10 +15,10 @@ const APPROVAL_PORT_UNAVAILABLE_STATUS = '501';
 function InputPreview({ input }: { input: unknown }) {
   return (
     <details>
-      <summary className="mono w-fit cursor-pointer select-none text-[10px] text-[var(--muted)] hover:text-[var(--text)]">
+      <summary className="mono w-fit cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground">
         input
       </summary>
-      <pre className="mono mt-1 max-w-[420px] overflow-x-auto rounded border border-[var(--line)] bg-[var(--panel-2)] p-2 text-[10px] text-[var(--text)]">
+      <pre className="mono mt-1 max-w-[420px] overflow-x-auto rounded border border-line bg-panel-2 p-2 text-[10px] text-foreground">
         {JSON.stringify(input, null, 2)}
       </pre>
     </details>
@@ -73,7 +76,7 @@ export function ApprovalsSection({
   return (
     <div className="flex flex-col gap-4">
       {readOnly && (
-        <div className="panel flex items-center gap-2 border-[var(--warn)]/40 p-3 text-xs text-[var(--warn)]">
+        <Card className="flex items-center gap-2 border-warn/40 p-3 text-xs text-warn">
           <AlertIcon />
           <span>
             No approval port is bound on this host — the inbox is READ-ONLY. Import{' '}
@@ -81,20 +84,20 @@ export function ApprovalsSection({
             <span className="mono">@dudousxd/nestjs-agent</span> alongside this dashboard to enable
             Approve/Reject.
           </span>
-        </div>
+        </Card>
       )}
       {error && !readOnly && (
-        <div className="panel flex items-center gap-2 border-[var(--bad)]/40 p-3 text-xs text-[var(--bad)]">
+        <Card className="flex items-center gap-2 border-bad/40 p-3 text-xs text-bad">
           <AlertIcon />
           <span>{error}</span>
-        </div>
+        </Card>
       )}
 
       <Panel
         title="Approvals"
         subtitle="Action tool calls awaiting a human decision, oldest first"
         right={
-          <span className="mono tnum text-[11px] text-[var(--muted)]">
+          <span className="mono tnum text-[11px] text-muted-foreground">
             {rows.length > 0 ? `${rows.length} of ${total} waiting` : `${total} waiting`}
           </span>
         }
@@ -115,7 +118,7 @@ export function ApprovalsSection({
                 return (
                   <li
                     key={row.toolCallId}
-                    className="rise flex flex-col gap-2 rounded-lg border border-[var(--line)] p-3 text-xs sm:flex-row sm:items-center"
+                    className="rise flex flex-col gap-2 rounded-lg border border-line p-3 text-xs sm:flex-row sm:items-center"
                   >
                     <div className="flex min-w-0 flex-1 flex-col gap-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -130,36 +133,32 @@ export function ApprovalsSection({
                             }
                           />
                         </span>
-                        <span className="truncate text-[var(--muted)]">{row.threadTitle}</span>
-                        {row.agentName && (
-                          <span className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
-                            {row.agentName}
-                          </span>
-                        )}
+                        <span className="truncate text-muted-foreground">{row.threadTitle}</span>
+                        {row.agentName && <Badge>{row.agentName}</Badge>}
                       </div>
-                      <div className="mono flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--muted)]">
+                      <div className="mono flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                         <span>asked by {row.actorRef}</span>
                         <span>· waiting {relTime(row.requestedAt)}</span>
                       </div>
                       <InputPreview input={row.input} />
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
+                      <Button
+                        variant="success"
+                        className="rounded-lg"
                         disabled={readOnly || pendingId === row.toolCallId}
                         onClick={() => decide(row.toolCallId, true)}
-                        className="flex items-center gap-1 rounded-lg border border-[var(--good)]/50 bg-[var(--good)]/10 px-2.5 py-1 text-[11px] text-[var(--good)] transition-colors hover:bg-[var(--good)]/20 disabled:opacity-50"
                       >
                         <CheckIcon /> Approve
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="danger"
+                        className="rounded-lg"
                         disabled={readOnly || pendingId === row.toolCallId}
                         onClick={() => decide(row.toolCallId, false)}
-                        className="flex items-center gap-1 rounded-lg border border-[var(--bad)]/50 bg-[var(--bad)]/10 px-2.5 py-1 text-[11px] text-[var(--bad)] transition-colors hover:bg-[var(--bad)]/20 disabled:opacity-50"
                       >
                         <XIcon /> Reject
-                      </button>
+                      </Button>
                     </div>
                   </li>
                 );

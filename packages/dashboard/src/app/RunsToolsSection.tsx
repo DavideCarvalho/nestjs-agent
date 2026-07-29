@@ -8,7 +8,9 @@ import { formatCount } from '../client/format-usd';
 import { InlineError } from './SectionBoundary';
 import { AlertIcon } from './icons';
 import type { PagedTable } from './paged-table';
-import { Empty, FilterInput, OpenCell, Pagination, Panel, StatusPill, relTime } from './ui';
+import { Badge } from './ui/badge';
+import { Card } from './ui/card';
+import { Empty, FilterInput, OpenCell, Pagination, Panel, StatusPill, relTime } from './ui/kit';
 
 /** A tool call whose status reads as blocked/failed — surfaced as the "denied/forbidden" signal. */
 function isDenied(status: string): boolean {
@@ -55,12 +57,12 @@ export function RunsToolsSection({
   return (
     <div className="flex flex-col gap-4">
       {denied.length > 0 && (
-        <div className="panel flex items-center gap-2 border-[var(--bad)]/40 p-3 text-xs text-[var(--bad)]">
+        <Card className="flex items-center gap-2 border-bad/40 p-3 text-xs text-bad">
           <AlertIcon />
           <span className="mono">
             {denied.length} recent tool call{denied.length === 1 ? '' : 's'} blocked or failed
           </span>
-        </div>
+        </Card>
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -103,7 +105,7 @@ export function RunsToolsSection({
                   return (
                     <li
                       key={call.toolCallId}
-                      className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
+                      className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2"
                     >
                       <StatusPill status={call.status} />
                       <span className="mono min-w-0">
@@ -117,10 +119,8 @@ export function RunsToolsSection({
                           }
                         />
                       </span>
-                      <span className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
-                        {call.toolType}
-                      </span>
-                      <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                      <Badge>{call.toolType}</Badge>
+                      <span className="mono ml-auto shrink-0 text-[10px] text-muted-foreground">
                         {relTime(call.createdAt)}
                       </span>
                     </li>
@@ -165,7 +165,7 @@ export function RunsToolsSection({
                 {threadsPage.rows.map((thread) => (
                   <li
                     key={thread.threadId}
-                    className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
+                    className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2"
                   >
                     <span className="min-w-0">
                       <OpenCell
@@ -178,10 +178,10 @@ export function RunsToolsSection({
                         }
                       />
                     </span>
-                    <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                    <span className="mono ml-auto shrink-0 text-[10px] text-muted-foreground">
                       {thread.messageCount} msg · {formatCount(thread.totalTokens)} tok
                     </span>
-                    <span className="mono shrink-0 text-[10px] text-[var(--muted)]">
+                    <span className="mono shrink-0 text-[10px] text-muted-foreground">
                       {relTime(thread.lastActivityAt)}
                     </span>
                   </li>
