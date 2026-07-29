@@ -18,10 +18,26 @@ export default defineConfig({
         preview: resolve(__dirname, 'preview.html'),
       },
       output: {
-        // Recharts (with its d3 scales/shapes) is by far the heaviest thing in the bundle. Give it
-        // its own chunk so the console's own code — which changes every release — does not
-        // invalidate a ~400 kB dependency in every browser cache on every deploy.
-        manualChunks: { recharts: ['recharts'] },
+        // Recharts (with its d3 scales/shapes) is by far the heaviest thing in the bundle, and Base
+        // UI is the second. Both get their own chunk so the console's own code — which changes every
+        // release — does not invalidate ~600 kB of dependencies in every browser cache on every
+        // deploy.
+        //
+        // Base UI is listed as the SUBPATHS this console imports rather than the package root: the
+        // root barrel reaches every primitive in the library, so naming it here would pull the
+        // accordion, the menubar and thirty others into the chunk that tree-shaking had correctly
+        // left out. Add a line when a new primitive is vendored under `src/app/ui/`.
+        manualChunks: {
+          recharts: ['recharts'],
+          'base-ui': [
+            '@base-ui-components/react/dialog',
+            '@base-ui-components/react/popover',
+            '@base-ui-components/react/select',
+            '@base-ui-components/react/tabs',
+            '@base-ui-components/react/tooltip',
+            '@base-ui-components/react/use-render',
+          ],
+        },
       },
     },
   },

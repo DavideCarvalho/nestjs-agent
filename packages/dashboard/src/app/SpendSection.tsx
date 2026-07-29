@@ -8,7 +8,8 @@ import { Donut, colorAt } from './Donut';
 import { TopThreadsSection } from './TopThreadsSection';
 import { TrendChart } from './TrendChart';
 import { ActivityIcon, ChipIcon, DollarIcon, TrendIcon } from './icons';
-import { Empty, Panel, Stat } from './ui';
+import { Empty, Panel, Stat } from './ui/kit';
+import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 
 /** The headline governance section: total spend + usage, the by-model donut, and the daily trend. */
 export function SpendSection({
@@ -75,15 +76,15 @@ export function SpendSection({
                       style={{ background: colorAt(index) }}
                     />
                     <span
-                      className="mono min-w-0 flex-1 truncate text-[var(--text)]"
+                      className="mono min-w-0 flex-1 truncate text-foreground"
                       title={row.modelId}
                     >
                       {formatModelLabel(row.modelId)}
                     </span>
-                    <span className="mono tnum ml-auto shrink-0 text-[var(--muted)]">
+                    <span className="mono tnum ml-auto shrink-0 text-muted-foreground">
                       {formatUsd(row.costUsd)}
                     </span>
-                    <span className="mono tnum w-9 shrink-0 text-right text-[var(--muted)]">
+                    <span className="mono tnum w-9 shrink-0 text-right text-muted-foreground">
                       {Math.round(row.costShare * 100)}%
                     </span>
                   </li>
@@ -98,22 +99,18 @@ export function SpendSection({
           title="Daily usage trend"
           subtitle="Per-day spend / tokens across the range"
           right={
-            <div className="flex gap-1">
-              {(['costUsd', 'totalTokens'] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setMetric(option)}
-                  className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
-                    metric === option
-                      ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text)]'
-                      : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'
-                  }`}
-                >
-                  {option === 'costUsd' ? 'Cost' : 'Tokens'}
-                </button>
-              ))}
-            </div>
+            // A segmented control, so the two options are one roving tab stop with arrow-key
+            // traversal rather than two separate buttons that merely look like a pair.
+            <Tabs
+              value={metric}
+              onValueChange={(value) => setMetric(value as TrendMetric)}
+              aria-label="Trend metric"
+            >
+              <TabsList>
+                <TabsTrigger value="costUsd">Cost</TabsTrigger>
+                <TabsTrigger value="totalTokens">Tokens</TabsTrigger>
+              </TabsList>
+            </Tabs>
           }
         >
           {overview.trend.length === 0 ? (

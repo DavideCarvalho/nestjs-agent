@@ -1,7 +1,7 @@
 import type { ActorSpendRow } from '../client/agent-client';
 import { type BudgetMap, joinBudgets } from '../client/budget-usage';
 import { formatCount, formatUsd } from '../client/format-usd';
-import { BarMeter, Empty, Panel } from './ui';
+import { BarMeter, Empty, Panel } from './ui/kit';
 
 /**
  * Spend by actor/tenant, with a usage-vs-budget bar shown only for actors whose daily token limit is
@@ -27,28 +27,24 @@ export function ActorsSection({
       ) : (
         <ul className="space-y-2.5">
           {actors.map((actor) => (
-            <li key={actor.actorRef} className="rounded-lg border border-[var(--line-soft)] p-3">
+            <li key={actor.actorRef} className="rounded-lg border border-line-soft p-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-baseline gap-2">
                   {actor.actorLabel ? (
                     <>
-                      <span className="truncate text-xs text-[var(--text)]">
-                        {actor.actorLabel}
-                      </span>
-                      <span className="mono truncate text-[10px] text-[var(--muted)]">
+                      <span className="truncate text-xs text-foreground">{actor.actorLabel}</span>
+                      <span className="mono truncate text-[10px] text-muted-foreground">
                         {actor.actorRef}
                       </span>
                     </>
                   ) : (
-                    <span className="mono truncate text-xs text-[var(--text)]">
-                      {actor.actorRef}
-                    </span>
+                    <span className="mono truncate text-xs text-foreground">{actor.actorRef}</span>
                   )}
                 </span>
-                <span className="mono tnum flex items-center gap-3 text-xs text-[var(--muted)]">
+                <span className="mono tnum flex items-center gap-3 text-xs text-muted-foreground">
                   <span>{actor.requests} req</span>
                   <span>{formatCount(actor.totalTokens)} tok</span>
-                  <span className="text-[var(--text)]">{formatUsd(actor.costUsd)}</span>
+                  <span className="text-foreground">{formatUsd(actor.costUsd)}</span>
                 </span>
               </div>
               {actor.usageRatio !== undefined && actor.limitTokens !== undefined ? (
@@ -56,7 +52,7 @@ export function ActorsSection({
                   <BarMeter ratio={actor.usageRatio} over={actor.overBudget} className="flex-1" />
                   <span
                     className={`mono tnum text-[10px] ${
-                      actor.overBudget ? 'text-[var(--bad)]' : 'text-[var(--muted)]'
+                      actor.overBudget ? 'text-bad' : 'text-muted-foreground'
                     }`}
                   >
                     {formatCount(actor.totalTokens)} / {formatCount(actor.limitTokens)}
@@ -64,7 +60,9 @@ export function ActorsSection({
                   </span>
                 </div>
               ) : (
-                <div className="mono mt-2 text-[10px] text-[var(--muted)]">no daily limit set</div>
+                <div className="mono mt-2 text-[10px] text-muted-foreground">
+                  no daily limit set
+                </div>
               )}
             </li>
           ))}

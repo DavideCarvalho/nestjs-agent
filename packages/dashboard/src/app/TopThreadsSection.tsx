@@ -1,6 +1,15 @@
 import type { ThreadSpendRow } from '../client/agent-client';
 import { formatCount, formatUsd } from '../client/format-usd';
-import { Empty, OpenCell, Panel } from './ui';
+import { Empty, OpenCell, Panel } from './ui/kit';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeadRow,
+  TableHeader,
+  TableRow,
+} from './ui/table';
 
 /** Top threads by cost over the range: thread, actor, requests, tokens, and cost. */
 export function TopThreadsSection({
@@ -15,42 +24,38 @@ export function TopThreadsSection({
       {rows.length === 0 ? (
         <Empty label="No thread spend in this range" />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-              <tr className="border-b border-[var(--line)]">
-                <th className="py-2 font-medium">Thread</th>
-                <th className="py-2 font-medium">Actor</th>
-                <th className="py-2 text-right font-medium">Requests</th>
-                <th className="py-2 text-right font-medium">Tokens</th>
-                <th className="py-2 text-right font-medium">Cost</th>
-              </tr>
-            </thead>
-            <tbody className="mono tnum">
-              {rows.map((row) => (
-                <tr key={row.threadId} className="border-b border-[var(--line-soft)]">
-                  <td className="max-w-[260px] py-2.5">
-                    <OpenCell
-                      label={row.title || row.threadId}
-                      title={row.threadId}
-                      onOpen={
-                        onOpenThread === undefined ? undefined : () => onOpenThread(row.threadId)
-                      }
-                    />
-                  </td>
-                  <td className="truncate py-2.5 text-[var(--muted)]">
-                    {row.actorLabel ?? row.actorRef}
-                  </td>
-                  <td className="py-2.5 text-right text-[var(--muted)]">{row.requests}</td>
-                  <td className="py-2.5 text-right text-[var(--muted)]">
-                    {formatCount(row.totalTokens)}
-                  </td>
-                  <td className="py-2.5 text-right text-[var(--text)]">{formatUsd(row.costUsd)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table className="min-w-[640px]">
+          <TableHeader>
+            <TableHeadRow>
+              <TableHead>Thread</TableHead>
+              <TableHead>Actor</TableHead>
+              <TableHead className="text-right">Requests</TableHead>
+              <TableHead className="text-right">Tokens</TableHead>
+              <TableHead className="text-right">Cost</TableHead>
+            </TableHeadRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.threadId}>
+                <TableCell className="max-w-[260px]">
+                  <OpenCell
+                    label={row.title || row.threadId}
+                    title={row.threadId}
+                    onOpen={
+                      onOpenThread === undefined ? undefined : () => onOpenThread(row.threadId)
+                    }
+                  />
+                </TableCell>
+                <TableCell className="truncate">{row.actorLabel ?? row.actorRef}</TableCell>
+                <TableCell className="text-right">{row.requests}</TableCell>
+                <TableCell className="text-right">{formatCount(row.totalTokens)}</TableCell>
+                <TableCell className="text-right text-foreground">
+                  {formatUsd(row.costUsd)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       )}
     </Panel>
   );

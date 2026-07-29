@@ -2,7 +2,19 @@ import { type FormEvent, type ReactNode, useState } from 'react';
 import type { ModelPrice, UpsertModelPriceInput } from '../client/agent-client';
 import { formatModelLabel } from '../client/format-model';
 import { formatUsd } from '../client/format-usd';
-import { Empty, Panel, relTime } from './ui';
+import { Button } from './ui/button';
+import { BareInput } from './ui/input';
+import { Empty, Panel, relTime } from './ui/kit';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeadRow,
+  TableHeader,
+  TableRow,
+} from './ui/table';
+import { Tooltip } from './ui/tooltip';
 
 const EMPTY_FORM: UpsertModelPriceInput = {
   modelId: '',
@@ -31,7 +43,7 @@ export function PricingSection({
   if (unavailable) {
     return (
       <Panel title="Pricing" subtitle="Per-model rates cost is priced against">
-        <div className="rounded-lg border border-dashed border-[var(--line)] p-6 text-xs text-[var(--muted)]">
+        <div className="rounded-lg border border-dashed border-line p-6 text-xs text-muted-foreground">
           No pricing store is bound on the host — pricing CRUD is unavailable. Bind
           `AGENT_PRICING_STORE` (e.g. `MikroOrmPricingStore`) to enable it.
         </div>
@@ -50,57 +62,52 @@ export function PricingSection({
         subtitle="One live row per model — the rate cost is priced against"
       >
         {loading ? (
-          <div className="animate-pulse text-xs text-[var(--muted)]">Loading…</div>
+          <div className="animate-pulse text-xs text-muted-foreground">Loading…</div>
         ) : prices.length === 0 ? (
           <Empty label="No prices set yet" />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-xs">
-              <thead className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-                <tr className="border-b border-[var(--line)]">
-                  <th className="py-2 font-medium">Model</th>
-                  <th className="py-2 text-right font-medium">Input / 1M</th>
-                  <th className="py-2 text-right font-medium">Output / 1M</th>
-                  <th className="py-2 text-right font-medium">Cache write / 1M</th>
-                  <th className="py-2 text-right font-medium">Cache read / 1M</th>
-                  <th className="py-2 pl-4 font-medium">Effective</th>
-                </tr>
-              </thead>
-              <tbody className="mono tnum">
-                {prices.map((price) => (
-                  <tr key={price.modelId} className="border-b border-[var(--line-soft)]">
-                    <td className="py-2.5 pr-4">
-                      <span
-                        className="block max-w-[240px] truncate text-[var(--text)]"
-                        title={price.modelId}
-                      >
+          <Table className="min-w-[560px]">
+            <TableHeader>
+              <TableHeadRow>
+                <TableHead>Model</TableHead>
+                <TableHead className="text-right">Input / 1M</TableHead>
+                <TableHead className="text-right">Output / 1M</TableHead>
+                <TableHead className="text-right">Cache write / 1M</TableHead>
+                <TableHead className="text-right">Cache read / 1M</TableHead>
+                <TableHead className="pl-4">Effective</TableHead>
+              </TableHeadRow>
+            </TableHeader>
+            <TableBody>
+              {prices.map((price) => (
+                <TableRow key={price.modelId}>
+                  <TableCell className="pr-4">
+                    <Tooltip label={price.modelId}>
+                      <span className="block max-w-[240px] truncate text-foreground">
                         {formatModelLabel(price.modelId)}
                       </span>
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--text)]">
-                      {formatUsd(price.inputPricePer1m)}
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--text)]">
-                      {formatUsd(price.outputPricePer1m)}
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--muted)]">
-                      {price.cacheWritePricePer1m !== undefined
-                        ? formatUsd(price.cacheWritePricePer1m)
-                        : '—'}
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--muted)]">
-                      {price.cacheReadPricePer1m !== undefined
-                        ? formatUsd(price.cacheReadPricePer1m)
-                        : '—'}
-                    </td>
-                    <td className="py-2.5 pl-4 text-[10px] text-[var(--muted)]">
-                      {relTime(price.effectiveFrom)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell className="text-right text-foreground">
+                    {formatUsd(price.inputPricePer1m)}
+                  </TableCell>
+                  <TableCell className="text-right text-foreground">
+                    {formatUsd(price.outputPricePer1m)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {price.cacheWritePricePer1m !== undefined
+                      ? formatUsd(price.cacheWritePricePer1m)
+                      : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {price.cacheReadPricePer1m !== undefined
+                      ? formatUsd(price.cacheReadPricePer1m)
+                      : '—'}
+                  </TableCell>
+                  <TableCell className="pl-4 text-[10px]">{relTime(price.effectiveFrom)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </Panel>
     </div>
@@ -131,12 +138,12 @@ function PriceForm({
   return (
     <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3">
       <Field label="Model id">
-        <input
+        <BareInput
           required
           value={form.modelId}
           onChange={(event) => setForm({ ...form, modelId: event.target.value })}
           placeholder="gpt-4o"
-          className="mono w-40 bg-transparent text-[var(--text)] outline-none"
+          className="w-40"
         />
       </Field>
       <Field label="Input / 1M">
@@ -163,14 +170,10 @@ function PriceForm({
           onChange={(value) => setForm(withOptionalNumber(form, 'cacheReadPricePer1m', value))}
         />
       </Field>
-      <button
-        type="submit"
-        disabled={saving}
-        className="rounded-lg border border-[var(--accent)]/50 bg-[var(--accent)]/10 px-3 py-1.5 text-xs text-[var(--text)] transition-colors hover:bg-[var(--accent)]/20 disabled:opacity-50"
-      >
+      <Button type="submit" variant="default" size="md" disabled={saving} className="rounded-lg">
         {saving ? 'Saving…' : 'Save price'}
-      </button>
-      {error && <span className="text-xs text-[var(--bad)]">{error}</span>}
+      </Button>
+      {error && <span className="text-xs text-bad">{error}</span>}
     </form>
   );
 }
@@ -195,7 +198,7 @@ function withOptionalNumber(
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     // biome-ignore lint/a11y/noLabelWithoutControl: children is always the field's input, nested inside.
-    <label className="flex flex-col gap-1 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[11px] text-[var(--muted)]">
+    <label className="flex flex-col gap-1 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[11px] text-muted-foreground">
       <span className="uppercase tracking-wider">{label}</span>
       {children}
     </label>
@@ -210,7 +213,7 @@ function NumberInput({
   onChange: (value: number | undefined) => void;
 }) {
   return (
-    <input
+    <BareInput
       type="number"
       min={0}
       step="0.01"
@@ -219,7 +222,7 @@ function NumberInput({
         const raw = event.target.value;
         onChange(raw === '' ? undefined : Number(raw));
       }}
-      className="mono tnum w-24 bg-transparent text-[var(--text)] outline-none"
+      className="tnum w-24"
     />
   );
 }

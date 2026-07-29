@@ -1,6 +1,17 @@
 import type { ToolStatRow } from '../client/agent-client';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
-import { Empty, Panel } from './ui';
+import { Badge } from './ui/badge';
+import { Empty, Panel } from './ui/kit';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeadRow,
+  TableHeader,
+  TableRow,
+} from './ui/table';
+import { Tooltip } from './ui/tooltip';
 
 /**
  * Governance rollup per tool over a range: volume, failure/rejection rate, and BOTH latency
@@ -19,56 +30,49 @@ export function ToolsSection({ rows }: { rows: ToolStatRow[] }) {
       {rows.length === 0 ? (
         <Empty label="No tool calls in this range" />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px] text-left text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-              <tr className="border-b border-[var(--line)]">
-                <th className="py-2 font-medium">Tool</th>
-                <th className="py-2 font-medium">Kind</th>
-                <th className="py-2 text-right font-medium">Calls</th>
-                <th className="py-2 text-right font-medium">Failure rate</th>
-                <th className="py-2 text-right font-medium">Rejected</th>
-                <th className="py-2 pl-4 text-right font-medium">p50 exec</th>
-                <th className="py-2 pl-4 text-right font-medium">p95 exec</th>
-              </tr>
-            </thead>
-            <tbody className="mono tnum">
-              {rows.map((row) => {
-                const failureRate = row.calls > 0 ? row.failed / row.calls : 0;
-                return (
-                  <tr key={row.toolName} className="border-b border-[var(--line-soft)]">
-                    <td className="py-2.5 pr-4">
-                      <span
-                        className="block max-w-[240px] truncate text-[var(--text)]"
-                        title={row.toolName}
-                      >
+        <Table className="min-w-[700px]">
+          <TableHeader>
+            <TableHeadRow>
+              <TableHead>Tool</TableHead>
+              <TableHead>Kind</TableHead>
+              <TableHead className="text-right">Calls</TableHead>
+              <TableHead className="text-right">Failure rate</TableHead>
+              <TableHead className="text-right">Rejected</TableHead>
+              <TableHead className="pl-4 text-right">p50 exec</TableHead>
+              <TableHead className="pl-4 text-right">p95 exec</TableHead>
+            </TableHeadRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const failureRate = row.calls > 0 ? row.failed / row.calls : 0;
+              return (
+                <TableRow key={row.toolName}>
+                  <TableCell className="pr-4">
+                    <Tooltip label={row.toolName}>
+                      <span className="block max-w-[240px] truncate text-foreground">
                         {row.toolName}
                       </span>
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      <span className="rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
-                        {row.toolType}
-                      </span>
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--muted)]">{row.calls}</td>
-                    <td
-                      className={`py-2.5 text-right ${row.failed > 0 ? 'text-[var(--bad)]' : 'text-[var(--muted)]'}`}
-                    >
-                      {formatPercent(failureRate)}
-                    </td>
-                    <td className="py-2.5 text-right text-[var(--muted)]">{row.rejected}</td>
-                    <td className="py-2.5 pl-4 text-right text-[var(--text)]">
-                      {formatDurationMs(row.p50ExecutionMs)}
-                    </td>
-                    <td className="py-2.5 pl-4 text-right text-[var(--muted)]">
-                      {formatDurationMs(row.p95ExecutionMs)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </Tooltip>
+                  </TableCell>
+                  <TableCell className="pr-4">
+                    <Badge>{row.toolType}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right">{row.calls}</TableCell>
+                  <TableCell className={`text-right ${row.failed > 0 ? 'text-bad' : ''}`}>
+                    {formatPercent(failureRate)}
+                  </TableCell>
+                  <TableCell className="text-right">{row.rejected}</TableCell>
+                  <TableCell className="pl-4 text-right text-foreground">
+                    {formatDurationMs(row.p50ExecutionMs)}
+                  </TableCell>
+                  <TableCell className="pl-4 text-right">
+                    {formatDurationMs(row.p95ExecutionMs)}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       )}
     </Panel>
   );

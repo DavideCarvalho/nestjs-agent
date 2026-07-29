@@ -2,7 +2,9 @@ import type { ReactNode } from 'react';
 import type { ThreadDetail } from '../client/agent-client';
 import { formatCount, formatDurationMs, formatUsd } from '../client/format-usd';
 import { AlertIcon } from './icons';
-import { Empty, Panel, Stat, StatusPill, relTime } from './ui';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
+import { Empty, Panel, Stat, StatusPill, relTime } from './ui/kit';
 
 /**
  * A thread drill-down: the lifetime token/cost rollup, the newest runs, and the newest messages.
@@ -28,12 +30,12 @@ export function ThreadDetailPanel({
   return (
     <div className="flex flex-col gap-4">
       {deleted && (
-        <div className="panel flex items-center gap-2 border-[var(--warn)]/40 p-3 text-xs text-[var(--warn)]">
+        <Card className="flex items-center gap-2 border-warn/40 p-3 text-xs text-warn">
           <AlertIcon />
           <span>
             This thread is soft-deleted. Its history is still readable here — the thread is not.
           </span>
-        </div>
+        </Card>
       )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -57,12 +59,15 @@ export function ThreadDetailPanel({
         right={
           runsHidden > 0 &&
           runsHref !== undefined && (
-            <a
-              href={runsHref}
-              className="rounded-md border border-[var(--line)] px-2 py-1 text-[10px] text-[var(--muted)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--text)]"
+            <Button
+              size="xs"
+              render={
+                // biome-ignore lint/a11y/useAnchorContent: Base UI merges the Button's children (the link text) onto this element, so the anchor is never actually empty.
+                <a href={runsHref} />
+              }
             >
               Show all {runTotal} runs
-            </a>
+            </Button>
           )
         }
       >
@@ -77,15 +82,13 @@ export function ThreadDetailPanel({
                     onClick={onOpenRun === undefined ? undefined : () => onOpenRun(run.runId)}
                   >
                     <StatusPill status={run.status} />
-                    <span className="mono truncate text-[var(--muted)]">
+                    <span className="mono truncate text-muted-foreground">
                       {run.agentName ?? '(default)'}
                     </span>
                     {run.errorCode !== null && (
-                      <span className="mono truncate text-[10px] text-[var(--bad)]">
-                        {run.errorCode}
-                      </span>
+                      <span className="mono truncate text-[10px] text-bad">{run.errorCode}</span>
                     )}
-                    <span className="mono tnum ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                    <span className="mono tnum ml-auto shrink-0 text-[10px] text-muted-foreground">
                       {formatDurationMs(run.durationMs)} · {relTime(run.startedAt)}
                     </span>
                   </RowButton>
@@ -93,7 +96,7 @@ export function ThreadDetailPanel({
               ))}
             </ul>
             {runsHidden > 0 && (
-              <p className="mono mt-2 text-[10px] text-[var(--muted)]">
+              <p className="mono mt-2 text-[10px] text-muted-foreground">
                 showing {runs.length} of {runTotal} — {runsHidden} older not loaded
               </p>
             )}
@@ -110,12 +113,10 @@ export function ThreadDetailPanel({
               {messages.map((message) => (
                 <li
                   key={message.messageId}
-                  className="rounded-md border border-[var(--line-soft)] px-2.5 py-2 text-xs"
+                  className="rounded-md border border-line-soft px-2.5 py-2 text-xs"
                 >
-                  <div className="mono flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted)]">
-                    <span className="uppercase tracking-wider text-[var(--accent)]">
-                      {message.role}
-                    </span>
+                  <div className="mono flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                    <span className="uppercase tracking-wider text-brand">{message.role}</span>
                     {message.agentName !== null && <span>· {message.agentName}</span>}
                     {message.toolCallCount > 0 && (
                       <span>
@@ -124,19 +125,19 @@ export function ThreadDetailPanel({
                     )}
                     <span className="ml-auto">{relTime(message.createdAt)}</span>
                   </div>
-                  <p className="mt-1 whitespace-pre-wrap break-words text-[var(--text)]">
+                  <p className="mt-1 whitespace-pre-wrap break-words text-foreground">
                     {message.content}
                     {/* An explicit marker, never an implied tail: the server cut this, and a reader
                         who does not know that will quote a sentence that does not end there. */}
                     {message.truncated && (
-                      <span className="mono text-[var(--muted)]"> […truncated]</span>
+                      <span className="mono text-muted-foreground"> […truncated]</span>
                     )}
                   </p>
                 </li>
               ))}
             </ul>
             {messagesHidden > 0 && (
-              <p className="mono mt-2 text-[10px] text-[var(--muted)]">
+              <p className="mono mt-2 text-[10px] text-muted-foreground">
                 showing {messages.length} of {thread.messageCount}
               </p>
             )}
@@ -163,7 +164,7 @@ function RowButton({
     <button
       type="button"
       onClick={onClick}
-      className={`${className} transition-colors hover:bg-[var(--panel-2)]`}
+      className={`${className} transition-colors hover:bg-panel-2`}
     >
       {children}
     </button>

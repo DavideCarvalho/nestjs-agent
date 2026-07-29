@@ -2,19 +2,36 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ * Aviary console tokens. SOURCE OF TRUTH: ../../../../AVIARY-UI.md (repo-sibling `nestjs/` root).
+ *
+ * The neutrals below are shared, byte-for-byte, with the durable / media / telescope consoles. Do
+ * not tune them here — a value that moves in one console and not the others is invisible until
+ * someone puts two screenshots side by side, which is exactly the drift this file just came out of
+ * (`#08080b` vs `#09090b`, `#e8e8ee` vs `#e7e7ea`, and four more nobody had chosen).
+ *
+ * `--accent` is the ONE line that differs per console. Violet is the agent console's signature.
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ */
 :root {
-  --bg: #08080b;
-  --panel: #0d0d12;
-  --panel-2: #101017;
-  --line: #1d1d26;
-  --line-soft: #16161d;
-  --text: #e8e8ee;
-  --muted: #7c7c88;
-  --accent: #a78bfa;
-  --accent-2: #22d3ee;
+  /* ── Shared. Identical in all four consoles. Do not tune per console. ── */
+  --bg: #09090b;
+  --panel: #0c0c0f;
+  --panel-2: #101017; /* elevated surface: modal/dialog, drawer, popover, menu */
+  --line: #1c1c22;
+  --line-soft: #16161a;
+  --text: #e7e7ea;
+  --muted: #76767f;
+
+  /* Status. Semantic, never decorative. */
   --good: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
+  --live: #60a5fa; /* in flight: a run executing, a tool call awaiting a decision */
+
+  /* ── Per console. This is the ONLY line that differs between them. ── */
+  --accent: #a78bfa; /* agent: violet */
 }
 
 * {
@@ -35,7 +52,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Faint blueprint grid + violet top glow — atmosphere, not noise. */
+/*
+ * Faint blueprint grid + accent top glow — atmosphere, not noise. The glows are mixed FROM the
+ * accent tokens rather than repeating their hex, so a console that copies this block gets its own
+ * accent in the glow instead of inheriting agent's violet by accident.
+ */
 .app-bg {
   position: fixed;
   inset: 0;
@@ -43,10 +64,14 @@ body {
   pointer-events: none;
   background-image: radial-gradient(
       900px 420px at 82% -10%,
-      rgba(167, 139, 250, 0.1),
+      color-mix(in srgb, var(--accent) 10%, transparent),
       transparent 70%
-    ), radial-gradient(700px 360px at 8% -12%, rgba(34, 211, 238, 0.06), transparent 70%),
-    linear-gradient(to right, var(--line-soft) 1px, transparent 1px),
+    ),
+    radial-gradient(
+      700px 360px at 8% -12%,
+      color-mix(in srgb, var(--live) 6%, transparent),
+      transparent 70%
+    ), linear-gradient(to right, var(--line-soft) 1px, transparent 1px),
     linear-gradient(to bottom, var(--line-soft) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 46px 46px, 46px 46px;
   mask-image: linear-gradient(to bottom, black, black 62%, transparent);
@@ -61,32 +86,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.panel {
-  background: linear-gradient(180deg, var(--panel-2), var(--panel));
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
-
-/* Status hues */
-.s-ok,
-.s-completed,
-.s-success {
-  color: var(--good);
-}
-.s-running,
-.s-pending {
-  color: var(--accent-2);
-}
-.s-forbidden,
-.s-denied,
-.s-failed,
-.s-error {
-  color: var(--bad);
-}
-.s-warn {
-  color: var(--warn);
-}
-
+/* A status dot: takes its hue from `currentColor` and haloes itself with a soft ring of the same. */
 .dot {
   width: 7px;
   height: 7px;
@@ -96,10 +96,15 @@ body {
   display: inline-block;
 }
 
-.pulse {
-  animation: pulse 1.6s ease-in-out infinite;
+/*
+ * Named `live-pulse`, not `pulse`: Tailwind ships its own `@keyframes pulse` for `animate-pulse`,
+ * and a second rule with the same name in this file silently redefined it for the whole console —
+ * every skeleton was breathing on the live-indicator's curve.
+ */
+.live-pulse {
+  animation: live-pulse 1.6s ease-in-out infinite;
 }
-@keyframes pulse {
+@keyframes live-pulse {
   0%,
   100% {
     opacity: 1;
@@ -123,46 +128,18 @@ body {
   animation: rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
-.bar-track {
-  background: var(--line);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-}
-
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #26262c;
+  background: color-mix(in srgb, var(--line) 70%, var(--muted));
   border: 3px solid var(--bg);
   border-radius: 999px;
 }
 
 /*
- * The drill-down drawer is a native <dialog> opened with showModal(): the focus trap, the inert
- * background and Esc-to-close come from the platform. What the UA gives it by default is a centred
- * auto-sized box, so these rules turn it into a full-height panel pinned to the right edge.
+ * The drill-down drawer used to be a native <dialog> with a `.drawer` rule and a `::backdrop`. It is
+ * now the vendored Base UI Dialog (`src/app/ui/dialog.tsx`) like every other overlay in the console,
+ * so its geometry lives with the component in Tailwind utilities instead of here.
  */
-.drawer {
-  margin: 0 0 0 auto;
-  width: 100%;
-  max-width: 720px;
-  height: 100dvh;
-  max-height: 100dvh;
-  padding: 0;
-  border: none;
-  border-left: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--text);
-  overflow: hidden;
-}
-.drawer::backdrop {
-  background: rgb(0 0 0 / 60%);
-  backdrop-filter: blur(2px);
-}

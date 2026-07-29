@@ -2,6 +2,8 @@ import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { Component, type ErrorInfo, type ReactNode, Suspense } from 'react';
 import { describeError } from '../client/describe-error';
 import { AlertIcon, RetryIcon } from './icons';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
 
 /**
  * Error isolation for one console section.
@@ -92,25 +94,21 @@ export function SectionErrorPanel({
 }) {
   const described = describeError(error);
   return (
-    <section className="panel rise border-[var(--bad)]/40 p-5">
+    <Card className="rise border-bad/40 p-5">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 text-[var(--bad)]">
+        <span className="mt-0.5 text-bad">
           <AlertIcon />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold tracking-tight text-[var(--bad)]">
-            {label} failed to load
-          </h2>
-          <p className="mono mt-1 break-words text-[11px] text-[var(--text)]">
-            {described.message}
-          </p>
+          <h2 className="text-sm font-semibold tracking-tight text-bad">{label} failed to load</h2>
+          <p className="mono mt-1 break-words text-[11px] text-foreground">{described.message}</p>
           {described.hint !== '' && (
-            <p className="mt-1.5 text-xs text-[var(--muted)]">{described.hint}</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">{described.hint}</p>
           )}
         </div>
         {described.retryable && <RetryButton onRetry={onRetry} />}
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -130,18 +128,18 @@ export function InlineError({
 }) {
   const described = describeError(error);
   return (
-    <div className="rounded-lg border border-dashed border-[var(--bad)]/50 p-4">
+    <div className="rounded-lg border border-dashed border-bad/50 p-4">
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 shrink-0 text-[var(--bad)]">
+        <span className="mt-0.5 shrink-0 text-bad">
           <AlertIcon />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-xs text-[var(--bad)]">{label} failed to load</p>
-          <p className="mono mt-1 break-words text-[10px] text-[var(--muted)]">
+          <p className="text-xs text-bad">{label} failed to load</p>
+          <p className="mono mt-1 break-words text-[10px] text-muted-foreground">
             {described.message}
           </p>
           {described.hint !== '' && (
-            <p className="mt-1 text-[10px] text-[var(--muted)]">{described.hint}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">{described.hint}</p>
           )}
         </div>
         {described.retryable && <RetryButton onRetry={onRetry} small />}
@@ -152,23 +150,17 @@ export function InlineError({
 
 function RetryButton({ onRetry, small }: { onRetry: () => void; small?: boolean }) {
   return (
-    <button
-      type="button"
-      onClick={onRetry}
-      className={`flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--line)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--text)] ${
-        small ? 'px-2 py-1 text-[10px]' : 'px-2.5 py-1.5 text-[11px]'
-      } text-[var(--muted)]`}
-    >
+    <Button onClick={onRetry} size={small ? 'xs' : 'sm'} className="rounded-lg">
       <RetryIcon /> Retry
-    </button>
+    </Button>
   );
 }
 
 /** The Suspense fallback a section shows while its own reads are in flight. */
 export function SectionSkeleton({ label }: { label: string }) {
   return (
-    <div className="panel animate-pulse p-6 text-sm text-[var(--muted)]" aria-busy="true">
+    <Card className="animate-pulse p-6 text-sm text-muted-foreground" aria-busy="true">
       Loading {label.toLowerCase()}…
-    </div>
+    </Card>
   );
 }

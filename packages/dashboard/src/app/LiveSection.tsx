@@ -1,6 +1,7 @@
 import type { FeedEvent } from '../client/merge-live-events';
 import { isAlertEvent } from '../client/merge-live-events';
-import { Empty, Panel, relTime } from './ui';
+import { Badge } from './ui/badge';
+import { Empty, Panel, StatusDot, relTime } from './ui/kit';
 
 /** A short human summary for a live event, pulled from the well-known payload fields. */
 function summarize(event: FeedEvent): string {
@@ -44,8 +45,8 @@ export function LiveSection({
       title="Live activity"
       subtitle="Streaming aviary:agent:* diagnostics events"
       right={
-        <span className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
-          <span className={`dot ${connected ? 's-ok pulse' : 's-failed'}`} aria-hidden />
+        <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <StatusDot tone={connected ? 'live' : 'bad'} />
           {connected ? 'connected' : 'disconnected'}
         </span>
       }
@@ -59,19 +60,16 @@ export function LiveSection({
             return (
               <li
                 key={event.id}
-                className="rise flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
+                className="rise flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2"
               >
-                <span
-                  className={`mono w-32 shrink-0 truncate rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
-                    alert
-                      ? 'border-[var(--bad)]/50 text-[var(--bad)]'
-                      : 'border-[var(--line)] text-[var(--accent)]'
-                  }`}
+                <Badge
+                  variant={alert ? 'bad' : 'accent'}
+                  className="w-32 shrink-0 truncate px-1.5 py-0.5 uppercase tracking-wider"
                 >
                   {event.event}
-                </span>
-                <span className="mono truncate text-[var(--text)]">{summarize(event)}</span>
-                <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                </Badge>
+                <span className="mono truncate text-foreground">{summarize(event)}</span>
+                <span className="mono ml-auto shrink-0 text-[10px] text-muted-foreground">
                   {relTime(event.ts)}
                 </span>
               </li>

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Card } from './ui/card';
 
 /**
  * Shared chart chrome for the console's recharts surfaces.
@@ -31,12 +32,12 @@ export const GRID = { stroke: 'var(--line-soft)', vertical: false } as const;
  */
 export function TooltipCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="panel px-2.5 py-2 text-[11px] shadow-lg shadow-black/50">
-      <div className="mono mb-1.5 text-[10px] uppercase tracking-wider text-[var(--muted)]">
+    <Card className="px-2.5 py-2 text-[11px] shadow-lg shadow-black/50">
+      <div className="mono mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
         {title}
       </div>
       <div className="space-y-1">{children}</div>
-    </div>
+    </Card>
   );
 }
 
@@ -53,8 +54,8 @@ export function TooltipRow({
   return (
     <div className="flex items-center gap-2">
       <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: color }} />
-      <span className="min-w-0 truncate text-[var(--muted)]">{label}</span>
-      <span className="mono tnum ml-auto shrink-0 pl-4 text-[var(--text)]">{value}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{label}</span>
+      <span className="mono tnum ml-auto shrink-0 pl-4 text-foreground">{value}</span>
     </div>
   );
 }
@@ -66,7 +67,7 @@ export function TooltipRow({
  */
 export function ChartCaption({ children }: { children: ReactNode }) {
   return (
-    <figcaption className="mono mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] text-[var(--muted)]">
+    <figcaption className="mono mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
       {children}
     </figcaption>
   );
