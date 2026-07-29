@@ -9,6 +9,16 @@ function response(init: { status?: number; type?: string } = {}): Response {
   return { ok: status >= 200 && status < 300, status, type: init.type ?? 'basic' } as Response;
 }
 
+/**
+ * A `pageshow` the hook can read. jsdom does not implement `PageTransitionEvent` in every version,
+ * and the constructor is not what is under test — `event.persisted` is.
+ */
+function pageshowEvent(persisted: boolean): Event {
+  return typeof PageTransitionEvent === 'function'
+    ? new PageTransitionEvent('pageshow', { persisted })
+    : Object.assign(new Event('pageshow'), { persisted });
+}
+
 describe('openAgentConsoleMutationOptions', () => {
   it('returns a useMutation-shaped object without depending on TanStack', async () => {
     const fetchMock = vi.fn().mockResolvedValue(response());
@@ -140,5 +150,99 @@ describe('<OpenAgentConsoleButton>', () => {
     await act(async () => {
       release(response());
     });
+  });
+
+  it('stays disabled after a successful mint, because the page is leaving', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response());
+    const navigate = vi.fn();
+    render(<OpenAgentConsoleButton fetch={fetchMock} navigate={navigate} />);
+    const button = screen.getByRole('button') as HTMLButtonElement;
+
+    await act(async () => {
+      button.click();
+    });
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+
+    // The anti-flicker guarantee: returning to idle on a page that is unloading shows a "ready to
+    // click again" frame the user reads as a failed click. Nothing below may regress this.
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+  });
+});
+
+describe('<OpenAgentConsoleButton> and the back/forward cache', () => {
+  it('re-enables the button when the page is restored from the bfcache', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response());
+    const navigate = vi.fn();
+    render(<OpenAgentConsoleButton fetch={fetchMock} navigate={navigate} />);
+    const button = screen.getByRole('button') as HTMLButtonElement;
+
+    await act(async () => {
+      button.click();
+    });
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+    expect(button.disabled).toBe(true);
+
+    // Back out of the console: the page was frozen, not destroyed, so this component wakes up with
+    // the `isPending` it went to sleep with — a spinner on a button that can never be clicked again.
+    await act(async () => {
+      window.dispatchEvent(pageshowEvent(true));
+    });
+
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('leaves an in-flight mint spinning on a non-persisted pageshow', async () => {
+    let release: (value: Response) => void = () => {};
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+    );
+    render(<OpenAgentConsoleButton fetch={fetchMock} navigate={vi.fn()} />);
+    const button = screen.getByRole('button') as HTMLButtonElement;
+
+    await act(async () => {
+      button.click();
+    });
+
+    // A fresh load fires `pageshow` too. Treating it as a restore would cancel the spinner of a
+    // mint that is genuinely still running, which is the flicker this hook exists to avoid.
+    await act(async () => {
+      window.dispatchEvent(pageshowEvent(false));
+    });
+
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    await act(async () => {
+      release(response());
+    });
+  });
+
+  it('removes the pageshow listener on unmount', async () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    try {
+      const { unmount } = render(<OpenAgentConsoleButton fetch={vi.fn()} navigate={vi.fn()} />);
+
+      const registered = add.mock.calls.filter(([type]) => type === 'pageshow');
+      expect(registered).toHaveLength(1);
+      const handler = registered[0]?.[1];
+
+      unmount();
+
+      // A launcher that lives in a header gets mounted on every page; a listener per mount is a
+      // leak, and a survivor would set state on a component that no longer exists.
+      const unregistered = remove.mock.calls.some(
+        ([type, fn]) => type === 'pageshow' && fn === handler,
+      );
+      expect(unregistered).toBe(true);
+
+      expect(() => window.dispatchEvent(pageshowEvent(true))).not.toThrow();
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
   });
 });
