@@ -35,5 +35,8 @@ and adding a GIN index means boot-time DDL that locks an already-populated table
 configuration that silently degrades to a sequential scan when it disagrees with the query. That
 wants a migration a consumer runs and observes. The interface is open for it later.
 
-`KeywordRetriever` is unchanged and still exported — it remains the right answer for
-`MemoryVectorStore` and single-process deployments. This is an additional path, not a replacement.
+`KeywordRetriever` is neither replaced nor deprecated by this — it remains the right answer for
+`MemoryVectorStore`, for a store with no lexical capability, and for single-process deployments. This
+is an additional path alongside it. (Where you do keep it, its own index still has to be fed and, as
+of the `remove()`/`clear()` fix shipping in this same release, explicitly emptied on delete. The
+store-backed leg has nothing to feed or empty, which is the point of it.)
