@@ -171,6 +171,38 @@ const retriever = new HybridRetriever([
 ]);
 ```
 
+### The fused score is not a similarity — do not threshold it
+
+Rank-based fusion is what makes RRF robust across incompatible scales, and the price is that its
+output is a function of **rank alone**. It never sees a similarity. Two things follow:
+
+- The score on a fused passage is **not comparable** to the score on one from `EmbeddingRetriever`,
+  even though it arrives in the same field, of the same type, through the same `Retriever` interface.
+  There is no discriminator — a consumer holding a `Passage[]` cannot tell which kind of number it
+  has. If you show scores to a user or a model, know which retriever produced them.
+- Its range is narrow, fixed and quality-blind: every possible value lies in
+  `[minWeight / (k + fetchTopK), Σ weights / (k + 1)]`, which with the defaults is
+  `[0.0125, 0.0328]`. A perfect match and the least-bad member of a set of terrible matches both land
+  around `0.016`.
+
+What a fused score measures is how strongly the legs *agree*, and agreement tracks nothing about
+correctness: two legs returning the same nearest nothing reinforce it to the same ceiling a unanimous
+correct answer gets. Measured on one corpus, the dense leg alone separated cleanly (weakest real
+answer `0.244`, loudest absent-topic answer `0.143`) while those same queries after fusion scored
+`0.032` and `0.033` — inverted.
+
+So a relevance floor goes on the legs, never on the fusion:
+
+```ts
+const retriever = new HybridRetriever([
+  new EmbeddingRetriever(embedder, store, { minScore: 0.2 }), // ← floor here
+  new LexicalRetriever(store),
+]);
+```
+
+`HybridRetriever` has no `minScore` of its own on purpose: the option would be an invitation to
+apply one to a number that cannot support it.
+
 Nothing else changes: no chunks to hand the retriever, no state in the process, no deletes to mirror.
 This is the only option that works when **ingestion and search run in different processes** — a
 worker that ingests and an API pod that searches. The API pod never sees the chunks, so an in-process
@@ -238,7 +270,9 @@ library upgrade. The interface is open, so it can be added later without changin
 
 - `chunkText(text, { chunkSize?, overlap? })` — overlapping, boundary-aware chunks.
 - `ingestDocuments(docs, { embedder, store, chunkSize?, overlap? })` — chunk → embed → upsert.
-- `EmbeddingRetriever(embedder, store)` — the core `Retriever` from an embedder + vector store.
+- `EmbeddingRetriever(embedder, store, { minScore? })` — the core `Retriever` from an embedder +
+  vector store. `minScore` drops passages below a similarity floor, so an unanswerable query can
+  return nothing.
 - `LexicalRetriever(store)` — the core `Retriever` from a store's own full-text index (BM25).
 - `KeywordRetriever` — in-process BM25 over chunks you feed it; the single-process lexical half:
   `add(chunks)`, `remove(documentId)`, `clear()`, `size`.

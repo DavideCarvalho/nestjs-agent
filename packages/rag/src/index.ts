@@ -21,7 +21,10 @@ export {
   type RedisSearchClient,
   type RedisVectorStoreOptions,
 } from './redis-vector-store.js';
-export { EmbeddingRetriever } from './embedding-retriever.js';
+export {
+  EmbeddingRetriever,
+  type EmbeddingRetrieverOptions,
+} from './embedding-retriever.js';
 export { KeywordRetriever, type KeywordRetrieverOptions } from './keyword-retriever.js';
 export { LexicalRetriever } from './lexical-retriever.js';
 export { HybridRetriever, type HybridRetrieverOptions } from './hybrid-retriever.js';
