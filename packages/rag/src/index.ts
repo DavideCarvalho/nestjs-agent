@@ -1,11 +1,12 @@
 export { chunkText, type ChunkOptions } from './chunk.js';
 export type {
   IndexedDocument,
+  LexicalVectorStore,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
 } from './vector-store.js';
-export { documentIdOf } from './vector-store.js';
+export { documentIdOf, isLexicalVectorStore } from './vector-store.js';
 export { MemoryVectorStore } from './memory-vector-store.js';
 export {
   PgVectorStore,
@@ -20,6 +21,7 @@ export {
 } from './redis-vector-store.js';
 export { EmbeddingRetriever } from './embedding-retriever.js';
 export { KeywordRetriever, type KeywordRetrieverOptions } from './keyword-retriever.js';
+export { LexicalRetriever } from './lexical-retriever.js';
 export { HybridRetriever, type HybridRetrieverOptions } from './hybrid-retriever.js';
 export { RerankingRetriever, type RerankingRetrieverOptions } from './reranking-retriever.js';
 export { FilteredRetriever } from './filtered-retriever.js';

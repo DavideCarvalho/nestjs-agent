@@ -1,11 +1,16 @@
 // Integration: RedisVectorStore against a REAL RediSearch (Redis Stack via testcontainers). Proves
 // FT.CREATE/HSET/FT.SEARCH KNN ranking + TAG metadata filtering — the parts a fake can't. Runs only
 // under `pnpm test:db`.
+import type { EmbeddingProvider } from '@dudousxd/nestjs-agent-core';
 import { type RedisClientType, createClient } from 'redis';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { EmbeddingRetriever } from './embedding-retriever.js';
+import { HybridRetriever } from './hybrid-retriever.js';
+import { LexicalRetriever } from './lexical-retriever.js';
 import type { RedisSearchClient } from './redis-vector-store.js';
 import { RedisVectorSchemaMismatchError, RedisVectorStore } from './redis-vector-store.js';
+import { isLexicalVectorStore } from './vector-store.js';
 
 let container: StartedTestContainer;
 let client: RedisClientType;
@@ -142,6 +147,156 @@ describe('RedisVectorStore (real RediSearch)', () => {
     const allIds = (await store.listDocuments()).map((document) => document.id).sort();
     expect(allIds).toContain('ld-a');
     expect(allIds).toContain('ld-b');
+  });
+});
+
+// The store-backed lexical leg: BM25 straight out of the SAME RediSearch index the vectors live in.
+// A fake client can prove the query string; only a real engine proves that the query is *valid*, that
+// BM25 actually ranks, and — the property that matters most — that a hostile query cannot slip past
+// the metadata filter that is carrying an ACL.
+describe('RedisVectorStore.searchText (real RediSearch BM25)', () => {
+  beforeAll(async () => {
+    await store.upsert([
+      {
+        id: 'lex-a#0',
+        text: 'quarterly reimbursement policy for travelling auditors',
+        embedding: [1, 0, 0],
+        source: 'docs/reimbursement',
+        metadata: { tenant: 'lex-t1' },
+      },
+      {
+        id: 'lex-a#1',
+        text: 'auditors submit receipts within thirty days',
+        embedding: [1, 0, 0],
+        source: 'docs/reimbursement',
+        metadata: { tenant: 'lex-t1' },
+      },
+      {
+        id: 'lex-b#0',
+        text: 'hydraulic actuator maintenance schedule',
+        embedding: [0, 1, 0],
+        source: 'docs/maintenance',
+        metadata: { tenant: 'lex-t2' },
+      },
+      {
+        id: 'lex-secret#0',
+        text: 'reimbursement rules for tenant two auditors',
+        embedding: [1, 0, 0],
+        source: 'docs/other-tenant',
+        metadata: { tenant: 'lex-t2' },
+      },
+    ]);
+  });
+
+  it('advertises the LexicalVectorStore capability', () => {
+    expect(isLexicalVectorStore(store)).toBe(true);
+  });
+
+  it('ranks by keyword relevance over the index the vectors already live in', async () => {
+    const passages = await store.searchText('reimbursement policy', { topK: 10 });
+    const ids = passages.map((passage) => passage.id);
+
+    expect(ids).toContain('lex-a#0');
+    expect(ids).not.toContain('lex-b#0'); // shares no term with the query
+    // the chunk carrying BOTH query terms outranks the one carrying only "reimbursement"
+    expect(ids.indexOf('lex-a#0')).toBeLessThan(ids.indexOf('lex-secret#0'));
+    expect(passages[0]?.score).toBeGreaterThan(0);
+    // passages come back whole — text/source/metadata — as citations need
+    const first = passages.find((passage) => passage.id === 'lex-a#0');
+    expect(first?.text).toContain('reimbursement');
+    expect(first?.source).toBe('docs/reimbursement');
+    expect(first?.metadata?.tenant).toBe('lex-t1');
+  });
+
+  it('is findable the moment it is upserted — no index rebuild, no refresh window', async () => {
+    await store.upsert([
+      {
+        id: 'lex-fresh#0',
+        text: 'defenestration protocol for obsolete gantries',
+        embedding: [0, 0, 1],
+        metadata: { tenant: 'lex-t1' },
+      },
+    ]);
+    const passages = await store.searchText('defenestration gantries', { topK: 5 });
+    expect(passages.map((passage) => passage.id)).toContain('lex-fresh#0');
+  });
+
+  // ── the ACL properties ────────────────────────────────────────────────────────────────────────
+  it('DENIES: an empty-array filter returns nothing, even for a query that matches plenty', async () => {
+    const unfiltered = await store.searchText('reimbursement auditors', { topK: 10 });
+    expect(unfiltered.length).toBeGreaterThan(0); // the query really does match
+
+    const denied = await store.searchText('reimbursement auditors', {
+      topK: 10,
+      filter: { tenant: [] },
+    });
+    expect(denied).toEqual([]);
+  });
+
+  it('SCOPES: a scoped filter never returns another scope’s chunks', async () => {
+    const scalar = await store.searchText('reimbursement auditors', {
+      topK: 10,
+      filter: { tenant: 'lex-t1' },
+    });
+    expect(scalar.length).toBeGreaterThan(0);
+    expect(scalar.every((passage) => passage.metadata?.tenant === 'lex-t1')).toBe(true);
+    expect(scalar.map((passage) => passage.id)).not.toContain('lex-secret#0');
+
+    const arrayScoped = await store.searchText('reimbursement auditors', {
+      topK: 10,
+      filter: { tenant: ['lex-t1'] },
+    });
+    expect(arrayScoped.map((passage) => passage.id).sort()).toEqual(
+      scalar.map((passage) => passage.id).sort(),
+    );
+  });
+
+  it('a hostile query cannot escape the filter it is ANDed with', async () => {
+    // every one of these tries to reach tenant lex-t2 (or the whole corpus) from inside a lex-t1 scope
+    const attacks = [
+      '*',
+      'reimbursement) | (@meta_tenant:{lex\\-t2}',
+      '@meta_tenant:{lex\\-t2}',
+      'reimbursement -@meta_tenant:{lex\\-t1}',
+      'reimbursement =>[KNN 10 @embedding $BLOB]',
+      '~reimbursement | @tenant:{*}',
+    ];
+    for (const attack of attacks) {
+      const passages = await store.searchText(attack, { topK: 20, filter: { tenant: 'lex-t1' } });
+      expect(passages.every((passage) => passage.metadata?.tenant === 'lex-t1')).toBe(true);
+      expect(passages.map((passage) => passage.id)).not.toContain('lex-secret#0');
+      expect(passages.map((passage) => passage.id)).not.toContain('lex-b#0');
+    }
+  });
+
+  it('an empty / punctuation-only query returns nothing rather than the whole corpus', async () => {
+    expect(await store.searchText('', { topK: 10 })).toEqual([]);
+    expect(await store.searchText('   ', { topK: 10 })).toEqual([]);
+    expect(await store.searchText('*** ??? ...', { topK: 10 })).toEqual([]);
+  });
+
+  it('composes with EmbeddingRetriever inside HybridRetriever, filter intact', async () => {
+    // a toy embedder: "reimbursement" queries point at the [1,0,0] axis the reimbursement chunks use
+    const embedder: EmbeddingProvider = {
+      embed: async (texts) => texts.map(() => [1, 0, 0]),
+    };
+    const hybrid = new HybridRetriever([
+      new EmbeddingRetriever(embedder, store),
+      new LexicalRetriever(store),
+    ]);
+
+    const passages = await hybrid.retrieve('reimbursement policy', {
+      topK: 5,
+      filter: { tenant: 'lex-t1' },
+    });
+    expect(passages.length).toBeGreaterThan(0);
+    expect(passages.every((passage) => passage.metadata?.tenant === 'lex-t1')).toBe(true);
+    expect(passages.map((passage) => passage.id)).toContain('lex-a#0');
+
+    // and the deny primitive survives fusion
+    expect(
+      await hybrid.retrieve('reimbursement policy', { topK: 5, filter: { tenant: [] } }),
+    ).toEqual([]);
   });
 });
 

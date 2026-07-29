@@ -1,6 +1,7 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import {
   type IndexedDocument,
+  type LexicalVectorStore,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
@@ -59,6 +60,12 @@ export interface RedisVectorStoreOptions {
    * front, so only keys listed here can be passed in `search`'s `filter`. Default none.
    */
   filterableFields?: string[];
+  /**
+   * RediSearch scorer used by {@link RedisVectorStore.searchText}. Default `BM25` — the standard
+   * lexical ranking, and the same family the in-process `KeywordRetriever` implements. Override for
+   * a server that names it differently (`BM25STD` on newer builds) or to pick `TFIDF`/`DISMAX`.
+   */
+  lexicalScorer?: string;
 }
 
 /**
@@ -66,12 +73,17 @@ export interface RedisVectorStoreOptions {
  * for anyone already running Redis (see `-transport-redis`). Chunks are hashes under `prefix`, the
  * embedding a FLOAT32 vector field; `search` is a KNN query. Call {@link RedisVectorStore.ensureSchema}
  * once at boot to create the index.
+ *
+ * The chunk text is declared as a RediSearch `TEXT` field, so this store also satisfies
+ * {@link LexicalVectorStore}: {@link RedisVectorStore.searchText} is BM25 over that same index —
+ * the lexical half of hybrid search with no second index to build, feed, or invalidate.
  */
-export class RedisVectorStore implements VectorStore {
+export class RedisVectorStore implements LexicalVectorStore {
   private readonly index: string;
   private readonly prefix: string;
   private readonly dimensions: number;
   private readonly filterableFields: string[];
+  private readonly lexicalScorer: string;
 
   constructor(
     private readonly client: RedisSearchClient,
@@ -81,6 +93,7 @@ export class RedisVectorStore implements VectorStore {
     this.prefix = options.prefix ?? 'agent_rag:';
     this.dimensions = options.dimensions ?? 1536;
     this.filterableFields = options.filterableFields ?? [];
+    this.lexicalScorer = options.lexicalScorer ?? 'BM25';
   }
 
   /**
@@ -312,6 +325,48 @@ export class RedisVectorStore implements VectorStore {
     ]);
     return parseSearchReply(reply, this.prefix);
   }
+
+  /**
+   * Lexical (BM25) search over the same index `search` uses — the {@link LexicalVectorStore} half of
+   * hybrid retrieval, served by RediSearch's own keyword index rather than an in-process copy of the
+   * corpus. `options.filter` is ANDed onto the text clause with the identical TAG semantics as
+   * `search` (array = OR, empty array = deny), so a lexical hit can never escape a filter a vector
+   * hit would have respected.
+   *
+   * A query with no searchable terms — empty, whitespace, or pure punctuation — returns `[]`. That is
+   * deliberate: RediSearch's `*` would match the entire corpus, which is the opposite of what a
+   * relevance query with nothing to be relevant to should do.
+   */
+  async searchText(query: string, options: VectorSearchOptions): Promise<Passage[]> {
+    if (filterMatchesNothing(options.filter)) {
+      return [];
+    }
+    const terms = tokenizeQuery(query);
+    if (terms.length === 0) {
+      return [];
+    }
+    const filterQuery = buildFilter(options.filter);
+    const textQuery = `@text:(${terms.join('|')})`;
+    const reply = await this.client.sendCommand([
+      'FT.SEARCH',
+      this.index,
+      filterQuery === '*' ? textQuery : `(${filterQuery} ${textQuery})`,
+      'SCORER',
+      this.lexicalScorer,
+      'WITHSCORES',
+      'RETURN',
+      '3',
+      'text',
+      'source',
+      'metadata_json',
+      'DIALECT',
+      '2',
+      'LIMIT',
+      '0',
+      String(options.topK),
+    ]);
+    return parseSearchReply(reply, this.prefix, 'lexical');
+  }
 }
 
 /** One attribute as the live index reports it — enough to spot the drift that matters. */
@@ -415,6 +470,24 @@ function filterMatchesNothing(filter?: Record<string, unknown>): boolean {
   return Object.values(filter).some((value) => Array.isArray(value) && value.length === 0);
 }
 
+/**
+ * Reduce a raw user query to RediSearch query *terms*, the union of which becomes the text clause.
+ *
+ * This is the escaping story for the text leg, and it escapes by **construction** rather than by
+ * quoting: a term is kept only as a run of letters, digits and `_`, so nothing that could carry
+ * meaning in RediSearch's query language — `@ { } | ( ) * ~ - " ' : ; , => %` and friends — can
+ * survive into the emitted query. A query cannot therefore add a clause, negate one, open a field
+ * selector, or widen the filter it is ANDed with. (Escaping each punctuation character instead, as
+ * {@link escapeTag} does for TAG values, would be safe but *lossy*: RediSearch's own tokenizer split
+ * the indexed text on that same punctuation, so an escaped `hello\-world` term matches nothing.)
+ *
+ * Unicode letters and digits are kept — stripping to ASCII would silently make non-English corpora
+ * unsearchable. Since `\p{L}`/`\p{N}` contain no RediSearch metacharacters, keeping them is safe.
+ */
+function tokenizeQuery(query: string): string[] {
+  return query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+
 /** Escape RediSearch TAG punctuation so an id/tenant value matches literally. */
 function escapeTag(value: string): string {
   return value.replace(/[^a-zA-Z0-9_]/g, (char) => `\\${char}`);
@@ -455,22 +528,39 @@ function toStr(value: unknown): string {
 }
 
 /**
+ * Which leg produced the reply, and therefore where a passage's `score` comes from:
+ *
+ * - `vector` — the KNN query. Score is the returned `vector_score` **distance**, turned into a
+ *   cosine similarity by `1 - distance`. Two array elements per result (`key`, `fields`).
+ * - `lexical` — the `WITHSCORES` text query. The engine's BM25 relevance is already a
+ *   bigger-is-better score, and it arrives *inline*: three array elements per result
+ *   (`key`, `score`, `fields`), which is why the stride is not a constant.
+ */
+type ScoreSource = 'vector' | 'lexical';
+
+/**
  * Parse an `FT.SEARCH` reply into passages, tolerating both wire shapes: the RESP2 array
  * `[total, key, [f, v, …], …]` (ioredis / node-redis RESP2) and the RESP3 object
- * `{ results: [{ id, extra_attributes: { … } }] }` (node-redis's default). Distance → similarity
- * via `1 - distance` (COSINE), and the `prefix` is stripped back off the key to recover the chunk id.
+ * `{ results: [{ id, extra_attributes: { … } }] }` (node-redis's default). The `prefix` is stripped
+ * back off the key to recover the chunk id; `scoreSource` selects the scoring convention.
  */
-function parseSearchReply(reply: unknown, prefix: string): Passage[] {
+function parseSearchReply(
+  reply: unknown,
+  prefix: string,
+  scoreSource: ScoreSource = 'vector',
+): Passage[] {
+  const stride = scoreSource === 'lexical' ? 3 : 2;
   if (Array.isArray(reply)) {
     const passages: Passage[] = [];
-    for (let index = 1; index + 1 < reply.length; index += 2) {
-      const rawFields = reply[index + 1];
+    for (let index = 1; index + stride - 1 < reply.length; index += stride) {
+      const rawFields = reply[index + stride - 1];
       if (Array.isArray(rawFields)) {
         const attrs: Record<string, string> = {};
         for (let field = 0; field + 1 < rawFields.length; field += 2) {
           attrs[toStr(rawFields[field])] = toStr(rawFields[field + 1]);
         }
-        passages.push(toPassage(toStr(reply[index]), attrs, prefix));
+        const inlineScore = scoreSource === 'lexical' ? toStr(reply[index + 1]) : undefined;
+        passages.push(toPassage(toStr(reply[index]), attrs, prefix, scoreSource, inlineScore));
       }
     }
     return passages;
@@ -478,10 +568,26 @@ function parseSearchReply(reply: unknown, prefix: string): Passage[] {
   if (typeof reply === 'object' && reply !== null && 'results' in reply) {
     const results = (reply as { results: unknown }).results;
     if (Array.isArray(results)) {
-      return results.map((result) => toPassage(readId(result), readAttributes(result), prefix));
+      return results.map((result) =>
+        toPassage(
+          readId(result),
+          readAttributes(result),
+          prefix,
+          scoreSource,
+          scoreSource === 'lexical' ? readScore(result) : undefined,
+        ),
+      );
     }
   }
   return [];
+}
+
+/** RESP3 `WITHSCORES` puts the relevance score on the result object rather than inline in the array. */
+function readScore(result: unknown): string | undefined {
+  if (typeof result === 'object' && result !== null && 'score' in result) {
+    return toStr((result as { score: unknown }).score);
+  }
+  return undefined;
 }
 
 function readId(result: unknown): string {
@@ -504,13 +610,20 @@ function readAttributes(result: unknown): Record<string, string> {
   return attrs;
 }
 
-function toPassage(rawId: string, attrs: Record<string, string>, prefix: string): Passage {
-  const distance = Number(attrs.vector_score ?? '1');
+function toPassage(
+  rawId: string,
+  attrs: Record<string, string>,
+  prefix: string,
+  scoreSource: ScoreSource = 'vector',
+  inlineScore?: string,
+): Passage {
+  const score =
+    scoreSource === 'lexical' ? Number(inlineScore ?? '0') : 1 - Number(attrs.vector_score ?? '1');
   const source = attrs.source;
   return {
     id: rawId.startsWith(prefix) ? rawId.slice(prefix.length) : rawId,
     text: attrs.text ?? '',
-    score: 1 - distance,
+    score: Number.isFinite(score) ? score : 0,
     ...(source !== undefined ? { source } : {}),
     ...parseMetadata(attrs.metadata_json),
   };
