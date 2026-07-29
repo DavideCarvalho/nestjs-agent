@@ -195,3 +195,52 @@ library upgrade. The interface is open, so it can be added later without changin
 - `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.
 - `createRetrievalTool(retriever, { name?, description?, topK? })` — the agentic-retrieval tool.
+
+## Collection maintenance
+
+`remove` and `listDocuments` can only enumerate documents *with* their metadata and delete them *one
+at a time*, which makes routine maintenance quadratic-ish: dropping a 2 000-document collection that
+way is one `listDocuments()` that parses a metadata blob per chunk, then 2 000 `remove()` calls — and
+on Redis each of those is a `SCAN` over the whole keyspace, queues and app cache included.
+
+So `VectorStore` **requires** four more methods, each doing the same work as one filtered query. They
+are not an optional capability and there is nothing to narrow to — every store has them:
+
+```ts
+await store.countChunks({ collection: 'handbook' });     // FT.SEARCH LIMIT 0 0 / count(*)
+await store.listDocumentIds({ collection: 'handbook' }); // ids only — no metadata round-trip
+await store.removeWhere({ collection: 'handbook' });     // one query, returns chunks removed
+await store.removeMany(['doc-a', 'doc-b']);              // N documents, one pass
+```
+
+`removeWhere` is the destructive one, so it has two rules worth knowing before you call it:
+
+| filter | result |
+|---|---|
+| `{ collection: 'handbook' }` | deletes that scope, returns the chunk count |
+| `{ audience: [] }` (or any empty array) | **deletes nothing**, returns `0` — the empty array is this package's deny primitive, and a deny must never be read as "no filter" |
+| `{}` | throws `UnsafeRemovalError` — an empty filter is far more often a filter built wrong than a deliberate request to wipe the store |
+| `{ notFilterable: 'x' }` (Redis) | throws `UnsafeRemovalError` — the key has no `meta_*` TAG to match on |
+
+Deliberate mass deletion is still available; it just has to be spelled out:
+`await store.removeMany(await store.listDocumentIds())`.
+
+`VectorStore.remove` deliberately stays a `SCAN` on the Redis adapter. Turning it into an `FT.SEARCH`
+would mean stamping the document id as an indexed field at write time, and chunks written before that
+change carry no such field — the search would find none of them and `remove` would silently stop
+deleting. The methods above need no new field, so they have no migration.
+
+### Why these are required and `searchText` is optional
+
+A method is **required on `VectorStore`** when every backend can implement it from what it already
+stores. Enumeration and bulk deletion are CRUD over records the store already holds — the same
+footing as `remove` and `listDocuments` — so making them optional would only cost every consumer a
+permanent `if (supported)` and an unreachable "and if it isn't?" branch.
+
+A method goes in an **optional capability interface** when some backend genuinely *cannot* provide it
+without infrastructure the consumer has to adopt. `LexicalVectorStore.searchText` is the only one
+today, and it earns it: RediSearch has BM25 natively, Postgres needs a `tsvector` column, a GIN index
+and a migration you run and watch, and `MemoryVectorStore` would have to implement BM25 itself.
+
+The test is whether a backend can do it at all — not whether adding it would inconvenience an
+implementer who has already shipped.

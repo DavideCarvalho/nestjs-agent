@@ -1,10 +1,12 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
+import { filterMatchesNothing } from './filter.js';
 import type {
   IndexedDocument,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
 } from './vector-store.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 /**
  * The minimal Postgres surface {@link PgVectorStore} needs — adapt your own `pg` / `postgres.js`
@@ -45,6 +47,10 @@ export interface PgVectorStoreOptions {
  * Both want a migration a consumer runs and observes, not a side effect of upgrading the library. The
  * capability interface is open, so a `PgLexicalVectorStore` (or an option here, gated on an
  * explicitly-created index) can be added later without changing anything else.
+ *
+ * The enumeration and bulk-deletion methods {@link VectorStore} requires need nothing new here,
+ * unlike the lexical capability above: enumeration and bulk deletion are `DISTINCT`, `= ANY($1)`, `DELETE … WHERE`
+ * and `count(*)` over the table and index that already exist. No DDL, no boot-time lock, no migration.
  */
 export class PgVectorStore implements VectorStore {
   private readonly table: string;
@@ -120,6 +126,72 @@ export class PgVectorStore implements VectorStore {
       id: row.doc_id,
       ...(row.metadata !== null ? { metadata: row.metadata } : {}),
     }));
+  }
+
+  /** {@link listDocuments} without the metadata: one `DISTINCT` over the derived document id. */
+  async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {
+    if (filterMatchesNothing(filter)) {
+      return [];
+    }
+    const where = buildWhere(filter, 1);
+    const rows = await this.client.query<{ doc_id: string }>(
+      `SELECT DISTINCT ${DOCUMENT_ID_FROM_CHUNK} AS doc_id
+       FROM ${this.table}
+       ${where.sql}
+       ORDER BY doc_id`,
+      where.params,
+    );
+    return rows.map((row) => row.doc_id);
+  }
+
+  /** N documents in one statement — the set-based form of {@link PgVectorStore.remove}. */
+  async removeMany(documentIds: string[]): Promise<void> {
+    if (documentIds.length === 0) {
+      return;
+    }
+    await this.client.query(
+      `DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = ANY($1::text[])`,
+      [documentIds],
+    );
+  }
+
+  /**
+   * See {@link VectorStore.removeWhere}: empty filter object throws, empty-array value
+   * deletes nothing. The count comes from `RETURNING id` rather than a driver-specific `rowCount`,
+   * because {@link PgClient} is deliberately just "run SQL, get rows".
+   */
+  async removeWhere(filter: Record<string, unknown>): Promise<number> {
+    if (Object.keys(filter).length === 0) {
+      throw new UnsafeRemovalError(
+        'empty-filter',
+        'removeWhere() refuses an empty filter: it would delete every chunk in the table. ' +
+          'Pass a filter that scopes the removal, or delete deliberately with ' +
+          'removeMany(await store.listDocumentIds()).',
+      );
+    }
+    // Redundant with buildWhere's `false` clause, and stated anyway — the deny primitive should be
+    // visible at the destructive call site, not one indirection away.
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+    const where = buildWhere(filter, 1);
+    const rows = await this.client.query<{ id: string }>(
+      `DELETE FROM ${this.table} ${where.sql} RETURNING id`,
+      where.params,
+    );
+    return rows.length;
+  }
+
+  async countChunks(filter?: Record<string, unknown>): Promise<number> {
+    if (filterMatchesNothing(filter)) {
+      return 0;
+    }
+    const where = buildWhere(filter, 1);
+    const rows = await this.client.query<{ count: number | string }>(
+      `SELECT count(*)::int AS count FROM ${this.table} ${where.sql}`,
+      where.params,
+    );
+    return Number(rows[0]?.count ?? 0);
   }
 
   async search(embedding: number[], options: VectorSearchOptions): Promise<Passage[]> {

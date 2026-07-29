@@ -27,3 +27,22 @@ export function matchesFilter(
     return metadata[key] === expected;
   });
 }
+
+/**
+ * Does this filter provably match **nothing**? True when any key carries an empty array, because
+ * nothing is a member of the empty set and every key must match (AND). This is the package's **deny
+ * primitive** — the shape a capability-style ACL collapses to for an actor holding no tokens — so
+ * every store has to honour it identically, and a store that cannot express "match nothing" in its
+ * query language (RediSearch has no valid empty-tag syntax) must short-circuit on it instead.
+ *
+ * It is exported from this module rather than reimplemented per adapter precisely because getting it
+ * wrong is *silent*: a read path that ignores it over-returns, and a **write** path that ignores it
+ * (see {@link import('./vector-store.js').VectorStore.removeWhere}) deletes the corpus a
+ * deny was supposed to protect.
+ */
+export function filterMatchesNothing(filter?: Record<string, unknown>): boolean {
+  if (filter === undefined) {
+    return false;
+  }
+  return Object.values(filter).some((value) => Array.isArray(value) && value.length === 0);
+}

@@ -212,6 +212,10 @@ describe('LexicalRetriever', () => {
       search: async () => [],
       remove: async () => undefined,
       listDocuments: async () => [],
+      listDocumentIds: async () => [],
+      removeMany: async () => undefined,
+      removeWhere: async () => 0,
+      countChunks: async () => 0,
       searchText: async (query, options) => {
         seen.push({ query, options });
         return passages;
