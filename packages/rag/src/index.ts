@@ -15,6 +15,7 @@ export {
 } from './pg-vector-store.js';
 export {
   RedisVectorStore,
+  RedisVectorSchemaMismatchError,
   type RedisSearchClient,
   type RedisVectorStoreOptions,
 } from './redis-vector-store.js';

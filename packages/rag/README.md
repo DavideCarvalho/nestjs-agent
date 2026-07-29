@@ -92,6 +92,13 @@ await store.ensureSchema(); // FT.CREATE: TEXT + TAG + HNSW cosine vector field
 `filterableFields` declares which metadata keys become filterable `TAG` fields — RediSearch needs them
 up front, so only those keys can be used in a `filter`. This store also does lexical search; see below.
 
+`ensureSchema()` belongs at boot. It creates the index if missing — and if the index already exists,
+it compares it against your configuration rather than assuming they agree. A `filterableFields` entry
+added after the index was created is repaired in place with `FT.ALTER … SCHEMA ADD` (chunks written
+before the repair only become filterable on that key once re-ingested). A changed `dimensions` — a
+model swap — can't be repaired without a full reindex, so it throws `RedisVectorSchemaMismatchError`
+instead of silently leaving the index on the old width.
+
 ## Hybrid search (dense + lexical)
 
 `HybridRetriever` fuses several retrievers with Reciprocal Rank Fusion. RRF is **rank**-based, so the
@@ -131,7 +138,8 @@ the corpus.
 
 **In-process (`KeywordRetriever`).** Still the right answer for `MemoryVectorStore`, for a store with
 no lexical capability, and for single-process deployments where you control both halves. It is a full
-BM25 implementation over chunks you feed it, so chunk once and give the SAME chunks to both halves:
+BM25 implementation over chunks you feed it, so chunk once and give the SAME chunks to both halves —
+their ids line up and `HybridRetriever` can fuse the rankings:
 
 ```ts
 const chunks = chunkDocuments(docs);
@@ -141,8 +149,17 @@ keyword.add(chunks); // its own copy of the corpus, in this process only
 const retriever = new HybridRetriever([new EmbeddingRetriever(embedder, store), keyword]);
 ```
 
-Because that is a second index, **deletes have to hit both** (`store.remove(id)` *and*
-`keyword.remove(id)`), and only this process can see it.
+Because that is a second index, **deletes have to hit both**, and only this process can see it.
+`KeywordRetriever` keeps its own copy of each chunk's text, so a document dropped from the vector
+store alone stays fully retrievable — `retrieve` will keep returning the removed passage:
+
+```ts
+await store.remove(documentId);
+keyword.remove(documentId); // ← the other half. Same document id; chunk ids collapse for you.
+```
+
+`KeywordRetriever` also exposes `clear()` and `size` for rebuilding the index wholesale. None of this
+bookkeeping exists on the store-backed path above, which is the point of it.
 
 Ask the store which it supports rather than hard-coding:
 
@@ -172,7 +189,8 @@ library upgrade. The interface is open, so it can be added later without changin
 - `ingestDocuments(docs, { embedder, store, chunkSize?, overlap? })` — chunk → embed → upsert.
 - `EmbeddingRetriever(embedder, store)` — the core `Retriever` from an embedder + vector store.
 - `LexicalRetriever(store)` — the core `Retriever` from a store's own full-text index (BM25).
-- `KeywordRetriever` — in-process BM25 over chunks you `add()`; the single-process lexical half.
+- `KeywordRetriever` — in-process BM25 over chunks you feed it; the single-process lexical half:
+  `add(chunks)`, `remove(documentId)`, `clear()`, `size`.
 - `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` — RRF fusion of the two.
 - `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.

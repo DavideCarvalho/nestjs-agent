@@ -1,6 +1,7 @@
 import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
 import { matchesFilter } from './filter.js';
 import type { ChunkRecord } from './ingest.js';
+import { documentIdOf } from './vector-store.js';
 
 export interface KeywordRetrieverOptions {
   /** BM25 term-frequency saturation. Default 1.5. */
@@ -21,6 +22,11 @@ interface IndexedDoc {
  * {@link ChunkRecord}s you upsert into the vector store (from `chunkDocuments`) so their chunk ids
  * line up and `HybridRetriever` can fuse the two rankings. Full BM25: idf, term-frequency saturation
  * (`k1`), and document-length normalization (`b`).
+ *
+ * Because it holds its OWN copy of each chunk's text, it needs the same delete-sync as the vector
+ * store: whenever you call {@link import('./vector-store.js').VectorStore.remove}, call
+ * {@link KeywordRetriever.remove} with the same document id. Skipping it leaves the document
+ * lexically retrievable — `retrieve` would keep returning the removed passage's full text.
  */
 export class KeywordRetriever implements Retriever {
   private readonly docs = new Map<string, IndexedDoc>();
@@ -34,10 +40,15 @@ export class KeywordRetriever implements Retriever {
     this.b = options.b ?? 0.75;
   }
 
+  /** How many chunks are currently indexed. */
+  get size(): number {
+    return this.docs.size;
+  }
+
   /** Index (or re-index) records. Re-adding an existing id replaces its posting and updates stats. */
   add(records: ChunkRecord[]): void {
     for (const record of records) {
-      this.remove(record.id);
+      this.removeChunk(record.id);
       const tokens = tokenize(record.text);
       const frequencies = new Map<string, number>();
       for (const token of tokens) {
@@ -51,7 +62,30 @@ export class KeywordRetriever implements Retriever {
     }
   }
 
-  private remove(id: string): void {
+  /**
+   * Forget a source document — every chunk whose id is `${documentId}` or `${documentId}#<n>`, the
+   * same id scheme (and the same {@link documentIdOf} collapse) the vector stores use for their
+   * `remove`. The keyword half of a hybrid index keeps its own copy of the chunk text, so a document
+   * dropped from the vector store stays fully retrievable here until this is called. Unknown ids are
+   * a no-op.
+   */
+  remove(documentId: string): void {
+    for (const id of [...this.docs.keys()]) {
+      if (id === documentId || documentIdOf(id) === documentId) {
+        this.removeChunk(id);
+      }
+    }
+  }
+
+  /** Drop every indexed chunk, resetting the corpus statistics with it. */
+  clear(): void {
+    this.docs.clear();
+    this.documentFrequency.clear();
+    this.totalLength = 0;
+  }
+
+  /** Drop ONE chunk by its exact id, decrementing the corpus statistics it contributed. */
+  private removeChunk(id: string): void {
     const existing = this.docs.get(id);
     if (existing === undefined) {
       return;

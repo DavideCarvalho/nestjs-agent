@@ -21,6 +21,12 @@ import {
 /** Read a media file's bytes from its disk. Host wires `(disk, path) => media.disk(disk).get(path)`. */
 export type ReadFile = (disk: string, path: string) => Promise<Buffer>;
 
+/**
+ * Ask the STORAGE layer how big a file really is, without reading it. Host wires
+ * `(disk, path) => media.disk(disk).size(path)` (S3 `HeadObject`, `fs.stat`, …).
+ */
+export type StatFile = (disk: string, path: string) => Promise<number>;
+
 /** Default upper bound on a file we'll read into memory to ingest — 25 MB. */
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -37,7 +43,15 @@ export interface MediaIngestionDeps {
   extractor?: TextExtractor;
   /** Chunking options forwarded to `chunkDocuments`. */
   chunk?: ChunkOptions;
-  /** Skip (don't read) files larger than this many bytes. Default 25 MB. */
+  /**
+   * Optional storage-side size probe, consulted before `readFile`. `MediaAttachEvent.size` is a
+   * DECLARED value — in most hosts it originates in the upload session the client opened, so it can
+   * be wrong (or adversarially `0`). The real byte length is always re-checked after the read, but
+   * that means a lying `size` still costs one full download; wiring `statFile` (S3 `HeadObject`,
+   * `fs.stat`) moves the authoritative check ahead of it so an oversized object is never fetched.
+   */
+  statFile?: StatFile;
+  /** Skip files larger than this many bytes. Default 25 MB. */
   maxBytes?: number;
   /**
    * Extra metadata stamped on every chunk, merged OVER the defaults (`mediaId`, `ownerType`,
@@ -62,8 +76,17 @@ export type MediaIngestResult =
   | { status: 'skipped'; reason: MediaIngestSkipReason };
 
 /**
- * Ingest one attached media file into a vector store: size-gate → read bytes → extract text →
- * `store.remove(id)` (orphan-free re-attach) → chunk → embed → upsert. Chunk metadata carries the
+ * Ingest one attached media file into a vector store: size-gate → read bytes → re-check the REAL
+ * size → extract text → `store.remove(id)` (orphan-free re-attach) → chunk → embed → upsert.
+ *
+ * The size gate never trusts `event.size` alone. That number is declared upstream (typically by the
+ * client that opened the upload session), so a file announced as `0` would otherwise sail past the
+ * limit into an embedding batch, and every chunk would then carry `size: 0` — poisoning the very
+ * fingerprint {@link import('./media-rag-reconciler.js').reconcileMediaRag} compares against media.
+ * The declared value is therefore only ever allowed to REJECT early (a cheap short-circuit); what
+ * authorizes the ingest, and what gets stamped into chunk metadata, is the real byte length.
+ *
+ * Chunk metadata carries the
  * owner (`ownerType`/`ownerId`) and `collection` from the server-side attach record, so retrieval can
  * be scoped per user/tenant via {@link import('@dudousxd/nestjs-agent-rag').FilteredRetriever}.
  *
@@ -76,19 +99,35 @@ export async function ingestMediaFile(
   deps: MediaIngestionDeps,
 ): Promise<MediaIngestResult> {
   const maxBytes = deps.maxBytes ?? DEFAULT_MAX_BYTES;
-  if (event.size > maxBytes) {
+  const skipTooLarge = (): MediaIngestResult => {
     publishRagMediaSkipped({
       ...outcomeContext(event),
       mimeType: event.mimeType,
       reason: 'too-large',
     });
     return { status: 'skipped', reason: 'too-large' };
+  };
+
+  // Fast path only: a declared size over the limit is taken at its word (nothing is gained by
+  // downloading a file its own record admits is too big), but a declared size UNDER it proves nothing.
+  if (event.size > maxBytes) {
+    return skipTooLarge();
+  }
+  if (deps.statFile !== undefined && (await deps.statFile(event.disk, event.path)) > maxBytes) {
+    return skipTooLarge();
   }
 
   const extractor = deps.extractor ?? defaultTextExtractor();
+  let size: number;
   let text: string;
   try {
     const bytes = await deps.readFile(event.disk, event.path);
+    // Authoritative gate: the bytes we actually hold. Guards the expensive half (extract → embed)
+    // against a lying declaration when no `statFile` is wired.
+    if (bytes.byteLength > maxBytes) {
+      return skipTooLarge();
+    }
+    size = bytes.byteLength;
     text = await extractor.extract(bytes, event.mimeType);
   } catch (error) {
     if (error instanceof UnsupportedMimeTypeError) {
@@ -125,8 +164,9 @@ export async function ingestMediaFile(
           ownerId: event.ownerId,
           collection: event.collection,
           // fingerprint the reconciler compares against the live media record to catch a content
-          // change a missed attach event would otherwise leave stale.
-          size: event.size,
+          // change a missed attach event would otherwise leave stale. The REAL byte length, not the
+          // declared one — a fingerprint copied from an untrusted claim can never detect drift.
+          size,
           // Host-supplied keys win, so a caller can add retrieval-scoping metadata (or correct a
           // default) without this package knowing what any of it means.
           ...deps.metadata?.(event),
@@ -142,7 +182,7 @@ export async function ingestMediaFile(
     ownerId: event.ownerId,
     collection: event.collection,
     source: event.path,
-    size: event.size,
+    size,
     mimeType: event.mimeType,
     chunks: count,
   });

@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.13.1
+
+### Patch Changes
+
+- [#41](https://github.com/DavideCarvalho/nestjs-agent/pull/41) [`a32a2da`](https://github.com/DavideCarvalho/nestjs-agent/commit/a32a2daedd07ea1fe2aa8297b3d4fbb3de8178aa) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix the console launcher spinning forever after a Back navigation. `useOpenAgentConsole` keeps `isPending` true after a successful mint on purpose — the page is leaving, and clearing it flashes a "ready to click again" button. With the browser's back/forward cache the page is frozen rather than destroyed, so pressing Back restored the launcher with that flag still set: a permanent spinner on a permanently disabled button. The hook now clears `isPending` on `pageshow` with `persisted: true` — a bfcache restore only, so a fresh load and a mint that is still genuinely in flight both keep their current behaviour.
+
 ## 0.13.0
 
 ### Minor Changes

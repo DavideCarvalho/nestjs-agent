@@ -18,6 +18,36 @@ export interface RedisSearchClient {
   sendCommand(args: (string | Buffer)[]): Promise<unknown>;
 }
 
+/**
+ * The index that already exists in Redis contradicts this store's configuration in a way that cannot
+ * be repaired in place. Thrown by {@link RedisVectorStore.ensureSchema} — which would otherwise have
+ * returned happily and left every subsequent query quietly wrong.
+ *
+ * The canonical case is a changed embedding width (a model swap, 1024 → 1536): RediSearch fixes a
+ * vector field's `DIM` at `FT.CREATE`, and every vector already stored was produced by the OLD model,
+ * so there is no in-place fix — the index has to be dropped and the corpus re-embedded. That is
+ * destructive and belongs to the host, never to a boot-time `ensureSchema`.
+ */
+export class RedisVectorSchemaMismatchError extends Error {
+  constructor(
+    /** The RediSearch index that was inspected. */
+    readonly index: string,
+    /** The index attribute that differs (e.g. `embedding`, `meta_tenant`). */
+    readonly field: string,
+    /** What this store is configured for. */
+    readonly expected: string,
+    /** What `FT.INFO` reports the live index has. */
+    readonly actual: string,
+    remedy: string,
+  ) {
+    super(
+      `RediSearch index "${index}" disagrees with this RedisVectorStore's configuration: ` +
+        `field "${field}" is ${actual}, expected ${expected}. ${remedy}`,
+    );
+    this.name = 'RedisVectorSchemaMismatchError';
+  }
+}
+
 export interface RedisVectorStoreOptions {
   /** RediSearch index name. Default `agent_rag_idx`. */
   index?: string;
@@ -66,14 +96,80 @@ export class RedisVectorStore implements LexicalVectorStore {
     this.lexicalScorer = options.lexicalScorer ?? 'BM25';
   }
 
-  /** Idempotent: create the HNSW/cosine index if `FT.INFO` says it doesn't exist yet. */
+  /**
+   * Idempotent, and drift-aware: create the HNSW/cosine index if `FT.INFO` says it doesn't exist —
+   * and if it DOES exist, compare what's there against this store's configuration instead of
+   * assuming they agree. An index that outlives a config change is the normal case (schemas live in
+   * Redis, config lives in a redeployed process), and the two failure modes it produces are both
+   * invisible at runtime: a `filterableFields` entry added later has no `meta_*` TAG, so every search
+   * filtering on it matches *nothing*; a changed `dimensions` leaves the index on the old width, so
+   * writes are rejected or KNN ranks garbage. Neither raises anything on its own.
+   *
+   * The two are repaired differently, because only one of them CAN be repaired:
+   *
+   * - **A missing filterable TAG is additive** → `FT.ALTER … SCHEMA ADD`. Nothing that already works
+   *   changes, so doing it automatically is safe. Note the chunks written *before* the alter carry no
+   *   `meta_*` hash field at all (`upsert` only writes the fields configured at the time), so they
+   *   only become filterable on that key once they're re-ingested — the schema is repaired here, the
+   *   backfill is the host's call.
+   * - **A dimension (or field-type) change is not repairable** → {@link RedisVectorSchemaMismatchError}.
+   *   It needs a drop + full reindex, which would destroy the host's corpus; failing loudly at boot is
+   *   the only honest option.
+   *
+   * If `FT.INFO` comes back in a shape this parser doesn't recognise, no drift is inferred — an
+   * unreadable reply must not be turned into a false alarm that blocks a boot.
+   */
   async ensureSchema(): Promise<void> {
+    let info: unknown;
     try {
-      await this.client.sendCommand(['FT.INFO', this.index]);
-      return;
+      info = await this.client.sendCommand(['FT.INFO', this.index]);
     } catch {
-      // index missing → create it below
+      await this.createIndex();
+      return;
     }
+    await this.reconcileSchema(info);
+  }
+
+  /** Repair what can be repaired in place; throw on what can't. */
+  private async reconcileSchema(info: unknown): Promise<void> {
+    const attributes = parseIndexAttributes(info);
+    if (attributes.size === 0) {
+      return;
+    }
+
+    const vector = attributes.get('embedding');
+    if (vector?.dimensions !== undefined && vector.dimensions !== this.dimensions) {
+      throw new RedisVectorSchemaMismatchError(
+        this.index,
+        'embedding',
+        `DIM ${this.dimensions}`,
+        `DIM ${vector.dimensions}`,
+        `A vector field's width is fixed at FT.CREATE and every stored embedding has the old one, so this cannot be altered in place: drop the index (FT.DROPINDEX ${this.index} DD) and re-ingest with the new embedding model.`,
+      );
+    }
+
+    const missing: string[] = [];
+    for (const field of this.filterableFields) {
+      const name = `meta_${field}`;
+      const existing = attributes.get(name);
+      if (existing === undefined) {
+        missing.push(name);
+      } else if (existing.type !== 'TAG') {
+        throw new RedisVectorSchemaMismatchError(
+          this.index,
+          name,
+          'TAG',
+          existing.type,
+          `A field's type cannot be changed in place: drop the index (FT.DROPINDEX ${this.index} DD) and re-ingest, or rename the metadata key.`,
+        );
+      }
+    }
+    for (const name of missing) {
+      await this.client.sendCommand(['FT.ALTER', this.index, 'SCHEMA', 'ADD', name, 'TAG']);
+    }
+  }
+
+  private async createIndex(): Promise<void> {
     const schema: string[] = ['text', 'TEXT', 'source', 'TAG', 'metadata_json', 'TEXT', 'NOINDEX'];
     for (const field of this.filterableFields) {
       schema.push(`meta_${field}`, 'TAG');
@@ -271,6 +367,72 @@ export class RedisVectorStore implements LexicalVectorStore {
     ]);
     return parseSearchReply(reply, this.prefix, 'lexical');
   }
+}
+
+/** One attribute as the live index reports it — enough to spot the drift that matters. */
+interface IndexAttribute {
+  /** `TEXT` / `TAG` / `VECTOR`. */
+  type: string;
+  /** `VECTOR` fields only: the width the index was created with. */
+  dimensions?: number;
+}
+
+/**
+ * Parse `FT.INFO`'s `attributes` into `attribute name → { type, dimensions }`, tolerating both wire
+ * shapes exactly like {@link parseSearchReply} does: the RESP2 flat key/value array (whose attributes
+ * are themselves flat key/value arrays) and node-redis's RESP3 object (attributes as objects).
+ * Unknown shapes yield an empty map, which callers read as "can't tell" rather than "nothing there".
+ */
+function parseIndexAttributes(reply: unknown): Map<string, IndexAttribute> {
+  const attributes = new Map<string, IndexAttribute>();
+  for (const entry of readInfoField(reply, 'attributes')) {
+    const fields = readKeyValues(entry);
+    const name = fields.attribute ?? fields.identifier;
+    if (name === undefined) {
+      continue;
+    }
+    const dim = Number(fields.dim);
+    attributes.set(name, {
+      type: (fields.type ?? '').toUpperCase(),
+      ...(fields.dim !== undefined && Number.isFinite(dim) ? { dimensions: dim } : {}),
+    });
+  }
+  return attributes;
+}
+
+/** Read one top-level `FT.INFO` field as an array, from either the RESP2 pair-array or RESP3 object. */
+function readInfoField(reply: unknown, key: string): unknown[] {
+  if (Array.isArray(reply)) {
+    for (let index = 0; index + 1 < reply.length; index += 2) {
+      if (toStr(reply[index]) === key) {
+        const value = reply[index + 1];
+        return Array.isArray(value) ? value : [];
+      }
+    }
+    return [];
+  }
+  if (typeof reply === 'object' && reply !== null && key in reply) {
+    const value = (reply as Record<string, unknown>)[key];
+    return Array.isArray(value) ? value : [];
+  }
+  return [];
+}
+
+/** Flatten one attribute entry (RESP2 pair-array or RESP3 object) into lower-cased string fields. */
+function readKeyValues(entry: unknown): Record<string, string | undefined> {
+  const fields: Record<string, string | undefined> = {};
+  if (Array.isArray(entry)) {
+    for (let index = 0; index + 1 < entry.length; index += 2) {
+      fields[toStr(entry[index]).toLowerCase()] = toStr(entry[index + 1]);
+    }
+    return fields;
+  }
+  if (typeof entry === 'object' && entry !== null) {
+    for (const [key, value] of Object.entries(entry)) {
+      fields[key.toLowerCase()] = toStr(value);
+    }
+  }
+  return fields;
 }
 
 /** RediSearch expects a little-endian FLOAT32 buffer for the query/stored vector. */

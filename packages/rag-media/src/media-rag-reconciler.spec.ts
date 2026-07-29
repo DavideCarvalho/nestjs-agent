@@ -10,8 +10,14 @@ import {
 } from './media-rag-reconciler.js';
 import { defaultTextExtractor } from './text-extractor.js';
 
+const FILES: Record<string, Buffer> = {
+  's3:docs/a.txt': Buffer.from('alpha document about refunds'),
+  's3:docs/b.txt': Buffer.from('bravo document about shipping'),
+  's3:docs/c.txt': Buffer.from('charlie document about returns'),
+};
+
 function attachEvent(overrides: Partial<MediaAttachEvent> = {}): MediaAttachEvent {
-  return {
+  const event: MediaAttachEvent = {
     id: 'media-1',
     ownerType: 'user',
     ownerId: 'alice',
@@ -22,6 +28,12 @@ function attachEvent(overrides: Partial<MediaAttachEvent> = {}): MediaAttachEven
     mimeType: 'text/plain',
     ...overrides,
   };
+  // Declared size defaults to the truth: ingestion stamps the REAL byte length as the fingerprint,
+  // so a fixture that declares a size its bytes don't have is drift, and would (correctly) re-ingest.
+  const bytes = FILES[`${event.disk}:${event.path}`];
+  return bytes === undefined || overrides.size !== undefined
+    ? event
+    : { ...event, size: bytes.byteLength };
 }
 
 function buildDeps(files: Record<string, Buffer>, overrides: Partial<MediaIngestionDeps> = {}) {
@@ -45,11 +57,7 @@ function buildDeps(files: Record<string, Buffer>, overrides: Partial<MediaIngest
 
 describe('reconcileMediaRag', () => {
   it('ingests media missing from the index and removes indexed orphans', async () => {
-    const { deps, store } = buildDeps({
-      's3:docs/a.txt': Buffer.from('alpha document about refunds'),
-      's3:docs/b.txt': Buffer.from('bravo document about shipping'),
-      's3:docs/c.txt': Buffer.from('charlie document about returns'),
-    });
+    const { deps, store } = buildDeps(FILES);
     const eventA = attachEvent({ id: 'a', path: 'docs/a.txt' });
     const eventB = attachEvent({ id: 'b', path: 'docs/b.txt' });
     const eventC = attachEvent({ id: 'c', path: 'docs/c.txt' });
@@ -76,11 +84,7 @@ describe('reconcileMediaRag', () => {
   });
 
   it('is idempotent: a second run touches nothing', async () => {
-    const { deps, store } = buildDeps({
-      's3:docs/a.txt': Buffer.from('alpha document about refunds'),
-      's3:docs/b.txt': Buffer.from('bravo document about shipping'),
-      's3:docs/c.txt': Buffer.from('charlie document about returns'),
-    });
+    const { deps, store } = buildDeps(FILES);
     const eventA = attachEvent({ id: 'a', path: 'docs/a.txt' });
     const eventB = attachEvent({ id: 'b', path: 'docs/b.txt' });
     const eventC = attachEvent({ id: 'c', path: 'docs/c.txt' });
@@ -122,5 +126,26 @@ describe('reconcileMediaRag', () => {
     const documents = await store.listDocuments();
     expect(documents).toHaveLength(1);
     expect(documents[0]?.metadata?.size).toBe(55);
+  });
+
+  it('compares the fingerprint against statFile, not the declared size, when statFile is wired', async () => {
+    const files: Record<string, Buffer> = { 's3:docs/a.txt': Buffer.from('the original body') };
+    const { deps, store } = buildDeps(files, {
+      statFile: async (disk, path) => files[`${disk}:${path}`]?.byteLength ?? 0,
+    });
+    // the attach record's declared size is wrong (a client-supplied lie) and stays wrong
+    const lying = attachEvent({ id: 'a', path: 'docs/a.txt', size: 0 });
+    await ingestMediaFile(lying, deps);
+
+    const source: MediaSource = { listMedia: async () => [lying] };
+    const query = { ownerType: 'user', ownerId: 'alice', collection: 'kb' };
+
+    // real-vs-real: no phantom drift, so no re-ingest churn on every pass
+    expect(await reconcileMediaRag(query, { ...deps, source })).toEqual({
+      ingested: [],
+      reingested: [],
+      removed: [],
+    });
+    expect((await store.listDocuments())[0]?.metadata?.size).toBe(17);
   });
 });
