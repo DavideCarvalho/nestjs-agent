@@ -6,6 +6,7 @@ import { FilteredRetriever } from './filtered-retriever.js';
 import { chunkDocuments, ingestChunks, ingestDocuments } from './ingest.js';
 import { MemoryVectorStore } from './memory-vector-store.js';
 import { createRetrievalTool } from './retrieval-tool.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 describe('chunkText', () => {
   it('returns the whole text as one chunk when under the size limit', () => {
@@ -138,6 +139,95 @@ describe('MemoryVectorStore.listDocuments', () => {
     expect(alice.map((document) => document.id).sort()).toEqual(['alice-1', 'alice-2']);
     expect(alice.every((document) => document.metadata?.owner === 'alice')).toBe(true);
     expect(await store.listDocuments()).toHaveLength(3);
+  });
+});
+
+describe('MemoryVectorStore enumeration + bulk deletion', () => {
+  async function corpus(): Promise<MemoryVectorStore> {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    await ingestDocuments(
+      [
+        {
+          id: 'kb-a',
+          text: 'a b c d e f g h',
+          metadata: { collection: 'kb', audience: ['public'] },
+        },
+        { id: 'kb-b', text: 'more knowledge base content', metadata: { collection: 'kb' } },
+        {
+          id: 'other-a',
+          text: 'a different collection entirely',
+          metadata: { collection: 'other' },
+        },
+      ],
+      { embedder, store, chunkSize: 12, overlap: 0 },
+    );
+    return store;
+  }
+
+  it('listDocumentIds returns the ids listDocuments would, without the metadata', async () => {
+    const store = await corpus();
+    expect((await store.listDocumentIds()).sort()).toEqual(['kb-a', 'kb-b', 'other-a']);
+    expect((await store.listDocumentIds({ collection: 'kb' })).sort()).toEqual(['kb-a', 'kb-b']);
+    expect(await store.listDocumentIds({ audience: [] })).toEqual([]);
+  });
+
+  it('countChunks counts chunks, not documents', async () => {
+    const store = await corpus();
+    const all = await store.countChunks();
+    const kb = await store.countChunks({ collection: 'kb' });
+    expect(all).toBeGreaterThan(3); // kb-a alone chunks into several
+    expect(kb).toBeLessThan(all);
+    expect(kb + (await store.countChunks({ collection: 'other' }))).toBe(all);
+    expect(await store.countChunks({ collection: [] })).toBe(0);
+  });
+
+  it('removeMany drops every chunk of every listed document in one pass', async () => {
+    const store = await corpus();
+    await store.removeMany(['kb-a', 'other-a']);
+    expect((await store.listDocumentIds()).sort()).toEqual(['kb-b']);
+    await store.removeMany([]); // no-op, not a wipe
+    expect(await store.listDocumentIds()).toEqual(['kb-b']);
+  });
+
+  it('removeWhere deletes only the matching scope and reports the chunk count', async () => {
+    const store = await corpus();
+    const kbChunks = await store.countChunks({ collection: 'kb' });
+    const otherChunks = await store.countChunks({ collection: 'other' });
+
+    const removed = await store.removeWhere({ collection: 'kb' });
+
+    expect(removed).toBe(kbChunks);
+    expect(await store.countChunks({ collection: 'kb' })).toBe(0);
+    expect(await store.countChunks({ collection: 'other' })).toBe(otherChunks);
+    expect(await store.listDocumentIds()).toEqual(['other-a']);
+  });
+
+  it('removeWhere with an empty-array filter deletes NOTHING (the deny primitive)', async () => {
+    const store = await corpus();
+    const before = await store.countChunks();
+
+    expect(await store.removeWhere({ audience: [] })).toBe(0);
+    expect(await store.removeWhere({ collection: 'kb', audience: [] })).toBe(0);
+
+    expect(await store.countChunks()).toBe(before);
+    expect((await store.listDocumentIds()).sort()).toEqual(['kb-a', 'kb-b', 'other-a']);
+  });
+
+  it('removeWhere refuses an empty filter object instead of wiping the store', async () => {
+    const store = await corpus();
+    const before = await store.countChunks();
+
+    await expect(store.removeWhere({})).rejects.toBeInstanceOf(UnsafeRemovalError);
+    await expect(store.removeWhere({})).rejects.toMatchObject({ reason: 'empty-filter' });
+
+    expect(await store.countChunks()).toBe(before);
+  });
+
+  it('deliberate mass deletion stays possible, just explicit', async () => {
+    const store = await corpus();
+    await store.removeMany(await store.listDocumentIds());
+    expect(await store.countChunks()).toBe(0);
   });
 });
 

@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RedisSearchClient } from './redis-vector-store.js';
 import { RedisVectorSchemaMismatchError, RedisVectorStore } from './redis-vector-store.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 /** FT.INFO as RESP2: a flat key/value array whose attributes are themselves flat key/value arrays. */
 function resp2Info(options: { dim: number; tags: string[] }): unknown[] {
@@ -127,5 +128,121 @@ describe('RedisVectorStore.ensureSchema (RESP2 replies)', () => {
 
     // no false alarm, and no blind ALTER against an index we know nothing about
     expect(commands.map((args) => String(args[0]))).toEqual(['FT.INFO']);
+  });
+});
+
+/**
+ * A scripted client, so a test can assert on the exact commands the store emits — including the ones
+ * it must NOT emit. The db suite proves the behaviour against a real engine; this proves that the
+ * refusals happen *before* anything reaches the wire, which is the only place you can see that a
+ * denied removal never even asked Redis to delete.
+ */
+function scriptedClient(replies: Record<string, unknown> | ((verb: string) => unknown)) {
+  const commands: (string | Buffer)[][] = [];
+  const client: RedisSearchClient = {
+    sendCommand: vi.fn(async (args: (string | Buffer)[]) => {
+      commands.push(args);
+      const verb = String(args[0]);
+      return typeof replies === 'function' ? replies(verb) : (replies[verb] ?? 'OK');
+    }),
+  };
+  return { client, commands, verbs: () => commands.map((args) => String(args[0])) };
+}
+
+describe('RedisVectorStore.removeWhere (guards, before anything hits the wire)', () => {
+  function store(client: RedisSearchClient): RedisVectorStore {
+    return new RedisVectorStore(client, {
+      index: 'idx',
+      prefix: 'p:',
+      dimensions: 3,
+      filterableFields: ['tenant', 'audience'],
+    });
+  }
+
+  it('an empty-array filter value sends NO command at all and removes 0', async () => {
+    const { client, verbs } = scriptedClient({});
+    expect(await store(client).removeWhere({ audience: [] })).toBe(0);
+    // the point: not "it deleted nothing because the query matched nothing" — it never asked.
+    expect(verbs()).toEqual([]);
+  });
+
+  it('a deny ANDed with a real scope still denies', async () => {
+    const { client, verbs } = scriptedClient({});
+    expect(await store(client).removeWhere({ tenant: 't1', audience: [] })).toBe(0);
+    expect(verbs()).toEqual([]);
+  });
+
+  it('an empty filter object throws rather than emitting the `*` query', async () => {
+    const { client, verbs } = scriptedClient({});
+    await expect(store(client).removeWhere({})).rejects.toBeInstanceOf(UnsafeRemovalError);
+    expect(verbs()).toEqual([]);
+  });
+
+  it('a key that is not a declared filterable field throws, naming it', async () => {
+    const { client, verbs } = scriptedClient({});
+    await expect(store(client).removeWhere({ collection: 'kb' })).rejects.toMatchObject({
+      reason: 'unindexed-field',
+    });
+    await expect(store(client).removeWhere({ collection: 'kb' })).rejects.toThrow(/"collection"/);
+    expect(verbs()).toEqual([]);
+  });
+
+  it('a scoped filter issues a NOCONTENT search and DELs exactly its keys', async () => {
+    // one page of two keys, then an empty page to end the loop
+    let searches = 0;
+    const { client, commands, verbs } = scriptedClient((verb) => {
+      if (verb !== 'FT.SEARCH') {
+        return 2;
+      }
+      searches += 1;
+      return searches === 1 ? [2, 'p:doc#0', 'p:doc#1'] : [0];
+    });
+
+    expect(await store(client).removeWhere({ tenant: 't1' })).toBe(2);
+    expect(verbs()).toEqual(['FT.SEARCH', 'DEL', 'FT.SEARCH']);
+    expect(commands[0]).toContain('NOCONTENT');
+    expect(commands[0]).toContain('(@meta_tenant:{t1})');
+    expect(commands[1]).toEqual(['DEL', 'p:doc#0', 'p:doc#1']);
+  });
+
+  it('stops instead of spinning when DEL reports nothing removed', async () => {
+    const { client, verbs } = scriptedClient({ 'FT.SEARCH': [1, 'p:ghost#0'], DEL: 0 });
+    expect(await store(client).removeWhere({ tenant: 't1' })).toBe(0);
+    expect(verbs()).toEqual(['FT.SEARCH', 'DEL']);
+  });
+});
+
+describe('RedisVectorStore enumeration (RESP2 replies)', () => {
+  it('countChunks reads the total out of a LIMIT 0 0 search', async () => {
+    const { client, commands } = scriptedClient({ 'FT.SEARCH': [42] });
+    const store = new RedisVectorStore(client, { index: 'idx', prefix: 'p:', dimensions: 3 });
+
+    expect(await store.countChunks()).toBe(42);
+    expect(commands[0]?.slice(-6)).toEqual(['NOCONTENT', 'LIMIT', '0', '0', 'DIALECT', '2']);
+    expect(commands[0]).toContain('*');
+  });
+
+  it('countChunks denies on an empty-array filter without querying', async () => {
+    const { client, verbs } = scriptedClient({ 'FT.SEARCH': [42] });
+    const store = new RedisVectorStore(client, {
+      index: 'idx',
+      prefix: 'p:',
+      dimensions: 3,
+      filterableFields: ['tenant'],
+    });
+    expect(await store.countChunks({ tenant: [] })).toBe(0);
+    expect(verbs()).toEqual([]);
+  });
+
+  it('listDocumentIds collapses NOCONTENT keys to distinct document ids', async () => {
+    const { client, commands } = scriptedClient({
+      'FT.SEARCH': [3, 'p:doc-a#0', 'p:doc-a#1', 'p:doc-b#0'],
+    });
+    const store = new RedisVectorStore(client, { index: 'idx', prefix: 'p:', dimensions: 3 });
+
+    expect((await store.listDocumentIds()).sort()).toEqual(['doc-a', 'doc-b']);
+    expect(commands[0]).toContain('NOCONTENT');
+    // no metadata_json asked for, so nothing to JSON.parse
+    expect(commands[0]).not.toContain('metadata_json');
   });
 });

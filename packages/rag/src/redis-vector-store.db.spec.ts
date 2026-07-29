@@ -4,13 +4,13 @@
 import type { EmbeddingProvider } from '@dudousxd/nestjs-agent-core';
 import { type RedisClientType, createClient } from 'redis';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { EmbeddingRetriever } from './embedding-retriever.js';
 import { HybridRetriever } from './hybrid-retriever.js';
 import { LexicalRetriever } from './lexical-retriever.js';
 import type { RedisSearchClient } from './redis-vector-store.js';
 import { RedisVectorSchemaMismatchError, RedisVectorStore } from './redis-vector-store.js';
-import { isLexicalVectorStore } from './vector-store.js';
+import { UnsafeRemovalError, isLexicalVectorStore } from './vector-store.js';
 
 let container: StartedTestContainer;
 let client: RedisClientType;
@@ -473,6 +473,154 @@ describe('RedisVectorStore.updateMetadata (real RediSearch, dual representation)
 
   it('returns 0 for a document that is not indexed, instead of throwing', async () => {
     await expect(mutable.updateMetadata('never-ingested', { tenant: 'x' })).resolves.toBe(0);
+  });
+});
+
+/**
+ * Enumeration + bulk deletion against a real engine, on their own index so a destructive test can
+ * never reach the corpus the other suites share. The properties under test are the ones a fake client
+ * cannot establish: that the emitted queries are *valid* RediSearch, that a scoped delete really
+ * leaves neighbouring scopes alone, and — the one that matters most — that the empty-array deny
+ * deletes nothing rather than everything.
+ */
+describe('RedisVectorStore enumeration + bulk deletion (real RediSearch)', () => {
+  let enumStore: RedisVectorStore;
+
+  /** Rebuild a two-collection corpus from scratch, so each destructive case starts from a known set. */
+  async function seed(): Promise<void> {
+    for (const key of await client.keys('enum:*')) {
+      await client.del(key);
+    }
+    await enumStore.upsert([
+      { id: 'kb-a#0', text: 'kb a zero', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      { id: 'kb-a#1', text: 'kb a one', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      { id: 'kb-b#0', text: 'kb b zero', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      {
+        id: 'ops-a#0',
+        text: 'ops a zero',
+        embedding: [0, 1, 0],
+        metadata: { collection: 'ops' },
+      },
+      {
+        id: 'ops-a#1',
+        text: 'ops a one',
+        embedding: [0, 1, 0],
+        metadata: { collection: 'ops' },
+      },
+      // a document stored under a bare id (no `#n`), plus a multi-valued audience tag
+      {
+        id: 'bare',
+        text: 'bare id document',
+        embedding: [0, 0, 1],
+        metadata: { collection: 'ops', audience: ['public', 'role:ADMIN'] },
+      },
+    ]);
+  }
+
+  beforeAll(async () => {
+    const search: RedisSearchClient = { sendCommand: (args) => client.sendCommand(args) };
+    enumStore = new RedisVectorStore(search, {
+      dimensions: 3,
+      index: 'enum_idx',
+      prefix: 'enum:',
+      filterableFields: ['collection', 'audience'],
+    });
+    await enumStore.ensureSchema();
+  });
+
+  beforeEach(seed);
+
+  it('countChunks counts chunks without fetching them', async () => {
+    expect(await enumStore.countChunks()).toBe(6);
+    expect(await enumStore.countChunks({ collection: 'kb' })).toBe(3);
+    expect(await enumStore.countChunks({ collection: 'ops' })).toBe(3);
+    expect(await enumStore.countChunks({ audience: ['role:ADMIN'] })).toBe(1);
+  });
+
+  it('listDocumentIds returns the same ids as listDocuments, with no metadata round-trip', async () => {
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(['bare', 'kb-a', 'kb-b', 'ops-a']);
+    expect((await enumStore.listDocumentIds({ collection: 'kb' })).sort()).toEqual([
+      'kb-a',
+      'kb-b',
+    ]);
+    // identical id set to the metadata-carrying enumeration it replaces
+    const viaDocuments = (await enumStore.listDocuments()).map((document) => document.id).sort();
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(viaDocuments);
+  });
+
+  it('removeMany drops every chunk of every id — including a bare-id document — in one scan', async () => {
+    await enumStore.removeMany(['kb-a', 'bare']);
+
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(['kb-b', 'ops-a']);
+    expect(await enumStore.countChunks()).toBe(3);
+    // and it did not reach into the *other* suites' prefixes
+    expect(await store.countChunks({ tenant: 'ld-t1' })).toBeGreaterThan(0);
+  });
+
+  it('removeMany([]) is a no-op, not a wipe', async () => {
+    await enumStore.removeMany([]);
+    expect(await enumStore.countChunks()).toBe(6);
+  });
+
+  // ── the destructive properties ────────────────────────────────────────────────────────────────
+  it('removeWhere scoped to one collection leaves the other collection intact', async () => {
+    const removed = await enumStore.removeWhere({ collection: 'kb' });
+
+    expect(removed).toBe(3);
+    expect(await enumStore.countChunks({ collection: 'kb' })).toBe(0);
+    expect(await enumStore.countChunks({ collection: 'ops' })).toBe(3);
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(['bare', 'ops-a']);
+  });
+
+  it('DELETES NOTHING for an empty-array filter — the deny primitive, against a real engine', async () => {
+    // the corpus this would wipe if the guard were treated as "no filter"
+    expect(await enumStore.countChunks()).toBe(6);
+
+    expect(await enumStore.removeWhere({ audience: [] })).toBe(0);
+    expect(await enumStore.removeWhere({ collection: [] })).toBe(0);
+    // a deny ANDed with a scope that DOES match plenty still denies
+    expect(await enumStore.removeWhere({ collection: 'kb', audience: [] })).toBe(0);
+
+    expect(await enumStore.countChunks()).toBe(6);
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(['bare', 'kb-a', 'kb-b', 'ops-a']);
+  });
+
+  it('refuses an empty filter object instead of deleting the corpus', async () => {
+    await expect(enumStore.removeWhere({})).rejects.toBeInstanceOf(UnsafeRemovalError);
+    await expect(enumStore.removeWhere({})).rejects.toMatchObject({ reason: 'empty-filter' });
+    expect(await enumStore.countChunks()).toBe(6);
+  });
+
+  it('refuses a filter key the index has no TAG for, rather than matching who-knows-what', async () => {
+    await expect(enumStore.removeWhere({ tenant: 't1' })).rejects.toMatchObject({
+      reason: 'unindexed-field',
+    });
+    expect(await enumStore.countChunks()).toBe(6);
+  });
+
+  it('an array filter value is OR here too, and removes only the union', async () => {
+    expect(await enumStore.removeWhere({ audience: ['role:ADMIN', 'nobody'] })).toBe(1);
+    expect((await enumStore.listDocumentIds()).sort()).toEqual(['kb-a', 'kb-b', 'ops-a']);
+  });
+
+  it('pages past a single DEL batch — a corpus larger than the batch is fully removed', async () => {
+    const many = Array.from({ length: 600 }, (_, index) => ({
+      id: `bulk-${index}#0`,
+      text: `bulk chunk ${index}`,
+      embedding: [1, 0, 0],
+      metadata: { collection: 'bulk' },
+    }));
+    await enumStore.upsert(many);
+    expect(await enumStore.countChunks({ collection: 'bulk' })).toBe(600);
+
+    expect(await enumStore.removeWhere({ collection: 'bulk' })).toBe(600);
+    expect(await enumStore.countChunks({ collection: 'bulk' })).toBe(0);
+    expect(await enumStore.countChunks({ collection: 'kb' })).toBe(3);
+  });
+
+  it('deliberate mass deletion stays available, just spelled out', async () => {
+    await enumStore.removeMany(await enumStore.listDocumentIds());
+    expect(await enumStore.countChunks()).toBe(0);
   });
 });
 

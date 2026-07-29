@@ -3,9 +3,10 @@
 // Runs only under `pnpm test:db`.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PgClient } from './pg-vector-store.js';
 import { PgVectorStore } from './pg-vector-store.js';
+import { UnsafeRemovalError } from './vector-store.js';
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -178,5 +179,69 @@ describe('PgVectorStore.updateMetadata (real jsonb)', () => {
     expect(await store.updateMetadata('never-ingested', { owner: 'u1' })).toBe(0);
     expect(await store.updateMetadata('um-doc', {})).toBe(0);
     expect(await store.updateMetadata('um-doc', { owner: undefined })).toBe(0);
+  });
+});
+
+/** The enumeration capability on its own table, so a destructive case can't reach the suite above. */
+describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
+  let enumStore: PgVectorStore;
+
+  async function seed(): Promise<void> {
+    await pool.query('TRUNCATE enum_chunks');
+    await enumStore.upsert([
+      { id: 'kb-a#0', text: 'kb a zero', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      { id: 'kb-a#1', text: 'kb a one', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      { id: 'kb-b#0', text: 'kb b zero', embedding: [1, 0, 0], metadata: { collection: 'kb' } },
+      { id: 'ops-a#0', text: 'ops a zero', embedding: [0, 1, 0], metadata: { collection: 'ops' } },
+      {
+        id: 'bare',
+        text: 'bare id',
+        embedding: [0, 0, 1],
+        metadata: { collection: 'ops', audience: ['public', 'role:ADMIN'] },
+      },
+    ]);
+  }
+
+  beforeAll(async () => {
+    const client: PgClient = {
+      query: (sql, params) => pool.query(sql, params).then((result) => result.rows),
+    };
+    enumStore = new PgVectorStore(client, { dimensions: 3, table: 'enum_chunks' });
+    await enumStore.ensureSchema();
+  });
+
+  beforeEach(seed);
+
+  it('countChunks and listDocumentIds agree with the metadata-carrying enumeration', async () => {
+    expect(await enumStore.countChunks()).toBe(5);
+    expect(await enumStore.countChunks({ collection: 'kb' })).toBe(3);
+    expect(await enumStore.countChunks({ audience: ['role:ADMIN'] })).toBe(1);
+    expect(await enumStore.listDocumentIds()).toEqual(['bare', 'kb-a', 'kb-b', 'ops-a']);
+    expect(await enumStore.listDocumentIds({ collection: 'kb' })).toEqual(['kb-a', 'kb-b']);
+    expect(await enumStore.listDocumentIds({ collection: [] })).toEqual([]);
+  });
+
+  it('removeMany deletes N documents in one statement, bare ids included', async () => {
+    await enumStore.removeMany(['kb-a', 'bare']);
+    expect(await enumStore.listDocumentIds()).toEqual(['kb-b', 'ops-a']);
+    await enumStore.removeMany([]);
+    expect(await enumStore.countChunks()).toBe(2);
+  });
+
+  it('removeWhere scoped to one collection leaves the other intact', async () => {
+    expect(await enumStore.removeWhere({ collection: 'kb' })).toBe(3);
+    expect(await enumStore.countChunks({ collection: 'kb' })).toBe(0);
+    expect(await enumStore.countChunks({ collection: 'ops' })).toBe(2);
+  });
+
+  it('DELETES NOTHING for an empty-array filter', async () => {
+    expect(await enumStore.removeWhere({ audience: [] })).toBe(0);
+    expect(await enumStore.removeWhere({ collection: 'kb', audience: [] })).toBe(0);
+    expect(await enumStore.countChunks()).toBe(5);
+  });
+
+  it('refuses an empty filter object instead of truncating the table', async () => {
+    await expect(enumStore.removeWhere({})).rejects.toBeInstanceOf(UnsafeRemovalError);
+    expect(await enumStore.countChunks()).toBe(5);
   });
 });
