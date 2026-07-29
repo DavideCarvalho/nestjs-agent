@@ -14,9 +14,11 @@ import { Empty, Panel, Stat } from './ui';
 export function SpendSection({
   overview,
   topThreads,
+  onOpenThread,
 }: {
   overview: SpendOverview;
   topThreads: ThreadSpendRow[];
+  onOpenThread?: ((threadId: string) => void) | undefined;
 }) {
   const [metric, setMetric] = useState<TrendMetric>('costUsd');
   const totals = summarizeSpend(overview.byModel);
@@ -122,7 +124,7 @@ export function SpendSection({
         </Panel>
       </div>
 
-      <TopThreadsSection rows={topThreads} />
+      <TopThreadsSection rows={topThreads} onOpenThread={onOpenThread} />
     </div>
   );
 }

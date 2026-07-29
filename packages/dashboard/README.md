@@ -198,19 +198,37 @@ Mounted at `apiBasePath`:
 | `GET` | `/spend?from=YYYY-MM-DD&to=YYYY-MM-DD` | `{ byModel: ModelSpendRow[], byActor: ActorSpendRow[], trend: UsageTrendPoint[] }` (defaults to the last 30 days) |
 | `GET` | `/tool-calls?limit=` | `ToolCallActivityRow[]` (default 50, max 200) |
 | `GET` | `/threads?limit=` | `ThreadActivityRow[]` (default 50, max 200) |
+| `GET` | `/<runs\|threads\|tool-calls\|approvals>-page?page=&limit=&where[…]=` | `GovernancePage<Row>` — `{ rows, total, page, pageSize }` |
+| `GET` | `/runs/:runId` | `RunDetail` — the run, its thread's headline and its tool calls. `404`s on an unknown id |
+| `GET` | `/threads/:threadId?messages=&runs=` | `ThreadDetail` — the thread, its lifetime usage rollup, newest runs and newest messages |
 | `GET` | `/stream` | SSE of live `aviary:agent:*` events (`{ event, ts, payload }`) |
 
 ## SPA sections
 
-- **Spend & usage** — headline $ + tokens, by-model donut + legend, daily trend (cost/tokens toggle).
+- **Spend & usage** — headline $ + tokens, by-model donut + legend, daily trend (cost/tokens toggle), top threads by cost.
 - **Models** — per-model requests / in+out tokens / cost / share.
 - **Actors & budgets** — spend per acting ref; usage-vs-budget bar when a daily limit is known.
-- **Runs & tools** — recent tool calls (with a denied/forbidden banner) and recent threads.
+- **Runs & tools** — recent tool calls (with a denied/forbidden banner) and recent threads, both paged and filterable.
+- **Reliability** — success/error rate, retries, p50+p95 duration, failures by error code, run/failure trend, and a paged recent-runs table.
+- **Approvals** — the cross-thread HITL inbox, paged, reporting the full backlog (`N of M`) rather than a silent cap.
+- **Tools** — per-tool volume, failure/rejection rate, and **both** latency percentiles (p50 next to p95 — p95 alone cannot tell an occasionally-hanging tool from a uniformly slow one).
+- **Pricing** — the current per-model rate table plus an upsert form; renders its own "no pricing store bound" state when the host 501s.
 - **Live** — the diagnostics SSE feed, newest-first, with quota/denied events flagged.
+
+Rows are not dead ends: a run, a tool call, a thread and an approval all open a drill-down drawer over the table, and a thread's drawer deep-links to `#/reliability?threadId=…` for every run it made.
+
+### How the SPA is wired
+
+Worth knowing before changing it, because two of these are the reason the console behaves the way it does:
+
+- **One container per section, each owning its own reads** (`src/app/containers/`). Sections that are not on screen issue no requests. The shell keeps exactly two data sources of its own, both because they must outlive the section being viewed: the SSE subscription, and the pending-approvals *count* behind the nav badge.
+- **An error boundary per section** (`SectionBoundary`), so a failing read names itself and offers a retry instead of rendering an empty state that reads as "there is no data". Paged tables render their failures inline instead, next to the last rows that did load.
+- **Freshness is `staleTime`, not an interval.** There is no `refetchInterval`; react-query's `refetchOnWindowFocus` is left on, and the per-query `STALE` values in `src/app/use-governance.ts` decide what that refetches. Aggregates are a minute stale, activity lists fifteen seconds, the approvals queue always.
+- **Suspense reads waterfall.** Two `useSuspenseQuery` calls in one component serialise — the first throws and the second never runs. Reads of equal standing go through `useSuspenseQueries`; see the note in `use-governance.ts`.
 
 ## Typed client
 
-For your own front-end, `@dudousxd/nestjs-agent-dashboard/client` exports `agentClient` (`spend`, `toolCalls`, `threads`, `streamEvents`) with the response types — dependency-free.
+For your own front-end, `@dudousxd/nestjs-agent-dashboard/client` exports `agentClient` (`spend`, `toolCalls`, `threads`, the `*Page` reads, `runDetail`, `threadDetail`, `streamEvents`) with the response types — dependency-free.
 
 ```ts
 import { agentClient } from '@dudousxd/nestjs-agent-dashboard/client';
@@ -222,7 +240,7 @@ const overview = await agentClient.spend({ fromDay: '2026-06-01', toDay: '2026-0
 
 `vite build && tsup && tsc -p tsconfig.client.json` — the SPA compiles to `dist/spa`, the NestJS server to `dist/server` (dual ESM + CJS with decorator metadata + `import.meta.url` shim), and the client types to `dist/client`. The bundled SPA ships in the package, so the UI controller serves it with no extra assets.
 
-`preview.html` renders every section against mock data (no backend) for visual verification.
+`preview.html` renders every section against mock data (no backend) for visual verification — including the drill-down drawers and the failure/loading states, which are otherwise the states a backend-less check can never reach.
 
 ### Charts
 

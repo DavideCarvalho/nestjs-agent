@@ -100,6 +100,42 @@ export function StatusPill({ status }: { status: string }) {
   );
 }
 
+/**
+ * A cell that opens the row's drill-down.
+ *
+ * Renders as plain text when `onOpen` is absent, which is the honest state for a row that has
+ * nothing to open — a tool call recorded before calls carried a run id has no run to show, and a
+ * button that does nothing is worse than no button. Same reason it is used in the mock-data preview,
+ * where no drill-down provider exists.
+ */
+export function OpenCell({
+  label,
+  onOpen,
+  title,
+}: {
+  label: string;
+  onOpen?: (() => void) | undefined;
+  title?: string;
+}) {
+  if (onOpen === undefined) {
+    return (
+      <span className="truncate text-[var(--text)]" title={title ?? label}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={title ?? label}
+      className="max-w-full truncate text-left text-[var(--text)] underline decoration-[var(--line)] decoration-dotted underline-offset-4 transition-colors hover:decoration-[var(--accent)] hover:text-[var(--accent)]"
+    >
+      {label}
+    </button>
+  );
+}
+
 /** An empty-state row for a section that has no data yet. */
 export function Empty({ label }: { label: string }) {
   return (

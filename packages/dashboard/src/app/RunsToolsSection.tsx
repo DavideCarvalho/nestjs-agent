@@ -1,13 +1,14 @@
 import type {
-  GovernancePage,
   ThreadActivityRow,
   ThreadWhere,
   ToolCallActivityRow,
   ToolCallWhere,
 } from '../client/agent-client';
 import { formatCount } from '../client/format-usd';
+import { InlineError } from './SectionBoundary';
 import { AlertIcon } from './icons';
-import { Empty, FilterInput, Pagination, Panel, StatusPill, relTime } from './ui';
+import type { PagedTable } from './paged-table';
+import { Empty, FilterInput, OpenCell, Pagination, Panel, StatusPill, relTime } from './ui';
 
 /** A tool call whose status reads as blocked/failed — surfaced as the "denied/forbidden" signal. */
 function isDenied(status: string): boolean {
@@ -16,33 +17,40 @@ function isDenied(status: string): boolean {
 
 /**
  * Recent tool calls (banner + a paged, filterable table) and a paged, filterable recent-threads
- * table, drawn from the read-model.
+ * table, drawn from the read-model. Both tables open their row: a tool call leads to the run that
+ * requested it, a thread to the conversation.
  */
 export function RunsToolsSection({
   toolCalls,
-  toolCallsPage,
+  toolCallsTable,
   toolCallsWhere,
   onToolCallsToolNameChange,
   onToolCallsStatusChange,
   onToolCallsPageChange,
-  threadsPage,
+  threadsTable,
   threadsWhere,
   onThreadsTitleChange,
   onThreadsPageChange,
+  onOpenRun,
+  onOpenThread,
 }: {
   /** Latest tool calls (unpaged, latest-N) — feeds the denied/forbidden banner. */
   toolCalls: ToolCallActivityRow[];
-  toolCallsPage: GovernancePage<ToolCallActivityRow>;
+  toolCallsTable: PagedTable<ToolCallActivityRow>;
   toolCallsWhere: ToolCallWhere;
   onToolCallsToolNameChange: (value: string) => void;
   onToolCallsStatusChange: (value: string) => void;
   onToolCallsPageChange: (page: number) => void;
-  threadsPage: GovernancePage<ThreadActivityRow>;
+  threadsTable: PagedTable<ThreadActivityRow>;
   threadsWhere: ThreadWhere;
   onThreadsTitleChange: (value: string) => void;
   onThreadsPageChange: (page: number) => void;
+  onOpenRun?: ((runId: string) => void) | undefined;
+  onOpenThread?: ((threadId: string) => void) | undefined;
 }) {
   const denied = toolCalls.filter((call) => isDenied(call.status));
+  const toolCallsPage = toolCallsTable.page;
+  const threadsPage = threadsTable.page;
 
   return (
     <div className="flex flex-col gap-4">
@@ -74,26 +82,50 @@ export function RunsToolsSection({
             </div>
           }
         >
+          {toolCallsTable.error !== null && (
+            <div className="mb-3">
+              <InlineError
+                label="Tool calls"
+                error={toolCallsTable.error}
+                onRetry={toolCallsTable.retry}
+              />
+            </div>
+          )}
           {toolCallsPage.rows.length === 0 ? (
             <Empty label="No tool calls yet" />
           ) : (
             <>
               <ul className="space-y-1">
-                {toolCallsPage.rows.map((call) => (
-                  <li
-                    key={call.toolCallId}
-                    className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
-                  >
-                    <StatusPill status={call.status} />
-                    <span className="mono truncate text-[var(--text)]">{call.toolName}</span>
-                    <span className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
-                      {call.toolType}
-                    </span>
-                    <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
-                      {relTime(call.createdAt)}
-                    </span>
-                  </li>
-                ))}
+                {toolCallsPage.rows.map((call) => {
+                  // Bound out of the row so the null check narrows inside the click handler; a
+                  // pre-rollout call has no run and must render as text, not a dead button.
+                  const runId = call.runId;
+                  return (
+                    <li
+                      key={call.toolCallId}
+                      className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
+                    >
+                      <StatusPill status={call.status} />
+                      <span className="mono min-w-0">
+                        <OpenCell
+                          label={call.toolName}
+                          title={runId ?? 'No run recorded for this call'}
+                          onOpen={
+                            onOpenRun === undefined || runId === null
+                              ? undefined
+                              : () => onOpenRun(runId)
+                          }
+                        />
+                      </span>
+                      <span className="mono rounded border border-[var(--line)] px-1 text-[10px] text-[var(--muted)]">
+                        {call.toolType}
+                      </span>
+                      <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
+                        {relTime(call.createdAt)}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
               <Pagination
                 page={toolCallsPage.page}
@@ -116,6 +148,15 @@ export function RunsToolsSection({
             />
           }
         >
+          {threadsTable.error !== null && (
+            <div className="mb-3">
+              <InlineError
+                label="Threads"
+                error={threadsTable.error}
+                onRetry={threadsTable.retry}
+              />
+            </div>
+          )}
           {threadsPage.rows.length === 0 ? (
             <Empty label="No threads yet" />
           ) : (
@@ -126,8 +167,16 @@ export function RunsToolsSection({
                     key={thread.threadId}
                     className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--panel-2)]"
                   >
-                    <span className="truncate text-[var(--text)]">
-                      {thread.title || thread.threadId}
+                    <span className="min-w-0">
+                      <OpenCell
+                        label={thread.title || thread.threadId}
+                        title={thread.threadId}
+                        onOpen={
+                          onOpenThread === undefined
+                            ? undefined
+                            : () => onOpenThread(thread.threadId)
+                        }
+                      />
                     </span>
                     <span className="mono ml-auto shrink-0 text-[10px] text-[var(--muted)]">
                       {thread.messageCount} msg · {formatCount(thread.totalTokens)} tok

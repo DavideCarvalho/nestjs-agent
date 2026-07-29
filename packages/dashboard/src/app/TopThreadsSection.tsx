@@ -1,9 +1,15 @@
 import type { ThreadSpendRow } from '../client/agent-client';
 import { formatCount, formatUsd } from '../client/format-usd';
-import { Empty, Panel } from './ui';
+import { Empty, OpenCell, Panel } from './ui';
 
 /** Top threads by cost over the range: thread, actor, requests, tokens, and cost. */
-export function TopThreadsSection({ rows }: { rows: ThreadSpendRow[] }) {
+export function TopThreadsSection({
+  rows,
+  onOpenThread,
+}: {
+  rows: ThreadSpendRow[];
+  onOpenThread?: ((threadId: string) => void) | undefined;
+}) {
   return (
     <Panel title="Top threads by cost" subtitle="Highest-spend conversations over the range">
       {rows.length === 0 ? (
@@ -23,10 +29,18 @@ export function TopThreadsSection({ rows }: { rows: ThreadSpendRow[] }) {
             <tbody className="mono tnum">
               {rows.map((row) => (
                 <tr key={row.threadId} className="border-b border-[var(--line-soft)]">
-                  <td className="py-2.5">
-                    <span className="truncate text-[var(--text)]">{row.title || row.threadId}</span>
+                  <td className="max-w-[260px] py-2.5">
+                    <OpenCell
+                      label={row.title || row.threadId}
+                      title={row.threadId}
+                      onOpen={
+                        onOpenThread === undefined ? undefined : () => onOpenThread(row.threadId)
+                      }
+                    />
                   </td>
-                  <td className="py-2.5 truncate text-[var(--muted)]">{row.actorRef}</td>
+                  <td className="truncate py-2.5 text-[var(--muted)]">
+                    {row.actorLabel ?? row.actorRef}
+                  </td>
                   <td className="py-2.5 text-right text-[var(--muted)]">{row.requests}</td>
                   <td className="py-2.5 text-right text-[var(--muted)]">
                     {formatCount(row.totalTokens)}
