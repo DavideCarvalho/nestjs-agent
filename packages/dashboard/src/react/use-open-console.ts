@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ConsoleSessionError,
   type OpenConsoleOptions,
@@ -42,6 +42,9 @@ export function useOpenAgentConsole(options: OpenConsoleOptions = {}): UseOpenCo
         // Deliberately NOT clearing `isPending` on success: the navigation is already underway and
         // this component is about to be torn down. Flipping the button back to idle first produces
         // a visible flicker of "ready to click again" on a page that is leaving.
+        //
+        // "About to be torn down" is true only until the user presses Back — see the `pageshow`
+        // effect below, which is the other half of this decision.
       })
       .catch((cause: unknown) => {
         setError(
@@ -56,6 +59,26 @@ export function useOpenAgentConsole(options: OpenConsoleOptions = {}): UseOpenCo
         );
         setIsPending(false);
       });
+  }, []);
+
+  // The success path above leaves `isPending` stuck on purpose, which is only correct while the
+  // page really is dying. It often isn't: `openAgentConsole` navigates with `location.assign`, and
+  // a browser back/forward-cache hit FREEZES this page instead of destroying it — pressing Back
+  // restores this component with the React state it fell asleep with, so the launcher wakes up
+  // showing a spinner on a button that is disabled forever. Only a bfcache restore fires `pageshow`
+  // with `persisted: true`, which makes it the one signal that distinguishes "you came back" from
+  // "you loaded"; keying off anything looser (a plain `pageshow`, `visibilitychange`, `focus`)
+  // would also fire while a mint is genuinely in flight and reintroduce the flicker the comment
+  // above exists to prevent. So: clear it here, and ONLY here.
+  useEffect(() => {
+    // Guarded rather than assumed: this hook ships in a published package and hosts render it
+    // through SSR, where `window` does not exist. (`window` is never touched at module scope.)
+    if (typeof window === 'undefined') return;
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setIsPending(false);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
   }, []);
 
   const reset = useCallback(() => setError(null), []);
