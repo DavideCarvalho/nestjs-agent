@@ -1,5 +1,181 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.14.0
+
+### Minor Changes
+
+- [#57](https://github.com/DavideCarvalho/nestjs-agent/pull/57) [`c8ba932`](https://github.com/DavideCarvalho/nestjs-agent/commit/c8ba932cf17f230934b6c8bc860e5fbf7b2a12cf) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Sections that fetch only when you open them, fail out loud, and open their rows
+
+  The governance console had one `refetchInterval: 5000` on the QueryClient, every one of its eleven
+  queries mounted unconditionally at the top of `App`, and no error boundary anywhere. Those three
+  facts compound: opening any single section fetched all nine, forever, and when a read failed the
+  section rendered its empty state — "no spend in this range" is what a governance console said when
+  the truth was "I could not ask".
+
+  **One container per section, each owning its own reads.** `src/app/containers/` replaces the wall
+  of hooks in `App` and the props drilled down through `ActiveSection`. A section that is not on
+  screen issues no requests: loading Spend now costs `spend` + `top-threads`, and navigating to
+  Reliability adds `reliability` and nothing else. The shell keeps two data sources of its own,
+  because both have to outlive the section being viewed — the SSE subscription (reopening it per nav
+  would reset the feed and make the header's connection dot lie) and the pending-approvals count
+  behind the nav badge, which is the one number that must be true while an operator is looking
+  somewhere else. It reads `approvalsPage({ page: 1, pageSize: 1 }).total`.
+
+  **An error boundary per section, and error copy that says what to do.** A failed read now names
+  itself, shows what the server actually said, and offers a retry when retrying could plausibly
+  help — `describeError` distinguishes an unreachable API from a rejected session from a `501` that
+  means "this host bound no store", because those lead to three different next actions and a red box
+  saying "error" leads to none. Paged tables render their failures INLINE, next to the last page that
+  did load, rather than throwing the whole section away over one bad page.
+
+  **The interval is gone.** Freshness is `staleTime` per query plus react-query's own
+  `refetchOnWindowFocus`, which the old config had explicitly disabled — fresh the moment someone
+  looks, silent when the tab is in the background. Day-range aggregates go stale after a minute (a
+  minute of traffic moves a 30-day rollup by a rounding error), activity lists after fifteen seconds,
+  the HITL queue immediately, pricing after five.
+
+  Removing the poll made the invalidation gaps it was hiding load-bearing, so both mutations were
+  audited against what they actually change:
+
+  - Deciding an approval invalidated `['approvals']` alone. It also flips that tool call's status,
+    which `tool-calls`, `tool-calls-page` and an open `run-detail` all render, and a rejection
+    increments the tool's `rejected` count in `tool-stats`. All of them now.
+  - Upserting a price invalidated `['pricing']` alone. Cost is priced at READ time —
+    `governance/compute.ts` estimates from the price table for every ledger row with no
+    provider-reported cost — so a price edit retroactively restates historical spend. `spend`,
+    `top-threads` and `thread-detail` are invalidated too, or the console shows a new rate next to
+    totals computed from the old one.
+
+  **Suspense for a section's spine, plain queries for its tables.** `useSuspenseQuery` gives loading
+  and error handling for free but has no `placeholderData`, so a paged table on it would unmount into
+  a fallback on every page click. It also waterfalls, which is measured rather than assumed: with two
+  suspense hooks side by side, loading Spend against a dead API issued `spend` twice and `top-threads`
+  zero times, because the first throws and the render never reaches the second. Equal-standing reads
+  go through `useSuspenseQueries` now.
+
+  **Wired up what the server gained in 0.13.** The approvals inbox is paged over `approvals-page` and
+  states its backlog outright ("2 of 7 waiting") instead of silently truncating at 50 — a queue that
+  hides its own depth is the worst failure a human-in-the-loop surface has. Every table row opens a
+  drill-down drawer: a run shows its full error text (the table could only truncate it), its thread
+  headline and its tool calls; a thread shows its lifetime token/cost rollup, its newest runs and its
+  newest messages, and links to `#/reliability?threadId=…` for all of them, which works because
+  `where[threadId]` on `runs-page` no longer 400s. A `404` from either detail says the row is gone
+  rather than showing a generic failure. The drawer is a native `<dialog>`, so the focus trap, the
+  inert background and Esc-to-close come from the platform. The Tools table shows p50 next to p95.
+
+  `ToolCallActivityRow.runId`, `PendingApprovalRow.runId` and `ToolStatRow.p50ExecutionMs` are
+  REQUIRED in the typed client now. They were optional only because the previous change did not own
+  the mock data that would have broken; the server has always sent all three, and a drill-down that
+  has to null-check a field the API guarantees is a drill-down written against a lie.
+
+  Section-local page and filter state is a deliberate trade: leaving a section and returning clears
+  its filters, in exchange for eight unviewed sections not holding page state for tables they are not
+  rendering. Filters worth surviving a nav belong in the URL, which is what the `threadId` deep link
+  is.
+
+- [#56](https://github.com/DavideCarvalho/nestjs-agent/pull/56) [`7c27376`](https://github.com/DavideCarvalho/nestjs-agent/commit/7c273763eeb6d5841028612d81acc63b2a8dd4eb) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Page the approvals inbox, open a run or a thread, and report p50 next to p95
+
+  The governance read-model could answer "what happened" but not "how much of it is there" or
+  "what happened _here_". Three gaps, one shape of fix.
+
+  **The approvals inbox was capped and silently truncating.** `pendingApprovals(limit)` returns a
+  capped list with no total, so a backlog past the cap was invisible — nothing on screen said so.
+  That is the worst failure a human-in-the-loop queue can have. `approvalsPage` gives it the same
+  paged treatment `runsPage`/`threadsPage`/`toolCallsPage` already have, with a `total` and filters
+  on `toolName`/`threadId`/`actorRef`/`agentName`/day bounds, exposed as `GET approvals-page`.
+  Ordering is `createdAt asc, id asc` — the `id` makes it a total order, and ascending means a newly
+  requested approval appends past the last page instead of shifting the page an operator is reading.
+  `GET approvals` stays: the console's own SPA still calls it, and telescope's inbox table reads the
+  SPI method directly. Telescope's pending-approvals STAT now reads `approvalsPage(...).total`, which
+  replaces an explicitly-documented undercount (it counted a 500-row capped list).
+
+  **Every table row was a dead end.** `runDetail(runId)` returns a run, its owning thread's headline
+  and its tool calls; `threadDetail({ threadId, messageLimit, runLimit })` returns a thread, its
+  lifetime token/cost rollup, its newest runs and its newest messages. One round trip each, and a
+  fixed query count inside — per-message tool-call counts are one batched read, not one per message.
+  Exposed as `GET runs/:runId` and `GET threads/:threadId`, 404 on an unknown id (a console that
+  renders an empty detail instead sends an operator hunting a bug that isn't there). A soft-deleted
+  thread is returned flagged `deleted: true` rather than 404'd — an audit needs the thread it just
+  lost. Run detail carries no cost figure: the token ledger has no run column, so per-run spend is
+  not attributable without a store migration, and inventing a number would be worse than omitting it.
+
+  **`toolStats` reported only a tail.** It had p95 and no measure of the typical call, so a tool whose
+  median is 100ms and whose p95 is 10s looked the same as one that is uniformly slow. Added
+  `p50ExecutionMs` alongside. Not a mean: latency is long-tailed, and an average of nine 100ms calls
+  and one 10s call is ~1s — a number no call in the sample ever produced. Percentiles stay in-process
+  off the sorted sample, as they already were, because MySQL has no `PERCENTILE_CONT` and one portable
+  implementation beats three dialect-specific ones.
+
+  Also in this change:
+
+  - `where[threadId]` on `GET runs-page` now works. Every adapter's `RunWhere` already supported it;
+    only the query parser rejected it, so "show me this thread's runs" 400'd with "Unknown where
+    field" — exactly the follow-up query a drill-down leads to.
+  - `recentThreads`/`threadsPage` no longer issue two queries per row. Both SQL adapters batch the
+    message counts and token totals across the whole page, so a 200-row page costs two statements
+    instead of four hundred round trips.
+  - The typed client (`@dudousxd/nestjs-agent-dashboard/client`) gains `approvalsPage`, `runDetail`
+    and `threadDetail`, and picks up `runId` on the tool-call and pending-approval rows — the server
+    had been sending it and the mirror had drifted.
+
+  `AgentGovernanceQueries` gains three required methods (`approvalsPage`, `runDetail`,
+  `threadDetail`), matching how the paged reads were added. An out-of-tree adapter implementing the
+  interface must add them; all three in-tree adapters (MikroORM, Drizzle, in-memory) do.
+
+- [#54](https://github.com/DavideCarvalho/nestjs-agent/pull/54) [`c303eda`](https://github.com/DavideCarvalho/nestjs-agent/commit/c303eda81d72db799a896e8d651765deb2cd5a03) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Draw the governance console's charts with recharts, so they can be read rather than just looked at.
+
+  The spend trend, the run/failure trend and both share donuts were hand-rolled inline SVG. They had no
+  interactivity of any kind — no hover, no tooltip, no axes — so the only way to learn what a day cost
+  was to guess from the curve's height. The trends were also drawn into a fixed 720-wide `viewBox` with
+  `preserveAspectRatio="none"`, which stretched the geometry horizontally at every other container
+  width; stroke weights and dot radii distorted along with it.
+
+  All three are now recharts, inside a `ResponsiveContainer` that re-measures instead of scaling:
+
+  - Tooltips give the exact value and the day it belongs to. The run/failure tooltip also states that
+    day's failure rate, which previously could only be eyeballed from the gap between two lines.
+  - Real x/y axes, tick labels, and a `<figcaption>` naming the range and the peak — an ops console is
+    read far more often than it is hovered.
+  - Keyboard-navigable plots (recharts' accessibility layer, on by default in v3) and honest semantics:
+    a `<figure>`/`<figcaption>` pair rather than a `role="img"` wrapper around interactive content.
+
+  Chart chrome (axis ticks, grid hairlines, hover cursor, tooltip surface) is themed once in
+  `src/app/chart-ui.tsx` against the console's existing CSS custom properties, so the charts read as
+  part of the console rather than as a library's defaults.
+
+  `recharts` is declared as a real dependency of this package, never as an undeclared import — and it is
+  reachable only from the SPA under `src/app/`, which is pre-built into `dist/spa`. The published
+  `./react` entry still resolves to four modules and pulls in no charting code, so a host that imports
+  `<OpenAgentConsoleButton />` does not get recharts in its bundle. The SPA build now emits recharts as
+  its own chunk (~408 kB raw / ~118 kB gzip) so console releases do not invalidate it in browser caches.
+
+  The pure SVG-geometry modules `trend-path.ts` and `run-trend-path.ts` are gone — recharts owns that
+  projection now — replaced by `trend-summary.ts` (range/peak/total for the captions) and `format-day.ts`
+  (calendar-day labels that never go through `Date`, so a `YYYY-MM-DD` never renders as the day before
+  in a negative-offset timezone). Both are unit-tested, as their predecessors were.
+
+- [#58](https://github.com/DavideCarvalho/nestjs-agent/pull/58) [`2301c39`](https://github.com/DavideCarvalho/nestjs-agent/commit/2301c39cb162c04b44cdc7b40296e01cc3b98174) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Bring the governance console onto the shared Aviary look, and onto shadcn/Base UI primitives.
+
+  The console's neutrals had drifted from the other three consoles on every single value (`#08080b`
+  vs `#09090b`, `#e8e8ee` vs `#e7e7ea`, and four more nobody had chosen). They now match `AVIARY-UI.md`
+  byte for byte, with `--live` adopted for in-flight states; the violet `--accent` stays, because that
+  is the deliberate per-console signature.
+
+  While normalising them this turned up a bug nothing could see: Tailwind 3 cannot apply an opacity
+  modifier to an arbitrary `var()` colour, so `bg-[var(--accent)]/10` compiled to **no rule at all**.
+  Every tinted surface in the console — the active nav pill, the Approve/Reject buttons, the failure
+  panels' borders — was rendering untinted, and a missing background is indistinguishable from one
+  that was meant to be absent. The tokens are now declared as Tailwind colour functions that
+  `color-mix` the modifier in, so those tints exist for the first time.
+
+  The hand-rolled kit is rebuilt on vendored shadcn primitives (Button, Badge, Input, Card, Table,
+  Select, Tabs, Tooltip, Popover, Dialog) generated against those tokens, with Base UI underneath.
+  `Stat`, `BarMeter`, `StatusPill` and `Pagination` are kept but now sit on the same primitives. The
+  drill-down drawer is a Base UI Dialog rather than a native `<dialog>`, so an overlay that has to
+  paint over it can. Base UI, `class-variance-authority`, `clsx` and `tailwind-merge` are
+  devDependencies: this package ships a pre-bundled SPA and its published entries import none of them,
+  so a host installs nothing extra.
+
 ## 0.13.1
 
 ### Patch Changes
