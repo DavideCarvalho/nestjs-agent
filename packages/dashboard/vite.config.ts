@@ -17,6 +17,12 @@ export default defineConfig({
         index: resolve(__dirname, 'index.html'),
         preview: resolve(__dirname, 'preview.html'),
       },
+      output: {
+        // Recharts (with its d3 scales/shapes) is by far the heaviest thing in the bundle. Give it
+        // its own chunk so the console's own code — which changes every release — does not
+        // invalidate a ~400 kB dependency in every browser cache on every deploy.
+        manualChunks: { recharts: ['recharts'] },
+      },
     },
   },
 });
