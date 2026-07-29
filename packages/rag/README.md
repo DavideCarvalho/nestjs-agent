@@ -29,6 +29,48 @@ await ingestDocuments(
 const retriever = new EmbeddingRetriever(embedder, store);
 ```
 
+## Chunking record-shaped text
+
+The default chunker is structure-blind: it fills a `chunkSize` window, breaks at the latest
+paragraph → sentence → word boundary inside it, and carries `overlap` characters across the seam.
+That is the right rule for prose — the two halves are still sentences, and the overlap rescues the
+one that got cut.
+
+It is the wrong rule for text whose boundaries mean something. A spreadsheet flattened to one
+field-labelled record per row has real boundaries the chunker does not know exist, so a cut lands
+mid-record routinely — and the half holding the row identifier and the half holding the value end up
+in different chunks, where **neither can answer a question about that row**. Tell it where the
+records are:
+
+```ts
+await ingestDocuments([{ id: 'mvr-2026', text: rows.join('\n') }], {
+  embedder,
+  store,
+  chunkSize: 800,
+  separator: '\n', // one record per line; a record is never split across chunks
+});
+```
+
+Records are packed greedily up to `chunkSize` and never split — except one longer than `chunkSize`,
+which has nowhere to go and is character-split as usual. That fallback is confined to the single
+record that could not fit, rather than applied to the whole document.
+
+**`overlap` is ignored when `separator` is set**, deliberately. Overlap exists to rescue a sentence a
+boundary cut in half; a boundary that never falls inside a record has nothing to rescue, and carrying
+the previous chunk's tail in would duplicate whole records into their neighbours — paying for the
+same rows twice at embedding time and letting one row match from two places.
+
+Measured on a 200-row, 15-column sheet ingested twice — same bytes, same embedder, same questions,
+only the cut positions differing — blind chunking left 27% of records split, and on questions
+targeting a field on the far side of such a cut, BM25 answered 54/66 (MRR 0.818) against 66/66
+(MRR 1.000) with records kept whole. The dense leg scored 7/66 either way: 200 near-identical rows
+produce near-identical vectors, so that leg cannot do row lookup at all and chunking does not change
+it. The win is the lexical leg's, and it only shows up on questions whose answer sits far from the
+row's rare identifying token — ask about a field next to the vehicle id and both arms score 1.000,
+because BM25 finds that token whatever the chunking did around it.
+
+Leave `separator` unset for prose. Nothing about the default path changed.
+
 ## Two ways to use it with the agent
 
 **Agentic (default) — the model decides when to search:**
@@ -268,8 +310,10 @@ library upgrade. The interface is open, so it can be added later without changin
 
 ## API
 
-- `chunkText(text, { chunkSize?, overlap? })` — overlapping, boundary-aware chunks.
-- `ingestDocuments(docs, { embedder, store, chunkSize?, overlap? })` — chunk → embed → upsert.
+- `chunkText(text, { chunkSize?, overlap?, separator? })` — overlapping, boundary-aware chunks;
+  `separator` packs whole records instead and never splits one (`overlap` is ignored in that mode).
+- `ingestDocuments(docs, { embedder, store, chunkSize?, overlap?, separator? })` — chunk → embed →
+  upsert.
 - `EmbeddingRetriever(embedder, store, { minScore? })` — the core `Retriever` from an embedder +
   vector store. `minScore` drops passages below a similarity floor, so an unanswerable query can
   return nothing.

@@ -29,6 +29,135 @@ describe('chunkText', () => {
   });
 });
 
+describe('chunkText default path is unchanged by the separator option', () => {
+  // Pinned against the pre-separator implementation, mid-word cuts and all. Adding `separator` is
+  // only a minor if a caller who does not pass one gets exactly the bytes they got before, so these
+  // two expectations are copied from the old implementation's output rather than reasoned about.
+  // The cuts they pin ("Epsilon zeta" / "ilon zeta") are also the behaviour record mode exists to
+  // avoid: the chunker breaks at a character offset, not at anything the text means.
+  it('cuts prose where it always did', () => {
+    expect(
+      chunkText(
+        'Alpha beta gamma delta. Epsilon zeta eta theta. Iota kappa lambda mu. Nu xi omicron pi rho sigma.',
+        { chunkSize: 40, overlap: 10 },
+      ),
+    ).toEqual([
+      'Alpha beta gamma delta. Epsilon zeta',
+      'ilon zeta eta theta. Iota kappa lambda',
+      'pa lambda mu. Nu xi omicron pi rho',
+      'on pi rho sigma.',
+    ]);
+  });
+
+  it('cuts paragraphed text where it always did', () => {
+    expect(
+      chunkText(
+        'First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph is longer than the rest of them.',
+        { chunkSize: 45, overlap: 12 },
+      ),
+    ).toEqual([
+      'First paragraph here.\n\nSecond paragraph',
+      'd paragraph here.\n\nThird paragraph is longer',
+      'h is longer than the rest of them.',
+    ]);
+  });
+});
+
+describe('chunkText with a record separator', () => {
+  const record = (row: number): string =>
+    `MVR row ${row} | Vehicle: 4A218${row} | Odometer: ${41000 + row} | Fuel Type: DIESEL | Remarks: none`;
+  const records = Array.from({ length: 40 }, (_, index) => record(index));
+  const document = records.join('\n');
+  const options = { chunkSize: 200, separator: '\n' };
+
+  it('files every record whole, in exactly one chunk', () => {
+    const chunks = chunkText(document, options);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const one of records) {
+      expect(chunks.filter((chunk) => chunk.includes(one))).toHaveLength(1);
+    }
+  });
+
+  it('packs greedily, so a chunk holds more than one record but never exceeds chunkSize', () => {
+    const chunks = chunkText(document, options);
+    expect(chunks.length).toBeLessThan(records.length);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(200);
+    }
+  });
+
+  it('preserves order and loses nothing: the chunks reassemble into the input records', () => {
+    expect(chunkText(document, options).join('\n').split('\n')).toEqual(records);
+  });
+
+  it('ignores overlap — the same chunks come out whatever it is set to', () => {
+    const carried = chunkText(document, { ...options, overlap: 150 });
+    expect(carried).toEqual(chunkText(document, { ...options, overlap: 0 }));
+    // the point of ignoring it: no record is duplicated into its neighbour
+    for (const one of records) {
+      expect(carried.filter((chunk) => chunk.includes(one))).toHaveLength(1);
+    }
+  });
+
+  it('splits a record longer than chunkSize, and leaves its neighbours whole', () => {
+    const oversized = Array.from({ length: 40 }, (_, index) => `word${index}`).join(' ');
+    const chunks = chunkText([record(1), oversized, record(2)].join('\n'), {
+      chunkSize: 100,
+      separator: '\n',
+    });
+    expect(chunks.filter((chunk) => chunk.includes(record(1)))).toHaveLength(1);
+    expect(chunks.filter((chunk) => chunk.includes(record(2)))).toHaveLength(1);
+    expect(chunks.some((chunk) => chunk.includes(oversized))).toBe(false);
+    // the fallback is confined to that one record, and splits it rather than dropping any of it
+    const pieces = chunks.slice(1, -1);
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.join(' ')).toBe(oversized);
+  });
+
+  it('returns nothing for blank input', () => {
+    expect(chunkText('   ', options)).toEqual([]);
+  });
+
+  it('treats text the separator never appears in as a single record', () => {
+    expect(chunkText('one line, no separator in it', options)).toEqual([
+      'one line, no separator in it',
+    ]);
+  });
+
+  it('splits that single record blind when it does not fit', () => {
+    const long = Array.from({ length: 40 }, (_, index) => `word${index}`).join(' ');
+    const chunks = chunkText(long, { chunkSize: 100, separator: '\n' });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join(' ')).toBe(long);
+  });
+
+  it('drops leading, trailing and repeated separators instead of emitting empty records', () => {
+    expect(chunkText('\n\n\nalpha\n\n\nbeta\n\n\n', options)).toEqual(['alpha\nbeta']);
+  });
+
+  it('drops records that are only whitespace, and trims the rest', () => {
+    expect(chunkText('  alpha  \n   \t  \n  beta  ', options)).toEqual(['alpha\nbeta']);
+  });
+
+  it('falls back to the default path for an empty separator', () => {
+    const text = 'Alpha beta gamma delta. Epsilon zeta eta theta. Iota kappa lambda mu.';
+    expect(chunkText(text, { chunkSize: 40, overlap: 10, separator: '' })).toEqual(
+      chunkText(text, { chunkSize: 40, overlap: 10 }),
+    );
+  });
+
+  it('carries through ingestion, so a collection can be chunked by record end to end', async () => {
+    const embedder = new FakeEmbeddingProvider();
+    const store = new MemoryVectorStore();
+    const written = await ingestDocuments([{ id: 'mvr', text: document }], {
+      embedder,
+      store,
+      ...options,
+    });
+    expect(written).toBe(chunkText(document, options).length);
+  });
+});
+
 describe('ingest + retrieve (MemoryVectorStore + EmbeddingRetriever)', () => {
   async function buildRetriever() {
     const embedder = new FakeEmbeddingProvider();
