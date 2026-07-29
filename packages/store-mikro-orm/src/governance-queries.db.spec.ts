@@ -56,7 +56,6 @@ beforeAll(async () => {
     actorRef: 'alice',
     title: 'Alice chat',
     transient: false,
-    summaryMessageCount: 0,
     createdAt: new Date('2026-07-01T09:00:00.000Z'),
     updatedAt: new Date('2026-07-02T09:00:00.000Z'),
   });
@@ -65,7 +64,6 @@ beforeAll(async () => {
     actorRef: 'bob',
     title: 'Bob chat',
     transient: false,
-    summaryMessageCount: 0,
     createdAt: new Date('2026-07-02T09:00:00.000Z'),
     updatedAt: new Date('2026-07-02T10:00:00.000Z'),
   });
@@ -305,7 +303,6 @@ describe('MikroOrmGovernanceQueries reported cost (sqlite)', () => {
       actorRef: 'carol',
       title: 'Carol chat',
       transient: false,
-      summaryMessageCount: 0,
       createdAt: new Date('2026-07-05T09:00:00.000Z'),
       updatedAt: new Date('2026-07-05T09:00:00.000Z'),
     });
@@ -390,7 +387,6 @@ describe('MikroOrmGovernanceQueries cache pricing (sqlite)', () => {
       actorRef: 'dave',
       title: 'Cache chat',
       transient: false,
-      summaryMessageCount: 0,
       createdAt: new Date('2026-07-06T09:00:00.000Z'),
       updatedAt: new Date('2026-07-06T09:00:00.000Z'),
     });

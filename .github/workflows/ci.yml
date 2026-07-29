@@ -19,5 +19,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm build
       - run: pnpm typecheck
+      # Specs are excluded from every package's build tsconfig (they would be emitted to dist),
+      # so `pnpm typecheck` never sees them. This is the same check with the specs included, for
+      # the packages that are clean. Opting a package in: docs/typechecking-specs.md
+      - run: pnpm typecheck:specs
       - run: pnpm test
       - run: pnpm test:db

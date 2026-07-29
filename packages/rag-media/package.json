@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
   "peerDependencies": {
     "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0",
