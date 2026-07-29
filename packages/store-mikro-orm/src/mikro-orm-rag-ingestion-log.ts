@@ -1,5 +1,10 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
-import { type EntityData, EntityManager, type FilterQuery, type QueryOrderMap } from '@mikro-orm/core';
+import {
+  type EntityData,
+  EntityManager,
+  type FilterQuery,
+  type QueryOrderMap,
+} from '@mikro-orm/core';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
 
@@ -58,6 +63,18 @@ export const RAG_INGESTION_LOG_PAGE_ORDER = { updatedAt: 'desc', documentId: 'as
 /** Default rows per round-trip for {@link MikroOrmRagIngestionLog.iterate}. */
 const DEFAULT_BATCH_SIZE = 200;
 
+/** Rows per round-trip, defaulted and clamped: a batch of 0 or NaN would never terminate. */
+function batches(batchSize: number | undefined): number {
+  const requested = Math.trunc(batchSize ?? DEFAULT_BATCH_SIZE);
+  return Number.isFinite(requested) && requested >= 1 ? requested : DEFAULT_BATCH_SIZE;
+}
+
+/**
+ * The only two columns a keyset sweep needs to keep going. `listDocumentIds` selects exactly these:
+ * the id it returns, plus the `updatedAt` half of the cursor.
+ */
+const CURSOR_FIELDS = ['documentId', 'updatedAt'] as const;
+
 /** The coordinates half of a log query: which rows, with nothing said about paging. */
 export interface RagIngestionLogWhere {
   collection?: string;
@@ -89,7 +106,10 @@ export interface RagIngestionLogCursor {
 }
 
 export interface RagIngestionLogIterateOptions {
-  /** Rows fetched per round-trip. Defaults to {@link DEFAULT_BATCH_SIZE}; clamped to at least 1. */
+  /**
+   * Rows fetched per round-trip. Defaults to 200; anything under 1 or non-finite falls back to
+   * that default rather than being honoured — a batch of 0 would fetch nothing and never advance.
+   */
   batchSize?: number;
   /** Resume strictly after this point in the order, e.g. a cursor persisted by an earlier sweep. */
   after?: RagIngestionLogCursor;
@@ -184,29 +204,36 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
    * delete-safe *by construction* rather than by the caller carefully advancing an offset by only
    * the rows it kept.
    *
+   * **The guarantee, stated once:** a row is yielded exactly when — at the moment the batch that
+   * would contain it is fetched — the row exists, matches `where`, and sorts strictly after the
+   * last row already yielded. Everything below is a consequence of that one sentence.
+   *
    * What you can rely on:
-   * - **Deleting rows while iterating is safe.** Delete any row you like — the one just yielded,
-   *   a batch of them, rows you have not reached yet — and the remaining rows are still each
-   *   visited exactly once. Nothing is skipped and nothing is repeated, because no surviving row's
-   *   `(updatedAt, documentId)` changed.
+   * - **Deleting rows while iterating is safe.** Delete any row you like — the one just yielded, the
+   *   whole batch, rows you have not reached yet — and every row that is still there when the sweep
+   *   reaches its position is visited exactly once. Nothing is skipped and nothing is repeated,
+   *   because deleting a row moves no *other* row's `(updatedAt, documentId)`. (Rows you delete
+   *   *ahead* of the cursor are simply never visited, which is the point of deleting them.)
    * - **Ties are safe.** A bulk upload stamps a whole batch with the same `updatedAt`; the
    *   `documentId` tiebreaker keeps consecutive batches disjoint even when every row ties.
-   * - **Each row is yielded at most once**, for as long as timestamps only move forward — which is
-   *   what `record()` does, since it always stamps `now`.
+   * - **Each row is yielded at most once**, for as long as `updatedAt` only ever moves forward —
+   *   which is what `record()` does, since it always stamps `now`.
    *
    * What this is **not**: a snapshot, or a repeatable read. The sweep observes the table as it is
    * when each batch is fetched, so:
-   * - A row **inserted** mid-sweep is stamped `now`, which sorts *newer* than a cursor already past
-   *   — so it lands behind the sweep and is not visited. A sweep therefore never sees documents
-   *   ingested after it started, which is the behaviour an orphan sweep wants: a document that
-   *   arrived while you were sweeping is not an orphan.
-   * - A row **re-ingested** mid-sweep has its `updatedAt` bumped to `now`, moving it behind the
+   * - A row **inserted** mid-sweep by `record()` is stamped `now`. The order is newest-first, so it
+   *   sorts ahead of a cursor the sweep has already moved past, and is not visited. A sweep
+   *   therefore never sees documents ingested after it started — the behaviour an orphan sweep
+   *   wants, since a document that arrived while you were sweeping is not an orphan. (A *direct*
+   *   insert with a backdated `updatedAt` lands ahead of the cursor and **is** visited; nothing in
+   *   this class writes one.)
+   * - A row **re-ingested** mid-sweep has its `updatedAt` bumped to `now`, moving it ahead of the
    *   cursor for the same reason. If the sweep had already passed it, it is not visited twice; if it
-   *   had not, it is **missed for this pass**. That is the honest limit: `iterate` guarantees "at
-   *   most once", not "at least once", against concurrent writers. Sweeps that must not miss a
+   *   had not, it is **missed for this pass**. That is the honest limit: against a concurrent
+   *   writer `iterate` guarantees "at most once", not "at least once". Sweeps that must not miss a
    *   concurrently-rewritten row should be idempotent and run again.
-   * - Only a row whose `updatedAt` is moved *backwards* — which nothing in this class does, and
-   *   which needs a direct write — can be yielded twice.
+   * - Only a row whose `updatedAt` moves *backwards* — which needs a direct write — can be yielded
+   *   twice.
    * - `collection` / `status` are re-evaluated per batch, so a row that stops matching mid-sweep
    *   stops being visited.
    *
@@ -215,43 +242,28 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
    * across it would retain every row it ever saw. Forking per batch keeps the working set to one
    * batch. The consequence for callers: yielded entities are not managed by any live context —
    * treat them as data, not as something to mutate and flush.
+   *
+   * There is no `limit`/`offset` here on purpose: `where` says *which* rows, `options` says how the
+   * sweep is run. A sweep that stops early stops by `break`ing out of the `for await`.
    */
-  async *iterate(
+  iterate(
     where: RagIngestionLogWhere = {},
     options: RagIngestionLogIterateOptions = {},
   ): AsyncGenerator<RagIngestionLog, void, undefined> {
-    const batchSize = Math.max(1, Math.trunc(options.batchSize ?? DEFAULT_BATCH_SIZE));
-    let cursor = options.after;
-    for (;;) {
-      const rows = await this.em.fork().find(RagIngestionLog, this.keyset(where, cursor), {
-        orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
-        limit: batchSize,
-      });
-      const last = rows.at(-1);
-      if (last === undefined) {
-        return;
-      }
-      for (const row of rows) {
-        yield row;
-      }
-      // Advance only after the batch is consumed, so a caller that breaks out leaves the cursor on
-      // the last row it actually saw.
-      cursor = { updatedAt: last.updatedAt, documentId: last.documentId };
-      // Deliberately NOT `if (rows.length < batchSize) return`: a short batch means "nothing after
-      // the cursor *right now*", not "nothing ever". One extra empty query per sweep buys the
-      // guarantee above holding for a writer that lands a row late.
-    }
+    return this.sweep(where, batches(options.batchSize), options.after, (em, filter, limit) =>
+      em.find(RagIngestionLog, filter, { orderBy: RAG_INGESTION_LOG_PAGE_ORDER, limit }),
+    );
   }
 
   /**
    * Just the document ids of the matching rows, in {@link RAG_INGESTION_LOG_PAGE_ORDER}.
    *
-   * Returns **all** of them — no 200-row cap, unlike `list` — by sweeping with {@link iterate}'s
+   * Returns **all** of them — no 200-row cap, unlike `list` — by sweeping on {@link iterate}'s
    * keyset internally, so it is correct against concurrent deletes for the same reason `iterate`
    * is. What the cap protects against is hydrating an unbounded number of wide entities (`error` is
    * a TEXT column); this selects two columns — the id, plus the `updatedAt` the cursor needs — and
-   * keeps only the ids, so the result is a list of strings whose size is the answer the caller
-   * asked for.
+   * keeps only the ids, so the peak footprint is one batch of two-column rows plus a list of
+   * strings whose size *is* the answer the caller asked for.
    *
    * For callers that need the id set of a collection and nothing else: an orphan sweep unioning the
    * log against the vector store's own document list.
@@ -260,24 +272,18 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     where: RagIngestionLogWhere = {},
     options: { batchSize?: number } = {},
   ): Promise<string[]> {
-    const batchSize = Math.max(1, Math.trunc(options.batchSize ?? DEFAULT_BATCH_SIZE));
     const ids: string[] = [];
-    let cursor: RagIngestionLogCursor | undefined;
-    for (;;) {
-      const rows = await this.em.fork().find(RagIngestionLog, this.keyset(where, cursor), {
+    const rows = this.sweep(where, batches(options.batchSize), undefined, (em, filter, limit) =>
+      em.find(RagIngestionLog, filter, {
         orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
-        limit: batchSize,
-        fields: ['documentId', 'updatedAt'],
-      });
-      const last = rows.at(-1);
-      if (last === undefined) {
-        return ids;
-      }
-      for (const row of rows) {
-        ids.push(row.documentId);
-      }
-      cursor = { updatedAt: last.updatedAt, documentId: last.documentId };
+        limit,
+        fields: CURSOR_FIELDS,
+      }),
+    );
+    for await (const row of rows) {
+      ids.push(row.documentId);
     }
+    return ids;
   }
 
   /** The latest recorded outcome for one document, or null if it was never attempted. */
@@ -294,6 +300,39 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   /** Forget every record for a collection — for when the collection itself is deleted. */
   async removeByCollection(collection: string): Promise<number> {
     return this.em.fork().nativeDelete(RagIngestionLog, { collection });
+  }
+
+  /**
+   * The keyset sweep both {@link iterate} and {@link listDocumentIds} are made of. `page` decides
+   * how wide a row is — whole entities for `iterate`, two columns for `listDocumentIds` — and the
+   * `R extends RagIngestionLogCursor` bound says the only thing the sweep needs back: a row it can
+   * read the next cursor off.
+   *
+   * The cursor advances **per yielded row**, not per batch, so a consumer that `break`s mid-batch
+   * leaves it on the last row it actually saw. It is two column values read off that row, so a row
+   * leaving the table cannot move it — the whole reason this is delete-safe by construction.
+   */
+  private async *sweep<R extends RagIngestionLogCursor>(
+    where: RagIngestionLogWhere,
+    batchSize: number,
+    after: RagIngestionLogCursor | undefined,
+    page: (em: EntityManager, filter: FilterQuery<RagIngestionLog>, limit: number) => Promise<R[]>,
+  ): AsyncGenerator<R, void, undefined> {
+    let cursor = after;
+    for (;;) {
+      // A fresh fork per batch: see iterate()'s note on the identity map.
+      const rows = await page(this.em.fork(), this.keyset(where, cursor), batchSize);
+      if (rows.length === 0) {
+        return;
+      }
+      for (const row of rows) {
+        yield row;
+        cursor = { updatedAt: row.updatedAt, documentId: row.documentId };
+      }
+      // Deliberately NOT `if (rows.length < batchSize) return`: a short batch means "nothing after
+      // the cursor *right now*", not "nothing ever". One extra empty query per sweep is what makes
+      // termination depend on the table rather than on a batch happening to come back full.
+    }
   }
 
   private where(query: RagIngestionLogWhere): FilterQuery<RagIngestionLog> {
