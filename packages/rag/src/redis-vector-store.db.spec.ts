@@ -300,6 +300,182 @@ describe('RedisVectorStore.searchText (real RediSearch BM25)', () => {
   });
 });
 
+// updateMetadata's whole difficulty is that a chunk stores its metadata TWICE — as `meta_<field>`
+// TAGs (what RediSearch filters on) and as the `metadata_json` blob (what comes back on a Passage).
+// Only a real engine can prove the two move together: a fake can be told the filter matched.
+describe('RedisVectorStore.updateMetadata (real RediSearch, dual representation)', () => {
+  /** Its own index, so `bases` can be a second filterable field without disturbing the shared one. */
+  let mutable: RedisVectorStore;
+
+  /** Read a chunk's raw hash — the ONLY way to see the two representations separately. */
+  async function hash(chunkId: string): Promise<Record<string, string>> {
+    const reply = (await client.sendCommand(['HGETALL', `um:${chunkId}`])) as unknown;
+    return (reply ?? {}) as Record<string, string>;
+  }
+
+  async function idsMatching(filter: Record<string, unknown>): Promise<string[]> {
+    const passages = await mutable.search([1, 0, 0], { topK: 50, filter });
+    return passages.map((passage) => passage.id).sort();
+  }
+
+  beforeAll(async () => {
+    const search: RedisSearchClient = { sendCommand: (args) => client.sendCommand(args) };
+    mutable = new RedisVectorStore(search, {
+      dimensions: 3,
+      index: 'um_idx',
+      prefix: 'um:',
+      filterableFields: ['tenant', 'bases'],
+    });
+    await mutable.ensureSchema();
+  });
+
+  it('RediSearch re-sees a TAG changed by a bare HSET — no reindex, and the vector survives', async () => {
+    // The platform assumption the whole method rests on, pinned rather than assumed: writing the
+    // hash field is enough for the index to pick the new value up on the very next query.
+    await mutable.upsert([
+      {
+        id: 'raw#0',
+        text: 'raw hset probe',
+        embedding: [1, 0, 0],
+        metadata: { tenant: 'raw-old' },
+      },
+    ]);
+    expect(await idsMatching({ tenant: 'raw-old' })).toEqual(['raw#0']);
+
+    await client.sendCommand(['HSET', 'um:raw#0', 'meta_tenant', 'raw-new']);
+
+    expect(await idsMatching({ tenant: 'raw-new' })).toEqual(['raw#0']);
+    expect(await idsMatching({ tenant: 'raw-old' })).toEqual([]);
+    // ...and HDEL likewise drops it from the index
+    await client.sendCommand(['HDEL', 'um:raw#0', 'meta_tenant']);
+    expect(await idsMatching({ tenant: 'raw-new' })).toEqual([]);
+  });
+
+  it('moves BOTH representations: the index sees the new value, the Passage reports it, the old value is gone', async () => {
+    await mutable.upsert([
+      {
+        id: 'doc#0',
+        text: 'quarterly reimbursement policy',
+        embedding: [1, 0, 0],
+        source: 'docs/policy',
+        metadata: { tenant: 'um-t1', bases: ['A', 'B'], title: 'quarterly' },
+      },
+      {
+        id: 'doc#1',
+        text: 'auditors submit receipts',
+        embedding: [1, 0, 0],
+        source: 'docs/policy',
+        metadata: { tenant: 'um-t1', bases: ['A', 'B'], title: 'quarterly' },
+      },
+      // a different document sharing the `doc` prefix — must not be touched
+      { id: 'docs#0', text: 'sibling', embedding: [1, 0, 0], metadata: { bases: ['A'] } },
+    ]);
+    expect(await idsMatching({ bases: ['A'] })).toEqual(['doc#0', 'doc#1', 'docs#0']);
+
+    // the document is re-classified: it now covers B and C, and no longer A. No re-embedding.
+    expect(await mutable.updateMetadata('doc', { bases: ['B', 'C'] })).toBe(2);
+
+    // (1) the INDEX half — a filter on the new value finds it, on the old value does not
+    expect(await idsMatching({ bases: ['C'] })).toEqual(['doc#0', 'doc#1']);
+    expect(await idsMatching({ bases: ['B'] })).toEqual(['doc#0', 'doc#1']);
+    expect(await idsMatching({ bases: ['A'] })).toEqual(['docs#0']); // only the untouched sibling
+
+    // (2) the BLOB half — metadata read back off a retrieved Passage reflects the change...
+    const passages = await mutable.search([1, 0, 0], { topK: 50, filter: { bases: ['C'] } });
+    expect(passages).toHaveLength(2);
+    for (const passage of passages) {
+      expect(passage.metadata?.bases).toEqual(['B', 'C']);
+      // ...and it is a MERGE: keys the patch never mentioned survive untouched
+      expect(passage.metadata?.tenant).toBe('um-t1');
+      expect(passage.metadata?.title).toBe('quarterly');
+      // text and source are untouched — this is a metadata write, not a re-ingest
+      expect(passage.source).toBe('docs/policy');
+      expect(passage.text.length).toBeGreaterThan(0);
+    }
+
+    // (3) and directly at the wire, so neither half can be inferred from the other
+    const raw = await hash('doc#0');
+    expect(raw.meta_bases).toBe('B,C');
+    expect(JSON.parse(raw.metadata_json ?? '{}')).toEqual({
+      tenant: 'um-t1',
+      bases: ['B', 'C'],
+      title: 'quarterly',
+    });
+  });
+
+  it('leaves text and embedding alone — the chunk is still KNN-ranked and still lexically findable', async () => {
+    const knn = await mutable.search([1, 0, 0], { topK: 50, filter: { tenant: 'um-t1' } });
+    expect(knn.map((passage) => passage.id)).toContain('doc#0');
+    expect(knn[0]?.score).toBeGreaterThan(0);
+
+    const lexical = await mutable.searchText('reimbursement quarterly', { topK: 10 });
+    expect(lexical.map((passage) => passage.id)).toContain('doc#0');
+  });
+
+  it('a NON-filterable key lands in metadata_json only — no stray meta_* field is invented', async () => {
+    expect(await mutable.updateMetadata('doc', { title: 'annual', reviewer: 'ada' })).toBe(2);
+
+    const raw = await hash('doc#0');
+    expect(Object.keys(raw).sort()).toEqual([
+      'embedding',
+      'meta_bases',
+      'meta_tenant',
+      'metadata_json',
+      'source',
+      'text',
+    ]);
+    expect(raw.meta_title).toBeUndefined();
+    expect(raw.meta_reviewer).toBeUndefined();
+    // the value is still there to be read back, it just isn't filterable
+    expect(JSON.parse(raw.metadata_json ?? '{}')).toMatchObject({
+      title: 'annual',
+      reviewer: 'ada',
+    });
+    // and the filterable TAGs it did not mention are untouched
+    expect(raw.meta_bases).toBe('B,C');
+    expect(await idsMatching({ bases: ['C'] })).toEqual(['doc#0', 'doc#1']);
+  });
+
+  it('removes a key with an explicit null — TAG dropped from the index AND key gone from the blob', async () => {
+    expect(await mutable.updateMetadata('doc', { bases: null, title: null })).toBe(2);
+
+    const raw = await hash('doc#0');
+    expect(raw.meta_bases).toBeUndefined(); // the TAG really was HDEL-ed, not left stale
+    const metadata = JSON.parse(raw.metadata_json ?? '{}') as Record<string, unknown>;
+    expect('bases' in metadata).toBe(false);
+    expect('title' in metadata).toBe(false);
+    expect(metadata.tenant).toBe('um-t1'); // untouched keys survive a removal patch
+
+    expect(await idsMatching({ bases: ['B', 'C'] })).toEqual([]); // index agrees
+    expect(await idsMatching({ tenant: 'um-t1' })).toEqual(['doc#0', 'doc#1']);
+  });
+
+  it('ignores an undefined value rather than treating it as a removal', async () => {
+    // `{ tenant: undefined }` is what `{ ...doc, tenant: doc.tenant }` produces by accident, and what
+    // any JSON hop would have dropped — deleting an ACL dimension on it would be the worst outcome.
+    expect(await mutable.updateMetadata('doc', { tenant: undefined })).toBe(0);
+    expect(await mutable.updateMetadata('doc', {})).toBe(0);
+    expect(await idsMatching({ tenant: 'um-t1' })).toEqual(['doc#0', 'doc#1']);
+    expect((await hash('doc#0')).meta_tenant).toBe('um-t1');
+  });
+
+  it('creates metadata on a chunk ingested without any, and patches a bare (unchunked) document id', async () => {
+    await mutable.upsert([{ id: 'bare', text: 'no metadata at all', embedding: [1, 0, 0] }]);
+
+    expect(await mutable.updateMetadata('bare', { tenant: 'um-bare' })).toBe(1);
+
+    expect(await idsMatching({ tenant: 'um-bare' })).toEqual(['bare']);
+    expect((await hash('bare')).meta_tenant).toBe('um-bare');
+    expect(await mutable.listDocuments({ tenant: 'um-bare' })).toEqual([
+      { id: 'bare', metadata: { tenant: 'um-bare' } },
+    ]);
+  });
+
+  it('returns 0 for a document that is not indexed, instead of throwing', async () => {
+    await expect(mutable.updateMetadata('never-ingested', { tenant: 'x' })).resolves.toBe(0);
+  });
+});
+
 describe('ensureSchema against an index that already exists (drift)', () => {
   /** A fresh store on its own index, so each drift case starts from a known FT.CREATE. */
   function storeOn(

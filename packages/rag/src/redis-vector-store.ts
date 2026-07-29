@@ -1,4 +1,5 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
+import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import {
   type IndexedDocument,
   type LexicalVectorStore,
@@ -217,11 +218,7 @@ export class RedisVectorStore implements LexicalVectorStore {
         for (const field of this.filterableFields) {
           const value = record.metadata[field];
           if (value !== undefined) {
-            // Array metadata is stored as a multi-valued TAG (comma-separated, RediSearch's default
-            // separator) so a document can carry several capability tokens; individual values must
-            // therefore not contain commas.
-            const tag = Array.isArray(value) ? value.map(String).join(',') : String(value);
-            args.push(`meta_${field}`, tag);
+            args.push(`meta_${field}`, encodeTag(value));
           }
         }
       }
@@ -230,7 +227,85 @@ export class RedisVectorStore implements LexicalVectorStore {
   }
 
   async remove(documentId: string): Promise<void> {
-    const keys = new Set<string>([`${this.prefix}${documentId}`]);
+    const keys = await this.chunkKeys(documentId);
+    if (keys.length > 0) {
+      await this.client.sendCommand(['DEL', ...keys]);
+    }
+  }
+
+  /**
+   * Rewrite the metadata of every chunk of `documentId` in place, leaving `text` and `embedding`
+   * alone. See {@link VectorStore.updateMetadata} for the merge semantics and the return value.
+   *
+   * The care this needs is entirely about the fact that a chunk stores its metadata **twice**: as the
+   * `metadata_json` blob (what {@link RedisVectorStore.search} reads back onto a `Passage`) and as
+   * `meta_<field>` TAG fields (what RediSearch actually filters on, and only for the declared
+   * `filterableFields`). Move one without the other and the store lies to itself — a chunk that
+   * filters as the old value but reports the new one, or the reverse — so this method rewrites both
+   * from the same merged object:
+   *
+   * - a patched key that is **not** filterable lands in `metadata_json` only, and no stray `meta_*`
+   *   field is invented for it (it would be dead weight the index does not know about);
+   * - a patched key that **is** filterable also rewrites its TAG, using the identical encoding
+   *   `upsert` uses, so an updated chunk is indistinguishable from a re-ingested one;
+   * - a filterable key the patch **removes** has its TAG `HDEL`-ed, not left behind as a tag matching
+   *   a value the document no longer carries.
+   *
+   * A plain `HSET` is all the index needs: RediSearch re-indexes a hash the moment it is written, so
+   * the very next `FT.SEARCH` sees the new TAG and no longer the old one — no reindex command, and
+   * no need to rewrite the (untouched, and expensive) vector to nudge it. `HDEL` on an indexed field
+   * likewise drops it from the index. Verified against a real Redis Stack in
+   * `redis-vector-store.db.spec.ts`, not assumed.
+   *
+   * Removals are issued **before** the write, so the only window a concurrent reader can observe is
+   * "TAG already gone, `metadata_json` not yet updated" — which fails *closed* on a filter carrying
+   * an ACL. The reverse order would briefly leave a document tagged with a capability its metadata no
+   * longer claims. Read-modify-write across chunks is not transactional; concurrent writers to the
+   * same chunk are last-writer-wins, exactly as two concurrent `upsert`s already are.
+   */
+  async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
+    if (isEmptyMetadataPatch(patch)) {
+      return 0;
+    }
+    const keys = await this.chunkKeys(documentId);
+    let updated = 0;
+    for (const key of keys) {
+      const raw = await this.client.sendCommand(['HGET', key, 'metadata_json']);
+      const current = parseMetadata(raw === null || raw === undefined ? undefined : toStr(raw));
+      const next = applyMetadataPatch(current.metadata, patch);
+
+      const args: (string | Buffer)[] = ['HSET', key, 'metadata_json', JSON.stringify(next)];
+      const stale: string[] = [];
+      for (const field of this.filterableFields) {
+        const value = next[field];
+        if (value !== undefined) {
+          args.push(`meta_${field}`, encodeTag(value));
+        } else if (current.metadata?.[field] !== undefined) {
+          stale.push(`meta_${field}`);
+        }
+      }
+      if (stale.length > 0) {
+        await this.client.sendCommand(['HDEL', key, ...stale]);
+      }
+      await this.client.sendCommand(args);
+      updated += 1;
+    }
+    return updated;
+  }
+
+  /**
+   * Every chunk key that currently EXISTS for `documentId` — the bare `${prefix}${documentId}` plus
+   * the `${documentId}#<n>` chunks found by `SCAN`. One definition of "chunk belongs to document",
+   * shared by `remove` and `updateMetadata`, so the two can never disagree about which keys a
+   * document owns. The glob is escaped so `gone` does not reach into `goner#0`.
+   */
+  private async chunkKeys(documentId: string): Promise<string[]> {
+    const keys = new Set<string>();
+    const bare = `${this.prefix}${documentId}`;
+    const exists = await this.client.sendCommand(['EXISTS', bare]);
+    if (Number(toStr(exists)) > 0) {
+      keys.add(bare);
+    }
     const pattern = `${this.prefix}${escapeGlob(documentId)}#*`;
     let cursor = '0';
     do {
@@ -248,9 +323,7 @@ export class RedisVectorStore implements LexicalVectorStore {
         keys.add(key);
       }
     } while (cursor !== '0');
-    if (keys.size > 0) {
-      await this.client.sendCommand(['DEL', ...keys]);
-    }
+    return [...keys];
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {
@@ -486,6 +559,19 @@ function filterMatchesNothing(filter?: Record<string, unknown>): boolean {
  */
 function tokenizeQuery(query: string): string[] {
   return query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+}
+
+/**
+ * Encode one metadata value as the `meta_<field>` hash field RediSearch indexes as a TAG. An **array**
+ * becomes a multi-valued TAG (comma-separated, RediSearch's default separator) so a document can
+ * carry several capability tokens — which is also why individual values must not contain commas.
+ *
+ * Shared by `upsert` and `updateMetadata` on purpose: they write the same field, and the day the two
+ * encode it differently is the day a patched chunk stops matching a filter a freshly-ingested one
+ * matches, for a value that looks identical in `metadata_json`.
+ */
+function encodeTag(value: unknown): string {
+  return Array.isArray(value) ? value.map(String).join(',') : String(value);
 }
 
 /** Escape RediSearch TAG punctuation so an id/tenant value matches literally. */

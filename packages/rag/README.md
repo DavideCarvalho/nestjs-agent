@@ -99,6 +99,57 @@ before the repair only become filterable on that key once re-ingested). A change
 model swap — can't be repaired without a full reindex, so it throws `RedisVectorSchemaMismatchError`
 instead of silently leaving the index on the old width.
 
+## Changing metadata without re-embedding
+
+Some metadata is derived from the document's content and only changes when the content does (its
+size, its mime type, its ingestion fingerprint). Some isn't: who may see it, which bases or teams it
+is relevant to, what it was last classified as. That second kind changes on its own schedule, and
+without a way to say so you are left choosing between re-embedding a whole document to change a
+string — paying the model bill, and the ingestion budget, for a reclassification — or refusing to
+stamp the dimension onto chunks at all and resolving it at query time instead, which turns a filter
+the index could have applied into a join you have to.
+
+`updateMetadata` is that way to say so. It rewrites the metadata of **every chunk** of a document and
+touches neither the text nor the embeddings:
+
+```ts
+// this document now covers bases B and C, and no longer A. No embedding is recomputed.
+const chunks = await store.updateMetadata(documentId, { bases: ['B', 'C'] });
+```
+
+The patch is applied as a shallow [JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7386):
+
+| in the patch | effect |
+| --- | --- |
+| key absent | the stored value is kept — this is a **partial** update, not a replacement |
+| `key: value` | the stored value is replaced |
+| `key: [a, b]` | replaced **wholesale** — an array is a set-valued dimension, not something to append to |
+| `key: null` | the key is **removed**. This is the only way to remove one |
+| `key: undefined` | **ignored**, as if the patch had not mentioned the key |
+
+`undefined` is ignored rather than treated as a removal on purpose. It does not survive
+`JSON.stringify`, and a patch routinely crosses a JSON boundary (an HTTP body, a workflow step
+payload) on its way in, so honouring it would make `{ audience: undefined }` mean *delete* on one
+side of that boundary and *no-op* on the other. It is also what `{ ...doc, audience: doc.audience }`
+produces by accident — and an accidental deletion of an access-control dimension is the worst thing
+this API could do. The cost is that a literal `null` cannot be stored as a value, which is no loss:
+"absent" and "null" filter identically anyway.
+
+The return value is the number of chunks written. **An unknown document id updates nothing and
+returns `0` rather than throwing** — like `remove`, this is a reconciliation-shaped call, made by a
+loop diffing your source of truth against the index, and such a loop races with ingestion and
+deletion by construction; an exception would make the ordinary case an error you had to catch and
+swallow. (A patch that writes nothing also returns `0`: the count is chunks *written*, not chunks
+*matched*.)
+
+Both representations move together. `RedisVectorStore` stores metadata twice — as `meta_<field>`
+TAGs, which is what RediSearch filters on, and as a `metadata_json` blob, which is what comes back on
+a `Passage` — and `updateMetadata` rewrites both from the same merged object, dropping the TAG of a
+removed key rather than leaving it matching a value the document no longer carries. A patched chunk
+is indistinguishable from a re-ingested one: filtering on the new value finds it, filtering on the
+old value does not, and the metadata read back off a retrieved passage agrees with both. (A plain
+`HSET` is all RediSearch needs to re-index — proven against a real Redis Stack, not assumed.)
+
 ## Hybrid search (dense + lexical)
 
 `HybridRetriever` fuses several retrievers with Reciprocal Rank Fusion. RRF is **rank**-based, so the
@@ -192,6 +243,10 @@ library upgrade. The interface is open, so it can be added later without changin
 - `KeywordRetriever` — in-process BM25 over chunks you feed it; the single-process lexical half:
   `add(chunks)`, `remove(documentId)`, `clear()`, `size`.
 - `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` — RRF fusion of the two.
-- `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters.
+- `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters:
+  `upsert(records)`, `search(embedding, opts)`, `remove(documentId)`,
+  `updateMetadata(documentId, patch)`, `listDocuments(filter?)`.
+- `applyMetadataPatch(metadata, patch)` — the `MetadataPatch` merge semantics, exported so your own
+  `VectorStore` can implement `updateMetadata` with exactly the same ones.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.
 - `createRetrievalTool(retriever, { name?, description?, topK? })` — the agentic-retrieval tool.
