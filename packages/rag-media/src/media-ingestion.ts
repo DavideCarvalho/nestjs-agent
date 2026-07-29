@@ -76,6 +76,123 @@ export type MediaIngestResult =
   | { status: 'skipped'; reason: MediaIngestSkipReason };
 
 /**
+ * WHICH PHASE of {@link ingestMediaFile} threw — the one thing a stringified message can't be parsed
+ * for, and the thing a host needs to branch a failure on.
+ *
+ * - `read` — the size probe (`statFile`) or the byte fetch (`readFile`) failed. Storage-side.
+ * - `extract` — bytes → text (`TextExtractor.extract`), or the chunking that follows it, threw. The
+ *   *content* is the suspect. (An unsupported mime type is a SKIP, not a failure — it never gets here.)
+ * - `embed` — the {@link EmbeddingProvider} threw. Model/provider-side.
+ * - `store` — the {@link VectorStore} threw: the pre-ingest `remove`, the final `upsert`, or a
+ *   delete-sync `removeMedia`. Index-side.
+ * - `unknown` — something outside a phase threw, or a non-object was thrown (nothing to tag).
+ *
+ * ## On retryability
+ *
+ * This is deliberately NOT a `retryable` boolean. Retryability is a function of the underlying error
+ * AND host policy, not of the phase: a `read` failure is transient for an S3 5xx and permanent for a
+ * 404; an `embed` failure is transient under throttling and permanent for an input that exceeds the
+ * model's context; an `extract` failure is permanent for a corrupt PDF and transient for a converter
+ * sidecar that is down. This package does not own `readFile`, the extractor, the embedder, or the
+ * store — every one of them is host-injected — so any boolean it emitted would be a guess wearing the
+ * costume of an answer, and a wrong `retryable: false` silently drops a document from the index.
+ *
+ * Branch on `kind` plus the `cause` (see {@link import('./media-ingest-job.js').MediaIngestOutcome}),
+ * which is the actual error object with its class and its own `cause` intact:
+ *
+ * ```ts
+ * const outcome = await runMediaIngestJob(job, deps);
+ * if (outcome.status === 'failed') {
+ *   const transient =
+ *     outcome.kind === 'read' && isTransientS3(outcome.cause);
+ *   if (!transient) throw new NonRetryableError(outcome.error); // terminal: stop the workflow
+ *   throw new Error(outcome.error); // let the durable engine retry
+ * }
+ * ```
+ *
+ * A useful default when you have no policy: treat `extract` as terminal (the bytes will not change
+ * on a retry) and everything else as retryable.
+ */
+export type MediaIngestFailureKind = 'read' | 'extract' | 'embed' | 'store' | 'unknown';
+
+const FAILURE_KINDS: ReadonlySet<string> = new Set<MediaIngestFailureKind>([
+  'read',
+  'extract',
+  'embed',
+  'store',
+  'unknown',
+]);
+
+/**
+ * The key the phase is stamped under. `Symbol.for` (the GLOBAL registry, not a module-local
+ * `Symbol()`) on purpose: a duplicated copy of this package — two versions in one `node_modules`
+ * tree, or a `dist` and a source copy loaded side by side, which is exactly what happens when a host
+ * bundles a worker — would otherwise mint a second, unequal symbol and {@link mediaIngestFailureKind}
+ * would read `undefined` off an error that was in fact tagged.
+ */
+const FAILURE_KIND = Symbol.for('aviary.rag.media.ingestFailureKind');
+
+/**
+ * Stamp the phase onto the error and RE-THROW THE SAME OBJECT.
+ *
+ * Not a wrapper class: `ingestMediaFile` is exported and called directly, and every one of those
+ * callers may already be doing `catch (e) { if (e instanceof S3Error) … }`. Replacing the error with
+ * a `MediaIngestError` would break each of them — that is a breaking change, not an additive one.
+ * A non-enumerable symbol property is invisible to `JSON.stringify`, to object spread, and to a
+ * structured clone, so a tagged error logs and serializes exactly as it did before.
+ *
+ * The first (innermost) tag wins, so a nested wrapper never relabels a phase its callee already
+ * named — that is what lets the `embed` delegate and the `store` wrapper around `ingestChunks`
+ * coexist.
+ */
+function tagFailureKind(error: unknown, kind: MediaIngestFailureKind): void {
+  // primitives can't carry a property; they surface as `unknown` on read.
+  if ((typeof error !== 'object' || error === null) && typeof error !== 'function') {
+    return;
+  }
+  if (FAILURE_KIND in error) {
+    return;
+  }
+  try {
+    Object.defineProperty(error, FAILURE_KIND, {
+      value: kind,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    // frozen/sealed error, or a hostile Proxy. Losing the tag costs a branch; letting this throw
+    // would REPLACE the real failure with a TypeError about defineProperty. Never worth it.
+  }
+}
+
+/** Run one phase of the ingest, tagging whatever escapes it with `kind`. Sync throws included. */
+async function inPhase<T>(kind: MediaIngestFailureKind, run: () => T | Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    tagFailureKind(error, kind);
+    throw error;
+  }
+}
+
+/**
+ * Which phase of {@link ingestMediaFile} an error escaped, for callers that use `ingestMediaFile` /
+ * {@link applyMediaIngestJob} directly and therefore catch the throw rather than reading a
+ * {@link import('./media-ingest-job.js').MediaIngestOutcome}. Untagged and non-object throws read
+ * `'unknown'`, so this is total — there is no `undefined` case to handle.
+ */
+export function mediaIngestFailureKind(error: unknown): MediaIngestFailureKind {
+  if ((typeof error !== 'object' || error === null) && typeof error !== 'function') {
+    return 'unknown';
+  }
+  const kind = (error as Record<symbol, unknown>)[FAILURE_KIND];
+  return typeof kind === 'string' && FAILURE_KINDS.has(kind)
+    ? (kind as MediaIngestFailureKind)
+    : 'unknown';
+}
+
+/**
  * Ingest one attached media file into a vector store: size-gate → read bytes → re-check the REAL
  * size → extract text → `store.remove(id)` (orphan-free re-attach) → chunk → embed → upsert.
  *
@@ -113,7 +230,11 @@ export async function ingestMediaFile(
   if (event.size > maxBytes) {
     return skipTooLarge();
   }
-  if (deps.statFile !== undefined && (await deps.statFile(event.disk, event.path)) > maxBytes) {
+  const statFile = deps.statFile;
+  if (
+    statFile !== undefined &&
+    (await inPhase('read', () => statFile(event.disk, event.path))) > maxBytes
+  ) {
     return skipTooLarge();
   }
 
@@ -121,14 +242,14 @@ export async function ingestMediaFile(
   let size: number;
   let text: string;
   try {
-    const bytes = await deps.readFile(event.disk, event.path);
+    const bytes = await inPhase('read', () => deps.readFile(event.disk, event.path));
     // Authoritative gate: the bytes we actually hold. Guards the expensive half (extract → embed)
     // against a lying declaration when no `statFile` is wired.
     if (bytes.byteLength > maxBytes) {
       return skipTooLarge();
     }
     size = bytes.byteLength;
-    text = await extractor.extract(bytes, event.mimeType);
+    text = await inPhase('extract', () => extractor.extract(bytes, event.mimeType));
   } catch (error) {
     if (error instanceof UnsupportedMimeTypeError) {
       publishRagMediaSkipped({
@@ -151,31 +272,40 @@ export async function ingestMediaFile(
   }
 
   // remove-then-ingest so a re-attach that shrinks to fewer chunks doesn't leave a stale tail.
-  await deps.store.remove(event.id);
-  const chunks = chunkDocuments(
-    [
-      {
-        id: event.id,
-        text,
-        source: event.path,
-        metadata: {
-          mediaId: event.id,
-          ownerType: event.ownerType,
-          ownerId: event.ownerId,
-          collection: event.collection,
-          // fingerprint the reconciler compares against the live media record to catch a content
-          // change a missed attach event would otherwise leave stale. The REAL byte length, not the
-          // declared one — a fingerprint copied from an untrusted claim can never detect drift.
-          size,
-          // Host-supplied keys win, so a caller can add retrieval-scoping metadata (or correct a
-          // default) without this package knowing what any of it means.
-          ...deps.metadata?.(event),
+  await inPhase('store', () => deps.store.remove(event.id));
+  const chunks = await inPhase('extract', () =>
+    chunkDocuments(
+      [
+        {
+          id: event.id,
+          text,
+          source: event.path,
+          metadata: {
+            mediaId: event.id,
+            ownerType: event.ownerType,
+            ownerId: event.ownerId,
+            collection: event.collection,
+            // fingerprint the reconciler compares against the live media record to catch a content
+            // change a missed attach event would otherwise leave stale. The REAL byte length, not the
+            // declared one — a fingerprint copied from an untrusted claim can never detect drift.
+            size,
+            // Host-supplied keys win, so a caller can add retrieval-scoping metadata (or correct a
+            // default) without this package knowing what any of it means.
+            ...deps.metadata?.(event),
+          },
         },
-      },
-    ],
-    deps.chunk ?? {},
+      ],
+      deps.chunk ?? {},
+    ),
   );
-  const count = await ingestChunks(chunks, { embedder: deps.embedder, store: deps.store });
+  // `ingestChunks` does embed AND upsert behind one call, so one wrapper can't tell them apart.
+  // The embedder is therefore tagged from the inside, via a one-method delegate, and the outer
+  // wrapper claims `store`. First tag wins, so an embedder throw stays `embed` and whatever escapes
+  // `ingestChunks` that ISN'T the embedder is, by elimination, the upsert.
+  const embedder: EmbeddingProvider = {
+    embed: (texts) => inPhase('embed', () => deps.embedder.embed(texts)),
+  };
+  const count = await inPhase('store', () => ingestChunks(chunks, { embedder, store: deps.store }));
   publishRagMediaIngested({
     mediaId: event.id,
     ownerType: event.ownerType,
@@ -194,7 +324,7 @@ export async function removeMedia(
   event: MediaDeleteEvent,
   deps: { store: VectorStore },
 ): Promise<void> {
-  await deps.store.remove(event.id);
+  await inPhase('store', () => deps.store.remove(event.id));
   publishRagMediaRemoved({
     mediaId: event.id,
     ownerType: event.ownerType,

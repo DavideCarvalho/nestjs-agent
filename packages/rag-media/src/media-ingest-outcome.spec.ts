@@ -69,7 +69,7 @@ describe('skip diagnostics carry the collection', () => {
   it('attributes an unsupported-type skip the same way', async () => {
     const skipped = capture('media.skipped');
     // an extractor that knows only PDFs, fed a text/plain event
-    await ingestMediaFile(EVENT, deps({ extractor: new MimeTextExtractor({}) }));
+    await ingestMediaFile(EVENT, deps({ extractor: new MimeTextExtractor() }));
 
     expect(skipped[0]).toMatchObject({
       collection: 'knowledge-base',
@@ -119,16 +119,24 @@ describe('runMediaIngestJob', () => {
 
   it('converts a thrown error into a failed outcome instead of propagating', async () => {
     const failed = capture('media.failed');
+    const thrown = new Error('S3 connection reset');
     const outcome = await runMediaIngestJob(
       { type: 'ingest', event: EVENT },
       deps({
         readFile: async () => {
-          throw new Error('S3 connection reset');
+          throw thrown;
         },
       }),
     );
 
-    expect(outcome).toEqual({ status: 'failed', error: 'S3 connection reset' });
+    // `error` is unchanged; `kind`/`cause` are additive. Phase-tagging has its own spec —
+    // media-ingest-failure-kind.spec.ts.
+    expect(outcome).toEqual({
+      status: 'failed',
+      error: 'S3 connection reset',
+      kind: 'read',
+      cause: thrown,
+    });
     // the whole point: a detached caller still leaves a trace of what failed and where
     expect(failed[0]).toMatchObject({
       mediaId: 'doc-1',
@@ -150,8 +158,9 @@ describe('runMediaIngestJob', () => {
   it('still publishes a failure for a removal that throws', async () => {
     const failed = capture('media.failed');
     const store = new MemoryVectorStore();
+    const thrown = new Error('index unavailable');
     store.remove = async () => {
-      throw new Error('index unavailable');
+      throw thrown;
     };
 
     const outcome = await runMediaIngestJob(
@@ -159,7 +168,12 @@ describe('runMediaIngestJob', () => {
       { ...deps(), store },
     );
 
-    expect(outcome).toEqual({ status: 'failed', error: 'index unavailable' });
+    expect(outcome).toEqual({
+      status: 'failed',
+      error: 'index unavailable',
+      kind: 'store',
+      cause: thrown,
+    });
     // a delete event knows its owner but not the collection — the payload reflects exactly that
     expect(failed[0]).toMatchObject({ mediaId: 'doc-1', ownerType: 'user', ownerId: 'u1' });
     expect(failed[0]).not.toHaveProperty('collection');
