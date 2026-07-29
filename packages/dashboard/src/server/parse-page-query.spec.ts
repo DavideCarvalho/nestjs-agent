@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import {
+  parseApprovalWhere,
   parsePageNumber,
   parseRunWhere,
   parseThreadWhere,
@@ -86,11 +87,53 @@ describe('parseRunWhere', () => {
     });
   });
 
+  it('accepts threadId — every adapter supported it, only this parser rejected it', () => {
+    expect(parseRunWhere({ threadId: 'th1' })).toEqual({ threadId: 'th1' });
+  });
+
   it('400s on an unknown where field', () => {
-    expect(() => parseRunWhere({ threadId: 'th1' })).toThrow(BadRequestException);
+    expect(() => parseRunWhere({ nonsense: 'x' })).toThrow(BadRequestException);
   });
 
   it('400s on a malformed day bound', () => {
     expect(() => parseRunWhere({ fromDay: '2026-7-1' })).toThrow(BadRequestException);
+  });
+});
+
+describe('parseApprovalWhere', () => {
+  it('returns undefined when no where params are given', () => {
+    expect(parseApprovalWhere(undefined)).toBeUndefined();
+    expect(parseApprovalWhere({})).toBeUndefined();
+  });
+
+  it('maps every known field through', () => {
+    expect(
+      parseApprovalWhere({
+        toolName: 'deploy',
+        threadId: 'th1',
+        actorRef: 'ops',
+        agentName: 'ops-agent',
+        fromDay: '2026-08-01',
+        toDay: '2026-08-03',
+      }),
+    ).toEqual({
+      toolName: 'deploy',
+      threadId: 'th1',
+      actorRef: 'ops',
+      agentName: 'ops-agent',
+      fromDay: '2026-08-01',
+      toDay: '2026-08-03',
+    });
+  });
+
+  it('400s on an unknown where field, naming it', () => {
+    expect(() => parseApprovalWhere({ status: 'pending_approval' })).toThrow(BadRequestException);
+    expect(() => parseApprovalWhere({ status: 'pending_approval' })).toThrow(
+      /Unknown where field "status"/,
+    );
+  });
+
+  it('400s on a malformed day bound', () => {
+    expect(() => parseApprovalWhere({ fromDay: '2026-8-1' })).toThrow(BadRequestException);
   });
 });

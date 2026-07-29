@@ -1,9 +1,13 @@
 import type {
   ActorSpendRow,
   AgentGovernanceQueries,
+  ApprovalWhere,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
+  GovernanceRunDetail,
+  GovernanceThreadDetail,
+  GovernanceThreadDetailQuery,
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
@@ -12,9 +16,11 @@ import type {
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
   RunMetrics,
+  RunToolCallRow,
   RunTrendPoint,
   RunWhere,
   ThreadActivityRow,
+  ThreadMessageRow,
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
@@ -28,6 +34,8 @@ import {
   bucketByModel,
   bucketByThread,
   bucketUsageTrend,
+  rollupThreadUsage,
+  truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
 import type {
   GovernanceRunRow,
@@ -82,6 +90,40 @@ function percentileMs(sortedDurationsMs: number[], p: number): number | null {
   }
   const offset = Math.min(sortedDurationsMs.length - 1, Math.floor(p * sortedDurationsMs.length));
   return sortedDurationsMs[offset] ?? null;
+}
+
+/** Map a recorded pending-approval row onto the SPI row. Shared by `pendingApprovals`/`approvalsPage`. */
+function toPendingApprovalRow(
+  row: ReturnType<InMemoryAgentStore['governancePendingApprovals']>[number],
+): PendingApprovalRow {
+  return {
+    toolCallId: row.toolCallId,
+    toolName: row.toolName,
+    input: row.input,
+    threadId: row.threadId,
+    threadTitle: row.threadTitle,
+    actorRef: row.actorRef,
+    agentName: row.agentName ?? null,
+    requestedAt: row.requestedAt,
+    runId: row.runId ?? null,
+  };
+}
+
+/** Map a recorded run row onto the SPI row. Shared by `recentRuns`/`runsPage`/the drill-downs. */
+function toRecentRunRow(run: GovernanceRunRow): RecentRunRow {
+  return {
+    runId: run.runId,
+    threadId: run.threadId,
+    actorRef: run.actorRef,
+    agentName: run.agentName ?? null,
+    status: run.status,
+    durationMs: run.durationMs ?? null,
+    errorCode: run.errorCode ?? null,
+    errorMessage: run.errorMessage ?? null,
+    retries: run.retries,
+    startedAt: run.startedAt,
+    promptHash: run.promptHash ?? null,
+  };
 }
 
 /**
@@ -274,19 +316,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     return [...this.store.governanceRuns()]
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
       .slice(0, limit)
-      .map((run) => ({
-        runId: run.runId,
-        threadId: run.threadId,
-        actorRef: run.actorRef,
-        agentName: run.agentName ?? null,
-        status: run.status,
-        durationMs: run.durationMs ?? null,
-        errorCode: run.errorCode ?? null,
-        errorMessage: run.errorMessage ?? null,
-        retries: run.retries,
-        startedAt: run.startedAt,
-        promptHash: run.promptHash ?? null,
-      }));
+      .map(toRecentRunRow);
   }
 
   /**
@@ -295,25 +325,51 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
    */
   async pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
     return [...this.store.governancePendingApprovals()]
-      .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+      .sort(
+        (left, right) =>
+          left.requestedAt.localeCompare(right.requestedAt) ||
+          left.toolCallId.localeCompare(right.toolCallId),
+      )
       .slice(0, limit)
-      .map((row) => ({
-        toolCallId: row.toolCallId,
-        toolName: row.toolName,
-        input: row.input,
-        threadId: row.threadId,
-        threadTitle: row.threadTitle,
-        actorRef: row.actorRef,
-        agentName: row.agentName ?? null,
-        requestedAt: row.requestedAt,
-        runId: row.runId ?? null,
-      }));
+      .map(toPendingApprovalRow);
+  }
+
+  /**
+   * Paged, filterable approvals inbox, oldest first (same ordering as {@link pendingApprovals}, with
+   * a `toolCallId` tiebreak so a tied `requestedAt` still pages deterministically), reporting the
+   * `total` that method cannot.
+   */
+  async approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    const filters = query.where;
+    const filtered = this.store.governancePendingApprovals().filter((row) => {
+      if (filters?.toolName !== undefined && row.toolName !== filters.toolName) {
+        return false;
+      }
+      if (filters?.threadId !== undefined && row.threadId !== filters.threadId) {
+        return false;
+      }
+      if (filters?.actorRef !== undefined && row.actorRef !== filters.actorRef) {
+        return false;
+      }
+      if (filters?.agentName !== undefined && row.agentName !== filters.agentName) {
+        return false;
+      }
+      return dayWithinBounds(row.requestedAt.slice(0, 10), filters?.fromDay, filters?.toDay);
+    });
+    filtered.sort(
+      (left, right) =>
+        left.requestedAt.localeCompare(right.requestedAt) ||
+        left.toolCallId.localeCompare(right.toolCallId),
+    );
+    return paginate(filtered.map(toPendingApprovalRow), query);
   }
 
   /**
    * Per-tool call/failure/rejection/latency rollup over the range, highest call count first.
-   * `p95ExecutionMs` is computed over calls that recorded a non-null `executionMs` (regardless of
-   * their final status); `null` when none did.
+   * `p50ExecutionMs`/`p95ExecutionMs` are computed over calls that recorded a non-null `executionMs`
+   * (regardless of their final status); both `null` when none did.
    */
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const byTool = new Map<
@@ -354,6 +410,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         calls: bucket.calls,
         failed: bucket.failed,
         rejected: bucket.rejected,
+        p50ExecutionMs: percentileMs(bucket.executionMs, 0.5),
         p95ExecutionMs: percentileMs(bucket.executionMs, 0.95),
       });
     }
@@ -472,21 +529,114 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       (left, right) =>
         right.startedAt.localeCompare(left.startedAt) || right.runId.localeCompare(left.runId),
     );
-    return paginate(
-      filtered.map((run) => ({
-        runId: run.runId,
+    return paginate(filtered.map(toRecentRunRow), query);
+  }
+
+  /**
+   * One run, its owning thread's headline and the tool calls attributed to it, oldest first. `null`
+   * when no run has that id. Mirrors the SQL adapters, with two documented gaps this store cannot
+   * fill: it records no `executedByRef` on a tool call (always `null` here) and it hard-removes a
+   * deleted thread rather than soft-deleting it (so `deleted` is always `false`).
+   */
+  async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
+    const run = this.store.governanceRuns().find((candidate) => candidate.runId === runId);
+    if (run === undefined) {
+      return null;
+    }
+    const thread = this.store
+      .governanceThreads()
+      .find((candidate) => candidate.threadId === run.threadId);
+    const toolCalls = this.store
+      .governanceToolCalls()
+      .filter((row) => row.runId === runId)
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.toolCallId.localeCompare(right.toolCallId),
+      )
+      .map(
+        (row): RunToolCallRow => ({
+          toolCallId: row.toolCallId,
+          toolName: row.toolName,
+          toolType: row.toolType,
+          status: row.status,
+          executionMs: row.executionMs ?? null,
+          executedByRef: null,
+          error: row.error ?? null,
+          createdAt: row.createdAt,
+        }),
+      );
+    return {
+      run: toRecentRunRow(run),
+      thread: {
         threadId: run.threadId,
-        actorRef: run.actorRef,
-        agentName: run.agentName ?? null,
-        status: run.status,
-        durationMs: run.durationMs ?? null,
-        errorCode: run.errorCode ?? null,
-        errorMessage: run.errorMessage ?? null,
-        retries: run.retries,
-        startedAt: run.startedAt,
-        promptHash: run.promptHash ?? null,
-      })),
-      query,
+        title: thread?.title ?? '',
+        actorRef: thread?.actorRef ?? run.actorRef,
+        deleted: false,
+      },
+      toolCalls,
+    };
+  }
+
+  /**
+   * One thread with its lifetime usage rollup, its newest runs and its newest messages. `null` when
+   * no thread has that id. `deleted` is always `false` — see {@link runDetail}.
+   */
+  async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
+    const thread = this.store
+      .governanceThreads()
+      .find((candidate) => candidate.threadId === query.threadId);
+    if (thread === undefined) {
+      return null;
+    }
+    const usage = rollupThreadUsage(
+      this.store.governanceUsage().filter((row) => row.threadId === thread.threadId),
+      this.pricing,
     );
+    const runs = this.store
+      .governanceRuns()
+      .filter((run) => run.threadId === thread.threadId)
+      .sort(
+        (left, right) =>
+          right.startedAt.localeCompare(left.startedAt) || right.runId.localeCompare(left.runId),
+      );
+    const messages = this.store
+      .governanceMessages()
+      .filter((message) => message.threadId === thread.threadId)
+      .sort(
+        (left, right) =>
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.messageId.localeCompare(left.messageId),
+      );
+    const toolCallCounts = new Map<string, number>();
+    for (const row of this.store.governanceToolCalls()) {
+      toolCallCounts.set(row.messageId, (toolCallCounts.get(row.messageId) ?? 0) + 1);
+    }
+    return {
+      thread: {
+        threadId: thread.threadId,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: thread.messageCount,
+        totalTokens: usage.totalTokens,
+        lastActivityAt: thread.updatedAt,
+      },
+      deleted: false,
+      usage,
+      runs: runs.slice(0, query.runLimit).map(toRecentRunRow),
+      runTotal: runs.length,
+      messages: messages.slice(0, query.messageLimit).map((message): ThreadMessageRow => {
+        const { content, truncated } = truncateDetailContent(message.content);
+        return {
+          messageId: message.messageId,
+          role: message.role,
+          content,
+          truncated,
+          agentName: message.agentName ?? null,
+          toolCallCount: toolCallCounts.get(message.messageId) ?? 0,
+          createdAt: message.createdAt,
+        };
+      }),
+    };
   }
 }

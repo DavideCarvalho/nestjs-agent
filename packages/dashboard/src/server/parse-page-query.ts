@@ -1,4 +1,9 @@
-import type { RunWhere, ThreadWhere, ToolCallWhere } from '@dudousxd/nestjs-agent-core';
+import type {
+  ApprovalWhere,
+  RunWhere,
+  ThreadWhere,
+  ToolCallWhere,
+} from '@dudousxd/nestjs-agent-core';
 import { BadRequestException } from '@nestjs/common';
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,7 +83,16 @@ export function parseThreadWhere(raw: Record<string, string> | undefined): Threa
   };
 }
 
-const RUN_WHERE_FIELDS = ['agentName', 'status', 'errorCode', 'fromDay', 'toDay'] as const;
+// `threadId` was supported by every adapter's `RunWhere` but never accepted here, so "show me this
+// thread's runs" — the drill-down's most obvious follow-up query — 400'd with "Unknown where field".
+const RUN_WHERE_FIELDS = [
+  'agentName',
+  'status',
+  'errorCode',
+  'threadId',
+  'fromDay',
+  'toDay',
+] as const;
 
 /**
  * Parse `GET runs-page`'s `where[...]` query params into a `RunWhere`. `undefined` means no filter.
@@ -92,6 +106,36 @@ export function parseRunWhere(raw: Record<string, string> | undefined): RunWhere
     ...(raw.agentName !== undefined ? { agentName: raw.agentName } : {}),
     ...(raw.status !== undefined ? { status: raw.status } : {}),
     ...(raw.errorCode !== undefined ? { errorCode: raw.errorCode } : {}),
+    ...(raw.threadId !== undefined ? { threadId: raw.threadId } : {}),
+    ...(raw.fromDay !== undefined ? { fromDay: raw.fromDay } : {}),
+    ...(raw.toDay !== undefined ? { toDay: raw.toDay } : {}),
+  };
+}
+
+const APPROVAL_WHERE_FIELDS = [
+  'toolName',
+  'threadId',
+  'actorRef',
+  'agentName',
+  'fromDay',
+  'toDay',
+] as const;
+
+/**
+ * Parse `GET approvals-page`'s `where[...]` query params into an `ApprovalWhere`. `undefined` means
+ * no filter. Throws `BadRequestException` on an unknown field name or a malformed day bound.
+ */
+export function parseApprovalWhere(
+  raw: Record<string, string> | undefined,
+): ApprovalWhere | undefined {
+  if (raw === undefined || Object.keys(raw).length === 0) return undefined;
+  assertKnownFields(raw, APPROVAL_WHERE_FIELDS);
+  assertDayFields(raw, DAY_FIELDS);
+  return {
+    ...(raw.toolName !== undefined ? { toolName: raw.toolName } : {}),
+    ...(raw.threadId !== undefined ? { threadId: raw.threadId } : {}),
+    ...(raw.actorRef !== undefined ? { actorRef: raw.actorRef } : {}),
+    ...(raw.agentName !== undefined ? { agentName: raw.agentName } : {}),
     ...(raw.fromDay !== undefined ? { fromDay: raw.fromDay } : {}),
     ...(raw.toDay !== undefined ? { toDay: raw.toDay } : {}),
   };

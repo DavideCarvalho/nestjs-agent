@@ -2,9 +2,13 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   AgentPricingStore,
+  ApprovalWhere,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
+  GovernanceRunDetail,
+  GovernanceThreadDetail,
+  GovernanceThreadDetailQuery,
   GovernanceUsageInput,
   ModelPrice,
   ModelSpendRow,
@@ -13,9 +17,11 @@ import type {
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
   RunMetrics,
+  RunToolCallRow,
   RunTrendPoint,
   RunWhere,
   ThreadActivityRow,
+  ThreadMessageRow,
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
@@ -30,6 +36,8 @@ import {
   bucketByThread,
   bucketUsageTrend,
   dayBoundsUtc,
+  rollupThreadUsage,
+  truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
 import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
@@ -98,6 +106,37 @@ function dayEndUtc(day: string): Date {
 /** An empty page for the given query's page/pageSize — the shape every paged read falls back to. */
 function emptyPage<TRow>(query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
   return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
+}
+
+/** Map a run entity onto the SPI row. Shared by `recentRuns`/`runsPage`/`runDetail`/`threadDetail`. */
+function toRecentRunRow(run: AgentRun): RecentRunRow {
+  return {
+    runId: run.id,
+    threadId: run.thread.id,
+    actorRef: run.actorRef,
+    agentName: run.agentName ?? null,
+    status: run.status,
+    durationMs: run.durationMs ?? null,
+    errorCode: run.errorCode ?? null,
+    errorMessage: run.errorMessage ?? null,
+    retries: run.retries,
+    startedAt: run.startedAt.toISOString(),
+    promptHash: run.promptHash ?? null,
+  };
+}
+
+/** Map a tool-call entity onto the run drill-down's row (execution outcome, not activity-feed shape). */
+function toRunToolCallRow(toolCall: AgentToolCall): RunToolCallRow {
+  return {
+    toolCallId: toolCall.id,
+    toolName: toolCall.toolName,
+    toolType: toolCall.toolType,
+    status: toolCall.status,
+    executionMs: toolCall.executionMs ?? null,
+    executedByRef: toolCall.executedByRef ?? null,
+    error: toolCall.error ?? null,
+    createdAt: toolCall.createdAt.toISOString(),
+  };
 }
 
 /** Map a MikroORM usage entity onto the shared bucketer input (thread via relation, day via `createdAt`). */
@@ -209,6 +248,72 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     }));
   }
 
+  /**
+   * Message counts and token totals for a whole set of threads in TWO queries rather than two per
+   * thread. Both reads are narrowed to the columns the rollup needs and bounded by the caller's
+   * thread ids, so a 200-row page costs two statements instead of four hundred round trips.
+   *
+   * Counting happens in-process rather than as a `GROUP BY` because the SPI's contract is engine-
+   * portable and this class only holds the driver-agnostic `EntityManager` (no QueryBuilder); the
+   * row volume was already being fetched by the per-thread loop this replaces.
+   */
+  private async threadRollups(
+    em: EntityManager,
+    threadIds: string[],
+  ): Promise<Map<string, { messageCount: number; totalTokens: number }>> {
+    const rollups = new Map<string, { messageCount: number; totalTokens: number }>(
+      threadIds.map((threadId) => [threadId, { messageCount: 0, totalTokens: 0 }]),
+    );
+    if (threadIds.length === 0) {
+      return rollups;
+    }
+    const messages = await em.find(
+      AgentMessage,
+      { thread: { $in: threadIds } },
+      { fields: ['thread'] },
+    );
+    for (const message of messages) {
+      const bucket = rollups.get(message.thread.id);
+      if (bucket !== undefined) {
+        bucket.messageCount += 1;
+      }
+    }
+    const usageRows = await em.find(
+      AgentTokenUsage,
+      { thread: { $in: threadIds } },
+      { fields: ['thread', 'inputTokens', 'outputTokens'] },
+    );
+    for (const row of usageRows) {
+      const bucket = rollups.get(row.thread.id);
+      if (bucket !== undefined) {
+        bucket.totalTokens += row.inputTokens + row.outputTokens;
+      }
+    }
+    return rollups;
+  }
+
+  /** Decorate an ordered thread list with its batched rollups, preserving the incoming order. */
+  private async toThreadActivityRows(
+    em: EntityManager,
+    threads: AgentThread[],
+  ): Promise<ThreadActivityRow[]> {
+    const rollups = await this.threadRollups(
+      em,
+      threads.map((thread) => thread.id),
+    );
+    return threads.map((thread) => {
+      const rollup = rollups.get(thread.id);
+      return {
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount: rollup?.messageCount ?? 0,
+        totalTokens: rollup?.totalTokens ?? 0,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      };
+    });
+  }
+
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
     const em = this.em.fork();
     const threads = await em.find(
@@ -216,24 +321,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       { deletedAt: null },
       { orderBy: { updatedAt: 'desc', id: 'desc' }, limit },
     );
-    const result: ThreadActivityRow[] = [];
-    for (const thread of threads) {
-      const messageCount = await em.count(AgentMessage, { thread });
-      const usageRows = await em.find(AgentTokenUsage, { thread });
-      const totalTokens = usageRows.reduce(
-        (sum, row) => sum + row.inputTokens + row.outputTokens,
-        0,
-      );
-      result.push({
-        threadId: thread.id,
-        title: thread.title,
-        actorRef: thread.actorRef,
-        messageCount,
-        totalTokens,
-        lastActivityAt: thread.updatedAt.toISOString(),
-      });
-    }
-    return result;
+    return this.toThreadActivityRows(em, threads);
   }
 
   private async runsInRange(em: EntityManager, range: GovernanceRange): Promise<AgentRun[]> {
@@ -337,19 +425,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   async recentRuns(limit: number): Promise<RecentRunRow[]> {
     const em = this.em.fork();
     const runs = await em.find(AgentRun, {}, { orderBy: { startedAt: 'desc', id: 'desc' }, limit });
-    return runs.map((run) => ({
-      runId: run.id,
-      threadId: run.thread.id,
-      actorRef: run.actorRef,
-      agentName: run.agentName ?? null,
-      status: run.status,
-      durationMs: run.durationMs ?? null,
-      errorCode: run.errorCode ?? null,
-      errorMessage: run.errorMessage ?? null,
-      retries: run.retries,
-      startedAt: run.startedAt.toISOString(),
-      promptHash: run.promptHash ?? null,
-    }));
+    return runs.map(toRecentRunRow);
   }
 
   /**
@@ -383,8 +459,10 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   /**
    * Per-tool call/failure/rejection/latency rollup over the range, highest call count first.
-   * `p95ExecutionMs` is computed over calls that recorded a non-null `executionMs` (regardless of
-   * their final status); `null` when none did.
+   * `p50ExecutionMs`/`p95ExecutionMs` are computed over calls that recorded a non-null `executionMs`
+   * (regardless of their final status); both `null` when none did. Percentiles are taken in-process
+   * off the sorted sample rather than in SQL: MySQL has no `PERCENTILE_CONT`, and this class supports
+   * every dialect MikroORM does, so one portable implementation beats three dialect-specific ones.
    */
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const em = this.em.fork();
@@ -428,6 +506,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
         calls: bucket.calls,
         failed: bucket.failed,
         rejected: bucket.rejected,
+        p50ExecutionMs: percentileMs(bucket.executionMs, 0.5),
         p95ExecutionMs: percentileMs(bucket.executionMs, 0.95),
       });
     }
@@ -525,23 +604,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       limit: query.pageSize,
       offset: (query.page - 1) * query.pageSize,
     });
-    const rows: ThreadActivityRow[] = [];
-    for (const thread of threads) {
-      const messageCount = await em.count(AgentMessage, { thread });
-      const usageRows = await em.find(AgentTokenUsage, { thread });
-      const totalTokens = usageRows.reduce(
-        (sum, row) => sum + row.inputTokens + row.outputTokens,
-        0,
-      );
-      rows.push({
-        threadId: thread.id,
-        title: thread.title,
-        actorRef: thread.actorRef,
-        messageCount,
-        totalTokens,
-        lastActivityAt: thread.updatedAt.toISOString(),
-      });
-    }
+    const rows = await this.toThreadActivityRows(em, threads);
     return { rows, total, page: query.page, pageSize: query.pageSize };
   }
 
@@ -576,23 +639,172 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       limit: query.pageSize,
       offset: (query.page - 1) * query.pageSize,
     });
+    return { rows: runs.map(toRecentRunRow), total, page: query.page, pageSize: query.pageSize };
+  }
+
+  /**
+   * Paged, filterable approvals inbox, oldest first — the same ordering as {@link pendingApprovals},
+   * now with the `total` that method structurally cannot report. `threadId`/`actorRef` filter through
+   * the `message → thread` relation, `agentName` through the message; day bounds apply to when the
+   * approval was requested (`createdAt`).
+   *
+   * The order is TOTAL (`createdAt asc, id asc`, and `id` is the primary key), so no row can land on
+   * two pages or on none for a given snapshot. Ascending order also means a newly requested approval
+   * appends past the last page instead of shifting the page an operator is currently reading.
+   */
+  async approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    const filters = query.where ?? {};
+    const threadWhere = {
+      ...(filters.threadId !== undefined ? { id: filters.threadId } : {}),
+      ...(filters.actorRef !== undefined ? { actorRef: filters.actorRef } : {}),
+    };
+    const messageWhere = {
+      ...(filters.agentName !== undefined ? { agentName: filters.agentName } : {}),
+      ...(Object.keys(threadWhere).length > 0 ? { thread: threadWhere } : {}),
+    };
+    const em = this.em.fork();
+    const where = {
+      status: 'pending_approval' as const,
+      ...(filters.toolName !== undefined ? { toolName: filters.toolName } : {}),
+      ...(Object.keys(messageWhere).length > 0 ? { message: messageWhere } : {}),
+      ...(filters.fromDay !== undefined || filters.toDay !== undefined
+        ? {
+            createdAt: {
+              ...(filters.fromDay !== undefined ? { $gte: dayStartUtc(filters.fromDay) } : {}),
+              ...(filters.toDay !== undefined ? { $lte: dayEndUtc(filters.toDay) } : {}),
+            },
+          }
+        : {}),
+    };
+    const [rows, total] = await em.findAndCount(AgentToolCall, where, {
+      orderBy: { createdAt: 'asc', id: 'asc' },
+      limit: query.pageSize,
+      offset: (query.page - 1) * query.pageSize,
+      populate: ['message', 'message.thread'],
+    });
     return {
-      rows: runs.map((run) => ({
-        runId: run.id,
-        threadId: run.thread.id,
-        actorRef: run.actorRef,
-        agentName: run.agentName ?? null,
-        status: run.status,
-        durationMs: run.durationMs ?? null,
-        errorCode: run.errorCode ?? null,
-        errorMessage: run.errorMessage ?? null,
-        retries: run.retries,
-        startedAt: run.startedAt.toISOString(),
-        promptHash: run.promptHash ?? null,
+      rows: rows.map((toolCall) => ({
+        toolCallId: toolCall.id,
+        toolName: toolCall.toolName,
+        input: toolCall.input,
+        threadId: toolCall.message.thread.id,
+        threadTitle: toolCall.message.thread.title,
+        actorRef: toolCall.message.thread.actorRef,
+        agentName: toolCall.message.agentName ?? null,
+        requestedAt: toolCall.createdAt.toISOString(),
+        runId: toolCall.runId ?? null,
       })),
       total,
       page: query.page,
       pageSize: query.pageSize,
     };
+  }
+
+  /**
+   * One run, its owning thread's headline and its tool calls — TWO queries regardless of how many
+   * tools the run called. `toolCalls` comes off `agent_tool_call.run_id`, so a run recorded before
+   * that column was written reports none.
+   */
+  async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
+    const em = this.em.fork();
+    const run = await em.findOne(AgentRun, { id: runId }, { populate: ['thread'] });
+    if (run === null) {
+      return null;
+    }
+    const toolCalls = await em.find(
+      AgentToolCall,
+      { runId },
+      { orderBy: { createdAt: 'asc', id: 'asc' } },
+    );
+    return {
+      run: toRecentRunRow(run),
+      thread: {
+        threadId: run.thread.id,
+        title: run.thread.title,
+        actorRef: run.thread.actorRef,
+        deleted: run.thread.deletedAt != null,
+      },
+      toolCalls: toolCalls.map(toRunToolCallRow),
+    };
+  }
+
+  /**
+   * One thread with its lifetime usage rollup, its newest runs and its newest messages. A fixed six
+   * queries (thread, usage, message count, message page, that page's tool calls, runs+count) — the
+   * per-message tool-call counts are ONE batched read over the returned message ids, not one per
+   * message. Soft-deleted threads are returned with `deleted: true`; an audit still needs them.
+   */
+  async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(AgentThread, { id: query.threadId });
+    if (thread === null) {
+      return null;
+    }
+    const pricing = await this.loadPricing();
+    const usageRows = await em.find(AgentTokenUsage, { thread });
+    const usage = rollupThreadUsage(usageRows.map(toUsageInput), pricing);
+    const messageCount = await em.count(AgentMessage, { thread });
+    const messages = await em.find(
+      AgentMessage,
+      { thread },
+      { orderBy: { createdAt: 'desc', id: 'desc' }, limit: query.messageLimit },
+    );
+    const toolCallCounts = await this.toolCallCountsByMessage(
+      em,
+      messages.map((message) => message.id),
+    );
+    const [runs, runTotal] = await em.findAndCount(
+      AgentRun,
+      { thread },
+      { orderBy: { startedAt: 'desc', id: 'desc' }, limit: query.runLimit },
+    );
+    return {
+      thread: {
+        threadId: thread.id,
+        title: thread.title,
+        actorRef: thread.actorRef,
+        messageCount,
+        totalTokens: usage.totalTokens,
+        lastActivityAt: thread.updatedAt.toISOString(),
+      },
+      deleted: thread.deletedAt != null,
+      usage,
+      runs: runs.map(toRecentRunRow),
+      runTotal,
+      messages: messages.map((message): ThreadMessageRow => {
+        const { content, truncated } = truncateDetailContent(message.content);
+        return {
+          messageId: message.id,
+          role: message.role,
+          content,
+          truncated,
+          agentName: message.agentName ?? null,
+          toolCallCount: toolCallCounts.get(message.id) ?? 0,
+          createdAt: message.createdAt.toISOString(),
+        };
+      }),
+    };
+  }
+
+  /** Tool-call counts for a set of messages in ONE query — the detail view's no-N+1 guarantee. */
+  private async toolCallCountsByMessage(
+    em: EntityManager,
+    messageIds: string[],
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (messageIds.length === 0) {
+      return counts;
+    }
+    const toolCalls = await em.find(
+      AgentToolCall,
+      { message: { $in: messageIds } },
+      { fields: ['message'] },
+    );
+    for (const toolCall of toolCalls) {
+      counts.set(toolCall.message.id, (counts.get(toolCall.message.id) ?? 0) + 1);
+    }
+    return counts;
   }
 }

@@ -152,6 +152,13 @@ export interface ToolStatRow {
   calls: number;
   failed: number;
   rejected: number;
+  /**
+   * p50 (median) of executionMs across calls that recorded one; null when none carry it. Reported
+   * alongside p95 rather than a mean: tool latency is long-tailed (a retry or a slow upstream drags
+   * an average somewhere no single call ever was), so the pair "typical / tail" is what an operator
+   * can actually act on.
+   */
+  p50ExecutionMs: number | null;
   /** p95 of executionMs across executed calls; null when none carry it. */
   p95ExecutionMs: number | null;
 }
@@ -209,6 +216,137 @@ export interface RunWhere {
   toDay?: string;
 }
 
+/** Filters for {@link AgentGovernanceQueries.approvalsPage}. */
+export interface ApprovalWhere {
+  toolName?: string;
+  threadId?: string;
+  /** The requesting thread's owner. */
+  actorRef?: string;
+  agentName?: string;
+  /** Inclusive UTC day bounds on when the approval was requested, `YYYY-MM-DD`. */
+  fromDay?: string;
+  toDay?: string;
+}
+
+// ─── Drill-down details ──────────────────────────────────────────────────────
+//
+// The list reads above answer "what happened"; these two answer "what happened HERE". Each is ONE
+// call returning everything the corresponding drill-down renders, so a console never fans out a
+// query per row it just drew. Both return `null` for an id that doesn't exist — the caller decides
+// whether that's a 404 or an empty panel.
+
+/** One tool call inside a {@link GovernanceRunDetail}, with the execution outcome a list row can't afford to carry. */
+export interface RunToolCallRow {
+  toolCallId: string;
+  toolName: string;
+  toolType: string;
+  status: string;
+  /** Wall time of the execution; null for a call that never executed (rejected/still pending). */
+  executionMs: number | null;
+  /** Who executed/decided it, when the store recorded an attribution. */
+  executedByRef: string | null;
+  /** The failure text for a `failed` call; null otherwise. */
+  error: string | null;
+  /** ISO timestamp. */
+  createdAt: string;
+}
+
+/** The owning thread's headline, carried on a drill-down so it can be named without a second read. */
+export interface DetailThreadRef {
+  threadId: string;
+  title: string;
+  actorRef: string;
+  /** True when the thread is soft-deleted — its history is still readable, the thread is not. */
+  deleted: boolean;
+}
+
+/**
+ * Everything a run drill-down renders: the run row itself, its owning thread's headline, and the
+ * tool calls attributed to it.
+ *
+ * `toolCalls` is empty for a run recorded before tool calls carried a `runId` (the column is
+ * nullable and pre-rollout rows have none) — indistinguishable, from here, from a run that called
+ * no tools. There is deliberately no cost figure: the token ledger has no run column, so per-run
+ * spend is not attributable without a store migration.
+ */
+export interface GovernanceRunDetail {
+  run: RecentRunRow;
+  thread: DetailThreadRef;
+  /** The run's tool calls, oldest first — the order they were requested in. */
+  toolCalls: RunToolCallRow[];
+}
+
+/** One message inside a {@link GovernanceThreadDetail}. `content` is capped server-side. */
+export interface ThreadMessageRow {
+  messageId: string;
+  role: string;
+  /** Message text, cut to {@link THREAD_DETAIL_CONTENT_CHARS}; see `truncated`. */
+  content: string;
+  /** True when `content` was cut — the console shows an explicit "…" rather than implying the tail. */
+  truncated: boolean;
+  agentName: string | null;
+  /** How many tool calls this message requested. */
+  toolCallCount: number;
+  /** ISO timestamp. */
+  createdAt: string;
+}
+
+/** Token/cost rollup across a thread's whole ledger (not range-scoped — a thread's lifetime). */
+export interface ThreadUsageRollup {
+  /** Ledger rows, i.e. billed turns. */
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+/** Everything a thread drill-down renders, in one call. */
+export interface GovernanceThreadDetail {
+  /** The thread's own activity row (`messageCount` is the thread total, not the page below). */
+  thread: ThreadActivityRow;
+  /** True when the thread is soft-deleted. */
+  deleted: boolean;
+  usage: ThreadUsageRollup;
+  /** The thread's runs, newest first, capped at the query's `runLimit`. */
+  runs: RecentRunRow[];
+  /** Runs on this thread in total — `runs.length < runTotal` means the cap bit. */
+  runTotal: number;
+  /** The thread's messages, newest first, capped at the query's `messageLimit`. */
+  messages: ThreadMessageRow[];
+}
+
+/** Row caps for {@link AgentGovernanceQueries.threadDetail}, already clamped by the caller. */
+export interface GovernanceThreadDetailQuery {
+  threadId: string;
+  /** Max messages returned, newest first. */
+  messageLimit: number;
+  /** Max runs returned, newest first. */
+  runLimit: number;
+}
+
+/**
+ * Per-message content cap for {@link ThreadMessageRow.content}. A drill-down is a triage view, not a
+ * transcript reader: capping here keeps one response bounded regardless of how long an assistant
+ * turn ran. Shared by every adapter so the cut is identical wherever the console is served from.
+ */
+export const THREAD_DETAIL_CONTENT_CHARS = 2000;
+
+/**
+ * Cut a message body to {@link THREAD_DETAIL_CONTENT_CHARS}, reporting whether it was cut. Lives
+ * next to the cap so every adapter truncates at the same boundary — a console comparing two stores
+ * must not see two different "…".
+ */
+export function truncateDetailContent(content: string): {
+  content: string;
+  truncated: boolean;
+} {
+  if (content.length <= THREAD_DETAIL_CONTENT_CHARS) {
+    return { content, truncated: false };
+  }
+  return { content: content.slice(0, THREAD_DETAIL_CONTENT_CHARS), truncated: true };
+}
+
 /**
  * The governance read-model. Cost is `inputTokens/1e6 * inputPricePer1m + outputTokens/1e6 *
  * outputPricePer1m` against the current pricing row per model; an unpriced model contributes 0 cost
@@ -230,8 +368,21 @@ export interface AgentGovernanceQueries {
   runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]>;
   runTrend(range: GovernanceRange): Promise<RunTrendPoint[]>;
   recentRuns(limit: number): Promise<RecentRunRow[]>;
-  /** Tool calls sitting `pending_approval`, oldest first — an inbox drains from the back. Capped at `limit`. */
+  /**
+   * Tool calls sitting `pending_approval`, oldest first — an inbox drains from the back. Capped at
+   * `limit`, with NO total: a caller that needs to know whether the cap hid anything wants
+   * {@link approvalsPage} instead.
+   */
   pendingApprovals(limit: number): Promise<PendingApprovalRow[]>;
+  /**
+   * Paged, filterable approvals inbox, oldest first (same ordering as `pendingApprovals`). Unlike
+   * that method this reports `total`, so a console can page a backlog and say how much of it is
+   * off-screen — the one failure this surface cannot afford is a pending approval nobody sees.
+   * An adapter without the backing data returns an empty page (`total: 0`) rather than throwing.
+   */
+  approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>>;
   /** Per-tool call/failure/rejection/latency rollup over the range, highest call count first. */
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]>;
   /**
@@ -251,4 +402,19 @@ export interface AgentGovernanceQueries {
    * by a store without run recording (no `recordRunStart`) returns an empty page (`total: 0`).
    */
   runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>>;
+  /**
+   * One run with its owning thread and its tool calls — the drill-down behind a row in the runs
+   * table. `null` when no run has that id. ONE call, not one per tool call: a failed run is the
+   * thing an operator opens first and it should not cost a query per step.
+   *
+   * An adapter backed by a store without run recording returns `null` for every id.
+   */
+  runDetail(runId: string): Promise<GovernanceRunDetail | null>;
+  /**
+   * One thread with its lifetime usage rollup, its recent runs and its recent messages — the
+   * drill-down behind a row in the threads table. `null` when no thread has that id; a soft-deleted
+   * thread IS returned (with `deleted: true`), because "what did the thread we just deleted do" is
+   * exactly the question an audit asks.
+   */
+  threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null>;
 }

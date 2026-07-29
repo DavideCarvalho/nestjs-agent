@@ -4,10 +4,14 @@ import type {
   AgentApprovalPort,
   AgentGovernanceQueries,
   AgentPricingStore,
+  ApprovalWhere,
   CurrentModelPrice,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
+  GovernanceRunDetail,
+  GovernanceThreadDetail,
+  GovernanceThreadDetailQuery,
   ModelSpendRow,
   PendingApprovalRow,
   RecentRunRow,
@@ -25,7 +29,13 @@ import type {
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
-import { Inject, Injectable, NotImplementedException, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  NotFoundException,
+  NotImplementedException,
+  Optional,
+} from '@nestjs/common';
 import { Observable } from 'rxjs';
 import type { ActorDirectory } from './actor-directory.js';
 import { parseApprovalDecision } from './parse-approval-decision.js';
@@ -45,6 +55,20 @@ export interface WithActorLabel {
 export type ActorSpendRowWithLabel = ActorSpendRow & WithActorLabel;
 export type ThreadSpendRowWithLabel = ThreadSpendRow & WithActorLabel;
 export type ThreadActivityRowWithLabel = ThreadActivityRow & WithActorLabel;
+
+/**
+ * `GET <api>/runs/:runId` — a run drill-down with the owning thread's `actorLabel` resolved, the
+ * same way {@link threadsPage} labels its rows. The run row itself stays unlabeled, matching every
+ * other run surface in this console.
+ */
+export type RunDetailWithLabel = Omit<GovernanceRunDetail, 'thread'> & {
+  thread: GovernanceRunDetail['thread'] & WithActorLabel;
+};
+
+/** `GET <api>/threads/:threadId` — a thread drill-down, actor-labeled like {@link threadsPage}. */
+export type ThreadDetailWithLabel = Omit<GovernanceThreadDetail, 'thread'> & {
+  thread: ThreadActivityRowWithLabel;
+};
 
 /** The spend/usage overview the SPA renders on its headline section (`GET <api>/spend`). */
 export interface SpendOverview {
@@ -187,9 +211,45 @@ export class DashboardService {
     return this.queries.runsPage(query);
   }
 
-  /** Tool calls sitting `pending_approval`, oldest first, for the cross-thread approvals inbox. */
+  /**
+   * Tool calls sitting `pending_approval`, oldest first, for the cross-thread approvals inbox.
+   * Capped and totalless — kept because the SPA still calls `GET approvals`; new callers want
+   * {@link approvalsPage}, which reports how much of the backlog the cap hid.
+   */
   pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
     return this.queries.pendingApprovals(limit);
+  }
+
+  /** Paged, filterable approvals inbox with a total — the backlog-safe read of the HITL queue. */
+  approvalsPage(
+    query: GovernancePageQuery<ApprovalWhere>,
+  ): Promise<GovernancePage<PendingApprovalRow>> {
+    return this.queries.approvalsPage(query);
+  }
+
+  /**
+   * One run with its thread and its tool calls. 404s on an unknown id rather than returning an empty
+   * detail: "this run does not exist" and "this run did nothing" are different answers, and a console
+   * that conflates them sends an operator looking for a bug that isn't there.
+   */
+  async runDetail(runId: string): Promise<RunDetailWithLabel> {
+    const detail = await this.queries.runDetail(runId);
+    if (detail === null) {
+      throw new NotFoundException(`No run "${runId}".`);
+    }
+    const [thread] = await this.withActorLabels([detail.thread]);
+    // `withActorLabels` returns one row per input; the array is never empty here.
+    return { ...detail, thread: thread ?? { ...detail.thread, actorLabel: null } };
+  }
+
+  /** One thread with its usage rollup, runs and messages. 404s on an unknown id, like {@link runDetail}. */
+  async threadDetail(query: GovernanceThreadDetailQuery): Promise<ThreadDetailWithLabel> {
+    const detail = await this.queries.threadDetail(query);
+    if (detail === null) {
+      throw new NotFoundException(`No thread "${query.threadId}".`);
+    }
+    const [thread] = await this.withActorLabels([detail.thread]);
+    return { ...detail, thread: thread ?? { ...detail.thread, actorLabel: null } };
   }
 
   /** Per-tool call/failure/rejection/latency rollup for a day range, for the Tools section. */

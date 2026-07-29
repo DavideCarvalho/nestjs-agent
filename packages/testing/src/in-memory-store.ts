@@ -71,11 +71,25 @@ export interface GovernanceToolCallRow {
   toolType: 'read' | 'action';
   status: ToolCallStatus;
   threadId: string;
+  /** The message that requested the call — the thread drill-down groups by it. */
+  messageId: string;
   /** Wall-clock milliseconds the tool took to run; undefined when it never recorded one. */
   executionMs?: number;
+  /** The failure text for a `failed` call; undefined otherwise. */
+  error?: string;
   createdAt: string;
   /** The run this call belongs to; undefined when the caller didn't supply one. */
   runId?: string;
+}
+
+/** A stored message exposed to the governance read-model (the thread drill-down's transcript). */
+export interface GovernanceMessageRow {
+  messageId: string;
+  threadId: string;
+  role: string;
+  content: string;
+  agentName?: string;
+  createdAt: string;
 }
 
 /** A tool call awaiting a HITL decision, joined to its thread + message for the approvals inbox. */
@@ -460,10 +474,30 @@ export class InMemoryAgentStore implements AgentStore {
       toolType: row.toolType,
       status: row.status,
       threadId: row.threadId,
+      messageId: row.messageId,
       createdAt: row.createdAt,
       ...(row.executionMs !== undefined ? { executionMs: row.executionMs } : {}),
+      ...(row.error !== undefined ? { error: row.error } : {}),
       ...(row.runId !== undefined ? { runId: row.runId } : {}),
     }));
+  }
+
+  /** Governance read-model feed: every stored message, thread-resolved, for the thread drill-down. */
+  governanceMessages(): GovernanceMessageRow[] {
+    const rows: GovernanceMessageRow[] = [];
+    for (const thread of this.threads.values()) {
+      for (const message of thread.messages) {
+        rows.push({
+          messageId: message.id,
+          threadId: thread.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt,
+          ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),
+        });
+      }
+    }
+    return rows;
   }
 
   /**

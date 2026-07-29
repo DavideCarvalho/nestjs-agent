@@ -4,9 +4,13 @@ import type {
   AgentApprovalPort,
   AgentGovernanceQueries,
   AgentPricingStore,
+  ApprovalWhere,
   CurrentModelPrice,
   GovernancePage,
   GovernanceRange,
+  GovernanceRunDetail,
+  GovernanceThreadDetail,
+  GovernanceThreadDetailQuery,
   ModelPriceInput,
   ModelSpendRow,
   PendingApprovalRow,
@@ -25,7 +29,7 @@ import type {
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
-import { NotImplementedException } from '@nestjs/common';
+import { NotFoundException, NotImplementedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import type { ActorDirectory } from './actor-directory.js';
 import { AgentApiController } from './agent-api.controller.js';
@@ -60,6 +64,9 @@ interface QueriesOverrides {
   toolCallsPage?: GovernancePage<ToolCallActivityRow>;
   threadsPage?: GovernancePage<ThreadActivityRow>;
   runsPage?: GovernancePage<RecentRunRow>;
+  approvalsPage?: GovernancePage<PendingApprovalRow>;
+  runDetail?: GovernanceRunDetail | null;
+  threadDetail?: GovernanceThreadDetail | null;
 }
 
 /** An empty `GovernancePage` — the shape a store without the backing data returns. */
@@ -134,6 +141,18 @@ function fakeQueries(overrides: QueriesOverrides = {}): AgentGovernanceQueries {
     async runsPage(query: { page: number; pageSize: number; where?: RunWhere }) {
       record('runsPage');
       return overrides.runsPage ?? emptyPage(query.page, query.pageSize);
+    },
+    async approvalsPage(query: { page: number; pageSize: number; where?: ApprovalWhere }) {
+      record('approvalsPage');
+      return overrides.approvalsPage ?? emptyPage(query.page, query.pageSize);
+    },
+    async runDetail(_runId: string) {
+      record('runDetail');
+      return overrides.runDetail ?? null;
+    },
+    async threadDetail(_query: GovernanceThreadDetailQuery) {
+      record('threadDetail');
+      return overrides.threadDetail ?? null;
     },
   };
 }
@@ -293,6 +312,7 @@ describe('DashboardService', () => {
             calls: 4,
             failed: 1,
             rejected: 1,
+            p50ExecutionMs: 90,
             p95ExecutionMs: 320,
           },
         ],
@@ -755,5 +775,211 @@ describe('AgentApiController decider attribution (POST approvals/:toolCallId →
     await controller.decideApproval('tc1', { approved: true }, {});
 
     expect(calls).toEqual([{ method: 'approve', toolCallId: 'tc1', opts: {} }]);
+  });
+});
+
+describe('DashboardService approvals inbox + drill-downs', () => {
+  const APPROVAL_ROW: PendingApprovalRow = {
+    toolCallId: 'tc1',
+    toolName: 'deploy',
+    input: { env: 'prod' },
+    threadId: 'th1',
+    threadTitle: 'Ops',
+    actorRef: 'user:1',
+    agentName: 'ops-agent',
+    requestedAt: '2026-08-01T09:00:00.000Z',
+    runId: 'run-1',
+  };
+
+  const RUN_ROW: RecentRunRow = {
+    runId: 'run-1',
+    threadId: 'th1',
+    actorRef: 'user:1',
+    agentName: 'ops-agent',
+    status: 'failed',
+    durationMs: 1200,
+    errorCode: 'TIMEOUT',
+    errorMessage: 'upstream timed out',
+    retries: 1,
+    startedAt: '2026-08-01T09:00:00.000Z',
+    promptHash: null,
+  };
+
+  const RUN_DETAIL: GovernanceRunDetail = {
+    run: RUN_ROW,
+    thread: { threadId: 'th1', title: 'Ops', actorRef: 'user:1', deleted: false },
+    toolCalls: [
+      {
+        toolCallId: 'tc1',
+        toolName: 'deploy',
+        toolType: 'action',
+        status: 'failed',
+        executionMs: 900,
+        executedByRef: 'user:2',
+        error: 'upstream 503',
+        createdAt: '2026-08-01T09:00:30.000Z',
+      },
+    ],
+  };
+
+  const THREAD_DETAIL: GovernanceThreadDetail = {
+    thread: {
+      threadId: 'th1',
+      title: 'Ops',
+      actorRef: 'user:1',
+      messageCount: 2,
+      totalTokens: 1500,
+      lastActivityAt: '2026-08-01T10:00:00.000Z',
+    },
+    deleted: false,
+    usage: { requests: 1, inputTokens: 1000, outputTokens: 500, totalTokens: 1500, costUsd: 0.5 },
+    runs: [RUN_ROW],
+    runTotal: 1,
+    messages: [
+      {
+        messageId: 'm1',
+        role: 'assistant',
+        content: 'done',
+        truncated: false,
+        agentName: 'ops-agent',
+        toolCallCount: 1,
+        createdAt: '2026-08-01T09:00:00.000Z',
+      },
+    ],
+  };
+
+  it('approvalsPage() passes the query through and returns the backlog total', async () => {
+    const calls: string[] = [];
+    const page: GovernancePage<PendingApprovalRow> = {
+      rows: [APPROVAL_ROW],
+      total: 812,
+      page: 2,
+      pageSize: 25,
+    };
+    const service = new DashboardService(
+      fakeQueries({ record: (call) => calls.push(call), approvalsPage: page }),
+    );
+
+    const result = await service.approvalsPage({
+      page: 2,
+      pageSize: 25,
+      where: { toolName: 'deploy' },
+    });
+
+    expect(calls).toEqual(['approvalsPage']);
+    // The whole point: the caller can tell 812 are pending while holding 1 of them.
+    expect(result).toEqual(page);
+  });
+
+  it('runDetail() resolves the owning thread actorLabel and leaves the run row unlabeled', async () => {
+    const directory: ActorDirectory = {
+      async resolveDisplay(refs) {
+        return Object.fromEntries(refs.map((ref) => [ref, `Name of ${ref}`]));
+      },
+    };
+    const service = new DashboardService(fakeQueries({ runDetail: RUN_DETAIL }), directory);
+
+    const detail = await service.runDetail('run-1');
+
+    expect(detail.thread).toEqual({
+      threadId: 'th1',
+      title: 'Ops',
+      actorRef: 'user:1',
+      deleted: false,
+      actorLabel: 'Name of user:1',
+    });
+    // Runs are unlabeled everywhere else in this console; a drill-down doesn't change that.
+    expect(detail.run).toEqual(RUN_ROW);
+    expect(detail.toolCalls).toHaveLength(1);
+  });
+
+  it('runDetail() 404s on an unknown id rather than returning an empty detail', async () => {
+    const service = new DashboardService(fakeQueries({ runDetail: null }));
+    await expect(service.runDetail('nope')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('threadDetail() labels the thread and passes the row caps through', async () => {
+    const seen: { threadId: string; messageLimit: number; runLimit: number }[] = [];
+    const queries = fakeQueries({ threadDetail: THREAD_DETAIL });
+    const spied: AgentGovernanceQueries = {
+      ...queries,
+      async threadDetail(query) {
+        seen.push(query);
+        return queries.threadDetail(query);
+      },
+    };
+    const service = new DashboardService(spied);
+
+    const detail = await service.threadDetail({
+      threadId: 'th1',
+      messageLimit: 10,
+      runLimit: 5,
+    });
+
+    expect(seen).toEqual([{ threadId: 'th1', messageLimit: 10, runLimit: 5 }]);
+    // No directory bound → actorLabel degrades to null instead of failing.
+    expect(detail.thread).toMatchObject({ threadId: 'th1', actorLabel: null });
+    expect(detail.usage.costUsd).toBe(0.5);
+    expect(detail.runTotal).toBe(1);
+  });
+
+  it('threadDetail() 404s on an unknown id', async () => {
+    const service = new DashboardService(fakeQueries({ threadDetail: null }));
+    await expect(
+      service.threadDetail({ threadId: 'nope', messageLimit: 10, runLimit: 5 }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('AgentApiController approvals inbox + drill-downs', () => {
+  it('approvals-page parses page/limit/where and clamps the page size', () => {
+    const seen: unknown[] = [];
+    const queries = fakeQueries({});
+    const service = new DashboardService({
+      ...queries,
+      async approvalsPage(query) {
+        seen.push(query);
+        return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
+      },
+    });
+    const controller = new AgentApiController(service, undefined);
+
+    void controller.approvalsPage('2', '9999', { toolName: 'deploy', actorRef: 'ops' });
+
+    expect(seen).toEqual([
+      { page: 2, pageSize: 200, where: { toolName: 'deploy', actorRef: 'ops' } },
+    ]);
+  });
+
+  it('approvals-page 400s on an unknown where field, naming it', () => {
+    const controller = new AgentApiController(new DashboardService(fakeQueries({})), undefined);
+    expect(() => controller.approvalsPage('1', '25', { nonsense: 'x' })).toThrow(
+      /Unknown where field "nonsense"/,
+    );
+  });
+
+  it('thread detail defaults and clamps the two row caps independently', async () => {
+    const seen: unknown[] = [];
+    const queries = fakeQueries({});
+    const service = new DashboardService({
+      ...queries,
+      async threadDetail(query) {
+        seen.push(query);
+        return null;
+      },
+    });
+    const controller = new AgentApiController(service, undefined);
+
+    // Defaults (50 messages / 25 runs), then an over-cap request clamped to 200. Both reject with a
+    // 404 (the stub returns null) — the assertion here is the caps that reached the read-model.
+    await expect(controller.threadDetail('th1')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(controller.threadDetail('th1', '9999', '0')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+
+    expect(seen).toEqual([
+      { threadId: 'th1', messageLimit: 50, runLimit: 25 },
+      { threadId: 'th1', messageLimit: 200, runLimit: 1 },
+    ]);
   });
 });

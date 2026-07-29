@@ -2,6 +2,7 @@
 // @mikro-orm/sqlite). Seeds a priced model (`gpt-x`, with a superseded non-current pricing row)
 // and an unpriced model (`free-y`) plus an out-of-range ledger row, then asserts the read-model
 // aggregations. Runs only under `pnpm test:db`.
+import { THREAD_DETAIL_CONTENT_CHARS } from '@dudousxd/nestjs-agent-core';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensureAgentSchema } from './ensure-schema';
@@ -970,7 +971,23 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
       createdAt: new Date('2026-07-19T09:00:00.000Z'),
     });
 
+    // A long-tailed sample in its own day (2026-07-22): nine 100ms calls and one 10s outlier. Their
+    // mean is ~1090ms — a number no call in the sample ever produced. p50/p95 report 100/10000.
+    const slowTail = [100, 100, 100, 100, 100, 100, 100, 100, 100, 10_000].map(
+      (executionMs, index) =>
+        em.create(AgentToolCall, {
+          id: `tc-stats-slowtail-${index}`,
+          message: messageJudyA,
+          toolName: 'slowtail',
+          toolType: 'action',
+          status: 'executed',
+          executionMs,
+          createdAt: new Date(`2026-07-22T09:0${index}:00.000Z`),
+        }),
+    );
+
     em.persist([
+      ...slowTail,
       threadJudy,
       threadKyle,
       messageJudyA,
@@ -1032,7 +1049,7 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
     expect(rows.map((row) => row.toolCallId)).toEqual(['tc-pa-1', 'tc-pa-2']);
   });
 
-  it('toolStats buckets by tool+type, counts failed/rejected, and computes p95 execution latency', async () => {
+  it('toolStats buckets by tool+type, counts failed/rejected, and computes p50/p95 latency', async () => {
     const rows = await toolQueries.toolStats({ fromDay: '2026-07-20', toDay: '2026-07-21' });
     expect(rows).toEqual([
       {
@@ -1041,6 +1058,8 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
         calls: 3,
         failed: 0,
         rejected: 0,
+        // sample [50, 150, 250]: the median is the middle call, NOT the 150ms mean-vs-tail confusion
+        p50ExecutionMs: 150,
         p95ExecutionMs: 250,
       },
       {
@@ -1049,6 +1068,8 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
         calls: 2,
         failed: 1,
         rejected: 1,
+        // only one of the two calls recorded a latency — a one-element sample is its own p50 and p95
+        p50ExecutionMs: 500,
         p95ExecutionMs: 500,
       },
       {
@@ -1057,9 +1078,19 @@ describe('MikroOrmGovernanceQueries approvals + tool stats (sqlite)', () => {
         calls: 1,
         failed: 0,
         rejected: 0,
+        p50ExecutionMs: null,
         p95ExecutionMs: null,
       },
     ]);
+  });
+
+  it('toolStats p50 tracks the typical call while p95 tracks the tail', async () => {
+    // The reason this pair exists instead of a mean: nine fast calls and one 10s outlier average to
+    // ~1s, a latency no call in the sample ever had. p50 says "normally 100ms", p95 says "but".
+    const [search] = await toolQueries.toolStats({ fromDay: '2026-07-22', toDay: '2026-07-22' });
+    expect(search).toMatchObject({ toolName: 'slowtail', calls: 10 });
+    expect(search?.p50ExecutionMs).toBe(100);
+    expect(search?.p95ExecutionMs).toBe(10_000);
   });
 
   it('toolStats reports nothing outside the range', async () => {
@@ -1622,5 +1653,578 @@ describe('MikroOrmGovernanceQueries runsPage (sqlite)', () => {
       where: { status: 'not-a-real-status' },
     });
     expect(page).toEqual({ rows: [], total: 0, page: 1, pageSize: 10 });
+  });
+});
+
+// The paged approvals inbox. The point of this suite is the two things `pendingApprovals` cannot do:
+// report how much of the backlog is off-screen, and page it under an ordering that ties.
+//
+// Two of the six fixtures share an identical `createdAt` on purpose, and the tests below pin the
+// order they page in. Be honest about what that proves: SQLite's plan for this query happens to be
+// stable, so these assertions still pass if you delete the `id` tiebreak from the ORDER BY (measured
+// — not assumed). They pin the CONTRACT, not the engine. The tiebreak is there because `createdAt`
+// alone is not a total order and another engine (or another plan on the same engine) is free to
+// return a tied pair differently per statement, which is how a row lands on two pages or on none.
+describe('MikroOrmGovernanceQueries approvalsPage (sqlite)', () => {
+  let approvalsOrm: MikroORM;
+  let approvalsQueries: MikroOrmGovernanceQueries;
+
+  beforeAll(async () => {
+    approvalsOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(approvalsOrm);
+    approvalsQueries = new MikroOrmGovernanceQueries(
+      approvalsOrm.em,
+      new MikroOrmPricingStore(approvalsOrm.em),
+    );
+
+    const em = approvalsOrm.em.fork();
+    const opsThread = em.create(AgentThread, {
+      id: 'thread-ops',
+      actorRef: 'ops',
+      title: 'Ops thread',
+      transient: false,
+      createdAt: new Date('2026-08-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-08-01T08:00:00.000Z'),
+    });
+    const financeThread = em.create(AgentThread, {
+      id: 'thread-finance',
+      actorRef: 'finance',
+      title: 'Finance thread',
+      transient: false,
+      createdAt: new Date('2026-08-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-08-01T08:00:00.000Z'),
+    });
+    const opsMessage = em.create(AgentMessage, {
+      id: 'msg-ops',
+      thread: opsThread,
+      role: 'assistant',
+      content: 'awaiting approval',
+      agentName: 'ops-agent',
+      createdAt: new Date('2026-08-01T08:30:00.000Z'),
+    });
+    const financeMessage = em.create(AgentMessage, {
+      id: 'msg-finance',
+      thread: financeThread,
+      role: 'assistant',
+      content: 'awaiting approval',
+      agentName: 'finance-agent',
+      createdAt: new Date('2026-08-01T08:30:00.000Z'),
+    });
+
+    // Six pending approvals; `ap-3a`/`ap-3b` share a timestamp to the millisecond.
+    const pending = [
+      { id: 'ap-1', at: '2026-08-01T09:00:00.000Z', tool: 'deploy', message: opsMessage },
+      { id: 'ap-2', at: '2026-08-01T09:01:00.000Z', tool: 'deploy', message: financeMessage },
+      { id: 'ap-3a', at: '2026-08-01T09:02:00.000Z', tool: 'refund', message: opsMessage },
+      { id: 'ap-3b', at: '2026-08-01T09:02:00.000Z', tool: 'refund', message: financeMessage },
+      { id: 'ap-4', at: '2026-08-02T09:03:00.000Z', tool: 'restart', message: opsMessage },
+      { id: 'ap-5', at: '2026-08-03T09:04:00.000Z', tool: 'restart', message: financeMessage },
+    ].map((row) =>
+      em.create(AgentToolCall, {
+        id: row.id,
+        message: row.message,
+        toolName: row.tool,
+        toolType: 'action',
+        input: { id: row.id },
+        status: 'pending_approval',
+        createdAt: new Date(row.at),
+        runId: `run-${row.id}`,
+      }),
+    );
+    // Already decided — must never appear in the inbox regardless of filters.
+    const decided = em.create(AgentToolCall, {
+      id: 'ap-decided',
+      message: opsMessage,
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'executed',
+      createdAt: new Date('2026-08-01T09:00:30.000Z'),
+    });
+
+    em.persist([opsThread, financeThread, opsMessage, financeMessage, ...pending, decided]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await approvalsOrm?.close(true);
+  });
+
+  it('reports the whole backlog as total even when the page shows a slice of it', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 2 });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-2']);
+    // The thing `pendingApprovals(2)` structurally cannot tell you.
+    expect(page).toMatchObject({ total: 6, page: 1, pageSize: 2 });
+  });
+
+  it('pages oldest-first with a total order — no row on two pages, none skipped', async () => {
+    const seen: string[] = [];
+    for (const page of [1, 2, 3, 4]) {
+      const result = await approvalsQueries.approvalsPage({ page, pageSize: 2 });
+      seen.push(...result.rows.map((row) => row.toolCallId));
+    }
+    // Every fixture exactly once, in a stable order across the tied pair's page boundary.
+    expect(seen).toEqual(['ap-1', 'ap-2', 'ap-3a', 'ap-3b', 'ap-4', 'ap-5']);
+    expect(new Set(seen).size).toBe(6);
+  });
+
+  it('splits the tied-timestamp pair across a page boundary deterministically', async () => {
+    // pageSize 3 puts ap-3a at the end of page 1 and ap-3b at the head of page 2 — the exact case an
+    // untiebroken ORDER BY gets wrong.
+    const first = await approvalsQueries.approvalsPage({ page: 1, pageSize: 3 });
+    const second = await approvalsQueries.approvalsPage({ page: 2, pageSize: 3 });
+    expect(first.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-2', 'ap-3a']);
+    expect(second.rows.map((row) => row.toolCallId)).toEqual(['ap-3b', 'ap-4', 'ap-5']);
+  });
+
+  it('returns an empty page past the end, keeping the total', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 9, pageSize: 2 });
+    expect(page).toEqual({ rows: [], total: 6, page: 9, pageSize: 2 });
+  });
+
+  it('carries the same joined fields pendingApprovals does', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 1 });
+    expect(page.rows[0]).toEqual({
+      toolCallId: 'ap-1',
+      toolName: 'deploy',
+      input: { id: 'ap-1' },
+      threadId: 'thread-ops',
+      threadTitle: 'Ops thread',
+      actorRef: 'ops',
+      agentName: 'ops-agent',
+      requestedAt: '2026-08-01T09:00:00.000Z',
+      runId: 'run-ap-1',
+    });
+  });
+
+  it('never surfaces an already-decided call', async () => {
+    const page = await approvalsQueries.approvalsPage({ page: 1, pageSize: 50 });
+    expect(page.rows.map((row) => row.toolCallId)).not.toContain('ap-decided');
+    expect(page.total).toBe(6);
+  });
+
+  it('filters by toolName', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { toolName: 'refund' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-3a', 'ap-3b']);
+    expect(page.total).toBe(2);
+  });
+
+  it('filters by threadId through the message relation', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { threadId: 'thread-finance' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-2', 'ap-3b', 'ap-5']);
+    expect(page.total).toBe(3);
+  });
+
+  it('filters by actorRef through message → thread', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { actorRef: 'ops' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-1', 'ap-3a', 'ap-4']);
+    expect(page.total).toBe(3);
+  });
+
+  it('filters by agentName on the requesting message', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { agentName: 'finance-agent' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-2', 'ap-3b', 'ap-5']);
+    expect(page.total).toBe(3);
+  });
+
+  it('filters by inclusive fromDay/toDay bounds on the request time', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { fromDay: '2026-08-02', toDay: '2026-08-03' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-4', 'ap-5']);
+    expect(page.total).toBe(2);
+  });
+
+  it('combines filters (actorRef + toolName)', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { actorRef: 'ops', toolName: 'restart' },
+    });
+    expect(page.rows.map((row) => row.toolCallId)).toEqual(['ap-4']);
+    expect(page.total).toBe(1);
+  });
+
+  it('a filter that matches nothing is an empty page, not an error', async () => {
+    const page = await approvalsQueries.approvalsPage({
+      page: 1,
+      pageSize: 10,
+      where: { toolName: 'no-such-tool' },
+    });
+    expect(page).toEqual({ rows: [], total: 0, page: 1, pageSize: 10 });
+  });
+});
+
+// The two drill-downs. Each assertion here is a question a table row currently answers with a dead
+// end: what did this failed run actually call, and what has this thread cost.
+describe('MikroOrmGovernanceQueries runDetail + threadDetail (sqlite)', () => {
+  let detailOrm: MikroORM;
+  let detailQueries: MikroOrmGovernanceQueries;
+
+  beforeAll(async () => {
+    detailOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(detailOrm);
+    detailQueries = new MikroOrmGovernanceQueries(
+      detailOrm.em,
+      new MikroOrmPricingStore(detailOrm.em),
+    );
+
+    const em = detailOrm.em.fork();
+    const pricing = em.create(AgentModelPricing, {
+      id: 'price-detail',
+      modelId: 'gpt-x',
+      inputPricePer1m: 3,
+      outputPricePer1m: 15,
+      effectiveFrom: new Date('2026-06-01T00:00:00.000Z'),
+      isCurrent: true,
+    });
+    const thread = em.create(AgentThread, {
+      id: 'thread-detail',
+      actorRef: 'erin',
+      title: 'Detail thread',
+      transient: false,
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T12:00:00.000Z'),
+    });
+    const deletedThread = em.create(AgentThread, {
+      id: 'thread-gone',
+      actorRef: 'erin',
+      title: 'Deleted thread',
+      transient: false,
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T08:30:00.000Z'),
+      deletedAt: new Date('2026-09-01T09:00:00.000Z'),
+    });
+    const otherThread = em.create(AgentThread, {
+      id: 'thread-other',
+      actorRef: 'frank',
+      title: 'Other thread',
+      transient: false,
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+      updatedAt: new Date('2026-09-01T08:00:00.000Z'),
+    });
+
+    const userMessage = em.create(AgentMessage, {
+      id: 'msg-detail-user',
+      thread,
+      role: 'user',
+      content: 'ship it',
+      createdAt: new Date('2026-09-01T09:00:00.000Z'),
+    });
+    const assistantMessage = em.create(AgentMessage, {
+      id: 'msg-detail-assistant',
+      thread,
+      role: 'assistant',
+      // Longer than THREAD_DETAIL_CONTENT_CHARS so the cap and its `truncated` flag are exercised.
+      content: 'x'.repeat(THREAD_DETAIL_CONTENT_CHARS + 500),
+      agentName: 'shipper',
+      createdAt: new Date('2026-09-01T09:01:00.000Z'),
+    });
+    const otherMessage = em.create(AgentMessage, {
+      id: 'msg-other',
+      thread: otherThread,
+      role: 'assistant',
+      content: 'unrelated',
+      createdAt: new Date('2026-09-01T09:00:00.000Z'),
+    });
+
+    // Two tool calls attributed to the failed run, one to no run at all (pre-rollout shape), and one
+    // on a different run — so `runDetail` must return exactly the first two.
+    const toolCallA = em.create(AgentToolCall, {
+      id: 'tc-detail-a',
+      message: assistantMessage,
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'failed',
+      executionMs: 1200,
+      executedByRef: 'user:erin',
+      error: 'upstream 503',
+      createdAt: new Date('2026-09-01T09:02:00.000Z'),
+      runId: 'run-failed',
+    });
+    const toolCallB = em.create(AgentToolCall, {
+      id: 'tc-detail-b',
+      message: assistantMessage,
+      toolName: 'search',
+      toolType: 'read',
+      status: 'executed',
+      executionMs: 40,
+      createdAt: new Date('2026-09-01T09:03:00.000Z'),
+      runId: 'run-failed',
+    });
+    const toolCallUnattributed = em.create(AgentToolCall, {
+      id: 'tc-detail-orphan',
+      message: assistantMessage,
+      toolName: 'notify',
+      toolType: 'action',
+      status: 'executed',
+      createdAt: new Date('2026-09-01T09:04:00.000Z'),
+    });
+    const toolCallOtherRun = em.create(AgentToolCall, {
+      id: 'tc-detail-other-run',
+      message: assistantMessage,
+      toolName: 'notify',
+      toolType: 'action',
+      status: 'executed',
+      createdAt: new Date('2026-09-01T09:05:00.000Z'),
+      runId: 'run-ok',
+    });
+
+    const failedRun = em.create(AgentRun, {
+      id: 'run-failed',
+      thread,
+      actorRef: 'erin',
+      agentName: 'shipper',
+      status: 'failed',
+      durationMs: 4200,
+      errorCode: 'tool_failed',
+      errorMessage: 'deploy blew up',
+      retries: 2,
+      startedAt: new Date('2026-09-01T09:01:30.000Z'),
+      settledAt: new Date('2026-09-01T09:05:30.000Z'),
+      promptHash: 'abc123',
+    });
+    const okRun = em.create(AgentRun, {
+      id: 'run-ok',
+      thread,
+      actorRef: 'erin',
+      status: 'completed',
+      durationMs: 900,
+      retries: 0,
+      startedAt: new Date('2026-09-01T09:06:00.000Z'),
+    });
+    const deletedThreadRun = em.create(AgentRun, {
+      id: 'run-gone',
+      thread: deletedThread,
+      actorRef: 'erin',
+      status: 'completed',
+      durationMs: 100,
+      retries: 0,
+      startedAt: new Date('2026-09-01T08:45:00.000Z'),
+    });
+    const otherRun = em.create(AgentRun, {
+      id: 'run-other-thread',
+      thread: otherThread,
+      actorRef: 'frank',
+      status: 'completed',
+      durationMs: 100,
+      retries: 0,
+      startedAt: new Date('2026-09-01T09:07:00.000Z'),
+    });
+
+    // 1M in / 0.5M out on gpt-x → 3 + 7.5 = 10.5; the second row is on the other thread.
+    const usage = em.create(AgentTokenUsage, {
+      id: 'usage-detail',
+      thread,
+      actorRef: 'erin',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      createdAt: new Date('2026-09-01T09:02:00.000Z'),
+    });
+    const otherUsage = em.create(AgentTokenUsage, {
+      id: 'usage-other',
+      thread: otherThread,
+      actorRef: 'frank',
+      modelId: 'gpt-x',
+      purpose: 'chat',
+      inputTokens: 9_000_000,
+      outputTokens: 9_000_000,
+      createdAt: new Date('2026-09-01T09:02:00.000Z'),
+    });
+
+    em.persist([
+      pricing,
+      thread,
+      deletedThread,
+      otherThread,
+      userMessage,
+      assistantMessage,
+      otherMessage,
+      toolCallA,
+      toolCallB,
+      toolCallUnattributed,
+      toolCallOtherRun,
+      failedRun,
+      okRun,
+      deletedThreadRun,
+      otherRun,
+      usage,
+      otherUsage,
+    ]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await detailOrm?.close(true);
+  });
+
+  it('runDetail returns the run, its thread headline and only its own tool calls, oldest first', async () => {
+    const detail = await detailQueries.runDetail('run-failed');
+    expect(detail?.run).toEqual({
+      runId: 'run-failed',
+      threadId: 'thread-detail',
+      actorRef: 'erin',
+      agentName: 'shipper',
+      status: 'failed',
+      durationMs: 4200,
+      errorCode: 'tool_failed',
+      errorMessage: 'deploy blew up',
+      retries: 2,
+      startedAt: '2026-09-01T09:01:30.000Z',
+      promptHash: 'abc123',
+    });
+    expect(detail?.thread).toEqual({
+      threadId: 'thread-detail',
+      title: 'Detail thread',
+      actorRef: 'erin',
+      deleted: false,
+    });
+    // Not the unattributed call, not the other run's call.
+    expect(detail?.toolCalls.map((row) => row.toolCallId)).toEqual(['tc-detail-a', 'tc-detail-b']);
+    expect(detail?.toolCalls[0]).toEqual({
+      toolCallId: 'tc-detail-a',
+      toolName: 'deploy',
+      toolType: 'action',
+      status: 'failed',
+      executionMs: 1200,
+      executedByRef: 'user:erin',
+      error: 'upstream 503',
+      createdAt: '2026-09-01T09:02:00.000Z',
+    });
+    // A call that recorded no latency/attribution/error resolves those to null, not undefined.
+    expect(detail?.toolCalls[1]).toMatchObject({ executedByRef: null, error: null });
+  });
+
+  it('runDetail reports no tool calls for a run nothing was attributed to', async () => {
+    const detail = await detailQueries.runDetail('run-gone');
+    expect(detail?.run.runId).toBe('run-gone');
+    expect(detail?.toolCalls).toEqual([]);
+    // The run's thread is soft-deleted; the drill-down still resolves it and says so.
+    expect(detail?.thread).toMatchObject({ threadId: 'thread-gone', deleted: true });
+  });
+
+  it('runDetail is null for an unknown run id', async () => {
+    expect(await detailQueries.runDetail('run-does-not-exist')).toBeNull();
+  });
+
+  it('threadDetail rolls up lifetime usage, runs and messages for one thread only', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.thread).toEqual({
+      threadId: 'thread-detail',
+      title: 'Detail thread',
+      actorRef: 'erin',
+      messageCount: 2,
+      totalTokens: 1_500_000,
+      lastActivityAt: '2026-09-01T12:00:00.000Z',
+    });
+    expect(detail?.deleted).toBe(false);
+    // The other thread's 18M-token row must not leak into this rollup.
+    expect(detail?.usage).toMatchObject({
+      requests: 1,
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      totalTokens: 1_500_000,
+    });
+    expect(detail?.usage.costUsd).toBeCloseTo(10.5, 6);
+    // Newest run first; the other thread's run is excluded.
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok', 'run-failed']);
+    expect(detail?.runTotal).toBe(2);
+    expect(detail?.messages.map((row) => row.messageId)).toEqual([
+      'msg-detail-assistant',
+      'msg-detail-user',
+    ]);
+  });
+
+  it('threadDetail counts each message tool calls without a query per message', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    const assistant = detail?.messages.find((row) => row.messageId === 'msg-detail-assistant');
+    // All four tool calls hang off this message, regardless of which run they were attributed to.
+    expect(assistant).toMatchObject({ role: 'assistant', agentName: 'shipper', toolCallCount: 4 });
+    const user = detail?.messages.find((row) => row.messageId === 'msg-detail-user');
+    expect(user).toMatchObject({ role: 'user', agentName: null, toolCallCount: 0 });
+  });
+
+  it('threadDetail truncates a long message body and says that it did', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    const assistant = detail?.messages.find((row) => row.messageId === 'msg-detail-assistant');
+    expect(assistant?.content).toHaveLength(THREAD_DETAIL_CONTENT_CHARS);
+    expect(assistant?.truncated).toBe(true);
+    const user = detail?.messages.find((row) => row.messageId === 'msg-detail-user');
+    expect(user).toMatchObject({ content: 'ship it', truncated: false });
+  });
+
+  it('threadDetail caps runs and messages while still reporting the true totals', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-detail',
+      messageLimit: 1,
+      runLimit: 1,
+    });
+    expect(detail?.messages.map((row) => row.messageId)).toEqual(['msg-detail-assistant']);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-ok']);
+    // The caps hid rows; the counts say so.
+    expect(detail?.runTotal).toBe(2);
+    expect(detail?.thread.messageCount).toBe(2);
+  });
+
+  it('threadDetail returns a soft-deleted thread, flagged — an audit still needs it', async () => {
+    const detail = await detailQueries.threadDetail({
+      threadId: 'thread-gone',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.thread.threadId).toBe('thread-gone');
+    expect(detail?.deleted).toBe(true);
+    expect(detail?.runs.map((row) => row.runId)).toEqual(['run-gone']);
+  });
+
+  it('threadDetail is null for an unknown thread id', async () => {
+    expect(
+      await detailQueries.threadDetail({
+        threadId: 'thread-does-not-exist',
+        messageLimit: 10,
+        runLimit: 10,
+      }),
+    ).toBeNull();
   });
 });
