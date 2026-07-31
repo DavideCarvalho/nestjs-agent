@@ -2,11 +2,18 @@ export { chunkText, type ChunkOptions } from './chunk.js';
 export type {
   IndexedDocument,
   LexicalVectorStore,
+  ListChunksOptions,
+  StoredChunk,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
 } from './vector-store.js';
-export { UnsafeRemovalError, documentIdOf, isLexicalVectorStore } from './vector-store.js';
+export {
+  UnsafeRemovalError,
+  chunkIndexOf,
+  documentIdOf,
+  isLexicalVectorStore,
+} from './vector-store.js';
 export type { MetadataPatch } from './metadata-patch.js';
 export { applyMetadataPatch } from './metadata-patch.js';
 export { MemoryVectorStore } from './memory-vector-store.js';

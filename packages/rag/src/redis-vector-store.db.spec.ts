@@ -548,6 +548,63 @@ describe('RedisVectorStore enumeration + bulk deletion (real RediSearch)', () =>
     expect((await enumStore.listDocumentIds()).sort()).toEqual(viaDocuments);
   });
 
+  it('listChunks reads a document back in order, with prefix-stripped ids and metadata', async () => {
+    const chunks = await enumStore.listChunks('kb-a');
+
+    // Ids come back as the caller wrote them — the `enum:` key prefix is an implementation detail of
+    // the store and must not leak into a chunk id the caller could hand back to `remove`.
+    expect(chunks.map((chunk) => chunk.id)).toEqual(['kb-a#0', 'kb-a#1']);
+    expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1]);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(['kb a zero', 'kb a one']);
+    expect(chunks[0]?.metadata).toEqual({ collection: 'kb' });
+  });
+
+  it('listChunks handles a bare-id document as chunk 0', async () => {
+    // The bare key has no `#n` to parse, and it is found by EXISTS rather than by the SCAN pattern —
+    // the same split `remove` relies on. Both halves have to end up in the result.
+    expect(await enumStore.listChunks('bare')).toEqual([
+      {
+        id: 'bare',
+        index: 0,
+        text: 'bare id document',
+        metadata: { collection: 'ops', audience: ['public', 'role:ADMIN'] },
+      },
+    ]);
+  });
+
+  it('listChunks orders numerically past ten, against a SCAN that returns no order at all', async () => {
+    // The real reason this test exists: SCAN gives keys back in whatever order the keyspace yields,
+    // so the ordering is entirely the store's own doing — and `#10` sorts before `#2` as a string.
+    // Written in reverse so "whatever SCAN happened to return" cannot pass by luck.
+    await enumStore.upsert(
+      [11, 10, 9, 2, 1, 0].map((index) => ({
+        id: `wide#${index}`,
+        text: `wide ${index}`,
+        embedding: [1, 0, 0],
+        metadata: { collection: 'kb' },
+      })),
+    );
+
+    expect((await enumStore.listChunks('wide')).map((chunk) => chunk.index)).toEqual([
+      0, 1, 2, 9, 10, 11,
+    ]);
+    expect(
+      (await enumStore.listChunks('wide', { limit: 2, offset: 3 })).map((c) => c.index),
+    ).toEqual([9, 10]);
+  });
+
+  it('listChunks is scoped to the one document, and silent on an unknown one', async () => {
+    expect(await enumStore.listChunks('nope')).toEqual([]);
+    // `kb` is a strict prefix of `kb-a`/`kb-b`. The pattern is `<id>#*` plus an exact EXISTS, so a
+    // prefix must match nothing — if this ever returned kb-a's chunks, `remove('kb')` would be
+    // deleting them too.
+    expect(await enumStore.listChunks('kb')).toEqual([]);
+    expect((await enumStore.listChunks('ops-a')).map((chunk) => chunk.id)).toEqual([
+      'ops-a#0',
+      'ops-a#1',
+    ]);
+  });
+
   it('removeMany drops every chunk of every id — including a bare-id document — in one scan', async () => {
     await enumStore.removeMany(['kb-a', 'bare']);
 

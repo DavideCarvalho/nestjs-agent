@@ -3,10 +3,13 @@ import { filterMatchesNothing, matchesFilter } from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import {
   type IndexedDocument,
+  type ListChunksOptions,
+  type StoredChunk,
   UnsafeRemovalError,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
+  chunkIndexOf,
   documentIdOf,
 } from './vector-store.js';
 
@@ -73,6 +76,35 @@ export class MemoryVectorStore implements VectorStore {
       }
     }
     return [...documents.values()];
+  }
+
+  /**
+   * The chunks of one document, in document order. See {@link VectorStore.listChunks}.
+   *
+   * Insertion order is not document order — `upsert` stores whatever the caller passed, and a
+   * re-ingest that rewrites chunk 3 alone moves it to the end of the Map. So this sorts by the index
+   * parsed from the id, the same thing the SQL and Redis adapters order by, rather than trusting the
+   * Map. A reference adapter that returned "usually ordered" would let a consumer ship a bug that
+   * only shows up on the store tests are NOT written against.
+   */
+  async listChunks(documentId: string, options?: ListChunksOptions): Promise<StoredChunk[]> {
+    const chunks: StoredChunk[] = [];
+    for (const record of this.records.values()) {
+      if (documentIdOf(record.id) !== documentId) {
+        continue;
+      }
+      chunks.push({
+        id: record.id,
+        index: chunkIndexOf(record.id),
+        text: record.text,
+        ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+      });
+    }
+    chunks.sort((a, b) => a.index - b.index);
+    const offset = options?.offset ?? 0;
+    return options?.limit === undefined
+      ? chunks.slice(offset)
+      : chunks.slice(offset, offset + options.limit);
   }
 
   async listDocumentIds(filter?: Record<string, unknown>): Promise<string[]> {

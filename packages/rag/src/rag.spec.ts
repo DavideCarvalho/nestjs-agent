@@ -358,6 +358,62 @@ describe('MemoryVectorStore enumeration + bulk deletion', () => {
     await store.removeMany(await store.listDocumentIds());
     expect(await store.countChunks()).toBe(0);
   });
+
+  it('listChunks reads a document back in order, with its text and metadata', async () => {
+    const store = await corpus();
+    const chunks = await store.listChunks('kb-a');
+
+    expect(chunks.length).toBe(2);
+    expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1]);
+    expect(chunks.map((chunk) => chunk.id)).toEqual(['kb-a#0', 'kb-a#1']);
+    // The text is the indexed string verbatim — reassembling the chunks (this corpus overlaps by 0)
+    // gives back the document, which is the property the whole method exists to let a caller check.
+    expect(chunks.map((chunk) => chunk.text).join(' ')).toBe('a b c d e f g h');
+    expect(chunks[0]?.metadata).toEqual({ collection: 'kb', audience: ['public'] });
+  });
+
+  it('listChunks pages with limit/offset over the ordered chunks', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert(
+      [0, 1, 2, 3].map((index) => ({
+        id: `doc#${index}`,
+        text: `chunk ${index}`,
+        embedding: [index],
+      })),
+    );
+    const all = await store.listChunks('doc');
+    expect(all.length).toBe(4);
+
+    expect(await store.listChunks('doc', { limit: 2 })).toEqual(all.slice(0, 2));
+    expect(await store.listChunks('doc', { offset: 1 })).toEqual(all.slice(1));
+    expect(await store.listChunks('doc', { limit: 2, offset: 1 })).toEqual(all.slice(1, 3));
+    // Past the end is empty, not an error — a caller paging until short is a normal way to use this.
+    expect(await store.listChunks('doc', { offset: 99 })).toEqual([]);
+  });
+
+  it('listChunks orders numerically, not lexically', async () => {
+    const store = new MemoryVectorStore();
+    // Inserted out of order and past ten on purpose: a Map preserves insertion order and `#10` sorts
+    // before `#2` as text, so both the "trust the Map" and the "sort as strings" bugs fail here.
+    await store.upsert(
+      [11, 2, 0].map((index) => ({
+        id: `doc#${index}`,
+        text: `chunk ${index}`,
+        embedding: [index],
+      })),
+    );
+
+    expect((await store.listChunks('doc')).map((chunk) => chunk.index)).toEqual([0, 2, 11]);
+  });
+
+  it('listChunks is scoped to one document and silent on an unknown one', async () => {
+    const store = await corpus();
+    expect(await store.listChunks('kb-b')).not.toEqual(await store.listChunks('kb-a'));
+    // The id prefix of another document must not leak in: `kb-a` is a prefix of nothing here, but
+    // `documentIdOf` equality (not startsWith) is what guarantees that in general.
+    expect(await store.listChunks('kb')).toEqual([]);
+    expect(await store.listChunks('nope')).toEqual([]);
+  });
 });
 
 describe('FilteredRetriever', () => {

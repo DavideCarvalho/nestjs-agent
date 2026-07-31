@@ -3,6 +3,8 @@ import { filterMatchesNothing } from './filter.js';
 import { type MetadataPatch, isEmptyMetadataPatch, splitMetadataPatch } from './metadata-patch.js';
 import type {
   IndexedDocument,
+  ListChunksOptions,
+  StoredChunk,
   VectorRecord,
   VectorSearchOptions,
   VectorStore,
@@ -152,6 +154,46 @@ export class PgVectorStore implements VectorStore {
     );
     return rows.map((row) => ({
       id: row.doc_id,
+      ...(row.metadata !== null ? { metadata: row.metadata } : {}),
+    }));
+  }
+
+  /**
+   * The chunks of one document, in document order. See {@link VectorStore.listChunks}.
+   *
+   * The order is computed from the id rather than stored: `#12` must sort after `#2`, which a plain
+   * `ORDER BY id` gets wrong on every document past ten chunks because it compares text. So the
+   * trailing number is extracted and cast to `int`, and a bare id (a single-chunk document, which
+   * carries no `#n` suffix) collapses to `0` — the same rule `chunkIndexOf` applies in the other two
+   * adapters.
+   *
+   * `embedding` is left out of the projection: it is the widest column in the table and useless to a
+   * caller reading text back.
+   */
+  async listChunks(documentId: string, options?: ListChunksOptions): Promise<StoredChunk[]> {
+    const params: unknown[] = [documentId];
+    let sql = `SELECT id, ${CHUNK_INDEX_FROM_ID} AS chunk_index, text, metadata
+       FROM ${this.table}
+       WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1
+       ORDER BY chunk_index`;
+    if (options?.limit !== undefined) {
+      params.push(options.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    if (options?.offset !== undefined) {
+      params.push(options.offset);
+      sql += ` OFFSET $${params.length}`;
+    }
+    const rows = await this.client.query<{
+      id: string;
+      chunk_index: number;
+      text: string;
+      metadata: Record<string, unknown> | null;
+    }>(sql, params);
+    return rows.map((row) => ({
+      id: row.id,
+      index: Number(row.chunk_index),
+      text: row.text,
       ...(row.metadata !== null ? { metadata: row.metadata } : {}),
     }));
   }
@@ -306,6 +348,9 @@ function buildWhere(
  * `listDocuments` so both key on the exact same definition of "chunk belongs to document".
  */
 const DOCUMENT_ID_FROM_CHUNK = "regexp_replace(id, '#[0-9]+$', '')";
+
+/** The `n` of `…#<n>` as an integer, so chunks sort numerically; a bare id (no suffix) is `0`. */
+const CHUNK_INDEX_FROM_ID = "COALESCE((substring(id from '#([0-9]+)$'))::int, 0)";
 
 /** pgvector accepts a `'[1,2,3]'` text literal cast to `vector`. */
 function toVectorLiteral(embedding: number[]): string {
