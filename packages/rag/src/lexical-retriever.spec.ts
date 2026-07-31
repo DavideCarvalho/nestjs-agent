@@ -213,6 +213,7 @@ describe('LexicalRetriever', () => {
       remove: async () => undefined,
       updateMetadata: async () => 0,
       listDocuments: async () => [],
+      listChunks: async () => [],
       listDocumentIds: async () => [],
       removeMany: async () => undefined,
       removeWhere: async () => 0,

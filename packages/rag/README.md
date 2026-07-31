@@ -323,7 +323,8 @@ library upgrade. The interface is open, so it can be added later without changin
 - `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` — RRF fusion of the two.
 - `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters:
   `upsert(records)`, `search(embedding, opts)`, `remove(documentId)`,
-  `updateMetadata(documentId, patch)`, `listDocuments(filter?)`.
+  `updateMetadata(documentId, patch)`, `listDocuments(filter?)`,
+  `listChunks(documentId, { limit?, offset? })`.
 - `applyMetadataPatch(metadata, patch)` — the `MetadataPatch` merge semantics, exported so your own
   `VectorStore` can implement `updateMetadata` with exactly the same ones.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.
@@ -362,6 +363,33 @@ Deliberate mass deletion is still available; it just has to be spelled out:
 would mean stamping the document id as an indexed field at write time, and chunks written before that
 change carry no such field — the search would find none of them and `remove` would silently stop
 deleting. The methods above need no new field, so they have no migration.
+
+## Reading chunks back
+
+Everything above enumerates *documents*. The text itself is otherwise write-only: `search` needs an
+embedding, `searchText` needs a query, and both return what **matched**, in relevance order, capped
+at `topK`. Neither answers "show me what was indexed for this document, in order" — the question you
+ask when retrieval returned the wrong passage and you need to know whether the chunker cut badly or
+the retriever chose badly.
+
+```ts
+const chunks = await store.listChunks('handbook.pdf', { limit: 20 });
+// [{ id: 'handbook.pdf#0', index: 0, text: 'Chapter 1 …', metadata: { collection: 'handbook' } }, …]
+```
+
+Ordered by `index` (the `n` of `${documentId}#<n>`, numerically — `#10` after `#2`), so paging with
+`limit`/`offset` walks the document front to back. A document stored under a bare id is chunk `0`. An
+unknown `documentId` yields `[]`.
+
+Document-scoped rather than filter-scoped, matching `remove` and `updateMetadata`: ordering only
+means something once a document is picked, so enumerate with `listDocumentIds(filter)` first when you
+need to sweep. Two things it deliberately is not:
+
+- **not an access-control seam** — it takes no filter and applies none, so a consumer that gates
+  retrieval on a metadata field must resolve that gate itself before calling, exactly as before
+  `remove`. It is shaped for an operator/debug surface, not for serving end users;
+- **not a hot path** — on Redis it costs one keyspace `SCAN`, the same as `remove`. Fine for one
+  document on demand, wrong inside a loop over a corpus.
 
 ### Why these are required and `searchText` is optional
 

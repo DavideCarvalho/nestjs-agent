@@ -101,6 +101,33 @@ export interface VectorStore {
   listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]>;
 
   /**
+   * Read one document's chunks back — id, text, metadata — ordered by their position in the
+   * document, optionally paged with `limit`/`offset`.
+   *
+   * The gap this closes is that **the text a store holds is otherwise write-only**. Every other way
+   * back to it is a ranked query: {@link VectorStore.search} needs an embedding,
+   * {@link LexicalVectorStore.searchText} needs a query string, and both return whatever *matched*,
+   * in relevance order, capped at `topK`. Neither can answer "show me what was indexed for this
+   * document, in order" — the question you ask when retrieval returns the wrong passage and you need
+   * to know whether the chunker cut badly or the retriever chose badly. Without this, the only way to
+   * see stored text is to reach around the adapter into the backing engine, which is exactly the
+   * abstraction break a consumer adopts a store to avoid.
+   *
+   * Document-scoped rather than filter-scoped, matching {@link VectorStore.remove} and
+   * {@link VectorStore.updateMetadata}: ordering is the whole point, and "position within the
+   * document" is only meaningful once a document has been picked. Enumerate documents with
+   * {@link VectorStore.listDocuments} first when you need to sweep.
+   *
+   * An unknown `documentId` yields `[]`; it does not throw, matching `remove` and `updateMetadata`.
+   *
+   * NOT an access-control seam. It takes no metadata `filter` and applies none, so it cannot enforce
+   * one — a caller that gates retrieval on a metadata field (tenant, audience, collection) MUST
+   * resolve that gate itself before calling, exactly as it would before `remove`. It is deliberately
+   * shaped for an operator/debug surface, not for serving end users.
+   */
+  listChunks(documentId: string, options?: ListChunksOptions): Promise<StoredChunk[]>;
+
+  /**
    * The distinct source document ids currently indexed, optionally narrowed by a metadata `filter` —
    * {@link VectorStore.listDocuments} without the metadata. Use it when you only need the id set (a
    * reconciliation diff against your source of truth, a count, a delete list): implementations are
@@ -208,6 +235,31 @@ export class UnsafeRemovalError extends Error {
 export interface IndexedDocument {
   id: string;
   metadata?: Record<string, unknown>;
+}
+
+/** One stored chunk, read back verbatim — what {@link VectorStore.listChunks} yields. */
+export interface StoredChunk {
+  /** The chunk id: `${documentId}#<n>`, or the bare document id for a single-chunk document. */
+  id: string;
+  /** Zero-based position within the document, parsed from the id. A bare id is chunk `0`. */
+  index: number;
+  /** The chunk text as it was indexed — the exact string the embedding was computed from. */
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Paging for {@link VectorStore.listChunks}. Omit both to read the whole document. */
+export interface ListChunksOptions {
+  /** Max chunks to return, applied after ordering by {@link StoredChunk.index}. */
+  limit?: number;
+  /** Chunks to skip, applied after ordering. */
+  offset?: number;
+}
+
+/** Chunk `n` of `${documentId}#<n>`; a bare document id (single-chunk document) is `0`. */
+export function chunkIndexOf(chunkId: string): number {
+  const match = /#(\d+)$/.exec(chunkId);
+  return match?.[1] === undefined ? 0 : Number(match[1]);
 }
 
 /** Collapse a chunk id (`${documentId}#<n>`) back to its source document id. */

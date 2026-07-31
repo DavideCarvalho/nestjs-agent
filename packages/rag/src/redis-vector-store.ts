@@ -4,10 +4,13 @@ import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './
 import {
   type IndexedDocument,
   type LexicalVectorStore,
+  type ListChunksOptions,
+  type StoredChunk,
   UnsafeRemovalError,
   type VectorRecord,
   type VectorSearchOptions,
   type VectorStore,
+  chunkIndexOf,
   documentIdOf,
 } from './vector-store.js';
 
@@ -346,6 +349,58 @@ export class RedisVectorStore implements LexicalVectorStore {
       }
     } while (cursor !== '0');
     return [...keys];
+  }
+
+  /**
+   * The chunks of one document, in document order. See {@link VectorStore.listChunks}.
+   *
+   * Reads the hashes directly (`HMGET text metadata_json`) rather than going through `FT.SEARCH`.
+   * Two reasons, and the second is the one that matters: the query language has no way to ask for
+   * "every chunk of this document" — `id` is the key name, not an indexed field — and `FT.SEARCH`
+   * caps at `LIMIT`, so paging a document through it would mean ordering by a field the index does
+   * not hold. `chunkKeys` is the same enumeration {@link RedisVectorStore.remove} and
+   * {@link RedisVectorStore.updateMetadata} already use, so "the chunks this returns" and "the chunks
+   * a delete would take" cannot drift apart.
+   *
+   * It inherits that method's cost too: one keyspace `SCAN` per call. Acceptable here because this
+   * is an inspection path (one document, on demand) and not something retrieval runs — but it is why
+   * this must not be put on a hot path or called in a loop over a corpus.
+   *
+   * `embedding` is deliberately not fetched: it is by far the largest field on the hash and nothing
+   * a caller reading text back can do with it.
+   */
+  async listChunks(documentId: string, options?: ListChunksOptions): Promise<StoredChunk[]> {
+    const keys = await this.chunkKeys(documentId);
+    const ordered = keys
+      .map((key) => ({ key, id: key.slice(this.prefix.length) }))
+      .map((entry) => ({ ...entry, index: chunkIndexOf(entry.id) }))
+      .sort((a, b) => a.index - b.index);
+
+    const offset = options?.offset ?? 0;
+    const page =
+      options?.limit === undefined
+        ? ordered.slice(offset)
+        : ordered.slice(offset, offset + options.limit);
+
+    const chunks: StoredChunk[] = [];
+    for (const entry of page) {
+      const reply = await this.client.sendCommand(['HMGET', entry.key, 'text', 'metadata_json']);
+      const fields = Array.isArray(reply) ? reply : [];
+      const text = fields[0] === null || fields[0] === undefined ? undefined : toStr(fields[0]);
+      if (text === undefined) {
+        // The key was deleted between the SCAN and this read. Skip it rather than reporting a chunk
+        // with empty text, which would read as "the chunker produced nothing here".
+        continue;
+      }
+      const raw = fields[1] === null || fields[1] === undefined ? undefined : toStr(fields[1]);
+      chunks.push({
+        id: entry.id,
+        index: entry.index,
+        text,
+        ...parseMetadata(raw),
+      });
+    }
+    return chunks;
   }
 
   async listDocuments(filter?: Record<string, unknown>): Promise<IndexedDocument[]> {

@@ -221,6 +221,46 @@ describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
     expect(await enumStore.listDocumentIds({ collection: [] })).toEqual([]);
   });
 
+  it('listChunks reads one document back in order, bare id included, with paging', async () => {
+    expect(await enumStore.listChunks('kb-a')).toEqual([
+      { id: 'kb-a#0', index: 0, text: 'kb a zero', metadata: { collection: 'kb' } },
+      { id: 'kb-a#1', index: 1, text: 'kb a one', metadata: { collection: 'kb' } },
+    ]);
+    // A bare id has no `#n` to extract; the COALESCE in CHUNK_INDEX_FROM_ID is what makes it 0
+    // rather than NULL (which would sort last and read as "unknown position").
+    expect(await enumStore.listChunks('bare')).toEqual([
+      {
+        id: 'bare',
+        index: 0,
+        text: 'bare id',
+        metadata: { collection: 'ops', audience: ['public', 'role:ADMIN'] },
+      },
+    ]);
+    expect((await enumStore.listChunks('kb-a', { limit: 1 })).map((c) => c.id)).toEqual(['kb-a#0']);
+    expect((await enumStore.listChunks('kb-a', { offset: 1 })).map((c) => c.id)).toEqual([
+      'kb-a#1',
+    ]);
+    // `kb` is a strict prefix of `kb-a`: the WHERE compares the DERIVED document id for equality, so
+    // a prefix matches nothing. An unknown id is empty rather than an error.
+    expect(await enumStore.listChunks('kb')).toEqual([]);
+    expect(await enumStore.listChunks('nope')).toEqual([]);
+  });
+
+  it('listChunks orders numerically past ten, where ORDER BY id would not', async () => {
+    await enumStore.upsert(
+      [11, 10, 2, 1].map((index) => ({
+        id: `wide#${index}`,
+        text: `wide ${index}`,
+        embedding: [1, 0, 0],
+      })),
+    );
+    // Lexically `wide#10` < `wide#11` < `wide#2`; numerically 1 < 2 < 10 < 11. The cast to int is
+    // the whole difference, and it only shows up once a document passes ten chunks.
+    expect((await enumStore.listChunks('wide')).map((chunk) => chunk.index)).toEqual([
+      1, 2, 10, 11,
+    ]);
+  });
+
   it('removeMany deletes N documents in one statement, bare ids included', async () => {
     await enumStore.removeMany(['kb-a', 'bare']);
     expect(await enumStore.listDocumentIds()).toEqual(['kb-b', 'ops-a']);
