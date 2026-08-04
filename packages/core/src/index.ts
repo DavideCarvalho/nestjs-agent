@@ -23,6 +23,7 @@ export { AgentRegistry } from './agent-registry.js';
 export {
   ToolRegistry,
   DefaultRolesPolicy,
+  ToolDisabledError,
   ToolForbiddenError,
   ToolNotFoundError,
   ToolInputInvalidError,
