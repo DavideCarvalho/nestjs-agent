@@ -1,6 +1,7 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
 import { type MetadataPatch, isEmptyMetadataPatch, splitMetadataPatch } from './metadata-patch.js';
+import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import type {
   IndexedDocument,
   ListChunksOptions,
@@ -65,6 +66,11 @@ export class PgVectorStore implements VectorStore {
   ) {
     this.table = options.table ?? 'agent_rag_chunks';
     this.dimensions = options.dimensions ?? 1536;
+  }
+
+  /** Telemetry self-description — the table is the namespace a retrieval was served from. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { store: 'pg', collection: this.table };
   }
 
   /** Idempotent DDL: the `vector` extension, the chunks table, and the cosine HNSW index. */

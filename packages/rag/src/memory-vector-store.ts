@@ -1,6 +1,7 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing, matchesFilter } from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
+import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
   type IndexedDocument,
   type ListChunksOptions,
@@ -25,6 +26,15 @@ import {
  */
 export class MemoryVectorStore implements VectorStore {
   private readonly records = new Map<string, VectorRecord>();
+
+  /**
+   * Telemetry self-description. No `collection`: there is no namespace to name — the corpus IS this
+   * instance, and two `MemoryVectorStore`s in one process are two corpora with nothing to tell them
+   * apart on a dashboard.
+   */
+  describeRetrieval(): RetrievalDescriptor {
+    return { store: 'memory' };
+  }
 
   async upsert(records: VectorRecord[]): Promise<void> {
     for (const record of records) {

@@ -1,4 +1,5 @@
 import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
+import { type RetrievalDescriptor, describeSharedSource } from './retrieval-descriptor.js';
 
 export interface HybridRetrieverOptions {
   /** RRF constant — larger flattens the rank weighting. Default 60 (the value from the original paper). */
@@ -50,6 +51,11 @@ export class HybridRetriever implements Retriever {
     private readonly retrievers: Retriever[],
     private readonly options: HybridRetrieverOptions = {},
   ) {}
+
+  /** Telemetry self-description — the store only when every leg agrees; see `describeSharedSource`. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'hybrid', ...describeSharedSource(this.retrievers) };
+  }
 
   async retrieve(query: string, options: RetrieveOptions = {}): Promise<Passage[]> {
     const k = this.options.k ?? 60;

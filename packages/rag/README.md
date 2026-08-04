@@ -96,6 +96,61 @@ Either way, retrieved passages carry a `source` and surface as citations through
 tool-call machinery (rendered in the chat UI, shown in the `-telescope` Agent tab). Each retrieval
 also emits an `aviary:agent:retrieved` diagnostics event.
 
+## Retrieval telemetry
+
+A tool-call row says a retrieval *happened*. It cannot say how long it took, how much came back, how
+good the scores were, which store answered, or whether it found nothing at all — a retrieval that
+returns zero passages and one that returns five perfect ones are the same row with the same `ok`
+status. So retrieval also publishes its own event, on `aviary:rag:retrieval`:
+
+```ts
+// envelope: { durationMs, ts, traceId }  ·  payload:
+{
+  retriever: 'embedding' | 'keyword' | 'lexical' | 'hybrid' | 'filtered' | 'reranking' | 'unknown',
+  store?: 'memory' | 'pg' | 'redis',   // absent for an in-process retriever
+  collection?: string,                 // pg table / RediSearch index, or your own label
+  topK: number,
+  chunks: number,
+  zeroHit: boolean,
+  topScore?: number,                   // 4dp; absent on a zero-hit
+  meanScore?: number,
+  failed: boolean,
+  error?: string,
+}
+```
+
+Counts, durations and kinds only — never the query text, never passage text.
+
+`createRetrievalTool` instruments the retriever it wraps **by default**, so agentic retrieval needs
+no wiring. Wrap it yourself for inject mode, or for any code path that calls `retrieve` directly:
+
+```ts
+import { instrumentRetriever } from '@dudousxd/nestjs-agent-rag';
+
+const retriever = instrumentRetriever(
+  new HybridRetriever([new EmbeddingRetriever(embedder, store), new LexicalRetriever(store)]),
+  // optional: name the collection per call, when one index holds many
+  { collection: (filter) => (typeof filter?.collectionId === 'string' ? filter.collectionId : undefined) },
+);
+```
+
+Three things worth knowing:
+
+- **A composed retrieval is ONE event.** The outermost instrumented retriever reports; anything
+  instrumented inside it stays silent. `RerankingRetriever` over a `HybridRetriever` over two legs is
+  one retrieval, reported as `retriever: 'reranking'` with the duration and scores the caller got.
+  Wrapping a leg as well as the composite is safe — it will not double-count.
+- **It costs nothing when nobody listens.** `emit` is gated on `channel.hasSubscribers`, and the
+  wrapper checks the same gate before it reads a clock or touches a score, so an install with no
+  Telescope (or no subscriber at all) delegates straight through.
+- **It never changes behaviour.** Passages come back verbatim; a throwing retriever is reported as
+  `failed` and rethrown unchanged.
+
+`@dudousxd/nestjs-agent-telescope` subscribes to this channel and renders the **Retrieval** and
+**Retrieval sources** sections of the Agent tab. Anything else can subscribe too —
+`RAG_RETRIEVAL_CHANNEL` is the exported wire contract, and a host that needs retrieval history to
+outlive a restart persists it from there.
+
 ## pgvector store
 
 `PgVectorStore` takes an injected `PgClient` — adapt your own `pg` / `postgres.js`:
@@ -328,7 +383,10 @@ library upgrade. The interface is open, so it can be added later without changin
 - `applyMetadataPatch(metadata, patch)` — the `MetadataPatch` merge semantics, exported so your own
   `VectorStore` can implement `updateMetadata` with exactly the same ones.
 - `isLexicalVectorStore(store)` — type guard for the optional `LexicalVectorStore` capability.
-- `createRetrievalTool(retriever, { name?, description?, topK? })` — the agentic-retrieval tool.
+- `createRetrievalTool(retriever, { name?, description?, topK?, telemetry? })` — the
+  agentic-retrieval tool. `telemetry` defaults to on; pass `false` to opt out.
+- `instrumentRetriever(retriever, { describe?, collection? })` — wrap any `Retriever` so each
+  retrieval publishes on `aviary:rag:retrieval` (`RAG_RETRIEVAL_CHANNEL`).
 
 ## Collection maintenance
 

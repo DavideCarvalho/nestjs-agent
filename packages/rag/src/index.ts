@@ -51,3 +51,22 @@ export {
   type RetrievalTool,
   type RetrievalToolOptions,
 } from './retrieval-tool.js';
+export {
+  describeRetrieval,
+  describeSharedSource,
+  describeSource,
+  describesRetrieval,
+  type DescribesRetrieval,
+  type RetrievalDescriptor,
+  type RetrieverKind,
+  type VectorStoreKind,
+} from './retrieval-descriptor.js';
+export {
+  emitRagRetrieval,
+  instrumentRetriever,
+  RAG_DIAGNOSTIC_LIB,
+  RAG_RETRIEVAL_CHANNEL,
+  RAG_RETRIEVAL_EVENT,
+  type InstrumentRetrieverOptions,
+  type RagRetrievalEvent,
+} from './retrieval-telemetry.js';

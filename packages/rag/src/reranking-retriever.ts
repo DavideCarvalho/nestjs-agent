@@ -1,4 +1,5 @@
 import type { Passage, Reranker, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
+import { type RetrievalDescriptor, describeSource } from './retrieval-descriptor.js';
 
 export interface RerankingRetrieverOptions {
   /** How many candidates to pull from the base retriever before reranking. Default 20. */
@@ -17,6 +18,11 @@ export class RerankingRetriever implements Retriever {
     private readonly reranker: Reranker,
     private readonly options: RerankingRetrieverOptions = {},
   ) {}
+
+  /** Telemetry self-description — the two-stage strategy, over the base's store. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'reranking', ...describeSource(this.base) };
+  }
 
   async retrieve(query: string, options: RetrieveOptions = {}): Promise<Passage[]> {
     const candidates = await this.base.retrieve(query, {

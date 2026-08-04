@@ -1,4 +1,5 @@
 import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
+import { type RetrievalDescriptor, describeSource } from './retrieval-descriptor.js';
 
 /**
  * Wraps a `Retriever` so every `retrieve` call ANDs a fixed metadata `filter` on top of whatever the
@@ -14,6 +15,11 @@ export class FilteredRetriever implements Retriever {
     private readonly base: Retriever,
     private readonly filter: Record<string, unknown>,
   ) {}
+
+  /** Telemetry self-description — this scope, over the base's store. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'filtered', ...describeSource(this.base) };
+  }
 
   async retrieve(query: string, options: RetrieveOptions = {}): Promise<Passage[]> {
     return this.base.retrieve(query, {

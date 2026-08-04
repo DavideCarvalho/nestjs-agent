@@ -8,8 +8,11 @@ describe('agentTelescopeExtension', () => {
   it('bundles the watcher, entry type, dashboard, and all providers', () => {
     const ext = agentTelescopeExtension();
     expect(ext.name).toBe('agent');
-    expect(ext.watchers?.(ctx).map((w) => w.type)).toEqual(['agent']);
-    expect(ext.entryTypes?.(ctx)).toEqual([{ id: 'agent', label: 'Agent', dot: 'bg-violet-400' }]);
+    expect(ext.watchers?.(ctx).map((w) => w.type)).toEqual(['agent', 'agent-rag']);
+    expect(ext.entryTypes?.(ctx)).toEqual([
+      { id: 'agent', label: 'Agent', dot: 'bg-violet-400' },
+      { id: 'agent-rag', label: 'RAG', dot: 'bg-emerald-400' },
+    ]);
     expect(ext.dashboards?.(ctx).map((d) => d.id)).toEqual(['agent.overview']);
     expect(
       ext
@@ -20,6 +23,16 @@ describe('agentTelescopeExtension', () => {
       [
         'agent.approvals.pending',
         'agent.approvals.recent',
+        'agent.rag.byCollection',
+        'agent.rag.byRetriever',
+        'agent.rag.byStore',
+        'agent.rag.chunks',
+        'agent.rag.latency',
+        'agent.rag.retrievals',
+        'agent.rag.scores',
+        'agent.rag.slowest',
+        'agent.rag.trend',
+        'agent.rag.zeroHitRate',
         'agent.runs',
         'agent.runs.byAgent',
         'agent.runs.duration',
@@ -98,5 +111,48 @@ describe('agentTelescopeExtension', () => {
         ? plainRecentThreads.columns.find((c) => c.key === 'threadId')
         : undefined;
     expect(plainThreadIdColumn?.link).toBeUndefined();
+  });
+});
+
+describe('agentTelescopeExtension host contributions', () => {
+  const hostProvider = {
+    name: 'myapp.rag.collections',
+    async resolve() {
+      return { rows: [] };
+    },
+  };
+
+  it('registers host providers under THIS extension, so host panels on this dashboard resolve', () => {
+    const ext = agentTelescopeExtension({
+      providers: [hostProvider],
+      sections: [
+        {
+          title: 'Knowledge base',
+          cols: 2,
+          panels: [
+            {
+              kind: 'table',
+              title: 'Collections',
+              data: { provider: 'myapp.rag.collections' },
+              columns: [{ key: 'name', label: 'Collection' }],
+            },
+            { kind: 'stat', title: 'Documents', data: { provider: 'myapp.rag.documents' } },
+          ],
+        },
+      ],
+    });
+
+    expect(ext.dataProviders?.(ctx).map((p) => p.name)).toContain('myapp.rag.collections');
+    const sections = ext.dashboards?.(ctx)[0]?.sections ?? [];
+    // Appended last, after every built-in section.
+    expect(sections.at(-1)?.title).toBe('Knowledge base');
+  });
+
+  it('refuses a host provider that squats the reserved `agent.` namespace', () => {
+    expect(() =>
+      agentTelescopeExtension({
+        providers: [{ ...hostProvider, name: 'agent.rag.collections' }],
+      }),
+    ).toThrow(/reserved "agent\." prefix/);
   });
 });
