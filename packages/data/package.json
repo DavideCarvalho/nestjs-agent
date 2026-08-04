@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-data",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
