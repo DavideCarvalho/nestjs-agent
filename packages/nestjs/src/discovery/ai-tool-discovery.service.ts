@@ -2,6 +2,7 @@ import {
   AGENT_OPTIONS,
   AGENT_REGISTRY,
   AGENT_TOOL_REGISTRY,
+  type Actor,
   type AgentRegistry,
   type ToolHandler,
   type ToolRegistry,
@@ -60,8 +61,20 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           // (its `defaultRoles`). Baking it in here too would leak it into custom policies.
           ...(meta.roles !== undefined ? { roles: meta.roles } : {}),
           ...(meta.ability !== undefined ? { ability: meta.ability } : {}),
+          ...(meta.enabled !== undefined ? { enabled: meta.enabled } : {}),
         },
-        { execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx) },
+        {
+          execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),
+          // Forwarded, not copied: the registry holds this wrapper rather than the provider, so an
+          // `isEnabled()`/`canUse()` left behind here would be a gate that silently never applies.
+          // Called through `instance` so each keeps its `this` (and its injected deps).
+          ...(typeof handler.isEnabled === 'function'
+            ? { isEnabled: () => (instance as Required<ToolHandler>).isEnabled() }
+            : {}),
+          ...(typeof handler.canUse === 'function'
+            ? { canUse: (actor: Actor) => (instance as Required<ToolHandler>).canUse(actor) }
+            : {}),
+        },
       );
       count += 1;
     }

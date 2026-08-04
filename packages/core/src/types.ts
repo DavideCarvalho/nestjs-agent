@@ -33,6 +33,16 @@ export interface ToolSpec {
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
+   * Whether the tool exists in this deployment. `false` (or a predicate returning `false`) drops it
+   * before the role filter, so it is never offered to the model and cannot be invoked. Undefined →
+   * enabled.
+   *
+   * A predicate is re-evaluated every turn, so a flag flipped at runtime takes effect on the next
+   * message with nothing re-registered. For availability that depends on injected services, put
+   * `isEnabled()` on the handler instead — a spec is data, a handler is a provider.
+   */
+  enabled?: boolean | (() => boolean | Promise<boolean>);
+  /**
    * An authorization ability name (e.g. 'cache.purge'). Consumed by an ability-aware RolesPolicy
    * such as the `@dudousxd/nestjs-agent-authz` Gate adapter. Apps that don't use authz ignore it
    * and rely on `roles` instead — both live on the same SPI, so neither is required.

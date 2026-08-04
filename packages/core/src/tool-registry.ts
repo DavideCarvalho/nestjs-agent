@@ -1,7 +1,14 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { AiToolCtx, ToolHandler } from './spi/tool.js';
-import { filterToolsByAllowList, filterToolsByRole } from './tool-filters.js';
+import {
+  canActorUseTool,
+  filterToolsByAllowList,
+  filterToolsByCanUse,
+  filterToolsByEnabled,
+  filterToolsByRole,
+  isToolEnabled,
+} from './tool-filters.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
 
 /** Thrown when an actor invokes a tool their role is not allowed. */
@@ -9,6 +16,22 @@ export class ToolForbiddenError extends Error {
   constructor(public readonly toolName: string) {
     super(`Tool "${toolName}" is not allowed for this role`);
     this.name = 'ToolForbiddenError';
+  }
+}
+
+/**
+ * Thrown when a registered tool is invoked while this deployment has it turned off (`enabled` /
+ * `isEnabled()`). Distinct from {@link ToolForbiddenError}, which is about the actor, and from
+ * {@link ToolNotFoundError}, which is about a name nobody registered — an operator reading a log
+ * needs to tell "you flipped the flag" apart from "that tool does not exist in this build".
+ *
+ * Reachable in normal operation, not just from a forged call: a HITL `action` approved before the
+ * flag was turned off runs its tool afterwards.
+ */
+export class ToolDisabledError extends Error {
+  constructor(public readonly toolName: string) {
+    super(`Tool "${toolName}" is disabled in this deployment`);
+    this.name = 'ToolDisabledError';
   }
 }
 
@@ -64,14 +87,34 @@ export class ToolRegistry {
     return [...this.entries.values()].map((entry) => entry.spec);
   }
 
-  /** The tools to offer the model for this actor+agent, after the two filter layers. */
+  /**
+   * The tools to offer the model for this actor+agent, after the four filter layers: what this
+   * deployment has enabled, what this actor's role allows, what each tool's own `canUse` allows
+   * this actor, and finally what this agent pinned.
+   *
+   * Every layer only ever removes tools, so no arrangement of them can widen what a turn reaches.
+   */
   async definitionsFor(
     actor: Actor,
     policy: RolesPolicy,
     allowedTools?: string[],
   ): Promise<ToolDefinition[]> {
-    const roleScoped = await filterToolsByRole(this.allSpecs(), actor, policy);
-    const allowScoped = filterToolsByAllowList(roleScoped, allowedTools);
+    const live = await filterToolsByEnabled([...this.entries.values()]);
+    const allowedByRole = new Set(
+      (
+        await filterToolsByRole(
+          live.map((entry) => entry.spec),
+          actor,
+          policy,
+        )
+      ).map((spec) => spec.name),
+    );
+    const roleScoped = live.filter((entry) => allowedByRole.has(entry.spec.name));
+    const actorScoped = await filterToolsByCanUse(roleScoped, actor);
+    const allowScoped = filterToolsByAllowList(
+      actorScoped.map((entry) => entry.spec),
+      allowedTools,
+    );
     return allowScoped.map((spec) => ({
       name: spec.name,
       kind: spec.kind,
@@ -80,7 +123,11 @@ export class ToolRegistry {
     }));
   }
 
-  /** Run a tool. Re-checks the role (defense-in-depth) and re-parses the input via Zod. */
+  /**
+   * Run a tool. Re-checks that the tool is enabled and that the role allows it (defense-in-depth —
+   * a call can reach here from a replayed durable step or an approval granted before the flag
+   * moved, neither of which went through `definitionsFor` again) and re-parses the input via Zod.
+   */
   async invoke(
     name: string,
     input: unknown,
@@ -91,7 +138,13 @@ export class ToolRegistry {
     if (entry === undefined) {
       throw new ToolNotFoundError(name);
     }
+    if (!(await isToolEnabled(entry.spec, entry.handler))) {
+      throw new ToolDisabledError(name);
+    }
     if (!(await policy.can(ctx.actor, entry.spec))) {
+      throw new ToolForbiddenError(name);
+    }
+    if (!(await canActorUseTool(ctx.actor, entry.handler))) {
       throw new ToolForbiddenError(name);
     }
     const validation = await entry.spec.inputSchema['~standard'].validate(input);

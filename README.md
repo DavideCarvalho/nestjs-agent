@@ -203,6 +203,38 @@ export class AppModule {}
 export class PurgeCacheTool implements ToolHandler<{ key: string }> { /* … */ }
 ```
 
+### Turning a tool off, and gating it per user
+
+`roles`/`ability` answer "may this actor use it?" with one app-wide policy, and an agent's `tools`
+allow-list is fixed when the agent is declared. Two optional methods on the handler answer the
+questions those can't, per turn and with DI:
+
+- **`isEnabled()`** — does this capability exist in this deployment at all? The feature-flag seam.
+- **`canUse(actor)`** — may THIS actor use it? The per-user seam, next to the tool that knows what
+  to ask (a plan, an entitlement row, ownership of the record in question).
+
+```ts
+@AiTool({ name: 'searchDocs', kind: 'read', description: '…', input: schema })
+export class SearchDocsTool implements ToolHandler<Input> {
+  constructor(private readonly config: ConfigService, private readonly plans: PlanService) {}
+
+  isEnabled() { return this.config.get('DOCS_SEARCH_ENABLED') === 'true'; }
+  canUse(actor: Actor) { return this.plans.includesDocSearch(actor.tenantRef); }
+
+  async execute(input, ctx) { /* … */ }
+}
+```
+
+Both run when the turn's tool list is built, so a tool that fails either is **never shown to the
+model** — no wasted step, no refusal that tells the user a capability exists. Both run again on
+invoke, which is what stops a HITL action approved before the flag moved from executing after it.
+Every gate can only remove tools: `isEnabled`, then the roles policy, then `canUse`, then the
+agent's allow-list. A disabled tool raises `ToolDisabledError`, distinct from `ToolForbiddenError`
+(wrong actor) and `ToolNotFoundError` (no such tool) — three different things to go fix.
+
+For availability that needs no injected service, the decorator takes it directly:
+`@AiTool({ enabled: false })`, or `enabled: () => process.env.FLAG === 'true'` (re-read every turn).
+
 ## Governed SQL (`-data`)
 
 Give the model read-only SQL access without handing it the database. Every query is AST-validated
