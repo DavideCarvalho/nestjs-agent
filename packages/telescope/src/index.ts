@@ -1,6 +1,35 @@
-export { agentTelescopeExtension } from './agent-telescope.extension.js';
+export {
+  agentTelescopeExtension,
+  type AgentTelescopeExtensionOptions,
+} from './agent-telescope.extension.js';
 export { AgentTelescopeWatcher } from './agent-telescope.watcher.js';
+export { RAG_ENTRY_TYPE, RagTelescopeWatcher } from './rag-telescope.watcher.js';
 export { agentDashboard } from './agent-dashboard.spec-data.js';
+export {
+  meanChunks,
+  percentile,
+  ragChunksProvider,
+  ragCollectionsTableProvider,
+  ragLatencyProvider,
+  ragRetrievalsProvider,
+  ragRetrieverBreakdownProvider,
+  ragScoresProvider,
+  ragSlowestTableProvider,
+  ragStoreBreakdownProvider,
+  ragTrendProvider,
+  ragZeroHitRateProvider,
+  readRetrievals,
+  toCollectionRows,
+  toLatencyDistribution,
+  toRagRetrieval,
+  toRetrievalTrendRows,
+  toRetrieverSegments,
+  toScoreDistribution,
+  toSlowestRows,
+  toStoreSegments,
+  zeroHitRate,
+  type RagRetrieval,
+} from './rag-data-providers.js';
 export {
   agentRunsProvider,
   agentTokensProvider,

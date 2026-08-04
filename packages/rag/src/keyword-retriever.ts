@@ -1,6 +1,7 @@
 import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
 import { matchesFilter } from './filter.js';
 import type { ChunkRecord } from './ingest.js';
+import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import { documentIdOf } from './vector-store.js';
 
 export interface KeywordRetrieverOptions {
@@ -38,6 +39,15 @@ export class KeywordRetriever implements Retriever {
   constructor(options: KeywordRetrieverOptions = {}) {
     this.k1 = options.k1 ?? 1.5;
     this.b = options.b ?? 0.75;
+  }
+
+  /**
+   * Telemetry self-description. No `store`: this retriever holds its own copy of the corpus in
+   * process, so attributing its retrievals to whichever vector store happens to hold the same chunks
+   * would credit a backend that was never queried.
+   */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'keyword' };
   }
 
   /** How many chunks are currently indexed. */

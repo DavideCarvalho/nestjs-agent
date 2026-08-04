@@ -1,4 +1,4 @@
-import type { Column, DashboardSpec } from '@dudousxd/nestjs-telescope';
+import type { Column, DashboardSection, DashboardSpec } from '@dudousxd/nestjs-telescope';
 
 /** A plain column, or one carrying a `Column.link` to `href` when `href` is given. */
 function col(key: string, label: string, href?: string): Column {
@@ -26,13 +26,20 @@ const DEFAULT_TRACE_HREF = '#/traces/{runId}';
  * still override it. Every table whose rows carry a `threadId`/`runId` gets a `Column.link` for it
  * (via {@link col}); `threadHref` left unset leaves that column plain text.
  *
- * Layout: six sections (Overview lean; Spend; Reliability; Activity; Approvals; Tools), each sized
- * so its panel count is an exact multiple of its `cols` — no half-empty row. `nestjs-telescope`'s
- * `ExtensionDashboardPage` renders a section as a `grid-cols-N` grid with one panel per cell and no
- * `colSpan`, so a lone table in an otherwise-empty row would leave a visible gap next to it.
+ * Layout: eight sections (Overview lean; Spend; Reliability; Activity; Approvals; Tools;
+ * Retrieval; Retrieval sources), each sized so its panel count is an exact multiple of its `cols` —
+ * no half-empty row. `nestjs-telescope`'s `ExtensionDashboardPage` renders a section as a
+ * `grid-cols-N` grid with one panel per cell and no `colSpan`, so a lone table in an otherwise-empty
+ * row would leave a visible gap next to it.
+ *
+ * `sections` appends HOST-contributed sections after the built-in ones — see
+ * {@link import('./agent-telescope.extension.js').agentTelescopeExtension}'s `sections`/`providers`
+ * options, which is the supported way an application puts its own panels (its knowledge-base
+ * collections, its ingestion activity) on this page. They are appended rather than interleaved so a
+ * host's layout can never push a built-in section out of the row it was sized for.
  */
 export function agentDashboard(
-  opts: { threadHref?: string; runHref?: string } = {},
+  opts: { threadHref?: string; runHref?: string; sections?: DashboardSection[] } = {},
 ): DashboardSpec {
   const runHref = opts.runHref ?? DEFAULT_TRACE_HREF;
   return {
@@ -286,6 +293,106 @@ export function agentDashboard(
           },
         ],
       },
+      {
+        // RAG. Fed by the `aviary:rag:retrieval` telemetry `@dudousxd/nestjs-agent-rag` emits, NOT
+        // derived from tool-call rows: a tool call that retrieved nothing and one that retrieved
+        // five perfect passages are the same row with the same `ok` status, so every number here
+        // would have been unanswerable from that side.
+        title: 'Retrieval',
+        cols: 3,
+        panels: [
+          { kind: 'stat', title: 'Retrievals', data: { provider: 'agent.rag.retrievals' } },
+          {
+            kind: 'stat',
+            title: 'Zero-hit rate',
+            data: { provider: 'agent.rag.zeroHitRate' },
+            format: 'percent',
+            // Up is bad and there is no "good" floor to calibrate against — a corpus that honestly
+            // cannot answer a question SHOULD come back empty — so no thresholds: colouring this
+            // would assert a target nobody measured.
+          },
+          {
+            kind: 'stat',
+            title: 'Passages per retrieval',
+            data: { provider: 'agent.rag.chunks' },
+            format: 'number',
+          },
+          {
+            // A real histogram, unlike the run-duration pair above: retrieval events carry the raw
+            // per-call duration, so there ARE samples to bucket and markers to place.
+            kind: 'distribution',
+            title: 'Retrieval latency',
+            data: { provider: 'agent.rag.latency' },
+            markers: ['p50', 'p95', 'p99'],
+            format: 'duration',
+          },
+          {
+            // Bound to ONE retriever kind on purpose — a cosine similarity, a BM25 score and an RRF
+            // rank score share no scale, so a histogram over all of them has bins that mean a
+            // different thing per bar. See `toScoreDistribution`.
+            kind: 'distribution',
+            title: 'Top score (dense)',
+            data: { provider: 'agent.rag.scores', query: { retriever: 'embedding' } },
+            markers: ['p50', 'p95'],
+            format: 'number',
+          },
+          {
+            kind: 'timeseries',
+            title: 'Retrievals & zero-hits',
+            data: { provider: 'agent.rag.trend' },
+            series: ['retrievals', 'zeroHits'],
+            style: 'stacked',
+          },
+        ],
+      },
+      {
+        title: 'Retrieval sources',
+        cols: 2,
+        panels: [
+          {
+            kind: 'breakdown',
+            title: 'Retrievals by store',
+            data: { provider: 'agent.rag.byStore' },
+            style: 'donut',
+          },
+          {
+            kind: 'breakdown',
+            title: 'Retrievals by retriever',
+            data: { provider: 'agent.rag.byRetriever' },
+            style: 'donut',
+          },
+          {
+            kind: 'table',
+            title: 'By collection',
+            data: { provider: 'agent.rag.byCollection' },
+            columns: [
+              { key: 'collection', label: 'Collection' },
+              { key: 'store', label: 'Store' },
+              { key: 'retrievals', label: 'Retrievals' },
+              { key: 'zeroHits', label: 'Zero-hits' },
+              { key: 'p95Ms', label: 'p95 (ms)' },
+              { key: 'meanTopScore', label: 'Mean top score' },
+            ],
+          },
+          {
+            kind: 'table',
+            title: 'Slowest retrievals',
+            data: { provider: 'agent.rag.slowest' },
+            // Seven columns, matching the recent-runs table's width: this is the widest a table can
+            // get here before it overflows its card.
+            columns: [
+              { key: 'at', label: 'When' },
+              { key: 'retriever', label: 'Retriever' },
+              { key: 'store', label: 'Store' },
+              { key: 'collection', label: 'Collection' },
+              { key: 'chunks', label: 'Passages' },
+              { key: 'topScore', label: 'Top score' },
+              { key: 'durationMs', label: 'Duration (ms)' },
+            ],
+          },
+        ],
+      },
+      ...(opts.sections ?? []),
     ],
   };
 }

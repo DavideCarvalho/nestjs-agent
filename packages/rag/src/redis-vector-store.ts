@@ -1,6 +1,7 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
+import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
   type IndexedDocument,
   type LexicalVectorStore,
@@ -100,6 +101,15 @@ export class RedisVectorStore implements LexicalVectorStore {
     this.dimensions = options.dimensions ?? 1536;
     this.filterableFields = options.filterableFields ?? [];
     this.lexicalScorer = options.lexicalScorer ?? 'BM25';
+  }
+
+  /**
+   * Telemetry self-description — the RediSearch INDEX, not the key prefix: the index is what both
+   * legs query, and two stores sharing one index (the dense and lexical halves of a hybrid) must
+   * report the same namespace or `describeSharedSource` would see them disagree and drop the store.
+   */
+  describeRetrieval(): RetrievalDescriptor {
+    return { store: 'redis', collection: this.index };
   }
 
   /**

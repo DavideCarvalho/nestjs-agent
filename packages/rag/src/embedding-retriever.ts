@@ -4,6 +4,7 @@ import type {
   RetrieveOptions,
   Retriever,
 } from '@dudousxd/nestjs-agent-core';
+import { type RetrievalDescriptor, describeSource } from './retrieval-descriptor.js';
 import type { VectorStore } from './vector-store.js';
 
 export interface EmbeddingRetrieverOptions {
@@ -41,6 +42,11 @@ export class EmbeddingRetriever implements Retriever {
     private readonly store: VectorStore,
     private readonly options: EmbeddingRetrieverOptions = {},
   ) {}
+
+  /** Telemetry self-description — the dense strategy, over whatever store it was handed. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'embedding', ...describeSource(this.store) };
+  }
 
   async retrieve(query: string, options: RetrieveOptions = {}): Promise<Passage[]> {
     const [embedding] = await this.embedder.embed([query]);

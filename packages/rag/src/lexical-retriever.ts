@@ -1,4 +1,5 @@
 import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
+import { type RetrievalDescriptor, describeSource } from './retrieval-descriptor.js';
 import type { LexicalVectorStore } from './vector-store.js';
 
 /**
@@ -26,6 +27,11 @@ import type { LexicalVectorStore } from './vector-store.js';
  */
 export class LexicalRetriever implements Retriever {
   constructor(private readonly store: LexicalVectorStore) {}
+
+  /** Telemetry self-description — the store's own lexical index, so the store is the same one. */
+  describeRetrieval(): RetrievalDescriptor {
+    return { retriever: 'lexical', ...describeSource(this.store) };
+  }
 
   async retrieve(query: string, options: RetrieveOptions = {}): Promise<Passage[]> {
     return this.store.searchText(query, {
