@@ -78,21 +78,38 @@ describe('agentDashboard', () => {
     expect(providers).toEqual(['agent.runs.paged', 'agent.tools.paged', 'agent.threads.paged']);
   });
 
-  it('a runId column defaults to the in-app trace route, overridable via opts.runHref', () => {
-    const runIdColumn = (panels: ReturnType<typeof agentDashboard>['sections']) =>
+  // A `runId` is NOT a `traceId`. Telescope's waterfall resolves `storage.get({ traceId })`, and
+  // AgentTelescopeWatcher stamps no trace on the entries it records, so the old
+  // `'#/traces/{runId}'` default linked every Run cell at a trace that cannot exist — clicking one
+  // returned `404 · No entries for trace <runId>`. No link at all beats a link that always 404s.
+  it('leaves a runId column unlinked unless the host supplies a run viewer', () => {
+    const runIdColumns = (panels: ReturnType<typeof agentDashboard>['sections']) =>
       panels
         ?.flatMap((s) => s.panels)
         .filter((p): p is Extract<typeof p, { kind: 'table' }> => p.kind === 'table')
         .flatMap((p) => p.columns)
-        .find((c) => c.key === 'runId');
+        .filter((c) => c.key === 'runId') ?? [];
 
-    const defaultDashboard = agentDashboard();
-    expect(runIdColumn(defaultDashboard.sections)?.link).toEqual({ href: '#/traces/{runId}' });
+    const defaultColumns = runIdColumns(agentDashboard().sections);
+    expect(defaultColumns.length).toBeGreaterThan(0);
+    for (const column of defaultColumns) {
+      expect(column.link).toBeUndefined();
+    }
 
-    const customDashboard = agentDashboard({ runHref: '/custom/runs/{runId}' });
-    expect(runIdColumn(customDashboard.sections)?.link).toEqual({
-      href: '/custom/runs/{runId}',
-    });
+    // No `#/traces/` template survives anywhere in the shipped spec, in any column.
+    const everyHref = agentDashboard()
+      .sections?.flatMap((s) => s.panels)
+      .filter((p): p is Extract<typeof p, { kind: 'table' }> => p.kind === 'table')
+      .flatMap((p) => p.columns)
+      .map((c) => c.link?.href)
+      .filter((h): h is string => typeof h === 'string');
+    expect(everyHref?.filter((h) => h.includes('/traces/'))).toEqual([]);
+
+    for (const column of runIdColumns(
+      agentDashboard({ runHref: '/custom/runs/{runId}' }).sections,
+    )) {
+      expect(column.link).toEqual({ href: '/custom/runs/{runId}' });
+    }
   });
 
   it('the RAG sections bind only to providers the retrieval telemetry actually feeds', () => {
