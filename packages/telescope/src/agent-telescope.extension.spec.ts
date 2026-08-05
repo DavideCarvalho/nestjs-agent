@@ -89,9 +89,9 @@ describe('agentTelescopeExtension', () => {
         : undefined;
     expect(threadIdColumn?.link).toEqual({ href: '/agent/threads/{threadId}' });
 
-    // No opts.runHref → the runId column still links, defaulting to the in-app trace waterfall
-    // (no host wiring needed); no opts.threadHref → the threadId column stays plain text (there's
-    // no internal thread view to default to).
+    // Neither opt supplied → both cells stay plain text. There is no internal viewer to default
+    // to for either: a runId is not a traceId, so the old '#/traces/{runId}' default pointed every
+    // Run cell at a trace that cannot exist.
     const withoutHrefs = agentTelescopeExtension();
     const plainDashboard = withoutHrefs.dashboards?.(ctx)[0];
     const plainRecentRuns = plainDashboard?.sections
@@ -101,7 +101,7 @@ describe('agentTelescopeExtension', () => {
       plainRecentRuns?.kind === 'table'
         ? plainRecentRuns.columns.find((c) => c.key === 'runId')
         : undefined;
-    expect(plainRunIdColumn?.link).toEqual({ href: '#/traces/{runId}' });
+    expect(plainRunIdColumn?.link).toBeUndefined();
 
     const plainRecentThreads = plainDashboard?.sections
       ?.flatMap((s) => s.panels)

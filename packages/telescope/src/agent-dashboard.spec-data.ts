@@ -6,25 +6,21 @@ function col(key: string, label: string, href?: string): Column {
 }
 
 /**
- * The default in-app trace-waterfall route a `runId` cell deep-links to — the TRACE view's
- * confirmed URL shape (wave-polish-CONTRACTS.md §A2 / `@dudousxd/nestjs-telescope`'s `LinkSpec`
- * doc): an in-app hash route rendered as a plain anchor, no host wiring required. `opts.runHref`
- * overrides this for a host that wants its own run viewer instead — mirrors how
- * `durableDashboard`'s own `runHref` defaults to an internal route (`'/durable/runs/{runId}'`)
- * unless the host supplies one.
- */
-const DEFAULT_TRACE_HREF = '#/traces/{runId}';
-
-/**
  * The "Agent" overview dashboard. Panels bind to the `agent.*` data providers.
  *
- * `threadHref` is a URL template for deep-linking a `{threadId}` cell out to the HOST's own thread
- * viewer (e.g. the standalone `@dudousxd/nestjs-agent-dashboard` SPA) — omitted by default (no
- * internal thread view exists), passed straight through when the host supplies one. `runHref` deep-
- * links a `{runId}` cell to the trace waterfall — defaults to {@link DEFAULT_TRACE_HREF} (the
- * in-app route), so a `runId` column works out of the box with no host option needed; a host may
- * still override it. Every table whose rows carry a `threadId`/`runId` gets a `Column.link` for it
- * (via {@link col}); `threadHref` left unset leaves that column plain text.
+ * `threadHref` and `runHref` are URL templates for deep-linking a `{threadId}` / `{runId}` cell out
+ * to the HOST's own viewer (e.g. the standalone `@dudousxd/nestjs-agent-dashboard` SPA). Both are
+ * omitted by default, and a cell whose template is unset renders as plain text.
+ *
+ * `runHref` used to default to `'#/traces/{runId}'`, and that default could only 404. Telescope's
+ * trace waterfall is keyed by **`traceId`** — `LinkSpec`'s doc says so, and `TracesService`
+ * resolves it with `storage.get({ traceId })` — while an agent's `runId` is a different identifier
+ * that {@link import('./agent-telescope.watcher.js').AgentTelescopeWatcher} never ties to one: it
+ * records `type: 'agent'` entries and stamps no trace at all. So every `Run` cell on the shipped
+ * dashboard pointed at a trace that does not exist, and clicking one answered
+ * `404 · No entries for trace <runId>`. Substituting the wrong key into a route that had been read
+ * correctly is the whole bug — hence no default here. A host that has a run viewer passes its own
+ * template; one that does not gets plain text, which is honest.
  *
  * Layout: eight sections (Overview lean; Spend; Reliability; Activity; Approvals; Tools;
  * Retrieval; Retrieval sources), each sized so its panel count is an exact multiple of its `cols` —
@@ -41,7 +37,7 @@ const DEFAULT_TRACE_HREF = '#/traces/{runId}';
 export function agentDashboard(
   opts: { threadHref?: string; runHref?: string; sections?: DashboardSection[] } = {},
 ): DashboardSpec {
-  const runHref = opts.runHref ?? DEFAULT_TRACE_HREF;
+  const runHref = opts.runHref;
   return {
     id: 'agent.overview',
     label: 'Agent',
