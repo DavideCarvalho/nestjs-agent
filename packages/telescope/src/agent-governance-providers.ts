@@ -584,10 +584,26 @@ const DEFAULT_RECENT_LIMIT = 50;
 /** Hard ceiling on `limit`, regardless of what a panel's query requests. */
 const MAX_RECENT_LIMIT = 500;
 
+/**
+ * Read a positive number out of a raw query value, whichever way it arrived.
+ *
+ * A panel's `data.query` reaches a provider as **strings**: the dashboard serializes it into the
+ * URL and the host controller hands `@Query()` straight through, so `?page=2` arrives as `'2'`.
+ * A `typeof raw === 'number'` guard therefore rejects every value a real request can carry and
+ * silently falls back — which is not a type error anywhere, and reads at runtime as "paging does
+ * nothing". Unit tests calling `resolve({ page: 2 })` pass either way, so the guard has to accept
+ * both forms for the tests to mean anything about the deployed behaviour.
+ */
+function readPositiveNumber(raw: unknown): number | undefined {
+  if (typeof raw === 'number') return Number.isFinite(raw) && raw > 0 ? raw : undefined;
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /** Clamp a panel-supplied `limit` into `[1, MAX_RECENT_LIMIT]`, defaulting when absent/invalid. */
 function resolveLimit(query: Record<string, unknown> | undefined, fallback: number): number {
-  const raw = query?.limit;
-  const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
+  const value = readPositiveNumber(query?.limit) ?? fallback;
   return Math.min(MAX_RECENT_LIMIT, Math.max(1, Math.trunc(value)));
 }
 
@@ -625,10 +641,17 @@ function governanceLimitProvider<TRow>(
 // version that publishes `paged`, flip the three panels below to `paged: true` — no other change
 // needed, the provider side is already ready.
 
-/** Clamp a panel-supplied `page` to `[1, Infinity)`, defaulting to 1 when absent/invalid. */
+/**
+ * Clamp a panel-supplied `page` to `[1, Infinity)`, defaulting to 1 when absent/invalid.
+ *
+ * See {@link readPositiveNumber} for why this cannot demand a `number`: it did, `?page=2` arrived
+ * as `'2'`, and every page resolved to 1. The visible symptom was worse than "Next shows page 1"
+ * — the pager renders the page the RESPONSE reports, so Next appeared to do nothing, and because
+ * the control then keeps computing `page + 1` from that pinned 1, the second click requests a page
+ * the UI is already on, React skips the re-render, and the pager stops responding entirely.
+ */
 function resolvePage(query: Record<string, unknown> | undefined): number {
-  const raw = query?.page;
-  const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 1;
+  const value = readPositiveNumber(query?.page) ?? 1;
   return Math.max(1, Math.trunc(value));
 }
 

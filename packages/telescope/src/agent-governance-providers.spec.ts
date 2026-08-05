@@ -668,6 +668,36 @@ describe('paged-table providers (A1)', () => {
     );
   });
 
+  // The tests above hand `resolve` real numbers, which is NOT what a deployed provider is given: the
+  // dashboard serializes a panel's query into the URL and the host controller passes `@Query()`
+  // through verbatim, so `?page=2&limit=20` arrives as the STRINGS '2' and '20'. Reading them with a
+  // `typeof raw === 'number'` guard sent every request to page 1 while every test above stayed green
+  // — the pager on /telescope#/ext/agent.overview showed "Page 1 of 2" forever, and stopped
+  // responding after one click because it kept re-requesting the page it was already on.
+  it('reads page/limit that arrived off the URL as strings', async () => {
+    const ctx = contextWith(stubQueries());
+    await expect(
+      agentToolCallsPagedTableProvider().resolve({ page: '3', limit: '20' }, ctx),
+    ).resolves.toMatchObject({ page: 3, limit: 20 });
+    await expect(
+      agentThreadsPagedTableProvider().resolve({ page: '2', limit: '10' }, ctx),
+    ).resolves.toMatchObject({ page: 2, limit: 10 });
+    await expect(agentRunsPagedTableProvider().resolve({ page: '4' }, ctx)).resolves.toMatchObject({
+      page: 4,
+      limit: 50,
+    });
+  });
+
+  it('falls back rather than propagating a page/limit that is not a positive number', async () => {
+    const ctx = contextWith(stubQueries());
+    // A hand-typed or truncated param must not reach the read-model as NaN or a negative offset.
+    for (const bad of ['', ' ', 'banana', '0', '-2', 'NaN', 'Infinity']) {
+      await expect(
+        agentToolCallsPagedTableProvider().resolve({ page: bad, limit: bad }, ctx),
+      ).resolves.toMatchObject({ page: 1, limit: 50 });
+    }
+  });
+
   it('degrades to an empty page (not a throw) when the read-model is unbound', async () => {
     const ctx = contextWith(MISSING_BINDING);
     await expect(agentToolCallsPagedTableProvider().resolve({ page: 2 }, ctx)).resolves.toEqual({
