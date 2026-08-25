@@ -1,5 +1,5 @@
 import type { UsagePurpose } from '@dudousxd/nestjs-agent-core';
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 
 /** A token-usage ledger row, summed per actor per day by {@link MikroOrmAgentStore.quotaToday}. */
@@ -19,7 +19,11 @@ export class AgentTokenUsage {
   /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
   costUsd?: number | null;
   createdAt!: Date;
+  [EntityRepositoryType]?: AgentTokenUsageRepository;
 }
+
+/** Custom repository for {@link AgentTokenUsage}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentTokenUsageRepository extends EntityRepository<AgentTokenUsage> {}
 
 /** Builds the `agent_token_usage` schema. `thread` cascades on delete (§5). */
 export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTokenUsage> {
@@ -27,6 +31,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
   return new EntitySchema<AgentTokenUsage>({
     class: AgentTokenUsage,
     tableName: 'agent_token_usage',
+    repository: () => AgentTokenUsageRepository,
     indexes: [
       { name: 'agent_token_usage_actor_created_idx', properties: ['actorRef', 'createdAt'] },
     ],

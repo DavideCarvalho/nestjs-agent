@@ -1,5 +1,5 @@
 import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentMessage } from './agent-message.entity';
 
 /** A tool call requested during an assistant turn. The pk is the model-supplied `toolCallId`. */
@@ -18,7 +18,11 @@ export class AgentToolCall {
   executedAt?: Date | null;
   /** The run (turn) this call belongs to, for a trace deep-link; `null` for a pre-rollout row. */
   runId?: string | null;
+  [EntityRepositoryType]?: AgentToolCallRepository;
 }
+
+/** Custom repository for {@link AgentToolCall}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentToolCallRepository extends EntityRepository<AgentToolCall> {}
 
 /** Builds the `agent_tool_call` schema. `message` cascades on delete (§5). */
 export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolCall> {
@@ -26,6 +30,7 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
   return new EntitySchema<AgentToolCall>({
     class: AgentToolCall,
     tableName: 'agent_tool_call',
+    repository: () => AgentToolCallRepository,
     properties: {
       id: { type: 'string', primary: true, ...str },
       message: {

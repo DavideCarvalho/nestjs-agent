@@ -1,4 +1,4 @@
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 
 /** Per-model token pricing, versioned by `effectiveFrom`; `isCurrent` flags the live row. */
 export class AgentModelPricing {
@@ -12,7 +12,11 @@ export class AgentModelPricing {
   cacheReadPricePer1m?: number | null;
   effectiveFrom!: Date;
   isCurrent!: boolean;
+  [EntityRepositoryType]?: AgentModelPricingRepository;
 }
+
+/** Custom repository for {@link AgentModelPricing}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentModelPricingRepository extends EntityRepository<AgentModelPricing> {}
 
 /** Builds the `agent_model_pricing` schema. */
 export function agentModelPricingSchema(collation?: string): EntitySchema<AgentModelPricing> {
@@ -20,6 +24,7 @@ export function agentModelPricingSchema(collation?: string): EntitySchema<AgentM
   return new EntitySchema<AgentModelPricing>({
     class: AgentModelPricing,
     tableName: 'agent_model_pricing',
+    repository: () => AgentModelPricingRepository,
     properties: {
       id: { type: 'string', primary: true, ...str },
       modelId: { type: 'string', fieldName: 'model_id', ...str },

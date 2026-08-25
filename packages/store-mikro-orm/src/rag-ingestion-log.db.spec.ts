@@ -5,7 +5,11 @@ import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
-import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
+import {
+  RagIngestionLog,
+  RagIngestionLogRepository,
+  type RagIngestionStatus,
+} from './entities/rag-ingestion-log.entity';
 import {
   MikroOrmRagIngestionLog,
   RAG_INGESTION_LOG_PAGE_ORDER,
@@ -109,6 +113,23 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await orm.em.fork().nativeDelete(RagIngestionLog, {});
+});
+
+describe('RagIngestionLog custom repository', () => {
+  it('is what a booted ORM hands back for the entity', () => {
+    // The point of wiring `repository` into the schema: a host resolves the repository by type
+    // (`em.getRepository(RagIngestionLog)`, `@InjectRepository`) instead of threading the entity
+    // through every `em.find(RagIngestionLog, …)` call.
+    const repository = orm.em.fork().getRepository(RagIngestionLog);
+    expect(repository).toBeInstanceOf(RagIngestionLogRepository);
+  });
+
+  it('reads the same rows the entity manager does', async () => {
+    await seed(3);
+
+    const rows = await orm.em.fork().getRepository(RagIngestionLog).findAll();
+    expect(rows.map((row) => row.documentId).sort()).toEqual(['doc-000', 'doc-001', 'doc-002']);
+  });
 });
 
 describe('MikroOrmRagIngestionLog (sqlite)', () => {
