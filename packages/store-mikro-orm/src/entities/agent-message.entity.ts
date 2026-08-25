@@ -25,7 +25,7 @@ export class AgentMessage {
   usage?: MessageUsage | null;
   agentName?: string | null;
   createdAt!: Date;
-  [EntityRepositoryType]?: AgentMessageRepository;
+  declare [EntityRepositoryType]?: AgentMessageRepository;
 }
 
 /** Custom repository for {@link AgentMessage}, so a host can inject it by type instead of passing the entity to every `em` call. */

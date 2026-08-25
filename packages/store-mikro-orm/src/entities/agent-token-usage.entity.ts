@@ -19,7 +19,7 @@ export class AgentTokenUsage {
   /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
   costUsd?: number | null;
   createdAt!: Date;
-  [EntityRepositoryType]?: AgentTokenUsageRepository;
+  declare [EntityRepositoryType]?: AgentTokenUsageRepository;
 }
 
 /** Custom repository for {@link AgentTokenUsage}, so a host can inject it by type instead of passing the entity to every `em` call. */

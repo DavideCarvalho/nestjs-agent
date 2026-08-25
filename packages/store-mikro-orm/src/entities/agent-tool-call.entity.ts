@@ -18,7 +18,7 @@ export class AgentToolCall {
   executedAt?: Date | null;
   /** The run (turn) this call belongs to, for a trace deep-link; `null` for a pre-rollout row. */
   runId?: string | null;
-  [EntityRepositoryType]?: AgentToolCallRepository;
+  declare [EntityRepositoryType]?: AgentToolCallRepository;
 }
 
 /** Custom repository for {@link AgentToolCall}, so a host can inject it by type instead of passing the entity to every `em` call. */

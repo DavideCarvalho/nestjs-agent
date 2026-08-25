@@ -35,7 +35,7 @@ export class RagIngestionLog {
   error?: string | null;
   createdAt!: Date;
   updatedAt!: Date;
-  [EntityRepositoryType]?: RagIngestionLogRepository;
+  declare [EntityRepositoryType]?: RagIngestionLogRepository;
 }
 
 /** Custom repository for {@link RagIngestionLog}, so a host can inject it by type instead of passing the entity to every `em` call. */

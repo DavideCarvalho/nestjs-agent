@@ -12,7 +12,7 @@ export class AgentModelPricing {
   cacheReadPricePer1m?: number | null;
   effectiveFrom!: Date;
   isCurrent!: boolean;
-  [EntityRepositoryType]?: AgentModelPricingRepository;
+  declare [EntityRepositoryType]?: AgentModelPricingRepository;
 }
 
 /** Custom repository for {@link AgentModelPricing}, so a host can inject it by type instead of passing the entity to every `em` call. */

@@ -24,7 +24,7 @@ export class AgentRun {
   settledAt?: Date | null;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a run recorded before this shipped. */
   promptHash?: string | null;
-  [EntityRepositoryType]?: AgentRunRepository;
+  declare [EntityRepositoryType]?: AgentRunRepository;
 }
 
 /** Custom repository for {@link AgentRun}, so a host can inject it by type instead of passing the entity to every `em` call. */

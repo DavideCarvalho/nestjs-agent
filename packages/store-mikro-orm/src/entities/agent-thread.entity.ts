@@ -16,7 +16,7 @@ export class AgentThread {
   createdAt!: Date;
   updatedAt!: Date;
   deletedAt?: Date | null;
-  [EntityRepositoryType]?: AgentThreadRepository;
+  declare [EntityRepositoryType]?: AgentThreadRepository;
 }
 
 /** Custom repository for {@link AgentThread}, so a host can inject it by type instead of passing the entity to every `em` call. */
