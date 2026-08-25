@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.14.0
+
+### Minor Changes
+
+- [#72](https://github.com/DavideCarvalho/nestjs-agent/pull/72) [`85fc4ec`](https://github.com/DavideCarvalho/nestjs-agent/commit/85fc4ec944c6d271b122589847199a834cd03a49) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Ship a custom `EntityRepository` per agent entity — `AgentThreadRepository`, `AgentMessageRepository`, `AgentToolCallRepository`, `AgentTokenUsageRepository`, `AgentModelPricingRepository`, `AgentRunRepository` and `RagIngestionLogRepository`.
+
+  Each is wired into its `EntitySchema` and declared on the entity class via `[EntityRepositoryType]`, so a host app can resolve one by type — `em.getRepository(RagIngestionLog)` or `@InjectRepository(RagIngestionLog)` in a Nest provider — instead of passing the entity class to every `em.find(RagIngestionLog, …)` call. The generated schema is unchanged: the boot fingerprint in `ensureAgentSchema` hashes tables, columns, indexes and collation only, so no host re-heals.
+
 ## 0.13.0
 
 ### Minor Changes
