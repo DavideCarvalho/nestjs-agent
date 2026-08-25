@@ -1,4 +1,4 @@
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 
 /**
  * A conversation thread. `deletedAt` drives soft delete (§5): a deleted thread is
@@ -16,7 +16,11 @@ export class AgentThread {
   createdAt!: Date;
   updatedAt!: Date;
   deletedAt?: Date | null;
+  declare [EntityRepositoryType]?: AgentThreadRepository;
 }
+
+/** Custom repository for {@link AgentThread}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentThreadRepository extends EntityRepository<AgentThread> {}
 
 /** Builds the `agent_thread` schema. `collation` is applied to string columns (MySQL parity). */
 export function agentThreadSchema(collation?: string): EntitySchema<AgentThread> {
@@ -24,6 +28,7 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
   return new EntitySchema<AgentThread>({
     class: AgentThread,
     tableName: 'agent_thread',
+    repository: () => AgentThreadRepository,
     indexes: [{ name: 'agent_thread_actor_updated_idx', properties: ['actorRef', 'updatedAt'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },

@@ -1,4 +1,4 @@
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 
 /** A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only. */
@@ -24,7 +24,11 @@ export class AgentRun {
   settledAt?: Date | null;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a run recorded before this shipped. */
   promptHash?: string | null;
+  declare [EntityRepositoryType]?: AgentRunRepository;
 }
+
+/** Custom repository for {@link AgentRun}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentRunRepository extends EntityRepository<AgentRun> {}
 
 /** Builds the `agent_run` schema. `thread` cascades on delete (§5). */
 export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
@@ -32,6 +36,7 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
   return new EntitySchema<AgentRun>({
     class: AgentRun,
     tableName: 'agent_run',
+    repository: () => AgentRunRepository,
     indexes: [{ name: 'agent_run_started_idx', properties: ['startedAt'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },

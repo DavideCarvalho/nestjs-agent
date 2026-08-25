@@ -1,4 +1,4 @@
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 
 /** The terminal states an ingestion attempt can land in. Mirrors `MediaIngestOutcome`. */
 export type RagIngestionStatus = 'ingested' | 'skipped' | 'failed' | 'removed';
@@ -35,7 +35,11 @@ export class RagIngestionLog {
   error?: string | null;
   createdAt!: Date;
   updatedAt!: Date;
+  declare [EntityRepositoryType]?: RagIngestionLogRepository;
 }
+
+/** Custom repository for {@link RagIngestionLog}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class RagIngestionLogRepository extends EntityRepository<RagIngestionLog> {}
 
 /** Builds the `rag_ingestion_log` schema. Indexed by collection for the per-collection listing. */
 export function ragIngestionLogSchema(collation?: string): EntitySchema<RagIngestionLog> {
@@ -43,6 +47,7 @@ export function ragIngestionLogSchema(collation?: string): EntitySchema<RagInges
   return new EntitySchema<RagIngestionLog>({
     class: RagIngestionLog,
     tableName: 'rag_ingestion_log',
+    repository: () => RagIngestionLogRepository,
     indexes: [
       { name: 'rag_ingestion_log_collection_idx', properties: ['collection', 'updatedAt'] },
     ],

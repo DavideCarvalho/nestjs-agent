@@ -5,7 +5,7 @@ import type {
   ToolCallRequest,
   ToolResult,
 } from '@dudousxd/nestjs-agent-core';
-import { EntitySchema } from '@mikro-orm/core';
+import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 
 /**
@@ -25,7 +25,11 @@ export class AgentMessage {
   usage?: MessageUsage | null;
   agentName?: string | null;
   createdAt!: Date;
+  declare [EntityRepositoryType]?: AgentMessageRepository;
 }
+
+/** Custom repository for {@link AgentMessage}, so a host can inject it by type instead of passing the entity to every `em` call. */
+export class AgentMessageRepository extends EntityRepository<AgentMessage> {}
 
 /** Builds the `agent_message` schema. `thread` cascades on delete (§5). */
 export function agentMessageSchema(collation?: string): EntitySchema<AgentMessage> {
@@ -33,6 +37,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
   return new EntitySchema<AgentMessage>({
     class: AgentMessage,
     tableName: 'agent_message',
+    repository: () => AgentMessageRepository,
     indexes: [{ name: 'agent_message_thread_created_idx', properties: ['thread', 'createdAt'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },
