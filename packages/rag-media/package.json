@@ -36,7 +36,7 @@
   "peerDependencies": {
     "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0",
     "@dudousxd/nestjs-agent-rag": ">=0.4.0 <1.0.0",
-    "@nestjs/common": "^10.0.0 || ^11.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "reflect-metadata": "^0.2.0"
   },
   "dependencies": {
@@ -46,7 +46,7 @@
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-rag": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
-    "@nestjs/common": "11.1.6",
+    "@nestjs/common": "12.0.1",
     "reflect-metadata": "0.2.2",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
