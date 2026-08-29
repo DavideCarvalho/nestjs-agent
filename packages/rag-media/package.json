@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-rag-media",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",

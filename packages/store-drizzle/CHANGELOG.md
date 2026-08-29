@@ -1,5 +1,24 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.8.2
+
+### Patch Changes
+
+- [`fe9fb99`](https://github.com/DavideCarvalho/nestjs-agent/commit/fe9fb9985131643ad9b2733a3c3658decdc585ab) - Add NestJS 12 to the supported peer range.
+
+  Every `@nestjs/common`, `@nestjs/core` and `@nestjs/platform-express` peer that read
+  `^10.0.0 || ^11.0.0` now reads `^10.0.0 || ^11.0.0 || ^12.0.0`. NestJS 12.0.1 shipped the framework
+  as pure ESM and raised its floor to Node >= 20.19; these packages are already `"type": "module"`,
+  so nothing needed porting — the turn loop, the `/api/agent/*` controllers, HITL approval as a durable
+  signal, the stores and the dashboard all behave identically on 11 and 12.
+
+  The dev and test matrix moved to the 12.x line with the ranges, including the demo app, so the added
+  range is tested rather than merely declared: build, both typecheck passes, and the unit and
+  database suites are green against 12.0.1.
+
+  11 and 10 stay in every range. Nothing in the source depends on a 12-only API, so the widened range
+  is additive and a consumer still on 11 sees no change.
+
 ## 0.8.1
 
 ### Patch Changes
