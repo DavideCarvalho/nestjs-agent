@@ -154,6 +154,16 @@ export interface AgentLoopDeps<TOutput = unknown> {
    * is a property of the wiring rather than of any decision.
    */
   maxDelegationDepth?: number;
+  /**
+   * How many times one agent may appear on a single delegation chain.
+   * Defaults to {@link DEFAULT_MAX_AGENT_APPEARANCES}.
+   *
+   * This is the guard the depth ceiling was a proxy for, made exact: the loop compares the target
+   * against {@link AgentRunInput.delegationPath} and knows whether the chain has been here before,
+   * and how often. A chain of eight DISTINCT agents is long, not looping, and no longer refused for
+   * resembling one.
+   */
+  maxAgentAppearances?: number;
   /** Optional host handle threaded to tool ctx (e.g. an ORM EntityManager). */
   host?: unknown;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
@@ -554,8 +564,50 @@ export function agentFailureCode(error: unknown): string {
 /**
  * The default depth at which agent→agent delegation stops nesting, when the host names none.
  * Override with {@link AgentLoopDeps.maxDelegationDepth}.
+ *
+ * A backstop for a chain that is merely LONG. The cycle it used to stand in for is now detected
+ * directly — see {@link DEFAULT_MAX_AGENT_APPEARANCES}.
  */
 export const MAX_DELEGATION_DEPTH = 5;
+
+/**
+ * How many times one agent may appear on a single delegation chain, when the host names no other
+ * number. Once: a chain that reaches an agent it has already passed through is going in circles.
+ *
+ * Override with {@link AgentLoopDeps.maxAgentAppearances} — a supervisor that genuinely hands work
+ * back to an earlier agent needs a larger number, and it is the count of APPEARANCES, so 2 admits
+ * exactly one return.
+ */
+export const DEFAULT_MAX_AGENT_APPEARANCES = 1;
+
+/**
+ * Why this delegation must not happen, or `null` to let it through.
+ *
+ * Two different refusals, and the order matters: a CYCLE is named before a depth, because they
+ * describe different faults and the depth is the vaguer of the two. "A→B→A" points at the wiring;
+ * "depth limit of 5 reached" leaves a reader to work out whether the chain was looping or merely
+ * long, which is exactly the question a count cannot answer.
+ */
+function delegationRefusal(args: {
+  deps: Pick<AgentLoopDeps, 'maxAgentAppearances' | 'maxDelegationDepth'>;
+  input: Pick<AgentRunInput, 'delegationDepth' | 'delegationPath'>;
+  targetAgent: string;
+}): string | null {
+  const { deps, input, targetAgent } = args;
+  const ancestry = input.delegationPath ?? [];
+  const appearances = ancestry.filter((name) => name === targetAgent).length;
+  const maxAppearances = deps.maxAgentAppearances ?? DEFAULT_MAX_AGENT_APPEARANCES;
+  if (appearances >= maxAppearances) {
+    const chain = [...ancestry, targetAgent].join(' → ');
+    const times = appearances + 1;
+    return `(delegation cycle: ${chain} — ${targetAgent} ${times} times on one chain)`;
+  }
+  const maxDepth = deps.maxDelegationDepth ?? MAX_DELEGATION_DEPTH;
+  if ((input.delegationDepth ?? 0) >= maxDepth) {
+    return `(delegation depth limit of ${maxDepth} reached)`;
+  }
+  return null;
+}
 
 /** Resolve a prompt that may be a flat string or a {@link PromptBuilder}. */
 async function resolvePrompt(prompt: string | PromptBuilder, ctx: PromptContext): Promise<string> {
@@ -1732,11 +1784,9 @@ async function delegateToolCall(
   const { deps, input, hooks } = turn;
   const { call, targetAgent = call.name } = claimed;
   const task = extractTask(call.input);
-  // A detached hop counts like any other: the cycle this guards against is cheaper to start, not
-  // less unbounded.
-  const maxDepth = deps.maxDelegationDepth ?? MAX_DELEGATION_DEPTH;
-  const overDepth = (input.delegationDepth ?? 0) >= maxDepth;
-  const start = claimed.detached === true && !overDepth ? hooks.startAgent : undefined;
+  // A detached hop counts like any other: a cycle is cheaper to start that way, not less unbounded.
+  const refusal = delegationRefusal({ deps, input, targetAgent });
+  const start = claimed.detached === true && refusal === null ? hooks.startAgent : undefined;
   publishAgentDelegated({
     runId: hooks.runId,
     toAgent: targetAgent,
@@ -1744,8 +1794,8 @@ async function delegateToolCall(
     ...(start !== undefined ? { detached: true } : {}),
   });
   let sub: { text: string } | DetachedDelegationReceipt;
-  if (overDepth) {
-    sub = { text: `(delegation depth limit of ${maxDepth} reached)` };
+  if (refusal !== null) {
+    sub = { text: refusal };
   } else if (start !== undefined) {
     const started = await start({ agentName: targetAgent, task, toolCallId: call.id });
     sub = detachedStarted({ agent: targetAgent, runId: started.runId });

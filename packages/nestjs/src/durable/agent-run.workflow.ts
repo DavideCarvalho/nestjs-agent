@@ -145,6 +145,13 @@ export class AgentRunWorkflow {
       await ctx.localStep('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
     }
     const sinkRunId = input.sinkRunId ?? ctx.runId;
+    // The chain this run sits on, with its own agent appended — what lets a child recognise a
+    // delegation back to an agent the chain has already passed through. Derived from the input, so
+    // it is the same on every replay and on every pod.
+    const chainBelow = [
+      ...(input.delegationPath ?? []),
+      ...(input.agentName !== undefined ? [input.agentName] : []),
+    ];
     const hooks: AgentLoopHooks = {
       runId: ctx.runId,
       // A child forwards into the top-level sink but must not end/fail it (the top-level run owns it).
@@ -186,6 +193,7 @@ export class AgentRunWorkflow {
           userText: task,
           day,
           delegationDepth: (input.delegationDepth ?? 0) + 1,
+          delegationPath: chainBelow,
           parentRunId: ctx.runId,
           sinkRunId,
         });
@@ -213,6 +221,7 @@ export class AgentRunWorkflow {
           userText: task,
           day,
           delegationDepth: (input.delegationDepth ?? 0) + 1,
+          delegationPath: chainBelow,
           parentRunId: ctx.runId,
           deliverTo: { threadId: input.threadId, toolCallId },
         });

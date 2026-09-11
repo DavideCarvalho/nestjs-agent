@@ -58,6 +58,10 @@ export class InlineAgentRunner implements AgentRunner {
       actor: input.actor,
       day,
       threadId: input.threadId,
+      chainBelow: [
+        ...(input.delegationPath ?? []),
+        ...(input.agentName !== undefined ? [input.agentName] : []),
+      ],
     });
 
     void runAgentLoop({ ...deps, day }, input, hooks)
@@ -163,8 +167,10 @@ export class InlineAgentRunner implements AgentRunner {
     actor: Actor;
     day: string;
     threadId: string;
+    /** This run's delegation chain with its own agent appended — see `AgentRunInput.delegationPath`. */
+    chainBelow: readonly string[];
   }): AgentLoopHooks {
-    const { runId, deps, actor, day, threadId } = args;
+    const { runId, deps, actor, day, threadId, chainBelow } = args;
     return {
       runId,
       openSink: () => deps.sink.open(runId),
@@ -180,6 +186,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: 1,
+          path: chainBelow,
           sinkRunId: runId,
           parentRunId: runId,
         }),
@@ -190,6 +197,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: 1,
+          path: chainBelow,
           parentRunId: runId,
           deliverTo: { threadId, toolCallId },
         }),
@@ -211,10 +219,12 @@ export class InlineAgentRunner implements AgentRunner {
     actor: Actor;
     day: string;
     depth: number;
+    /** The chain that reached this child, root first. */
+    path: readonly string[];
     parentRunId: string;
     deliverTo: DetachedDelivery;
   }): Promise<{ runId: string }> {
-    const { agentName, task, actor, day, depth, parentRunId, deliverTo } = args;
+    const { agentName, task, actor, day, depth, path, parentRunId, deliverTo } = args;
     const subThread = await this.store.createThread({ actor, transient: true });
     const runId = crypto.randomUUID();
     // Marks the subthread as streaming this run, exactly as a sub-agent's does: it is what routes a
@@ -236,6 +246,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: depth + 1,
+          path: [...path, agentName],
           // A detached run owns a stream of its own, so ITS sub-agents forward into that one.
           sinkRunId: runId,
           parentRunId: runId,
@@ -247,6 +258,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: depth + 1,
+          path: [...path, agentName],
           parentRunId: runId,
           deliverTo: { threadId: subThread.id, toolCallId },
         }),
@@ -260,6 +272,7 @@ export class InlineAgentRunner implements AgentRunner {
         agentName,
         day,
         delegationDepth: depth,
+        delegationPath: path,
         parentRunId,
         deliverTo,
       },
@@ -306,10 +319,12 @@ export class InlineAgentRunner implements AgentRunner {
     actor: Actor;
     day: string;
     depth: number;
+    /** The chain that reached this child, root first. */
+    path: readonly string[];
     sinkRunId: string;
     parentRunId: string;
   }): Promise<{ text: string }> {
-    const { agentName, task, actor, day, depth, sinkRunId, parentRunId } = args;
+    const { agentName, task, actor, day, depth, path, sinkRunId, parentRunId } = args;
     const subThread = await this.store.createThread({ actor, transient: true });
     const runId = crypto.randomUUID();
     // Mark the subthread as streaming THIS sub-run so a human approval routes back here
@@ -334,6 +349,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: depth + 1,
+          path: [...path, agentName],
           sinkRunId,
           parentRunId: runId,
         }),
@@ -344,6 +360,7 @@ export class InlineAgentRunner implements AgentRunner {
           actor,
           day,
           depth: depth + 1,
+          path: [...path, agentName],
           parentRunId: runId,
           deliverTo: { threadId: subThread.id, toolCallId },
         }),
@@ -358,6 +375,7 @@ export class InlineAgentRunner implements AgentRunner {
           agentName,
           day,
           delegationDepth: depth,
+          delegationPath: path,
           parentRunId,
           sinkRunId,
         },

@@ -283,9 +283,19 @@ export interface AgentRunInput {
   agentName?: string;
   /**
    * How many agent→agent delegations deep this run already is (0 for a top-level turn). The runner
-   * increments it for each child run; the loop refuses to delegate past {@link MAX_DELEGATION_DEPTH}.
+   * increments it for each child run; the loop refuses to delegate past its depth ceiling.
    */
   delegationDepth?: number;
+  /**
+   * The named agents already on this delegation chain, root first — what {@link delegationDepth}
+   * counts, spelled out. The runner appends its own agent's name for each child it starts.
+   *
+   * A count can only say a chain is LONG. This says whether it is going in circles, and how often:
+   * an agent that appears here is one the chain has already passed through, so a delegation back to
+   * it is a cycle by inspection rather than by proxy. A run whose runner does not supply it falls
+   * back to the depth ceiling alone.
+   */
+  delegationPath?: readonly string[];
   /**
    * When set, this run streams into ANOTHER run's sink instead of its own. A sub-agent run carries
    * its top-level ancestor's runId here so its tokens (and its pending action-tool frames) land in
