@@ -22,7 +22,14 @@ function readHeader(req: unknown, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-/** Constant-time comparison, so a wrong key cannot be refined one character at a time. */
+/**
+ * Compare a candidate token against an issued one in time that does not depend on its contents:
+ * every character of an equal-length candidate is examined before an answer is returned, so a wrong
+ * token cannot be refined one character at a time by timing the rejections.
+ *
+ * The length check up front is the one thing that does short-circuit, and deliberately: it reveals
+ * how long an issued token is, never any of its characters.
+ */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
