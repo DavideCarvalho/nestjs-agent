@@ -23,6 +23,15 @@ export {
 export { InMemoryTokenStreamSink } from './in-memory-sink.js';
 export { InMemoryQuotaStore } from './in-memory-quota.js';
 export { InMemoryPricingStore } from './in-memory-pricing-store.js';
+export {
+  InMemoryMemoryProvider,
+  type InMemoryMemoryProviderOptions,
+} from './in-memory-memory-provider.js';
+export {
+  everyMemoryField,
+  expectedMemoryRecord,
+  type EveryMemoryField,
+} from './memory-fixture.js';
 export { FakeEmbeddingProvider, type FakeEmbeddingOptions } from './fake-embedding-provider.js';
 export { FakeReranker } from './fake-reranker.js';
 export { EVERY_MESSAGE_FIELD, type EveryMessageField } from './message-fixture.js';
