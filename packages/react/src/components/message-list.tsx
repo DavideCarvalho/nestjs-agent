@@ -1,19 +1,17 @@
 import type { UIMessage } from 'ai';
-import React, { useState } from 'react';
+import type React from 'react';
+import type { ChatStatus, MessageUsageInfo } from '../transcript/model.js';
+import { useChatTranscript } from '../transcript/use-chat-transcript.js';
 import {
-  MessageItem,
   type MessageItemClassNames,
-  type MessageUsageInfo,
+  MessageItemView,
+  type RenderReasoningFn,
   type RenderTextFn,
   type RenderToolGroupFn,
   type RenderToolPartFn,
 } from './message-item.js';
 
-export type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
-
-/** Default number of most-recent messages mounted; older load on demand. */
-const DEFAULT_VISIBLE_COUNT = 50;
-const LOAD_EARLIER_STEP = 50;
+export type { ChatStatus } from '../transcript/model.js';
 
 export interface MessageListClassNames {
   root?: string;
@@ -33,6 +31,9 @@ export interface MessageListProps {
   renderToolPart?: RenderToolPartFn;
   renderToolGroup?: RenderToolGroupFn;
   renderText?: RenderTextFn;
+  /** Render the body of a reasoning run; the disclosure toggle is the list's. */
+  renderReasoning?: RenderReasoningFn;
+  reasoningLabel?: React.ReactNode;
   /** When set, every message gets a "Fork" affordance calling back with its id. */
   onFork?: (uiMessageId: string) => void | Promise<void>;
   /** User messages get an inline edit-and-resubmit affordance. */
@@ -62,6 +63,9 @@ export interface MessageListProps {
  * with "load earlier", a typing indicator, an inline error+retry banner,
  * and follow-up chips — but ships no styles: drive everything through
  * `classNames` and the `emptyState`/`typingIndicator` slots.
+ *
+ * Every decision here comes from `useChatTranscript`; the file below it is markup. A host that
+ * wants a different layout drives that hook directly and never imports this component.
  */
 export function MessageList({
   messages,
@@ -69,6 +73,8 @@ export function MessageList({
   renderToolPart,
   renderToolGroup,
   renderText,
+  renderReasoning,
+  reasoningLabel,
   onFork,
   editable,
   onEditSubmit,
@@ -84,77 +90,47 @@ export function MessageList({
   onRetry,
   classNames,
 }: MessageListProps) {
-  const [visibleCount, setVisibleCount] = useState(DEFAULT_VISIBLE_COUNT);
+  const transcript = useChatTranscript({
+    messages,
+    status,
+    ...(onFork ? { onFork } : {}),
+    ...(editable !== undefined ? { editable } : {}),
+    ...(onEditSubmit ? { onEditSubmit } : {}),
+    ...(regeneratable !== undefined ? { regeneratable } : {}),
+    ...(onRegenerate ? { onRegenerate } : {}),
+    ...(getUsage ? { getUsage } : {}),
+    ...(getCreatedAt ? { getCreatedAt } : {}),
+    ...(followUps !== undefined ? { followUps } : {}),
+  });
 
-  if (messages.length === 0 && status === 'ready') {
+  if (transcript.showEmptyState) {
     return <div className={classNames?.empty}>{emptyState}</div>;
   }
 
-  const lastMessage = messages.at(-1);
-  const showTypingBubble =
-    (status === 'submitted' || status === 'streaming') && lastMessage?.role !== 'assistant';
-
-  const showFollowUps =
-    status === 'ready' &&
-    !showTypingBubble &&
-    lastMessage?.role === 'assistant' &&
-    onFollowUpClick !== undefined &&
-    !!followUps &&
-    followUps.length > 0;
-
-  // Mount only the tail; "Load earlier" reveals older chunks — critical
-  // for long threads where mounting every markdown-rendered message would
-  // lock the main thread during streaming.
-  const visibleStart = Math.max(0, messages.length - visibleCount);
-  const visibleMessages = messages.slice(visibleStart);
-  const hiddenCount = visibleStart;
-
-  let lastAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === 'assistant') {
-      lastAssistantIndex = i;
-      break;
-    }
-  }
+  const slots = {
+    ...(renderToolPart ? { renderToolPart } : {}),
+    ...(renderToolGroup ? { renderToolGroup } : {}),
+    ...(renderText ? { renderText } : {}),
+    ...(renderReasoning ? { renderReasoning } : {}),
+    ...(reasoningLabel !== undefined ? { reasoningLabel } : {}),
+    ...(classNames?.message ? { classNames: classNames.message } : {}),
+  };
 
   return (
     <div className={classNames?.root}>
-      {hiddenCount > 0 ? (
+      {transcript.window.canLoadEarlier ? (
         <button
           type="button"
           className={classNames?.loadEarlier}
-          onClick={() => setVisibleCount((count) => count + LOAD_EARLIER_STEP)}
+          onClick={transcript.window.loadEarlier}
         >
-          Load earlier ({hiddenCount} more)
+          Load earlier ({transcript.window.hiddenCount} more)
         </button>
       ) : null}
-      {visibleMessages.map((message, index) => {
-        const absoluteIndex = visibleStart + index;
-        const isLastAssistant = absoluteIndex === lastAssistantIndex;
-        const usage = getUsage?.(message) ?? null;
-        const createdAt = getCreatedAt?.(message) ?? null;
-        return (
-          <MessageItem
-            key={message.id}
-            message={message}
-            {...(renderToolPart ? { renderToolPart } : {})}
-            {...(renderToolGroup ? { renderToolGroup } : {})}
-            {...(renderText ? { renderText } : {})}
-            {...(classNames?.message ? { classNames: classNames.message } : {})}
-            {...(onFork ? { onFork } : {})}
-            {...(editable ? { editable } : {})}
-            {...(onEditSubmit
-              ? { onEditSubmit: (text: string) => onEditSubmit(message.id, text) }
-              : {})}
-            {...(regeneratable && isLastAssistant ? { regeneratable } : {})}
-            {...(onRegenerate ? { onRegenerate: () => onRegenerate(message.id) } : {})}
-            {...(usage !== null ? { usage } : {})}
-            {...(createdAt !== null ? { createdAt } : {})}
-            isStreaming={status === 'streaming' && isLastAssistant}
-          />
-        );
-      })}
-      {showTypingBubble ? (
+      {transcript.items.map((item) => (
+        <MessageItemView key={item.id} item={item} {...slots} />
+      ))}
+      {transcript.showTypingIndicator ? (
         <div className={classNames?.typing}>{typingIndicator ?? 'Thinking…'}</div>
       ) : null}
       {error && onRetry ? (
@@ -165,7 +141,7 @@ export function MessageList({
           </button>
         </div>
       ) : null}
-      {showFollowUps ? (
+      {transcript.showFollowUps && onFollowUpClick && followUps ? (
         <div className={classNames?.followUps}>
           {followUps.map((text) => (
             <button

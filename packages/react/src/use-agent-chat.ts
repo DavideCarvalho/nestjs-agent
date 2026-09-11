@@ -337,6 +337,32 @@ export function useAgentChat(options: UseAgentChatOptions) {
     [client],
   );
 
+  // Answer / skip settle a parked question set, routed by tool-call id alone for the same reason
+  // approve/reject are: the server derives the run awaiting it. Omitting `answers` submits nothing
+  // and lets every question take the default it was shown with.
+  const answer = useCallback(
+    async ({
+      toolCallId,
+      answers,
+    }: {
+      toolCallId: string;
+      answers?: Record<string, string[]>;
+    }): Promise<void> => {
+      await client.answerToolCall({
+        toolCallId,
+        ...(answers !== undefined ? { answers } : {}),
+      });
+    },
+    [client],
+  );
+
+  const skip = useCallback(
+    async ({ toolCallId }: { toolCallId: string }): Promise<void> => {
+      await client.skipToolCall({ toolCallId });
+    },
+    [client],
+  );
+
   // Re-run the last exchange: flag the next request as a regenerate (so the backend truncates and
   // re-answers instead of appending) and let the SDK re-issue it, dropping the last assistant turn.
   const regenerate = useCallback((): void => {
@@ -364,6 +390,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     cancel,
     approve,
     reject,
+    answer,
+    skip,
     regenerate,
   };
 }

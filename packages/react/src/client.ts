@@ -141,6 +141,28 @@ export class AgentClient {
     return this.request<void>('POST', '/agent/tool-call/reject', input);
   }
 
+  /**
+   * Settle a parked question set. `answers` is questionId → chosen option values; a question left
+   * out takes the pre-picked default the request carried, resolved server-side against the request
+   * the run already holds. Omit the whole object and the user has confirmed every pre-picked
+   * answer — which is the point of the surface, so it is a valid submission rather than a blank.
+   */
+  answerToolCall(input: {
+    toolCallId: string;
+    answers?: Record<string, string[]>;
+  }): Promise<void> {
+    return this.request<void>('POST', '/agent/tool-call/answer', input);
+  }
+
+  /**
+   * Decline to answer and let the agent proceed on its own pre-picked values. Lands on the same
+   * values a confirmation would, and persists differently on purpose — only one of them is
+   * evidence the user chose them.
+   */
+  skipToolCall(input: { toolCallId: string }): Promise<void> {
+    return this.request<void>('POST', '/agent/tool-call/skip', input);
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const fetchImpl = this.options.fetch ?? globalThis.fetch;
     const baseUrl = (this.options.baseUrl ?? '').replace(/\/$/, '');

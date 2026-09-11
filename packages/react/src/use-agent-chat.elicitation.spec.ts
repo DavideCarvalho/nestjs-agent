@@ -1,0 +1,57 @@
+// @vitest-environment jsdom
+import { act, renderHook } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { useAgentChat } from './use-agent-chat.js';
+
+function jsonResponse(status = 200) {
+  return {
+    ok: status < 400,
+    status,
+    statusText: status === 200 ? 'OK' : 'Forbidden',
+    headers: new Headers(),
+    text: async () => '{"ok":true}',
+  };
+}
+
+describe('useAgentChat — settling a question set', () => {
+  it('answers and skips by tool-call id, the way approve and reject do', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return jsonResponse();
+    });
+
+    const { result } = renderHook(() =>
+      useAgentChat({ threadId: 'thr-1', fetch: fetchMock as unknown as typeof fetch }),
+    );
+
+    await act(async () => {
+      await result.current.answer({ toolCallId: 'intake-run-1', answers: { scope: ['file'] } });
+      await result.current.answer({ toolCallId: 'intake-run-2' });
+      await result.current.skip({ toolCallId: 'intake-run-3' });
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      '/agent/tool-call/answer',
+      '/agent/tool-call/answer',
+      '/agent/tool-call/skip',
+    ]);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      toolCallId: 'intake-run-1',
+      answers: { scope: ['file'] },
+    });
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ toolCallId: 'intake-run-2' });
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ toolCallId: 'intake-run-3' });
+  });
+
+  it('lets a refusal reach the caller rather than resolving as if it worked', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(403));
+    const { result } = renderHook(() =>
+      useAgentChat({ threadId: 'thr-1', fetch: fetchMock as unknown as typeof fetch }),
+    );
+
+    await expect(result.current.answer({ toolCallId: 'not-mine' })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+});

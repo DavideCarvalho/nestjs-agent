@@ -56,6 +56,14 @@ const HEADER_RUN_ID = 'x-agent-run-id';
 const HEADER_THREAD_ID = 'x-agent-thread-id';
 
 /**
+ * The tool name BOTH elicitation surfaces persist their question set under (core's
+ * `ASK_TOOL_NAME`), so a synthesized part and a replayed `tool-ask` row are the same part type.
+ * Spelled out rather than imported: every other core import in this package is type-only, and a
+ * value import would pull the agent loop into a browser bundle for a three-letter string.
+ */
+const ASK_TOOL_NAME = 'ask';
+
+/**
  * AI SDK v7 `ChatTransport` for the nestjs-agent backend. POSTs
  * `/agent/chat`, parses the backend's `meta` + `{delta}` + `done` SSE
  * frames, and re-emits them as the v7 UI-message chunk stream
@@ -198,6 +206,11 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     let stepIndex = 0;
     let textId: string | null = null;
     let reasoningId: string | null = null;
+    // Tool calls this STREAM has already announced. The AI SDK settles a tool part by looking it
+    // up by call id and throws — dropping the whole message — when there is none, so an outcome
+    // must never be the first a client hears of a call. Per stream, not per transport: a resumed
+    // run replays its buffered frames from the beginning.
+    const announced = new Set<string>();
     const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
 
     return new ReadableStream<UIMessageChunk>({
@@ -269,6 +282,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'tool-input-start':
               ensureStep();
+              announced.add(event.id);
               controller.enqueue({
                 type: 'tool-input-start',
                 toolCallId: event.id,
@@ -291,6 +305,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'tool-input-available':
               ensureStep();
+              announced.add(event.id);
               controller.enqueue({
                 type: 'tool-input-available',
                 toolCallId: event.id,
@@ -300,6 +315,28 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                   ? { toolMetadata: { toolKind: event.toolKind } }
                   : {}),
               });
+              break;
+            case 'elicitation':
+              ensureStep();
+              // An authored intake asks before the turn's first model call, so nothing announced
+              // the call this question set is parked under — open it here, carrying the request as
+              // the part's input, which is exactly what the store persists as the call's input and
+              // therefore what a reloaded thread replays. The model's own `ask` announced its call
+              // itself, and re-stating it would fire a consumer's `onToolCall` twice.
+              if (!announced.has(event.id)) {
+                announced.add(event.id);
+                controller.enqueue({
+                  type: 'tool-input-available',
+                  toolCallId: event.id,
+                  toolName: ASK_TOOL_NAME,
+                  input: {
+                    ...(event.request.preamble !== undefined
+                      ? { preamble: event.request.preamble }
+                      : {}),
+                    questions: event.request.questions,
+                  },
+                });
+              }
               break;
             case 'tool-output':
               ensureStep();
