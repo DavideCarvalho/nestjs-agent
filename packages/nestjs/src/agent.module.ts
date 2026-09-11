@@ -258,9 +258,8 @@ function routerFor(path: string): DynamicModule {
 
 /**
  * `dispatchedSteps` routes the turn's model/tool calls through `AgentRunSteps` — a durable-only
- * worker group. It defaults ON under `durable: true` (see `AgentModuleOptions.dispatchedSteps`), but
- * an EXPLICIT `dispatchedSteps: true` without `durable: true` is still a config error: there is no
- * workflow to dispatch from, so it would silently no-op — fail loudly at build time instead.
+ * worker group (see `AgentModuleOptions.dispatchedSteps`). Without `durable: true` there is no
+ * workflow to dispatch from, so the flag would silently no-op — fail loudly at build time instead.
  */
 function assertDispatchedStepsRequiresDurable(dispatchedSteps: boolean, durable: boolean): void {
   if (dispatchedSteps && !durable) {

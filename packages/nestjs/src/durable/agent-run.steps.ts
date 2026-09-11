@@ -58,8 +58,8 @@ export interface DispatchedToolInput extends ToolStepEnvelope {
 
 /**
  * The two long steps `AgentRunWorkflow` dispatches as routed remote steps (`AgentRunSteps.llm` /
- * `AgentRunSteps.tool`) — the default under `durable: true`; `dispatchedSteps: false` runs them
- * in-process under `ctx.localStep` instead. Both re-resolve their deps from THIS worker's own DI via
+ * `AgentRunSteps.tool`) under `dispatchedSteps: true`; omitting that flag runs them in-process
+ * under `ctx.localStep` instead. Both re-resolve their deps from THIS worker's own DI via
  * `AGENT_DEPS_FACTORY.forAgent` — a step can be served by any worker in the fleet, not just the one
  * that started the run. Always provided by `AgentDurableModule` regardless of `dispatchedSteps`, so
  * the worker group is never orphaned.

@@ -102,9 +102,8 @@ class DefaultAgent {}
 
 /**
  * `dispatchedSteps` OMITTED (undefined) leaves the key off the options — exercising the durable
- * DEFAULT, which is dispatch ON. Pass an explicit `false` to pin the in-process localStep path, or
- * an explicit `true` to state the default outright (the dispatched suite below does, so its tests
- * keep meaning the same thing independent of what the default is).
+ * DEFAULT, which keeps the turn's steps in-process. Every suite that means one path or the other
+ * passes the flag explicitly, so its tests keep meaning the same thing independent of the default.
  */
 async function buildDurableApp(
   script: FakeScript,
@@ -346,27 +345,25 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
   });
 });
 
-describe('dispatchedSteps default (ON under durable: true)', () => {
-  it('durable: true with NO dispatchedSteps key runs the turn via the dispatched path', async () => {
+describe('dispatchedSteps (stated, not inferred)', () => {
+  it('durable: true with NO dispatchedSteps key keeps the turn in-process', async () => {
     // No second argument — the key is genuinely absent from the options.
     const { moduleRef, service, engine, store } = await buildDurableApp(() => ({
-      text: 'hello default dispatch',
+      text: 'hello in-process default',
     }));
     try {
-      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(true);
+      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(false);
 
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
         message: 'hi',
       });
       const collected = collect(service.subscribe(runId));
-      // Dispatched `ctx.step`s momentarily suspend the run — `until: 'terminal'` polls through
-      // those hops (see the dispatched suite below for the full explanation).
       const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       const streamed = await collected;
 
       expect(result.status).toBe('completed');
-      expect(streamed).toContain('hello default dispatch');
+      expect(streamed).toContain('hello in-process default');
       const detail = await store.getThread((await store.listThreads('u1'))[0]?.id ?? '');
       expect(detail?.messages.map((m) => m.role)).toContain('assistant');
     } finally {
@@ -374,12 +371,12 @@ describe('dispatchedSteps default (ON under durable: true)', () => {
     }
   });
 
-  it('dispatchedSteps: false opts back into in-process localSteps', async () => {
-    const { moduleRef } = await buildDurableApp(() => ({ text: 'x' }), false);
+  it('dispatchedSteps: true opts into the routed remote steps', async () => {
+    const { moduleRef } = await buildDurableApp(() => ({ text: 'x' }), true);
     try {
-      // The behavioral coverage of the localStep path is the first suite above (all pinned to
-      // `false`); this just asserts the opt-out actually lands on the wiring flag.
-      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(false);
+      // The behavioral coverage of the dispatched path is the suite further down; this just asserts
+      // the opt-in lands on the wiring flag.
+      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(true);
     } finally {
       await moduleRef.close();
     }
