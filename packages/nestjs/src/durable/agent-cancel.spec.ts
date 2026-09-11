@@ -97,9 +97,6 @@ async function buildApp(script: FakeScript) {
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
-        // The in-process localStep path: the whole turn runs in this process, which is the shape
-        // where a cancel has to be OBSERVED rather than simply refused at a dispatch boundary.
-        dispatchedSteps: false,
       }),
       AgentDurableModule,
     ],
@@ -152,7 +149,9 @@ describe('the durable runner’s cancel', () => {
       await app.service.cancel(ACTOR, runId);
       releaseTool.resolve();
 
-      const result = await app.workflows.waitForRun(runId, { timeoutMs: 5000 });
+      // `until: 'terminal'` rather than the default settled wait: a turn suspends at every
+      // dispatch hop, and a suspend is indistinguishable from a HITL park to the settled wait.
+      const result = await app.engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       expect(result.status).toBe('cancelled');
       // The tool already executing finished; the turn stopped before its next model call.
       expect(app.modelCalls()).toBe(1);
@@ -177,7 +176,7 @@ describe('the durable runner’s cancel', () => {
       await toolRunning.promise;
       await app.service.cancel(ACTOR, runId);
       releaseTool.resolve();
-      await app.workflows.waitForRun(runId, { timeoutMs: 5000 });
+      await app.engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       expect(await app.store.activeRunForThread(threadId)).toBeNull();
     } finally {
       releaseTool.resolve();
@@ -188,7 +187,7 @@ describe('the durable runner’s cancel', () => {
   it('stops a turn parked on a human, which no observation inside the body can reach', async () => {
     const app = await buildApp(callsThen('purge'));
     try {
-      const { runId } = await app.service.chat({ actor: ACTOR, message: 'hi' });
+      const { runId, threadId } = await app.service.chat({ actor: ACTOR, message: 'hi' });
       const streamed = drain(app.service, runId);
       // Let the turn reach its approval wait and suspend there.
       await app.engine.waitForRun(runId, { timeoutMs: 5000 });
@@ -201,6 +200,9 @@ describe('the durable runner’s cancel', () => {
       expect(result.status).toBe('cancelled');
       // The approval never came and never will: the runtime's own cancel is what settles this one.
       expect(app.ends).toEqual([{ runId, status: 'cancelled' }]);
+      // Including the thread, which a body suspended inside a position its journal already holds
+      // can never release itself.
+      expect(await app.store.activeRunForThread(threadId)).toBeNull();
       const { frames, failure } = await streamed;
       expect(failure).toBeUndefined();
       expect(frames.at(-1)).toEqual({ kind: 'cancelled' });

@@ -4,6 +4,8 @@ import {
   AGENT_APPROVAL_PORT,
   AGENT_SPAN_EVENTS,
   type AgentApprovalPort,
+  type AgentLoopResult,
+  type AgentRunInput,
 } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
@@ -11,7 +13,11 @@ import {
   InMemoryAgentStore,
 } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule, WorkflowService } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
+import {
+  InMemoryStateStore,
+  type WorkflowCtx,
+  WorkflowEngine,
+} from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -25,7 +31,7 @@ import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
-import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
+import { AgentRunWorkflow } from './agent-run.workflow.js';
 
 @AiTool({
   name: 'purgeCache',
@@ -101,17 +107,34 @@ class ThinWorkerSuspendTool {
 class DefaultAgent {}
 
 /**
- * `dispatchedSteps` OMITTED (undefined) leaves the key off the options — exercising the durable
- * DEFAULT, which keeps the turn's steps in-process. Every suite that means one path or the other
- * passes the flag explicitly, so its tests keep meaning the same thing independent of the default.
+ * The `agent.run` body as a release that ran the two long steps in-process journaled it:
+ * `ctx.patched('agent:dispatched-steps')` answers `false` without consuming a position, which is
+ * what the real `ctx.patched` answers on every replay of such a run. It is the only way left to
+ * produce that journal, and so the only shape in which the loop's own `hooks.step` still runs the
+ * model call and a tool invocation.
  */
+@Injectable()
+class InProcessJournalWorkflow extends AgentRunWorkflow {
+  override run(ctx: WorkflowCtx, input: AgentRunInput): Promise<AgentLoopResult> {
+    const legacy: WorkflowCtx = {
+      ...ctx,
+      patched: (id) => (id === 'agent:dispatched-steps' ? Promise.resolve(false) : ctx.patched(id)),
+    };
+    return super.run(legacy, input);
+  }
+}
+
 async function buildDurableApp(
   script: FakeScript,
-  dispatchedSteps?: boolean,
-  toolTransientRetry?: AgentModuleOptions['toolTransientRetry'],
+  options?: {
+    toolTransientRetry?: AgentModuleOptions['toolTransientRetry'];
+    /** Register the body above, so the turn journals — and runs — on the in-process names. */
+    journalPredatingDispatch?: boolean;
+  },
 ) {
+  const toolTransientRetry = options?.toolTransientRetry;
   const store = new InMemoryAgentStore();
-  const moduleRef = await Test.createTestingModule({
+  const builder = Test.createTestingModule({
     imports: [
       // Operator + worker in one process — an operator requires a transport since durable 0.31's
       // topology roles; the event-emitter transport keeps the whole run in-process for the test.
@@ -125,7 +148,6 @@ async function buildDurableApp(
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
-        ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
         ...(toolTransientRetry !== undefined ? { toolTransientRetry } : {}),
       }),
       AgentDurableModule,
@@ -137,17 +159,36 @@ async function buildDurableApp(
       FlakyDeadlockTool,
       DefaultAgent,
     ],
-  }).compile();
+  });
+  const moduleRef = await (options?.journalPredatingDispatch === true
+    ? builder.overrideProvider(AgentRunWorkflow).useClass(InProcessJournalWorkflow)
+    : builder
+  ).compile();
   await moduleRef.init();
   return {
     moduleRef,
     store,
     service: moduleRef.get(AgentService),
     workflows: moduleRef.get(WorkflowService),
-    // `WorkflowService.waitForRun`'s public type only exposes `timeoutMs`; the dispatchedSteps
-    // tests below need the engine's own `until: 'terminal'` (see the comment at their first use).
+    // `WorkflowService.waitForRun`'s public type only exposes `timeoutMs`; a dispatched turn needs
+    // the engine's own `until: 'terminal'` (see the comment at its first use below).
     engine: moduleRef.get(WorkflowEngine),
   };
+}
+
+/**
+ * Wait until the turn has parked its action tool on a human, which is what makes it approvable. The
+ * ROW, not the run: a dispatched turn suspends at every transport hop, so the run's own status
+ * cannot say whether the call has reached a human yet.
+ */
+async function pendingApproval(store: InMemoryAgentStore): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (store.toolCallRows()[0]?.status === 'pending_approval') {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('the turn never parked its action tool on an approval');
 }
 
 async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string> {
@@ -180,13 +221,15 @@ describe('durable wiring', () => {
   });
 });
 
-// Explicit `dispatchedSteps: false` throughout — this suite pins the opt-out localStep path (the
-// pre-default-on behavior). The dispatched path is the durable default, covered further down.
-describe('AgentDurableModule (the agent turn as a durable workflow, dispatchedSteps: false)', () => {
+// Every app here registers `InProcessJournalWorkflow`, so the turn runs and journals the way a run
+// recorded before dispatch was the primitive does — the shape such a run must still be able to
+// finish on, months after the release that wrote it. The dispatched path, which every FRESH run
+// takes, is covered further down.
+describe('AgentDurableModule (a turn whose journal predates dispatch)', () => {
   it('runs a no-tool turn as a durable run and streams it', async () => {
     const { moduleRef, service, workflows, store } = await buildDurableApp(
       () => ({ text: 'hello durable' }),
-      false,
+      { journalPredatingDispatch: true },
     );
     try {
       const { runId } = await service.chat({
@@ -210,9 +253,12 @@ describe('AgentDurableModule (the agent turn as a durable workflow, dispatchedSt
   });
 
   it('records a failed run end when the model provider throws', async () => {
-    const { moduleRef, service, workflows, store } = await buildDurableApp(() => {
-      throw new Error('model unavailable');
-    }, false);
+    const { moduleRef, service, workflows, store } = await buildDurableApp(
+      () => {
+        throw new Error('model unavailable');
+      },
+      { journalPredatingDispatch: true },
+    );
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -238,7 +284,9 @@ describe('AgentDurableModule (the agent turn as a durable workflow, dispatchedSt
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
+    const { moduleRef, service, workflows, store } = await buildDurableApp(script, {
+      journalPredatingDispatch: true,
+    });
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -246,7 +294,7 @@ describe('AgentDurableModule (the agent turn as a durable workflow, dispatchedSt
       });
       const collected = collect(service.subscribe(runId));
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await pendingApproval(store);
       await service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
 
       const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
@@ -267,16 +315,14 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    // Pinned to the localStep path (`false`) — the port's mechanics are dispatch-agnostic and the
-    // `workflows.waitForRun` settled-wait below is only reliable without dispatched-step suspends.
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
         message: 'purge it',
       });
       const collected = collect(service.subscribe(runId));
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await pendingApproval(store);
 
       // The port never sees (or needs) the run's own actor — a console operator is authorized by
       // the dashboard's guards, not by owning the thread. `store.toolCallRows()` (a test helper)
@@ -285,7 +331,7 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       const port = moduleRef.get<AgentApprovalPort>(AGENT_APPROVAL_PORT);
       await port.approve('call-0-purgeCache', { executedByRef: 'console-admin' });
 
-      const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       const streamed = await collected;
 
       expect(result.status).toBe('completed');
@@ -309,16 +355,14 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'not purging' };
-    // Pinned to the localStep path (`false`) — the port's mechanics are dispatch-agnostic and the
-    // `workflows.waitForRun` settled-wait below is only reliable without dispatched-step suspends.
-    const { moduleRef, service, workflows, store } = await buildDurableApp(script, false);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
         message: 'purge it',
       });
       const collected = collect(service.subscribe(runId));
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await pendingApproval(store);
 
       // `store.toolCallRows()` (a test helper) doesn't surface `error`/`executedByRef` — spy on the
       // SPI method directly to assert both reach persistence, not just that the run unblocks.
@@ -326,7 +370,7 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
       const port = moduleRef.get<AgentApprovalPort>(AGENT_APPROVAL_PORT);
       await port.reject('call-0-purgeCache', { executedByRef: 'console-admin', reason: 'not now' });
 
-      const result = await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       await collected;
 
       expect(result.status).toBe('completed');
@@ -345,45 +389,10 @@ describe('AGENT_APPROVAL_PORT (console HITL — no ownership re-check, same dura
   });
 });
 
-describe('dispatchedSteps (stated, not inferred)', () => {
-  it('durable: true with NO dispatchedSteps key keeps the turn in-process', async () => {
-    // No second argument — the key is genuinely absent from the options.
-    const { moduleRef, service, engine, store } = await buildDurableApp(() => ({
-      text: 'hello in-process default',
-    }));
-    try {
-      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(false);
-
-      const { runId } = await service.chat({
-        actor: { id: 'u1', roles: ['ADMIN'] },
-        message: 'hi',
-      });
-      const collected = collect(service.subscribe(runId));
-      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
-      const streamed = await collected;
-
-      expect(result.status).toBe('completed');
-      expect(streamed).toContain('hello in-process default');
-      const detail = await store.getThread((await store.listThreads('u1'))[0]?.id ?? '');
-      expect(detail?.messages.map((m) => m.role)).toContain('assistant');
-    } finally {
-      await moduleRef.close();
-    }
-  });
-
-  it('dispatchedSteps: true opts into the routed remote steps', async () => {
-    const { moduleRef } = await buildDurableApp(() => ({ text: 'x' }), true);
-    try {
-      // The behavioral coverage of the dispatched path is the suite further down; this just asserts
-      // the opt-in lands on the wiring flag.
-      expect(moduleRef.get<boolean>(AGENT_DISPATCHED_STEPS)).toBe(true);
-    } finally {
-      await moduleRef.close();
-    }
-  });
-});
-
 describe('cross-runtime control-flow signals (thin-worker Suspend)', () => {
+  // On the in-process journal shape deliberately: a tool that throws the raw signal only reaches
+  // the loop's own tool catch when the tool runs in the body. Dispatch puts the same class in front
+  // of the WORKFLOW's catch instead, from `ctx.step` — covered by the suite below.
   // Regression for flip's live incident: on the BullMQ thin-worker runtime, dispatch suspends throw
   // durable-worker's `Suspend` — NOT durable-core's `WorkflowSuspended` — and the workflow's old
   // instanceof catch misclassified it as a real failure, running persist:run:fail + deactivate +
@@ -394,7 +403,9 @@ describe('cross-runtime control-flow signals (thin-worker Suspend)', () => {
       turnIndex === 0
         ? { text: 'dispatching', toolCall: { name: 'thinWorkerSuspend', input: {} } }
         : { text: 'never reached' };
-    const { moduleRef, service, engine, store } = await buildDurableApp(script, false);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script, {
+      journalPredatingDispatch: true,
+    });
     try {
       // Installed BEFORE the run so any failure-path write would be captured.
       const runEndSpy = vi.spyOn(store, 'recordRunEnd');
@@ -421,12 +432,11 @@ describe('cross-runtime control-flow signals (thin-worker Suspend)', () => {
   });
 });
 
-describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remote steps)', () => {
+describe('AgentDurableModule (llm/tool as the routed remote steps every turn dispatches)', () => {
   it('completes a no-tool turn via the dispatched llm step and streams it', async () => {
-    const { moduleRef, service, engine, store } = await buildDurableApp(
-      () => ({ text: 'hello dispatched' }),
-      true,
-    );
+    const { moduleRef, service, engine, store } = await buildDurableApp(() => ({
+      text: 'hello dispatched',
+    }));
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -457,7 +467,7 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, engine, store } = await buildDurableApp(script, true);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -484,7 +494,7 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       turnIndex === 0
         ? { text: 'about to explode', toolCall: { name: 'explode', input: {} } }
         : { text: 'handled the failure' };
-    const { moduleRef, service, engine, store } = await buildDurableApp(script, true);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -514,7 +524,7 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       turnIndex === 0
         ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
         : { text: 'recovered from the deadlock' };
-    const { moduleRef, service, engine, store } = await buildDurableApp(script, true);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -543,7 +553,9 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       turnIndex === 0
         ? { text: 'checking', toolCall: { name: 'flakyDeadlock', input: {} } }
         : { text: 'could not recover' };
-    const { moduleRef, service, engine, store } = await buildDurableApp(script, true, false);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script, {
+      toolTransientRetry: false,
+    });
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
@@ -563,18 +575,6 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
     } finally {
       await moduleRef.close();
     }
-  });
-
-  it('rejects at build when dispatchedSteps:true is set without durable:true', () => {
-    expect(() =>
-      AgentModule.forRoot({
-        model: new FakeModelProvider(() => ({ text: 'x' })),
-        store: new InMemoryAgentStore(),
-        actorResolver: new HeaderActorResolver(),
-        dispatchedSteps: true,
-        // durable intentionally omitted (defaults to false)
-      }),
-    ).toThrow(/requires durable: true/);
   });
 });
 
@@ -631,7 +631,7 @@ describe('dispatched-step span emission (traceLlmTurn / traceToolExecution from 
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, engine } = await buildDurableApp(script, true);
+    const { moduleRef, service, engine } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },

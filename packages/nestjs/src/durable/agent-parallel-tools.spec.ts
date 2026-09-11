@@ -101,9 +101,6 @@ async function buildDurableApp() {
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
-        // Pinned, so this test states which execution path it exercises: the turn's tool calls run
-        // as `ctx.localStep`s in the workflow worker.
-        dispatchedSteps: false,
       }),
       AgentDurableModule,
     ],
@@ -137,7 +134,10 @@ describe('a turn of two read tools under the durable runner', () => {
       ]);
 
       // The journal the engine itself wrote, at the positions its own counter handed out: the
-      // version marker, both claims, both invocations, both persists — each pair in call order.
+      // version marker, both claims, both dispatches, both persists — each pair in call order. The
+      // two dispatches share a name (the routed group they went to), so what the positions prove
+      // is the block: it is fixed at the moment the batch was launched, not by which tool answered
+      // first — and here NEITHER can answer until the other has started.
       const journal = (await stateStore.listCheckpoints(runId))
         .sort((a, b) => a.seq - b.seq)
         .map((checkpoint) => checkpoint.name);
@@ -146,8 +146,8 @@ describe('a turn of two read tools under the durable runner', () => {
         'patch:agent:parallel-tools',
         'persist:toolcall:call-left',
         'persist:toolcall:call-right',
-        'tool:call-left',
-        'tool:call-right',
+        'AgentRunSteps.tool',
+        'AgentRunSteps.tool',
         'persist:toolexec:call-left',
         'persist:toolexec:call-right',
       ]);

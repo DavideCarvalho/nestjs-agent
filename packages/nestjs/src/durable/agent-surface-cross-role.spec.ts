@@ -12,7 +12,7 @@
 //   `start()` get picked up and RUN by the engine side, with no polling delay.
 // - ONE shared `InProcessTokenStreamSink` — the engine side writes tokens into it; the http side's
 //   `AgentService.subscribe`/`.chat` reads from the SAME object, standing in for a real cross-process
-//   sink (Redis pub/sub in production — see `AgentDurableModule`'s dispatchedSteps warning).
+//   sink (Redis pub/sub in production — see `DurableAgentRunner`'s boot warning).
 // - `@Agent`/`@AiTool` providers registered on BOTH sides (as a real flip-style feature module would
 //   import identically into both its API and worker containers) — only the CONTROLLERS and the
 //   durable workflow/step-handler REGISTRATION differ by surface.
@@ -164,8 +164,8 @@ describe('surface: http + engine — a chat turn runs across the two roles', () 
     });
     const collected = collect(httpService.subscribe(runId));
     // The run genuinely executes on the engine side (drive: true there, drive: false on http) —
-    // `until: 'terminal'` polls the shared store through the control-plane hop, mirroring the
-    // existing dispatched-steps suite's reasoning (agent-durable.spec.ts).
+    // `until: 'terminal'` polls the shared store through the control-plane hop, and through every
+    // dispatched step's own suspend (see agent-durable.spec.ts).
     const result = await engineEngine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
     const streamed = await collected;
 

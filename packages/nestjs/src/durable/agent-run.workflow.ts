@@ -29,19 +29,19 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
 import { AgentRunSteps } from './agent-run.steps.js';
-import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 
 /**
  * The agent turn AS a durable workflow. Persist/stream checkpoints are `ctx.localStep`s — the
  * in-process primitive, NOT the always-dispatched `ctx.step`: their names are dynamic checkpoint
  * identities (`persist:toolcall:<id>`), not routable worker groups, and their deps (store, sink)
- * live in THIS workflow worker's DI. The two LONG steps (model call, tool execution) are dispatched
- * through `AgentRunSteps` where the deployment asked for it (`AGENT_DISPATCHED_STEPS`, from
- * `dispatchedSteps: true`) so the run isn't pinned to this pod while they execute; without that
- * flag they are localSteps too. HITL is `ctx.waitForSignal`, and sub-agent delegation is
- * `ctx.child(AgentRunWorkflow)` — a replay-safe, observable child run (it shows up as a node in the durable dashboard). A child
- * streams into its top-level ancestor's sink (`sinkRunId`) so the human watching the parent sees it
- * and can approve its action tools; the approval routes to the child's own run via `runForToolCall`.
+ * live in THIS workflow worker's DI. The two LONG steps (model call, tool execution) are `ctx.step`s
+ * routed to `AgentRunSteps`, so the run is never pinned to this pod while they execute — the same
+ * thing `ctx.step` means anywhere in this ecosystem, and the reason a `@AiTool` handler must
+ * establish whatever execution context it needs itself. HITL is `ctx.waitForSignal`, and sub-agent
+ * delegation is `ctx.child(AgentRunWorkflow)` — a replay-safe, observable child run (it shows up as
+ * a node in the durable dashboard). A child streams into its top-level ancestor's sink
+ * (`sinkRunId`) so the human watching the parent sees it and can approve its action tools; the
+ * approval routes to the child's own run via `runForToolCall`.
  */
 @Injectable()
 @Workflow({ name: 'agent.run', version: '1' })
@@ -49,14 +49,14 @@ export class AgentRunWorkflow {
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    // NOTE: `AgentRunSteps` is deliberately NOT injected here. `AgentDurableModule.forRoot({
-    // surface: 'http' })` registers this workflow (so `WorkflowService.start` finds it locally —
-    // `engine.start` validates registration before persisting a run, even on an enqueue-only pod)
-    // but provides no `AgentRunSteps`, because an http pod that registered the dispatched-step
-    // handlers would subscribe their queues and run LLM/tool work meant for the worker fleet.
-    // Depending on the instance here would make the workflow BODY differ between the two surfaces,
-    // which is a replay divergence, not a degradation — see `run()`.
-    @Inject(AGENT_DISPATCHED_STEPS) private readonly dispatchedSteps: boolean,
+    // NOTE: `AgentRunSteps` is deliberately NOT injected here, optionally or otherwise.
+    // `AgentDurableModule.forRoot({ surface: 'http' })` registers this workflow (so
+    // `WorkflowService.start` finds it locally — `engine.start` validates registration before
+    // persisting a run, even on an enqueue-only pod) but provides no `AgentRunSteps`, because an
+    // http pod that registered the dispatched-step handlers would subscribe their queues and run
+    // LLM/tool work meant for the worker fleet. Depending on the instance here would make the
+    // workflow BODY differ between the two surfaces, which is a replay divergence, not a
+    // degradation — see `run()`.
     // The runtime's own view of this run, used for ONE question: has it been cancelled. `@Optional`
     // so a host that wired no gateway still boots — but note that the hook built from it is wired
     // UNCONDITIONALLY below. Its presence decides how many checkpoints a turn writes, and that must
@@ -121,22 +121,19 @@ export class AgentRunWorkflow {
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<AgentLoopResult> {
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
-    // Whether a turn dispatches decides which checkpoint NAMES it writes — the routed
-    // `AgentRunSteps.llm`/`.tool` groups instead of the in-process `llm:<i>`/`tool:<callId>` — so the
-    // answer must not come from anything local to the process that happens to be replaying.
+    // A turn's model call and its tool executions are dispatched steps. The ONE thing that may say
+    // otherwise is this run's own journal: a run recorded by a release that ran them in-process
+    // wrote `llm:<i>`/`tool:<callId>` where the routed `AgentRunSteps.llm`/`.tool` groups now sit,
+    // and it has to finish on the names it holds. `ctx.patched` answers that from the history and
+    // nowhere else — it records the marker and returns true for a fresh run, and for a run whose
+    // position already holds a real step it rewinds (spending no position) and returns false.
     //
-    // It therefore reads NOTHING off `this.steps`. `ctx.step` routes by the `@Step`-stamped name and
-    // never invokes the reference (the serving worker re-resolves the real handler from its own DI),
-    // so the names come off the prototype and a pod that provides no `AgentRunSteps` — `surface:
-    // 'http'`, which registers this workflow only so `start()` can enqueue it — still replays the
-    // same branch instead of silently degrading to the in-process one and diverging from the
-    // history an engine pod wrote.
-    //
-    // `ctx.patched` is what keeps a run that journaled the in-process names finishing on them: it
-    // consumes a position for a fresh run and rewinds for an in-flight one. It sits behind the
-    // config flag only, which is built from the same `AgentModuleOptions` on every surface of a
-    // deployment, so every pod agrees on whether the position is spent at all.
-    const dispatchSteps = this.dispatchedSteps && (await ctx.patched('agent:dispatched-steps'));
+    // Nothing process-local is read here, deliberately. `ctx.step` routes by the `@Step`-stamped
+    // name off the prototype and never invokes the reference (the serving worker re-resolves the
+    // real handler from its own DI), so a pod that provides no `AgentRunSteps` — `surface: 'http'`,
+    // which registers this workflow only so `start()` can enqueue it — writes the same names an
+    // engine pod does instead of degrading to the in-process ones and diverging from the history.
+    const dispatchSteps = await ctx.patched('agent:dispatched-steps');
     // A sub-agent run marks its subthread as streaming THIS child run, so a human approving its
     // action tool routes the signal back here (runForToolCall) and a client may attach to its
     // stream. Both shapes of sub-agent qualify: one forwarding into an ancestor's sink, and a
@@ -227,10 +224,11 @@ export class AgentRunWorkflow {
         });
         return { runId: childRunId };
       },
-      // Routes the two long steps through AgentRunSteps as engine-dispatched `ctx.step`s instead of
-      // `ctx.localStep`s, so a turn isn't pinned to this workflow worker for the model call or a tool
-      // execution. `sinkRunId`/`childSink` are sink routing this workflow already resolved above —
-      // core's dispatchLlm signature stays sink-topology-agnostic, so we add them here, not in core.
+      // The two long steps as engine-dispatched `ctx.step`s, so a turn isn't pinned to this
+      // workflow worker for the model call or a tool execution. `sinkRunId`/`childSink` are sink
+      // routing this workflow already resolved above — core's dispatchLlm signature stays
+      // sink-topology-agnostic, so we add them here, not in core. Omitted only for a run whose
+      // journal predates dispatch (`dispatchSteps` above), which leaves the loop on `hooks.step`.
       ...(dispatchSteps
         ? {
             dispatchLlm: (index: number, envelope: LlmStepEnvelope) =>

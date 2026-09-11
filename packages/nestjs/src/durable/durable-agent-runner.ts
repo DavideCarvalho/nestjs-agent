@@ -13,7 +13,20 @@ import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
 import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
+import { InProcessTokenStreamSink } from '../in-process-sink.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
+
+/**
+ * The thread a run was streaming, read back off the input the runtime recorded when it started —
+ * `AgentRunInput.threadId`, structurally, since the runtime stores a run's input as `unknown`.
+ * `undefined` for anything that is not an agent run, or a run the gateway no longer has.
+ */
+function threadOfRun(input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null || !('threadId' in input)) {
+    return undefined;
+  }
+  return typeof input.threadId === 'string' ? input.threadId : undefined;
+}
 
 /**
  * Runs the agent turn as a `@dudousxd/nestjs-durable` workflow. `start` creates the run and returns
@@ -33,7 +46,21 @@ export class DurableAgentRunner implements AgentRunner {
     @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
-  ) {}
+  ) {
+    // A durable turn runs on whichever worker takes `agent.run`, and its model call is dispatched
+    // again from there — so the process holding the reader's SSE connection is generally not the
+    // one writing tokens. The default sink only buffers in this process's memory, which cannot be
+    // reached from either. Detectable only via `instanceof`: the sink SPI carries no "am I
+    // cross-process" capability, so this is silent for any custom sink (which may well be one).
+    if (this.sink instanceof InProcessTokenStreamSink) {
+      this.logger.warn(
+        'durable: true with the default InProcessTokenStreamSink, which only buffers tokens in ' +
+          'this process. The worker that runs the turn — and the one that serves its dispatched ' +
+          '`llm` step — cannot stream into this buffer. Wire a cross-process TokenStreamSink ' +
+          '(e.g. a Redis pub/sub sink) via AgentModule.forRoot({ sink }) before running multi-pod.',
+      );
+    }
+  }
 
   async start(input: AgentRunInput): Promise<{ runId: string }> {
     const stamped: AgentRunInput = { ...input, day: input.day ?? utcDay() };
@@ -72,15 +99,25 @@ export class DurableAgentRunner implements AgentRunner {
    * settles the run `cancelled` regardless. The cascade to child runs comes with it.
    *
    * Neither of those settles the agent's own state, so this does: the run row gets its own terminal,
-   * and the subscriber gets a `cancelled` frame followed by a normal end. Both are keyed by runId
-   * alone, which is why they belong here rather than in the body — the body is the only place that
-   * knows which THREAD was streaming, so releasing that stays there (see `AgentRunWorkflow`).
+   * the thread stops reporting a live stream, and the subscriber gets a `cancelled` frame followed
+   * by a normal end.
+   *
+   * The thread is released HERE rather than left to the body, because a cancelled turn is usually
+   * suspended — parked on a human, or on one of the dispatched steps a turn spends most of its life
+   * in — and a suspended body never reaches its own catch: the runtime settles the run from outside
+   * it. The body still releases the thread on the paths where it does unwind (see
+   * `AgentRunWorkflow`); both write the same `null`, and whichever gets there first is right. The
+   * thread id comes off the run's own recorded input, so this holds for a sub-agent's subthread too.
    *
    * A tool already executing is not interrupted, here or anywhere: see `haltIfCancelled` in core.
    */
   async cancel(runId: string): Promise<void> {
     this.logger.log(`cancelling agent run ${runId}`);
+    const threadId = threadOfRun((await this.runs.getRunDetail(runId))?.run.input);
     await this.runs.cancel(runId, { compensate: true });
+    if (threadId !== undefined) {
+      await this.store.setActiveStream(threadId, null);
+    }
     const writer = await this.sink.open(runId);
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();

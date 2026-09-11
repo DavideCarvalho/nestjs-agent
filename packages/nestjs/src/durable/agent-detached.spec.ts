@@ -4,8 +4,8 @@ import {
   type FakeScript,
   InMemoryAgentStore,
 } from '@dudousxd/nestjs-agent-testing';
-import { DurableModule, WorkflowService } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -79,7 +79,6 @@ async function buildApp(store: AgentStore, chosen: FakeScript = script) {
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'orch',
-        dispatchedSteps: false,
       }),
       AgentDurableModule,
     ],
@@ -89,7 +88,9 @@ async function buildApp(store: AgentStore, chosen: FakeScript = script) {
   return {
     moduleRef,
     service: moduleRef.get(AgentService),
-    workflows: moduleRef.get(WorkflowService),
+    // The engine's own wait, not `WorkflowService.waitForRun`: a turn suspends at every dispatch
+    // hop, and the default settled wait cannot tell such a suspend from a turn parked on a human.
+    engine: moduleRef.get(WorkflowEngine),
   };
 }
 
@@ -117,14 +118,14 @@ async function eventually<T>(read: () => Promise<T | undefined>, label: string):
 describe('a detached delegation under the durable runner', () => {
   it('ends the turn while the sub-agent is still parked, then delivers its answer into the thread', async () => {
     const store = new InMemoryAgentStore();
-    const { moduleRef, service, workflows } = await buildApp(store);
+    const { moduleRef, service, engine } = await buildApp(store);
     try {
       const actor = { id: 'u1', roles: ['ADMIN'] };
       const { runId, threadId } = await service.chat({ actor, message: 'look into this' });
       const collected = collect(service.subscribe(runId));
 
       // THE TURN ENDS WITHOUT THE ANSWER. The research agent is still suspended on its approval.
-      const parent = await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      const parent = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       const streamed = await collected;
       expect(parent.status).toBe('completed');
       expect(streamed).toContain('"status":"started"');
@@ -146,7 +147,7 @@ describe('a detached delegation under the durable runner', () => {
       expect(childRunId).not.toBe(runId);
 
       await service.approve(actor, pending.toolCallId);
-      await workflows.waitForRun(childRunId ?? '', { timeoutMs: 5000 });
+      await engine.waitForRun(childRunId ?? '', { timeoutMs: 5000, until: 'terminal' });
 
       // THE RESULT ARRIVES AFTERWARDS, IN THE RIGHT THREAD, UNDER ITS OWN NAME.
       const delivered = await eventually<StoredMessage>(
@@ -177,12 +178,12 @@ describe('a detached delegation under the durable runner', () => {
 
   it('lets the owner attach to the detached run’s own stream', async () => {
     const store = new InMemoryAgentStore();
-    const { moduleRef, service, workflows } = await buildApp(store);
+    const { moduleRef, service, engine } = await buildApp(store);
     try {
       const actor = { id: 'u1', roles: ['ADMIN'] };
       const { runId } = await service.chat({ actor, message: 'look into this' });
       await collect(service.subscribe(runId));
-      await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
 
       const childRunId = await eventually(
         async () => store.toolCallRows().find((row) => row.toolName === 'purgeCache')?.runId,
@@ -199,7 +200,7 @@ describe('a detached delegation under the durable runner', () => {
 
   it('records the delegating run as the detached child’s parent', async () => {
     const store = new InMemoryAgentStore();
-    const { moduleRef, service, workflows } = await buildApp(store);
+    const { moduleRef, service, engine } = await buildApp(store);
     const parents: Record<string, string | undefined> = {};
     const recordRunStart = store.recordRunStart.bind(store);
     (store as AgentStore).recordRunStart = async (run) => {
@@ -210,7 +211,7 @@ describe('a detached delegation under the durable runner', () => {
       const actor = { id: 'u1', roles: ['ADMIN'] };
       const { runId } = await service.chat({ actor, message: 'look into this' });
       await collect(service.subscribe(runId));
-      await workflows.waitForRun(runId, { timeoutMs: 5000 });
+      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
 
       const child = await eventually(
         async () => store.toolCallRows().find((row) => row.toolName === 'purgeCache')?.runId,
@@ -233,13 +234,15 @@ describe('a detached delegation under the durable runner', () => {
         ? { text: 'starting', toolCall: { name: 'start_research', input: { task: 'dig' } } }
         : { text: 'started it' };
     };
-    const { moduleRef, service, workflows } = await buildApp(store, dying);
+    const { moduleRef, service, engine } = await buildApp(store, dying);
     try {
       const actor = { id: 'u1', roles: ['ADMIN'] };
       const { runId, threadId } = await service.chat({ actor, message: 'look into this' });
       await collect(service.subscribe(runId));
       // The delegating turn is unaffected by its delegate's death — it never waited for it.
-      expect((await workflows.waitForRun(runId, { timeoutMs: 5000 })).status).toBe('completed');
+      expect((await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' })).status).toBe(
+        'completed',
+      );
 
       const told = await eventually<StoredMessage>(
         async () =>
