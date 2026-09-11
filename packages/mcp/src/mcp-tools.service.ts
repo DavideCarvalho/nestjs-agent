@@ -73,7 +73,11 @@ export class McpToolsService implements OnApplicationBootstrap, OnApplicationShu
 
   /**
    * Re-import from one server, or from all of them — the way back for a server that was down at
-   * boot, or that has since gained or lost tools. Returns how many tools are now registered.
+   * boot, or that has gained tools since.
+   *
+   * Returns how many tools the servers it re-imported from just claimed, which is not the
+   * registry's total: a name skipped for a collision is not counted, and a scoped refresh says
+   * nothing about what the other servers hold.
    */
   async refresh(serverName?: string): Promise<number> {
     const configs = this.options.servers.filter(

@@ -72,7 +72,11 @@ export interface ApprovalPriorQuery {
   toDay?: string;
   /** Rows per page while walking the history. */
   pageSize?: number;
-  /** Hard cap on rows read, so building a prior can never turn into an unbounded scan. */
+  /**
+   * Bound on the history read, so building a prior can never turn into an unbounded scan. Tested
+   * between pages, so the walk stops once this many rows are in hand — the page that reaches the
+   * bound is folded in whole, carrying up to `pageSize - 1` rows past it.
+   */
   maxRows?: number;
 }
 
