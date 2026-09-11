@@ -25,8 +25,8 @@ describe('isControlFlowSignal — pinned to the durable runtimes it has to recog
   });
 
   it('does not match a cancellation or a failed step, which callers must still handle', () => {
-    expect(isControlFlowSignal(new Cancelled())).toBe(false);
-    expect(isControlFlowSignal(new StepFailed('chargeCard', 'card declined'))).toBe(false);
+    expect(isControlFlowSignal(new Cancelled('run-1'))).toBe(false);
+    expect(isControlFlowSignal(new StepFailed({ message: 'card declined' }))).toBe(false);
     expect(isControlFlowSignal(new Error('deadlock found'))).toBe(false);
   });
 });

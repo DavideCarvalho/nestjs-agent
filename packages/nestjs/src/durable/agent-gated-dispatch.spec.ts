@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 
 const ACTOR = { id: 'u1', roles: ['ADMIN'] };
@@ -71,6 +72,7 @@ async function buildApp(options: { model: ModelProvider; outputProcessors: Outpu
       AgentModule.forRoot({
         model: options.model,
         store: new InMemoryAgentStore(),
+        actorResolver: new HeaderActorResolver(),
         sink,
         durable: true,
         defaultAgent: 'default',

@@ -31,7 +31,18 @@ const EVERY_AGENT_OPTION: Required<AgentOptions> = {
   history: { maxMessages: 4 },
   outputSchema: { '~standard': { version: 1, vendor: 'spec', validate: (v) => ({ value: v }) } },
   outputRepairAttempts: 2,
-  intake: { mode: 'thread-start', prompt: 'What are we doing?' },
+  intake: {
+    questions: [
+      {
+        id: 'goal',
+        prompt: 'What are we doing?',
+        options: [{ value: 'refactor', label: 'Refactor' }],
+        defaults: ['refactor'],
+      },
+    ],
+    preamble: 'One question before I start.',
+    when: 'thread-start',
+  },
   ask: true,
 };
 
@@ -67,7 +78,18 @@ describe('@Agent options reaching the registered definition', () => {
       tools: ['getWeather'],
       history: { maxMessages: 4 },
       outputRepairAttempts: 2,
-      intake: { mode: 'thread-start', prompt: 'What are we doing?' },
+      intake: {
+        questions: [
+          {
+            id: 'goal',
+            prompt: 'What are we doing?',
+            options: [{ value: 'refactor', label: 'Refactor' }],
+            defaults: ['refactor'],
+          },
+        ],
+        preamble: 'One question before I start.',
+        when: 'thread-start',
+      },
       ask: true,
     });
     expect(definition?.systemPrompt).toBe('You are fully specified.');

@@ -9,7 +9,7 @@ import { type DynamicModule, Global, Injectable, Module } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentModule } from '../agent.module.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { Agent } from '../decorator/agent.decorator.js';

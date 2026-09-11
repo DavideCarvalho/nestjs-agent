@@ -16,6 +16,7 @@ import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 
 /** The one thing the research agent does — and it needs a human, so it parks. */
@@ -75,6 +76,7 @@ async function buildApp(store: AgentStore, chosen: FakeScript = script) {
       AgentModule.forRoot({
         model: new FakeModelProvider(chosen),
         store,
+        actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'orch',
         dispatchedSteps: false,

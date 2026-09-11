@@ -1,6 +1,8 @@
 import { Suspend } from '@dudousxd/durable-worker';
 import type { AgentRunInput } from '@dudousxd/nestjs-agent-core';
+import { InMemoryAgentStore, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
 import type { WorkflowService } from '@dudousxd/nestjs-durable';
+import type { RunGateway } from '@dudousxd/nestjs-durable-core';
 import { WorkflowSuspended } from '@dudousxd/nestjs-durable-core';
 import { describe, expect, it, vi } from 'vitest';
 import { DurableAgentRunner } from './durable-agent-runner.js';
@@ -14,9 +16,33 @@ function runInput(): AgentRunInput {
   };
 }
 
+/** `start` reaches for none of these; calling one is the test's own mistake, not a fake's gap. */
+function unreached(): never {
+  throw new Error('DurableAgentRunner.start must not touch the run gateway');
+}
+
+const runGateway: RunGateway = {
+  topology: unreached,
+  getRunDetail: unreached,
+  listRuns: unreached,
+  waitingFor: unreached,
+  workerHealth: unreached,
+  cancel: unreached,
+  retry: unreached,
+  continue: unreached,
+  redispatchPending: unreached,
+  retryWithInput: unreached,
+  subscribe: unreached,
+};
+
 function runnerWith(start: WorkflowService['start']): DurableAgentRunner {
   const workflows = { start, signal: vi.fn() } as unknown as WorkflowService;
-  return new DurableAgentRunner(workflows);
+  return new DurableAgentRunner(
+    workflows,
+    runGateway,
+    new InMemoryAgentStore(),
+    new InMemoryTokenStreamSink(),
+  );
 }
 
 describe('DurableAgentRunner.start', () => {

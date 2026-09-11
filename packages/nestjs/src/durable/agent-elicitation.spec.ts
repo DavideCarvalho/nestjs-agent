@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 
 const ACTOR = { id: 'u1', roles: ['ADMIN'] };
@@ -126,7 +127,13 @@ async function buildApp(model: ModelProvider, defaultAgent: string) {
         store: stateStore,
         transport: new EventEmitterTransport(new EventEmitter2()),
       }),
-      AgentModule.forRoot({ model, store: agentStore, durable: true, defaultAgent }),
+      AgentModule.forRoot({
+        model,
+        store: agentStore,
+        actorResolver: new HeaderActorResolver(),
+        durable: true,
+        defaultAgent,
+      }),
       AgentDurableModule,
     ],
     providers: [IntakeAgent, AskingAgent],
@@ -147,7 +154,7 @@ describe('elicitation survives a real suspend and resume', () => {
       // The run really is parked, and the model has not been called at all — the intake sits ahead
       // of the first turn, so it costs nothing to produce.
       await waitForPending(agentStore, `intake-${runId}`);
-      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'suspended' });
+      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'settled' });
       expect(model.prompts).toHaveLength(0);
       const pending = agentStore.toolCallRows();
       expect(pending).toHaveLength(1);

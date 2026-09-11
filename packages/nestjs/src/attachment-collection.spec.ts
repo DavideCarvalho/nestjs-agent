@@ -175,8 +175,8 @@ describe('AgentService — what is safe to collect', () => {
     const sent = await stage(staging, 'sent.png');
     await send(backing, thread.id, sent);
     // a store predating the reference query: everything else delegates, this one is simply absent
-    const store = Object.create(backing) as AgentStore & { referencedMediaIds?: unknown };
-    store.referencedMediaIds = undefined;
+    const store: AgentStore = Object.create(backing);
+    Reflect.set(store, 'referencedMediaIds', undefined);
 
     await expect(
       buildService(store, staging).collectableAttachments(ACTOR, { olderThan: FRIDAY }),

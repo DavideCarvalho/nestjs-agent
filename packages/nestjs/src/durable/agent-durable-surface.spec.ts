@@ -13,6 +13,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentModule } from '../agent.module.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 import { AgentRunSteps } from './agent-run.steps.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
@@ -29,6 +30,7 @@ function agentImport(surface?: 'http' | 'engine' | 'both') {
   return AgentModule.forRoot({
     model: new FakeModelProvider(() => ({ text: 'x' })),
     store: new InMemoryAgentStore(),
+    actorResolver: new HeaderActorResolver(),
     durable: true,
     ...(surface !== undefined ? { surface } : {}),
   });

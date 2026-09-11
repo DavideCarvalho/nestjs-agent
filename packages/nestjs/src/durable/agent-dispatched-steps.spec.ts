@@ -12,6 +12,7 @@ import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 import { AgentRunSteps } from './agent-run.steps.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
@@ -80,6 +81,7 @@ async function buildApp(
       AgentModule.forRoot({
         model: shared?.model ?? new OneToolModel(),
         store: agentStore,
+        actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
         dispatchedSteps,
@@ -161,7 +163,7 @@ describe('dispatched steps under the durable runner', () => {
       ({ runId } = await first.moduleRef.get(AgentService).chat({ actor: ACTOR, message: 'go' }));
       await first.moduleRef
         .get(WorkflowEngine)
-        .waitForRun(runId, { timeoutMs: 5000, until: 'suspended' });
+        .waitForRun(runId, { timeoutMs: 5000, until: 'settled' });
       expect((await stateStore.listCheckpoints(runId)).map((c) => c.name)).toContain('llm:0');
     } finally {
       await first.moduleRef.close();

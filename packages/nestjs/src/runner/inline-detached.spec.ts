@@ -12,6 +12,7 @@ import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 
 @AiTool({
   name: 'purgeCache',
@@ -82,6 +83,7 @@ describe('a detached delegation under the inline runner', () => {
         AgentModule.forRoot({
           model: new FakeModelProvider(script),
           store,
+          actorResolver: new HeaderActorResolver(),
           defaultAgent: 'orch',
         }),
       ],

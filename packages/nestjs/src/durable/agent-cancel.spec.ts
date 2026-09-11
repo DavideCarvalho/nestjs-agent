@@ -20,6 +20,7 @@ import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 
 const ACTOR = { id: 'u1', roles: ['ADMIN'] };
@@ -93,6 +94,7 @@ async function buildApp(script: FakeScript) {
           },
         },
         store,
+        actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
         // The in-process localStep path: the whole turn runs in this process, which is the shape

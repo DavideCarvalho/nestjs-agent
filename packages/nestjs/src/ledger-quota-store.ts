@@ -22,7 +22,7 @@ export class LedgerQuotaStore implements QuotaStore {
     };
   }
 
-  async bump(): Promise<void> {
+  async bump(_actorRef: string, _day: string, _tokens: number): Promise<void> {
     // No-op: the ledger is the source of truth — recordUsage already persisted this turn's tokens.
   }
 }

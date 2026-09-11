@@ -26,6 +26,8 @@ function buildDepsFactory(agents: AgentRegistry, defaultAgent?: string): AgentDe
     [],
     undefined,
     undefined,
+    undefined,
+    undefined,
   );
 }
 
