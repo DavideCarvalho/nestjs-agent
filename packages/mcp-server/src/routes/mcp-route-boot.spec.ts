@@ -12,6 +12,7 @@ import {
   Injectable,
   type Provider,
   Res,
+  Scope,
   type Type,
   UseGuards,
   createParamDecorator,
@@ -48,6 +49,15 @@ class AnswersEveryVerbController {
   @Mcp({ kind: 'read', description: 'Answer anything.' })
   any(): string {
     return 'any';
+  }
+}
+
+@Controller({ path: 'per-request', scope: Scope.REQUEST })
+class RequestScopedController {
+  @Get()
+  @Mcp({ kind: 'read', description: 'Read something per request.' })
+  read(): string {
+    return 'per-request';
   }
 }
 
@@ -151,6 +161,12 @@ describe('what @Mcp() refuses to boot', () => {
   it('refuses a route with no single verb a dispatched request could carry', async () => {
     await expect(bootRefusal({ controllers: [AnswersEveryVerbController] })).rejects.toThrow(
       /AnswersEveryVerbController\.any: it is not an HTTP route with one verb/,
+    );
+  });
+
+  it('refuses a request-scoped controller rather than quietly exposing none of its routes', async () => {
+    await expect(bootRefusal({ controllers: [RequestScopedController] })).rejects.toThrow(
+      /RequestScopedController\.read: its controller is request-scoped/,
     );
   });
 

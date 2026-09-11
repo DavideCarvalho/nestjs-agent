@@ -39,6 +39,25 @@ const UNSUPPORTED_SLOTS = new Map<number, string>([
   ],
 ]);
 
+/** Fail the boot if a controller with no static instance carries `@Mcp()` anywhere. */
+function assertNoMcpRoutesOn(input: { metatype: unknown; methods: MetadataScanner }): void {
+  if (typeof input.metatype !== 'function') {
+    return;
+  }
+  const prototype: unknown = Reflect.get(input.metatype, 'prototype');
+  if (typeof prototype !== 'object' || prototype === null) {
+    return;
+  }
+  for (const methodName of input.methods.getAllMethodNames(prototype)) {
+    if (readMcpRouteMetadata({ prototype, methodName }) !== undefined) {
+      throw new McpRouteDeclarationError(
+        `${input.metatype.name}.${methodName}`,
+        'its controller is request-scoped, and a dispatched tool call has no request to build one against. Put it on a default-scoped controller.',
+      );
+    }
+  }
+}
+
 /**
  * Registers every `@Mcp()` controller route as a tool, into a registry of its own.
  *
@@ -67,8 +86,18 @@ export class McpRouteDiscoveryService implements OnApplicationBootstrap {
     const principal = this.options.routes?.principal ?? defaultMcpRoutePrincipal;
     const tools: McpRouteTool[] = [];
     for (const wrapper of this.discovery.getControllers()) {
+      // A request-scoped controller has no static instance to dispatch against — what stands in
+      // `instance` is a prototype-only placeholder with none of its dependencies injected, and a
+      // tool call has no request for Nest to build the real one from. Refused rather than served
+      // half-built, and refused rather than skipped: a route that declared @Mcp() and then quietly
+      // was not there is the worse of the two answers.
+      if (!wrapper.isDependencyTreeStatic()) {
+        assertNoMcpRoutesOn({ metatype: wrapper.metatype, methods: this.methods });
+        continue;
+      }
       const instance = wrapper.instance;
       if (instance === null || instance === undefined || typeof instance !== 'object') {
+        assertNoMcpRoutesOn({ metatype: wrapper.metatype, methods: this.methods });
         continue;
       }
       const moduleKey = wrapper.host?.token ?? '';
