@@ -1,12 +1,15 @@
-import { type DynamicModule, Module } from '@nestjs/common';
-import { RouterModule } from '@nestjs/core';
+import { ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import { type DynamicModule, Module, type Provider } from '@nestjs/common';
+import { DiscoveryModule, RouterModule } from '@nestjs/core';
 import { AgentMcpServerController } from './agent-mcp-server.controller.js';
 import type {
   AgentMcpServerModuleAsyncOptions,
   AgentMcpServerModuleOptions,
 } from './agent-mcp-server.options.js';
 import { McpSessionStore } from './mcp-sessions.js';
-import { AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
+import { McpRouteDiscoveryService } from './routes/mcp-route-discovery.service.js';
+import { McpRouteDispatcher } from './routes/mcp-route-dispatcher.js';
+import { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
 
 /** Route the MCP endpoint mounts at when `path` is omitted. */
 const DEFAULT_PATH = 'mcp';
@@ -35,9 +38,9 @@ export class AgentMcpServerModule {
   static forRoot(options: AgentMcpServerModuleOptions): DynamicModule {
     return {
       module: AgentMcpServerModule,
-      imports: [routerFor(options.path ?? DEFAULT_PATH)],
+      imports: [DiscoveryModule, routerFor(options.path ?? DEFAULT_PATH)],
       controllers: [AgentMcpServerController],
-      providers: [{ provide: AGENT_MCP_SERVER_OPTIONS, useValue: options }, McpSessionStore],
+      providers: [{ provide: AGENT_MCP_SERVER_OPTIONS, useValue: options }, ...ROUTE_PROVIDERS],
       exports: [McpSessionStore],
     };
   }
@@ -45,7 +48,11 @@ export class AgentMcpServerModule {
   static forRootAsync(options: AgentMcpServerModuleAsyncOptions): DynamicModule {
     return {
       module: AgentMcpServerModule,
-      imports: [routerFor(options.path ?? DEFAULT_PATH), ...(options.imports ?? [])],
+      imports: [
+        DiscoveryModule,
+        routerFor(options.path ?? DEFAULT_PATH),
+        ...(options.imports ?? []),
+      ],
       controllers: [AgentMcpServerController],
       providers: [
         {
@@ -53,12 +60,23 @@ export class AgentMcpServerModule {
           useFactory: options.useFactory,
           inject: options.inject ?? [],
         },
-        McpSessionStore,
+        ...ROUTE_PROVIDERS,
       ],
       exports: [McpSessionStore],
     };
   }
 }
+
+/**
+ * Everything both variants provide: the live sessions, the registry `@Mcp()` routes land in, the
+ * dispatcher that runs one through its request pipeline, and the boot walk that finds them.
+ */
+const ROUTE_PROVIDERS: Provider[] = [
+  McpSessionStore,
+  { provide: AGENT_MCP_ROUTE_TOOLS, useFactory: () => new ToolRegistry() },
+  McpRouteDispatcher,
+  McpRouteDiscoveryService,
+];
 
 /** Mount the controller under `path` (Nest applies the prefix to its relative routes). */
 function routerFor(path: string): DynamicModule {

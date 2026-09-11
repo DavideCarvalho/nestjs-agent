@@ -10,7 +10,9 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
   type RequestId,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -20,6 +22,7 @@ import {
   isToolExposedOverMcp,
 } from './exposed-tools.js';
 import { actorFromAuthInfo } from './mcp-actor.js';
+import { McpRouteHttpError } from './routes/mcp-route-dispatcher.js';
 import { toMcpInputSchema } from './tool-json-schema.js';
 
 /** Options for {@link createAgentMcpServer}. */
@@ -30,6 +33,11 @@ export interface CreateAgentMcpServerOptions {
   version: string;
   /** The tool registry to expose — the SAME one the agent loop runs tools from. */
   registry: ToolRegistry;
+  /**
+   * Tools derived from `@Mcp()` controller routes, served alongside `registry` and gated exactly as
+   * it is. Omit where the deployment exposes no routes.
+   */
+  routeTools?: ToolRegistry;
   /** The tool authorization gate — the SAME `RolesPolicy` the agent loop gates turns with. */
   policy: RolesPolicy;
   /** What an `action` tool means here. Defaults to `'deny'`. See {@link McpActionPolicy}. */
@@ -80,12 +88,15 @@ function asText(output: unknown): string {
  * Both halves run against the agent's own registry and policy — not a second gate that happens to
  * agree with them:
  *
- * - `tools/list` → `registry.definitionsFor(actor, policy, allowedTools)`, which applies the same
- *   four layers a turn does (allow-list, `enabled`, `RolesPolicy`, the tool's own `canUse`), then
- *   drops every kind this surface will not run (see `mcpExposureRefusal`).
- * - `tools/call` → the exposure gate again, then `registry.invoke`, which re-checks `enabled`, the
+ * - `tools/list` → `definitionsFor(actor, policy, allowedTools)`, which applies the same four
+ *   layers a turn does (allow-list, `enabled`, `RolesPolicy`, the tool's own `canUse`), then drops
+ *   every kind this surface will not run (see `mcpExposureRefusal`).
+ * - `tools/call` → the exposure gate again, then `invoke`, which re-checks `enabled`, the
  *   `RolesPolicy` and `canUse` and re-validates the input before the handler runs. A client holding
  *   a list from before a role changed therefore gains nothing by calling from it.
+ *
+ * Tools derived from `@Mcp()` controller routes live in a registry of their own and go through both
+ * halves on identical terms — a second door into the same house, not a way around it.
  *
  * The acting actor comes from the transport's verified `AuthInfo` on EVERY request, so a long-lived
  * MCP session cannot outlive the identity it was opened with: each request is gated against whoever
@@ -95,6 +106,10 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
   const { registry, policy, allowedTools } = options;
   const actions = options.actions ?? 'deny';
   const actorFromAuth = options.actorFromAuth ?? actorFromAuthInfo;
+  // Two registries, one set of gates: each is asked the same question with the same actor, policy
+  // and allow-list, and the exposure decision is applied to the answers together.
+  const registries: ToolRegistry[] =
+    options.routeTools === undefined ? [registry] : [registry, options.routeTools];
   const server = new Server(
     { name: options.name, version: options.version },
     { capabilities: { tools: {} } },
@@ -102,10 +117,14 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
 
   server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
     const actor = actorFromAuth(extra.authInfo);
-    const definitions = await registry.definitionsFor(actor, policy, allowedTools);
-    const exposed = definitions.filter((definition) =>
-      isToolExposedOverMcp({ name: definition.name, kind: definition.kind, actions }),
+    const listed = await Promise.all(
+      registries.map((source) => source.definitionsFor(actor, policy, allowedTools)),
     );
+    const exposed = listed
+      .flat()
+      .filter((definition) =>
+        isToolExposedOverMcp({ name: definition.name, kind: definition.kind, actions }),
+      );
     return { tools: exposed.map(describe) };
   });
 
@@ -115,8 +134,9 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
     const actor = actorFromAuth(extra.authInfo);
     const { name, arguments: args } = request.params;
     try {
-      const spec = registry.spec(name);
-      if (spec === undefined) {
+      const source = registries.find((candidate) => candidate.has(name));
+      const spec = source?.spec(name);
+      if (source === undefined || spec === undefined) {
         throw new ToolNotFoundError(name);
       }
       assertToolExposedOverMcp({
@@ -126,13 +146,30 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
         ...(allowedTools !== undefined ? { allowedTools } : {}),
       });
       const ctx = toolContext({ actor, sessionId: extra.sessionId, requestId: extra.requestId });
-      const output = await registry.invoke(name, args ?? {}, ctx, policy);
+      const output = await source.invoke(name, args ?? {}, ctx, policy);
       return { content: [{ type: 'text', text: asText(output) }] };
     } catch (error) {
+      // A route answered this call with a status. That is the route's verdict on the CALL, not a
+      // result the tool produced: reporting a 403 as ordinary tool output would read to a model as
+      // "that did not work, try different arguments", when the answer is that this caller may not
+      // do it at all. It travels as a protocol error, carrying the status the route chose.
+      if (error instanceof McpRouteHttpError) {
+        throw new McpError(errorCodeForStatus(error.status), error.message, {
+          httpStatus: error.status,
+        });
+      }
       const message = error instanceof Error ? error.message : String(error);
       return { content: [{ type: 'text', text: message }], isError: true };
     }
   });
 
   return server;
+}
+
+/** The JSON-RPC code that says the same thing as an HTTP status. */
+function errorCodeForStatus(status: number): ErrorCode {
+  if (status === 400 || status === 422) {
+    return ErrorCode.InvalidParams;
+  }
+  return status >= 500 ? ErrorCode.InternalError : ErrorCode.InvalidRequest;
 }

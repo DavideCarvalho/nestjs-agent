@@ -29,7 +29,7 @@ import type { AgentMcpServerModuleOptions } from './agent-mcp-server.options.js'
 import { authenticateMcpRequest } from './authenticate.js';
 import type { McpAuthInfo } from './mcp-actor.js';
 import { type McpSession, McpSessionStore } from './mcp-sessions.js';
-import { AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
+import { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
 
 /** The node request the MCP transport reads, with the slot it takes the verified identity from. */
 type McpHttpRequest = IncomingMessage & { auth?: AuthInfo };
@@ -64,6 +64,7 @@ export class AgentMcpServerController {
     @Inject(AGENT_MCP_SERVER_OPTIONS) private readonly options: AgentMcpServerModuleOptions,
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
     @Inject(AGENT_ROLES_POLICY) private readonly policy: RolesPolicy,
+    @Inject(AGENT_MCP_ROUTE_TOOLS) private readonly routeTools: ToolRegistry,
     private readonly sessions: McpSessionStore,
   ) {}
 
@@ -157,6 +158,7 @@ export class AgentMcpServerController {
       name: this.options.name,
       version: this.options.version,
       registry: this.registry,
+      routeTools: this.routeTools,
       policy: this.policy,
       ...(this.options.actions !== undefined ? { actions: this.options.actions } : {}),
       ...(this.options.allowedTools !== undefined

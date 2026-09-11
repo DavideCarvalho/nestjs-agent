@@ -1,6 +1,7 @@
 import type { ActorResolver } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
 import type { McpActionPolicy } from './exposed-tools.js';
+import type { McpRoutePrincipalFactory } from './routes/mcp-route-dispatcher.js';
 
 export interface AgentMcpServerModuleOptions {
   /** Server name reported to MCP clients in the initialize handshake. */
@@ -32,6 +33,21 @@ export interface AgentMcpServerModuleOptions {
    * name left off is unreachable rather than merely unadvertised.
    */
   allowedTools?: string[];
+  /** How `@Mcp()` controller routes behave on this surface. See {@link McpRouteExposureOptions}. */
+  routes?: McpRouteExposureOptions;
+}
+
+/** Settings for the tools derived from `@Mcp()` controller routes. */
+export interface McpRouteExposureOptions {
+  /**
+   * How the MCP actor becomes the principal of the request a route-derived tool call dispatches —
+   * what the route's own guards authenticate against.
+   *
+   * Defaults to `defaultMcpRoutePrincipal`, which puts the resolved `Actor` on `request.user` and
+   * carries nothing over from the inbound MCP request. Supply your own where your guards read
+   * something else.
+   */
+  principal?: McpRoutePrincipalFactory;
 }
 
 /** Async variant, for auth that only exists at runtime — a key list from config, a JWT verifier. */
