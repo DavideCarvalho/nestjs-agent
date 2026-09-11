@@ -181,6 +181,7 @@ export class McpRouteDiscoveryService implements OnApplicationBootstrap {
         methodName,
         // The controller's host module, whose injectable guards, pipes and interceptors apply.
         moduleKey: wrapper.host?.token ?? '',
+
         route: ref,
         principal,
       }),

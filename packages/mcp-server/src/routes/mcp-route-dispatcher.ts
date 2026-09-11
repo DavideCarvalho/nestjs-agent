@@ -210,7 +210,7 @@ function syntheticResponse(): McpSyntheticResponse {
   return response;
 }
 
-/** The most specific message an `HttpException` carries — a `ValidationPipe` puts its in the body. */
+/** The most specific message an `HttpException` carries — a `ValidationPipe` puts its own in the body. */
 function reasonFor(exception: HttpException): string {
   const body: unknown = exception.getResponse();
   if (typeof body === 'string') {
@@ -297,6 +297,14 @@ export class McpRouteDispatcher {
     const handler: unknown = Reflect.get(instance, methodName);
     if (!isMethod(handler)) {
       throw new Error(`${route.handler} is not a method, so it cannot be dispatched.`);
+    }
+    // Without a module key, `GuardsContextCreator` has nowhere to resolve a class-based
+    // `@UseGuards` from and drops it — the route would run with its guards absent and nothing said.
+    // Refusing here is the difference between a loud boot failure and an open door.
+    if (moduleKey.length === 0) {
+      throw new Error(
+        `${route.handler} could not be traced to a module, so its guards, pipes and interceptors cannot be resolved. It is not exposed over MCP.`,
+      );
     }
     const run = scopedToModule({ contexts: this.contexts, moduleKey }).create(
       instance,

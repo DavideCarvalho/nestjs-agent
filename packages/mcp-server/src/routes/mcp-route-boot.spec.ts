@@ -24,6 +24,7 @@ import { AgentMcpServerModule } from '../agent-mcp-server.module.js';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
 import { BearerTokenActorResolver } from '../bearer-token-actor-resolver.js';
 import { AGENT_MCP_ROUTE_TOOLS } from '../tokens.js';
+import { McpRouteDispatcher, defaultMcpRoutePrincipal } from './mcp-route-dispatcher.js';
 import { Mcp } from './mcp.decorator.js';
 
 const KEY = 'a-key-0123456789abcdef';
@@ -187,6 +188,32 @@ describe('the registry @Mcp() routes land in', () => {
     const routeTools = context.get<ToolRegistry>(AGENT_MCP_ROUTE_TOOLS);
     expect(routeTools.has('internal_read')).toBe(true);
     expect(agentTools.has('internal_read')).toBe(false);
+  });
+});
+
+describe('a route that cannot be traced to a module', () => {
+  it('is refused, because its class-based guards would resolve to nothing', async () => {
+    // `GuardsContextCreator` resolves a `@UseGuards(SomeGuard)` out of the module the handler
+    // belongs to. With no module it drops the guard and says nothing, and the route would run
+    // wide open.
+    const context = await boot({
+      controllers: [InternalController],
+      providers: [ServiceTokenGuard],
+    });
+    expect(() =>
+      context.get(McpRouteDispatcher).compile({
+        instance: context.get(InternalController),
+        methodName: 'read',
+        moduleKey: '',
+        route: {
+          tool: 'internal_read',
+          method: 'GET',
+          path: '/internal',
+          handler: 'InternalController.read',
+        },
+        principal: defaultMcpRoutePrincipal,
+      }),
+    ).toThrow(/could not be traced to a module/);
   });
 });
 
