@@ -13,5 +13,3 @@ allowBuilds:
   ssh2: false
 minimumReleaseAgeExclude:
   - '@dudousxd/*'
-  - '@ai-sdk/react@4.0.17'
-  - ai@7.0.16
