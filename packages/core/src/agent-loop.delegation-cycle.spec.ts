@@ -146,6 +146,20 @@ describe('a delegation chain that has been here before', () => {
     expect(delegated).toEqual(['research']);
   });
 
+  it('falls to the depth ceiling once a raised appearance count lets the chain revisit', async () => {
+    // The two guards in the same run, with depth winning. Raising appearances is what lets a chain
+    // grow past the number of agents it has — without it, a chain cannot outlive the fleet, and a
+    // deployment with fewer agents than the ceiling never reaches the ceiling at all.
+    const { delegated, text } = await run({
+      input: { delegationPath: ['research', 'intake', 'research'], delegationDepth: 3 },
+      maxAgentAppearances: 5,
+      maxDelegationDepth: 3,
+    });
+    expect(delegated).toEqual([]);
+    expect(text).toContain('depth limit of 3');
+    expect(text).not.toContain('cycle');
+  });
+
   it('admits exactly one return when the host allows two appearances', async () => {
     const { delegated } = await run({
       input: { delegationPath: ['research', 'intake'] },

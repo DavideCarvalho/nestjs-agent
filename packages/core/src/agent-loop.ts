@@ -567,6 +567,12 @@ export function agentFailureCode(error: unknown): string {
  *
  * A backstop for a chain that is merely LONG. The cycle it used to stand in for is now detected
  * directly — see {@link DEFAULT_MAX_AGENT_APPEARANCES}.
+ *
+ * WHEN IT ACTUALLY BINDS. At one appearance per agent, a chain cannot be longer than the number of
+ * registered agents, so a deployment with fewer agents than this number never reaches it: the cycle
+ * guard always fires first. It starts mattering with a larger fleet of agents than the ceiling, or
+ * once a host raises {@link AgentLoopDeps.maxAgentAppearances}, which is what lets a chain revisit
+ * an agent and therefore grow past the fleet's size.
  */
 export const MAX_DELEGATION_DEPTH = 5;
 
