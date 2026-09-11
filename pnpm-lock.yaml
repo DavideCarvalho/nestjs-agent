@@ -132,8 +132,8 @@ importers:
         version: link:../core
     devDependencies:
       '@dudousxd/nestjs-authz':
-        specifier: 0.6.3
-        version: 0.6.3(@dudousxd/nestjs-context@0.2.0(@dudousxd/nestjs-diagnostics@0.7.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)
+        specifier: 0.6.5
+        version: 0.6.5(@dudousxd/nestjs-context@0.2.0(@dudousxd/nestjs-diagnostics@0.7.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)
       '@nestjs/common':
         specifier: 12.0.1
         version: 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1)
@@ -1127,8 +1127,8 @@ packages:
       ioredis:
         optional: true
 
-  '@dudousxd/nestjs-authz@0.6.3':
-    resolution: {integrity: sha512-BXPPxwMsjVm58MEMyfqiJrr2rkRhvtEcY5Mrr1VG+IJVHNSWtwaICy8CALv84yMWPWK7GQ4Nh6x+C+y4ZcZN5A==}
+  '@dudousxd/nestjs-authz@0.6.5':
+    resolution: {integrity: sha512-2JWQ2eRaNP5GLbXHFkDO6z/ibVESp1UF4IqNSZNk6zdTr2hIFEhRopoua8XGyB7EMjxMhHerepKFBdKH6rx7SQ==}
     engines: {node: '>=20'}
     peerDependencies:
       '@dudousxd/nestjs-context': '>=0.1.0'
@@ -6008,7 +6008,7 @@ snapshots:
     optionalDependencies:
       ioredis: 5.4.1
 
-  '@dudousxd/nestjs-authz@0.6.3(@dudousxd/nestjs-context@0.2.0(@dudousxd/nestjs-diagnostics@0.7.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-authz@0.6.5(@dudousxd/nestjs-context@0.2.0(@dudousxd/nestjs-diagnostics@0.7.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2))(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)':
     dependencies:
       '@dudousxd/nestjs-diagnostics': 0.5.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)
       '@nestjs/common': 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1)
