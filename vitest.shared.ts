@@ -18,8 +18,13 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-diagnostics': pkg('diagnostics'),
   '@dudousxd/nestjs-agent-client': pkg('client'),
   '@dudousxd/nestjs-agent-codegen': pkg('codegen'),
+  '@dudousxd/nestjs-agent-mcp': pkg('mcp'),
   '@dudousxd/nestjs-agent-react': pkg('react'),
   '@dudousxd/nestjs-agent': pkg('nestjs'),
+  // The registry ships shadcn-flavoured source, which reaches `cn` through the alias every shadcn
+  // project already has. Nothing under packages/ uses an `@/` specifier, so this resolves only
+  // registry files.
+  '@/lib/utils': fileURLToPath(new URL('./registry/src/lib/utils.ts', import.meta.url)),
 };
 
 /** SWC transform so NestJS decorator metadata works under Vitest (esbuild can't emit it). */

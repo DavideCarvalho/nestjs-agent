@@ -32,8 +32,16 @@ running it across the whole monorepo reported **194 errors in 10 packages**:
 | rag | 0 |
 
 Turning it on repo-wide in one commit would have meant blind-fixing 194 errors across packages in a
-single change, which is how you turn a real check into a rubber stamp. So `rag`, `rag-media` and
-`store-mikro-orm` are in; the rest is a standing invitation.
+single change, which is how you turn a real check into a rubber stamp. The rest is a standing
+invitation.
+
+In now: `rag`, `rag-media`, `store-mikro-orm`, `evals`, `mcp`, `testing`. The last three cost
+nothing — a package written after this check existed tends to report zero, and `testing` reported
+zero on a codebase that predates it. Measure before assuming a package is expensive to opt in:
+
+```
+cd packages/<name> && npx tsc -p tsconfig.spec.json 2>&1 | grep -c 'error TS'
+```
 
 To add a package:
 
