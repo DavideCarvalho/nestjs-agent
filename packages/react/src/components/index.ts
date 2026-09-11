@@ -8,6 +8,7 @@ export {
   MessageItemView,
   type MessageItemViewProps,
   type MessageUsageInfo,
+  type RenderFilesFn,
   type RenderReasoningFn,
   type RenderTextFn,
   type RenderToolGroupFn,

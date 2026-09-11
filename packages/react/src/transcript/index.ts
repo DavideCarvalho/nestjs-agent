@@ -15,6 +15,8 @@ export {
   type TranscriptBlock,
   type TranscriptElicitationBlock,
   type TranscriptElicitationOutcome,
+  type TranscriptFile,
+  type TranscriptFilesBlock,
   type TranscriptQuestion,
   type TranscriptQuestionOption,
   type TranscriptReasoningBlock,

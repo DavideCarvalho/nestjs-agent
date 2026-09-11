@@ -9,6 +9,7 @@ import type {
 } from '@dudousxd/nestjs-agent-react';
 import type { ReactNode } from 'react';
 import { ChatElicitation } from './chat-elicitation';
+import { ChatFiles } from './chat-files';
 import { ChatReasoning } from './chat-reasoning';
 import { ChatSourceChips, ChatSources } from './chat-sources';
 import { ChatToolGroup, type RenderToolPartFn } from './chat-tool-group';
@@ -106,6 +107,9 @@ export function ChatMessage({
           }
           if (block.kind === 'elicitation') {
             return <ChatElicitation key={block.key} block={block} />;
+          }
+          if (block.kind === 'files') {
+            return <ChatFiles key={block.key} block={block} />;
           }
           return <ChatToolGroup key={block.key} block={block} renderToolPart={renderToolPart} />;
         })}

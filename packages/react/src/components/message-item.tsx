@@ -1,6 +1,11 @@
 import type { UIMessage } from 'ai';
 import React from 'react';
-import type { AnyToolUIPart, MessageUsageInfo, TranscriptBlock } from '../transcript/model.js';
+import type {
+  AnyToolUIPart,
+  MessageUsageInfo,
+  TranscriptBlock,
+  TranscriptFile,
+} from '../transcript/model.js';
 import { type TranscriptItem, useTranscriptItem } from '../transcript/use-chat-transcript.js';
 
 export type { AnyToolUIPart, MessageUsageInfo } from '../transcript/model.js';
@@ -13,6 +18,9 @@ export type RenderToolGroupFn = (parts: AnyToolUIPart[], key: string) => React.R
 
 /** Render a message's text — pass a markdown renderer (e.g. `AgentMarkdown`) here if desired. */
 export type RenderTextFn = (text: string, ctx: { isStreaming: boolean }) => React.ReactNode;
+
+/** Render a run of files — attachments on a user turn, or files the model produced. */
+export type RenderFilesFn = (files: TranscriptFile[]) => React.ReactNode;
 
 /** Render the body of a reasoning run; the disclosure toggle around it stays this component's. */
 export type RenderReasoningFn = (
@@ -35,6 +43,9 @@ export interface MessageItemClassNames {
   reasoning?: string;
   reasoningToggle?: string;
   reasoningText?: string;
+  files?: string;
+  file?: string;
+  fileImage?: string;
 }
 
 interface MessageRenderSlots {
@@ -43,6 +54,13 @@ interface MessageRenderSlots {
   renderToolGroup?: RenderToolGroupFn;
   renderText?: RenderTextFn;
   renderReasoning?: RenderReasoningFn;
+  /** Draw files yourself — a gallery, a viewer. Omitted → images inline, everything else a link. */
+  renderFiles?: RenderFilesFn;
+  /**
+   * Extra content for the action row, after the built-in affordances and before usage — a badge
+   * naming which agent answered, a status pill. Rendered for every message that has an action row.
+   */
+  meta?: React.ReactNode;
   /** Label on the reasoning disclosure toggle. Default `"Reasoning"`. */
   reasoningLabel?: React.ReactNode;
   classNames?: MessageItemClassNames;
@@ -141,6 +159,7 @@ export function MessageItemView({ item, ...slots }: MessageItemViewProps) {
           Regenerate
         </button>
       ) : null}
+      {slots.meta}
       {!item.isUser && item.usage ? (
         <span
           className={classNames?.usage}
@@ -193,11 +212,51 @@ function renderBlocks(item: TranscriptItem, slots: MessageRenderSlots): React.Re
       nodes.push(renderReasoningBlock(block, slots));
       continue;
     }
+    if (block.kind === 'files') {
+      nodes.push(renderFilesBlock(block, slots));
+      continue;
+    }
     if (block.kind === 'tools') {
       nodes.push(...renderToolBlock(item, block, slots));
     }
   }
   return nodes;
+}
+
+/**
+ * Files as content. An image is shown; anything else is a labelled link, because a renderer that
+ * cannot display a format is more useful pointing at it than guessing.
+ */
+function renderFilesBlock(
+  block: Extract<TranscriptBlock, { kind: 'files' }>,
+  slots: MessageRenderSlots,
+): React.ReactNode {
+  return (
+    <div key={block.key} className={slots.classNames?.files} data-files="true">
+      {slots.renderFiles
+        ? slots.renderFiles(block.files)
+        : block.files.map((file) => (
+            <a
+              key={file.url}
+              href={file.url}
+              target="_blank"
+              rel="noreferrer"
+              className={slots.classNames?.file}
+              title={file.filename ?? file.mediaType}
+            >
+              {file.isImage ? (
+                <img
+                  src={file.url}
+                  alt={file.filename ?? 'image'}
+                  className={slots.classNames?.fileImage}
+                />
+              ) : (
+                (file.filename ?? file.mediaType)
+              )}
+            </a>
+          ))}
+    </div>
+  );
 }
 
 function renderReasoningBlock(

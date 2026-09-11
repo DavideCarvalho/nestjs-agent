@@ -5,6 +5,7 @@ import { useChatTranscript } from '../transcript/use-chat-transcript.js';
 import {
   type MessageItemClassNames,
   MessageItemView,
+  type RenderFilesFn,
   type RenderReasoningFn,
   type RenderTextFn,
   type RenderToolGroupFn,
@@ -33,7 +34,11 @@ export interface MessageListProps {
   renderText?: RenderTextFn;
   /** Render the body of a reasoning run; the disclosure toggle is the list's. */
   renderReasoning?: RenderReasoningFn;
+  /** Draw a message's files yourself. Omitted → images inline, everything else a link. */
+  renderFiles?: RenderFilesFn;
   reasoningLabel?: React.ReactNode;
+  /** Extra content for one message's action row — e.g. a badge naming which agent answered. */
+  getMeta?: (message: UIMessage) => React.ReactNode;
   /** When set, every message gets a "Fork" affordance calling back with its id. */
   onFork?: (uiMessageId: string) => void | Promise<void>;
   /** User messages get an inline edit-and-resubmit affordance. */
@@ -74,7 +79,9 @@ export function MessageList({
   renderToolGroup,
   renderText,
   renderReasoning,
+  renderFiles,
   reasoningLabel,
+  getMeta,
   onFork,
   editable,
   onEditSubmit,
@@ -112,6 +119,7 @@ export function MessageList({
     ...(renderToolGroup ? { renderToolGroup } : {}),
     ...(renderText ? { renderText } : {}),
     ...(renderReasoning ? { renderReasoning } : {}),
+    ...(renderFiles ? { renderFiles } : {}),
     ...(reasoningLabel !== undefined ? { reasoningLabel } : {}),
     ...(classNames?.message ? { classNames: classNames.message } : {}),
   };
@@ -128,7 +136,12 @@ export function MessageList({
         </button>
       ) : null}
       {transcript.items.map((item) => (
-        <MessageItemView key={item.id} item={item} {...slots} />
+        <MessageItemView
+          key={item.id}
+          item={item}
+          {...slots}
+          {...(getMeta ? { meta: getMeta(item.message) } : {})}
+        />
       ))}
       {transcript.showTypingIndicator ? (
         <div className={classNames?.typing}>{typingIndicator ?? 'Thinking…'}</div>

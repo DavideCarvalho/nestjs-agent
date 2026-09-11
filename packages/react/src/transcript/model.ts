@@ -1,8 +1,10 @@
 import {
   type DynamicToolUIPart,
+  type FileUIPart,
   type ToolUIPart,
   type UIMessage,
   getToolName,
+  isFileUIPart,
   isReasoningUIPart,
   isTextUIPart,
   isToolUIPart,
@@ -17,7 +19,12 @@ export type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
 export interface MessageUsageInfo {
   inputTokens: number;
   outputTokens: number;
-  costUsd: number;
+  /**
+   * `null` when no price is on record for the model that ran the turn. Distinct from `0`, which is
+   * a turn that genuinely cost nothing — printing `$0` for an unpriced turn states a number the
+   * store never had.
+   */
+  costUsd: number | null;
 }
 
 /** A run of contiguous prose. `isStreaming` is the PART's own state, not the message's. */
@@ -26,6 +33,23 @@ export interface TranscriptTextBlock {
   key: string;
   text: string;
   isStreaming: boolean;
+}
+
+/** One file on a message — an uploaded attachment, or one the model produced. */
+export interface TranscriptFile {
+  /** Presigned or otherwise directly fetchable. Display-only: the model reads its own copy. */
+  url: string;
+  mediaType: string;
+  filename: string | null;
+  /** `image/*`, which a renderer can show inline rather than as a link. */
+  isImage: boolean;
+}
+
+/** A run of contiguous files. Grouped so a renderer can lay several out as one strip. */
+export interface TranscriptFilesBlock {
+  kind: 'files';
+  key: string;
+  files: TranscriptFile[];
 }
 
 /**
@@ -181,6 +205,7 @@ export interface TranscriptSourcesBlock {
 
 export type TranscriptBlock =
   | TranscriptTextBlock
+  | TranscriptFilesBlock
   | TranscriptReasoningBlock
   | TranscriptToolBlock
   | TranscriptSourcesBlock
@@ -228,10 +253,10 @@ export interface BuildBlocksOptions {
 }
 
 /**
- * Walk a message's parts into renderable blocks, buffering consecutive tool parts into one run.
- * Parts this library has no model for (files, sources, data-*) are dropped rather than guessed at,
- * but they still terminate a tool run — their position in the transcript is meaningful even when
- * their content is not modelled here.
+ * Walk a message's parts into renderable blocks, buffering consecutive tool parts into one run and
+ * consecutive files into one strip. Parts this library has no model for (`data-*`) are dropped
+ * rather than guessed at, but they still terminate a tool run — their position in the transcript is
+ * meaningful even when their content is not modelled here.
  */
 export function buildTranscriptBlocks(
   message: UIMessage,
@@ -240,8 +265,10 @@ export function buildTranscriptBlocks(
   const blocks: TranscriptBlock[] = [];
   let toolBuffer: AnyToolUIPart[] = [];
   let retrievalBuffer: AnyToolUIPart[] = [];
+  let fileBuffer: FileUIPart[] = [];
   let toolCounter = 0;
   let textCounter = 0;
+  let fileCounter = 0;
   let reasoningCounter = 0;
   let sourcesCounter = 0;
   let elicitationCounter = 0;
@@ -267,9 +294,27 @@ export function buildTranscriptBlocks(
     retrievalBuffer = [];
   }
 
+  function flushFiles() {
+    if (fileBuffer.length === 0) {
+      return;
+    }
+    blocks.push({
+      kind: 'files',
+      key: `${message.id}-files-${fileCounter++}`,
+      files: fileBuffer.map((part) => ({
+        url: part.url,
+        mediaType: part.mediaType,
+        filename: part.filename ?? null,
+        isImage: part.mediaType.startsWith('image/'),
+      })),
+    });
+    fileBuffer = [];
+  }
+
   function flushAll() {
     flushTools();
     flushSources();
+    flushFiles();
   }
 
   for (const part of message.parts ?? []) {
@@ -296,7 +341,14 @@ export function buildTranscriptBlocks(
         continue;
       }
       flushSources();
+      flushFiles();
       toolBuffer.push(part);
+      continue;
+    }
+    if (isFileUIPart(part)) {
+      flushTools();
+      flushSources();
+      fileBuffer.push(part);
       continue;
     }
     flushAll();
@@ -699,7 +751,10 @@ function formatTokensShort(n: number): string {
   return `${Math.round(n / 1_000)}k tokens`;
 }
 
-function formatCostUsd(cost: number): string {
+function formatCostUsd(cost: number | null): string {
+  if (cost === null) {
+    return '—';
+  }
   if (cost === 0) {
     return '$0';
   }

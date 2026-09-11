@@ -7,10 +7,18 @@
       "name": "agent-chat",
       "type": "registry:block",
       "title": "Agent Chat",
-      "description": "A full chat surface over useChatTranscript — welcome state with mode pills, a composer card with a context strip, message bubbles, grouped tool cards with inline approve/reject, the agent's own questions as an inline form, a reasoning disclosure, provenance from retrieval, follow-ups and stick-to-bottom.",
+      "description": "A full chat surface over useChatTranscript \u2014 welcome state with mode pills, a composer card with a context strip, message bubbles, grouped tool cards with inline approve/reject, the agent's own questions as an inline form, a reasoning disclosure, provenance from retrieval, follow-ups and stick-to-bottom.",
       "author": "Davide Carvalho <https://github.com/DavideCarvalho>",
-      "categories": ["ai", "chat"],
-      "dependencies": ["@dudousxd/nestjs-agent-react", "ai", "clsx", "tailwind-merge"],
+      "categories": [
+        "ai",
+        "chat"
+      ],
+      "dependencies": [
+        "@dudousxd/nestjs-agent-react",
+        "ai",
+        "clsx",
+        "tailwind-merge"
+      ],
       "files": [
         {
           "path": "src/components/agent-chat/agent-chat.tsx",
@@ -46,6 +54,11 @@
           "path": "src/components/agent-chat/chat-elicitation.tsx",
           "type": "registry:component",
           "target": "@components/agent-chat/chat-elicitation.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-files.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-files.tsx"
         },
         {
           "path": "src/components/agent-chat/chat-follow-ups.tsx",
@@ -93,10 +106,17 @@
       "name": "agent-chat-composer",
       "type": "registry:component",
       "title": "Agent Chat Composer",
-      "description": "The composer card on its own — growing textarea, attach affordance, a slot for a model picker, one control that submits or cancels the turn in flight, a context strip and mode pills.",
+      "description": "The composer card on its own \u2014 growing textarea, attach affordance, a slot for a model picker, one control that submits or cancels the turn in flight, a context strip and mode pills.",
       "author": "Davide Carvalho <https://github.com/DavideCarvalho>",
-      "categories": ["ai", "chat"],
-      "dependencies": ["@dudousxd/nestjs-agent-react", "clsx", "tailwind-merge"],
+      "categories": [
+        "ai",
+        "chat"
+      ],
+      "dependencies": [
+        "@dudousxd/nestjs-agent-react",
+        "clsx",
+        "tailwind-merge"
+      ],
       "files": [
         {
           "path": "src/components/agent-chat/chat-composer.tsx",
