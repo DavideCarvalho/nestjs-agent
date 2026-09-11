@@ -1,5 +1,175 @@
 # @dudousxd/nestjs-agent-telescope
 
+## 0.8.3
+
+### Patch Changes
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Skills: an authored procedure the model pulls in when a task calls for it.
+
+  The instructions a deployment needs the agent to follow had two homes, and both were wrong for most
+  of them. In the system prompt they are paid for on every turn, by every user, whether or not the work
+  calls for them — and an agent with a per-base ingestion quirk, a work-order rule and a normalisation
+  procedure is an agent whose prompt is mostly things the current question does not need. Hardcoded as
+  a tool, the instructions are a deploy away from changing and the model has to guess from a name what
+  the tool will tell it.
+
+  A skill splits the two halves. The turn's system block carries a CATALOG — one line per skill: its
+  name, the scope it came from, and what task it covers. The body is read on demand, through a built-in
+  `skill` tool, and arrives as an ordinary tool result. So an instruction costs a prompt line until the
+  turn that needs it, and costs nothing at all on the turns that do not.
+
+  **A skill is not an agent.** An `@Agent` is who is answering — its model, its tools, its history
+  ceiling, its output schema. A `@Skill` carries none of those: it is a name, a description, a scope
+  and text, and any agent may load it. An instruction that should apply to every turn of a persona is
+  still that persona's `systemPrompt` or a `@SystemPromptContributor()` — a skill is for the ones that
+  should apply only when the work calls for them, which is the whole of what makes them cheap.
+
+  **Scoping is an opaque token, resolved by the host.** A skill is published at a token —
+  `actor:u1`, `tenant:base-7`, `global`, or a deployment's own `sector:logistics` — and which tokens
+  apply to a turn is answered by a `ScopeResolver` returning them MOST SPECIFIC FIRST. Precedence falls
+  out of that order, so a new axis (a sector, a squadron, a shift) is a resolver a host writes rather
+  than an enum or a column in this library. `defaultScopeResolver` covers what an `Actor` alone can
+  say — the actor's own scope, their tenant's, and the deployment's — so the common case wires no host
+  code at all.
+
+  **This library owns no skill table, and adds no column to either store adapter.** The rows are the
+  host's, behind a `SkillProvider` with two calls: `list(scopes, ctx)` for the catalog, on every turn,
+  and `load(name, scope, ctx)` for one body, only when the model asks. A consumer that needs an admin
+  UI over "every skill for sector X" joins its own `Sector` entity against the token values in its own
+  read model — without writing migrations into a schema this package's boot-time heal also edits.
+  Skills that are authored rather than administered are `@Skill`-decorated providers, discovered at
+  boot, with a flat `body` string or a `body(ctx)` method that gets DI.
+
+  **Conflict is reported, not resolved silently.** The most specific scope wins, and the scopes it
+  outranked are recorded on the entry's `shadows` — shown to the model in the catalog block and
+  returned on the endpoint — so the agent can say "I followed your base's version, which differs from
+  the org default" rather than quietly choosing.
+
+  **`GET /agent/skills`** lists what THIS actor can reach right now, scope-resolved, as
+  `{ name, description, scope, shadows? }[]` — the same list the model is offered, built by the same
+  `offerSkills` call against the same provider and resolver, so a `/`-autocomplete can never offer a
+  skill the agent has never heard of. Ownership posture mirrors `GET /agent/agents`: the actor comes
+  from the resolver, and nothing a caller passes widens the answer.
+
+  **Write authority.** There is no HTTP write surface: who administers `sector:logistics` is a fact
+  this library does not have. What it ships is the rule, as a pure `skillWriteVerdict` a host calls
+  from its own console — you may only write into a scope you are in; your own scope is yours; a wider
+  one needs the host to say the human is elevated; and **nothing but a human may ever write above its
+  own scope**, whatever elevation a host would grant. An agent that can write a `tenant:` skill is an
+  agent whose prompt anyone in that tenant can edit by talking to it, and no amount of permission makes
+  that a different shape.
+
+  **Checkpoints.** One new position, `skills:catalog`, holding the WHOLE offer — the scopes the
+  resolver returned and the entries that survived precedence — and reachable only through new config,
+  so no in-flight run can land on it. A `skill` call spends a plain read tool's positions and adds no
+  name of its own (`persist:toolcall:<id>`, `tool:<id>`, `persist:toolexec:<id>`). Both payloads are
+  load-bearing rather than incidental: which instructions entered a turn's prompt is a decision about
+  that turn, so it has to be readable from its journal. A replay re-reading the provider would compose
+  a different prompt from a skill edited in between, on a transcript position the history already
+  holds. `ToolKind` gains a fifth member, `'skill'`, carried by no `ToolSpec` — the tool is never
+  registered, and its branch is settled inside the already-journaled `persist:toolcall` checkpoint, the
+  same way `action` and `ask` are. Configure no skills and a turn's checkpoint sequence is
+  byte-identical to one that never had the option.
+
+  **Budget.** Five things now write the system block — the agent's base prompt, its
+  `@SystemPromptContributor()` sections, memory, injected retrieval, and this catalog — assembled in
+  that fixed order. Skills are deliberately the cheapest: the catalog is one line each, capped by `maxSkills`
+  (default 20, widest scopes dropped first), and the bodies ride the TRANSCRIPT, where the
+  `HistoryPolicy` ceiling already governs them. A new `aviary:agent:skills.resolved` diagnostics event
+  reports how many were offered, how many the cap left out, and exactly how many characters the block
+  added — so a turn whose input tokens jump can be attributed to a contributor by name rather than
+  guessed at.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Memory: what the assistant concluded about a person, carried across turns and across threads.
+
+  Everything the agent works out about someone dies at the end of the turn. The next conversation
+  re-asks which units they report in, which fiscal year their org uses, that they were corrected about
+  this last week. The two places a deployment can put that today are both wrong: the system prompt,
+  which is authored by a developer and identical for everyone, or retrieval, which answers from
+  documents nobody wrote about this person.
+
+  A **memory** is a keyed fact at a scope. `{ key: 'fiscal-year', text: 'they report on the calendar
+year', scope: 'actor:u1' }`. It rides the system block as one line, the model writes it through a
+  built-in `remember` tool, and the person it is about can read every one of them back and delete any
+  of them.
+
+  **It is not RAG, and the difference is not cosmetic.** Retrieval answers _what do the documents say_
+  and cites them; memory answers _what did I decide about you_ and has no source to go and fix. So
+  every record carries an origin (which conversation, which run, written by the agent or by a person),
+  the block tells the model these are its own fallible notes and to prefer what the user says now, and
+  `MemoryProvider.forget` is a **required** method rather than an optional one — a deployment may
+  reasonably serve memory read-only, but none may reasonably hold conclusions about someone that the
+  someone cannot delete.
+
+  **Scoping is the same opaque token skills use**, resolved by the same `ScopeResolver`, most specific
+  first — `actor:u1`, `sector:logistics`, `tenant:base-7`, `global`. One resolver, so a deployment
+  cannot end up with two answers to "which scopes does this actor have". And as with skills, **this
+  library owns no memory table**: the rows are the host's, behind a provider with `list` / `forget` /
+  optional `write`.
+
+  **Conflict is shown with both values, which is where memory departs from a skill.** A skill's entry
+  records only _which_ scope it outranked — the agent follows one procedure either way. A memory is a
+  value, so the entry carries the beaten **text** too, and the block prints it underneath:
+
+  ```text
+  - [actor:u1] fiscal-year: they report on the calendar year
+      ↳ [global] instead has: the fiscal year starts in October
+  ```
+
+  An agent that knew only that a wider value existed could tell the user nothing except which one it
+  picked.
+
+  **Write authority: an agent proposes, a person publishes.** `memoryWriteVerdict` carries the same
+  four rules as `skillWriteVerdict`, and rule three bites harder here — nothing but a human may write
+  above its own scope, whatever elevation a host grants. A tenant _skill_ an agent could publish is a
+  procedure anyone in the tenant can edit by talking to the assistant; a tenant _memory_ is a fact
+  everyone in the tenant is then answered from, with no document to inspect and nobody aware it was
+  written. The `remember` tool enforces it by shape as well as by check: **it has no scope parameter**,
+  so there is no request rule three has to refuse. Promotion to a wider scope is a human act in the
+  host's own console.
+
+  **Forgetting is part of the feature, not a console someone might build.** `GET /agent/memories`
+  returns everything this actor can reach — scope-resolved, with origins and overrides, and
+  deliberately ignoring `maxMemories`, because that ceiling is a budget on what a _turn_ carries and
+  applying it to the read-back would hide a belief the assistant is one write away from acting on
+  again. `DELETE /agent/memories/:id` deletes one held at the actor's own scope; an id the actor cannot
+  see is answered as missing rather than refused, so the endpoint cannot be used to discover what the
+  assistant believes about other people. A memory whose source conversation has since been truncated
+  away is **kept**: it is shown with an origin that no longer resolves, because a history ceiling is a
+  cost control and must never double as an eraser.
+
+  **Recall over a transcript is a different feature and is not folded in here.** Searching what was
+  _said_ earlier is retrieval over messages, and `Retriever`/`Reranker`/`EmbeddingProvider` already
+  exist for that. Memory is the set of conclusions that ride every turn. Selecting _which_ of them ride
+  a given turn, once there are more than the block holds, is `MemoryProvider.search` — see the
+  relevance-selection changeset.
+
+  **Budget.** The block is `maxMemories` lines (default 20), each capped at `maxFactChars` (default 240) when it is **written** — so the ceiling is a product of two numbers an operator set, rather than
+  however much the model felt like writing down, and the push-back lands at the moment the model is
+  writing an essay instead of a fact. Unlike a skill, a memory has no body/catalog split: a fact that
+  cannot be stated in a line is a document, and documents are retrieval's job. Two new diagnostics
+  events — `aviary:agent:memory.resolved` (scopes, offered, omitted, `promptChars`) and
+  `aviary:agent:memory.written` (scope, chars) — so a turn whose input tokens jump can be attributed by
+  name, and an operator can watch the agent's own write volume without reading anyone's rows.
+
+  **Checkpoints.** One new position, `memory:digest`, holding the WHOLE digest — the scopes the
+  resolver returned and the entries that survived precedence and the ceiling — placed after
+  `persist:run:start` so `promptHash` keeps identifying a prompt version rather than a person. It is
+  both what the block is rendered from and what a later `remember` call is authorized against, so a
+  replay on a pod that would resolve the actor differently rebuilds the identical prompt and cannot
+  widen what the turn may write. A `remember` call spends a plain read tool's positions
+  (`persist:toolcall:<id>`, `tool:<id>`, `persist:toolexec:<id>`) and the write happens _inside_
+  `tool:<id>`, which is what makes it idempotent under replay: a resumed run reads the stored record
+  back instead of storing a second copy of a fact the model decided once. The digest is resolved once
+  per run, so a memory written mid-turn reaches the model as that call's tool result rather than by
+  rewriting a system block no journal position covers. `ToolKind` gains a sixth member, `'memory'`,
+  carried by no `ToolSpec` — the tool is never registered and its branch is settled inside the
+  already-journaled `persist:toolcall` checkpoint, the same way `ask` and `skill` are. Configure no
+  memory and a turn's checkpoint sequence is byte-identical to one that never had the option.
+
+- Updated dependencies [[`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4), [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4)]:
+  - @dudousxd/nestjs-agent-core@0.13.0
+
 ## 0.8.2
 
 ### Patch Changes
