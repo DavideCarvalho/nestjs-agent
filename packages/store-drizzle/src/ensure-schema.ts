@@ -93,7 +93,8 @@ const statements: string[] = [
     retries INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,
     settled_at INTEGER,
-    prompt_hash TEXT
+    prompt_hash TEXT,
+    parent_run_id TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS agent_run_started_idx
     ON agent_run (started_at)`,
@@ -124,6 +125,11 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_thread',
     column: 'default_agent',
     ddl: 'ALTER TABLE agent_thread ADD COLUMN default_agent TEXT',
+  },
+  {
+    table: 'agent_run',
+    column: 'parent_run_id',
+    ddl: 'ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT',
   },
 ];
 

@@ -4,6 +4,11 @@ import type { PayloadOf } from '@dudousxd/nestjs-diagnostics';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { isControlFlowSignal } from './control-flow.js';
 import {
+  type DetachedDelegationReceipt,
+  detachedDelivered,
+  detachedStarted,
+} from './delegation.js';
+import {
   type AgentSpanEvent,
   publishAgentDelegated,
   publishAgentMemoryResolved,
@@ -390,6 +395,25 @@ export interface AgentLoopHooks {
    * support (durable → child workflow, inline → nested loop). Exposed to tools as `ctx.runAgent`.
    */
   runAgent?(agentName: string, task: string): Promise<{ text: string }>;
+  /**
+   * Start another named agent and return its run id WITHOUT waiting for it, so the calling turn can
+   * finish while the delegate is still working. The durable runner maps this to `ctx.startChild`
+   * (checkpointed as `spawn:<id>`; no suspend, unlike the `ctx.child` behind {@link runAgent}); the
+   * inline runner to a nested loop nobody awaits.
+   *
+   * `toolCallId` is the delegation's own call, which the started run carries as its delivery
+   * address: it posts its answer back into the calling thread against that row.
+   *
+   * Absent -> a delegation the journal declares detached is AWAITED instead. The loop writes the
+   * same checkpoint names either way (see {@link delegateToolCall}), so a runner that cannot detach
+   * still answers the user; only the runner's own positions differ, and a given runner always makes
+   * the same choice for the same call.
+   */
+  startAgent?(args: {
+    agentName: string;
+    task: string;
+    toolCallId: string;
+  }): Promise<{ runId: string }>;
   /**
    * Checkpoint wrapper. Inline = call fn directly; durable = ctx.localStep(name, fn) — the
    * in-process checkpointed primitive (`name` is a checkpoint identity, not a worker group).
@@ -1256,6 +1280,8 @@ interface ClaimedToolCall {
   resolvedCall: ToolCallRequest;
   toolType: ToolKind;
   targetAgent?: string;
+  /** For an `agent` call — whether the journal says this delegation runs detached. */
+  detached?: boolean;
   ctx: AiToolCtx;
 }
 
@@ -1303,8 +1329,11 @@ async function claimToolCall(
     return {
       kind,
       ...(spec?.targetAgent !== undefined ? { targetAgent: spec.targetAgent } : {}),
+      // Only an `agent` spec ever carries this, and only when the author declared it — so a
+      // deployment with no detached edge writes the same bytes here it always has.
+      ...(spec?.detached === true ? { detached: true } : {}),
     };
-  })) as { kind?: ToolKind; targetAgent?: string } | undefined;
+  })) as { kind?: ToolKind; targetAgent?: string; detached?: boolean } | undefined;
   const toolType: ToolKind = persisted?.kind ?? call.kind ?? 'read';
   return {
     call,
@@ -1313,6 +1342,7 @@ async function claimToolCall(
     resolvedCall: call.kind === toolType ? call : { ...call, kind: toolType },
     toolType,
     ...(persisted?.targetAgent !== undefined ? { targetAgent: persisted.targetAgent } : {}),
+    ...(persisted?.detached === true ? { detached: true } : {}),
     ctx: toolContext(deps, input, hooks),
   };
 }
@@ -1601,7 +1631,17 @@ async function recordToolOutcome(
   return { id: call.id, name: call.name, output: outcome.output };
 }
 
-/** Delegate to another agent (an `agent`-kind call) and record its answer as this call's output. */
+/**
+ * Delegate to another agent (an `agent`-kind call) and record what came back as this call's output:
+ * the delegate's ANSWER when the turn waited for it, a {@link DetachedDelegationReceipt} when it did
+ * not.
+ *
+ * The two branches write the same checkpoint, under the same name, at the same position — every
+ * difference between them lives in the RUNNER's own positions (`ctx.child` suspends and joins;
+ * `ctx.startChild` records a `spawn:` and moves on). That is deliberate: which branch a call takes
+ * is decided by `persist:toolcall`, whose answer comes out of the journal, so the loop's sequence
+ * cannot depend on a registry the replaying process happens to hold.
+ */
 async function delegateToolCall(
   turn: ToolTurnContext,
   claimed: ClaimedToolCall,
@@ -1609,16 +1649,22 @@ async function delegateToolCall(
   const { deps, input, hooks } = turn;
   const { call, targetAgent = call.name } = claimed;
   const task = extractTask(call.input);
-  // Cap nesting so a mis-wired delegation cycle can't spawn runs without bound.
+  // Cap nesting so a mis-wired delegation cycle can't spawn runs without bound. A detached hop
+  // counts like any other: the cycle it guards against is cheaper to start, not less unbounded.
   const overDepth = (input.delegationDepth ?? 0) >= MAX_DELEGATION_DEPTH;
+  const start = claimed.detached === true && !overDepth ? hooks.startAgent : undefined;
   publishAgentDelegated({
     runId: hooks.runId,
     toAgent: targetAgent,
     ...(input.agentName !== undefined ? { fromAgent: input.agentName } : {}),
+    ...(start !== undefined ? { detached: true } : {}),
   });
-  let sub: { text: string };
+  let sub: { text: string } | DetachedDelegationReceipt;
   if (overDepth) {
     sub = { text: `(delegation depth limit of ${MAX_DELEGATION_DEPTH} reached)` };
+  } else if (start !== undefined) {
+    const started = await start({ agentName: targetAgent, task, toolCallId: call.id });
+    sub = detachedStarted({ agent: targetAgent, runId: started.runId });
   } else if (hooks.runAgent) {
     sub = await hooks.runAgent(targetAgent, task);
   } else {
@@ -1896,6 +1942,7 @@ export async function runAgentLoop<TOutput = unknown>(
       threadId: input.threadId,
       actorRef: input.actor.id,
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.parentRunId !== undefined ? { parentRunId: input.parentRunId } : {}),
       promptHash,
     });
   });
@@ -2486,6 +2533,38 @@ export async function runAgentLoop<TOutput = unknown>(
     await hooks.step('persist:title', () =>
       deps.store.setTitle(input.threadId, deriveTitle(input.userText)),
     );
+  }
+
+  const delivery = input.deliverTo;
+  if (delivery !== undefined) {
+    // A detached run's answer has nowhere to go but a message of its own: the turn that delegated it
+    // ended without it, so there is no tool result left to fill and no live stream to write into.
+    // Stamped with THIS run and agent, which is how a reader tells "the research agent finished"
+    // from the assistant's next reply.
+    //
+    // The position exists only for a run carrying a delivery address, and only a detached
+    // delegation's own child run carries one — so the sequence of every other turn is untouched.
+    await hooks.step('deliver:detached', async () => {
+      if ((await deps.store.getThread(delivery.threadId)) === null) {
+        // The conversation was deleted while this ran. The work cannot be un-run, but delivering
+        // into a thread nobody kept would resurrect it, and the tool-call row it would settle went
+        // with it.
+        return;
+      }
+      const agent = input.agentName ?? 'default';
+      await deps.store.appendMessage({
+        threadId: delivery.threadId,
+        role: 'assistant',
+        content: lastText,
+        agentName: agent,
+        runId: hooks.runId,
+      });
+      await deps.store.updateToolCall({
+        toolCallId: delivery.toolCallId,
+        status: 'executed',
+        output: detachedDelivered({ agent, runId: hooks.runId, text: lastText }),
+      });
+    });
   }
 
   // Normal completion only. The loop never records 'failed' — it doesn't catch its own crash;

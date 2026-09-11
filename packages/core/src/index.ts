@@ -31,6 +31,16 @@ export { AgentRegistry } from './agent-registry.js';
 export { isReplayIntegrityError } from './replay-integrity.js';
 export { isControlFlowSignal } from './control-flow.js';
 export {
+  normalizeDelegation,
+  detachedStarted,
+  detachedDelivered,
+  detachedUnsettled,
+  settleUnsettledDelegation,
+  type ResolvedDelegation,
+  type DetachedDelegationReceipt,
+  type DetachedDelegationOutcome,
+} from './delegation.js';
+export {
   ToolRegistry,
   DefaultRolesPolicy,
   ToolDisabledError,

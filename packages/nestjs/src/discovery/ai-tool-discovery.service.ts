@@ -6,6 +6,7 @@ import {
   type AgentRegistry,
   type ToolHandler,
   type ToolRegistry,
+  normalizeDelegation,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService } from '@nestjs/core';
@@ -89,7 +90,8 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     // Synthesize an `agent`-kind delegate tool for each agent->agent edge declared via `delegatesTo`.
     let delegates = 0;
     for (const definition of this.agents.list()) {
-      for (const target of definition.delegatesTo ?? []) {
+      for (const edge of definition.delegatesTo ?? []) {
+        const { agent: target, detached } = normalizeDelegation(edge);
         const targetDefinition = this.agents.get(target);
         // A dangling handoff target (a `@Agent({ handoff })` class that isn't itself an `@Agent`)
         // would otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
@@ -99,7 +101,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
             `Agent "${definition.name}" hands off to "${target}", which is not a registered @Agent. Declare it as an @Agent provider or fix the reference.`,
           );
         }
-        const name = delegateToolName(target);
+        const name = delegateToolName({ target, detached });
         if (this.registry.has(name)) {
           continue;
         }
@@ -109,12 +111,19 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           typeof targetDefinition.systemPrompt === 'string'
             ? ` It is: ${targetDefinition.systemPrompt}`
             : '';
+        // A detached edge's description is the model's only warning that this call hands back a
+        // receipt: a tool advertised as returning an answer, which then returns something else, is
+        // a model that reports an answer it was never given.
+        const description = detached
+          ? `Start the "${target}" agent working on a task in the BACKGROUND. Returns immediately with a receipt, NOT an answer — the answer is delivered to this conversation as a separate message later. Use it for work the user does not need to sit and wait for.${targetBlurb}`
+          : `Delegate a task to the "${target}" agent and get its answer.${targetBlurb}`;
         this.registry.register(
           {
             name,
             kind: 'agent',
             targetAgent: target,
-            description: `Delegate a task to the "${target}" agent and get its answer.${targetBlurb}`,
+            ...(detached ? { detached: true } : {}),
+            description,
             inputSchema: z.object({ task: z.string() }),
           },
           // Loop-handled (kind 'agent'); the handler is never called.

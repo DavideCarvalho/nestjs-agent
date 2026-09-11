@@ -86,6 +86,15 @@ export interface RecordRunStartInput {
   threadId: string;
   actorRef: string;
   agentName?: string;
+  /**
+   * The run that started this one, for a delegation's child run. The parent->child edge exists in
+   * the durable runtime's own journal, but only there: a governance surface reading run rows alone
+   * cannot roll a delegation's cost up to the turn that asked for it, and a DETACHED child outlives
+   * its parent's turn entirely, so nothing in the transcript pairs them either.
+   *
+   * Optional, and a store that persists nothing for it still works — it loses the tree, not the run.
+   */
+  parentRunId?: string;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt — identifies the prompt VERSION. */
   promptHash?: string;
 }

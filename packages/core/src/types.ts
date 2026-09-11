@@ -14,6 +14,24 @@ export interface Actor {
 export type ToolKind = 'read' | 'action' | 'agent' | 'ask' | 'skill' | 'memory';
 
 /**
+ * One agent->agent edge on {@link AgentDefinition.delegatesTo}. A bare name is the awaited
+ * delegation that has always existed; the object form is how an author says this one runs in the
+ * background.
+ */
+export type AgentDelegation = string | { agent: string; detached?: boolean };
+
+/**
+ * Where a detached sub-agent run posts its answer: the thread that delegated it, and the
+ * `agent`-kind tool call that started it. Carried on the child run's own {@link AgentRunInput},
+ * because by the time the child finishes the parent turn is over and nothing is holding the
+ * address.
+ */
+export interface DetachedDelivery {
+  threadId: string;
+  toolCallId: string;
+}
+
+/**
  * Declared shape of a tool.
  *  - `read`   auto-executes.
  *  - `action` never auto-executes — requires HITL approval.
@@ -44,6 +62,20 @@ export interface ToolSpec {
   inputSchema: StandardSchemaV1;
   /** For `kind: 'agent'` — the name of the agent to delegate to. */
   targetAgent?: string;
+  /**
+   * For `kind: 'agent'` — start the delegation and let the calling turn END, instead of holding it
+   * open until the delegate answers. The call's result is a {@link DetachedDelegationReceipt}, and
+   * the answer arrives later as its own message in the same thread (see
+   * {@link AgentRunInput.deliverTo}).
+   *
+   * Authored per EDGE, never chosen by the model: a model that can decide to detach can decide to
+   * detach the one thing the user is sitting there waiting for, and it has no way to know which that
+   * is. The person wiring `A -> B` does.
+   *
+   * Settled into the call's `persist:toolcall` checkpoint alongside `targetAgent`, so every replay
+   * reads the branch back rather than re-deciding it against a registry that may have changed.
+   */
+  detached?: boolean;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
@@ -262,6 +294,18 @@ export interface AgentRunInput {
    */
   sinkRunId?: string;
   /**
+   * Set on a DETACHED sub-agent run: the thread and tool call this run answers into when it
+   * finishes. Its presence is also what makes a run detached from the inside — it has no ancestor
+   * sink to stream into, so nothing else distinguishes it from a top-level turn.
+   */
+  deliverTo?: DetachedDelivery;
+  /**
+   * The run that started this one (a delegation's parent). Recorded with the run so a governance
+   * surface can roll a delegation's cost up to the turn that asked for it; a detached child is
+   * otherwise a row with nothing pointing at it.
+   */
+  parentRunId?: string;
+  /**
    * Re-run the last exchange instead of adding a new message: the loop truncates everything after
    * the thread's last user message and re-answers it (no `userText` is appended). Used by a
    * "regenerate" button. `userText` is ignored when set.
@@ -284,8 +328,12 @@ export interface AgentDefinition {
   systemPrompt?: string | PromptBuilder;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
   tools?: string[];
-  /** Names of other agents this agent may hand off to (auto-registered as `agent`-kind tools). */
-  delegatesTo?: string[];
+  /**
+   * Other agents this agent may hand off to (auto-registered as `agent`-kind tools). A bare name
+   * is the awaited form; `{ agent, detached: true }` starts the delegate and lets this agent's turn
+   * finish without its answer — see {@link ToolSpec.detached}.
+   */
+  delegatesTo?: AgentDelegation[];
   modelId?: string;
   maxSteps?: number;
   /**

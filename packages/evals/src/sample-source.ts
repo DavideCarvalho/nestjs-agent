@@ -8,7 +8,7 @@ export interface RunSampleQuery {
   fromDay?: string;
   toDay?: string;
   agentName?: string;
-  /** `'running'` | `'completed'` | `'failed'`. */
+  /** `'running'` | `'completed'` | `'failed'` | `'cancelled'`. */
   status?: string;
   threadId?: string;
 }

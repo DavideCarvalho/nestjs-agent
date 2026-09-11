@@ -67,13 +67,32 @@ export function storedThreadToUiMessages(messages: StoredMessage[]): UIMessage[]
   for (const message of messages) {
     const currentTurn = turns.at(-1);
     const previousRow = currentTurn?.at(-1);
-    if (message.role === 'assistant' && previousRow?.role === 'assistant' && currentTurn) {
+    if (
+      message.role === 'assistant' &&
+      previousRow?.role === 'assistant' &&
+      currentTurn &&
+      sameRun(previousRow, message)
+    ) {
       currentTurn.push(message);
     } else {
       turns.push([message]);
     }
   }
   return turns.map(mergeTurn);
+}
+
+/**
+ * Two assistant rows belong to the same TURN, not merely to the same side of the conversation.
+ * Consecutive is the right test only while one run at a time writes to a thread: a detached
+ * sub-agent posts its answer whenever it lands, so a thread whose last row is an assistant reply can
+ * gain another from a different run entirely — merged, that reads as the assistant having said both.
+ *
+ * Rows that carry no `runId` (written before it was recorded, or by a host outside a run) merge as
+ * they always did: there is nothing to tell them apart with, and splitting on absence would
+ * un-merge every old thread.
+ */
+function sameRun(previous: StoredMessage, next: StoredMessage): boolean {
+  return previous.runId === undefined || next.runId === undefined || previous.runId === next.runId;
 }
 
 function mergeTurn(rows: StoredMessage[]): UIMessage {

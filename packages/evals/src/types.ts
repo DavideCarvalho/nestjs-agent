@@ -29,7 +29,11 @@ export interface ScorableRun {
   threadId: string;
   actorRef: string;
   agentName: string | null;
-  /** `'running'` | `'completed'` | `'failed'`, as the store recorded it. */
+  /**
+   * `'running'` | `'completed'` | `'failed'` | `'cancelled'`, as the store recorded it. `cancelled`
+   * is a terminal of its own — a user pressing Stop — so a scorer that reads this must not fold it
+   * into the failure count.
+   */
   status: string;
   /** The user text that opened the turn; `''` when the transcript could not supply one. */
   input: string;

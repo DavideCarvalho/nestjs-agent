@@ -33,8 +33,9 @@ export class RunCompletionScorer implements Scorer {
     };
 
     // A run still in flight has no outcome to judge — scoring it would freeze a verdict the run is
-    // about to contradict.
-    if (run.status === 'running') {
+    // about to contradict. A cancelled one has no outcome either: the user stopped it, so whatever
+    // it had written by then is not an answer the agent chose to give.
+    if (run.status === 'running' || run.status === 'cancelled') {
       return null;
     }
     if (run.status === 'failed') {

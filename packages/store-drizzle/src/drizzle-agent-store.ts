@@ -2,6 +2,7 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  RecordRunStartInput,
   RecordToolCallInput,
   RecordUsageInput,
   StoredMessage,
@@ -23,6 +24,37 @@ import {
   agentTokenUsage,
   agentToolCall,
 } from './schema.js';
+
+/** Which thread, and how many of its newest messages, {@link DrizzleAgentStore.loadThreadForTurn} reads. */
+export interface ThreadTurnQuery {
+  threadId: string;
+  /** Omitted reads every message; `0` reads none. */
+  messageLimit?: number;
+}
+
+/** What a turn reads off a thread — a bounded window, not the transcript. */
+export interface ThreadTurnPage {
+  title: string;
+  defaultAgent: string | null;
+  /** Whether the THREAD has ever been answered, not whether {@link messages} contains an answer. */
+  hasAssistantMessage: boolean;
+  /** Oldest first, carrying only the fields a model turn reads. */
+  messages: StoredMessage[];
+}
+
+/** The message columns a model turn reads. `usage`, `follow_ups` and `run_id` are nobody's business here. */
+const TURN_MESSAGE_COLUMNS = {
+  id: agentMessage.id,
+  role: agentMessage.role,
+  content: agentMessage.content,
+  agentName: agentMessage.agentName,
+  toolCalls: agentMessage.toolCalls,
+  toolResults: agentMessage.toolResults,
+  attachments: agentMessage.attachments,
+  createdAt: agentMessage.createdAt,
+};
+
+type TurnMessageRow = { [K in keyof typeof TURN_MESSAGE_COLUMNS]: AgentMessageRow[K] };
 
 /**
  * {@link AgentStore} backed by Drizzle ORM — a second adapter alongside the MikroORM one, proving
@@ -70,6 +102,61 @@ export class DrizzleAgentStore implements AgentStore {
       messages: messages.map((message) => this.toStoredMessage(message)),
       ...(thread.activeStreamId != null ? { activeStreamId: thread.activeStreamId } : {}),
     };
+  }
+
+  /**
+   * The window a turn reads off a thread: its newest `messageLimit` messages (oldest first), the
+   * title, the default agent, and whether the thread has EVER been answered.
+   *
+   * {@link getThread} is the wrong read for a turn. It materializes the transcript — every message,
+   * every attachment, every tool output the thread ever recorded — and the run then journals what it
+   * loaded, so a long thread pays for its whole history on every turn and again on every replay.
+   *
+   * `hasAssistantMessage` is answered over the WHOLE thread, not the returned page: it answers "has
+   * this conversation been answered before?", and a thread whose window happens to hold only the
+   * user's last questions has still been answered. `null` when the thread is unknown or
+   * soft-deleted, same as {@link getThread}.
+   */
+  async loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null> {
+    const [thread] = await this.db
+      .select({ title: agentThread.title, defaultAgent: agentThread.defaultAgent })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, query.threadId), isNull(agentThread.deletedAt)));
+    if (thread === undefined) {
+      return null;
+    }
+    const messages = await this.loadTurnWindow(query.threadId, query.messageLimit);
+    const [answered] = await this.db
+      .select({ id: agentMessage.id })
+      .from(agentMessage)
+      .where(and(eq(agentMessage.threadId, query.threadId), eq(agentMessage.role, 'assistant')))
+      .limit(1);
+    return {
+      title: thread.title,
+      defaultAgent: thread.defaultAgent,
+      hasAssistantMessage: answered !== undefined,
+      messages,
+    };
+  }
+
+  /**
+   * The newest `limit` messages of a thread, oldest first, projected to the columns a model turn
+   * reads. Read newest-first so the LIMIT is the database's job, then reversed for the prompt.
+   */
+  private async loadTurnWindow(
+    threadId: string,
+    limit: number | undefined,
+  ): Promise<StoredMessage[]> {
+    if (limit !== undefined && limit <= 0) {
+      return [];
+    }
+    const window = this.db
+      .select(TURN_MESSAGE_COLUMNS)
+      .from(agentMessage)
+      .where(eq(agentMessage.threadId, threadId))
+      .orderBy(desc(agentMessage.createdAt), desc(agentMessage.id));
+    const rows: TurnMessageRow[] = limit === undefined ? await window : await window.limit(limit);
+    return rows.reverse().map((row) => this.toStoredMessage(row));
   }
 
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
@@ -246,14 +333,13 @@ export class DrizzleAgentStore implements AgentStore {
     return thread?.defaultAgent ?? null;
   }
 
-  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
-  async recordRunStart(run: {
-    runId: string;
-    threadId: string;
-    actorRef: string;
-    agentName?: string;
-    promptHash?: string;
-  }): Promise<void> {
+  /**
+   * Persist the start of a run (turn). Replay-safe: called under a durable localStep.
+   *
+   * Takes the SPI's own {@link RecordRunStartInput} rather than a hand-copied shape: a field added
+   * to the input is otherwise accepted and dropped, silently, by every adapter that re-declares it.
+   */
+  async recordRunStart(run: RecordRunStartInput): Promise<void> {
     const runRow: AgentRunRow = {
       id: run.runId,
       threadId: run.threadId,
@@ -267,6 +353,7 @@ export class DrizzleAgentStore implements AgentStore {
       startedAt: new Date(),
       settledAt: null,
       promptHash: run.promptHash ?? null,
+      parentRunId: run.parentRunId ?? null,
     };
     await this.db.insert(agentRun).values(runRow);
   }
@@ -478,7 +565,7 @@ export class DrizzleAgentStore implements AgentStore {
     };
   }
 
-  private toStoredMessage(message: AgentMessageRow): StoredMessage {
+  private toStoredMessage(message: TurnMessageRow & Partial<AgentMessageRow>): StoredMessage {
     return {
       id: message.id,
       role: message.role,

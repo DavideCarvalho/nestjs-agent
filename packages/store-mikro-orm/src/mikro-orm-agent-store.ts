@@ -2,6 +2,7 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  RecordRunStartInput,
   RecordToolCallInput,
   RecordUsageInput,
   StoredMessage,
@@ -17,6 +18,46 @@ import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
+
+/** Which thread, and how many of its newest messages, {@link MikroOrmAgentStore.loadThreadForTurn} reads. */
+export interface ThreadTurnQuery {
+  threadId: string;
+  /** Omitted reads every message; `0` reads none. */
+  messageLimit?: number;
+}
+
+/** What a turn reads off a thread — a bounded window, not the transcript. */
+export interface ThreadTurnPage {
+  title: string;
+  defaultAgent: string | null;
+  /** Whether the THREAD has ever been answered, not whether {@link messages} contains an answer. */
+  hasAssistantMessage: boolean;
+  /** Oldest first, carrying only the fields a model turn reads. */
+  messages: StoredMessage[];
+}
+
+/** The message columns a model turn reads. `usage`, `follow_ups` and `run_id` are nobody's business here. */
+const TURN_MESSAGE_FIELDS = [
+  'role',
+  'content',
+  'agentName',
+  'toolCalls',
+  'toolResults',
+  'attachments',
+  'createdAt',
+] as const;
+
+/** The columns present on EVERY message row this store reads, projected or not. */
+type TurnMessageKey = 'id' | 'role' | 'content' | 'createdAt';
+
+/**
+ * A message row the mappers below accept: the columns every read of the table selects, and nothing
+ * else required. A partial load carrying only {@link TURN_MESSAGE_FIELDS} satisfies it, and so does
+ * a fully loaded {@link AgentMessage} — one mapper serves the window read and the transcript read.
+ */
+type TurnMessage = Pick<AgentMessage, TurnMessageKey> & {
+  [K in Exclude<keyof AgentMessage, TurnMessageKey>]?: AgentMessage[K] | undefined;
+};
 
 /**
  * {@link AgentStore} backed by MikroORM. A POJO receiving an {@link EntityManager}; each
@@ -71,6 +112,66 @@ export class MikroOrmAgentStore implements AgentStore {
   }
 
   /**
+   * The window a turn reads off a thread: its newest `messageLimit` messages (oldest first), the
+   * title, the default agent, and whether the thread has EVER been answered.
+   *
+   * {@link getThread} is the wrong read for a turn. It materializes the transcript — every message,
+   * every attachment, every tool output the thread ever recorded — and the run then journals what it
+   * loaded, so a long thread pays for its whole history on every turn and again on every replay.
+   *
+   * `hasAssistantMessage` is counted over the WHOLE thread, not the returned page: it answers "has
+   * this conversation been answered before?", and a thread whose window happens to hold only the
+   * user's last questions has still been answered. `null` when the thread is unknown or
+   * soft-deleted, same as {@link getThread}.
+   */
+  async loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: query.threadId, deletedAt: null },
+      { fields: ['title', 'defaultAgent'] },
+    );
+    if (thread === null) {
+      return null;
+    }
+    const messages = await this.loadTurnWindow(em, query.threadId, query.messageLimit);
+    const resultsByMessage = await this.loadToolResults(em, messages);
+    return {
+      title: thread.title,
+      defaultAgent: thread.defaultAgent ?? null,
+      hasAssistantMessage:
+        (await em.count(AgentMessage, { thread: query.threadId, role: 'assistant' })) > 0,
+      messages: messages.map((message) =>
+        this.toStoredMessage(message, resultsByMessage.get(message.id)),
+      ),
+    };
+  }
+
+  /**
+   * The newest `limit` messages of a thread, oldest first, projected to the columns a model turn
+   * reads. Read newest-first so the LIMIT is the database's job, then reversed for the prompt.
+   */
+  private async loadTurnWindow(
+    em: EntityManager,
+    threadId: string,
+    limit: number | undefined,
+  ): Promise<TurnMessage[]> {
+    if (limit !== undefined && limit <= 0) {
+      return [];
+    }
+    const messages = await em.find(
+      AgentMessage,
+      { thread: threadId },
+      {
+        fields: TURN_MESSAGE_FIELDS,
+        orderBy: { createdAt: 'desc', id: 'desc' },
+        ...(limit !== undefined ? { limit } : {}),
+      },
+    );
+    return messages.reverse();
+  }
+
+  /**
    * Group the resolved tool calls of each message that has none of its own into `ToolResult[]`,
    * keyed by message id. A call is "resolved" once it has run (executed/failed/rejected) — a
    * pending-approval call has no result yet and is skipped, so a mid-approval turn doesn't inject
@@ -78,18 +179,18 @@ export class MikroOrmAgentStore implements AgentStore {
    */
   private async loadToolResults(
     em: EntityManager,
-    messages: AgentMessage[],
+    messages: TurnMessage[],
   ): Promise<Map<string, ToolResult[]>> {
-    const withCalls = messages.filter(
-      (message) => message.toolCalls != null && message.toolResults == null,
-    );
+    const awaitingResults = messages
+      .filter((message) => message.toolCalls != null && message.toolResults == null)
+      .map((message) => message.id);
     const byMessage = new Map<string, ToolResult[]>();
-    if (withCalls.length === 0) {
+    if (awaitingResults.length === 0) {
       return byMessage;
     }
     const calls = await em.find(
       AgentToolCall,
-      { message: { $in: withCalls }, status: { $ne: 'pending_approval' } },
+      { message: { $in: awaitingResults }, status: { $ne: 'pending_approval' } },
       { orderBy: { createdAt: 'asc', id: 'asc' } },
     );
     for (const call of calls) {
@@ -315,14 +416,13 @@ export class MikroOrmAgentStore implements AgentStore {
     return thread?.activeStreamId ?? null;
   }
 
-  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
-  async recordRunStart(run: {
-    runId: string;
-    threadId: string;
-    actorRef: string;
-    agentName?: string;
-    promptHash?: string;
-  }): Promise<void> {
+  /**
+   * Persist the start of a run (turn). Replay-safe: called under a durable localStep.
+   *
+   * Takes the SPI's own {@link RecordRunStartInput} rather than a hand-copied shape: a field added
+   * to the input is otherwise accepted and dropped, silently, by every adapter that re-declares it.
+   */
+  async recordRunStart(run: RecordRunStartInput): Promise<void> {
     const em = this.em.fork();
     const runRow = em.create(AgentRun, {
       id: run.runId,
@@ -332,6 +432,7 @@ export class MikroOrmAgentStore implements AgentStore {
       retries: 0,
       startedAt: new Date(),
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+      ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
       ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
     });
     em.persist(runRow);
@@ -555,7 +656,7 @@ export class MikroOrmAgentStore implements AgentStore {
     };
   }
 
-  private toStoredMessage(message: AgentMessage, toolResults?: ToolResult[]): StoredMessage {
+  private toStoredMessage(message: TurnMessage, toolResults?: ToolResult[]): StoredMessage {
     // The message's own results are the answer — the same list every other adapter returns. The
     // rebuilt ones only ever arrive for a message that has none.
     const resolvedResults =

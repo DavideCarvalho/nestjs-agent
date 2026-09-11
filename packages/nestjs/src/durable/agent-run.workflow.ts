@@ -17,6 +17,7 @@ import {
   publishAgentRunFailed,
   runAgentLoop,
   settleAll,
+  settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
 import { RUN_GATEWAY, Workflow } from '@dudousxd/nestjs-durable';
 import {
@@ -88,6 +89,35 @@ export class AgentRunWorkflow {
     }
   }
 
+  /**
+   * Settle the delegation a DETACHED run was started for, when that run ends without an answer.
+   *
+   * The loop delivers its own success (`deliver:detached`) but cannot catch its own crash, and the
+   * runtime settles the run row without knowing anything delegated it. Left alone, the card in the
+   * calling conversation says "started" for ever — the one state a reader can neither wait on nor
+   * act on. A no-op for every other run: only a detached one carries a delivery address.
+   */
+  private async settleDetachedParent(
+    ctx: WorkflowCtx,
+    input: AgentRunInput,
+    outcome: { status: 'failed' | 'cancelled'; error?: string },
+  ): Promise<void> {
+    const delivery = input.deliverTo;
+    if (delivery === undefined) {
+      return;
+    }
+    await ctx.localStep('deliver:detached:unsettled', () =>
+      settleUnsettledDelegation({
+        store: this.store,
+        delivery,
+        agent: input.agentName ?? 'default',
+        runId: ctx.runId,
+        status: outcome.status,
+        ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+      }),
+    );
+  }
+
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<AgentLoopResult> {
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
@@ -107,9 +137,11 @@ export class AgentRunWorkflow {
     // config flag only, which is built from the same `AgentModuleOptions` on every surface of a
     // deployment, so every pod agrees on whether the position is spent at all.
     const dispatchSteps = this.dispatchedSteps && (await ctx.patched('agent:dispatched-steps'));
-    // A sub-agent run (one with an ancestor sink) marks its subthread as streaming THIS child run,
-    // so a human approving its action tool routes the signal back here (runForToolCall).
-    if (input.sinkRunId !== undefined) {
+    // A sub-agent run marks its subthread as streaming THIS child run, so a human approving its
+    // action tool routes the signal back here (runForToolCall) and a client may attach to its
+    // stream. Both shapes of sub-agent qualify: one forwarding into an ancestor's sink, and a
+    // DETACHED one, which has no ancestor sink and is recognized by its delivery address instead.
+    if (input.sinkRunId !== undefined || input.deliverTo !== undefined) {
       await ctx.localStep('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
     }
     const sinkRunId = input.sinkRunId ?? ctx.runId;
@@ -154,8 +186,37 @@ export class AgentRunWorkflow {
           userText: task,
           day,
           delegationDepth: (input.delegationDepth ?? 0) + 1,
+          parentRunId: ctx.runId,
           sinkRunId,
         });
+      },
+      // The same delegation, not awaited: `ctx.startChild` records a `spawn:<childRunId>` at this
+      // position and returns, so THIS turn ends while the child is still working. Two things the
+      // awaited form does are deliberately left off:
+      //   - no `sinkRunId`. A detached run owns its own stream. Forwarding it into the turn that
+      //     started it would write tokens, and a pending action-tool frame, into a stream whose
+      //     reader has already seen `done` — and would put the child's approval card in whatever
+      //     turn happened to be open. Its approval goes to the pending-approvals surface instead,
+      //     which it reaches for free: the call is persisted `pending_approval` against the child's
+      //     OWN runId, and that is what `runForToolCall` answers with.
+      //   - `deliverTo` instead. The parent's tool result is a receipt, so the answer needs an
+      //     address of its own, and by the time it exists nobody is holding one.
+      startAgent: async ({ agentName, task, toolCallId }) => {
+        const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
+          const thread = await this.store.createThread({ actor: input.actor, transient: true });
+          return thread.id;
+        });
+        const childRunId = await ctx.startChild(AgentRunWorkflow, {
+          agentName,
+          threadId: subThreadId,
+          actor: input.actor,
+          userText: task,
+          day,
+          delegationDepth: (input.delegationDepth ?? 0) + 1,
+          parentRunId: ctx.runId,
+          deliverTo: { threadId: input.threadId, toolCallId },
+        });
+        return { runId: childRunId };
       },
       // Routes the two long steps through AgentRunSteps as engine-dispatched `ctx.step`s instead of
       // `ctx.localStep`s, so a turn isn't pinned to this workflow worker for the model call or a tool
@@ -213,6 +274,7 @@ export class AgentRunWorkflow {
       // `cancelled` rather than completed.
       if (error instanceof RunCancelledError) {
         await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+        await this.settleDetachedParent(ctx, input, { status: 'cancelled' });
         throw error;
       }
       // A replay-integrity failure gets the sink half of this path but NOT the checkpoint half. The
@@ -246,6 +308,7 @@ export class AgentRunWorkflow {
           }) ?? Promise.resolve(),
       );
       await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      await this.settleDetachedParent(ctx, input, { status: 'failed', error: message });
       // Reuse the run's own sink resolution: a top-level run fails the watched stream; a child run's
       // writer no-ops fail, deferring the surfaced error to the ancestor whose run also unwinds.
       const writer = await hooks.openSink();

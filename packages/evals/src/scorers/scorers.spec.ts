@@ -52,6 +52,13 @@ describe('RunCompletionScorer', () => {
     expect(result?.reason).toContain('quota_exceeded');
   });
 
+  it('has no verdict on a run the user cancelled', async () => {
+    // Stop is the control working. Judging the answer a run was never allowed to finish writes a 0
+    // into the quality score for something the agent did right.
+    expect(await scorer.score(run({ status: 'cancelled', output: '' }))).toBeNull();
+    expect(await scorer.score(run({ status: 'cancelled', output: 'half an ans' }))).toBeNull();
+  });
+
   it('scores a completed run that answered nothing 0 — what the governance success rate calls a success', async () => {
     const result = await scorer.score(run({ output: '   ' }));
 

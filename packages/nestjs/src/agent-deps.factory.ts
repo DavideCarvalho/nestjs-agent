@@ -24,6 +24,7 @@ import {
   type SkillsConfig,
   type TokenStreamSink,
   ToolRegistry,
+  normalizeDelegation,
   summarizeWithModel,
   windowHistory,
 } from '@dudousxd/nestjs-agent-core';
@@ -32,9 +33,17 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 
-/** The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`. */
-export function delegateToolName(target: string): string {
-  return `ask_${target.replace(/[^a-zA-Z0-9]+/g, '_')}`;
+/**
+ * The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`.
+ *
+ * A detached edge gets its own verb — `start_research` next to `ask_research` — for two reasons.
+ * One agent can be both awaited AND backgrounded by the same orchestrator, and one name cannot
+ * carry both. And the name is the part of a tool the model reads first: `ask` promises an answer,
+ * `start` does not.
+ */
+export function delegateToolName(args: { target: string; detached?: boolean }): string {
+  const slug = args.target.replace(/[^a-zA-Z0-9]+/g, '_');
+  return args.detached === true ? `start_${slug}` : `ask_${slug}`;
 }
 
 /** Builds the per-agent loop deps. The single-agent case is just the one registered `@Agent`. */
@@ -94,7 +103,10 @@ export class AgentDepsFactory {
     if (definition === undefined) {
       return undefined;
     }
-    const delegated = (definition.delegatesTo ?? []).map(delegateToolName);
+    const delegated = (definition.delegatesTo ?? []).map((edge) => {
+      const { agent, detached } = normalizeDelegation(edge);
+      return delegateToolName({ target: agent, detached });
+    });
     if (definition.tools === undefined && delegated.length === 0) {
       return undefined; // no restriction
     }

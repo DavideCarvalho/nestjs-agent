@@ -3,6 +3,7 @@ export {
   type AgentChatTransportOptions,
   type AgentStreamMeta,
 } from './agent-chat-transport.js';
+export { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 export {
   AgentClient,
   type AgentClientOptions,
@@ -105,4 +106,8 @@ export {
   useTranscriptItem,
   type UseTranscriptItemOptions,
 } from './transcript/index.js';
-export { useAgentChat, type UseAgentChatOptions } from './use-agent-chat.js';
+export {
+  type ChatBackground,
+  useAgentChat,
+  type UseAgentChatOptions,
+} from './use-agent-chat.js';

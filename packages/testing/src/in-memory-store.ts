@@ -2,6 +2,7 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  RecordRunStartInput,
   RecordToolCallInput,
   RecordUsageInput,
   StoredMessage,
@@ -130,6 +131,8 @@ interface RunRow {
   settledAt?: string;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; undefined for a pre-existing run. */
   promptHash?: string;
+  /** The run that delegated this one; undefined for a turn nobody delegated. */
+  parentRunId?: string;
 }
 
 /** A recorded run outcome exposed to the governance read-model (reliability surfaces). */
@@ -146,6 +149,12 @@ export interface GovernanceRunRow {
   startedAt: string;
   settledAt?: string;
   promptHash?: string;
+  /**
+   * The run that delegated this one; undefined for a turn nobody delegated. The edge exists in the
+   * durable journal too, but a reader of run rows has only this — and a DETACHED child outlives its
+   * parent's turn, so nothing in the transcript pairs them either.
+   */
+  parentRunId?: string;
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
@@ -286,14 +295,13 @@ export class InMemoryAgentStore implements AgentStore {
     return this.threads.get(threadId)?.defaultAgent ?? null;
   }
 
-  /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
-  async recordRunStart(run: {
-    runId: string;
-    threadId: string;
-    actorRef: string;
-    agentName?: string;
-    promptHash?: string;
-  }): Promise<void> {
+  /**
+   * Persist the start of a run (turn). Replay-safe: called under a durable localStep.
+   *
+   * Takes the SPI's own {@link RecordRunStartInput} rather than a hand-copied shape: a field added
+   * to the input is otherwise accepted and dropped, silently, by every adapter that re-declares it.
+   */
+  async recordRunStart(run: RecordRunStartInput): Promise<void> {
     this.runs.set(run.runId, {
       runId: run.runId,
       threadId: run.threadId,
@@ -302,6 +310,7 @@ export class InMemoryAgentStore implements AgentStore {
       retries: 0,
       startedAt: this.now(),
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
+      ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
       ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
     });
   }
@@ -600,6 +609,7 @@ export class InMemoryAgentStore implements AgentStore {
       retries: row.retries,
       startedAt: row.startedAt,
       ...(row.agentName !== undefined ? { agentName: row.agentName } : {}),
+      ...(row.parentRunId !== undefined ? { parentRunId: row.parentRunId } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
       ...(row.errorCode !== undefined ? { errorCode: row.errorCode } : {}),
       ...(row.errorMessage !== undefined ? { errorMessage: row.errorMessage } : {}),

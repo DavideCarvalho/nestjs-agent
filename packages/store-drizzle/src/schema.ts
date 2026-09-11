@@ -8,6 +8,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { TablesRelationalConfig } from 'drizzle-orm';
 import {
   type BaseSQLiteDatabase,
   index,
@@ -178,6 +179,14 @@ export const agentRun = sqliteTable(
     settledAt: integer('settled_at', { mode: 'timestamp_ms' }),
     /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a pre-existing run. */
     promptHash: text('prompt_hash'),
+    /**
+     * The run that delegated this one; null for a turn nobody delegated. The durable runtime's
+     * journal holds the same edge, but only there — this column is what lets a reader of run ROWS
+     * build the delegation tree and roll a child's cost up to the turn that asked for it, including
+     * for a detached child, which outlives its parent's turn and so is paired by nothing in the
+     * transcript.
+     */
+    parentRunId: text('parent_run_id'),
   },
   (table) => [index('agent_run_started_idx').on(table.startedAt)],
 );
@@ -197,7 +206,12 @@ export const agentSchema = {
  * driver (better-sqlite3, libsql, D1, …) in either sync or async result mode; the host app owns
  * the connection and passes the `drizzle(...)` instance in.
  */
-export type AgentDrizzleDb = BaseSQLiteDatabase<'sync' | 'async', unknown>;
+export type AgentDrizzleDb = BaseSQLiteDatabase<
+  'sync' | 'async',
+  unknown,
+  Record<string, unknown>,
+  TablesRelationalConfig
+>;
 
 /** A persisted thread row as Drizzle selects it. */
 export type AgentThreadRow = typeof agentThread.$inferSelect;

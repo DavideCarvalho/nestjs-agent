@@ -28,8 +28,17 @@ export interface AgentOptions {
   maxSteps?: number;
   /** Allow-list of global tool names this agent may use. Omit → every tool its role allows. */
   tools?: string[];
-  /** Other `@Agent` classes this agent may hand off to (auto-exposed as handoff tools). */
-  handoff?: Type[];
+  /**
+   * Other `@Agent` classes this agent may hand off to (auto-exposed as handoff tools). A bare class
+   * is the delegation that has always existed: this agent's turn waits for the answer.
+   *
+   * `{ agent, detached: true }` is the other shape — the delegate is STARTED and this agent's turn
+   * ends without its answer, which arrives in the conversation later as its own message. Declared
+   * per edge, by the author, and never by the model: the same worker is worth waiting for in one
+   * orchestrator and worth backgrounding in another, and only the person wiring the edge knows
+   * which side of that the user is sitting on.
+   */
+  handoff?: (Type | { agent: Type; detached?: boolean })[];
   /**
    * How much of the thread this agent's turns carry, overriding `AgentModule.forRoot({ history })`.
    * `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit; `{ summarize: true }` folds

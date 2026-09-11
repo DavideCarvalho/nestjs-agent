@@ -30,6 +30,13 @@ export class AgentRun {
   settledAt?: Date | null;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a run recorded before this shipped. */
   promptHash?: string | null;
+  /**
+   * The run that delegated this one; null for a turn nobody delegated. The durable runtime's journal
+   * holds the same edge, but only there — this column is what lets a reader of run ROWS build the
+   * delegation tree and roll a child's cost up to the turn that asked for it, including for a
+   * detached child, which outlives its parent's turn and so is paired by nothing in the transcript.
+   */
+  parentRunId?: string | null;
   declare [EntityRepositoryType]?: AgentRunRepository;
 }
 
@@ -63,6 +70,7 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
       startedAt: { type: 'datetime', fieldName: 'started_at' },
       settledAt: { type: 'datetime', nullable: true, fieldName: 'settled_at' },
       promptHash: { type: 'string', nullable: true, fieldName: 'prompt_hash', ...str },
+      parentRunId: { type: 'string', nullable: true, fieldName: 'parent_run_id', ...str },
     },
   });
 }
