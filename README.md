@@ -41,6 +41,7 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
 | `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
+| `@dudousxd/nestjs-agent-mcp-server` | MCP server — expose this deployment's tools to an external Model Context Protocol client, under the same registry and roles policy a turn runs through |
 | `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + `useChatTranscript` (the headless transcript model) + styling-agnostic chat components; optional `/markdown` subpath |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |
@@ -584,6 +585,36 @@ AgentMcpModule.forRoot({
   silently take over one of yours.
 
 See [`packages/mcp`](./packages/mcp) for the full option surface.
+
+## Your tools to an MCP client (`-mcp-server`)
+
+The other direction: mount a Streamable HTTP MCP endpoint so an external client — Claude Desktop, an
+editor, a CI job — can reach the tools this deployment already has.
+
+```ts
+import { AgentMcpServerModule, BearerTokenActorResolver } from '@dudousxd/nestjs-agent-mcp-server';
+
+AgentMcpServerModule.forRoot({
+  name: 'Acme Agent',
+  version: '1.0.0',
+  auth: new BearerTokenActorResolver([
+    { token: process.env.MCP_CI_TOKEN ?? '', actor: { id: 'ci', roles: ['ANALYST'] } },
+  ]),
+});
+```
+
+- **The same registry and the same `RolesPolicy` as a turn.** `tools/list` is
+  `definitionsFor(actor, policy, allowedTools)` and `tools/call` is `invoke` — no second gate to
+  drift out of step with the loop's.
+- **An `action` tool is not callable by default.** It is HITL-gated in a turn, and there is nobody on
+  an MCP connection to approve it, so it is neither listed nor callable. `actions: 'execute'` is the
+  deployment saying out loud that this caller may act without approval.
+- **Identity is required and never invented.** `auth` is the same `ActorResolver` seam `AgentModule`
+  takes, with no default actor and no default role; a caller it cannot identify gets **401**, not 500.
+- **A session belongs to the actor that opened it** — a request authenticating as somebody else is
+  403, not served on it.
+
+See [`packages/mcp-server`](./packages/mcp-server) for the full option surface.
 
 ## Frontend (`-react`)
 

@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from 'node:http';
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
+import type { ActorResolver } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -48,6 +49,8 @@ class PurgeCacheTool {
 }
 
 let app: INestApplication | undefined;
+/** Connected clients, closed before the app is — an open SSE stream would hold `close()` open. */
+const clients: Client[] = [];
 
 const INITIALIZE = {
   jsonrpc: '2.0',
@@ -60,7 +63,7 @@ const INITIALIZE = {
   },
 };
 
-async function boot(): Promise<INestApplication> {
+async function boot(overrides: { auth?: ActorResolver } = {}): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AgentModule.forRoot({
@@ -73,10 +76,12 @@ async function boot(): Promise<INestApplication> {
       AgentMcpServerModule.forRoot({
         name: 'spec-server',
         version: '1.0.0',
-        auth: new BearerTokenActorResolver([
-          { token: ANALYST_KEY, actor: { id: 'u-analyst', roles: ['ANALYST'] } },
-          { token: OPS_KEY, actor: { id: 'u-ops', roles: ['OPS'] } },
-        ]),
+        auth:
+          overrides.auth ??
+          new BearerTokenActorResolver([
+            { token: ANALYST_KEY, actor: { id: 'u-analyst', roles: ['ANALYST'] } },
+            { token: OPS_KEY, actor: { id: 'u-ops', roles: ['OPS'] } },
+          ]),
       }),
     ],
     providers: [SearchDocsTool, PurgeCacheTool],
@@ -112,10 +117,12 @@ async function connect(input: {
   // interface declares the property optional, which `exactOptionalPropertyTypes` reads as a
   // mismatch — the class does implement the interface it is declared against.
   await client.connect(transport as Transport);
+  clients.push(client);
   return { client, transport };
 }
 
 afterEach(async () => {
+  await Promise.all(clients.splice(0).map((client) => client.close()));
   await app?.close();
   app = undefined;
   purged.mockReset();
@@ -138,6 +145,23 @@ describe('AgentMcpServerModule over HTTP', () => {
       .expect(401);
   });
 
+  it('answers 401 when the host resolver rejects with a plain Error', async () => {
+    // The resolver seam is the host's: one that throws a bare Error would otherwise reach the
+    // client as a 500 with a logged stack, reporting a server fault for an anonymous probe.
+    const context = await boot({
+      auth: {
+        resolve: () => {
+          throw new Error('no credential on this request');
+        },
+      },
+    });
+    await request(httpServer(context))
+      .post('/mcp')
+      .set('authorization', `Bearer ${ANALYST_KEY}`)
+      .send(INITIALIZE)
+      .expect(401);
+  });
+
   it('serves the app’s own @AiTools to an authenticated MCP client', async () => {
     const context = await boot();
     const { client } = await connect({ context, token: ANALYST_KEY });
@@ -147,19 +171,17 @@ describe('AgentMcpServerModule over HTTP', () => {
     const result = await client.callTool({ name: 'search_docs', arguments: { q: 'leave' } });
     expect(result.content).toEqual([{ type: 'text', text: 'found leave' }]);
     expect(purged).not.toHaveBeenCalled();
-    await client.close();
   });
 
   it('offers a caller nothing when their roles reach nothing', async () => {
     const context = await boot();
     const { client } = await connect({ context, token: OPS_KEY });
     expect((await client.listTools()).tools).toEqual([]);
-    await client.close();
   });
 
   it('refuses a session id presented by a different actor', async () => {
     const context = await boot();
-    const { client, transport } = await connect({ context, token: ANALYST_KEY });
+    const { transport } = await connect({ context, token: ANALYST_KEY });
     const sessionId = transport.sessionId;
     expect(sessionId).toBeDefined();
     // The session id travels in a plain header and owns an open stream; holding one is not
@@ -167,10 +189,10 @@ describe('AgentMcpServerModule over HTTP', () => {
     await request(httpServer(context))
       .post('/mcp')
       .set('authorization', `Bearer ${OPS_KEY}`)
+      .set('accept', 'application/json, text/event-stream')
       .set('mcp-session-id', sessionId ?? '')
       .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
       .expect(403);
-    await client.close();
   });
 
   it('tells a client to start again when it names a session this process does not hold', async () => {
@@ -199,20 +221,18 @@ describe('AgentMcpServerModule over HTTP', () => {
   it('forgets a session the client terminated', async () => {
     const context = await boot();
     const sessions = context.get(McpSessionStore);
-    const { client, transport } = await connect({ context, token: ANALYST_KEY });
+    const { transport } = await connect({ context, token: ANALYST_KEY });
     expect(sessions.size).toBe(1);
     await transport.terminateSession();
     expect(sessions.size).toBe(0);
-    await client.close();
   });
 
   it('closes what it is still holding when the application shuts down', async () => {
     const context = await boot();
     const sessions = context.get(McpSessionStore);
-    const { client } = await connect({ context, token: ANALYST_KEY });
+    await connect({ context, token: ANALYST_KEY });
     expect(sessions.size).toBe(1);
     await sessions.onApplicationShutdown();
     expect(sessions.size).toBe(0);
-    await client.close();
   });
 });
