@@ -23,6 +23,7 @@ import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 
@@ -122,6 +123,7 @@ async function buildDurableApp(
       AgentModule.forRoot({
         model: new FakeModelProvider(script),
         store,
+        actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
         ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
@@ -169,6 +171,7 @@ describe('durable wiring', () => {
         AgentModule.forRoot({
           model: new FakeModelProvider(() => ({ text: 'x' })),
           store: new InMemoryAgentStore(),
+          actorResolver: new HeaderActorResolver(),
           durable: true,
           // AgentDurableModule intentionally NOT imported
         }),
@@ -570,6 +573,7 @@ describe('AgentDurableModule with dispatchedSteps: true (llm/tool as routed remo
       AgentModule.forRoot({
         model: new FakeModelProvider(() => ({ text: 'x' })),
         store: new InMemoryAgentStore(),
+        actorResolver: new HeaderActorResolver(),
         dispatchedSteps: true,
         // durable intentionally omitted (defaults to false)
       }),

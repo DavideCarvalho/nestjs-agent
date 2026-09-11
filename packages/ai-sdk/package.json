@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
   "dependencies": {
     "@standard-schema/spec": "1.1.0"

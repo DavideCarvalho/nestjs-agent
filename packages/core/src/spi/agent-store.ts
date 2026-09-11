@@ -29,6 +29,14 @@ export interface AppendMessageInput {
   attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
+  /**
+   * The run (turn) that produced this message. Without it a consumer can only guess which turn a
+   * message belongs to by comparing timestamps against the run's `startedAt`, and that guess breaks
+   * the moment a turn is regenerated — the replaced answer is truncated away, so the times no longer
+   * line up 1:1. Optional so a caller predating this (and a host that appends messages outside a
+   * run) can omit it; the store persists it as `null` when absent.
+   */
+  runId?: string;
 }
 
 export interface RecordToolCallInput {
@@ -78,16 +86,70 @@ export interface RecordRunStartInput {
   threadId: string;
   actorRef: string;
   agentName?: string;
+  /**
+   * The run that started this one, for a delegation's child run. The parent->child edge exists in
+   * the durable runtime's own journal, but only there: a governance surface reading run rows alone
+   * cannot roll a delegation's cost up to the turn that asked for it, and a DETACHED child outlives
+   * its parent's turn entirely, so nothing in the transcript pairs them either.
+   *
+   * Optional, and a store that persists nothing for it still works — it loses the tree, not the run.
+   */
+  parentRunId?: string;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt — identifies the prompt VERSION. */
   promptHash?: string;
 }
 
 export interface RecordRunEndInput {
   runId: string;
-  status: 'completed' | 'failed';
+  /**
+   * `cancelled` is a THIRD terminal, not a flavour of `failed`: someone asked the run to stop and it
+   * did, which is the control working. A consumer computing a failure rate over these rows has to be
+   * able to leave it out — counting a user pressing Stop as an error pages whoever is on call for
+   * model failures. It carries no `errorCode`/`errorMessage`, since there is nothing to diagnose.
+   */
+  status: 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
+}
+
+/** Which thread, and how many of its newest messages, {@link ThreadTurnReader.loadThreadForTurn} reads. */
+export interface ThreadTurnQuery {
+  threadId: string;
+  /** Omitted reads every message; `0` reads none. */
+  messageLimit?: number;
+}
+
+/** What a turn reads off a thread — a bounded window, not the transcript. */
+export interface ThreadTurnPage {
+  title: string;
+  defaultAgent: string | null;
+  /** Whether the THREAD has ever been answered, not whether {@link messages} holds an answer. */
+  hasAssistantMessage: boolean;
+  /** Oldest first, carrying only the fields a model turn reads. */
+  messages: StoredMessage[];
+}
+
+/**
+ * A store that can hand a turn the WINDOW it is about to send, instead of the thread's transcript.
+ *
+ * {@link AgentStore.getThread} materializes every message row, every attachment and every tool
+ * output a thread ever recorded, and the run then journals what it loaded — so a long thread pays
+ * for its whole history on every turn and again on every replay, to send a prompt bounded to its
+ * last few messages. This read is bounded by the database (`order by created_at desc limit ?`),
+ * projected to the columns a model turn actually reads.
+ *
+ * `hasAssistantMessage` is answered over the WHOLE thread, never the page: it answers "has this
+ * conversation been answered before?" — what a `thread-start` intake asks — and a thread whose window
+ * happens to hold only the user's last questions has still been answered. `null` for a thread that is
+ * unknown or soft-deleted, matching `getThread`.
+ *
+ * Probed STRUCTURALLY rather than declared on {@link AgentStore}, the same way `defaultAgentForThread`
+ * is: it is an optimization a store either offers or does not, and one that predates it still answers
+ * correctly through the full read.
+ */
+export interface ThreadTurnReader {
+  loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null>;
 }
 
 /** ORM-agnostic persistence. Refs are string ids; adapters may add real relations. */
@@ -142,11 +204,15 @@ export interface AgentStore {
    */
   ownerOfToolCall(toolCallId: string): Promise<string | null>;
   /**
-   * The runId currently streaming the thread a tool call belongs to (its thread's `activeStreamId`),
-   * or `null` if the call or its active run is unknown. HITL approve / reject route the decision to
-   * THIS run, derived server-side from the tool call alone — so a decision reaches the exact run
+   * The run awaiting a decision on `toolCallId`: the call's OWN `runId` when the row carries one,
+   * else the thread's `activeStreamId`. Both HITL approve/reject and an elicitation answer route
+   * through this, derived server-side from the tool call alone — so a decision reaches the exact run
    * awaiting it, including a sub-agent's own child run, which the client never sees and could not
    * name. No client-supplied runId is trusted (or needed).
+   *
+   * The row's own runId comes FIRST because `activeStreamId` names whichever run is streaming the
+   * thread right now, and that is only the same run while a thread holds exactly one. The fallback
+   * is for rows written before tool calls recorded a runId, which have nothing else to answer with.
    */
   runForToolCall(toolCallId: string): Promise<string | null>;
   /**
@@ -157,10 +223,45 @@ export interface AgentStore {
   ownerOfActiveStream(runId: string): Promise<string | null>;
 
   appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
+  /**
+   * Attach a turn's settled tool RESULTS to a message that was already appended, replacing whatever
+   * it held. A message's tool calls are known when it is written and their outputs are not, but a
+   * thread reader pairs the two off THAT MESSAGE — so an output that only ever reaches the tool-call
+   * table leaves every call on a reopened thread looking like a tool still running.
+   *
+   * Required rather than optional: a store that silently declines this renders a finished turn as a
+   * permanently in-flight one, with nothing logged and nothing to notice. A missing method should
+   * fail to compile instead.
+   */
+  setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void>;
   truncateFrom(threadId: string, messageId: string): Promise<void>;
 
   recordToolCall(input: RecordToolCallInput): Promise<void>;
   updateToolCall(input: UpdateToolCallInput): Promise<void>;
+
+  /**
+   * OPTIONAL: of `mediaIds`, the ones a message that still exists — in a thread owned by
+   * `actorRef` — still carries as an attachment. The inverse of
+   * {@link import('./attachment-staging.js').AttachmentStagingStore.list}: the host can enumerate
+   * the media it staged but cannot see a transcript, and this side sees every transcript but never
+   * holds the bytes, so neither can decide alone what is safe to delete.
+   *
+   * DERIVED, not tracked. A reference is not permanent: `truncateFrom` deletes messages — which is
+   * exactly what regenerating a turn does — so media that was referenced becomes unreferenced
+   * again. A flag set when a message is sent would never be unset by that delete, and the bytes
+   * would be pinned for ever with nothing pointing at them. Answering from the surviving message
+   * rows on every call is the only form of this that stays true after a truncation.
+   *
+   * Scoped to one actor, like every other read on this surface: media referenced only by ANOTHER
+   * actor's thread is reported unreferenced here, so this can never be turned into a probe for what
+   * exists in someone else's conversation. A host pairs it with its own per-actor inventory, so the
+   * candidate ids are already the caller's own.
+   *
+   * Returns each id at most once, in the order asked. Absent on a store that predates this — a
+   * caller must treat the absence as "cannot answer" and collect NOTHING, never as "nothing is
+   * referenced", which would delete every attachment the actor ever sent.
+   */
+  referencedMediaIds?(actorRef: string, mediaIds: readonly string[]): Promise<string[]>;
 
   recordUsage(input: RecordUsageInput): Promise<void>;
   /**

@@ -1,0 +1,27 @@
+{
+  "name": "@dudousxd/nestjs-agent-registry",
+  "version": "0.0.0",
+  "private": true,
+  "description": "shadcn registry of first-party chat components over @dudousxd/nestjs-agent-react's transcript model — distributed as copy-in source, never as a published bundle",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "scripts": {
+    "build:registry": "node scripts/build-registry.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent-react": "workspace:*",
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/react": "16.3.0",
+    "@types/react": "19.2.5",
+    "ai": "7.0.16",
+    "clsx": "2.1.1",
+    "jsdom": "26.1.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "tailwind-merge": "3.6.0",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    // Off deliberately: this source is COPIED into consumer projects, which do not run with it.
+    // Keeping it on here would force `{...(x ? { x } : {})}` spreads through markup nobody would
+    // write by hand in a shadcn component.
+    "exactOptionalPropertyTypes": false,
+    "declaration": false,
+    "declarationMap": false,
+    "types": ["vitest/globals"],
+    "paths": {
+      "@/lib/utils": ["./src/lib/utils.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

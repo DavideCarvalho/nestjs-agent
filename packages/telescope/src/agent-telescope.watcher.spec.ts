@@ -1,12 +1,15 @@
 import {
   AGENT_DIAGNOSTIC_EVENTS,
   publishAgentDelegated,
+  publishAgentMemoryResolved,
+  publishAgentMemoryWritten,
   publishAgentMessage,
   publishAgentQuotaExceeded,
   publishAgentRetrieved,
   publishAgentRunFailed,
   publishAgentRunFinished,
   publishAgentRunStarted,
+  publishAgentSkillsResolved,
   publishAgentToolCall,
   publishAgentToolRetry,
 } from '@dudousxd/nestjs-agent-core';
@@ -28,8 +31,8 @@ describe('AgentTelescopeWatcher', () => {
     expect(new AgentTelescopeWatcher().type).toBe('agent');
   });
 
-  it('subscribes all 9 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(9);
+  it('subscribes all 12 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(12);
 
     const ctx = mockCtx();
     watcher = new AgentTelescopeWatcher();
@@ -50,6 +53,23 @@ describe('AgentTelescopeWatcher', () => {
     publishAgentRunFailed({ runId: 'r1', code: 'run_failed', message: 'boom' });
     publishAgentDelegated({ runId: 'r1', toAgent: 'triage' });
     publishAgentRetrieved({ runId: 'r1', query: 'q', count: 3 });
+    publishAgentSkillsResolved({
+      runId: 'r1',
+      scopes: 3,
+      offered: 2,
+      omitted: 0,
+      promptChars: 180,
+    });
+    publishAgentMemoryResolved({
+      runId: 'r1',
+      scopes: 3,
+      offered: 4,
+      omitted: 1,
+      pinnedOmitted: 0,
+      recalled: false,
+      promptChars: 260,
+    });
+    publishAgentMemoryWritten({ runId: 'r1', scope: 'actor:u1', chars: 42 });
     publishAgentToolRetry({
       toolName: 'search',
       toolCallId: 'call-1',
@@ -57,7 +77,7 @@ describe('AgentTelescopeWatcher', () => {
       message: 'deadlock',
     });
 
-    expect(ctx.record).toHaveBeenCalledTimes(9);
+    expect(ctx.record).toHaveBeenCalledTimes(12);
     const events = ctx.record.mock.calls.map(
       ([input]) => (input.content as { event: string }).event,
     );

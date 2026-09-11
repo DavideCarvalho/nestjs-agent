@@ -898,9 +898,63 @@ describe('dispatched turn steps (dispatchLlm / dispatchTool)', () => {
     expect(result.text).toBe('gave up');
     expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'getWeather', status: 'failed' });
   });
+
+  it('rethrows a MARKER-carrying suspend with no isControlFlowError hook supplied', async () => {
+    const store = new InMemoryAgentStore();
+    const sink = new InMemoryTokenStreamSink();
+    const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+        : { text: 'never reached — the suspend throws through the loop' };
+    const deps: AgentLoopDeps = {
+      model: new FakeModelProvider(script),
+      store,
+      registry: buildRegistry(),
+      rolesPolicy: new DefaultRolesPolicy(),
+      modelId: 'fake-1',
+      day: '2026-06-30',
+      systemPrompt: 'You are a test agent.',
+    };
+    const hooks: AgentLoopHooks = {
+      runId: 'run-1',
+      openSink: () => sink.open('run-1'),
+      awaitApproval: async () => ({ approved: true }),
+      step: (_name, fn) => fn(),
+      dispatchTool: async () => {
+        throw markedSuspendSignal();
+      },
+      // Deliberately absent: a host that forgot it must still not record a suspend as a tool
+      // failure, because the loop reads the marker off the error itself.
+    };
+    await expect(
+      runAgentLoop(
+        deps,
+        { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'hi' },
+        hooks,
+      ),
+    ).rejects.toThrow('workflow suspended');
+    expect(store.toolCallRows()[0]).toMatchObject({
+      toolName: 'getWeather',
+      status: 'auto_executed',
+    });
+    const detail = await store.getThread(thread.id);
+    expect(detail?.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
 });
 
-/** Stands in for the durable runner's suspend signal (e.g. WorkflowSuspended on first dispatch). */
+/**
+ * The same suspend as the durable runtimes actually throw it: a class core cannot import, carrying
+ * the global-registry marker every copy of that key collapses onto. `Object.assign` because a
+ * computed class member needs a `unique symbol`, which `Symbol.for` deliberately isn't.
+ */
+function markedSuspendSignal(): Error {
+  const signal = new Error('workflow suspended');
+  signal.name = 'WorkflowSuspended';
+  return Object.assign(signal, { [Symbol.for('aviary:durable:control-flow')]: true });
+}
+
+/** Stands in for a runner suspend that carries NO marker — recognizable only via the hook. */
 class FakeSuspendSignal extends Error {
   constructor() {
     super('workflow suspended');
@@ -928,6 +982,7 @@ function withoutOptionalStoreMethods(store: InMemoryAgentStore): AgentStore {
     runForToolCall: (toolCallId) => store.runForToolCall(toolCallId),
     ownerOfActiveStream: (runId) => store.ownerOfActiveStream(runId),
     appendMessage: (input) => store.appendMessage(input),
+    setMessageToolResults: (messageId, results) => store.setMessageToolResults(messageId, results),
     truncateFrom: (threadId, messageId) => store.truncateFrom(threadId, messageId),
     recordToolCall: (input) => store.recordToolCall(input),
     updateToolCall: (input) => store.updateToolCall(input),

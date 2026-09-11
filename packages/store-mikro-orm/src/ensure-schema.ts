@@ -57,8 +57,13 @@ const SCHEMA_REVISION = 1;
  * The heal runs `getUpdateSchemaSQL({ safe: true })` on a **fresh** schema generator built straight
  * from the platform — so it ignores any `schemaGenerator.skipTables` the host set (hosts skip
  * `agent_` in their own snapshot precisely because this owns those tables) — and applies only the
- * statements that target an agent table. `safe` means create + add-column only; existing columns are
- * never dropped or altered.
+ * statements whose every table is an agent table, including the multi-statement table rebuild SQLite
+ * uses in place of `add column`. `safe` means create + add-column only; existing columns are never
+ * dropped or altered.
+ *
+ * What the heal applied is then re-diffed, and a heal that left required structure pending throws
+ * {@link AgentSchemaHealError} — the fingerprint is written only on the way out, so a boot that
+ * healed nothing cannot record itself as the applied schema and silence every boot after it.
  */
 export async function ensureAgentSchema(orm: MikroORM): Promise<void> {
   const em = orm.em;
@@ -77,28 +82,85 @@ export async function ensureAgentSchema(orm: MikroORM): Promise<void> {
     if ((await readStoredFingerprint(connection)) === expected) {
       return;
     }
-    await healAgentSchema(em);
+    await healAgentSchema(em, dialect);
     await writeFingerprint(connection, dialect, expected);
   } finally {
     await releaseSchemaLock(connection, dialect);
   }
 }
 
-async function healAgentSchema(em: EntityManager): Promise<void> {
+/**
+ * The heal ran and the structure it was asked for is still missing. The fingerprint is written only
+ * after the heal returns, so throwing this is what keeps a boot that healed nothing from recording
+ * itself as the applied schema — the next boot introspects again instead of returning early forever.
+ */
+export class AgentSchemaHealError extends Error {
+  constructor(readonly pending: string[]) {
+    super(
+      `[nestjs-agent-store-mikro-orm] the agent schema heal did not apply: ${pending.length} statement(s) the schema diff asked for are still pending after it ran. The schema fingerprint was NOT recorded, so the next boot retries. Apply them by hand (or via \`agentSchemaSql()\` in a migration) if the database rejects them: ${pending.join('; ')}`,
+    );
+    this.name = 'AgentSchemaHealError';
+  }
+}
+
+async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<void> {
   const connection = em.getConnection();
-  for (const statement of await agentUpdateStatements(em)) {
-    try {
-      await connection.execute(statement);
-    } catch (error) {
-      // A create/add statement failing is fatal — the store can't run without its tables. A
-      // non-structural tweak (a column-type nudge) a shared DB rejects is left as-is, functional.
-      if (isRequiredStructure(statement)) {
-        throw error;
+  const statements = await agentUpdateStatements(em);
+  if (statements.length === 0) {
+    return;
+  }
+  await withoutForeignKeyEnforcement(connection, dialect, async () => {
+    for (const statement of statements) {
+      try {
+        await connection.execute(statement);
+      } catch (error) {
+        // A create/add statement failing is fatal — the store can't run without its tables. A
+        // non-structural tweak (a column-type nudge) a shared DB rejects is left as-is, functional.
+        if (isRequiredStructure(statement)) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[nestjs-agent-store-mikro-orm] skipped a non-structural agent-schema statement that failed; the column is left as-is (functional). Statement: ${statement} — ${message}`,
+        );
       }
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[nestjs-agent-store-mikro-orm] skipped a non-structural agent-schema statement that failed; the column is left as-is (functional). Statement: ${statement} — ${message}`,
-      );
+    }
+  });
+  // Ask the differ again rather than trust that every statement returning without an error means the
+  // schema moved: a filtered, rewritten or silently-swallowed statement leaves no error to catch.
+  const pending = (await agentUpdateStatements(em)).filter(isRequiredStructure);
+  if (pending.length > 0) {
+    throw new AgentSchemaHealError(pending);
+  }
+}
+
+/**
+ * Run the heal with SQLite's foreign-key enforcement off, restoring it afterwards.
+ *
+ * SQLite implements `add column` as a table REBUILD — the original is DROPped and a rewritten twin
+ * renamed into its place. With enforcement on, dropping `agent_thread` fires the children's
+ * `on delete cascade`, so healing the thread table would take every message, tool call and usage row
+ * with it. The pragma is a no-op inside a transaction, so the heal deliberately runs outside one.
+ */
+async function withoutForeignKeyEnforcement(
+  connection: Connection,
+  dialect: SqlDialect,
+  apply: () => Promise<void>,
+): Promise<void> {
+  if (dialect !== 'sqlite') {
+    await apply();
+    return;
+  }
+  const rows = await connection.execute<{ foreign_keys: number }[]>('pragma foreign_keys');
+  // Anything but a positive "off" restores enforcement: leaving it off afterwards is the worse
+  // mistake, since every later write on the connection would skip its foreign keys too.
+  const wasEnforcing = rows[0]?.foreign_keys !== 0;
+  await connection.execute('pragma foreign_keys = off');
+  try {
+    await apply();
+  } finally {
+    if (wasEnforcing) {
+      await connection.execute('pragma foreign_keys = on');
     }
   }
 }
@@ -115,22 +177,58 @@ async function agentUpdateStatements(em: EntityManager): Promise<string[]> {
     .filter((statement) => statement.length > 0 && belongsToAgent(statement));
 }
 
+/**
+ * A statement the store may run: every table it names is one this store owns.
+ *
+ * "Names" is the whole statement, not just its target, because a SQLite rebuild moves rows between
+ * two tables (`insert into agent_thread__temp_alter … from agent_thread`) and a heal that ran half
+ * of one is worse than one that ran none of it. Requiring ALL of them is also what keeps the
+ * rebuild's `drop table` from ever pointing at a table the host owns.
+ */
 function belongsToAgent(statement: string): boolean {
-  const table = targetTable(statement);
-  return table !== undefined && AGENT_TABLE_NAMES.has(table);
+  const tables = namedTables(statement);
+  return tables.length > 0 && tables.every(isAgentTable);
 }
 
-/** The table a `create table` / `create index … on` / `alter table` statement targets, lowercased. */
-function targetTable(statement: string): string | undefined {
-  const match = statement.match(
-    /^(?:create\s+(?:unique\s+)?index\s+.+?\s+on\s+|(?:create|alter)\s+table\s+(?:if\s+not\s+exists\s+)?)[`"']?([\w$]+)[`"']?/i,
+/**
+ * MikroORM's scratch table for a SQLite rebuild: `agent_thread` is rewritten as
+ * `agent_thread__temp_alter` and renamed back over it.
+ */
+const REBUILD_TABLE_SUFFIX = '__temp_alter';
+
+function isAgentTable(table: string): boolean {
+  return AGENT_TABLE_NAMES.has(
+    table.endsWith(REBUILD_TABLE_SUFFIX) ? table.slice(0, -REBUILD_TABLE_SUFFIX.length) : table,
   );
-  return match?.[1]?.toLowerCase();
 }
 
-/** A statement that creates or adds structure — its failure must abort the heal, not be swallowed. */
+/** Every table a DDL or rebuild statement names, lowercased. Empty for anything else (`pragma`). */
+function namedTables(statement: string): string[] {
+  const patterns = [
+    /^create\s+table\s+(?:if\s+not\s+exists\s+)?[`"']?([\w$]+)/i,
+    /^create\s+(?:unique\s+)?index\s+.+?\s+on\s+[`"']?([\w$]+)/i,
+    /^alter\s+table\s+[`"']?([\w$]+)/i,
+    /^drop\s+table\s+(?:if\s+exists\s+)?[`"']?([\w$]+)/i,
+    /^insert\s+into\s+[`"']?([\w$]+)/i,
+    /\brename\s+to\s+[`"']?([\w$]+)/i,
+    /\bfrom\s+[`"']?([\w$]+)/i,
+  ];
+  const tables: string[] = [];
+  for (const pattern of patterns) {
+    const name = statement.match(pattern)?.[1];
+    if (name !== undefined) {
+      tables.push(name.toLowerCase());
+    }
+  }
+  return tables;
+}
+
+/**
+ * A statement that creates or moves structure — its failure must abort the heal, not be swallowed.
+ * The rebuild statements count: a copy, drop or rename that failed leaves the table half-rewritten.
+ */
 function isRequiredStructure(statement: string): boolean {
-  return /\b(?:create\s+table|create\s+(?:unique\s+)?index|add\s+(?:column|index|constraint|key|unique|fulltext))\b/i.test(
+  return /\b(?:create\s+table|create\s+(?:unique\s+)?index|add\s+(?:column|index|constraint|key|unique|fulltext)|insert\s+into|drop\s+table|rename\s+to)\b/i.test(
     statement,
   );
 }

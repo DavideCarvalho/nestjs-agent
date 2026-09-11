@@ -2,25 +2,73 @@ import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
   AgentStreamError,
-  type MessageAttachment,
+  type AttachmentRef,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
-import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Req,
+  Res,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AgentService } from '../agent.service.js';
+
+/**
+ * How many attachments one turn may name. Each costs a staging-store read before the run starts,
+ * and no model provider accepts anywhere near this many parts in a single message.
+ */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 interface ChatBody {
   message: string;
   threadId?: string;
   /** Name of the agent to run (orchestrator or a sub-agent). Defaults to the module's default. */
   agent?: string;
-  /** Files attached to this message (image/PDF) for a vision-capable model. */
-  attachments?: MessageAttachment[];
+  /**
+   * Files attached to this message (image/PDF), named by the `mediaId` `POST /agent/attachments`
+   * (or the host's own upload) returned. Any other field sent alongside it is ignored.
+   */
+  attachments?: unknown;
   pageContext?: PageContext;
   /** Re-run the last exchange on `threadId` instead of adding a new message. */
   regenerate?: boolean;
   /** Start a new thread transient (hidden from history until promoted). Ignored with `threadId`. */
   transient?: boolean;
+}
+
+/**
+ * Reduce whatever the body sent to the ids alone. A client cannot describe an attachment, only
+ * point at one it staged: the url the model provider will fetch is resolved server-side from the
+ * id (see `AgentService.chat`), so anything else here would be an SSRF the caller writes.
+ */
+function attachmentRefs(claimed: unknown): AttachmentRef[] {
+  if (claimed === undefined) {
+    return [];
+  }
+  if (!Array.isArray(claimed)) {
+    throw new BadRequestException('attachments must be an array of { mediaId }');
+  }
+  if (claimed.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    throw new BadRequestException(
+      `a message may carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments`,
+    );
+  }
+  return claimed.map((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null || !('mediaId' in entry)) {
+      throw new BadRequestException('each attachment must be an object with a mediaId');
+    }
+    const { mediaId } = entry as { mediaId: unknown };
+    if (typeof mediaId !== 'string' || mediaId.length === 0) {
+      throw new BadRequestException('each attachment must carry a non-empty string mediaId');
+    }
+    return { mediaId };
+  });
 }
 
 @Controller()
@@ -33,22 +81,31 @@ export class ChatController {
   @Post('chat')
   async chat(@Req() req: Request, @Res() res: Response, @Body() body: ChatBody): Promise<void> {
     const actor = await this.actorResolver.resolve(req);
+    const attachments = attachmentRefs(body.attachments);
     const { runId, threadId } = await this.agent.chat({
       actor,
       message: body.message,
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
-      ...(body.attachments !== undefined ? { attachments: body.attachments } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
       ...(body.transient === true ? { transient: true } : {}),
     });
-    await this.pipe(res, runId, threadId);
+    // The run was just started for this actor, so no ownership read is needed — and one would race
+    // the run itself, which clears the thread's active stream (what ownership is derived from) the
+    // moment it finishes.
+    await this.pipe(res, runId, this.agent.subscribe(runId), threadId);
   }
 
   @Get('chat/:runId/stream')
-  async stream(@Param('runId') runId: string, @Res() res: Response): Promise<void> {
-    await this.pipe(res, runId);
+  async stream(
+    @Req() req: Request,
+    @Param('runId') runId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const actor = await this.actorResolver.resolve(req);
+    await this.pipe(res, runId, await this.agent.subscribeAs(actor, runId));
   }
 
   @Post('chat/:runId/cancel')
@@ -58,7 +115,12 @@ export class ChatController {
     return { aborted: true };
   }
 
-  private async pipe(res: Response, runId: string, threadId?: string): Promise<void> {
+  private async pipe(
+    res: Response,
+    runId: string,
+    events: AsyncIterable<Uint8Array>,
+    threadId?: string,
+  ): Promise<void> {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -73,7 +135,7 @@ export class ChatController {
     const decoder = new TextDecoder();
     let buffer = '';
     try {
-      for await (const chunk of this.agent.subscribe(runId)) {
+      for await (const chunk of events) {
         buffer += decoder.decode(chunk, { stream: true });
         let newline = buffer.indexOf('\n');
         while (newline !== -1) {

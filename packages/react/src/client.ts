@@ -1,6 +1,7 @@
 import type {
   MessageAttachment,
   QuotaView,
+  SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
@@ -64,6 +65,17 @@ export class AgentClient {
 
   listThreads(): Promise<ThreadSummary[]> {
     return this.request<ThreadSummary[]>('GET', '/agent/threads');
+  }
+
+  /**
+   * The skills this caller can invoke right now, scope-resolved — the same list, built by the same
+   * call, that the model is offered, so what a user can type after a `/` and what the agent can
+   * reach cannot drift apart. `threadId` reaches the host's own resolver, which may scope a skill to
+   * one conversation; omitted, the server reads it as a brand-new thread.
+   */
+  listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
+    const query = threadId === undefined ? '' : `?threadId=${encodeURIComponent(threadId)}`;
+    return this.request<SkillCatalogEntry[]>('GET', `/agent/skills${query}`);
   }
 
   getThread(id: string): Promise<ThreadDetail> {
@@ -139,6 +151,28 @@ export class AgentClient {
 
   rejectToolCall(input: { toolCallId: string; reason?: string }): Promise<void> {
     return this.request<void>('POST', '/agent/tool-call/reject', input);
+  }
+
+  /**
+   * Settle a parked question set. `answers` is questionId → chosen option values; a question left
+   * out takes the pre-picked default the request carried, resolved server-side against the request
+   * the run already holds. Omit the whole object and the user has confirmed every pre-picked
+   * answer — which is the point of the surface, so it is a valid submission rather than a blank.
+   */
+  answerToolCall(input: {
+    toolCallId: string;
+    answers?: Record<string, string[]>;
+  }): Promise<void> {
+    return this.request<void>('POST', '/agent/tool-call/answer', input);
+  }
+
+  /**
+   * Decline to answer and let the agent proceed on its own pre-picked values. Lands on the same
+   * values a confirmation would, and persists differently on purpose — only one of them is
+   * evidence the user chose them.
+   */
+  skipToolCall(input: { toolCallId: string }): Promise<void> {
+    return this.request<void>('POST', '/agent/tool-call/skip', input);
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

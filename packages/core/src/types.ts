@@ -1,4 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { AgentIntake, ElicitationReply } from './elicitation.js';
+import type { AgentHistoryWindow } from './spi/history-policy.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
@@ -9,7 +11,25 @@ export interface Actor {
   tenantRef?: string;
 }
 
-export type ToolKind = 'read' | 'action' | 'agent';
+export type ToolKind = 'read' | 'action' | 'agent' | 'ask' | 'skill' | 'memory';
+
+/**
+ * One agent->agent edge on {@link AgentDefinition.delegatesTo}. A bare name is the awaited
+ * delegation that has always existed; the object form is how an author says this one runs in the
+ * background.
+ */
+export type AgentDelegation = string | { agent: string; detached?: boolean };
+
+/**
+ * Where a detached sub-agent run posts its answer: the thread that delegated it, and the
+ * `agent`-kind tool call that started it. Carried on the child run's own {@link AgentRunInput},
+ * because by the time the child finishes the parent turn is over and nothing is holding the
+ * address.
+ */
+export interface DetachedDelivery {
+  threadId: string;
+  toolCallId: string;
+}
 
 /**
  * Declared shape of a tool.
@@ -17,6 +37,18 @@ export type ToolKind = 'read' | 'action' | 'agent';
  *  - `action` never auto-executes — requires HITL approval.
  *  - `agent`  delegates to another named agent (durable: a child workflow; inline: a nested loop),
  *             handled at the loop level — NOT via a handler. Carries `targetAgent`.
+ *  - `ask`    puts a question set to the user and waits for the answers (see `elicitation.ts`).
+ *             Handled at the loop level and never registered, so no `ToolSpec` carries this kind:
+ *             the only tool that has it is the built-in `ask`, whose definition the loop supplies.
+ *  - `skill`  reads one of the procedures offered in the turn's `<skills>` catalog (see `skills.ts`).
+ *             Auto-executes like a read and performs nothing, but is served by the LOOP from the
+ *             catalog the journal holds rather than by a registered handler — so, like `ask`, no
+ *             `ToolSpec` carries this kind.
+ *  - `memory` records one fact about the actor for later turns (see `memory.ts`). Served by the LOOP
+ *             and never registered, like `skill`. It WRITES, but auto-executes rather than asking
+ *             for approval: an agent may only ever write the scope of the actor it is running for,
+ *             so the blast radius of a bad one is the prompt of the person who was talking, and the
+ *             remedy is the read-back that lets them delete it.
  */
 export interface ToolSpec {
   name: string;
@@ -30,6 +62,20 @@ export interface ToolSpec {
   inputSchema: StandardSchemaV1;
   /** For `kind: 'agent'` — the name of the agent to delegate to. */
   targetAgent?: string;
+  /**
+   * For `kind: 'agent'` — start the delegation and let the calling turn END, instead of holding it
+   * open until the delegate answers. The call's result is a {@link DetachedDelegationReceipt}, and
+   * the answer arrives later as its own message in the same thread (see
+   * {@link AgentRunInput.deliverTo}).
+   *
+   * Authored per EDGE, never chosen by the model: a model that can decide to detach can decide to
+   * detach the one thing the user is sitting there waiting for, and it has no way to know which that
+   * is. The person wiring `A -> B` does.
+   *
+   * Settled into the call's `persist:toolcall` checkpoint alongside `targetAgent`, so every replay
+   * reads the branch back rather than re-deciding it against a registry that may have changed.
+   */
+  detached?: boolean;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
@@ -115,7 +161,14 @@ export interface MessageUsage {
   costUsd?: number | null;
 }
 
-export type UsagePurpose = 'chat' | 'follow_ups';
+/**
+ * What a usage row was spent ON. `chat` is a model step of the turn itself; `follow_ups` is the
+ * extra call that proposes follow-up questions; `history_summary` is the extra call a
+ * {@link import('./spi/history-policy.js').HistoryPolicy} makes to fold windowed-out messages into a
+ * summary — so bounding context cost never becomes spend nothing accounts for; `structured_output`
+ * is the formatting pass that restates a finished answer as `AgentLoopDeps.outputSchema` requires.
+ */
+export type UsagePurpose = 'chat' | 'follow_ups' | 'history_summary' | 'structured_output';
 
 export interface QuotaState {
   usedTokens: number;
@@ -135,6 +188,13 @@ export interface QuotaView {
   withinLimit: boolean;
   costUsd: number;
 }
+
+/**
+ * Anything a human sends back into a parked run: a {@link Decision} on an action tool, or an
+ * `ElicitationReply` answering a question set. Both travel the same `tool:<runId>:<toolCallId>`
+ * signal, so the runner that delivers them does not need to know which it is carrying.
+ */
+export type HumanReply = Decision | ElicitationReply;
 
 /** A human decision on a pending action tool call. */
 export interface Decision {
@@ -223,9 +283,19 @@ export interface AgentRunInput {
   agentName?: string;
   /**
    * How many agent→agent delegations deep this run already is (0 for a top-level turn). The runner
-   * increments it for each child run; the loop refuses to delegate past {@link MAX_DELEGATION_DEPTH}.
+   * increments it for each child run; the loop refuses to delegate past its depth ceiling.
    */
   delegationDepth?: number;
+  /**
+   * The named agents already on this delegation chain, root first — what {@link delegationDepth}
+   * counts, spelled out. The runner appends its own agent's name for each child it starts.
+   *
+   * A count can only say a chain is LONG. This says whether it is going in circles, and how often:
+   * an agent that appears here is one the chain has already passed through, so a delegation back to
+   * it is a cycle by inspection rather than by proxy. A run whose runner does not supply it falls
+   * back to the depth ceiling alone.
+   */
+  delegationPath?: readonly string[];
   /**
    * When set, this run streams into ANOTHER run's sink instead of its own. A sub-agent run carries
    * its top-level ancestor's runId here so its tokens (and its pending action-tool frames) land in
@@ -233,6 +303,18 @@ export interface AgentRunInput {
    * approve, a sub-agent's HITL action. Propagated unchanged down the delegation chain.
    */
   sinkRunId?: string;
+  /**
+   * Set on a DETACHED sub-agent run: the thread and tool call this run answers into when it
+   * finishes. Its presence is also what makes a run detached from the inside — it has no ancestor
+   * sink to stream into, so nothing else distinguishes it from a top-level turn.
+   */
+  deliverTo?: DetachedDelivery;
+  /**
+   * The run that started this one (a delegation's parent). Recorded with the run so a governance
+   * surface can roll a delegation's cost up to the turn that asked for it; a detached child is
+   * otherwise a row with nothing pointing at it.
+   */
+  parentRunId?: string;
   /**
    * Re-run the last exchange instead of adding a new message: the loop truncates everything after
    * the thread's last user message and re-answers it (no `userText` is appended). Used by a
@@ -256,10 +338,51 @@ export interface AgentDefinition {
   systemPrompt?: string | PromptBuilder;
   /** Allow-list of tool names this agent may use (subset of all registered tools). */
   tools?: string[];
-  /** Names of other agents this agent may hand off to (auto-registered as `agent`-kind tools). */
-  delegatesTo?: string[];
+  /**
+   * Other agents this agent may hand off to (auto-registered as `agent`-kind tools). A bare name
+   * is the awaited form; `{ agent, detached: true }` starts the delegate and lets this agent's turn
+   * finish without its answer — see {@link ToolSpec.detached}.
+   */
+  delegatesTo?: AgentDelegation[];
   modelId?: string;
   maxSteps?: number;
+  /**
+   * How deep delegation may nest below this agent. Undefined → {@link MAX_DELEGATION_DEPTH}.
+   *
+   * Bounds the CHAIN, not the fan-out: how many agents a turn delegates to is the model's.
+   */
+  maxDelegationDepth?: number;
+  /**
+   * How many times one agent may appear on a single delegation chain.
+   * Undefined → {@link DEFAULT_MAX_AGENT_APPEARANCES}.
+   */
+  maxAgentAppearances?: number;
+  /**
+   * This agent's own ceiling on how much of a thread rides into its turn, overriding the
+   * module-wide one. A persona that reasons over a long back-and-forth and one that answers a single
+   * question from a page context want very different windows.
+   */
+  history?: AgentHistoryWindow;
+  /**
+   * Constrain this agent's final answer to a schema. A live schema INSTANCE, so it is resolved from
+   * DI on whichever process runs the turn and never travels on `AgentRunInput` — a Standard Schema
+   * cannot survive the JSON hop into a durable workflow, which is why there is no per-request
+   * override on the HTTP surface.
+   */
+  outputSchema?: StandardSchemaV1;
+  /**
+   * Extra model calls allowed to fix an answer that failed {@link outputSchema}. Undefined → 1.
+   */
+  outputRepairAttempts?: number;
+  /**
+   * Questions this agent puts to the user BEFORE it starts working. Authored, so the turn pays no
+   * model call to produce them and a client knows the total up front. Undefined → no intake.
+   */
+  intake?: AgentIntake;
+  /**
+   * Whether this agent is offered the built-in `ask` tool. Undefined → the module-wide setting.
+   */
+  ask?: boolean;
 }
 
 /**
@@ -306,6 +429,8 @@ export interface StoredMessage {
   attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
+  /** The run (turn) that produced this message; absent on a row written before this was recorded. */
+  runId?: string;
   createdAt: string;
 }
 
@@ -332,6 +457,13 @@ export interface LlmStepEnvelope {
   messages: ModelMessage[];
   /** The turn's actor — the handler re-derives tool definitions from it (definitionsFor). */
   actor: Actor;
+  /**
+   * Hold this call's stream frames rather than writing them to the run's sink, and return them on
+   * the result. Set by the loop when an output processor has to see the whole answer before the
+   * subscriber does — the dispatched handler streams to a worker-side sink the loop cannot
+   * interpose on, so the instruction has to ride the envelope. Absent → stream live, as before.
+   */
+  bufferOutput?: boolean;
 }
 
 /**

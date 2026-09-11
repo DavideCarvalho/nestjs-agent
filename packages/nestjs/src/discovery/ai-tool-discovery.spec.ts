@@ -169,3 +169,64 @@ describe('AiToolDiscoveryService — availability gates on the provider', () => 
     expect(await toolNames(built.registry)).toContain('plainTool');
   });
 });
+
+@Agent({ name: 'worker', systemPrompt: 'a worker' })
+@Injectable()
+class WorkerAgent {}
+
+@Agent({
+  name: 'boss',
+  systemPrompt: 'a boss',
+  handoff: [WorkerAgent, { agent: WorkerAgent, detached: true }],
+})
+@Injectable()
+class BossAgent {}
+
+describe('AiToolDiscoveryService — the delegate tool a handoff synthesizes', () => {
+  let close: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    await close?.();
+    close = undefined;
+  });
+
+  async function registerHandoffs() {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'noop' })),
+          store: new InMemoryAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          defaultAgent: 'boss',
+        }),
+      ],
+      providers: [WorkerAgent, BossAgent],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+    close = () => app.close();
+    return app.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+  }
+
+  it('gives the awaited and the backgrounded edge to one agent separate tools', async () => {
+    const registry = await registerHandoffs();
+    expect(registry.spec('ask_worker')).toMatchObject({ targetAgent: 'worker' });
+    expect(registry.spec('ask_worker')?.detached).toBeUndefined();
+    expect(registry.spec('start_worker')).toMatchObject({ targetAgent: 'worker', detached: true });
+  });
+
+  it('carries the detached flag the edge was authored with', async () => {
+    const registry = await registerHandoffs();
+    expect(registry.spec('start_worker')).toMatchObject({
+      kind: 'agent',
+      targetAgent: 'worker',
+      detached: true,
+    });
+  });
+
+  it("tells the model the call hands back a receipt, not the worker's answer", async () => {
+    const registry = await registerHandoffs();
+    const description = registry.spec('start_worker')?.description ?? '';
+    expect(description).toContain('BACKGROUND');
+    expect(description).toContain('NOT an answer');
+  });
+});

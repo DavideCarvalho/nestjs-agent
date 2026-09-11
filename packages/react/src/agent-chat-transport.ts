@@ -56,6 +56,14 @@ const HEADER_RUN_ID = 'x-agent-run-id';
 const HEADER_THREAD_ID = 'x-agent-thread-id';
 
 /**
+ * The tool name BOTH elicitation surfaces persist their question set under (core's
+ * `ASK_TOOL_NAME`), so a synthesized part and a replayed `tool-ask` row are the same part type.
+ * Spelled out rather than imported: every other core import in this package is type-only, and a
+ * value import would pull the agent loop into a browser bundle for a three-letter string.
+ */
+const ASK_TOOL_NAME = 'ask';
+
+/**
  * AI SDK v7 `ChatTransport` for the nestjs-agent backend. POSTs
  * `/agent/chat`, parses the backend's `meta` + `{delta}` + `done` SSE
  * frames, and re-emits them as the v7 UI-message chunk stream
@@ -76,6 +84,15 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   private currentRunId: string | undefined;
   private currentThreadId: string | undefined;
 
+  /**
+   * One attempt at a time. The AI SDK keeps a single in-flight response per chat and decides
+   * whether its streamed message REPLACES the list's last entry or is appended by comparing that
+   * response's message id against the last entry alone. Two attempts writing into one chat
+   * therefore append alternating copies of each other's message, and the list ends up holding
+   * several entries under each id — which React renders as duplicate keys.
+   */
+  private attemptLive = false;
+
   constructor(private readonly options: AgentChatTransportOptions = {}) {}
 
   /** Run id of the most recent stream — HITL approve/reject target this. */
@@ -88,63 +105,96 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     return this.currentThreadId;
   }
 
+  /**
+   * True from the moment a send or resume attempt starts until its chunk stream terminates. A
+   * caller that can refuse a turn BEFORE the SDK commits to one — `useAgentChat` wrapping
+   * `sendMessage` — reads this; the transport itself can only refuse a resume, which is the one
+   * attempt the SDK lets a transport decline.
+   */
+  get isAttemptLive(): boolean {
+    return this.attemptLive;
+  }
+
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
     this.options.onAttemptStart?.();
-    const lastMessage = options.messages.at(-1);
-    const message = lastMessage ? extractText(lastMessage) : '';
-    const body: Record<string, unknown> = {
-      ...(this.options.agent !== undefined ? { agent: this.options.agent } : {}),
-      ...(this.options.getBody?.() ?? {}),
-      ...((options.body as Record<string, unknown> | undefined) ?? {}),
-      message,
-    };
-    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        ...(await this.resolveHeaders(options.headers)),
-      },
-      body: JSON.stringify(body),
-      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
-      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
+    this.attemptLive = true;
+    try {
+      const lastMessage = options.messages.at(-1);
+      const message = lastMessage ? extractText(lastMessage) : '';
+      const body: Record<string, unknown> = {
+        ...(this.options.agent !== undefined ? { agent: this.options.agent } : {}),
+        ...(this.options.getBody?.() ?? {}),
+        ...((options.body as Record<string, unknown> | undefined) ?? {}),
+        message,
+      };
+      const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          ...(await this.resolveHeaders(options.headers)),
+        },
+        body: JSON.stringify(body),
+        ...(this.options.credentials !== undefined
+          ? { credentials: this.options.credentials }
+          : {}),
+        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
+      }
+      this.captureHeaderMeta(response.headers);
+      return this.toChunkStream(response.body);
+    } catch (error) {
+      this.attemptLive = false;
+      throw error;
     }
-    this.captureHeaderMeta(response.headers);
-    return this.toChunkStream(response.body);
   }
 
   async reconnectToStream(
     options: Parameters<ChatTransport<UIMessage>['reconnectToStream']>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
+    // Already attached: a second reconnect replays the SAME buffered frames into the SAME chat, so
+    // it adds a duplicate of the message the first attempt is writing rather than a second turn.
+    // React StrictMode runs the SDK's resume effect twice on mount, which makes this the ordinary
+    // case and not an edge one. `null` is the SDK's own "nothing to resume" answer and, unlike a
+    // throw, leaves it holding no state for an attempt that never happened.
+    if (this.attemptLive) return null;
     this.options.onAttemptStart?.();
     const runId = this.options.getResumeRunId?.();
     // No buffered run → resolve null without a network round-trip so we
     // never surface a 404 from a doomed resume GET.
     if (runId === undefined) return null;
-    const response = await this.fetchImpl()(
-      `${this.baseUrl()}/agent/chat/${encodeURIComponent(runId)}/stream`,
-      {
-        method: 'GET',
-        headers: {
-          accept: 'text/event-stream',
-          ...(await this.resolveHeaders(options.headers)),
+    this.attemptLive = true;
+    try {
+      const response = await this.fetchImpl()(
+        `${this.baseUrl()}/agent/chat/${encodeURIComponent(runId)}/stream`,
+        {
+          method: 'GET',
+          headers: {
+            accept: 'text/event-stream',
+            ...(await this.resolveHeaders(options.headers)),
+          },
+          ...(this.options.credentials !== undefined
+            ? { credentials: this.options.credentials }
+            : {}),
         },
-        ...(this.options.credentials !== undefined
-          ? { credentials: this.options.credentials }
-          : {}),
-      },
-    );
-    if (response.status === 404) return null;
-    if (!response.ok || !response.body) {
-      throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
+      );
+      if (response.status === 404) {
+        this.attemptLive = false;
+        return null;
+      }
+      if (!response.ok || !response.body) {
+        throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
+      }
+      this.captureHeaderMeta(response.headers);
+      return this.toChunkStream(response.body);
+    } catch (error) {
+      this.attemptLive = false;
+      throw error;
     }
-    this.captureHeaderMeta(response.headers);
-    return this.toChunkStream(response.body);
   }
 
   private fetchImpl(): typeof fetch {
@@ -198,7 +248,17 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     let stepIndex = 0;
     let textId: string | null = null;
     let reasoningId: string | null = null;
+    // Tool calls this STREAM has already announced. The AI SDK settles a tool part by looking it
+    // up by call id and throws — dropping the whole message — when there is none, so an outcome
+    // must never be the first a client hears of a call. Per stream, not per transport: a resumed
+    // run replays its buffered frames from the beginning.
+    const announced = new Set<string>();
     const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
+    // Every way out of the read loop below passes through here: the attempt is over the moment its
+    // chunk stream terminates, and a latch left set would refuse every later turn.
+    const endAttempt = () => {
+      this.attemptLive = false;
+    };
 
     return new ReadableStream<UIMessageChunk>({
       async pull(controller) {
@@ -269,6 +329,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'tool-input-start':
               ensureStep();
+              announced.add(event.id);
               controller.enqueue({
                 type: 'tool-input-start',
                 toolCallId: event.id,
@@ -291,6 +352,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'tool-input-available':
               ensureStep();
+              announced.add(event.id);
               controller.enqueue({
                 type: 'tool-input-available',
                 toolCallId: event.id,
@@ -300,6 +362,28 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                   ? { toolMetadata: { toolKind: event.toolKind } }
                   : {}),
               });
+              break;
+            case 'elicitation':
+              ensureStep();
+              // An authored intake asks before the turn's first model call, so nothing announced
+              // the call this question set is parked under — open it here, carrying the request as
+              // the part's input, which is exactly what the store persists as the call's input and
+              // therefore what a reloaded thread replays. The model's own `ask` announced its call
+              // itself, and re-stating it would fire a consumer's `onToolCall` twice.
+              if (!announced.has(event.id)) {
+                announced.add(event.id);
+                controller.enqueue({
+                  type: 'tool-input-available',
+                  toolCallId: event.id,
+                  toolName: ASK_TOOL_NAME,
+                  input: {
+                    ...(event.request.preamble !== undefined
+                      ? { preamble: event.request.preamble }
+                      : {}),
+                    questions: event.request.questions,
+                  },
+                });
+              }
               break;
             case 'tool-output':
               ensureStep();
@@ -326,6 +410,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           closeStep();
           controller.enqueue({ type: 'finish' });
           controller.close();
+          endAttempt();
         }
         try {
           while (true) {
@@ -348,6 +433,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 ensureStarted();
                 controller.enqueue({ type: 'error', errorText: parseErrorText(frame.data) });
                 controller.close();
+                endAttempt();
                 return;
               }
               if (frame.event === 'meta') {
@@ -366,10 +452,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
             errorText: error instanceof Error ? error.message : 'Agent stream error',
           });
           controller.close();
+          endAttempt();
         }
       },
       cancel() {
         void reader.cancel();
+        endAttempt();
       },
     });
   }

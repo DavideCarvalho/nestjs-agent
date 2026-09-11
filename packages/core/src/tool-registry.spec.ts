@@ -5,6 +5,7 @@ import {
   type Actor,
   type AiToolCtx,
   DefaultRolesPolicy,
+  type RolesPolicy,
   ToolDisabledError,
   ToolForbiddenError,
   type ToolHandler,
@@ -84,6 +85,50 @@ describe('ToolRegistry', () => {
       'getWeather',
     ]);
     expect(defs.map((d) => d.name)).toEqual(['getWeather']);
+  });
+
+  it('asks the gates about the pinned tools only, not about every tool registered', async () => {
+    const asked = { enabled: 0, role: 0, canUse: 0 };
+    const reg = new ToolRegistry();
+    for (let index = 0; index < 200; index += 1) {
+      reg.register(
+        {
+          name: `tool-${index}`,
+          kind: 'read',
+          description: 'a tool',
+          inputSchema: z.object({}),
+          enabled: async () => {
+            asked.enabled += 1;
+            return true;
+          },
+        },
+        {
+          execute: async () => null,
+          canUse: async () => {
+            asked.canUse += 1;
+            return true;
+          },
+        },
+      );
+    }
+    const counting: RolesPolicy = {
+      can: async () => {
+        asked.role += 1;
+        return true;
+      },
+    };
+
+    const defs = await reg.definitionsFor({ id: 'u1', roles: ['ADMIN'] }, counting, [
+      'tool-3',
+      'tool-7',
+      'tool-11',
+    ]);
+
+    expect(defs.map((d) => d.name)).toEqual(['tool-3', 'tool-7', 'tool-11']);
+    // The COUNTS are the point, not the result: each of these gates may be a round trip (an authz
+    // service, a feature-flag store, an MCP server), and this runs once per model step. Asking about
+    // the 197 tools the agent pinned away is 3N calls nobody reads the answer to.
+    expect(asked).toEqual({ enabled: 3, role: 3, canUse: 3 });
   });
 
   it('invokes a read tool, re-parsing input via Zod', async () => {

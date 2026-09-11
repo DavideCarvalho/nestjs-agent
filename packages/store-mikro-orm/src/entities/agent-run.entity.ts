@@ -1,8 +1,14 @@
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 
-/** A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only. */
-export type AgentRunStatus = 'running' | 'completed' | 'failed';
+/**
+ * A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only.
+ *
+ * `cancelled` is a third TERMINAL, not a flavour of `failed`: someone asked the run to stop and it
+ * did. A reliability read that folded it into `failed` would page whoever is on call for model
+ * failures every time a user pressed Stop.
+ */
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * One recorded run (turn) outcome — the durable half of what `aviary:agent:*` diagnostics report
@@ -24,6 +30,13 @@ export class AgentRun {
   settledAt?: Date | null;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a run recorded before this shipped. */
   promptHash?: string | null;
+  /**
+   * The run that delegated this one; null for a turn nobody delegated. The durable runtime's journal
+   * holds the same edge, but only there — this column is what lets a reader of run ROWS build the
+   * delegation tree and roll a child's cost up to the turn that asked for it, including for a
+   * detached child, which outlives its parent's turn and so is paired by nothing in the transcript.
+   */
+  parentRunId?: string | null;
   declare [EntityRepositoryType]?: AgentRunRepository;
 }
 
@@ -57,6 +70,7 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
       startedAt: { type: 'datetime', fieldName: 'started_at' },
       settledAt: { type: 'datetime', nullable: true, fieldName: 'settled_at' },
       promptHash: { type: 'string', nullable: true, fieldName: 'prompt_hash', ...str },
+      parentRunId: { type: 'string', nullable: true, fieldName: 'parent_run_id', ...str },
     },
   });
 }

@@ -1,10 +1,17 @@
 import type {
   ActorResolver,
+  AgentHistoryWindow,
   AgentStore,
+  HistoryPolicy,
+  InputProcessor,
+  MemoryProvider,
   ModelProvider,
+  OutputProcessor,
   QuotaStore,
   Retriever,
   RolesPolicy,
+  ScopeResolver,
+  SkillProvider,
   TokenStreamSink,
   ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
@@ -57,6 +64,63 @@ export interface AgentAttachmentsOptions {
    * fails boot loudly instead of silently mounting a controller that 501s on every request.
    */
   upload?: boolean;
+}
+
+/**
+ * `AgentModuleOptions.skills` — where a turn's skills come from, and which scopes an actor draws
+ * them from. Its PRESENCE turns skills on: `skills: {}` offers whatever the `@Skill`-decorated
+ * providers declare, resolved against the actor's own, their tenant's and the deployment's scopes.
+ */
+export interface AgentSkillsOptions {
+  /**
+   * A provider of your own — skills a host stores and administers itself (per user, per sector, per
+   * base). Merged with the discovered `@Skill` classes, and outranking them for a name published at
+   * the same scope. Omit → the decorated classes are the whole catalog.
+   */
+  provider?: SkillProvider;
+  /**
+   * Which scope tokens an actor draws from, most specific first — the precedence order. Omit → the
+   * actor's own (`actor:<id>`), their tenant's (`tenant:<ref>`, when they have one), and `global`.
+   * Supply one to add an axis this library has no key for: a sector, a squadron, a shift.
+   */
+  scopes?: ScopeResolver;
+  /**
+   * How many skills the catalog block offers before it starts leaving the widest ones out. Omit →
+   * 20. A ceiling on what the SYSTEM PROMPT carries, not on how many a deployment may hold.
+   */
+  maxSkills?: number;
+}
+
+/**
+ * `AgentModuleOptions.memory` — where what the assistant concluded about a person is stored, and how
+ * much of it a turn may carry. Its PRESENCE turns memory on.
+ *
+ * Unlike `skills`, there is no decorator and no zero-config form: a memory is by definition something
+ * the agent worked out about someone, so a memory a developer wrote in a class would be an
+ * instruction wearing a memory's clothes — which is what `@Skill` and `@SystemPromptContributor()`
+ * are for. The rows are the host's from the start.
+ */
+export interface AgentMemoryOptions {
+  /**
+   * Where the rows live. `forget` is required on it; `write` is what decides the `remember` tool;
+   * `search` is what decides whether a turn's block is selected by relevance or read whole. Supply
+   * `search` once the applicable set outgrows `maxMemories` — without it the ceiling selects by
+   * scope, and the widest scopes are the ones it starves.
+   */
+  provider: MemoryProvider;
+  /**
+   * Which scope tokens an actor draws from, most specific first — the precedence order, and the same
+   * seam `skills` uses. Omit → the actor's own, their tenant's, and `global`.
+   */
+  scopes?: ScopeResolver;
+  /**
+   * How many memories the block carries. Omit → 20. A budget on the PROMPT, never on the store: with
+   * a provider that can `search`, this is how many matter right now rather than how many a person
+   * may have. Always-on (`pinned`) memories are taken from it first.
+   */
+  maxMemories?: number;
+  /** How long one memory may be, checked when it is written. Omit → 240. */
+  maxFactChars?: number;
 }
 
 export interface AgentModuleOptions {
@@ -149,6 +213,80 @@ export interface AgentModuleOptions {
    * this — instead expose the tool: `provideAgentTool(createRetrievalTool(retriever))`. Omit → off.
    */
   retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
+
+  /**
+   * Bounds how much of a thread rides into each turn. Omit and a turn carries EVERY message the
+   * thread holds, so a long-lived thread costs more each time and eventually exceeds the model's
+   * context limit outright. `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit;
+   * `{ summarize: true }` folds what they left out into a leading summary, at the price of one extra
+   * model call per run (recorded as `history_summary` usage). An agent can override this for itself
+   * with `@Agent({ history })`.
+   */
+  history?: AgentHistoryWindow;
+  /**
+   * A {@link HistoryPolicy} of your own — for a window the built-in can't express (pinning the
+   * thread's opening brief, keeping every message that carries a tool result, a budget that varies
+   * by actor). A convenience-vs-custom pair like `quotaLimitTokens`/`quota`: this outranks a
+   * module-wide `history`, and `@Agent({ history })` outranks both for the agent that declares it.
+   * `select` MUST be pure — see the SPI's determinism contract.
+   */
+  historyPolicy?: HistoryPolicy;
+
+  /**
+   * Rewrites the prompt before every model call — masking identifiers, stamping a policy preamble,
+   * trimming an oversized tool result. Applies to EVERY agent: a transformation one persona can opt
+   * out of is not a control. Transformation only; `history`/`historyPolicy` still own which messages
+   * are there to transform. A processor needing DI-resolved dependencies is built in
+   * `forRootAsync`'s `useFactory` (which has `inject`), the same way `retrieval.retriever` is.
+   */
+  inputProcessors?: InputProcessor[];
+  /**
+   * Gates every model answer before the stream, the store or the next step sees it — redact,
+   * replace, or refuse the turn outright (which fails it with an `output_rejected` stream error).
+   *
+   * REGISTERING ONE TURNS OFF LIVE TOKEN STREAMING. Reading the whole answer and streaming it as it
+   * is generated cannot both be true, so the turn's model output is buffered and released in one
+   * frame once the chain passes. That is the price of a gate that actually gates; see
+   * `AgentLoopDeps.outputProcessors` for exactly what a subscriber still receives live.
+   */
+  outputProcessors?: OutputProcessor[];
+
+  /**
+   * Offer every agent the built-in `ask` tool, so the model can put its own clarifying question set
+   * to the user when it judges the scope is missing. The turn parks on the answers exactly as it
+   * parks on a HITL approval, and they arrive through `POST /agent/tool-call/answer`.
+   *
+   * `ask` is not a registered tool and has no handler — the loop settles it against a person — so no
+   * `RolesPolicy` gates it: asking a question performs nothing. An `@Agent({ ask })` overrides this
+   * for one persona. Omit → the model never sees it, and nothing about a turn changes.
+   */
+  ask?: boolean;
+
+  /**
+   * Authored procedures any agent may pull in when a task calls for one — per-user, per-tenant or
+   * deployment-wide, with the most specific winning. Declared as `@Skill`-decorated providers and/or
+   * served by a `provider` of your own; offered to the model as a one-line-each catalog it loads
+   * from on demand, so an instruction costs a prompt only on the turns that need it.
+   *
+   * Omit → no catalog, no `skill` tool, and a turn's checkpoint sequence is byte-identical to one
+   * that never had the option. See {@link AgentSkillsOptions}.
+   */
+  skills?: AgentSkillsOptions;
+
+  /**
+   * What the assistant has concluded about the actor and their organisation, carried into every turn
+   * as a bounded block of one-line facts and written by the model through a built-in `remember` tool.
+   *
+   * NOT the same thing as retrieval, and not a second name for it: `retrieval` answers from documents
+   * a person curated and can fix at the source, memory answers from the agent's own inferences about
+   * someone who never saw them written. That is why the rows carry an origin, why the block tells the
+   * model they may be wrong, and why `GET /agent/memories` + `DELETE /agent/memories/:id` are part of
+   * the feature rather than an optional console.
+   *
+   * Omit → no block, no `remember` tool, and a turn's checkpoint sequence is byte-identical to one
+   * that never had the option. See {@link AgentMemoryOptions}.
+   */
+  memory?: AgentMemoryOptions;
 
   /**
    * The name of the agent a turn uses when the caller doesn't select one. Omit → the single

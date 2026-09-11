@@ -1,4 +1,5 @@
 import type {
+  MessageAttachment,
   MessageRole,
   MessageUsage,
   ToolCallRequest,
@@ -7,6 +8,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { TablesRelationalConfig } from 'drizzle-orm';
 import {
   type BaseSQLiteDatabase,
   index,
@@ -38,6 +40,8 @@ export const agentThread = sqliteTable(
     title: text('title').notNull(),
     transient: integer('transient', { mode: 'boolean' }).notNull().default(false),
     activeStreamId: text('active_stream_id'),
+    /** The agent a new turn on this thread defaults to when the caller names none. */
+    defaultAgent: text('default_agent'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
@@ -61,33 +65,45 @@ export const agentMessage = sqliteTable(
     content: text('content').notNull(),
     toolCalls: text('tool_calls', { mode: 'json' }).$type<ToolCallRequest[]>(),
     toolResults: text('tool_results', { mode: 'json' }).$type<ToolResult[]>(),
+    attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),
     followUps: text('follow_ups', { mode: 'json' }).$type<string[]>(),
     usage: text('usage', { mode: 'json' }).$type<MessageUsage>(),
     agentName: text('agent_name'),
+    runId: text('run_id'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_message_thread_created_idx').on(table.threadId, table.createdAt)],
 );
 
-/** A tool call requested during an assistant turn. The pk is the model-supplied `toolCallId`. */
-export const agentToolCall = sqliteTable('agent_tool_call', {
-  id: text('id').primaryKey(),
-  messageId: text('message_id')
-    .notNull()
-    .references(() => agentMessage.id, { onDelete: 'cascade' }),
-  toolName: text('tool_name').notNull(),
-  toolType: text('tool_type').$type<ToolKind>().notNull(),
-  input: text('input', { mode: 'json' }),
-  output: text('output', { mode: 'json' }),
-  status: text('status').$type<ToolCallStatus>().notNull(),
-  executedByRef: text('executed_by_ref'),
-  executionMs: integer('execution_ms'),
-  error: text('error'),
-  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
-  /** The run (turn) this call belongs to, for a trace deep-link; null for a pre-rollout row. */
-  runId: text('run_id'),
-});
+/**
+ * A tool call requested during an assistant turn. The pk is the model-supplied `toolCallId`.
+ *
+ * `messageId` carries its own index rather than relying on the foreign key: MySQL indexes a foreign
+ * key column for you, Postgres does not — and every message-scoped read here filters on it (the
+ * thread reader's `IN (…)` over a turn's calls, and `truncateFrom`'s delete).
+ */
+export const agentToolCall = sqliteTable(
+  'agent_tool_call',
+  {
+    id: text('id').primaryKey(),
+    messageId: text('message_id')
+      .notNull()
+      .references(() => agentMessage.id, { onDelete: 'cascade' }),
+    toolName: text('tool_name').notNull(),
+    toolType: text('tool_type').$type<ToolKind>().notNull(),
+    input: text('input', { mode: 'json' }),
+    output: text('output', { mode: 'json' }),
+    status: text('status').$type<ToolCallStatus>().notNull(),
+    executedByRef: text('executed_by_ref'),
+    executionMs: integer('execution_ms'),
+    error: text('error'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
+    /** The run (turn) this call belongs to, for a trace deep-link; null for a pre-rollout row. */
+    runId: text('run_id'),
+  },
+  (table) => [index('agent_tool_call_message_idx').on(table.messageId)],
+);
 
 /** A token-usage ledger row, summed per actor per day by `quotaToday`. */
 export const agentTokenUsage = sqliteTable(
@@ -128,8 +144,14 @@ export const agentModelPricing = sqliteTable('agent_model_pricing', {
   isCurrent: integer('is_current', { mode: 'boolean' }).notNull(),
 });
 
-/** A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only. */
-export type AgentRunStatus = 'running' | 'completed' | 'failed';
+/**
+ * A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only.
+ *
+ * `cancelled` is a third TERMINAL, not a flavour of `failed`: someone asked the run to stop and it
+ * did. A reliability read that folded it into `failed` would page whoever is on call for model
+ * failures every time a user pressed Stop.
+ */
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * One recorded run (turn) outcome — the durable half of what `aviary:agent:*` diagnostics report
@@ -157,6 +179,14 @@ export const agentRun = sqliteTable(
     settledAt: integer('settled_at', { mode: 'timestamp_ms' }),
     /** sha256 hex of the run's resolved (pre-RAG) system prompt; null for a pre-existing run. */
     promptHash: text('prompt_hash'),
+    /**
+     * The run that delegated this one; null for a turn nobody delegated. The durable runtime's
+     * journal holds the same edge, but only there — this column is what lets a reader of run ROWS
+     * build the delegation tree and roll a child's cost up to the turn that asked for it, including
+     * for a detached child, which outlives its parent's turn and so is paired by nothing in the
+     * transcript.
+     */
+    parentRunId: text('parent_run_id'),
   },
   (table) => [index('agent_run_started_idx').on(table.startedAt)],
 );
@@ -176,7 +206,12 @@ export const agentSchema = {
  * driver (better-sqlite3, libsql, D1, …) in either sync or async result mode; the host app owns
  * the connection and passes the `drizzle(...)` instance in.
  */
-export type AgentDrizzleDb = BaseSQLiteDatabase<'sync' | 'async', unknown>;
+export type AgentDrizzleDb = BaseSQLiteDatabase<
+  'sync' | 'async',
+  unknown,
+  Record<string, unknown>,
+  TablesRelationalConfig
+>;
 
 /** A persisted thread row as Drizzle selects it. */
 export type AgentThreadRow = typeof agentThread.$inferSelect;

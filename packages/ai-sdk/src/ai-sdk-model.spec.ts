@@ -11,6 +11,7 @@ vi.mock('ai', () => ({
   streamText: (args: unknown) => streamTextMock(args),
   tool: (definition: unknown) => definition,
   jsonSchema: (schema: unknown) => ({ jsonSchema: schema }),
+  Output: { object: (options: unknown) => ({ outputSpec: options }) },
 }));
 
 interface CollectingSink extends SinkWriter {
@@ -25,6 +26,7 @@ function createSink(): CollectingSink {
       written += decoder.decode(chunk);
     },
     end() {},
+    fail() {},
     get written() {
       return written;
     },
@@ -317,5 +319,60 @@ describe('aiSdkModel', () => {
     const call = streamTextMock.mock.calls[0]?.[0];
     // Pass-through: the SDK receives the original standard schema, not a jsonSchema() wrapper.
     expect(call.tools.lookup.inputSchema).toBe(converterSchema.inputSchema);
+  });
+});
+
+describe('aiSdkModel — structured output', () => {
+  const schema: StandardSchemaV1 = {
+    '~standard': { version: 1, vendor: 'zod', validate: (value: unknown) => ({ value }) },
+  };
+
+  beforeEach(() => {
+    streamTextMock.mockReset();
+  });
+
+  it('asks for no response format when the turn declares no schema', async () => {
+    streamTextMock.mockReturnValue(fakeStreamResult());
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: 's',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+    });
+    expect(streamTextMock.mock.calls[0]?.[0]).not.toHaveProperty('output');
+  });
+
+  it('hands the schema to the SDK’s object output spec and returns what it parsed', async () => {
+    streamTextMock.mockReturnValue(
+      fakeStreamResult({ output: Promise.resolve({ headline: 'all clean' }) }),
+    );
+    const result = await aiSdkModel('openai/gpt-4o').runTurn({
+      system: 's',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+      outputSchema: schema,
+    });
+    expect(streamTextMock.mock.calls[0]?.[0]).toMatchObject({
+      output: { outputSpec: { schema } },
+    });
+    expect(result.object).toEqual({ headline: 'all clean' });
+  });
+
+  it('reports no object rather than throwing when the SDK refuses to parse one', async () => {
+    streamTextMock.mockReturnValue(
+      fakeStreamResult({ output: Promise.reject(new Error('NoObjectGeneratedError')) }),
+    );
+    const result = await aiSdkModel('openai/gpt-4o').runTurn({
+      system: 's',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+      outputSchema: schema,
+    });
+    // The loop turns the unparsed text into a repairable `StructuredOutputError`; throwing here
+    // would take that away and leave the caller a provider stack trace instead.
+    expect(result).not.toHaveProperty('object');
+    expect(result.text).toBe('Hello');
   });
 });

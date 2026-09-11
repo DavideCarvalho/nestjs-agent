@@ -1,12 +1,20 @@
 // Integration: MikroOrmAgentStore + ensureAgentSchema against an in-memory SQLite
 // (better-sqlite3, via @mikro-orm/sqlite). Runs only under `pnpm test:db`.
-import type { StoredMessage, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type {
+  RecordRunEndInput,
+  RecordRunStartInput,
+  StoredMessage,
+  ThreadSummary,
+  UpdateThreadInput,
+} from '@dudousxd/nestjs-agent-core';
+import { EVERY_MESSAGE_FIELD } from '@dudousxd/nestjs-agent-testing';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
 import { agentManagedTables, ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
-import { AgentRun } from './entities/agent-run.entity';
+import { AgentMessage } from './entities/agent-message.entity';
+import { AgentRun, type AgentRunStatus } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
@@ -417,5 +425,434 @@ describe('agentSchemaSql', () => {
     } finally {
       await fresh.close(true);
     }
+  });
+});
+
+describe('MikroOrmAgentStore — a turn a client reads back', () => {
+  it('pairs every tool call on a message with the result the turn settled it with', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [
+        { id: 'c1', name: 'lookup', input: {}, kind: 'read' },
+        { id: 'c2', name: 'retrieve', input: { query: 'refunds' }, kind: 'read' },
+      ],
+      toolResults: [{ id: 'c2', name: 'retrieve', output: { passages: [] } }],
+    });
+
+    await store.setMessageToolResults(message.id, [
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+
+    const stored = (await store.getThread(thread.id))?.messages.find(
+      (candidate) => candidate.id === message.id,
+    );
+    // The message's own list, in the order the turn settled it — not one re-derived from the
+    // tool-call rows, whose order is their own and whose shape for a rejection is not this one.
+    expect(stored?.toolResults).toEqual([
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+  });
+
+  it('completes a message that carries calls and no results of its own from their rows', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [{ id: 'orphan-1', name: 'lookup', input: {}, kind: 'read' }],
+    });
+    await store.recordToolCall({
+      toolCallId: 'orphan-1',
+      messageId: message.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+    await store.updateToolCall({
+      toolCallId: 'orphan-1',
+      status: 'executed',
+      output: { rows: 2 },
+    });
+
+    const stored = (await store.getThread(thread.id))?.messages.find(
+      (candidate) => candidate.id === message.id,
+    );
+    expect(stored?.toolResults).toEqual([{ id: 'orphan-1', name: 'lookup', output: { rows: 2 } }]);
+  });
+});
+
+describe('MikroOrmAgentStore — a thread patch a client reads back', () => {
+  /**
+   * Typed `Required<UpdateThreadInput>` so a new field on the patch fails to COMPILE here until this
+   * adapter round-trips it. The column and the write existed; `toSummary` never emitted the value,
+   * so `getThread` reported no default agent and a turn fell back to the module's.
+   */
+  const EVERY_PATCH_FIELD: Required<UpdateThreadInput> = {
+    title: 'Renamed',
+    defaultAgent: 'researcher',
+  };
+
+  it('returns every patched field from getThread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch' } });
+
+    await store.updateThread(thread.id, EVERY_PATCH_FIELD);
+
+    expect(await store.getThread(thread.id)).toMatchObject(EVERY_PATCH_FIELD);
+  });
+
+  it('reports a never-set default agent as null, and clears it on an explicit null', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch-2' } });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBe('researcher');
+
+    await store.updateThread(thread.id, { defaultAgent: null });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+  });
+
+  it('reads the default agent without materializing the thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-projection' } });
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect(await store.defaultAgentForThread(thread.id)).toBe('researcher');
+
+    expect(await store.defaultAgentForThread('missing')).toBeNull();
+    await store.softDeleteThread(thread.id);
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+  });
+});
+
+/**
+ * Every terminal the SPI can hand a store has to be NAMEABLE by the row it lands in. The
+ * `satisfies` is the whole check: a `recordRunEnd` declaring a narrower parameter still accepts
+ * `'cancelled'` and writes it through (method parameters are bivariant), so at runtime nothing is
+ * wrong — but the entity tells every reader a cancelled run is impossible, and a reliability read
+ * then has no way to leave a user pressing Stop out of its failure count.
+ */
+const TERMINALS = ['completed', 'failed', 'cancelled'] as const satisfies readonly (AgentRunStatus &
+  RecordRunEndInput['status'])[];
+
+describe('MikroOrmAgentStore — the terminals a run can settle on', () => {
+  it('records and reads back each of them', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-terminals' } });
+
+    for (const status of TERMINALS) {
+      const runId = `run-${status}`;
+      await store.recordRunStart({ runId, threadId: thread.id, actorRef: 'actor-terminals' });
+      await store.recordRunEnd({ runId, status, durationMs: 42 });
+
+      const settled = await orm.em.fork().findOne(AgentRun, { id: runId });
+      expect(settled?.status).toBe(status);
+      expect(settled?.durationMs).toBe(42);
+    }
+  });
+
+  it('leaves a cancelled run undiagnosed — a stop is not an error', async () => {
+    const cancelled = await orm.em.fork().findOne(AgentRun, { id: 'run-cancelled' });
+    expect(cancelled?.errorCode).toBeNull();
+    expect(cancelled?.errorMessage).toBeNull();
+  });
+});
+
+describe('agent_tool_call.message_id is indexed', () => {
+  it('renders an index on the column the message-scoped reads run against', async () => {
+    // `loadToolResults`' IN (…) and `truncateFrom`'s delete both filter on this column, and MySQL
+    // indexes a foreign key for you while Postgres does not. Here the index comes from the ORM (it
+    // indexes every m:1 on any SQL platform), so the entity declares none of its own — a second
+    // declared index would be a duplicate on every dialect. This pins the coverage we're relying on.
+    const statements = await agentSchemaSql(orm, { ifNotExists: false });
+    expect(
+      statements.some(
+        (sql) =>
+          /^create index/i.test(sql) && /agent_tool_call/.test(sql) && /message_id/.test(sql),
+      ),
+    ).toBe(true);
+  });
+});
+
+const IMAGE = { url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' };
+
+describe('MikroOrmAgentStore — which media a live message still references', () => {
+  it('reports the referenced subset, scoped to the asking actor', async () => {
+    const mine = await store.createThread({ actor: { id: 'actor-ref-1' } });
+    const theirs = await store.createThread({ actor: { id: 'actor-ref-2' } });
+    await store.appendMessage({
+      threadId: mine.id,
+      role: 'user',
+      content: 'mine',
+      attachments: [{ mediaId: 'ref-mine', ...IMAGE }],
+    });
+    await store.appendMessage({
+      threadId: theirs.id,
+      role: 'user',
+      content: 'theirs',
+      attachments: [{ mediaId: 'ref-theirs', ...IMAGE }],
+    });
+
+    expect(
+      await store.referencedMediaIds('actor-ref-1', ['ref-mine', 'ref-theirs', 'ref-never']),
+    ).toEqual(['ref-mine']);
+  });
+
+  it('re-derives after truncateFrom, so a regenerated turn frees its media again', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-3' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'ref-sent', ...IMAGE }],
+    });
+    expect(await store.referencedMediaIds('actor-ref-3', ['ref-sent'])).toEqual(['ref-sent']);
+
+    await store.truncateFrom(thread.id, message.id);
+
+    expect(await store.referencedMediaIds('actor-ref-3', ['ref-sent'])).toEqual([]);
+  });
+
+  it('still counts a reference held by a soft-deleted thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-4' } });
+    await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'ref-kept', ...IMAGE }],
+    });
+
+    await store.softDeleteThread(thread.id);
+
+    // The message row survives a soft delete, so the bytes it points at are not garbage yet — a
+    // host that wants them collected removes the thread for real and lets the cascade do it.
+    expect(await store.referencedMediaIds('actor-ref-4', ['ref-kept'])).toEqual(['ref-kept']);
+  });
+
+  it('carries every message field onto a fork', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-fork' } });
+    const appended = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'here it is',
+      ...EVERY_MESSAGE_FIELD,
+    });
+
+    const fork = await store.forkThread(thread.id, appended.id);
+
+    const [copied] = (await store.getThread(fork.id))?.messages ?? [];
+    expect(copied).toMatchObject(EVERY_MESSAGE_FIELD);
+  });
+});
+
+/**
+ * What a turn reads off a thread is a WINDOW — the last few messages, the title, and whether the
+ * thread has ever been answered. `getThread` hands back the transcript instead: every message, every
+ * attachment, every tool output the thread ever recorded, all of it parsed and then journaled by the
+ * run. A 50-turn thread whose turns each ran a 50 KB tool is 1.9 MB of that, 97% tool results.
+ */
+describe('MikroOrmAgentStore — the window a turn reads off a thread', () => {
+  let windowOrm: MikroORM;
+  let windowStore: MikroOrmAgentStore;
+  const queries: string[] = [];
+
+  beforeAll(async () => {
+    windowOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+      debug: ['query'],
+      logger: (message) => queries.push(message),
+    });
+    await ensureAgentSchema(windowOrm);
+    windowStore = new MikroOrmAgentStore(windowOrm.em);
+  });
+
+  afterAll(async () => {
+    await windowOrm?.close(true);
+  });
+
+  /** A thread whose first message is the assistant's and whose last `count` are the user's. */
+  async function threadOf(actorRef: string, count: number): Promise<ThreadSummary> {
+    const thread = await windowStore.createThread({ actor: { id: actorRef }, title: 'Long chat' });
+    const appended = [
+      await windowStore.appendMessage({
+        threadId: thread.id,
+        role: 'assistant',
+        content: 'the first answer',
+      }),
+    ];
+    for (let index = 1; index <= count; index += 1) {
+      appended.push(
+        await windowStore.appendMessage({
+          threadId: thread.id,
+          role: 'user',
+          content: `question ${index}`,
+        }),
+      );
+    }
+    // One second each. They are appended within the same millisecond, and the tiebreak after
+    // `created_at` is a random uuid — so which two a window of two holds would be decided by chance.
+    const em = windowOrm.em.fork();
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    for (const [index, message] of appended.entries()) {
+      await em.nativeUpdate(
+        AgentMessage,
+        { id: message.id },
+        { createdAt: new Date(base + index * 1000) },
+      );
+    }
+    return thread;
+  }
+
+  /** The reads that pull message CONTENT — not the one-column count of assistant messages. */
+  function transcriptReads(): string[] {
+    return queries.filter((query) => /select .*`content`.*from `agent_message`/i.test(query));
+  }
+
+  it('returns the newest messages, oldest first, with the fields the turn reads off the thread', async () => {
+    const thread = await threadOf('actor-window', 4);
+    await windowStore.updateThread(thread.id, { defaultAgent: 'researcher' });
+
+    const page = await windowStore.loadThreadForTurn({ threadId: thread.id, messageLimit: 2 });
+
+    expect(page?.messages.map((message) => message.content)).toEqual(['question 3', 'question 4']);
+    expect(page?.title).toBe('Long chat');
+    expect(page?.defaultAgent).toBe('researcher');
+  });
+
+  it('counts an assistant message the window does not reach', async () => {
+    // A thread-start intake asks "has this been answered before?". Answered off the PAGE, a long
+    // thread whose window holds only the user's last questions re-introduces itself every turn.
+    const thread = await threadOf('actor-window-assistant', 3);
+
+    const page = await windowStore.loadThreadForTurn({ threadId: thread.id, messageLimit: 2 });
+
+    expect(page?.messages.some((message) => message.role === 'assistant')).toBe(false);
+    expect(page?.hasAssistantMessage).toBe(true);
+  });
+
+  it('asks the database for the window, not for the transcript', async () => {
+    const thread = await threadOf('actor-window-sql', 4);
+    queries.length = 0;
+
+    await windowStore.loadThreadForTurn({ threadId: thread.id, messageLimit: 2 });
+
+    const [read] = transcriptReads();
+    expect(read).toMatch(/limit/i);
+    // Named columns, not `a0`.* — the ones a model turn never reads stay in the table.
+    expect(read).toMatch(/`content`/);
+    expect(read).not.toMatch(/`a0`\.\*/);
+    expect(read).not.toMatch(/`usage`/);
+    expect(read).not.toMatch(/`follow_ups`/);
+  });
+
+  it('reads no messages at all for an empty window', async () => {
+    const thread = await threadOf('actor-window-zero', 2);
+    queries.length = 0;
+
+    const page = await windowStore.loadThreadForTurn({ threadId: thread.id, messageLimit: 0 });
+
+    expect(page?.messages).toEqual([]);
+    expect(page?.hasAssistantMessage).toBe(true);
+    expect(transcriptReads()).toEqual([]);
+  });
+
+  it('returns the whole thread when no window is asked for', async () => {
+    const thread = await threadOf('actor-window-all', 2);
+
+    const page = await windowStore.loadThreadForTurn({ threadId: thread.id });
+
+    expect(page?.messages.map((message) => message.content)).toEqual([
+      'the first answer',
+      'question 1',
+      'question 2',
+    ]);
+  });
+
+  it('carries the tool results of a message inside the window', async () => {
+    const thread = await windowStore.createThread({ actor: { id: 'actor-window-tools' } });
+    const message = await windowStore.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [{ id: 'w1', name: 'lookup', input: {}, kind: 'read' }],
+    });
+    await windowStore.recordToolCall({
+      toolCallId: 'w1',
+      messageId: message.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+    await windowStore.updateToolCall({ toolCallId: 'w1', status: 'executed', output: { rows: 2 } });
+
+    const page = await windowStore.loadThreadForTurn({ threadId: thread.id, messageLimit: 1 });
+
+    expect(page?.messages[0]?.toolResults).toEqual([
+      { id: 'w1', name: 'lookup', output: { rows: 2 } },
+    ]);
+  });
+
+  it('has nothing to load for a thread that is unknown or soft-deleted', async () => {
+    const thread = await threadOf('actor-window-gone', 1);
+    expect(await windowStore.loadThreadForTurn({ threadId: 'missing' })).toBeNull();
+
+    await windowStore.softDeleteThread(thread.id);
+
+    expect(await windowStore.loadThreadForTurn({ threadId: thread.id })).toBeNull();
+  });
+});
+
+/**
+ * Everything `recordRunStart` is handed has to land in a column. `parentRunId` — the run that
+ * delegated this one — is the case that made this check: the durable journal holds the parent edge
+ * and nothing else does, so a run-row reader cannot roll a delegation's cost up to the turn that
+ * asked for it, and a DETACHED child outlives its parent's turn, so the transcript cannot pair them
+ * either. Typed `Required<RecordRunStartInput>` so the next field fails to COMPILE here first.
+ */
+function everyRunStartField(threadId: string): Required<RecordRunStartInput> {
+  return {
+    runId: 'run-child',
+    threadId,
+    actorRef: 'actor-run-fields',
+    agentName: 'researcher',
+    parentRunId: 'run-parent',
+    promptHash: 'a'.repeat(64),
+  };
+}
+
+describe('MikroOrmAgentStore — a recorded run round-trips every field it was started with', () => {
+  it('reads all of them back off the row', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-run-fields' } });
+    const started = everyRunStartField(thread.id);
+
+    await store.recordRunStart(started);
+
+    const em = orm.em.fork();
+    expect(await em.findOne(AgentRun, { id: started.runId })).toMatchObject({
+      agentName: started.agentName,
+      parentRunId: started.parentRunId,
+      promptHash: started.promptHash,
+    });
+  });
+
+  it('leaves the parent null for a turn nobody delegated', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-run-root' } });
+
+    await store.recordRunStart({
+      runId: 'run-root',
+      threadId: thread.id,
+      actorRef: 'actor-run-root',
+    });
+
+    const em = orm.em.fork();
+    expect((await em.findOne(AgentRun, { id: 'run-root' }))?.parentRunId ?? null).toBeNull();
   });
 });

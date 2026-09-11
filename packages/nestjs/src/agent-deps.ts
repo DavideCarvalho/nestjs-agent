@@ -1,17 +1,24 @@
 import type {
+  AgentIntake,
   AgentPricingStore,
   AgentStore,
+  HistoryPolicy,
+  InputProcessor,
+  MemoryConfig,
   ModelProvider,
+  OutputProcessor,
   PromptBuilder,
   PromptContributor,
   QuotaStore,
   Retriever,
   RolesPolicy,
   SinkWriter,
+  SkillsConfig,
   TokenStreamSink,
   ToolRegistry,
   ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
 export interface AgentDeps {
@@ -27,6 +34,10 @@ export interface AgentDeps {
   /** App-wide `@SystemPromptContributor()` sections appended after the agent's base prompt. */
   promptContributors: PromptContributor[];
   maxSteps: number;
+  /** Nesting ceiling for delegation below this agent. Undefined → the loop's default. */
+  maxDelegationDepth?: number;
+  /** How many times one agent may appear on a chain. Undefined → the loop's default. */
+  maxAgentAppearances?: number;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
@@ -44,6 +55,30 @@ export interface AgentDeps {
   retrievalTopK?: number;
   /** Bound `AGENT_PRICING_STORE`, when a module (e.g. a store's) provides one. Undefined → no pricing. */
   pricingStore?: AgentPricingStore;
+  /** The agent's history ceiling, resolved from `@Agent({ history })` / module options. Undefined → unbounded. */
+  historyPolicy?: HistoryPolicy;
+  /** Module-wide prompt rewriters, applied before every model call. Empty → none. */
+  inputProcessors: InputProcessor[];
+  /** Module-wide answer gates. NON-EMPTY MEANS THE TURN'S MODEL OUTPUT IS BUFFERED, not streamed. */
+  outputProcessors: OutputProcessor[];
+  /** The agent's `@Agent({ outputSchema })`, resolved from DI — never over the wire. Undefined → free text. */
+  outputSchema?: StandardSchemaV1;
+  /** Extra model calls allowed to repair an answer that failed `outputSchema`. Undefined → 1. */
+  outputRepairAttempts?: number;
+  /** The agent's `@Agent({ intake })` question set, asked before the turn starts. Undefined → none. */
+  intake?: AgentIntake;
+  /** Whether the model may call the built-in `ask` tool this turn. Undefined/false → it never sees it. */
+  ask?: boolean;
+  /**
+   * The resolved skills seam (`forRoot({ skills })` + discovered `@Skill` providers). Undefined →
+   * no catalog, no `skill` tool, and the turn spends no checkpoint on either.
+   */
+  skills?: SkillsConfig;
+  /**
+   * The resolved memory seam (`forRoot({ memory })`). Undefined → no block, no `remember` tool, and
+   * the turn spends no checkpoint on either.
+   */
+  memory?: MemoryConfig;
 }
 
 export function utcDay(date = new Date()): string {

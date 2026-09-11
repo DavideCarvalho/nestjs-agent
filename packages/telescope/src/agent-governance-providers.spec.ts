@@ -138,6 +138,7 @@ const RECENT_RUN_ROWS: RecentRunRow[] = [
     retries: 1,
     startedAt: '2026-07-01T00:00:00.000Z',
     promptHash: 'abcdef0123456789',
+    parentRunId: null,
   },
   {
     runId: 'run2',
@@ -151,6 +152,7 @@ const RECENT_RUN_ROWS: RecentRunRow[] = [
     retries: 0,
     startedAt: '2026-07-02T00:00:00.000Z',
     promptHash: null,
+    parentRunId: null,
   },
 ];
 

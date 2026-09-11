@@ -174,6 +174,28 @@ describe('invokeWithTransientRetry', () => {
     expect(onRetry).not.toHaveBeenCalled();
   });
 
+  it('marker-carrying signal → immediate rethrow with NO isControlFlowError option', async () => {
+    let calls = 0;
+    const onRetry = vi.fn();
+    await expect(
+      invokeWithTransientRetry(
+        async () => {
+          calls += 1;
+          // How a durable suspend actually arrives: a class this package cannot import, carrying
+          // only the global-registry marker. `Object.assign` because a computed class member needs
+          // a `unique symbol`, which `Symbol.for` deliberately isn't.
+          throw Object.assign(new Error('workflow suspended'), {
+            [Symbol.for('aviary:durable:control-flow')]: true,
+          });
+        },
+        { attempts: 3, backoffMs: 1, classify: () => true },
+        { onRetry },
+      ),
+    ).rejects.toThrow('workflow suspended');
+    expect(calls).toBe(1);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it('a custom classify widens what counts as transient', async () => {
     let calls = 0;
     const result = await invokeWithTransientRetry(

@@ -51,6 +51,12 @@ export function RunDetailPanel({
           </div>
         )}
 
+        {run.parentRunId !== null && (
+          <div className="mono mt-3 text-[10px] text-muted-foreground">
+            delegated by <span className="text-foreground">{run.parentRunId}</span>
+          </div>
+        )}
+
         {run.promptHash !== null && (
           <div className="mono mt-3 text-[10px] text-muted-foreground">
             prompt sha256 <span className="text-foreground">{run.promptHash}</span>

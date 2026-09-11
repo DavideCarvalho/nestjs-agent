@@ -22,7 +22,7 @@ running it across the whole monorepo reported **194 errors in 10 packages**:
 | core | 67 |
 | react | 34 |
 | codegen | 32 |
-| store-drizzle | 30 |
+| store-drizzle | 30 → fixed |
 | dashboard | 15 |
 | nestjs | 6 |
 | store-mikro-orm | 4 → fixed |
@@ -32,8 +32,20 @@ running it across the whole monorepo reported **194 errors in 10 packages**:
 | rag | 0 |
 
 Turning it on repo-wide in one commit would have meant blind-fixing 194 errors across packages in a
-single change, which is how you turn a real check into a rubber stamp. So `rag`, `rag-media` and
-`store-mikro-orm` are in; the rest is a standing invitation.
+single change, which is how you turn a real check into a rubber stamp. The rest is a standing
+invitation.
+
+In now: `rag`, `rag-media`, `store-mikro-orm`, `store-drizzle`, `evals`, `mcp`, `testing`. Several of
+those cost nothing — a package written after this check existed tends to report zero, and `testing`
+reported zero on a codebase that predates it. `store-drizzle` is the case for measuring rather than
+estimating: it reported 39 errors, of which 38 were one `AgentDrizzleDb` variance complaint repeated
+at every `new DrizzleAgentStore(db)` in its db specs, and the 39th was a missing devDependency on
+`@dudousxd/nestjs-agent-testing`. Two fixes, not 39. Measure before assuming a package is expensive
+to opt in:
+
+```
+cd packages/<name> && npx tsc -p tsconfig.spec.json 2>&1 | grep -c 'error TS'
+```
 
 To add a package:
 

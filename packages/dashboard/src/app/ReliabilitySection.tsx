@@ -1,3 +1,4 @@
+import type { RecordRunEndInput } from '@dudousxd/nestjs-agent-core';
 import type { RecentRunRow, ReliabilityOverview, RunWhere } from '../client/agent-client';
 import { errorSegments } from '../client/error-breakdown';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
@@ -21,20 +22,31 @@ import {
 } from './ui/table';
 
 /**
- * A run's status is a CLOSED set — `governance-queries.ts` documents `RecentRunRow.status` as
- * 'running' | 'completed' | 'failed' — so the filter offers the three rather than asking an operator
- * to guess the spelling of a value they cannot see.
+ * Every terminal `recordRunEnd` can settle a run on, keyed by the SPI's own union so a new one has
+ * to be answered for here before this file compiles. `cancelled` is a terminal of its own — a user
+ * pressing Stop is the control working, not a failure — and a terminal the filter does not list is
+ * one an operator cannot look at, since the table is filtered server-side.
+ */
+const RUN_TERMINAL_LABELS: Record<RecordRunEndInput['status'], string> = {
+  completed: 'completed',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
+/**
+ * A run's status is a CLOSED set — the terminals above, plus the one a run sits in while it runs —
+ * so the filter offers them rather than asking an operator to guess the spelling of a value they
+ * cannot see.
  *
  * Note the deliberate asymmetry with the tool-call status filter in `RunsToolsSection`, which stays
  * a free-text box: `ToolCallActivityRow.status` is typed as a bare `string` that a store may fill
  * however it likes, and a dropdown there would silently hide whatever it does not list.
  */
-const RUN_STATUS_OPTIONS = [
+export const RUN_STATUS_OPTIONS: readonly { value: string; label: string }[] = [
   { value: '', label: 'any status' },
   { value: 'running', label: 'running' },
-  { value: 'completed', label: 'completed' },
-  { value: 'failed', label: 'failed' },
-] as const;
+  ...Object.entries(RUN_TERMINAL_LABELS).map(([value, label]) => ({ value, label })),
+];
 
 /** Run success rate, failure breakdown, run/failure trend and a paged, filterable recent-runs table. */
 export function ReliabilitySection({

@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useAgentChat } from './use-agent-chat.js';
 
-function sseResponse(frames: string[]) {
+function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -11,29 +11,22 @@ function sseResponse(frames: string[]) {
       controller.close();
     },
   });
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    body,
-    headers: new Headers(),
-  };
+  return new Response(body, { status: 200, statusText: 'OK' });
 }
 
-function jsonResponse() {
-  return {
-    ok: true,
+/** A 200 carrying `body` as JSON; with no body, the empty 200 the client reads as `undefined`. */
+function jsonResponse(body?: unknown): Response {
+  return new Response(body === undefined ? '' : JSON.stringify(body), {
     status: 200,
     statusText: 'OK',
-    headers: new Headers(),
-    text: async () => '',
-  };
+  });
 }
 
 describe('useAgentChat', () => {
   it('streams assistant text and approves a tool call against the live run', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
       calls.push({ url, ...(init ? { init } : {}) });
       if (url.endsWith('/agent/chat')) {
         return sseResponse([
@@ -51,7 +44,7 @@ describe('useAgentChat', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-1',
-        fetch: fetchMock as unknown as typeof fetch,
+        fetch: fetchMock,
       }),
     );
 
@@ -82,8 +75,8 @@ describe('useAgentChat', () => {
   });
 
   it('sends only the latest user message text in the chat request body', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/agent/chat')) {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).endsWith('/agent/chat')) {
         return sseResponse(['data: {"kind":"text","text":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
       }
       return jsonResponse();
@@ -92,7 +85,7 @@ describe('useAgentChat', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-9',
-        fetch: fetchMock as unknown as typeof fetch,
+        fetch: fetchMock,
       }),
     );
 
@@ -102,7 +95,7 @@ describe('useAgentChat', () => {
 
     const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/agent/chat'));
     expect(chatCall).toBeDefined();
-    const body = JSON.parse(String((chatCall?.[1] as RequestInit).body));
+    const body = JSON.parse(String(chatCall?.[1]?.body));
     expect(body).toMatchObject({
       message: 'how many users?',
       threadId: 'thr-9',
@@ -111,7 +104,8 @@ describe('useAgentChat', () => {
 
   it('reuses the backend-created thread on later sends (no new thread per message)', async () => {
     const created: string[] = [];
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
       if (url.endsWith('/agent/chat')) {
         return sseResponse([
           'event: meta\ndata: {"runId":"run-1","threadId":"srv-thread"}\n\n',
@@ -125,7 +119,7 @@ describe('useAgentChat', () => {
     // No threadId option → a "new chat". The backend mints `srv-thread` and reports it via `meta`.
     const { result } = renderHook(() =>
       useAgentChat({
-        fetch: fetchMock as unknown as typeof fetch,
+        fetch: fetchMock,
         onThreadCreated: (id) => created.push(id),
       }),
     );
@@ -139,7 +133,7 @@ describe('useAgentChat', () => {
 
     const chatBodies = fetchMock.mock.calls
       .filter(([url]) => String(url).endsWith('/agent/chat'))
-      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+      .map(([, init]) => JSON.parse(String(init?.body)));
 
     // First send carries no threadId (none exists yet); the second reuses the created one.
     expect(chatBodies[0]).toMatchObject({ message: 'first' });
@@ -151,24 +145,18 @@ describe('useAgentChat', () => {
 
   describe('resume', () => {
     it('fetches the thread on mount and attaches to its active run', async () => {
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/threads/thr-1')) {
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            text: async () =>
-              JSON.stringify({
-                id: 'thr-1',
-                title: 'Resumed thread',
-                transient: false,
-                createdAt: '2026-01-01T00:00:00.000Z',
-                updatedAt: '2026-01-01T00:00:00.000Z',
-                messages: [],
-                activeRunId: 'run-live',
-              }),
-          };
+          return jsonResponse({
+            id: 'thr-1',
+            title: 'Resumed thread',
+            transient: false,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            messages: [],
+            activeRunId: 'run-live',
+          });
         }
         if (url.endsWith('/agent/chat/run-live/stream')) {
           return sseResponse([
@@ -186,7 +174,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-1',
           resume: true,
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
         }),
       );
 
@@ -211,24 +199,18 @@ describe('useAgentChat', () => {
     });
 
     it('does not attach to a stream when the thread has no active run', async () => {
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/threads/thr-2')) {
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            text: async () =>
-              JSON.stringify({
-                id: 'thr-2',
-                title: 'Idle thread',
-                transient: false,
-                createdAt: '2026-01-01T00:00:00.000Z',
-                updatedAt: '2026-01-01T00:00:00.000Z',
-                messages: [],
-                activeRunId: null,
-              }),
-          };
+          return jsonResponse({
+            id: 'thr-2',
+            title: 'Idle thread',
+            transient: false,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            messages: [],
+            activeRunId: null,
+          });
         }
         return jsonResponse();
       });
@@ -237,7 +219,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-2',
           resume: true,
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
         }),
       );
 
@@ -253,9 +235,7 @@ describe('useAgentChat', () => {
     it('never fetches the thread when resume is not set (default false)', async () => {
       const fetchMock = vi.fn(async () => jsonResponse());
 
-      renderHook(() =>
-        useAgentChat({ threadId: 'thr-3', fetch: fetchMock as unknown as typeof fetch }),
-      );
+      renderHook(() => useAgentChat({ threadId: 'thr-3', fetch: fetchMock }));
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(fetchMock).not.toHaveBeenCalled();
@@ -265,7 +245,8 @@ describe('useAgentChat', () => {
   describe('onRunSettled', () => {
     it('fires once with status "completed" when the stream ends on a normal `done` frame', async () => {
       const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/chat')) {
           return sseResponse([
             'event: meta\ndata: {"runId":"run-1","threadId":"thr-1"}\n\n',
@@ -279,7 +260,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-1',
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -293,7 +274,8 @@ describe('useAgentChat', () => {
 
     it('fires once with status "failed" when the stream ends on an `event: error` frame', async () => {
       const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/chat')) {
           return sseResponse([
             'event: meta\ndata: {"runId":"run-2","threadId":"thr-2"}\n\n',
@@ -307,7 +289,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-2',
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -321,7 +303,8 @@ describe('useAgentChat', () => {
 
     it('is not called again per additional send beyond the one fired for that turn', async () => {
       const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/chat')) {
           return sseResponse([
             'event: meta\ndata: {"runId":"run-3","threadId":"thr-3"}\n\n',
@@ -335,7 +318,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-3',
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -350,24 +333,18 @@ describe('useAgentChat', () => {
 
     it('fires on a resumed stream reaching its own `done` frame', async () => {
       const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/threads/thr-4')) {
-          return {
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            headers: new Headers(),
-            text: async () =>
-              JSON.stringify({
-                id: 'thr-4',
-                title: 'Resumed thread',
-                transient: false,
-                createdAt: '2026-01-01T00:00:00.000Z',
-                updatedAt: '2026-01-01T00:00:00.000Z',
-                messages: [],
-                activeRunId: 'run-resumed',
-              }),
-          };
+          return jsonResponse({
+            id: 'thr-4',
+            title: 'Resumed thread',
+            transient: false,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            messages: [],
+            activeRunId: 'run-resumed',
+          });
         }
         if (url.endsWith('/agent/chat/run-resumed/stream')) {
           return sseResponse([
@@ -383,7 +360,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-4',
           resume: true,
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -393,15 +370,10 @@ describe('useAgentChat', () => {
 
     it('does not fire when the attempt fails before any run id was ever learned', async () => {
       const settled: Array<{ runId: string; status: 'completed' | 'failed' }> = [];
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
         if (url.endsWith('/agent/chat')) {
-          return {
-            ok: false,
-            status: 500,
-            statusText: 'Internal Server Error',
-            body: null,
-            headers: new Headers(),
-          };
+          return new Response(null, { status: 500, statusText: 'Internal Server Error' });
         }
         return jsonResponse();
       });
@@ -409,7 +381,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-5',
-          fetch: fetchMock as unknown as typeof fetch,
+          fetch: fetchMock,
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );

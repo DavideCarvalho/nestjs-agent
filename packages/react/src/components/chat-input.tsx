@@ -12,11 +12,21 @@ export interface ChatInputProps {
   speechLang?: string;
   /** Label/content for the send button. Default `"Send"`. */
   sendLabel?: React.ReactNode;
+  /**
+   * Cancel the turn in flight — wire to `useAgentChat`'s `cancel`. Rendered only alongside
+   * `isStreaming`, so the affordance exists exactly while there is something to cancel.
+   */
+  onStop?: () => void | Promise<void>;
+  /** Whether a turn is currently in flight. Gates the stop affordance. */
+  isStreaming?: boolean;
+  /** Label/content for the stop button. Default `"Stop generating"` — the mic's own is `"Stop"`. */
+  stopLabel?: React.ReactNode;
   /** Wrapper class. The component ships no styles of its own. */
   className?: string;
   textareaClassName?: string;
   sendButtonClassName?: string;
   micButtonClassName?: string;
+  stopButtonClassName?: string;
   /**
    * Custom mic affordance. Receives `isListening`; return any node. When
    * omitted a plain text button ("Speak" / "Stop") is rendered.
@@ -27,7 +37,8 @@ export interface ChatInputProps {
 /**
  * Styling-agnostic chat composer. Enter submits, Shift+Enter inserts a
  * newline. Optional dictation streams interim transcripts into the draft
- * and commits finalized chunks. No design-system or icon-library deps —
+ * and commits finalized chunks, and `onStop` surfaces the backend's
+ * cancel next to send. No design-system or icon-library deps —
  * style it entirely through the `*ClassName` props.
  */
 export function ChatInput({
@@ -38,10 +49,14 @@ export function ChatInput({
   enableSpeech = true,
   speechLang = 'en-US',
   sendLabel = 'Send',
+  onStop,
+  isStreaming = false,
+  stopLabel = 'Stop generating',
   className,
   textareaClassName,
   sendButtonClassName,
   micButtonClassName,
+  stopButtonClassName,
   renderMic,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
@@ -91,6 +106,7 @@ export function ChatInput({
       : value;
 
   const showMic = enableSpeech && speech.isSupported;
+  const showStop = isStreaming && onStop !== undefined;
 
   return (
     <div className={className}>
@@ -116,6 +132,16 @@ export function ChatInput({
       >
         {sendLabel}
       </button>
+      {showStop ? (
+        <button
+          type="button"
+          className={stopButtonClassName}
+          onClick={() => void onStop()}
+          aria-label="Stop generating"
+        >
+          {stopLabel}
+        </button>
+      ) : null}
       {showMic ? (
         <button
           type="button"

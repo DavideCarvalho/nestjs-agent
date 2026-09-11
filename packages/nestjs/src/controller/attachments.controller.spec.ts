@@ -1,15 +1,20 @@
 import type { AttachmentStagingStore, MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { AGENT_ATTACHMENT_STAGING } from '@dudousxd/nestjs-agent-core';
-import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
+import {
+  FakeModelProvider,
+  InMemoryAgentStore,
+  InMemoryAttachmentStagingStore,
+} from '@dudousxd/nestjs-agent-testing';
 import { type DynamicModule, Global, Injectable, Module } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentModule } from '../agent.module.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
+import { ATTACHMENT_PAGE_SIZE, HARD_MAX_ATTACHMENT_BYTES } from './attachments.controller.js';
 
 /**
  * `AGENT_ATTACHMENT_STAGING` is bound externally (like `AGENT_PRICING_STORE`) — a provider on the
@@ -36,6 +41,10 @@ class DefaultAgent {}
 class FakeStagingStore implements AttachmentStagingStore {
   readonly staged: { filename: string; contentType: string; sizeBytes: number; actorId: string }[] =
     [];
+
+  async resolve(): Promise<MessageAttachment | null> {
+    throw new Error('these tests only exercise the upload side');
+  }
 
   async stage(input: Parameters<AttachmentStagingStore['stage']>[0]): Promise<MessageAttachment> {
     this.staged.push({
@@ -138,6 +147,27 @@ describe('AttachmentsController', () => {
     expect(staging.staged).toHaveLength(0);
   });
 
+  it('refuses a file over the hard ceiling, whatever the configured cap says', async () => {
+    const staging = new FakeStagingStore();
+    // A cap far above the ceiling: without a multer limit the whole body lands in memory first and
+    // this request succeeds, which is the OOM an authenticated caller could ask for at will.
+    const testApp = await boot(
+      { attachments: { upload: true, maxBytes: 512 * 1024 * 1024 } },
+      staging,
+    );
+
+    const res = await request(testApp.getHttpServer())
+      .post('/agent/attachments')
+      .set('x-actor-id', 'u1')
+      .attach('file', Buffer.alloc(HARD_MAX_ATTACHMENT_BYTES + 1024), {
+        filename: 'big.txt',
+        contentType: 'text/plain',
+      });
+
+    expect(res.status).toBe(413);
+    expect(staging.staged).toHaveLength(0);
+  });
+
   it('rejects with 400 when the multipart "file" field is missing', async () => {
     const staging = new FakeStagingStore();
     const testApp = await boot({}, staging);
@@ -161,5 +191,88 @@ describe('AttachmentsController', () => {
       .set('x-actor-id', 'u1')
       .attach('file', Buffer.from('hello'), { filename: 'a.txt', contentType: 'text/plain' });
     expect(res.status).toBe(404);
+
+    const listed = await request(testApp.getHttpServer())
+      .get('/agent/attachments')
+      .set('x-actor-id', 'u1');
+    expect(listed.status).toBe(404);
+  });
+});
+
+async function stageFor(
+  staging: InMemoryAttachmentStagingStore,
+  actorId: string,
+  filename: string,
+): Promise<void> {
+  await staging.stage({
+    data: Buffer.from('bytes'),
+    filename,
+    contentType: 'image/png',
+    sizeBytes: 5,
+    actor: { id: actorId },
+  });
+}
+
+describe('AttachmentsController — listing what an actor has staged', () => {
+  it('returns the caller’s own inventory', async () => {
+    const staging = new InMemoryAttachmentStagingStore();
+    await stageFor(staging, 'u1', 'mine.png');
+    const testApp = await boot({}, staging);
+
+    const res = await request(testApp.getHttpServer())
+      .get('/agent/attachments')
+      .set('x-actor-id', 'u1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({ name: 'mine.png', contentType: 'image/png', sizeBytes: 5 }),
+    ]);
+  });
+
+  it('never shows one actor another’s files', async () => {
+    const staging = new InMemoryAttachmentStagingStore();
+    await stageFor(staging, 'u1', 'mine.png');
+    const testApp = await boot({}, staging);
+
+    const res = await request(testApp.getHttpServer())
+      .get('/agent/attachments')
+      .set('x-actor-id', 'u2');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('carries no url — a file list must not mint one fetchable link per row', async () => {
+    const staging = new InMemoryAttachmentStagingStore();
+    await stageFor(staging, 'u1', 'mine.png');
+    const testApp = await boot({}, staging);
+
+    const res = await request(testApp.getHttpServer())
+      .get('/agent/attachments')
+      .set('x-actor-id', 'u1');
+
+    expect(res.body[0]).not.toHaveProperty('url');
+  });
+
+  it('bounds the page rather than serving an unbounded inventory', async () => {
+    const staging = new InMemoryAttachmentStagingStore();
+    await stageFor(staging, 'u1', 'mine.png');
+    const list = vi.spyOn(staging, 'list');
+    const testApp = await boot({}, staging);
+
+    await request(testApp.getHttpServer()).get('/agent/attachments').set('x-actor-id', 'u1');
+
+    expect(list.mock.calls[0]?.[0]?.limit).toBe(ATTACHMENT_PAGE_SIZE);
+  });
+
+  it('answers 501 when the bound staging store keeps no inventory', async () => {
+    const staging = new FakeStagingStore();
+    const testApp = await boot({}, staging);
+
+    const res = await request(testApp.getHttpServer())
+      .get('/agent/attachments')
+      .set('x-actor-id', 'u1');
+
+    expect(res.status).toBe(501);
   });
 });

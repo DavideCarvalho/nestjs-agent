@@ -36,9 +36,58 @@ export class AppModule {}
 ```
 
 The package ships the `agentSchema` (Drizzle tables), `ensureAgentSchema` (a non-destructive
-`CREATE TABLE IF NOT EXISTS` helper for a quick start), `DrizzleAgentStore`, and
-`DrizzleGovernanceQueries`. For production, prefer your normal drizzle-kit migrations over the
-`ensureAgentSchema` helper.
+DDL helper for a quick start), `DrizzleAgentStore`, and `DrizzleGovernanceQueries`. For production,
+prefer your normal drizzle-kit migrations over the `ensureAgentSchema` helper.
+
+## The read a turn makes
+
+The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's
+`ThreadTurnReader`, so the loop asks it for `loadThreadForTurn({ threadId, messageLimit })` instead:
+the thread's newest `messageLimit` messages oldest-first, bounded by the database rather than in
+memory, projected to the columns a model turn reads (`usage`, `follow_ups` and `run_id` stay in the
+table), plus the title, the default agent, and whether the thread has EVER been answered.
+
+`messageLimit` is the configured `HistoryPolicy.maxMessages`. A policy that summarizes, or whose
+ceiling is only a token budget, names no row bound and the whole thread is read — see the core
+README. Nothing to wire: the loop probes for the method, and `getThread` remains the right read for
+a client rendering a transcript.
+
+## Upgrading a database that already exists
+
+`ensureAgentSchema` is additive only — `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT
+EXISTS`, and an explicit add-column pass for columns this package introduced after a table shipped,
+since the `CREATE TABLE` guard is inert against a table that already exists. Calling it on boot is
+enough; it never drops a column or changes a type.
+
+On your own drizzle-kit migrations, those additive statements are yours to write:
+
+```sql
+ALTER TABLE agent_thread ADD COLUMN default_agent TEXT;
+ALTER TABLE agent_message ADD COLUMN run_id TEXT;
+ALTER TABLE agent_message ADD COLUMN attachments TEXT;
+ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT;
+CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
+```
+
+The index is not optional on Postgres: `agent_tool_call.message_id` carries a foreign key, and
+Postgres — unlike MySQL — does not index one for you, while both message-scoped reads (the thread
+reader's `IN (…)` and `truncateFrom`'s delete) filter on it.
+
+## Attachment housekeeping
+
+`referencedMediaIds(actorRef, mediaIds)` answers which of a set of media ids a message that still
+exists carries, for one actor — the inverse of the host's own staged-media inventory, and the half a
+sweep cannot work out for itself. It needs **no schema change**: it reads the `attachments` JSON
+column messages have carried since attachments shipped, so an existing database answers correctly
+the moment you upgrade, with nothing to backfill.
+
+The match happens in memory rather than in SQL. The column holds an array of objects, every dialect
+spells that query differently, and none of them can use an index for it; the scan is bounded to one
+actor's attachment-bearing messages, and a message with no attachments never leaves the database.
+
+A thread that was soft-deleted still counts as holding its references: the message rows survive, so
+the bytes are still reachable from stored state. Delete the thread for real and the cascade makes
+them collectable on the next sweep.
 
 ## Cost accounting
 

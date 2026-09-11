@@ -3,7 +3,9 @@ import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
+import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 import { AgentClient, type QuotaToday } from './client.js';
+import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 
 export interface UseAgentChatOptions {
   /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
@@ -70,6 +72,35 @@ export interface UseAgentChatOptions {
    * error, not why it stopped.
    */
   onRunSettled?: (outcome: { runId: string; status: 'completed' | 'failed' }) => void;
+  /**
+   * Track DETACHED sub-agents this conversation started: which are still working, and their answers
+   * as they land (see {@link ChatBackground}). Default `false`.
+   *
+   * Opt-in for the same reason {@link UseAgentChatOptions.resume} is — it reads the thread, and a
+   * plain mount must not spend a request on a feature the host is not using. Leaving it off still
+   * leaves {@link ChatBackground.refresh} callable, for a host that would rather drive it itself.
+   */
+  background?: boolean;
+  /**
+   * How often to re-read the thread while a detached sub-agent is still working, in ms. Default
+   * 5000; `0` turns the interval off, leaving {@link ChatBackground.refresh} as the only trigger.
+   *
+   * A poll rather than a second stream, because what a background run produces is a persisted
+   * MESSAGE, not tokens this chat should render as they arrive: its answer belongs to its own run,
+   * it can land while the user is mid-turn or has the tab closed, and it has to be there on the next
+   * reload either way. The interval exists only while something is outstanding, which is rare and
+   * bounded by how many delegations a conversation has started.
+   */
+  backgroundPollMs?: number;
+}
+
+/** Sub-agents this conversation started and did not wait for. See {@link BackgroundRun}. */
+export interface ChatBackground {
+  runs: BackgroundRun[];
+  /** True while any of them is still working — what a "2 agents running" affordance reads. */
+  isWorking: boolean;
+  /** Re-read the thread now, instead of waiting for the next poll. */
+  refresh: () => Promise<void>;
 }
 
 interface AddToolResultArgs {
@@ -200,6 +231,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
     });
   }, []);
 
+  // Assigned once `refreshBackground` exists below. `useChat`'s `onFinish` is the earliest place a
+  // new delegation can be observed, and it runs long after this hook's body has finished laying out.
+  const backgroundRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   const chat = useChat({
     transport,
     resume: options.resumeRunId !== undefined || autoResume,
@@ -207,6 +242,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onFinish: ({ isError }) => {
       latest.current.onFinish?.();
+      // A turn that just ended may have started a delegation, and its receipt is only in the store.
+      if (latest.current.background === true) {
+        void backgroundRef.current();
+      }
       // Only the run learned DURING this attempt — see `settlingRunIdRef`'s comment. `undefined`
       // means the attempt never got a run id (failed before any header/meta frame), so there's
       // nothing server-side to report settling.
@@ -222,6 +261,38 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   const chatRef = useRef(chat);
   chatRef.current = chat;
+
+  /**
+   * One turn in flight per chat. The SDK commits its single in-flight response BEFORE it reaches
+   * the transport, so a second overlapping turn cannot be untangled downstream: both write into the
+   * same message list, and the SDK's "replace the list's last entry or append" test — which looks
+   * only at that last entry — then appends alternating copies of each, leaving several entries
+   * under one id. Refusing here is the only point early enough to keep the list honest, and
+   * dropping the extra turn is what a composer that disables itself while busy already does.
+   *
+   * The ref rather than `chat.status`: the SDK awaits once before it touches its own state, so the
+   * status a render can see is still `ready` when a second call arrives in the same tick, and a
+   * double-submitted composer is exactly the case this has to catch.
+   */
+  const turnInFlight = useRef(false);
+  const isTurnInFlight = useCallback(
+    () => turnInFlight.current || transport.isAttemptLive,
+    [transport],
+  );
+
+  type SdkSendMessage = typeof chat.sendMessage;
+  const sendMessage = useCallback<SdkSendMessage>(
+    async (...args: Parameters<SdkSendMessage>) => {
+      if (isTurnInFlight()) return;
+      turnInFlight.current = true;
+      try {
+        await chatRef.current.sendMessage(...args);
+      } finally {
+        turnInFlight.current = false;
+      }
+    },
+    [isTurnInFlight],
+  );
 
   // chat.addToolResult is generic over the backend's tool registry, which
   // we don't statically type here. Expose a string-keyed adapter and narrow
@@ -240,6 +311,64 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [quota, setQuota] = useState<QuotaToday | null>(null);
+  const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
+
+  /**
+   * Re-derive what is running in the background, and pull in anything that has landed since.
+   *
+   * Both halves come from ONE thread read, because both are the same fact persisted: the receipt is
+   * a tool result on the delegating turn, the answer is a message stamped with the run that wrote
+   * it. Nothing is remembered across a reload, so a tab opened after the fact sees the same thing as
+   * the one that started it.
+   */
+  const refreshBackground = useCallback(async (): Promise<void> => {
+    const threadId = latest.current.threadId ?? createdThreadId.current;
+    if (threadId === undefined) {
+      return;
+    }
+    const thread = await client.getThread(threadId);
+    const runs = backgroundRunsFromThread(thread.messages);
+    setBackgroundRuns(runs);
+    const landed = runs
+      .map((run) => run.message)
+      .filter((message): message is NonNullable<typeof message> => message !== undefined);
+    if (landed.length === 0) {
+      return;
+    }
+    // Appended rather than re-seeding the list from the thread: the session's own messages hold
+    // live stream state (a tool card mid-flight, a question set awaiting an answer) that the
+    // persisted rows do not carry, and replacing them would throw it away.
+    chatRef.current.setMessages((current) => {
+      const known = new Set(current.map((message) => message.id));
+      const missing = landed.filter((message) => !known.has(message.id));
+      return missing.length === 0
+        ? current
+        : [...current, ...missing.map((message) => storedMessageToUiMessage(message))];
+    });
+  }, [client]);
+
+  backgroundRef.current = refreshBackground;
+
+  const isWorking = backgroundRuns.some((run) => run.status === 'running');
+
+  // On mount with a thread, so a reload finds the delegations it left running. A turn that settles
+  // refreshes too (see `onFinish`), which is the other moment a new one can have appeared.
+  useEffect(() => {
+    if (options.background !== true || options.threadId === undefined) {
+      return;
+    }
+    void refreshBackground();
+  }, [options.background, options.threadId, refreshBackground]);
+
+  // Only while something is outstanding. A conversation with nothing running costs no requests.
+  useEffect(() => {
+    const every = latest.current.backgroundPollMs ?? 5000;
+    if (latest.current.background !== true || !isWorking || every <= 0) {
+      return;
+    }
+    const timer = setInterval(() => void refreshBackground(), every);
+    return () => clearInterval(timer);
+  }, [isWorking, refreshBackground]);
 
   const loadThreads = useCallback(async (): Promise<ThreadSummary[]> => {
     const list = await client.listThreads();
@@ -337,16 +466,55 @@ export function useAgentChat(options: UseAgentChatOptions) {
     [client],
   );
 
+  // Answer / skip settle a parked question set, routed by tool-call id alone for the same reason
+  // approve/reject are: the server derives the run awaiting it. Omitting `answers` submits nothing
+  // and lets every question take the default it was shown with.
+  const answer = useCallback(
+    async ({
+      toolCallId,
+      answers,
+    }: {
+      toolCallId: string;
+      answers?: Record<string, string[]>;
+    }): Promise<void> => {
+      await client.answerToolCall({
+        toolCallId,
+        ...(answers !== undefined ? { answers } : {}),
+      });
+    },
+    [client],
+  );
+
+  const skip = useCallback(
+    async ({ toolCallId }: { toolCallId: string }): Promise<void> => {
+      await client.skipToolCall({ toolCallId });
+    },
+    [client],
+  );
+
   // Re-run the last exchange: flag the next request as a regenerate (so the backend truncates and
   // re-answers instead of appending) and let the SDK re-issue it, dropping the last assistant turn.
   const regenerate = useCallback((): void => {
+    if (isTurnInFlight()) return;
     regenerateNext.current = true;
-    void chatRef.current.regenerate();
-  }, []);
+    turnInFlight.current = true;
+    void chatRef.current.regenerate().finally(() => {
+      turnInFlight.current = false;
+    });
+  }, [isTurnInFlight]);
+
+  const background: ChatBackground = {
+    runs: backgroundRuns,
+    isWorking,
+    refresh: refreshBackground,
+  };
 
   return {
     ...chat,
+    sendMessage,
     addToolResult,
+    /** Sub-agents this conversation started and did not wait for. */
+    background,
     runId,
     /** The `resume`-fetched thread's active run id, or `null` once resolved with none. */
     activeRunId,
@@ -364,6 +532,8 @@ export function useAgentChat(options: UseAgentChatOptions) {
     cancel,
     approve,
     reject,
+    answer,
+    skip,
     regenerate,
   };
 }

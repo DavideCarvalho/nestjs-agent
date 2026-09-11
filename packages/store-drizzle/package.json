@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
   "dependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*"
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@nestjs/common": "12.0.1",
     "@types/better-sqlite3": "7.6.13",
     "better-sqlite3": "12.11.1",

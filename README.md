@@ -40,10 +40,13 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres) |
 | `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
-| `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + styling-agnostic chat components; optional `/markdown` subpath |
+| `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
+| `@dudousxd/nestjs-agent-mcp-server` | MCP server — expose this deployment's tools to an external Model Context Protocol client, under the same registry and roles policy a turn runs through |
+| `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + `useChatTranscript` (the headless transcript model) + styling-agnostic chat components; optional `/markdown` subpath |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |
 | `@dudousxd/nestjs-agent-dashboard` | A standalone, mountable AI-gateway governance console (bundled React SPA + NestJS module) — no Telescope required |
+| `@dudousxd/nestjs-agent-evals` | Answer-quality scoring over stored runs — a `Scorer` SPI, a resumable batch runner, and built-in rule / statistical / model-graded scorers (incl. mining HITL rejections) |
 | `@dudousxd/nestjs-agent-testing` | In-memory store/sink + a deterministic fake model for offline tests/demos |
 
 ## Install
@@ -162,6 +165,303 @@ AgentModule.forRoot({
 Each retry emits an `aviary:agent:tool.retry` point event (`{ toolName, toolCallId, attempt,
 message }`) — see [Observability](#observability-diagnostics) below.
 
+### Several tool calls in one turn
+
+A model routinely asks for more than one tool at a time. When **every** call in the turn is a
+`read`, their invocations run concurrently — the turn costs its slowest call rather than the sum of
+them. Nothing to configure; both runners do it.
+
+Only the invocations overlap. The turn's bookkeeping stays strictly in call order — every call is
+claimed first, then the batch is launched in one tick, then the results are recorded — because under
+`durable: true` the loop body is *replayed*, and checkpoint positions are handed out as the body
+runs. Ordering them by whichever tool finished first would give the replay a different journal than
+the original run. (Worse, under dispatched steps every tool call checkpoints under the same routing
+name, so a swapped pair raises no error at all — it hands one call's output to another.)
+
+A turn is eligible only when every call is a `read`. An `action` waits on a human, which is decision
+time rather than I/O, and reserving an execution slot for a call that may still be rejected reserves
+one the rejection never fills; an `agent` delegation is a child workflow, whose parallel form is the
+durable runtime's own `ctx.all`. Those turns run one call at a time, exactly as before.
+
+## Conversation history
+
+A turn carries the whole thread by default: every message the store holds, on every turn. That is
+fine for a support chat and wrong for an assistant someone lives in — the prompt grows, each turn
+costs more than the last, and eventually the provider rejects the request outright. `history` puts a
+ceiling on it.
+
+```ts
+AgentModule.forRoot({
+  // …
+  history: { maxMessages: 40, maxTokens: 60_000, summarize: true },
+});
+```
+
+- **`maxMessages` / `maxTokens`** keep the newest messages that fit; set both and whichever cuts more
+  wins. Tokens are estimated (~4 chars/token plus tool-call payloads) — a real tokenizer is
+  model-specific, and a budget only has to keep you clear of the hard limit. The newest message always
+  rides, whatever the limits say.
+- **`summarize: true`** folds what the window left out into a leading `system` summary instead of
+  simply losing it. It costs one extra model call per run, recorded as a `history_summary` usage row
+  so it shows up in spend like anything else.
+- **Per agent**: `@Agent({ history: { maxMessages: 8 } })` overrides the module-wide ceiling — a
+  persona that answers from a page context needs far less window than one reasoning over a long
+  back-and-forth.
+- **Your own rule**: `historyPolicy` takes a `HistoryPolicy` for a window the built-in can't express
+  (pin the thread's opening brief, keep every message carrying a tool result, vary the budget by
+  actor). `select` must be a pure function of the messages it's given; anything that calls out —
+  including summarizing — belongs in `summarize`, which the loop runs inside a checkpoint so a
+  resumed durable run reads the summary back rather than producing a different one.
+
+Configure none of it and nothing changes, including the loop's durable checkpoint names and
+positions — a run already in flight keeps replaying.
+
+## Input and output processors
+
+`history` decides *which* messages reach the model. Processors decide *what they say* — and, on the
+way back, whether the answer is allowed out at all.
+
+```ts
+AgentModule.forRoot({
+  // …
+  inputProcessors: [maskIdentifiers],
+  outputProcessors: [refuseRawCustomerRows],
+});
+```
+
+- **`InputProcessor.process({ system, messages }, ctx)`** returns the prompt rewritten. It runs
+  before **every** model call of a turn, not once per run: the transcript grows between steps, so a
+  redactor that only saw the opening prompt would wave through whatever a tool result carried back.
+  The loop's own transcript is untouched — a redaction is what leaves the process, never the thread's
+  memory of what was said.
+- **`OutputProcessor.process({ text, toolCalls }, ctx)`** returns `{ action: 'pass' }`,
+  `{ action: 'replace', text }` (a redaction is a replacement), or `{ action: 'reject', reason }`,
+  which ends the run with an `OutputRejectedError` and an `output_rejected` stream error instead of an
+  answer. Chained in order, each seeing what the previous one produced; the first rejection stops the
+  chain.
+- Both run inside a durable checkpoint, so a processor may call a model (a moderation pass is the
+  point) and a resumed run reads the verdict back rather than deciding it again. One that throws
+  surfaces as `ProcessorFailedError` naming the phase and the processor, so it can't be mistaken for
+  the model failing.
+- They are module-wide and apply to every agent. A control one persona can turn off is not a control.
+
+**Registering an output processor turns off live token streaming for that turn.** A gate that has to
+read the whole answer cannot run after the answer has already reached the reader, so the model call
+writes to a buffer and the loop releases it as one `text` frame once the chain passes. Step
+boundaries and the turn's tool-call frames still arrive live; token-by-token text does not. That is
+the price of a gate that gates — and it holds under `dispatchedSteps: true` too, where the model runs
+on another worker and hands its held frames back on the step result.
+
+Register neither and nothing changes, checkpoint names and positions included.
+
+## Structured output
+
+```ts
+const Report = z.object({ headline: z.string(), rows: z.number() });
+
+@Agent({ name: 'analyst', systemPrompt: '…', outputSchema: Report })
+export class AnalystAgent {}
+```
+
+The validated value comes back as `object` on the run's result and is delivered the way any tool call
+is — on the assistant message's `toolCalls`/`toolResults` as a synthetic `structured_output` call, as
+an `agent_tool_call` row, and live on the stream as a `tool-input-available` + `tool-output` pair — so
+a thread reader and the existing tool-output rendering both get it, live and on reload, with no store
+change. Any [Standard Schema](https://standardschema.dev) works.
+
+**With tool calling, it is a final formatting pass.** The turn calls its tools exactly as it would
+without a schema; once a step comes back with no tool calls, one extra non-streamed call carrying the
+schema and **no** tools restates that answer. Most providers refuse a response format and a tool set
+in the same request, and the pass is unconditional rather than skipped for a tool-less agent — that
+decision would depend on the tool registry of whichever process is replaying the turn. It costs one
+model call, billed as a `structured_output` usage row.
+
+A reply that fails the schema is retried with its validation issues attached, `outputRepairAttempts`
+times (default 1). After that the run fails with a `StructuredOutputError` carrying the issues, the
+offending text and the attempt count, under a `structured_output_invalid` stream error code.
+
+Declared on the agent rather than per request: a schema is a live object, and `AgentRunInput` crosses
+a JSON boundary on its way into a durable workflow. A consumer calling `runAgentLoop` directly passes
+`outputSchema` per call and gets `object` typed from it.
+
+## Asking the user (intake + `ask`)
+
+Approval settles work the agent has already proposed. This is the other direction — collecting the
+scope *before* the work starts.
+
+```ts
+@Agent({
+  name: 'refactorer',
+  systemPrompt: '…',
+  intake: {
+    preamble: 'Three questions before I start. I have pre-picked what I would choose, so confirming is enough.',
+    questions: [
+      {
+        id: 'scope',
+        prompt: 'How much should I cover?',
+        options: [
+          { value: 'file', label: 'This file', hotkey: 'a' },
+          { value: 'module', label: 'The whole module', hotkey: 'b' },
+        ],
+        defaults: ['module'],
+      },
+    ],
+  },
+})
+export class RefactorerAgent {}
+```
+
+Two surfaces, one shape:
+
+- **A configured intake** runs before the turn's first model call. The questions are authored, so it
+  costs **no model call** and `questions.length` is known before the form appears — which is what
+  lets a client render "Question 1 of 3".
+- **`ask`**, the model-callable tool (`forRoot({ ask: true })`, or `@Agent({ ask })`), for when the
+  model itself judges the scope is missing. Its schema *requires* a pre-picked `defaults` on every
+  question, so "I would choose X" is mandatory rather than aspirational.
+
+Both persist as the same pending tool-call row, park on the same `tool:<runId>:<callId>` signal a
+HITL approval uses, and stream the same `elicitation` frame. A consumer cannot tell which one asked.
+
+Answer with `POST /agent/tool-call/answer` (`{ toolCallId, answers? }`) or decline with
+`POST /agent/tool-call/skip` — same ownership check as approve/reject. **An omitted question takes
+its own pre-picked default**, resolved server-side from the request, so submitting an empty body is a
+valid confirmation. A skip lands on the same values but persists as a *rejection*: proceeding on an
+assumption the user refused to confirm is not the same fact as proceeding on one they chose.
+
+Nobody answers → the run stays parked, indefinitely, exactly as an approval does. It is a durable
+suspend, not a held socket.
+
+Declare neither and nothing changes: no new checkpoint, no new tool, no change to the sequence.
+
+## Skills (scoped, loaded on demand)
+
+Instructions that are true *sometimes* — how one base formats a unit designation, what counts as a
+valid work order — have nowhere good to live. In the system prompt they are paid for on every turn by
+every user; hardcoded as a tool they are a deploy away from changing. A **skill** splits the two
+halves: the prompt carries a one-line-each catalog, and the body is read on demand through a built-in
+`skill` tool, arriving as an ordinary tool result.
+
+```ts
+AgentModule.forRoot({ /* … */ skills: {} });
+
+@Skill({
+  name: 'normalize-unit',
+  description: 'Normalise a unit designation to DPAS form.',
+  scope: 'tenant:base-7',
+})
+@Injectable()
+export class NormalizeUnitSkill implements SkillBody {
+  constructor(private readonly units: UnitService) {}
+  body(ctx: SkillContext): string {
+    return `Strip any squadron suffix, then match against DPAS…`;
+  }
+}
+```
+
+**A skill is not an agent.** An `@Agent` is *who is answering*; a skill is *how one task is done*, and
+any agent may load it. An instruction that applies to every turn of a persona is still that persona's
+`systemPrompt`.
+
+**Scoping is an opaque token you order.** A skill is published at `actor:u1`, `tenant:base-7`,
+`global` — or your own `sector:logistics`. Which tokens apply is a `ScopeResolver` returning them
+most-specific-first, so precedence falls out of the order and a new axis is a resolver you write
+rather than an enum you wait for. Omit it and you get the actor's own scope, their tenant's, and
+`global`. **This library owns no skill table**: rows a person administers live behind your own
+`SkillProvider` (`list(scopes, ctx)` for the catalog, `load(name, scope, ctx)` for one body), so your
+`Sector` entity relates to them however it likes and your migrations never meet the `agent_*` schema
+heal.
+
+Most specific wins, and the entry records what it **shadowed**, so the agent can say "I followed your
+base's version, which differs from the org default" instead of choosing silently.
+
+```http
+GET /agent/skills → [{ name, description, scope, shadows? }]
+```
+
+The same list the model is offered, from the same call — so a `/`-autocomplete can never offer a skill
+the agent has never heard of. There is no write endpoint: `skillWriteVerdict` is the rule for your own
+console — your own scope is yours, a wider one needs an elevated **human**, and nothing but a human
+may ever write above its own scope.
+
+One new checkpoint (`skills:catalog`) holds the whole offer; a load rides a plain read tool's
+positions and returns the body *from* the checkpoint, so a skill edited mid-run never rewrites the
+prompt of a run in flight, and the journaled catalog — not the provider — decides what a turn may
+reach. Declare none and the turn's sequence is byte-identical.
+
+## Memory (what it knows about you)
+
+Everything the agent works out about a person dies at the end of the turn. **Memory** is the bounded
+set of conclusions that survives it — a keyed fact at a scope, one line in the system block, written
+by the model and deletable by the person it is about.
+
+```ts
+AgentModule.forRoot({ /* … */ memory: { provider: myMemoryProvider } });
+```
+
+```ts
+// MemoryProvider — your rows, your table. `forget` is required; `write` is what decides
+// whether the model is offered the built-in `remember` tool at all.
+{
+  list: ({ scopes }) => this.repo.find({ scope: { $in: [...scopes] } }),
+  forget: ({ id }) => this.repo.nativeDelete({ id }).then((n) => n > 0),
+  write: ({ key, text, scope, origin }) => this.repo.upsert({ key, text, scope, origin }),
+}
+```
+
+```text
+<memory>
+What you concluded about this user and their organisation on earlier turns. These are your own
+notes, not documents anyone wrote: they may be wrong or out of date…
+- [actor:u1] fiscal-year: they report on the calendar year
+    ↳ [global] instead has: the fiscal year starts in October
+- [global] units: report distances in nautical miles
+</memory>
+```
+
+**It is not RAG.** Retrieval answers *what do the documents say*, and cites them. Memory answers
+*what did I decide about you*, and has no source to go and fix. So every record carries an **origin**
+(which conversation, which run, agent or person), the block tells the model these are its own
+fallible notes, and `MemoryProvider.forget` is required rather than optional — a deployment may
+serve memory read-only, but none may hold conclusions about someone the someone cannot delete.
+
+**Scoping is the same token, resolved by the same `ScopeResolver` as [skills](#skills-scoped-loaded-on-demand)** —
+`actor:u1`, `sector:logistics`, `tenant:base-7`, `global`, most specific first. Where a narrower
+scope wins a key, the entry carries the beaten **value**, not just its scope, so the agent can say
+*"your setting differs from the org default"* rather than quietly picking one.
+
+**An agent proposes; a person publishes.** The `remember` tool has **no scope parameter** — an agent
+may only ever write the actor it is running for, so there is no request `memoryWriteVerdict`'s third
+rule has to refuse. Promoting a fact to a tenant or a sector is a human act in your own console
+(`memoryWriteVerdict({ …, author: { kind: 'human' }, elevated })`). A tenant memory an agent could
+write is a fact everyone in the tenant is then answered from, with no document to inspect and nobody
+aware it was written.
+
+```http
+GET    /agent/memories        → [{ id, key, text, scope, origin, updatedAt, overrides? }]
+DELETE /agent/memories/:id    → { forgotten: true }
+```
+
+The read-back deliberately **ignores `maxMemories`**: that ceiling is a budget on what a *turn*
+carries, and applying it here would hide a belief the assistant is one write away from acting on
+again. `DELETE` covers the actor's own scope; an id they cannot see answers 404 rather than 403, so
+it cannot be used to discover what the assistant believes about other people. A memory whose source
+conversation was later truncated away is **kept**, shown with an origin that no longer resolves — a
+history ceiling is a cost control and must never double as an eraser.
+
+**Working memory and recall are two features; this is the first.** Searching what was *said* earlier
+is retrieval over a transcript — `Retriever`/`Reranker` already do that. The ceiling here is exactly
+what makes semantic search over memory pointless: it is a search for something already in the prompt.
+
+**Budget.** `maxMemories` lines (default 20), each capped at `maxFactChars` (default 240) *when
+written*, so the block's ceiling is a product an operator can do — and the push-back lands while the
+model is writing an essay instead of a fact. One checkpoint (`memory:digest`) holds the whole digest:
+it is what the block is rendered from *and* what a `remember` call is authorized against, so a replay
+on a pod that resolves the actor differently rebuilds the identical prompt. The write happens inside
+the call's own `tool:` checkpoint, so a resume stores nothing twice. `aviary:agent:memory.resolved`
+and `aviary:agent:memory.written` report what it cost and how much the agent is writing. Configure
+none and the turn's sequence is byte-identical.
+
 ## Multi-agent (orchestrator → sub-agents)
 
 Register named agents with `forFeature`; declare which agents an orchestrator may call via
@@ -253,13 +553,78 @@ const { spec, handler } = createExecuteSqlTool({
 });
 ```
 
+## Tools from an MCP server (`-mcp`)
+
+Import an external [MCP](https://modelcontextprotocol.io) server's tools instead of writing an
+`@AiTool` class for each. They land in the same registry as your own, so they inherit every gate —
+`roles` / `ability` / `canUse`, an agent's allow-list, HITL approval, tool-call rows in the thread
+and the dashboard.
+
+```ts
+import { AgentMcpModule } from '@dudousxd/nestjs-agent-mcp';
+
+AgentMcpModule.forRoot({
+  servers: [
+    { name: 'github', transport: { type: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] }, roles: ['ADMIN'] },
+    { name: 'docs', transport: { type: 'http', url: 'https://mcp.example.com/mcp' }, kind: 'read', include: ['search_docs'] },
+  ],
+});
+```
+
+- **An imported tool is an `action` by default** — it waits for a human. Its effects live outside
+  this codebase, and the server's own `readOnlyHint` is asserted by the party whose effects it
+  describes, so believing it (`kind: 'trust-annotations'`) is an explicit decision, as is
+  `kind: 'read'` for a server you own.
+- **The server's JSON Schema is enforced**, not approximated: the model's arguments are validated
+  against the real schema before the call goes out, and a tool whose schema won't compile is skipped
+  rather than imported behind a permissive stand-in.
+- **A slow or missing server costs its own tools, nothing else.** An unreachable server at boot is a
+  warning (`required: true` to make it fatal); a hung call hits the SDK's request timeout; a dropped
+  connection is classified transient, recycled and retried through core's `invokeWithTransientRetry`.
+- Tool names are **namespaced under the server** (`github_create_issue`), so a remote tool can never
+  silently take over one of yours.
+
+See [`packages/mcp`](./packages/mcp) for the full option surface.
+
+## Your tools to an MCP client (`-mcp-server`)
+
+The other direction: mount a Streamable HTTP MCP endpoint so an external client — Claude Desktop, an
+editor, a CI job — can reach the tools this deployment already has.
+
+```ts
+import { AgentMcpServerModule, BearerTokenActorResolver } from '@dudousxd/nestjs-agent-mcp-server';
+
+AgentMcpServerModule.forRoot({
+  name: 'Acme Agent',
+  version: '1.0.0',
+  auth: new BearerTokenActorResolver([
+    { token: process.env.MCP_CI_TOKEN ?? '', actor: { id: 'ci', roles: ['ANALYST'] } },
+  ]),
+});
+```
+
+- **The same registry and the same `RolesPolicy` as a turn.** `tools/list` is
+  `definitionsFor(actor, policy, allowedTools)` and `tools/call` is `invoke` — no second gate to
+  drift out of step with the loop's.
+- **An `action` tool is not callable by default.** It is HITL-gated in a turn, and there is nobody on
+  an MCP connection to approve it, so it is neither listed nor callable. `actions: 'execute'` is the
+  deployment saying out loud that this caller may act without approval.
+- **Identity is required and never invented.** `auth` is the same `ActorResolver` seam `AgentModule`
+  takes, with no default actor and no default role; a caller it cannot identify gets **401**, not 500.
+- **A session belongs to the actor that opened it** — a request authenticating as somebody else is
+  403, not served on it.
+
+See [`packages/mcp-server`](./packages/mcp-server) for the full option surface.
+
 ## Frontend (`-react`)
 
 `useAgentChat` wraps the Vercel AI SDK v7 `useChat` with a transport for the `/agent/chat` SSE,
-plus threads, personas, quota, cancel, and HITL approve/reject. The components are styling-agnostic
-(every action is a callback, all styling via `classNames`). The optional
-`@dudousxd/nestjs-agent-react/markdown` subpath ships a full streamdown renderer (GFM, KaTeX,
-syntax-highlighted code, Mermaid) you can drop into the `renderText` slot.
+plus threads, personas, quota, cancel, and HITL approve/reject. `useChatTranscript` turns the
+streamed messages into a renderable model — parts grouped into text/reasoning/tool runs, per-message
+derived values, each action a state machine, plus list windowing and stick-to-bottom — and
+`MessageList`/`MessageItem`/`ChatInput` are one rendering of it, styling-agnostic and optional. The
+optional `@dudousxd/nestjs-agent-react/markdown` subpath ships a full streamdown renderer (GFM,
+KaTeX, syntax-highlighted code, Mermaid) you can drop into the `renderText` slot.
 
 ```tsx
 // baseUrl is the origin (default '' = same origin); the transport appends '/agent/chat' itself
@@ -308,6 +673,50 @@ export class AppModule {}
 
 Both read the same `AGENT_GOVERNANCE_QUERIES` read-model (bound by the store modules) and tail live
 tool-call / quota signals off the `aviary:agent:*` diagnostics channel.
+
+## Evals & scorers (`-evals`)
+
+Cost and reliability say what a turn *spent* and whether it *finished*. `@dudousxd/nestjs-agent-evals`
+says whether it was any **good** — a `0..1` score plus the sentence that justifies it, tracked over
+time. Scoring is **offline-first**: it reads runs the agent already persisted (`AgentGovernanceQueries`
++ `AgentStore`), so nothing sits inside a turn adding latency or cost to every message a user sends.
+
+```ts
+import {
+  ApprovalOutcomeScorer, ApprovalRiskScorer, GovernanceRunSampleSource,
+  InMemoryScoreStore, RunCompletionScorer, loadApprovalPrior, runEvaluation, summarizeByScorer,
+} from '@dudousxd/nestjs-agent-evals';
+
+const scores = new InMemoryScoreStore();          // or your own ScoreStore adapter
+await runEvaluation({
+  source: new GovernanceRunSampleSource(governanceQueries, agentStore),
+  scorers: [
+    new RunCompletionScorer(),
+    new ApprovalOutcomeScorer(),
+    new ApprovalRiskScorer(await loadApprovalPrior(governanceQueries)),
+  ],
+  store: scores,
+  query: { limit: 500, fromDay: '2026-09-01', toDay: '2026-09-07' },
+});
+summarizeByScorer(await scores.listScores({}));   // worst mean first
+```
+
+**The HITL signal is the point.** Because an `action` tool pauses for a human approve/reject, **every
+rejection is a negative quality label a human produced for free** — in the words of the domain, at
+the moment it mattered. `ApprovalOutcomeScorer` reads those verdicts back as the fraction of a run's
+decided actions a human approved; `ApprovalRiskScorer` turns the same corpus into a Beta-smoothed
+prior so a pending-approvals inbox can be drained riskiest-first, before anyone looks.
+
+The four built-ins cover the three families: `RunCompletionScorer` + `ApprovalOutcomeScorer`
+(`rule`), `ApprovalRiskScorer` (`statistical`), `AnswerRelevancyScorer` (`model`, LLM-as-judge over
+any `ModelProvider`). A scorer returns `null` — not `1` — for a run it has nothing to say about, so
+the runs carrying a real verdict aren't buried under an average of ~1; a scorer that throws is
+collected as a per-run failure and the batch carries on.
+
+`runEvaluation` skips a `(run, scorer)` pair the store has already seen, so an interrupted backfill
+restarted with the same query re-bills nothing. Optionally, `attachLiveScoring` scores runs as they
+finish off the `aviary:agent:run.finished` channel — opt-in, after the run has settled, in a guarded
+detached promise, so there is no path from a scorer back into a turn.
 
 ## Example
 

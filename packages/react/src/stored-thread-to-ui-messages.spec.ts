@@ -182,3 +182,28 @@ describe('storedThreadToUiMessages', () => {
     expect(storedThreadToUiMessages([])).toEqual([]);
   });
 });
+
+describe('a message from another run', () => {
+  it('is its own bubble, not the tail of the assistant turn before it', () => {
+    const merged = storedThreadToUiMessages([
+      message({ id: 'u1', role: 'user', content: 'look into this' }),
+      message({
+        id: 'a1',
+        role: 'assistant',
+        content: 'starting the research agent',
+        runId: 'run-1',
+      }),
+      message({ id: 'a2', role: 'assistant', content: 'RESEARCH ANSWER', runId: 'run-child' }),
+    ]);
+    expect(merged.map((message) => message.id)).toEqual(['u1', 'a1', 'a2']);
+  });
+
+  it('still merges two rows of the SAME run, as one turn always has', () => {
+    const merged = storedThreadToUiMessages([
+      message({ id: 'a1', role: 'assistant', content: 'checking', runId: 'run-1' }),
+      message({ id: 'a2', role: 'assistant', content: 'done', runId: 'run-1' }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe('a2');
+  });
+});

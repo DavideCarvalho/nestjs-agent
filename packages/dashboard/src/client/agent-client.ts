@@ -129,6 +129,12 @@ export interface RecentRunRow {
   startedAt: string;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; `null` for a run recorded before this shipped. */
   promptHash: string | null;
+  /**
+   * The run that delegated this one; `null` for a turn nobody delegated. For a DETACHED child it is
+   * the only link back to the turn that asked for it — that child outlives its parent's turn, so the
+   * transcript pairs them nowhere.
+   */
+  parentRunId: string | null;
 }
 
 /** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */

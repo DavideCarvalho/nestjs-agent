@@ -6,9 +6,12 @@ import type { Experimental_DownloadFunction } from 'ai';
  * AI SDK's default downloader, which refuses localhost/private hostnames (SSRF guard) and kills
  * attachment parts staged against a non-public object store (local MinIO in dev, VPC-only S3).
  *
- * Only safe because agent attachment URLs come exclusively from the host's own
- * `AGENT_ATTACHMENT_STAGING` presigner — never from user input. Do NOT reuse this for URLs a user
- * can influence.
+ * Safe here because the library ENFORCES that invariant rather than assuming it: `POST /agent/chat`
+ * accepts only a `mediaId` and rebuilds every attachment through
+ * `AttachmentStagingStore.resolve({ mediaId, actor })`, discarding whatever url the request named —
+ * so the URLs reaching this downloader come exclusively from the host's own staging store. That
+ * guarantee stops at this library's edge: do NOT reuse this downloader for URLs a user can
+ * influence.
  *
  * Mirrors the default's routing otherwise: URLs the model supports natively are left to the
  * provider (`null`), everything else is fetched and inlined as bytes.

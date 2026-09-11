@@ -4,6 +4,8 @@ export interface FakeTurn {
   text: string;
   /** If set, the turn asks to call this tool instead of finishing. */
   toolCall?: { name: string; input: unknown };
+  /** If set, the turn asks for several tools at once. Ignored when `toolCall` is set. */
+  toolCalls?: { name: string; input: unknown }[];
   /** If set, the turn reports an actual USD cost — as a gateway provider would. */
   costUsd?: number;
 }
@@ -29,15 +31,12 @@ export class FakeModelProvider implements ModelProvider {
     const encoder = new TextEncoder();
     await args.sink.write(encoder.encode(turn.text));
 
-    const toolCalls = turn.toolCall
-      ? [
-          {
-            id: `call-${turnIndex}-${turn.toolCall.name}`,
-            name: turn.toolCall.name,
-            input: turn.toolCall.input,
-          },
-        ]
-      : [];
+    const requested = turn.toolCall !== undefined ? [turn.toolCall] : (turn.toolCalls ?? []);
+    const toolCalls = requested.map((call) => ({
+      id: `call-${turnIndex}-${call.name}`,
+      name: call.name,
+      input: call.input,
+    }));
 
     return {
       text: turn.text,

@@ -7,9 +7,16 @@ import {
   type AgentRunner,
   type AgentStore,
   type Decision,
-  QuotaExceededError,
+  type DetachedDelivery,
+  type ElicitationReply,
+  type HumanReply,
+  RunCancelledError,
+  agentFailureCode,
+  encodeStreamEvent,
   publishAgentRunFailed,
   runAgentLoop,
+  settleAll,
+  settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
@@ -25,7 +32,16 @@ import { type AgentDeps, childSinkWriter, utcDay } from '../agent-deps.js';
 @Injectable()
 export class InlineAgentRunner implements AgentRunner {
   private readonly logger = new Logger(InlineAgentRunner.name);
-  private readonly pending = new Map<string, (decision: Decision) => void>();
+  private readonly pending = new Map<
+    string,
+    { resolve: (reply: HumanReply) => void; reject: (error: unknown) => void }
+  >();
+  /**
+   * Runs someone has asked to stop. In-process, like `pending`, and for the same reason: this runner
+   * is single-replica by construction, so the request is readable by the only loop that could be
+   * running it. A cancelled id is dropped once the run settles, so the set tracks live runs only.
+   */
+  private readonly cancelled = new Set<string>();
 
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
@@ -36,13 +52,27 @@ export class InlineAgentRunner implements AgentRunner {
     const runId = crypto.randomUUID();
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
-    const hooks = this.topLevelHooks(runId, deps, input.actor, day);
+    const hooks = this.topLevelHooks({
+      runId,
+      deps,
+      actor: input.actor,
+      day,
+      threadId: input.threadId,
+      chainBelow: [
+        ...(input.delegationPath ?? []),
+        ...(input.agentName !== undefined ? [input.agentName] : []),
+      ],
+    });
 
     void runAgentLoop({ ...deps, day }, input, hooks)
       .then(() => this.store.setActiveStream(input.threadId, null))
       .catch(async (error) => {
+        if (error instanceof RunCancelledError) {
+          await this.settleCancelled(runId, input.threadId, deps);
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
-        const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
+        const code = agentFailureCode(error);
         this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
         publishAgentRunFailed({ runId, code, message });
         // Settle the run's persisted outcome (the loop only records completions — it can't catch
@@ -59,37 +89,223 @@ export class InlineAgentRunner implements AgentRunner {
         // instead of leaking the message as assistant text.
         const writer = await deps.sink.open(runId);
         await writer.fail({ code, message });
-      });
+      })
+      .finally(() => this.cancelled.delete(runId));
 
     return { runId };
   }
 
-  async signal(runId: string, toolCallId: string, decision: Decision): Promise<void> {
+  async signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void> {
     const key = `${runId}:${toolCallId}`;
-    const resolve = this.pending.get(key);
-    if (resolve !== undefined) {
+    const waiter = this.pending.get(key);
+    if (waiter !== undefined) {
       this.pending.delete(key);
-      resolve(decision);
+      waiter.resolve(reply);
     }
   }
 
+  /**
+   * Ask a run to stop, and settle whatever it was parked on.
+   *
+   * The loop observes the request at its next safe point (between steps, before the turn's tools) and
+   * unwinds from there — so a tool already executing is left to finish, and its result is recorded
+   * exactly as it would have been. What this cannot wait for is a turn parked on a human: that wait
+   * is a promise nobody is going to resolve, so it is REJECTED here with the same
+   * {@link RunCancelledError} the loop would have thrown, and the run unwinds through the identical
+   * path.
+   *
+   * Settlement — the run row, the thread's active stream, the stream's terminal — belongs to the
+   * `RunCancelledError` catch in `start`, so a cancel and an ordinary failure settle in one place
+   * each and can never both write.
+   */
   async cancel(runId: string): Promise<void> {
-    const deps = this.factory.forAgent();
-    const writer = await deps.sink.open(runId);
-    await writer.end();
+    this.cancelled.add(runId);
+    for (const [key, waiter] of this.pending) {
+      if (key.startsWith(`${runId}:`)) {
+        this.pending.delete(key);
+        waiter.reject(new RunCancelledError());
+      }
+    }
+    await Promise.resolve();
   }
 
-  private topLevelHooks(runId: string, deps: AgentDeps, actor: Actor, day: string): AgentLoopHooks {
+  /**
+   * The single place a cancelled run's state is settled: recorded as its own terminal (never
+   * `failed` — a user pressing Stop must not land in someone's error rate), the thread released, and
+   * the stream ENDED after a `cancelled` frame rather than failed, so a client that retries failed
+   * streams does not retry this one.
+   */
+  private async settleCancelled(runId: string, threadId: string, deps: AgentDeps): Promise<void> {
+    this.logger.log(`agent run ${runId} cancelled`);
+    await this.store.setActiveStream(threadId, null);
+    const writer = await deps.sink.open(runId);
+    await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
+    await writer.end();
+    // Last, so the reader is released before the bookkeeping: everything above is what someone is
+    // waiting on, and the run row is what someone reads afterwards.
+    await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
+  }
+
+  /**
+   * Park a run on a human, keyed by run + tool call. One map for approvals and for question-set
+   * answers alike: both wait on the same key, and `signal` cannot tell (or need to tell) which
+   * shape it is delivering — the loop asked for one and only ever gets what the caller sent. A
+   * cancel settles the wait too, by rejecting it.
+   */
+  private park<T extends HumanReply>(runId: string, toolCallId: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(`${runId}:${toolCallId}`, {
+        resolve: resolve as (reply: HumanReply) => void,
+        reject,
+      });
+    });
+  }
+
+  private topLevelHooks(args: {
+    runId: string;
+    deps: AgentDeps;
+    actor: Actor;
+    day: string;
+    threadId: string;
+    /** This run's delegation chain with its own agent appended — see `AgentRunInput.delegationPath`. */
+    chainBelow: readonly string[];
+  }): AgentLoopHooks {
+    const { runId, deps, actor, day, threadId, chainBelow } = args;
     return {
       runId,
       openSink: () => deps.sink.open(runId),
-      awaitApproval: (call) =>
-        new Promise<Decision>((resolve) => {
-          this.pending.set(`${runId}:${call.id}`, resolve);
-        }),
+      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
-      runAgent: (agentName, task) => this.runNested(agentName, task, actor, day, 1, runId),
+      parallel: settleAll,
+      cancelled: async () => this.cancelled.has(runId),
+      runAgent: (agentName, task) =>
+        this.runNested({
+          agentName,
+          task,
+          actor,
+          day,
+          depth: 1,
+          path: chainBelow,
+          sinkRunId: runId,
+          parentRunId: runId,
+        }),
+      startAgent: ({ agentName, task, toolCallId }) =>
+        this.startDetached({
+          agentName,
+          task,
+          actor,
+          day,
+          depth: 1,
+          path: chainBelow,
+          parentRunId: runId,
+          deliverTo: { threadId, toolCallId },
+        }),
     };
+  }
+
+  /**
+   * Delegate WITHOUT waiting: a nested loop nobody awaits, on its own thread and its own sink, which
+   * posts its answer back into the delegating thread when it lands (`deliverTo`, settled by the
+   * loop). The calling turn gets the run id straight back and finishes.
+   *
+   * No `sinkRunId`, unlike {@link runNested}: forwarding into the stream the human is watching would
+   * write into a turn that has already ended. Its own approvals resolve through the shared pending
+   * map keyed by its own runId — which is what the pending-approvals surface routes to.
+   */
+  private async startDetached(args: {
+    agentName: string;
+    task: string;
+    actor: Actor;
+    day: string;
+    depth: number;
+    /** The chain that reached this child, root first. */
+    path: readonly string[];
+    parentRunId: string;
+    deliverTo: DetachedDelivery;
+  }): Promise<{ runId: string }> {
+    const { agentName, task, actor, day, depth, path, parentRunId, deliverTo } = args;
+    const subThread = await this.store.createThread({ actor, transient: true });
+    const runId = crypto.randomUUID();
+    // Marks the subthread as streaming this run, exactly as a sub-agent's does: it is what routes a
+    // human decision on its action tools back to it, and what lets a client attach to its stream.
+    await this.store.setActiveStream(subThread.id, runId);
+    const deps = this.factory.forAgent(agentName);
+    const hooks: AgentLoopHooks = {
+      runId,
+      openSink: () => deps.sink.open(runId),
+      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
+      step: (_name, fn) => fn(),
+      parallel: settleAll,
+      cancelled: async () => this.cancelled.has(runId),
+      runAgent: (childName, childTask) =>
+        this.runNested({
+          agentName: childName,
+          task: childTask,
+          actor,
+          day,
+          depth: depth + 1,
+          path: [...path, agentName],
+          // A detached run owns a stream of its own, so ITS sub-agents forward into that one.
+          sinkRunId: runId,
+          parentRunId: runId,
+        }),
+      startAgent: ({ agentName: childName, task: childTask, toolCallId }) =>
+        this.startDetached({
+          agentName: childName,
+          task: childTask,
+          actor,
+          day,
+          depth: depth + 1,
+          path: [...path, agentName],
+          parentRunId: runId,
+          deliverTo: { threadId: subThread.id, toolCallId },
+        }),
+    };
+    void runAgentLoop(
+      { ...deps, day },
+      {
+        threadId: subThread.id,
+        actor,
+        userText: task,
+        agentName,
+        day,
+        delegationDepth: depth,
+        delegationPath: path,
+        parentRunId,
+        deliverTo,
+      },
+      hooks,
+    )
+      .catch(async (error: unknown) => {
+        const cancelled = error instanceof RunCancelledError;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!cancelled) {
+          this.logger.error(`detached agent run ${runId} failed: ${message}`);
+          publishAgentRunFailed({ runId, code: agentFailureCode(error), message });
+        }
+        await this.store.recordRunEnd?.({
+          runId,
+          status: cancelled ? 'cancelled' : 'failed',
+          ...(cancelled ? {} : { errorCode: agentFailureCode(error), errorMessage: message }),
+        });
+        // The loop delivers its own success; a run that never produced an answer has to settle the
+        // delegation itself, or the calling conversation shows "started" for ever.
+        await settleUnsettledDelegation({
+          store: this.store,
+          delivery: deliverTo,
+          agent: agentName,
+          runId,
+          status: cancelled ? 'cancelled' : 'failed',
+          ...(cancelled ? {} : { error: message }),
+        });
+      })
+      .finally(async () => {
+        this.cancelled.delete(runId);
+        await this.store.setActiveStream(subThread.id, null);
+      });
+    return { runId };
   }
 
   /**
@@ -97,14 +313,18 @@ export class InlineAgentRunner implements AgentRunner {
    * (the top-level run the human is watching) so its output and any pending action tool are visible,
    * and its own approvals resolve through the shared pending map keyed by its own runId.
    */
-  private async runNested(
-    agentName: string,
-    task: string,
-    actor: Actor,
-    day: string,
-    depth: number,
-    sinkRunId: string,
-  ): Promise<{ text: string }> {
+  private async runNested(args: {
+    agentName: string;
+    task: string;
+    actor: Actor;
+    day: string;
+    depth: number;
+    /** The chain that reached this child, root first. */
+    path: readonly string[];
+    sinkRunId: string;
+    parentRunId: string;
+  }): Promise<{ text: string }> {
+    const { agentName, task, actor, day, depth, path, sinkRunId, parentRunId } = args;
     const subThread = await this.store.createThread({ actor, transient: true });
     const runId = crypto.randomUUID();
     // Mark the subthread as streaming THIS sub-run so a human approval routes back here
@@ -115,13 +335,35 @@ export class InlineAgentRunner implements AgentRunner {
       runId,
       // Forward into the top-level stream; the top-level run owns end/fail on that shared sink.
       openSink: async () => childSinkWriter(await deps.sink.open(sinkRunId)),
-      awaitApproval: (call) =>
-        new Promise<Decision>((resolve) => {
-          this.pending.set(`${runId}:${call.id}`, resolve);
-        }),
+      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
+      parallel: settleAll,
+      // A child stops when it is cancelled OR when the run a human is actually watching is: the
+      // canceller names the top-level run, which is the only id that ever left the server.
+      cancelled: async () => this.cancelled.has(runId) || this.cancelled.has(sinkRunId),
       runAgent: (childName, childTask) =>
-        this.runNested(childName, childTask, actor, day, depth + 1, sinkRunId),
+        this.runNested({
+          agentName: childName,
+          task: childTask,
+          actor,
+          day,
+          depth: depth + 1,
+          path: [...path, agentName],
+          sinkRunId,
+          parentRunId: runId,
+        }),
+      startAgent: ({ agentName: childName, task: childTask, toolCallId }) =>
+        this.startDetached({
+          agentName: childName,
+          task: childTask,
+          actor,
+          day,
+          depth: depth + 1,
+          path: [...path, agentName],
+          parentRunId: runId,
+          deliverTo: { threadId: subThread.id, toolCallId },
+        }),
     };
     try {
       return await runAgentLoop(
@@ -133,6 +375,8 @@ export class InlineAgentRunner implements AgentRunner {
           agentName,
           day,
           delegationDepth: depth,
+          delegationPath: path,
+          parentRunId,
           sinkRunId,
         },
         hooks,

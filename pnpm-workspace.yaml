@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "examples/*"
+  - "registry"
 allowBuilds:
   '@biomejs/biome': true
   '@nestjs/core': false

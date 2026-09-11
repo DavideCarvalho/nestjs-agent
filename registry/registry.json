@@ -1,0 +1,149 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "aviary-agent",
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "items": [
+    {
+      "name": "agent-chat",
+      "type": "registry:block",
+      "title": "Agent Chat",
+      "description": "A full chat surface over useChatTranscript \u2014 welcome state with mode pills, a composer card with a context strip, message bubbles, grouped tool cards with inline approve/reject, the agent's own questions as an inline form, a reasoning disclosure, provenance from retrieval, follow-ups and stick-to-bottom.",
+      "author": "Davide Carvalho <https://github.com/DavideCarvalho>",
+      "categories": [
+        "ai",
+        "chat"
+      ],
+      "dependencies": [
+        "@dudousxd/nestjs-agent-react",
+        "ai",
+        "clsx",
+        "tailwind-merge"
+      ],
+      "files": [
+        {
+          "path": "src/components/agent-chat/agent-chat.tsx",
+          "type": "registry:block",
+          "target": "@components/agent-chat/agent-chat.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-transcript.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-transcript.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-message.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-message.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-reasoning.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-reasoning.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-sources.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-sources.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-tool-group.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-tool-group.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-elicitation.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-elicitation.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-files.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-files.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-follow-ups.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-follow-ups.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-welcome.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-welcome.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-panel.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-panel.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-composer.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-composer.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-context-strip.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-context-strip.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-mode-pills.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-mode-pills.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-command-palette.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-command-palette.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/icons.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/icons.tsx"
+        }
+      ]
+    },
+    {
+      "name": "agent-chat-composer",
+      "type": "registry:component",
+      "title": "Agent Chat Composer",
+      "description": "The composer card on its own \u2014 growing textarea, attach affordance, a slot for a model picker, one control that submits or cancels the turn in flight, a context strip and mode pills.",
+      "author": "Davide Carvalho <https://github.com/DavideCarvalho>",
+      "categories": [
+        "ai",
+        "chat"
+      ],
+      "dependencies": [
+        "@dudousxd/nestjs-agent-react",
+        "clsx",
+        "tailwind-merge"
+      ],
+      "files": [
+        {
+          "path": "src/components/agent-chat/chat-composer.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-composer.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-context-strip.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-context-strip.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-mode-pills.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-mode-pills.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/chat-command-palette.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-command-palette.tsx"
+        },
+        {
+          "path": "src/components/agent-chat/icons.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/icons.tsx"
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import {
   AGENT_PROMPT_CONTRIBUTORS,
   AGENT_REGISTRY,
   type AgentDefinition,
+  type AgentDelegation,
   AgentRegistry,
   type PromptBuilder,
   type PromptContext,
@@ -60,14 +61,33 @@ export class AgentDiscoveryService implements OnModuleInit {
       ...(meta.tools !== undefined ? { tools: meta.tools } : {}),
       ...(meta.model !== undefined ? { modelId: meta.model } : {}),
       ...(meta.maxSteps !== undefined ? { maxSteps: meta.maxSteps } : {}),
-      ...(meta.handoff !== undefined ? { delegatesTo: this.handoffNames(meta) } : {}),
+      ...(meta.maxDelegationDepth !== undefined
+        ? { maxDelegationDepth: meta.maxDelegationDepth }
+        : {}),
+      ...(meta.maxAgentAppearances !== undefined
+        ? { maxAgentAppearances: meta.maxAgentAppearances }
+        : {}),
+      ...(meta.history !== undefined ? { history: meta.history } : {}),
+      ...(meta.outputSchema !== undefined ? { outputSchema: meta.outputSchema } : {}),
+      ...(meta.intake !== undefined ? { intake: meta.intake } : {}),
+      ...(meta.ask !== undefined ? { ask: meta.ask } : {}),
+      ...(meta.outputRepairAttempts !== undefined
+        ? { outputRepairAttempts: meta.outputRepairAttempts }
+        : {}),
+      ...(meta.handoff !== undefined ? { delegatesTo: this.handoffEdges(meta) } : {}),
     };
   }
 
-  /** Resolve each handoff `@Agent` class to its registered name (skipping non-agent classes). */
-  private handoffNames(meta: AgentOptions): string[] {
-    const names: string[] = [];
-    for (const target of meta.handoff ?? []) {
+  /**
+   * Resolve each handoff entry to an {@link AgentDelegation} — its target's registered name, plus
+   * whether that edge detaches (skipping non-agent classes). A bare name is kept for a plain edge
+   * rather than an always-object form, so a definition an older host built by hand still reads.
+   */
+  private handoffEdges(meta: AgentOptions): AgentDelegation[] {
+    const edges: AgentDelegation[] = [];
+    for (const entry of meta.handoff ?? []) {
+      const target = typeof entry === 'function' ? entry : entry.agent;
+      const detached = typeof entry === 'function' ? false : entry.detached === true;
       const targetMeta = readAgentMetadata(target);
       if (targetMeta === undefined) {
         this.logger.warn(
@@ -75,9 +95,9 @@ export class AgentDiscoveryService implements OnModuleInit {
         );
         continue;
       }
-      names.push(targetMeta.name);
+      edges.push(detached ? { agent: targetMeta.name, detached: true } : targetMeta.name);
     }
-    return names;
+    return edges;
   }
 
   /** Push every `@SystemPromptContributor()` method on `instance` (bound) into the contributor list. */

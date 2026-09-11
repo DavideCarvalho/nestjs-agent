@@ -117,7 +117,11 @@ export interface RecentRunRow {
   threadId: string;
   actorRef: string;
   agentName: string | null;
-  /** 'running' | 'completed' | 'failed'. */
+  /**
+   * `'running'` | `'completed'` | `'failed'` | `'cancelled'`. `cancelled` is a terminal of its own —
+   * someone asked the run to stop and it did — so a consumer computing a failure rate over these
+   * rows has to be able to leave it out rather than fold it into `failed`.
+   */
   status: string;
   durationMs: number | null;
   errorCode: string | null;
@@ -127,6 +131,14 @@ export interface RecentRunRow {
   startedAt: string;
   /** sha256 hex of the run's resolved (pre-RAG) system prompt; `null` for a run recorded before this shipped. */
   promptHash: string | null;
+  /**
+   * The run that delegated this one; `null` for a turn nobody delegated, and for any run recorded
+   * before the column existed. Pairing a child with its parent is what lets a console draw the
+   * delegation tree and roll a child's cost up to the turn that asked for it — and for a DETACHED
+   * child it is the only pairing there is, since it outlives its parent's turn and the transcript
+   * holds no other link.
+   */
+  parentRunId: string | null;
 }
 
 /** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */

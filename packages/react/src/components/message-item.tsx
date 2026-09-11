@@ -1,14 +1,15 @@
-import {
-  type DynamicToolUIPart,
-  type ToolUIPart,
-  type UIMessage,
-  isTextUIPart,
-  isToolUIPart,
-} from 'ai';
-import React, { useEffect, useRef, useState } from 'react';
+import type { UIMessage } from 'ai';
+import React from 'react';
+import type {
+  AnyToolUIPart,
+  MessageUsageInfo,
+  TranscriptBlock,
+  TranscriptFile,
+} from '../transcript/model.js';
+import { type TranscriptItem, useTranscriptItem } from '../transcript/use-chat-transcript.js';
 
-/** A tool UI part on a `UIMessage` — a static `tool-*` part or the `dynamic-tool` part. */
-export type AnyToolUIPart = ToolUIPart | DynamicToolUIPart;
+export type { AnyToolUIPart, MessageUsageInfo } from '../transcript/model.js';
+export { formatRelativeTime } from '../transcript/model.js';
 
 export type RenderToolPartFn = (part: AnyToolUIPart, key: string) => React.ReactNode;
 
@@ -18,12 +19,14 @@ export type RenderToolGroupFn = (parts: AnyToolUIPart[], key: string) => React.R
 /** Render a message's text — pass a markdown renderer (e.g. `AgentMarkdown`) here if desired. */
 export type RenderTextFn = (text: string, ctx: { isStreaming: boolean }) => React.ReactNode;
 
-/** Server-aggregated usage for an assistant turn, shown as a small inline line. */
-export interface MessageUsageInfo {
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
-}
+/** Render a run of files — attachments on a user turn, or files the model produced. */
+export type RenderFilesFn = (files: TranscriptFile[]) => React.ReactNode;
+
+/** Render the body of a reasoning run; the disclosure toggle around it stays this component's. */
+export type RenderReasoningFn = (
+  text: string,
+  ctx: { isStreaming: boolean; isOpen: boolean },
+) => React.ReactNode;
 
 export interface MessageItemClassNames {
   root?: string;
@@ -37,15 +40,34 @@ export interface MessageItemClassNames {
   timestamp?: string;
   editTextarea?: string;
   editActions?: string;
+  reasoning?: string;
+  reasoningToggle?: string;
+  reasoningText?: string;
+  files?: string;
+  file?: string;
+  fileImage?: string;
 }
 
-export interface MessageItemProps {
-  message: UIMessage;
+interface MessageRenderSlots {
   renderToolPart?: RenderToolPartFn;
   /** Takes precedence over `renderToolPart` for a run of consecutive tool parts. */
   renderToolGroup?: RenderToolGroupFn;
   renderText?: RenderTextFn;
+  renderReasoning?: RenderReasoningFn;
+  /** Draw files yourself — a gallery, a viewer. Omitted → images inline, everything else a link. */
+  renderFiles?: RenderFilesFn;
+  /**
+   * Extra content for the action row, after the built-in affordances and before usage — a badge
+   * naming which agent answered, a status pill. Rendered for every message that has an action row.
+   */
+  meta?: React.ReactNode;
+  /** Label on the reasoning disclosure toggle. Default `"Reasoning"`. */
+  reasoningLabel?: React.ReactNode;
   classNames?: MessageItemClassNames;
+}
+
+export interface MessageItemProps extends MessageRenderSlots {
+  message: UIMessage;
   /** Marks the in-flight assistant bubble (e.g. for a caret animation / deferred markdown render). */
   isStreaming?: boolean;
   /** User bubble gets a pencil → inline textarea; submitting calls back with the new text. */
@@ -62,18 +84,22 @@ export interface MessageItemProps {
   createdAt?: string | null;
 }
 
+export interface MessageItemViewProps extends MessageRenderSlots {
+  item: TranscriptItem;
+}
+
 /**
  * Styling-agnostic renderer for a single v7 `UIMessage`. Ports flip's full chat-item UX —
- * copy, fork, regenerate, inline edit-and-resubmit, usage line, relative timestamp, and tool
- * grouping — but with ALL styling left to `classNames` and every action surfaced as a callback,
- * so no design-system / icon / date library is pulled in (relative time uses Intl.RelativeTimeFormat).
+ * copy, fork, regenerate, inline edit-and-resubmit, collapsible reasoning, usage line, relative
+ * timestamp, and tool grouping — but with ALL styling left to `classNames` and every action
+ * surfaced as a callback, so no design-system / icon / date library is pulled in (relative time
+ * uses Intl.RelativeTimeFormat).
+ *
+ * All of the logic lives in `useTranscriptItem`; this is one rendering of it. An app that wants
+ * different markup drives that hook and writes its own.
  */
 export function MessageItem({
   message,
-  renderToolPart,
-  renderToolGroup,
-  renderText,
-  classNames,
   isStreaming = false,
   editable,
   onEditSubmit,
@@ -82,189 +108,231 @@ export function MessageItem({
   onFork,
   usage,
   createdAt,
+  ...slots
 }: MessageItemProps) {
-  const isUser = message.role === 'user';
-  const parts = message.parts ?? [];
-  const copyableText = extractText(parts);
+  const item = useTranscriptItem({
+    message,
+    isStreaming,
+    ...(editable !== undefined ? { editable } : {}),
+    ...(onEditSubmit ? { onEditSubmit: (_id: string, next: string) => onEditSubmit(next) } : {}),
+    ...(onFork ? { onFork } : {}),
+    ...(regeneratable !== undefined ? { regeneratable } : {}),
+    ...(onRegenerate ? { onRegenerate: () => onRegenerate() } : {}),
+    ...(usage != null ? { getUsage: () => usage } : {}),
+    ...(createdAt != null ? { getCreatedAt: () => createdAt } : {}),
+  });
+  return <MessageItemView item={item} {...slots} />;
+}
 
+/** The default markup for one modelled message — what `MessageItem` renders once it has an item. */
+export function MessageItemView({ item, ...slots }: MessageItemViewProps) {
+  const { classNames } = slots;
   const actionRow = (
-    <div className={classNames?.actions} data-actions-for={message.role}>
-      {copyableText ? (
-        <CopyButton text={copyableText} className={classNames?.actionButton} />
-      ) : null}
-      {onFork ? (
+    <div className={classNames?.actions} data-actions-for={item.role}>
+      {item.copy.available ? (
         <button
           type="button"
-          onClick={() => void onFork(message.id)}
+          onClick={item.copy.copy}
+          className={classNames?.actionButton}
+          title={item.copy.copied ? 'Copied!' : 'Copy message text'}
+        >
+          {item.copy.copied ? 'Copied' : 'Copy'}
+        </button>
+      ) : null}
+      {item.fork.available ? (
+        <button
+          type="button"
+          onClick={item.fork.run}
           className={classNames?.actionButton}
           title="Fork thread from this message"
         >
           Fork
         </button>
       ) : null}
-      {!isUser && regeneratable && onRegenerate ? (
+      {item.regenerate.available ? (
         <button
           type="button"
-          onClick={() => void onRegenerate()}
+          onClick={item.regenerate.run}
           className={classNames?.actionButton}
           title="Regenerate response"
         >
           Regenerate
         </button>
       ) : null}
-      {!isUser && usage ? <UsageInline usage={usage} className={classNames?.usage} /> : null}
-      {createdAt ? (
-        <TimestampInline createdAt={createdAt} className={classNames?.timestamp} />
+      {slots.meta}
+      {!item.isUser && item.usage ? (
+        <span
+          className={classNames?.usage}
+          title={`Input ${item.usage.inputTokens.toLocaleString()} · Output ${item.usage.outputTokens.toLocaleString()} tokens`}
+        >
+          {item.usage.costLabel} · {item.usage.tokensLabel}
+        </span>
+      ) : null}
+      {item.timestamp ? (
+        <span className={classNames?.timestamp} title={item.timestamp.absolute}>
+          {item.timestamp.relative}
+        </span>
       ) : null}
     </div>
   );
 
-  if (isUser && editable && onEditSubmit) {
-    return (
-      <EditableUserBubble
-        message={message}
-        onSubmit={onEditSubmit}
-        renderText={renderText}
-        classNames={classNames}
-        actions={actionRow}
-      />
-    );
+  if (item.edit.available) {
+    return <EditableUserBubble item={item} slots={slots} actions={actionRow} />;
   }
 
-  const className = [classNames?.root, classNames?.byRole?.[message.role]]
-    .filter((entry) => entry)
-    .join(' ');
+  const className = joinClasses(classNames?.root, classNames?.byRole?.[item.role]);
 
   return (
     <div
-      className={className === '' ? undefined : className}
-      data-role={message.role}
-      data-streaming={isStreaming ? 'true' : undefined}
+      className={className}
+      data-role={item.role}
+      data-streaming={item.isStreaming ? 'true' : undefined}
     >
-      <div>
-        {renderParts(message, parts, {
-          renderText,
-          renderToolPart,
-          renderToolGroup,
-          classNames,
-          isStreaming,
-        })}
-      </div>
+      <div>{renderBlocks(item, slots)}</div>
       {actionRow}
     </div>
   );
 }
 
-interface RenderPartsCtx {
-  renderText?: RenderTextFn | undefined;
-  renderToolPart?: RenderToolPartFn | undefined;
-  renderToolGroup?: RenderToolGroupFn | undefined;
-  classNames?: MessageItemClassNames | undefined;
-  isStreaming: boolean;
-}
-
-/** Walk the parts, buffering consecutive tool parts so they can render as one group. */
-function renderParts(
-  message: UIMessage,
-  parts: NonNullable<UIMessage['parts']>,
-  ctx: RenderPartsCtx,
-): React.ReactNode[] {
-  const blocks: React.ReactNode[] = [];
-  let toolBuffer: AnyToolUIPart[] = [];
-  let toolGroupCounter = 0;
-  let textCounter = 0;
-
-  function flushTools() {
-    if (toolBuffer.length === 0) {
-      return;
-    }
-    const key = `${message.id}-tools-${toolGroupCounter++}`;
-    if (ctx.renderToolGroup) {
-      blocks.push(
-        <React.Fragment key={key}>{ctx.renderToolGroup(toolBuffer, key)}</React.Fragment>,
-      );
-    } else if (ctx.renderToolPart) {
-      for (const part of toolBuffer) {
-        const partKey = `${message.id}-${part.toolCallId}`;
-        blocks.push(
-          <React.Fragment key={partKey}>{ctx.renderToolPart(part, partKey)}</React.Fragment>,
-        );
-      }
-    }
-    toolBuffer = [];
-  }
-
-  for (const part of parts) {
-    if (isToolUIPart(part)) {
-      toolBuffer.push(part);
-      continue;
-    }
-    flushTools();
-    if (isTextUIPart(part)) {
-      const key = `${message.id}-text-${textCounter++}`;
-      blocks.push(
-        <div key={key} className={ctx.classNames?.text}>
-          {ctx.renderText ? ctx.renderText(part.text, { isStreaming: ctx.isStreaming }) : part.text}
+/** Blocks the model has no opinion on are skipped — a renderer only draws what it can draw. */
+function renderBlocks(item: TranscriptItem, slots: MessageRenderSlots): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  for (const block of item.blocks) {
+    if (block.kind === 'text') {
+      nodes.push(
+        <div key={block.key} className={slots.classNames?.text}>
+          {slots.renderText
+            ? slots.renderText(block.text, { isStreaming: item.isStreaming })
+            : block.text}
         </div>,
       );
+      continue;
+    }
+    if (block.kind === 'reasoning') {
+      nodes.push(renderReasoningBlock(block, slots));
+      continue;
+    }
+    if (block.kind === 'files') {
+      nodes.push(renderFilesBlock(block, slots));
+      continue;
+    }
+    if (block.kind === 'tools') {
+      nodes.push(...renderToolBlock(item, block, slots));
     }
   }
-  flushTools();
-  return blocks;
+  return nodes;
+}
+
+/**
+ * Files as content. An image is shown; anything else is a labelled link, because a renderer that
+ * cannot display a format is more useful pointing at it than guessing.
+ */
+function renderFilesBlock(
+  block: Extract<TranscriptBlock, { kind: 'files' }>,
+  slots: MessageRenderSlots,
+): React.ReactNode {
+  return (
+    <div key={block.key} className={slots.classNames?.files} data-files="true">
+      {slots.renderFiles
+        ? slots.renderFiles(block.files)
+        : block.files.map((file) => (
+            <a
+              key={file.url}
+              href={file.url}
+              target="_blank"
+              rel="noreferrer"
+              className={slots.classNames?.file}
+              title={file.filename ?? file.mediaType}
+            >
+              {file.isImage ? (
+                <img
+                  src={file.url}
+                  alt={file.filename ?? 'image'}
+                  className={slots.classNames?.fileImage}
+                />
+              ) : (
+                (file.filename ?? file.mediaType)
+              )}
+            </a>
+          ))}
+    </div>
+  );
+}
+
+function renderReasoningBlock(
+  block: Extract<TranscriptBlock, { kind: 'reasoning' }>,
+  slots: MessageRenderSlots,
+): React.ReactNode {
+  return (
+    <div
+      key={block.key}
+      className={slots.classNames?.reasoning}
+      data-reasoning="true"
+      data-streaming={block.isStreaming ? 'true' : undefined}
+    >
+      <button
+        type="button"
+        className={slots.classNames?.reasoningToggle}
+        onClick={() => block.toggle()}
+        aria-expanded={block.isOpen}
+      >
+        {slots.reasoningLabel ?? 'Reasoning'}
+      </button>
+      {block.isOpen ? (
+        <div className={slots.classNames?.reasoningText}>
+          {slots.renderReasoning
+            ? slots.renderReasoning(block.text, {
+                isStreaming: block.isStreaming,
+                isOpen: block.isOpen,
+              })
+            : block.text}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function renderToolBlock(
+  item: TranscriptItem,
+  block: Extract<TranscriptBlock, { kind: 'tools' }>,
+  slots: MessageRenderSlots,
+): React.ReactNode[] {
+  if (slots.renderToolGroup) {
+    return [
+      <React.Fragment key={block.key}>
+        {slots.renderToolGroup(block.parts, block.key)}
+      </React.Fragment>,
+    ];
+  }
+  if (!slots.renderToolPart) {
+    return [];
+  }
+  const renderToolPart = slots.renderToolPart;
+  return block.parts.map((part) => {
+    const partKey = `${item.id}-${part.toolCallId}`;
+    return <React.Fragment key={partKey}>{renderToolPart(part, partKey)}</React.Fragment>;
+  });
 }
 
 interface EditableUserBubbleProps {
-  message: UIMessage;
-  onSubmit: (newText: string) => void | Promise<void>;
-  renderText?: RenderTextFn | undefined;
-  classNames?: MessageItemClassNames | undefined;
-  actions?: React.ReactNode;
+  item: TranscriptItem;
+  slots: MessageRenderSlots;
+  actions: React.ReactNode;
 }
 
-function EditableUserBubble({
-  message,
-  onSubmit,
-  renderText,
-  classNames,
-  actions,
-}: EditableUserBubbleProps) {
-  const initialText = extractText(message.parts ?? []);
-  const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState(initialText);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+function EditableUserBubble({ item, slots, actions }: EditableUserBubbleProps) {
+  const { classNames } = slots;
+  const { edit } = item;
 
-  useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      const el = textareaRef.current;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    }
-  }, [isEditing]);
-
-  async function handleSave() {
-    const next = draft.trim();
-    if (!next) {
-      return;
-    }
-    setIsEditing(false);
-    await onSubmit(next);
-  }
-
-  if (!isEditing) {
-    const rootClass = [classNames?.root, classNames?.byRole?.user]
-      .filter((entry) => entry)
-      .join(' ');
+  if (!edit.isEditing) {
     return (
-      <div className={rootClass === '' ? undefined : rootClass} data-role="user">
+      <div className={joinClasses(classNames?.root, classNames?.byRole?.user)} data-role="user">
         <div className={classNames?.text}>
-          {renderText ? renderText(initialText, { isStreaming: false }) : initialText}
+          {slots.renderText ? slots.renderText(item.text, { isStreaming: false }) : item.text}
         </div>
         <button
           type="button"
-          onClick={() => {
-            setDraft(initialText);
-            setIsEditing(true);
-          }}
+          onClick={edit.start}
           className={classNames?.actionButton}
           title="Edit & resubmit"
         >
@@ -275,30 +343,19 @@ function EditableUserBubble({
     );
   }
 
+  const textareaProps = edit.getTextareaProps();
   return (
     <div data-editing="true">
       <textarea
-        ref={textareaRef}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            void handleSave();
-          }
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            setIsEditing(false);
-          }
-        }}
-        rows={Math.min(8, draft.split('\n').length + 1)}
+        {...textareaProps}
+        rows={Math.min(8, edit.draft.split('\n').length + 1)}
         className={classNames?.editTextarea}
       />
       <div className={classNames?.editActions}>
-        <button type="button" onClick={() => setIsEditing(false)}>
+        <button type="button" onClick={edit.cancel}>
           Cancel
         </button>
-        <button type="button" onClick={() => void handleSave()} disabled={!draft.trim()}>
+        <button type="button" onClick={edit.save} disabled={!edit.canSave}>
           Resend
         </button>
       </div>
@@ -306,122 +363,7 @@ function EditableUserBubble({
   );
 }
 
-interface CopyButtonProps {
-  text: string;
-  className?: string | undefined;
-}
-
-function CopyButton({ text, className }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard can be unavailable (insecure context / denied permission) — fail quietly.
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => void handleCopy()}
-      className={className}
-      title={copied ? 'Copied!' : 'Copy message text'}
-    >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
-}
-
-function UsageInline({
-  usage,
-  className,
-}: { usage: MessageUsageInfo; className?: string | undefined }) {
-  const total = usage.inputTokens + usage.outputTokens;
-  return (
-    <span
-      className={className}
-      title={`Input ${usage.inputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} tokens`}
-    >
-      {formatCostUsd(usage.costUsd)} · {formatTokensShort(total)}
-    </span>
-  );
-}
-
-function TimestampInline({
-  createdAt,
-  className,
-}: { createdAt: string; className?: string | undefined }) {
-  const parsed = new Date(createdAt);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-  const absolute = parsed.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  return (
-    <span className={className} title={absolute}>
-      {formatRelativeTime(parsed)}
-    </span>
-  );
-}
-
-const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'narrow' });
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * "just now" within ±10s (server `created_at` can land a few ms ahead of the client clock), a
- * relative phrase up to a week, then a calendar date. Uses Intl.RelativeTimeFormat — no date-fns.
- */
-export function formatRelativeTime(date: Date): string {
-  const diffMs = Date.now() - date.getTime();
-  if (Math.abs(diffMs) < 10_000) {
-    return 'just now';
-  }
-  if (diffMs > ONE_WEEK_MS) {
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  }
-  const minutes = Math.round(-diffMs / 60_000);
-  if (Math.abs(minutes) < 60) {
-    return RELATIVE_TIME.format(minutes, 'minute');
-  }
-  const hours = Math.round(-diffMs / 3_600_000);
-  if (Math.abs(hours) < 24) {
-    return RELATIVE_TIME.format(hours, 'hour');
-  }
-  return RELATIVE_TIME.format(Math.round(-diffMs / 86_400_000), 'day');
-}
-
-function formatTokensShort(n: number): string {
-  if (n < 1_000) {
-    return `${n} tokens`;
-  }
-  if (n < 10_000) {
-    return `${(n / 1_000).toFixed(1)}k tokens`;
-  }
-  return `${Math.round(n / 1_000)}k tokens`;
-}
-
-function formatCostUsd(cost: number): string {
-  if (cost === 0) {
-    return '$0';
-  }
-  if (cost < 0.01) {
-    return `$${cost.toFixed(4)}`;
-  }
-  if (cost < 1) {
-    return `$${cost.toFixed(3)}`;
-  }
-  return `$${cost.toFixed(2)}`;
-}
-
-function extractText(parts: NonNullable<UIMessage['parts']>): string {
-  const out: string[] = [];
-  for (const part of parts) {
-    if (isTextUIPart(part)) {
-      out.push(part.text);
-    }
-  }
-  return out.join('\n\n').trim();
+function joinClasses(...entries: Array<string | undefined>): string | undefined {
+  const joined = entries.filter((entry) => entry).join(' ');
+  return joined === '' ? undefined : joined;
 }
