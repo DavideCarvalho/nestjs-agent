@@ -30,12 +30,12 @@ export default defineConfig({
         manualChunks: {
           recharts: ['recharts'],
           'base-ui': [
-            '@base-ui-components/react/dialog',
-            '@base-ui-components/react/popover',
-            '@base-ui-components/react/select',
-            '@base-ui-components/react/tabs',
-            '@base-ui-components/react/tooltip',
-            '@base-ui-components/react/use-render',
+            '@base-ui/react/dialog',
+            '@base-ui/react/popover',
+            '@base-ui/react/select',
+            '@base-ui/react/tabs',
+            '@base-ui/react/tooltip',
+            '@base-ui/react/use-render',
           ],
         },
       },

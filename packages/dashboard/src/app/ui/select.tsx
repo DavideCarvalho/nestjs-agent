@@ -1,4 +1,4 @@
-import { Select as SelectPrimitive } from '@base-ui-components/react/select';
+import { Select as SelectPrimitive } from '@base-ui/react/select';
 import type { ComponentProps } from 'react';
 import { CheckIcon, ChevronDownIcon } from '../icons';
 import { cn } from './cn';
