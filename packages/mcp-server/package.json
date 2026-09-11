@@ -1,12 +1,12 @@
 {
   "name": "@dudousxd/nestjs-agent-mcp-server",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/mcp-server"
   },
-  "description": "nestjs-agent MCP server \u2014 expose this deployment's @AiTools to an external Model Context Protocol client, under the same authorization the agent loop applies",
+  "description": "nestjs-agent MCP server — expose this deployment's @AiTools to an external Model Context Protocol client, under the same authorization the agent loop applies",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",

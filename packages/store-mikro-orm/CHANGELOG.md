@@ -1,5 +1,439 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.15.0
+
+### Minor Changes
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `RecentRunRow.parentRunId` — the delegation edge reaches the read-model.
+
+  The run row records which turn delegated it, but the governance read-model did not carry it, so every
+  surface built on `recentRuns` / `runsPage` / `runDetail` / `threadDetail` still saw a flat list of runs.
+  `RecentRunRow` gains `parentRunId: string | null`, mapped by all three adapters — `null` for a turn
+  nobody delegated, and for any run recorded before the column existed.
+
+  That is what a console needs to draw a delegation tree and roll a child's cost up to the turn that asked
+  for it. For a DETACHED child it is the only link there is: it outlives its parent's turn, so nothing in
+  the transcript pairs them.
+
+  `RecentRunRow.status` also stops documenting three terminals. `cancelled` is a fourth value these rows
+  carry, and a consumer computing a failure rate has to be able to leave it out rather than fold it into
+  `failed` — a user pressing Stop is not an error.
+
+  **Upgrading.** No schema change and no behaviour change; an existing consumer that ignores the new field
+  is unaffected. A consumer asserting exhaustively on a run row (`toEqual`) will see the added key.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Make a finished turn read back as a finished turn.
+
+  A standalone client built against the published surface found two things the unit tests could not,
+  because both only appear once something reads a thread BACK.
+
+  **A turn's tool results were never persisted onto its message.** The loop appended the assistant
+  message at `persist:assistant:<i>` — before the tools ran — and then attached the results to an
+  in-memory object nothing ever wrote. The outputs did reach the `agent_tool_call` table, and the
+  MikroORM adapter hid the consequence by rebuilding `toolResults` from those rows on read; Drizzle and
+  the in-memory store return the column as written. So on those two, every tool on a reopened thread
+  sat at `state: 'input-available'` forever — a UI renders that as "Running", under an answer that had
+  already quoted the tool's output.
+
+  The fix is one write, not three reads. `AgentStore` gains a **required** `setMessageToolResults`, the
+  loop calls it once with the turn's complete result list, and all three adapters return the same
+  column. Making it optional would have reproduced the defect for any store that declined it, silently;
+  a missing method should fail to compile. MikroORM now returns the message's own results and consults
+  the tool-call rows only for a message that carries calls and none of its own, so what it returns for
+  anything the loop writes is byte-for-byte what the other two return, rather than a second derivation
+  that happens to agree.
+
+  **Inject-mode retrieval and structured output never reached a client at all.** Both were recorded
+  with `recordToolCall` — the tool-call table only. Neither was added to the message's `toolCalls`, and
+  neither emitted a stream frame, so the passages behind a grounded answer were invisible to every
+  client and a validated `outputSchema` value was unreachable except by reading the store directly.
+  Both now ride the whole delivery path an ordinary tool call has: the assistant message's
+  `toolCalls`/`toolResults`, the `agent_tool_call` row, and a live `tool-input-available` +
+  `tool-output` frame pair. No new frame kind and no new message field — a client that renders tool
+  calls renders both with no change, and `@dudousxd/nestjs-agent-react` folds the retrieval into its
+  provenance block on the shape of its output rather than the tool's name.
+
+  Docs claiming these already worked (`guides/rag.mdx`: "the same surface, so citations render
+  identically"; `guides/structured-output.mdx`) are now true rather than aspirational.
+
+  **No checkpoint moved.** Every value involved is settled by a checkpoint the turn already took, so
+  the results write lives inside `stream:tool-outputs:<i>` and the two synthetic calls keep their
+  existing `persist:retrieval:<messageId>` / `persist:structured:<messageId>` positions. A turn that
+  configures nothing new records a byte-identical sequence, so no run in flight can be refused on
+  resume, and none of this needed a `patched` marker.
+
+  **Migrating a custom `AgentStore`:** add `setMessageToolResults(messageId, results)` — replace that
+  message's `toolResults` with `results`. Adapters using the bundled schemas need no migration; the
+  `tool_results` column already exists.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Heal the schema on SQLite, and refuse to record a heal that did not apply.
+
+  `ensureAgentSchema` kept the statements of the update diff whose target table is an agent table. On
+  MySQL and Postgres a missing column is `alter table agent_thread add column …`, which that keeps. On
+  SQLite/libsql there is no such statement: MikroORM rewrites the table — `create table
+agent_thread__temp_alter`, `insert … select`, `drop table`, `rename to` — and every one of those was
+  filtered out, the temp table not being in the owned set and `insert`/`drop` not being matched at all.
+
+  So the heal ran, applied nothing, raised nothing — and then wrote the fingerprint, which is the part
+  that made it permanent: every later boot compared fingerprints, matched, and returned before ever
+  looking at the database again. Measured on a thread table missing four columns, the heal left
+  `id, actor_ref, title, transient, created_at, updated_at` and reported success.
+
+  Two changes, either of which would have caught it:
+
+  - The statement filter now keeps a statement when EVERY table it names is one this store owns —
+    which admits the whole rebuild sequence, and is also what keeps its `drop table` from ever pointing
+    at a host table. On SQLite the rebuild runs with foreign-key enforcement off and restored
+    afterwards: dropping `agent_thread` with enforcement on fires the children's `on delete cascade`,
+    taking every message, tool call and usage row with it.
+  - The heal then re-diffs, and throws the new `AgentSchemaHealError` when structure the diff asked for
+    is still pending. The fingerprint is written only on the way out, so a heal that did not happen
+    cannot record itself as the applied schema — the next boot introspects again instead of returning
+    early forever.
+
+  **Upgrading.** Nothing to run. A deployment whose agent tables are already current sees no change:
+  the diff is empty, so there is nothing to apply and nothing pending. A SQLite/libsql deployment that
+  silently missed a column heals on the next boot — the rebuild preserves the rows, and the fingerprint
+  is recorded only once the columns are actually there. A deployment whose database rejects the DDL
+  (no DDL grant, a managed schema) now fails the boot loudly with the pending statements in the
+  message, instead of starting against a schema the store cannot use; apply them from
+  `agentSchemaSql()` in a migration.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Read the window a turn sends, not the thread's whole transcript.
+
+  A turn loads the thread to build its prompt, and loaded it with `getThread`: every message row, every
+  attachment, every tool output the thread ever recorded, all of it parsed — and then journaled, so a
+  resumed run re-reads and re-parses the same payload. On a 50-turn thread whose turns each ran a 50 KB
+  tool that is **1.9 MB per load, 97% of it tool results**, to send a prompt bounded to the last few
+  messages.
+
+  Both SQL stores gain `loadThreadForTurn({ threadId, messageLimit })`, returning the thread's newest
+  `messageLimit` messages oldest-first, its title, its default agent, and whether the thread has ever
+  been answered. The read is the database's job: `order by created_at desc limit ?` over the columns a
+  model turn reads (`usage`, `follow_ups` and `run_id` stay in the table), reversed for the prompt.
+  `messageLimit: 0` reads no messages at all rather than every one of them; an omitted `messageLimit`
+  reads the whole thread.
+
+  `hasAssistantMessage` is answered over the WHOLE thread — a one-row probe, not a scan of the page.
+  It is what a thread-start intake asks ("has this conversation been answered before?"), and a long
+  thread whose window happens to hold only the user's last questions has still been answered; computed
+  off the page, such a thread re-introduces itself on every turn.
+
+  The method is probed structurally rather than added to the `AgentStore` SPI, the same way
+  `defaultAgentForThread` is: it is an optimization a store either offers or does not, and a store that
+  predates it still answers correctly through the full `getThread` read.
+
+  **Upgrading.** Nothing to run: additive method, no schema change, no behaviour change for any
+  existing call. `getThread` still returns the full `ThreadDetail` and is still the right read for a
+  client rendering a transcript.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - List staged attachments, and find the ones nothing points at any more.
+
+  `stage()` creates media at upload time, before any message exists. A user who attached a file and
+  then closed the tab left bytes in the host's object store with nothing referencing them — no
+  message, no listing, no sweep, no way to even measure how much was there. In a product where an
+  attachment may be a contract or a medical record, keeping it for ever by omission is the worse
+  default.
+
+  The two sides of the problem are held by different owners, so neither could answer alone, and both
+  now have a method:
+
+  - **The host owns the bytes.** `AttachmentStagingStore` gains optional
+    **`list({ actor, stagedBefore?, limit? })` → `StagedAttachment[]`** — `mediaId`, `name`,
+    `contentType`, `sizeBytes`, `createdAt`. Deliberately no `url`: a url is minted per turn by
+    `resolve` so it can be short-lived, and a listing that returned one per row would undo that just
+    to render a file list.
+  - **The library owns the references.** `AgentStore` gains optional
+    **`referencedMediaIds(actorRef, mediaIds)` → `string[]`**, the inverse query: of these ids, which
+    a message that still exists carries. Implemented in `store-mikro-orm`, `store-drizzle` and
+    `InMemoryAgentStore`.
+
+  `AgentService.collectableAttachments(actor, { olderThan })` composes them into the candidate set for
+  a sweep — inventory, minus references, minus anything too recent to be garbage. It returns
+  candidates and **never deletes anything**: the bytes are the host's, and so is the decision.
+  `AgentService.listAttachments(actor)` and `GET /agent/attachments` expose the inventory itself.
+
+  **References are re-derived, never latched.** `truncateFrom` deletes messages — which is exactly
+  what regenerating a turn does — so media that was referenced becomes unreferenced again. A flag set
+  when a message is sent would never be unset by that delete and would pin the bytes for ever. Every
+  call answers from the surviving message rows instead.
+
+  **`olderThan` is required and has no default.** Freshly staged media is an upload in flight, not
+  garbage. How long a composer may sit open with a file attached is the host's knowledge, and a
+  library-chosen grace period would eventually delete a file someone was about to send. It is pushed
+  down to `list` as `stagedBefore` _and_ re-applied to the result, so a store that ignores the hint
+  cannot turn this into that bug silently.
+
+  **Both halves must answer or the sweep refuses** (`501`). An unanswerable reference query means
+  "cannot tell", and reading it as "nothing is referenced" would hand back every attachment the actor
+  ever sent, marked safe to delete.
+
+  **No schema change.** `referencedMediaIds` reads the `attachments` JSON column that has carried
+  message attachments since they shipped, so there is nothing to migrate and nothing to backfill — an
+  existing deployment gets correct answers on its existing rows the moment it upgrades. A normalized
+  index table would have been faster to query and would have reported every attachment written before
+  the backfill as unreferenced, which on a delete path is the one failure mode worth designing out.
+
+  Both reads are per-actor without exception, and `GET /agent/attachments` has no `threadId` filter:
+  a thread's attachments already ride on its messages in the thread payload, so a second ownership
+  path would be new risk for information the client already has. Collection is not an HTTP route at
+  all — it needs a host-chosen threshold and ends in deleting files, so it stays an in-process call.
+
+  `@dudousxd/nestjs-agent-testing` also gains `InMemoryAttachmentStagingStore`, a complete staging
+  store (including the per-actor checks) for testing a sweep end to end.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Record which run wrote each message.
+
+  `AppendMessageInput`/`StoredMessage` gain an optional `runId`, persisted by all three store adapters,
+  and the loop stamps it on the user message and on every assistant message. Until now nothing tied a
+  message to a turn, so a reader could only compare timestamps against the run's `startedAt` — and a
+  regenerate breaks that comparison: it truncates the replaced answer and re-answers the surviving user
+  message without appending a new one, leaving one prompt followed by the newest answer. Walking
+  forward by time then hands the older run the replacement's text.
+
+  `GovernanceRunSampleSource` (`-evals`) now attributes on the stamp. A transcript carrying no stamp at
+  all is treated as legacy and still resolved by time; a stamped transcript holding nothing for a run
+  reads as empty for that run rather than borrowing a neighbour's answer. A regenerated run may still
+  borrow the prompt it re-answered — that message genuinely is its input — but never an answer.
+
+  The MikroORM adapter adds the column on its next boot through the schema heal it already runs. The
+  Drizzle adapter's `ensureAgentSchema` was `CREATE TABLE IF NOT EXISTS` only, inert against an
+  existing table, so it gains an additive-column pass that adds `run_id` where the table predates it.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Read a thread's default agent without reading the thread.
+
+  Every `chat()` call that does not name an agent asked the store for the thread's `defaultAgent`, and
+  asked for it with `getThread` — which returns the entire transcript: every message, every persisted
+  tool output. On a 20-turn thread with 8 KB tool results that is **173 KB read per turn, outside the
+  workflow, discarded immediately** for one nullable string.
+
+  Each store gains `defaultAgentForThread(threadId)`, a one-column read on the primary key, and
+  `AgentService` prefers it. On the same 20-turn thread the read goes from two statements returning 41
+  rows (173,054 bytes) to one statement returning one column (29 bytes).
+
+  The method is probed structurally against the exported `ThreadDefaultAgentReader` shape rather than
+  added to the `AgentStore` SPI: it is an optimization a store either offers or does not, and a store
+  that predates it still answers correctly through the full `getThread` read.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The loop asks for the window, instead of taking the transcript.
+
+  Both SQL stores could already hand a turn the messages it was about to send. Nothing asked them to:
+  `runAgentLoop` loaded every thread with `getThread`, which materializes the whole transcript — every
+  message row, every attachment, every tool output the thread ever recorded — to build a prompt bounded
+  to its last few messages. Measured on a 50-turn thread whose turns each ran a 50 KB tool: **2.6 MB per
+  load, 99% of it tool output**, paid on every turn and again on every replay. The same thread read
+  through a four-message window is 103 KB.
+
+  `ThreadTurnReader` is now a core SPI seam, and `load:thread` probes the store for it:
+
+  ```ts
+  interface ThreadTurnReader {
+    loadThreadForTurn(query: {
+      threadId: string;
+      messageLimit?: number;
+    }): Promise<ThreadTurnPage | null>;
+  }
+  ```
+
+  Probed STRUCTURALLY, not declared on `AgentStore`, the same seam `defaultAgentForThread` uses. A store
+  that does not implement it keeps working through the full read — no config change, no deprecation
+  warning, nothing to do. Both SQL adapters now implement the core interface rather than re-declaring
+  its shape, so the adapter and the seam the loop probes for cannot drift apart.
+
+  **Which row bound the store is given.** `HistoryPolicy` gains an optional `maxMessages`: the most
+  messages `select` can ever keep. Declaring it is a promise about `select` — that it keeps at most that
+  many, and that they are the NEWEST ones — so a window that size is indistinguishable to it from the
+  full transcript. `windowHistory({ maxMessages })` declares it; two cases deliberately do not, and read
+  everything:
+
+  - **A policy that summarizes.** `summarize` is handed what `select` DROPPED, and a read bounded to what
+    `select` keeps drops nothing. The turn would fold an empty summary into a prompt that is missing the
+    messages it stands in for, with no error anywhere.
+  - **A ceiling expressed only in tokens.** No row count follows from a token budget — one message can be
+    four tokens or forty thousand. Naming one too low reads fewer rows than `select` would have kept,
+    which changes the prompt; leaving it out only costs the read. A policy that wants its bound to reach
+    the database states `maxMessages` alongside `maxTokens`.
+
+  **Determinism.** This changes how the data is FETCHED, not what is journaled. `load:thread` keeps its
+  name, its position and its payload: both reads produce the same messages, the same title and the same
+  `hasAssistantMessage`, so the recorded string is byte-identical and a resume reads it back without
+  calling the store at all. No new checkpoint, and no patch marker — `agent:selected-history` is
+  untouched, and the pre-marker `loadWholeThread` path still calls `getThread` exactly as it did. A spec
+  pins both halves: the two read paths agree byte for byte, and the payload's KEYS are named, so a field
+  added to what the checkpoint records fails rather than silently stranding runs in flight.
+
+  `hasAssistantMessage` comes from the page's own whole-thread flag, never from its messages. It decides
+  a `thread-start` intake, and a window that happens to hold only the user's last questions belongs to a
+  conversation that has still been answered — derived from the page, such a thread re-introduces itself
+  every turn.
+
+  **Upgrading.** Nothing to run, and nothing to configure. A deployment on a store without the method
+  behaves exactly as before; one on either SQL adapter gets the bounded read on its next turn. Runs
+  already in flight replay against the payload their journal holds, unchanged.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Record which run delegated a run.
+
+  `RecordRunStartInput.parentRunId` is populated for awaited and detached children alike, by both
+  runners — and all three stores dropped it on the floor. Each declared its own structural parameter
+  for `recordRunStart` (`{ runId; threadId; actorRef; agentName?; promptHash? }`) instead of the SPI's
+  input, so a field added to the input was accepted and discarded with nothing to fail.
+
+  What that costs is the delegation tree. The durable runtime journals the parent→child edge, but only
+  there: a reader of run ROWS — every reliability and cost surface — cannot pair a child with the turn
+  that asked for it, so a delegation's spend is unattributable. For a **detached** child it is worse,
+  because it outlives its parent's turn, so nothing in the transcript pairs them either.
+
+  Both SQL adapters gain a nullable `parent_run_id` column on `agent_run` and persist it; the
+  in-memory store carries it on its run row and its `GovernanceRunRow`. All three now take
+  `RecordRunStartInput` itself, so the next field cannot drift the same way, and each adapter's spec
+  round-trips a fixture typed `Required<RecordRunStartInput>` — which fails to COMPILE until the row
+  can name what the input carries.
+
+  The console reads the edge off `RecentRunRow`: the run drill-down names the run that delegated the
+  one being read, which for a detached child is the only link back to the turn that asked for it.
+
+  **Upgrading.** Nothing to run by hand on either adapter.
+
+  - MikroORM: `ensureAgentSchema` heals it, and the column is appended last, so the diff is a plain
+    `alter table agent_run add column parent_run_id text null` on every dialect — no SQLite table
+    rebuild.
+  - Drizzle: `CREATE TABLE IF NOT EXISTS` is inert against an existing table, so `parent_run_id` is
+    also registered in the additive-column pass and lands on the next boot.
+
+  Runs recorded before the upgrade keep `parent_run_id` null: the edge for a turn that has already
+  finished exists only in the durable journal, and is not backfilled.
+
+### Patch Changes
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Name `cancelled` in the row types a run settles into.
+
+  `RecordRunEndInput.status` has three terminals — `completed`, `failed`, `cancelled` — but all three
+  stores declared `recordRunEnd`'s parameter as the narrower `'completed' | 'failed'`, and their run
+  row and column types listed only those. Method parameters are bivariant, so this typechecked and the
+  value was written through: the data was right and every reader was told a cancelled run is
+  impossible. A consumer computing a failure rate had no type-level way to leave a user pressing Stop
+  out of it.
+
+  The parameter, the `AgentRunStatus` column type on both SQL adapters, and the in-memory store's run
+  rows now all name it. `DrizzleGovernanceQueries` also accepts `cancelled` as a run-status filter —
+  it previously short-circuited an unrecognized value to an empty page, so an operator could not list
+  the cancelled runs that were already in the table.
+
+  Each adapter's db spec now derives its terminal fixture from `RecordRunEndInput['status']` and the
+  row's own status type, so a fourth terminal fails to compile until the row can name it. A runtime
+  test cannot catch this — bivariance means the value round-trips either way.
+
+  **Upgrading.** No schema change: `status` is a plain string column on both adapters, with no enum or
+  check constraint to widen.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Forking a thread no longer drops a message's `attachments` and `runId`.
+
+  Both SQL adapters copied a forked message field by field and omitted two of them, while the
+  in-memory store copied the whole object — a three-way divergence in what "fork" means. So forking a
+  thread silently lost its attachments, and the copied messages could no longer be attributed to the
+  turn that wrote them. Nothing logged; the fork just came back thinner.
+
+  The fixture that catches this is now shared rather than rewritten per spec:
+  `EVERY_MESSAGE_FIELD` is exported from `@dudousxd/nestjs-agent-testing`, typed
+  `Required<Omit<AppendMessageInput, 'threadId' | 'role' | 'content'>>`, so a new optional field on
+  the input fails to COMPILE until it is filled in — and then fails every adapter's round-trip test
+  until that adapter carries it. A consumer writing its own `AgentStore` can hold it to the same
+  contract.
+
+  A forked message keeps the `runId` of the turn that produced it. The copy is that same message, so
+  the attribution is truthful, and a run-scoped read still resolves through the run's own thread —
+  which is the original, never the fork.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Persist and return a thread's `defaultAgent` on every adapter.
+
+  `AgentStore.updateThread({ defaultAgent })` decides which agent answers the next turn on a thread
+  when the caller names none. Neither SQL adapter could answer with it.
+
+  **Drizzle had no `default_agent` column at all** — not in `schema.ts`, not in its DDL — and no
+  `updateThread`, so a host on that adapter got a 501 from `PATCH /agent/threads/:id` and could never
+  set the field. It now has the column, `updateThread` (title and/or `defaultAgent`, each touched only
+  when present in the patch, `null` clearing the default), and the read side below.
+
+  **MikroORM had the column and wrote it, but `toSummary` never emitted it**, so `getThread` reported
+  no default agent and the next turn silently fell through to the module default. The stored value was
+  reachable only by querying the entity directly, which is what its own test did — the round-trip
+  through the store was never exercised.
+
+  Both adapters now report `defaultAgent: string | null` on every thread summary/detail, and a fork
+  carries the source thread's default (the in-memory reference store too — a fork continues the same
+  conversation, so the same agent answers it).
+
+  A `Required<UpdateThreadInput>` fixture in each adapter's db spec and in
+  `packages/testing/src/thread-fields.spec.ts` fails to COMPILE when the patch gains a field the
+  adapter does not round-trip — the same gate `message-fields.spec.ts` uses, which is what caught two
+  silently-dropped message fields.
+
+  **Upgrading.** Drizzle's `ensureAgentSchema` is `CREATE TABLE IF NOT EXISTS`, inert against a table
+  that already exists, so `default_agent` is added through the additive-column pass it already runs at
+  boot — an existing deployment calling `ensureAgentSchema` needs no action. A host running its own
+  drizzle-kit migrations instead must add `ALTER TABLE agent_thread ADD COLUMN default_agent TEXT`.
+  MikroORM needs nothing: the column already shipped.
+
+- [#75](https://github.com/DavideCarvalho/nestjs-agent/pull/75) [`d17dbae`](https://github.com/DavideCarvalho/nestjs-agent/commit/d17dbaed49c118f65d5fc9421ccb2677201b5bd4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Let an agent ask the user a structured question, and wait.
+
+  The only way a run could pause for a human was `awaitApproval` — a yes/no about a tool call already
+  proposed, mid-work. The other direction was missing entirely: collecting the SCOPE, before the work,
+  while changing course is still cheap. Two surfaces now do it, and they were built to be
+  indistinguishable downstream.
+
+  **A configured intake.** `@Agent({ intake: { questions, preamble?, when? } })` declares the questions;
+  the turn passes through them before its first model call. Because they are authored, the intake costs
+  **no model call** and writes no usage row — and `questions.length` is known before the form appears,
+  which is the only honest way a client can render "Question 1 of 3" rather than discovering a fourth
+  halfway through. `when: 'thread-start'` (the default) asks once per thread; `'every-turn'` asks before
+  each one.
+
+  **A model-callable `ask`.** `forRoot({ ask: true })` (or `@Agent({ ask })`) offers the model a built-in
+  `ask` tool for the case an intake cannot anticipate. Its input schema _requires_ a pre-picked
+  `defaults` on every question: "I have pre-picked what I would choose, so confirming is enough" is the
+  claim the surface rests on, and a schema is the only place to make it mandatory rather than
+  aspirational. A malformed question set comes back as an ordinary tool failure carrying the validation
+  issues, so the model fixes its own mistake instead of failing the run or parking a person.
+
+  **One shape, one resume path.** Both write a single pending tool-call row named `ask`
+  (`toolType: 'action'`, `status: 'pending_approval'`, so it surfaces in the existing approvals inbox),
+  both emit the same new `elicitation` stream frame followed by the ordinary `tool-output` frame, and
+  both park on the same `tool:<runId>:<callId>` durable signal a HITL approval already waits on. New
+  `POST /agent/tool-call/answer` and `/skip` mirror `approve`/`reject`, with the same ownership check.
+  `AgentLoopHooks` gains an optional `awaitAnswers`; a host that only implemented `awaitApproval` still
+  completes an elicitation, reading approve as "confirmed the pre-picked answers" and reject as "skipped".
+
+  **An omitted question takes its own default**, resolved server-side against the request the run
+  already holds rather than in the client — so "just pressed enter" and "picked exactly the defaults"
+  persist identically, and a client that never rendered the defaults cannot submit a blank. The settled
+  row records `defaulted: string[]` so an auditor can still see which questions a human touched.
+  **A skip is not a confirmation:** it lands on the same values, and persists as `rejected` rather than
+  `executed`, because proceeding on an assumption the user declined to confirm is a different fact from
+  proceeding on one they chose. Nobody answering parks the run indefinitely, exactly as an approval
+  does — there is no intake timeout, because a timeout that applied the defaults would manufacture
+  consent from silence.
+
+  `ToolKind` gains a fourth member, `'ask'`. No `ToolSpec` carries it: `ask` is never registered, has no
+  handler, and is offered to the model straight from module config — so the branch that decides whether
+  a call parks on a human can never be settled by a process-local registry lookup. As with the other
+  kinds, the value is resolved INSIDE the already-journaled `persist:toolcall:<callId>` checkpoint and
+  read back from there on every replay.
+
+  **Checkpoints.** An intake spends one position for its verdict (`intake:ask`) plus two more on the
+  turns it asks; an `ask` reuses the approval path's own names and adds one (`stream:elicitation:<id>`).
+  The intake's verdict is RETURNED from `intake:ask` rather than recomputed, because by the time a
+  resume replays the turn the first attempt has already appended the intake's own assistant message to
+  the thread — recomputing "has this thread been asked?" would answer no on the way in and yes on the way
+  back, and land `stream:step-start:0` where the history holds `signal:tool:`. No `patched` marker is
+  spent for either surface: an intake is reachable only through new config and an `ask` only through a
+  journaled kind no existing run recorded, so no in-flight run can land on any of these positions.
+  Declare neither and a turn's checkpoint sequence is byte-identical.
+
+  `AgentStore.runForToolCall` now answers from the tool call's OWN `runId`, falling back to the thread's
+  `activeStreamId` only for rows written before calls carried one. Keying off the active stream assumed
+  a thread holds exactly one live run; it is about to hold more, and then the answer would reach a run
+  waiting on nothing. Fixed in all three shipped adapters.
+
 ## 0.14.1
 
 ### Patch Changes
