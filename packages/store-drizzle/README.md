@@ -39,6 +39,19 @@ The package ships the `agentSchema` (Drizzle tables), `ensureAgentSchema` (a non
 DDL helper for a quick start), `DrizzleAgentStore`, and `DrizzleGovernanceQueries`. For production,
 prefer your normal drizzle-kit migrations over the `ensureAgentSchema` helper.
 
+## The read a turn makes
+
+The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's
+`ThreadTurnReader`, so the loop asks it for `loadThreadForTurn({ threadId, messageLimit })` instead:
+the thread's newest `messageLimit` messages oldest-first, bounded by the database rather than in
+memory, projected to the columns a model turn reads (`usage`, `follow_ups` and `run_id` stay in the
+table), plus the title, the default agent, and whether the thread has EVER been answered.
+
+`messageLimit` is the configured `HistoryPolicy.maxMessages`. A policy that summarizes, or whose
+ceiling is only a token budget, names no row bound and the whole thread is read — see the core
+README. Nothing to wire: the loop probes for the method, and `getThread` remains the right read for
+a client rendering a transcript.
+
 ## Upgrading a database that already exists
 
 `ensureAgentSchema` is additive only — `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT
@@ -52,6 +65,7 @@ On your own drizzle-kit migrations, those additive statements are yours to write
 ALTER TABLE agent_thread ADD COLUMN default_agent TEXT;
 ALTER TABLE agent_message ADD COLUMN run_id TEXT;
 ALTER TABLE agent_message ADD COLUMN attachments TEXT;
+ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT;
 CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
 ```
 

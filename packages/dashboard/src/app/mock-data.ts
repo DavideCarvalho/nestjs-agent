@@ -157,6 +157,7 @@ const FAILED_RUN: RecentRunRow = {
   retries: 2,
   startedAt: new Date(Date.now() - 210_000).toISOString(),
   promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
+  parentRunId: null,
 };
 
 export const MOCK_RUNS: RecentRunRow[] = [
@@ -172,6 +173,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     retries: 0,
     startedAt: new Date(Date.now() - 40_000).toISOString(),
     promptHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef01234',
+    parentRunId: null,
   },
   FAILED_RUN,
   {
@@ -186,6 +188,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     retries: 1,
     startedAt: new Date(Date.now() - 540_000).toISOString(),
     promptHash: null,
+    parentRunId: null,
   },
   {
     runId: 'r-b902',
@@ -199,6 +202,7 @@ export const MOCK_RUNS: RecentRunRow[] = [
     retries: 0,
     startedAt: new Date(Date.now() - 1_320_000).toISOString(),
     promptHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef01234',
+    parentRunId: null,
   },
   {
     runId: 'r-c447',
@@ -212,6 +216,8 @@ export const MOCK_RUNS: RecentRunRow[] = [
     retries: 0,
     startedAt: new Date(Date.now() - 8_000).toISOString(),
     promptHash: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221',
+    // Still running after the turn that started it settled: the detached case.
+    parentRunId: 'r-7c31',
   },
 ];
 

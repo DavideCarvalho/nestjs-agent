@@ -8,6 +8,9 @@ import type {
   StoredMessage,
   ThreadDetail,
   ThreadSummary,
+  ThreadTurnPage,
+  ThreadTurnQuery,
+  ThreadTurnReader,
   ToolResult,
   UpdateThreadInput,
   UpdateToolCallInput,
@@ -19,22 +22,12 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 
-/** Which thread, and how many of its newest messages, {@link MikroOrmAgentStore.loadThreadForTurn} reads. */
-export interface ThreadTurnQuery {
-  threadId: string;
-  /** Omitted reads every message; `0` reads none. */
-  messageLimit?: number;
-}
-
-/** What a turn reads off a thread — a bounded window, not the transcript. */
-export interface ThreadTurnPage {
-  title: string;
-  defaultAgent: string | null;
-  /** Whether the THREAD has ever been answered, not whether {@link messages} contains an answer. */
-  hasAssistantMessage: boolean;
-  /** Oldest first, carrying only the fields a model turn reads. */
-  messages: StoredMessage[];
-}
+/**
+ * Re-exported from the core SPI so a consumer can name this store's window read without importing a
+ * second package. ONE definition of the shape, so the adapter and the seam the loop probes for
+ * cannot drift apart.
+ */
+export type { ThreadTurnPage, ThreadTurnQuery };
 
 /** The message columns a model turn reads. `usage`, `follow_ups` and `run_id` are nobody's business here. */
 const TURN_MESSAGE_FIELDS = [
@@ -65,7 +58,7 @@ type TurnMessage = Pick<AgentMessage, TurnMessageKey> & {
  * concurrent turns. Behaviour mirrors the in-memory reference store (fork/truncate/quota/
  * active-stream/soft-delete semantics) so the two are interchangeable in tests.
  */
-export class MikroOrmAgentStore implements AgentStore {
+export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
   constructor(private readonly em: EntityManager) {}
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {

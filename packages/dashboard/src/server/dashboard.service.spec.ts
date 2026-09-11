@@ -241,12 +241,16 @@ describe('DashboardService', () => {
             retries: 1,
             startedAt: '2026-07-05T00:00:00.000Z',
             promptHash: null,
+            parentRunId: 'r-parent',
           },
         ],
       }),
     );
 
-    expect((await service.recentRuns(10))[0]?.runId).toBe('r1');
+    const [row] = await service.recentRuns(10);
+    expect(row?.runId).toBe('r1');
+    // Passed through, not re-mapped: the console builds the delegation tree off this edge.
+    expect(row?.parentRunId).toBe('r-parent');
   });
 
   it('recentToolCalls / recentThreads pass through to the read-model', async () => {
@@ -393,6 +397,7 @@ describe('DashboardService', () => {
           retries: 1,
           startedAt: '2026-07-05T00:00:00.000Z',
           promptHash: null,
+          parentRunId: null,
         },
       ],
       total: 3,
@@ -803,6 +808,7 @@ describe('DashboardService approvals inbox + drill-downs', () => {
     retries: 1,
     startedAt: '2026-08-01T09:00:00.000Z',
     promptHash: null,
+    parentRunId: null,
   };
 
   const RUN_DETAIL: GovernanceRunDetail = {

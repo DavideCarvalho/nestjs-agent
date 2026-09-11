@@ -123,6 +123,7 @@ function toRecentRunRow(run: GovernanceRunRow): RecentRunRow {
     retries: run.retries,
     startedAt: run.startedAt,
     promptHash: run.promptHash ?? null,
+    parentRunId: run.parentRunId ?? null,
   };
 }
 

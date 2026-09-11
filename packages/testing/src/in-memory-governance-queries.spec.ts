@@ -1475,3 +1475,45 @@ describe('InMemoryGovernanceQueries runDetail + threadDetail', () => {
     ).toBeNull();
   });
 });
+
+// The delegation edge on the run read-model — the reference store's half of what both SQL adapters
+// answer from a `parent_run_id` column.
+describe('InMemoryGovernanceQueries delegation edge', () => {
+  it('pairs each child run with the turn that asked for it, and leaves a root run unpaired', async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'nora' } });
+    const queries = new InMemoryGovernanceQueries(store);
+
+    await store.recordRunStart({
+      runId: 'run-parent',
+      threadId: thread.id,
+      actorRef: 'nora',
+      agentName: 'orchestrator',
+    });
+    await store.recordRunStart({
+      runId: 'run-awaited',
+      threadId: thread.id,
+      actorRef: 'nora',
+      agentName: 'weather-analyst',
+      parentRunId: 'run-parent',
+    });
+    // The one the transcript cannot pair: it outlives the turn that started it.
+    await store.recordRunStart({
+      runId: 'run-detached',
+      threadId: thread.id,
+      actorRef: 'nora',
+      agentName: 'deep-research',
+      parentRunId: 'run-parent',
+    });
+
+    const byId = new Map((await queries.recentRuns(10)).map((row) => [row.runId, row.parentRunId]));
+    expect(byId.get('run-awaited')).toBe('run-parent');
+    expect(byId.get('run-detached')).toBe('run-parent');
+    expect(byId.get('run-parent')).toBeNull();
+
+    const page = await queries.runsPage({ page: 1, pageSize: 10, where: {} });
+    expect(page.rows.find((row) => row.runId === 'run-detached')?.parentRunId).toBe('run-parent');
+    expect((await queries.runDetail('run-awaited'))?.run.parentRunId).toBe('run-parent');
+    expect((await queries.runDetail('run-parent'))?.run.parentRunId).toBeNull();
+  });
+});

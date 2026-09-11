@@ -2101,6 +2101,8 @@ describe('MikroOrmGovernanceQueries runDetail + threadDetail (sqlite)', () => {
       retries: 2,
       startedAt: '2026-09-01T09:01:30.000Z',
       promptHash: 'abc123',
+      // Nobody delegated this turn.
+      parentRunId: null,
     });
     expect(detail?.thread).toEqual({
       threadId: 'thread-detail',
@@ -2226,5 +2228,100 @@ describe('MikroOrmGovernanceQueries runDetail + threadDetail (sqlite)', () => {
         runLimit: 10,
       }),
     ).toBeNull();
+  });
+});
+
+// A self-contained db covering the delegation edge on the run read-model: a parent turn, an awaited
+// child and a detached child, plus a root run nobody delegated.
+describe('MikroOrmGovernanceQueries delegation edge (sqlite)', () => {
+  let treeOrm: MikroORM;
+  let treeQueries: MikroOrmGovernanceQueries;
+
+  beforeAll(async () => {
+    treeOrm = await MikroORM.init({
+      driver: SqliteDriver,
+      dbName: ':memory:',
+      entities: agentEntities(),
+      allowGlobalContext: true,
+    });
+    await ensureAgentSchema(treeOrm);
+    treeQueries = new MikroOrmGovernanceQueries(treeOrm.em, new MikroOrmPricingStore(treeOrm.em));
+
+    const em = treeOrm.em.fork();
+    const thread = em.create(AgentThread, {
+      id: 'thread-tree',
+      actorRef: 'nora',
+      title: 'Delegating chat',
+      transient: false,
+      createdAt: new Date('2026-08-01T09:00:00.000Z'),
+      updatedAt: new Date('2026-08-01T09:00:00.000Z'),
+    });
+    em.persist([
+      thread,
+      em.create(AgentRun, {
+        id: 'run-parent',
+        thread,
+        actorRef: 'nora',
+        agentName: 'orchestrator',
+        status: 'completed',
+        retries: 0,
+        startedAt: new Date('2026-08-01T09:00:00.000Z'),
+      }),
+      em.create(AgentRun, {
+        id: 'run-awaited',
+        thread,
+        actorRef: 'nora',
+        agentName: 'weather-analyst',
+        status: 'completed',
+        retries: 0,
+        startedAt: new Date('2026-08-01T09:00:01.000Z'),
+        parentRunId: 'run-parent',
+      }),
+      em.create(AgentRun, {
+        id: 'run-detached',
+        thread,
+        actorRef: 'nora',
+        agentName: 'deep-research',
+        status: 'running',
+        retries: 0,
+        startedAt: new Date('2026-08-01T09:00:02.000Z'),
+        parentRunId: 'run-parent',
+      }),
+    ]);
+    await em.flush();
+  });
+
+  afterAll(async () => {
+    await treeOrm?.close(true);
+  });
+
+  it('recentRuns pairs each child with the turn that asked for it', async () => {
+    const byId = new Map(
+      (await treeQueries.recentRuns(10)).map((row) => [row.runId, row.parentRunId]),
+    );
+    expect(byId.get('run-awaited')).toBe('run-parent');
+    // The one the transcript cannot pair: it outlives the turn that started it.
+    expect(byId.get('run-detached')).toBe('run-parent');
+    expect(byId.get('run-parent')).toBeNull();
+  });
+
+  it('runsPage and runDetail carry the same edge', async () => {
+    const page = await treeQueries.runsPage({ page: 1, pageSize: 10, where: {} });
+    expect(page.rows.find((row) => row.runId === 'run-detached')?.parentRunId).toBe('run-parent');
+    expect((await treeQueries.runDetail('run-awaited'))?.run.parentRunId).toBe('run-parent');
+    expect((await treeQueries.runDetail('run-parent'))?.run.parentRunId).toBeNull();
+  });
+
+  it('threadDetail carries it too — the tree is read off one thread', async () => {
+    const detail = await treeQueries.threadDetail({
+      threadId: 'thread-tree',
+      messageLimit: 10,
+      runLimit: 10,
+    });
+    expect(detail?.runs.map((row) => [row.runId, row.parentRunId])).toEqual([
+      ['run-detached', 'run-parent'],
+      ['run-awaited', 'run-parent'],
+      ['run-parent', null],
+    ]);
   });
 });

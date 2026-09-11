@@ -112,6 +112,7 @@ function toRecentRunRow(run: typeof agentRun.$inferSelect): RecentRunRow {
     retries: run.retries,
     startedAt: run.startedAt.toISOString(),
     promptHash: run.promptHash ?? null,
+    parentRunId: run.parentRunId ?? null,
   };
 }
 

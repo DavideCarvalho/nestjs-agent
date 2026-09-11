@@ -69,7 +69,7 @@ import {
   skillInputSchema,
   withSkillTool,
 } from './skills.js';
-import type { AgentStore } from './spi/agent-store.js';
+import type { AgentStore, ThreadTurnReader } from './spi/agent-store.js';
 import type {
   HistoryPolicy,
   HistoryPolicyContext,
@@ -786,16 +786,89 @@ async function loadSelectedHistory(
   hooks: AgentLoopHooks,
 ): Promise<TurnHistory> {
   return hooks.step('load:thread', async (): Promise<TurnHistory> => {
-    const thread = await deps.store.getThread(input.threadId);
-    const stored = thread?.messages ?? [];
-    const { keep, drop } = splitHistory(deps.historyPolicy, input, toModelMessages(stored));
+    const thread = await readThreadForTurn(deps, input.threadId);
+    const { keep, drop } = splitHistory(
+      deps.historyPolicy,
+      input,
+      toModelMessages(thread.messages),
+    );
     return {
       messages: keep,
       dropped: deps.historyPolicy?.summarize === undefined ? [] : drop,
-      title: thread?.title ?? null,
-      hasAssistantMessage: stored.some((message) => message.role === 'assistant'),
+      title: thread.title,
+      hasAssistantMessage: thread.hasAssistantMessage,
     };
   });
+}
+
+/** The three things a turn reads off its thread, however the store was able to answer them. */
+interface ThreadForTurn {
+  /** Oldest-first, and at most what the ceiling was going to keep. */
+  messages: StoredMessage[];
+  title: string | null;
+  hasAssistantMessage: boolean;
+}
+
+/**
+ * Read the thread: the store's bounded WINDOW where it offers one, else its whole transcript.
+ *
+ * Probed structurally, the same seam as `defaultAgentForThread` — the window is an optimization a
+ * store either offers or does not, and one that predates it still answers correctly through
+ * `getThread`. Which branch runs is invisible to the journal on purpose: both produce the same three
+ * answers, so the payload this checkpoint records is identical either way and a deployment's choice
+ * of store can never decide a run's checkpoints. That is also why the probe lives INSIDE
+ * `load:thread` rather than around it — it adds no position, and a replaying process reads the
+ * recorded payload back without calling the store at all.
+ *
+ * `hasAssistantMessage` is taken from the page's own flag rather than scanned out of its messages,
+ * because the page's flag answers over the whole thread. It decides a `thread-start` intake, and a
+ * window that happens to hold only the user's last questions belongs to a conversation that has
+ * still been answered — scanned off the window, such a thread re-introduces itself every turn.
+ */
+async function readThreadForTurn(deps: AgentLoopDeps, threadId: string): Promise<ThreadForTurn> {
+  const windowing = deps.store as Partial<ThreadTurnReader>;
+  if (typeof windowing.loadThreadForTurn === 'function') {
+    const messageLimit = turnMessageLimit(deps.historyPolicy);
+    const page = await windowing.loadThreadForTurn({
+      threadId,
+      ...(messageLimit !== undefined ? { messageLimit } : {}),
+    });
+    return page === null
+      ? { messages: [], title: null, hasAssistantMessage: false }
+      : {
+          messages: page.messages,
+          title: page.title,
+          hasAssistantMessage: page.hasAssistantMessage,
+        };
+  }
+  const thread = await deps.store.getThread(threadId);
+  const stored = thread?.messages ?? [];
+  return {
+    messages: stored,
+    title: thread?.title ?? null,
+    hasAssistantMessage: stored.some((message) => message.role === 'assistant'),
+  };
+}
+
+/**
+ * How many of the thread's newest rows to ask the store for — the policy's own row ceiling, or
+ * nothing at all, which asks for the transcript.
+ *
+ * A policy that SUMMARIZES gets no limit. `summarize` is handed what `select` dropped, and a read
+ * bounded to what `select` keeps drops nothing: the turn would fold an empty summary into a prompt
+ * that is missing the messages it stands in for, with no error anywhere.
+ *
+ * A ceiling expressed only in TOKENS gets no limit either, and none can be derived from it: one
+ * message can be four tokens or forty thousand, so no row count follows from a token budget. Naming
+ * one too low reads fewer rows than `select` would have kept, which changes the prompt itself;
+ * leaving it out only costs the read. A policy that wants its bound to reach the database states
+ * {@link HistoryPolicy.maxMessages} alongside the token budget.
+ */
+function turnMessageLimit(policy: HistoryPolicy | undefined): number | undefined {
+  if (policy === undefined || policy.summarize !== undefined) {
+    return undefined;
+  }
+  return policy.maxMessages;
 }
 
 /**

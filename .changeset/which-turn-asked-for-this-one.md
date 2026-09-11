@@ -1,4 +1,5 @@
 ---
+'@dudousxd/nestjs-agent-dashboard': minor
 '@dudousxd/nestjs-agent-store-drizzle': minor
 '@dudousxd/nestjs-agent-store-mikro-orm': minor
 '@dudousxd/nestjs-agent-testing': minor
@@ -21,6 +22,9 @@ in-memory store carries it on its run row and its `GovernanceRunRow`. All three 
 `RecordRunStartInput` itself, so the next field cannot drift the same way, and each adapter's spec
 round-trips a fixture typed `Required<RecordRunStartInput>` — which fails to COMPILE until the row
 can name what the input carries.
+
+The console reads the edge off `RecentRunRow`: the run drill-down names the run that delegated the
+one being read, which for a detached child is the only link back to the turn that asked for it.
 
 **Upgrading.** Nothing to run by hand on either adapter.
 

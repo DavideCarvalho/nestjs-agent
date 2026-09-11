@@ -29,6 +29,19 @@ export class AppModule {}
 The package ships the entities (`EntitySchema`) and `MikroOrmAgentStore`. Run your normal MikroORM
 migrations to create the tables, or use the exported schema helper for a quick start.
 
+## The read a turn makes
+
+The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's
+`ThreadTurnReader`, so the loop asks it for `loadThreadForTurn({ threadId, messageLimit })` instead:
+the thread's newest `messageLimit` messages oldest-first, bounded by the database rather than in
+memory, projected to the columns a model turn reads (`usage`, `follow_ups` and `run_id` stay in the
+table), plus the title, the default agent, and whether the thread has EVER been answered.
+
+`messageLimit` is the configured `HistoryPolicy.maxMessages`. A policy that summarizes, or whose
+ceiling is only a token budget, names no row bound and the whole thread is read — see the core
+README. Nothing to wire: the loop probes for the method, and `getThread` remains the right read for
+a client rendering a transcript.
+
 ## Attachment housekeeping
 
 `referencedMediaIds(actorRef, mediaIds)` answers which of a set of media ids a message that still

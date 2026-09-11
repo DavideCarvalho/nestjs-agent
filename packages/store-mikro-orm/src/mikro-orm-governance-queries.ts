@@ -122,6 +122,7 @@ function toRecentRunRow(run: AgentRun): RecentRunRow {
     retries: run.retries,
     startedAt: run.startedAt.toISOString(),
     promptHash: run.promptHash ?? null,
+    parentRunId: run.parentRunId ?? null,
   };
 }
 

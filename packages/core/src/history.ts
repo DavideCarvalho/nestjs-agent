@@ -48,6 +48,10 @@ export interface WindowHistoryOptions {
 export function windowHistory(options: WindowHistoryOptions): HistoryPolicy {
   const estimate = options.estimate ?? estimateMessageTokens;
   const policy: HistoryPolicy = {
+    // A suffix selection of at most `maxMessages` rows, which is exactly what `HistoryPolicy`'s row
+    // hint promises — so the store can bound its read to that many of the thread's newest messages.
+    // A token-only window declares nothing: its budget names no row count.
+    ...(options.maxMessages !== undefined ? { maxMessages: options.maxMessages } : {}),
     select(messages: ModelMessage[]): HistorySelection {
       let cut = 0;
       if (options.maxMessages !== undefined) {
