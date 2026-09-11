@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-evals
 
+## 0.2.1
+
+### Patch Changes
+
+- [#84](https://github.com/DavideCarvalho/nestjs-agent/pull/84) [`b7d2a75`](https://github.com/DavideCarvalho/nestjs-agent/commit/b7d2a750f32d8c12e8fff9501d5caff7d35f89e9) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Describe `ApprovalPriorQuery.maxRows` as the page-granular bound it is: the walk stops once the bound is reached, after folding in the page that reached it.
+
 ## 0.2.0
 
 ### Minor Changes

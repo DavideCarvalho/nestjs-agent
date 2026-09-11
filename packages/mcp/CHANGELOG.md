@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp
 
+## 0.1.1
+
+### Patch Changes
+
+- [#84](https://github.com/DavideCarvalho/nestjs-agent/pull/84) [`b7d2a75`](https://github.com/DavideCarvalho/nestjs-agent/commit/b7d2a750f32d8c12e8fff9501d5caff7d35f89e9) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Say what `McpToolsService.refresh` returns — the count the re-imported servers just claimed, not the registry's total.
+
 ## 0.1.0
 
 ### Minor Changes
