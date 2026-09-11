@@ -27,7 +27,7 @@ export interface SkillOptions {
   description: string;
   /**
    * The scope token this skill is published at. Omit → `'global'`, the deployment-wide default. Any
-   * string a host's `ScopeResolver` can return works: `'tenant:base-7'`, `'sector:logistics'`.
+   * string a host's `ScopeResolver` can return works: `'tenant:berlin'`, `'sector:logistics'`.
    */
   scope?: string;
   /** A flat body. For one built per actor or per page, add a `body()` method instead. */

@@ -21,7 +21,7 @@ import {
 } from './skills.js';
 import type { Actor, ToolDefinition } from './types.js';
 
-const actor: Actor = { id: 'u1', tenantRef: 'base-7', roles: ['USER'] };
+const actor: Actor = { id: 'u1', tenantRef: 'berlin', roles: ['USER'] };
 
 function summary(name: string, scope: string, description = `${name} at ${scope}`): SkillSummary {
   return { name, description, scope };
@@ -31,13 +31,13 @@ function skill(name: string, scope: string, body: string): Skill {
   return { name, description: `${name} at ${scope}`, scope, body };
 }
 
-const SCOPES = [actorScope(actor), 'sector:logistics', tenantScope('base-7'), GLOBAL_SCOPE];
+const SCOPES = [actorScope(actor), 'sector:logistics', tenantScope('berlin'), GLOBAL_SCOPE];
 
 describe('defaultScopeResolver', () => {
   it('resolves actor, tenant and global — most specific first', async () => {
     expect(await defaultScopeResolver.resolve({ actor, threadId: 't1' })).toEqual([
       'actor:u1',
-      'tenant:base-7',
+      'tenant:berlin',
       'global',
     ]);
   });
@@ -54,18 +54,18 @@ describe('resolveSkillCatalog', () => {
   it('lets the most specific scope win and records what it shadowed', () => {
     const { entries } = resolveSkillCatalog(
       [
-        summary('normalize-unit', GLOBAL_SCOPE),
-        summary('normalize-unit', 'tenant:base-7'),
-        summary('normalize-unit', 'sector:logistics'),
+        summary('label-pallet', GLOBAL_SCOPE),
+        summary('label-pallet', 'tenant:berlin'),
+        summary('label-pallet', 'sector:logistics'),
       ],
       SCOPES,
     );
     expect(entries).toEqual([
       {
-        name: 'normalize-unit',
-        description: 'normalize-unit at sector:logistics',
+        name: 'label-pallet',
+        description: 'label-pallet at sector:logistics',
         scope: 'sector:logistics',
-        shadows: ['tenant:base-7', 'global'],
+        shadows: ['tenant:berlin', 'global'],
       },
     ]);
   });
@@ -89,14 +89,14 @@ describe('resolveSkillCatalog', () => {
         summary('zulu', actorScope(actor)),
         summary('alpha', GLOBAL_SCOPE),
         summary('bravo', actorScope(actor)),
-        summary('charlie', 'tenant:base-7'),
+        summary('charlie', 'tenant:berlin'),
       ],
       SCOPES,
     );
     expect(entries.map((entry) => `${entry.scope}/${entry.name}`)).toEqual([
       'actor:u1/bravo',
       'actor:u1/zulu',
-      'tenant:base-7/charlie',
+      'tenant:berlin/charlie',
       'global/alpha',
     ]);
   });
@@ -146,8 +146,8 @@ describe('offerSkills', () => {
       },
       { actor, threadId: 't1' },
     );
-    expect(asked).toEqual([['actor:u1', 'tenant:base-7', 'global']]);
-    expect(offer.scopes).toEqual(['actor:u1', 'tenant:base-7', 'global']);
+    expect(asked).toEqual([['actor:u1', 'tenant:berlin', 'global']]);
+    expect(offer.scopes).toEqual(['actor:u1', 'tenant:berlin', 'global']);
     expect(offer.entries.map((entry) => entry.name)).toEqual(['mine']);
   });
 
@@ -155,10 +155,7 @@ describe('offerSkills', () => {
     const offer = await offerSkills(
       {
         provider: {
-          list: () => [
-            summary('normalize-unit', 'global'),
-            summary('normalize-unit', 'shift:night'),
-          ],
+          list: () => [summary('label-pallet', 'global'), summary('label-pallet', 'shift:night')],
           load: () => null,
         },
         scopes: { resolve: () => ['shift:night', 'global'] },
@@ -171,9 +168,9 @@ describe('offerSkills', () => {
 });
 
 describe('compositeSkillProvider', () => {
-  const host = staticSkillProvider([skill('normalize-unit', GLOBAL_SCOPE, 'HOST')]);
+  const host = staticSkillProvider([skill('label-pallet', GLOBAL_SCOPE, 'HOST')]);
   const code = staticSkillProvider([
-    skill('normalize-unit', GLOBAL_SCOPE, 'CODE'),
+    skill('label-pallet', GLOBAL_SCOPE, 'CODE'),
     skill('work-order', GLOBAL_SCOPE, 'CODE'),
   ]);
 
@@ -182,14 +179,14 @@ describe('compositeSkillProvider', () => {
       scopes: [GLOBAL_SCOPE],
       ctx: { actor, threadId: 't1' },
     });
-    expect(merged.map((summary) => summary.name)).toEqual(['normalize-unit', 'work-order']);
+    expect(merged.map((summary) => summary.name)).toEqual(['label-pallet', 'work-order']);
   });
 
   it('lets the earlier source win a name published at the same scope by both', async () => {
     const provider = compositeSkillProvider([host, code]);
     expect(
       await provider.load({
-        name: 'normalize-unit',
+        name: 'label-pallet',
         scope: GLOBAL_SCOPE,
         ctx: { actor, threadId: 't1' },
       }),
@@ -211,17 +208,21 @@ describe('compositeSkillProvider', () => {
 describe('buildSkillsBlock', () => {
   it('lists one line per skill carrying its name, scope and description', () => {
     const block = buildSkillsBlock([
-      { name: 'normalize-unit', description: 'Normalise a unit designation.', scope: 'global' },
+      {
+        name: 'label-pallet',
+        description: 'Label a pallet for outbound freight.',
+        scope: 'global',
+      },
     ]);
-    expect(block).toContain('- normalize-unit [global] — Normalise a unit designation.');
+    expect(block).toContain('- label-pallet [global] — Label a pallet for outbound freight.');
   });
 
   it('tells the model which scope a skill overrode, so it can say so', () => {
     const block = buildSkillsBlock([
       {
-        name: 'normalize-unit',
-        description: 'Normalise a unit designation.',
-        scope: 'tenant:base-7',
+        name: 'label-pallet',
+        description: 'Label a pallet for outbound freight.',
+        scope: 'tenant:berlin',
         shadows: ['global'],
       },
     ]);
@@ -250,16 +251,16 @@ describe('the skill tool definition', () => {
   });
 
   it('accepts a named call', async () => {
-    const result = await skillInputSchema['~standard'].validate({ name: 'normalize-unit' });
+    const result = await skillInputSchema['~standard'].validate({ name: 'label-pallet' });
     expect(result.issues).toBeUndefined();
-    expect((result as { value: { name: string } }).value).toEqual({ name: 'normalize-unit' });
+    expect((result as { value: { name: string } }).value).toEqual({ name: 'label-pallet' });
   });
 });
 
 describe('loadSkill', () => {
   const provider = staticSkillProvider([
-    skill('normalize-unit', 'tenant:base-7', 'Strip the suffix, then match DPAS.'),
-    skill('normalize-unit', GLOBAL_SCOPE, 'Match DPAS.'),
+    skill('label-pallet', 'tenant:berlin', 'Strip the carrier prefix, then match the manifest.'),
+    skill('label-pallet', GLOBAL_SCOPE, 'Match the manifest.'),
     skill('hidden', 'actor:someone-else', 'not yours'),
   ]);
 
@@ -268,18 +269,18 @@ describe('loadSkill', () => {
   }
 
   it('serves the body of the scope that won', async () => {
-    const offer = await offerFor(['tenant:base-7', GLOBAL_SCOPE]);
-    const outcome = await loadSkill({ provider }, offer, 'normalize-unit', {
+    const offer = await offerFor(['tenant:berlin', GLOBAL_SCOPE]);
+    const outcome = await loadSkill({ provider }, offer, 'label-pallet', {
       actor,
       threadId: 't1',
     });
     expect(outcome).toEqual({
       ok: true,
       skill: {
-        name: 'normalize-unit',
-        description: 'normalize-unit at tenant:base-7',
-        scope: 'tenant:base-7',
-        body: 'Strip the suffix, then match DPAS.',
+        name: 'label-pallet',
+        description: 'label-pallet at tenant:berlin',
+        scope: 'tenant:berlin',
+        body: 'Strip the carrier prefix, then match the manifest.',
       },
       shadows: ['global'],
     });
@@ -290,10 +291,7 @@ describe('loadSkill', () => {
     // A provider that hands back everything it has, scope filter or no scope filter: the catalog
     // the turn was offered is the only thing deciding what the model can reach.
     const leaky = {
-      list: () => [
-        summary('hidden', 'actor:someone-else'),
-        summary('normalize-unit', GLOBAL_SCOPE),
-      ],
+      list: () => [summary('hidden', 'actor:someone-else'), summary('label-pallet', GLOBAL_SCOPE)],
       load: () => 'not yours',
     };
     const outcome = await loadSkill({ provider: leaky }, offer, 'hidden', {
@@ -302,7 +300,7 @@ describe('loadSkill', () => {
     });
     expect(outcome).toEqual({
       ok: false,
-      error: 'No skill named "hidden" is available to you. Available: normalize-unit.',
+      error: 'No skill named "hidden" is available to you. Available: label-pallet.',
     });
   });
 
@@ -317,18 +315,18 @@ describe('loadSkill', () => {
     const outcome = await loadSkill(
       { provider: { list: () => [], load: () => null } },
       offer,
-      'normalize-unit',
+      'label-pallet',
       { actor, threadId: 't1' },
     );
     expect(outcome).toEqual({
       ok: false,
-      error: 'Skill "normalize-unit" is listed but its body could not be read.',
+      error: 'Skill "label-pallet" is listed but its body could not be read.',
     });
   });
 });
 
 describe('skillWriteVerdict', () => {
-  const scopes = ['actor:u1', 'sector:logistics', 'tenant:base-7', 'global'];
+  const scopes = ['actor:u1', 'sector:logistics', 'tenant:berlin', 'global'];
 
   it('lets a person write their own skill', () => {
     expect(
@@ -381,7 +379,7 @@ describe('skillWriteVerdict', () => {
   it('refuses an agent writing above the actor even when the host elevates it', () => {
     expect(
       skillWriteVerdict({
-        scope: 'tenant:base-7',
+        scope: 'tenant:berlin',
         actor,
         scopes,
         author: { kind: 'agent' },
@@ -390,7 +388,7 @@ describe('skillWriteVerdict', () => {
     ).toEqual({
       allowed: false,
       reason:
-        'only a human may author a skill at "tenant:base-7"; an agent may write only at "actor:u1"',
+        'only a human may author a skill at "tenant:berlin"; an agent may write only at "actor:u1"',
     });
   });
 });

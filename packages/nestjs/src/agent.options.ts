@@ -81,7 +81,7 @@ export interface AgentSkillsOptions {
   /**
    * Which scope tokens an actor draws from, most specific first — the precedence order. Omit → the
    * actor's own (`actor:<id>`), their tenant's (`tenant:<ref>`, when they have one), and `global`.
-   * Supply one to add an axis this library has no key for: a sector, a squadron, a shift.
+   * Supply one to add an axis this library has no key for: a sector, a region, a shift.
    */
   scopes?: ScopeResolver;
   /**

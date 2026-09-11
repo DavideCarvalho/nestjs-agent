@@ -28,14 +28,14 @@ import { HeaderActorResolver } from './resolver/header-actor-resolver.js';
 class DefaultAgent {}
 
 @Skill({
-  name: 'normalize-unit',
-  description: 'Normalise a unit designation to DPAS form.',
+  name: 'label-pallet',
+  description: 'Label a pallet for outbound freight.',
   body: 'GLOBAL-BODY',
 })
 @Injectable()
 class NormalizeUnitSkill {}
 
-@Skill({ name: 'work-order', description: 'Open a work order.', scope: 'tenant:base-7' })
+@Skill({ name: 'work-order', description: 'Open a work order.', scope: 'tenant:berlin' })
 @Injectable()
 class WorkOrderSkill implements SkillBody {
   body(ctx: SkillContext): string {
@@ -94,8 +94,8 @@ describe('GET /agent/skills', () => {
     const entries = await listSkills(await boot({}), { 'x-actor-id': 'u1' });
     expect(entries).toEqual([
       {
-        name: 'normalize-unit',
-        description: 'Normalise a unit designation to DPAS form.',
+        name: 'label-pallet',
+        description: 'Label a pallet for outbound freight.',
         scope: 'global',
       },
     ]);
@@ -105,25 +105,25 @@ describe('GET /agent/skills', () => {
     const application = await boot({});
     const inTenant = await listSkills(application, {
       'x-actor-id': 'u1',
-      'x-tenant-ref': 'base-7',
+      'x-tenant-ref': 'berlin',
     });
     expect(inTenant.map((entry) => `${entry.scope}/${entry.name}`)).toEqual([
-      'tenant:base-7/work-order',
-      'global/normalize-unit',
+      'tenant:berlin/work-order',
+      'global/label-pallet',
     ]);
     const outside = await listSkills(application, { 'x-actor-id': 'u2', 'x-tenant-ref': 'base-9' });
-    expect(outside.map((entry) => entry.name)).toEqual(['normalize-unit']);
+    expect(outside.map((entry) => entry.name)).toEqual(['label-pallet']);
   });
 
   it('reports the scope a skill overrode, so a client can say whose setting won', async () => {
     const hostProvider: SkillProvider = {
       list: ({ scopes }) =>
-        scopes.includes('tenant:base-7')
+        scopes.includes('tenant:berlin')
           ? [
               {
-                name: 'normalize-unit',
-                description: 'Base 7 strips the suffix first.',
-                scope: 'tenant:base-7',
+                name: 'label-pallet',
+                description: 'Berlin strips the carrier prefix first.',
+                scope: 'tenant:berlin',
               },
             ]
           : [],
@@ -131,12 +131,12 @@ describe('GET /agent/skills', () => {
     };
     const entries = await listSkills(await boot({ provider: hostProvider }), {
       'x-actor-id': 'u1',
-      'x-tenant-ref': 'base-7',
+      'x-tenant-ref': 'berlin',
     });
     expect(entries).toContainEqual({
-      name: 'normalize-unit',
-      description: 'Base 7 strips the suffix first.',
-      scope: 'tenant:base-7',
+      name: 'label-pallet',
+      description: 'Berlin strips the carrier prefix first.',
+      scope: 'tenant:berlin',
       shadows: ['global'],
     });
   });
@@ -155,11 +155,11 @@ describe('the listing endpoint and the turn read one resolution', () => {
     expect(config).toBeDefined();
     expect(factory.forAgent('default').skills).toBe(config);
 
-    const listed = await listSkills(application, { 'x-actor-id': 'u1', 'x-tenant-ref': 'base-7' });
+    const listed = await listSkills(application, { 'x-actor-id': 'u1', 'x-tenant-ref': 'berlin' });
     const offered = await offerSkills(
       // biome-ignore lint/style/noNonNullAssertion: asserted defined above.
       config!,
-      { actor: { id: 'u1', tenantRef: 'base-7' }, threadId: '' },
+      { actor: { id: 'u1', tenantRef: 'berlin' }, threadId: '' },
     );
     expect(offered.entries).toEqual(listed);
   });
@@ -175,9 +175,9 @@ describe('a @Skill body', () => {
   it('is built per turn from the class method, with the turn’s context', async () => {
     const application = await boot({});
     const config = application.get<AgentDepsFactory>(AGENT_DEPS_FACTORY).skillsConfig();
-    const ctx: SkillContext = { actor: { id: 'u1', tenantRef: 'base-7' }, threadId: 't1' };
+    const ctx: SkillContext = { actor: { id: 'u1', tenantRef: 'berlin' }, threadId: 't1' };
     // biome-ignore lint/style/noNonNullAssertion: skills are configured in this boot.
-    expect(await config!.provider.load({ name: 'work-order', scope: 'tenant:base-7', ctx })).toBe(
+    expect(await config!.provider.load({ name: 'work-order', scope: 'tenant:berlin', ctx })).toBe(
       'Open a work order for u1.',
     );
   });
@@ -187,7 +187,7 @@ describe('a @Skill body', () => {
     const config = application.get<AgentDepsFactory>(AGENT_DEPS_FACTORY).skillsConfig();
     const ctx: SkillContext = { actor: { id: 'u1' }, threadId: 't1' };
     // biome-ignore lint/style/noNonNullAssertion: skills are configured in this boot.
-    expect(await config!.provider.load({ name: 'normalize-unit', scope: GLOBAL_SCOPE, ctx })).toBe(
+    expect(await config!.provider.load({ name: 'label-pallet', scope: GLOBAL_SCOPE, ctx })).toBe(
       'GLOBAL-BODY',
     );
   });
