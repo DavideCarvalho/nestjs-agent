@@ -67,7 +67,7 @@ class OneToolModel implements ModelProvider {
 }
 
 async function buildApp(
-  dispatchedSteps: boolean,
+  dispatchedSteps?: boolean,
   shared?: { stateStore: InMemoryStateStore; agentStore: InMemoryAgentStore; model: ModelProvider },
 ) {
   const stateStore = shared?.stateStore ?? new InMemoryStateStore();
@@ -84,7 +84,7 @@ async function buildApp(
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
-        dispatchedSteps,
+        ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
       }),
       AgentDurableModule,
     ],
@@ -92,6 +92,17 @@ async function buildApp(
   }).compile();
   await moduleRef.init();
   return { moduleRef, stateStore, agentStore };
+}
+
+/** Wait until the turn has parked its action tool on a human, which is what makes it approvable. */
+async function pendingApproval(store: InMemoryAgentStore): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (store.toolCallRows()[0]?.status === 'pending_approval') {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('the turn never parked its action tool on an approval');
 }
 
 describe('dispatched steps under the durable runner', () => {
@@ -145,6 +156,55 @@ describe('dispatched steps under the durable runner', () => {
       expect(journal).not.toContain('patch:agent:dispatched-steps');
       expect(journal).toContain('llm:0');
       expect(journal).toContain('tool:call-peek');
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  /**
+   * The one thing a behavioural assertion cannot see. Both paths execute the same tool and produce
+   * the same row, so a durable host only finds out that its `@AiTool` handlers moved into another
+   * worker when one of them reaches for something only its caller's execution context holds — a
+   * request-scoped ORM EntityManager, an AsyncLocalStorage tenant. An approved action tool is where
+   * that surfaces worst: the human's decision is spent and the action does not happen.
+   *
+   * The journal is what says where the turn ran, so that is what this asserts, for a `durable: true`
+   * host that says nothing about dispatch.
+   */
+  it('keeps a turn — HITL approval included — on the in-process names unless asked otherwise', async () => {
+    const stateStore = new InMemoryStateStore();
+    const agentStore = new InMemoryAgentStore();
+    // No `dispatchedSteps` key at all: what a durable host that never considered the question gets.
+    const { moduleRef } = await buildApp(undefined, {
+      stateStore,
+      agentStore,
+      model: new ActionToolModel(),
+    });
+    try {
+      const service = moduleRef.get(AgentService);
+      const engine = moduleRef.get(WorkflowEngine);
+      const { runId } = await service.chat({ actor: ACTOR, message: 'go' });
+      // Polled on the ROW, not the run: a dispatched turn suspends at every transport hop, so the
+      // run's own status cannot say whether the call has reached a human yet.
+      await pendingApproval(agentStore);
+
+      await service.approve(ACTOR, 'call-commit');
+      const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      expect(result.status).toBe('completed');
+      expect(agentStore.toolCallRows()[0]).toMatchObject({
+        toolName: 'commit',
+        status: 'executed',
+      });
+
+      const journal = (await stateStore.listCheckpoints(runId))
+        .sort((left, right) => left.seq - right.seq)
+        .map((checkpoint) => checkpoint.name);
+
+      // The model call and the approved tool both ran in the workflow body — their own checkpoints
+      // rather than a routed group — and no marker is spent on a branch nobody asked to take.
+      expect(journal).toContain('llm:0');
+      expect(journal).toContain('tool:call-commit');
+      expect(journal).not.toContain('patch:agent:dispatched-steps');
     } finally {
       await moduleRef.close();
     }
