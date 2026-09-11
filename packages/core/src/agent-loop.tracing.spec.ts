@@ -93,8 +93,8 @@ function buildDeps(model: ModelProvider, store: InMemoryAgentStore): AgentLoopDe
     followUpsCount: 2,
     retriever: {
       retrieve: async () => [
-        { text: 'Lisbon is in Portugal.', source: 'geo' },
-        { text: 'Averages 300 sunny days.', source: 'climate' },
+        { id: 'p1', text: 'Lisbon is in Portugal.', source: 'geo', score: 0.9 },
+        { id: 'p2', text: 'Averages 300 sunny days.', source: 'climate', score: 0.8 },
       ],
     },
   };

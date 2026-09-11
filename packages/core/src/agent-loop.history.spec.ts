@@ -19,6 +19,16 @@ import {
 
 const RUN_ID = 'run-1';
 
+/** An in-memory store that also keeps each usage call's input, in the order the turn made them. */
+class RecordingStore extends InMemoryAgentStore {
+  readonly usageInputs: RecordUsageInput[] = [];
+
+  override async recordUsage(input: RecordUsageInput): Promise<void> {
+    this.usageInputs.push(input);
+    await super.recordUsage(input);
+  }
+}
+
 interface RunResult {
   /** The `messages` each model turn was actually given — what the ceiling is measured against. */
   turns: ModelMessage[][];
@@ -35,7 +45,7 @@ async function run(
   historyPolicy?: HistoryPolicy,
   step?: AgentLoopHooks['step'],
 ): Promise<RunResult> {
-  const store = new InMemoryAgentStore();
+  const store = new RecordingStore();
   const sink = new InMemoryTokenStreamSink();
   const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
   for (let index = 0; index < priorMessages; index += 1) {
@@ -47,28 +57,13 @@ async function run(
   }
 
   const turns: ModelMessage[][] = [];
-  const usage: RecordUsageInput[] = [];
-  const recordingStore: AgentStore = {
-    ...store,
-    getThread: (threadId) => store.getThread(threadId),
-    appendMessage: (input) => store.appendMessage(input),
-    setMessageToolResults: (messageId, results) => store.setMessageToolResults(messageId, results),
-    recordUsage: async (input) => {
-      usage.push(input);
-      await store.recordUsage(input);
-    },
-    recordToolCall: (input) => store.recordToolCall(input),
-    updateToolCall: (input) => store.updateToolCall(input),
-    setTitle: (threadId, title) => store.setTitle(threadId, title),
-    truncateFrom: (threadId, messageId) => store.truncateFrom(threadId, messageId),
-  };
 
   const deps: AgentLoopDeps = {
     model: new FakeModelProvider((args) => {
       turns.push(args.messages.map((message) => ({ ...message })));
       return { text: 'answered' };
     }),
-    store: recordingStore,
+    store,
     registry: new ToolRegistry(),
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
@@ -91,7 +86,7 @@ async function run(
     { threadId: thread.id, actor: { id: 'u1', roles: ['ADMIN'] }, userText: 'hi' },
     hooks,
   );
-  return { turns, stepNames, usage };
+  return { turns, stepNames, usage: store.usageInputs };
 }
 
 function contents(messages: ModelMessage[]): string[] {

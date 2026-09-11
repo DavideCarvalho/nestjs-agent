@@ -26,6 +26,16 @@ import {
 const RUN_ID = 'run-1';
 const ACTOR = { id: 'u1', roles: ['ADMIN'] };
 
+/** An in-memory store that also keeps each usage call's input, in the order the turn made them. */
+class RecordingStore extends InMemoryAgentStore {
+  readonly usageInputs: RecordUsageInput[] = [];
+
+  override async recordUsage(input: RecordUsageInput): Promise<void> {
+    this.usageInputs.push(input);
+    await super.recordUsage(input);
+  }
+}
+
 /** Collects the sink as decoded frames, so a test can assert WHEN each one arrived, not just that it did. */
 function recordingSink(): { writer: SinkWriter; frames: () => AgentStreamEvent[] } {
   const decoder = new TextDecoder();
@@ -116,28 +126,13 @@ interface RunResult {
 }
 
 async function run(options: RunOptions = {}): Promise<RunResult> {
-  const store = new InMemoryAgentStore();
+  const store = new RecordingStore();
   const thread = await store.createThread({ actor: ACTOR });
-  const usage: RecordUsageInput[] = [];
   const model = new ScriptedModel(options.turns ?? [{ text: 'the quiet answer' }]);
   const sink = recordingSink();
   const deps: AgentLoopDeps = {
     model,
-    store: {
-      ...store,
-      getThread: (id) => store.getThread(id),
-      appendMessage: (message) => store.appendMessage(message),
-      setMessageToolResults: (messageId, results) =>
-        store.setMessageToolResults(messageId, results),
-      recordUsage: async (row) => {
-        usage.push(row);
-        await store.recordUsage(row);
-      },
-      recordToolCall: (call) => store.recordToolCall(call),
-      updateToolCall: (call) => store.updateToolCall(call),
-      setTitle: (id, title) => store.setTitle(id, title),
-      truncateFrom: (id, messageId) => store.truncateFrom(id, messageId),
-    },
+    store,
     registry: options.registry ?? new ToolRegistry(),
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
@@ -168,7 +163,7 @@ async function run(options: RunOptions = {}): Promise<RunResult> {
     text: result.text,
     stepNames,
     frames: sink.frames(),
-    usage,
+    usage: store.usageInputs,
     model,
     messages: stored?.messages ?? [],
     toolResults: stored?.messages.find((message) => message.role === 'assistant')?.toolResults,
