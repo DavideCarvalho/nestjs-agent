@@ -15,14 +15,13 @@ const CATALOG = [
 ];
 
 function clientReturning(entries: unknown = CATALOG) {
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: new Headers({ 'content-type': 'application/json' }),
-    text: async () => JSON.stringify(entries),
-  }));
-  const client = new AgentClient({ fetch: fetchMock as unknown as typeof fetch });
+  const fetchMock = vi.fn<typeof fetch>(
+    async () =>
+      new Response(JSON.stringify(entries), {
+        headers: { 'content-type': 'application/json' },
+      }),
+  );
+  const client = new AgentClient({ fetch: fetchMock });
   return { client, fetchMock };
 }
 
@@ -109,16 +108,14 @@ describe('createSkillsSource', () => {
 
   it('retries after a failed read instead of caching the outage', async () => {
     const fetchMock = vi
-      .fn()
+      .fn<typeof fetch>()
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: new Headers({ 'content-type': 'application/json' }),
-        text: async () => JSON.stringify(CATALOG),
-      });
-    const client = new AgentClient({ fetch: fetchMock as unknown as typeof fetch });
+      .mockResolvedValue(
+        new Response(JSON.stringify(CATALOG), {
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    const client = new AgentClient({ fetch: fetchMock });
     const source = createSkillsSource({ client });
 
     await expect(source.getItems('', NO_SIGNAL)).rejects.toThrow('offline');

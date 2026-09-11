@@ -3,27 +3,22 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useAgentChat } from './use-agent-chat.js';
 
-function jsonResponse(status = 200) {
-  return {
-    ok: status < 400,
+function jsonResponse(status = 200): Response {
+  return new Response('{"ok":true}', {
     status,
     statusText: status === 200 ? 'OK' : 'Forbidden',
-    headers: new Headers(),
-    text: async () => '{"ok":true}',
-  };
+  });
 }
 
 describe('useAgentChat — settling a question set', () => {
   it('answers and skips by tool-call id, the way approve and reject do', async () => {
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push({ url, init });
+    const calls: Array<{ url: string; init?: RequestInit | undefined }> = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      calls.push({ url: String(url), init });
       return jsonResponse();
     });
 
-    const { result } = renderHook(() =>
-      useAgentChat({ threadId: 'thr-1', fetch: fetchMock as unknown as typeof fetch }),
-    );
+    const { result } = renderHook(() => useAgentChat({ threadId: 'thr-1', fetch: fetchMock }));
 
     await act(async () => {
       await result.current.answer({ toolCallId: 'intake-run-1', answers: { scope: ['file'] } });
@@ -45,10 +40,8 @@ describe('useAgentChat — settling a question set', () => {
   });
 
   it('lets a refusal reach the caller rather than resolving as if it worked', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(403));
-    const { result } = renderHook(() =>
-      useAgentChat({ threadId: 'thr-1', fetch: fetchMock as unknown as typeof fetch }),
-    );
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(403));
+    const { result } = renderHook(() => useAgentChat({ threadId: 'thr-1', fetch: fetchMock }));
 
     await expect(result.current.answer({ toolCallId: 'not-mine' })).rejects.toMatchObject({
       status: 403,

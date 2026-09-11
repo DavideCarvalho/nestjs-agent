@@ -153,7 +153,7 @@ describe('useChatTranscript — settling a question set', () => {
 
   it('clears a previous failure when the user tries again', async () => {
     const onAnswer = vi
-      .fn<[string, Record<string, string[]>], Promise<void>>()
+      .fn<(toolCallId: string, answers: Record<string, string[]>) => Promise<void>>()
       .mockRejectedValueOnce(new Error('nope'))
       .mockResolvedValueOnce(undefined);
     const { result } = transcript({ onAnswer });
