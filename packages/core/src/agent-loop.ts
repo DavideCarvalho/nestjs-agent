@@ -144,6 +144,16 @@ export interface AgentLoopDeps<TOutput = unknown> {
    */
   promptContributors?: PromptContributor[];
   maxSteps?: number;
+  /**
+   * How deep agent→agent delegation may nest before the loop refuses further hops.
+   * Defaults to {@link MAX_DELEGATION_DEPTH}.
+   *
+   * It bounds NESTING, never fan-out: how many agents a turn delegates to is the model's, one tool
+   * call each, and nothing here caps that. What it guards is a hop the model cannot see — a
+   * `delegatesTo` cycle (A→B→A), where each agent is making one reasonable call and the recursion
+   * is a property of the wiring rather than of any decision.
+   */
+  maxDelegationDepth?: number;
   /** Optional host handle threaded to tool ctx (e.g. an ORM EntityManager). */
   host?: unknown;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
@@ -542,8 +552,8 @@ export function agentFailureCode(error: unknown): string {
 }
 
 /**
- * How deep agent→agent delegation may nest before the loop refuses further hops. A cap, not a
- * tuning knob: it stops a mis-wired `delegatesTo` cycle (A→B→A) from spawning runs unbounded.
+ * The default depth at which agent→agent delegation stops nesting, when the host names none.
+ * Override with {@link AgentLoopDeps.maxDelegationDepth}.
  */
 export const MAX_DELEGATION_DEPTH = 5;
 
@@ -1722,9 +1732,10 @@ async function delegateToolCall(
   const { deps, input, hooks } = turn;
   const { call, targetAgent = call.name } = claimed;
   const task = extractTask(call.input);
-  // Cap nesting so a mis-wired delegation cycle can't spawn runs without bound. A detached hop
-  // counts like any other: the cycle it guards against is cheaper to start, not less unbounded.
-  const overDepth = (input.delegationDepth ?? 0) >= MAX_DELEGATION_DEPTH;
+  // A detached hop counts like any other: the cycle this guards against is cheaper to start, not
+  // less unbounded.
+  const maxDepth = deps.maxDelegationDepth ?? MAX_DELEGATION_DEPTH;
+  const overDepth = (input.delegationDepth ?? 0) >= maxDepth;
   const start = claimed.detached === true && !overDepth ? hooks.startAgent : undefined;
   publishAgentDelegated({
     runId: hooks.runId,
@@ -1734,7 +1745,7 @@ async function delegateToolCall(
   });
   let sub: { text: string } | DetachedDelegationReceipt;
   if (overDepth) {
-    sub = { text: `(delegation depth limit of ${MAX_DELEGATION_DEPTH} reached)` };
+    sub = { text: `(delegation depth limit of ${maxDepth} reached)` };
   } else if (start !== undefined) {
     const started = await start({ agentName: targetAgent, task, toolCallId: call.id });
     sub = detachedStarted({ agent: targetAgent, runId: started.runId });

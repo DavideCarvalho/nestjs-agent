@@ -34,6 +34,8 @@ export interface AgentDeps {
   /** App-wide `@SystemPromptContributor()` sections appended after the agent's base prompt. */
   promptContributors: PromptContributor[];
   maxSteps: number;
+  /** Nesting ceiling for delegation below this agent. Undefined → the loop's default. */
+  maxDelegationDepth?: number;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */

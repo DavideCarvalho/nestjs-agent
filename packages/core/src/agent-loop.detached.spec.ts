@@ -60,6 +60,8 @@ interface RunArgs {
   store?: AgentStore;
   threadId?: string;
   runId?: string;
+  /** The host's nesting ceiling. Absent → the loop's own default. */
+  maxDelegationDepth?: number;
 }
 
 async function run(args: RunArgs) {
@@ -86,6 +88,9 @@ async function run(args: RunArgs) {
     modelId: 'fake-1',
     day: '2026-06-30',
     systemPrompt: 'You are a test agent.',
+    ...(args.maxDelegationDepth !== undefined
+      ? { maxDelegationDepth: args.maxDelegationDepth }
+      : {}),
   };
   const hooks: AgentLoopHooks = {
     runId,
@@ -232,6 +237,33 @@ describe('detached delegation', () => {
     });
     expect(started).toEqual([]);
     expect(result.text).toContain('depth limit');
+  });
+
+  it('nests as deep as the HOST said, not as deep as the library ships with', async () => {
+    const started: unknown[] = [];
+    const { result } = await run({
+      script: delegateThenAnswer('start_research'),
+      input: { delegationDepth: 5 },
+      maxDelegationDepth: 8,
+      startAgent: async (call) => {
+        started.push(call);
+        return { runId: 'run-child' };
+      },
+    });
+    // Depth 5 is the default's refusal point, so a host that raised the ceiling is the only
+    // reason this hop happens at all.
+    expect(started).toHaveLength(1);
+    expect(result.text).not.toContain('depth limit');
+  });
+
+  it('reports the ceiling that actually applied, not the default', async () => {
+    const { result } = await run({
+      script: delegateThenAnswer('start_research'),
+      input: { delegationDepth: 2 },
+      maxDelegationDepth: 2,
+      startAgent: async () => ({ runId: 'run-child' }),
+    });
+    expect(result.text).toContain('depth limit of 2');
   });
 });
 

@@ -130,6 +130,9 @@ export class AgentDepsFactory {
       promptContributors: this.promptContributors,
       systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',
       maxSteps: definition?.maxSteps ?? 8,
+      ...(definition?.maxDelegationDepth !== undefined
+        ? { maxDelegationDepth: definition.maxDelegationDepth }
+        : {}),
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),

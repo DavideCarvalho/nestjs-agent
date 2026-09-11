@@ -337,6 +337,12 @@ export interface AgentDefinition {
   modelId?: string;
   maxSteps?: number;
   /**
+   * How deep delegation may nest below this agent. Undefined → {@link MAX_DELEGATION_DEPTH}.
+   *
+   * Bounds the CHAIN, not the fan-out: how many agents a turn delegates to is the model's.
+   */
+  maxDelegationDepth?: number;
+  /**
    * This agent's own ceiling on how much of a thread rides into its turn, overriding the
    * module-wide one. A persona that reasons over a long back-and-forth and one that answers a single
    * question from a page context want very different windows.

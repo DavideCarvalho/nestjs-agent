@@ -26,6 +26,13 @@ export interface AgentOptions {
   model?: string;
   /** Max model→tool iterations for this agent's turn. Default 8. */
   maxSteps?: number;
+  /**
+   * How deep delegation may nest below this agent before further hops are refused. Default 5.
+   *
+   * Not a budget for how MANY agents a turn delegates to — that is the model's, one tool call each,
+   * and nothing caps it. This bounds the chain a `delegatesTo` cycle would otherwise run forever.
+   */
+  maxDelegationDepth?: number;
   /** Allow-list of global tool names this agent may use. Omit → every tool its role allows. */
   tools?: string[];
   /**

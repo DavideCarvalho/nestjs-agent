@@ -61,6 +61,9 @@ export class AgentDiscoveryService implements OnModuleInit {
       ...(meta.tools !== undefined ? { tools: meta.tools } : {}),
       ...(meta.model !== undefined ? { modelId: meta.model } : {}),
       ...(meta.maxSteps !== undefined ? { maxSteps: meta.maxSteps } : {}),
+      ...(meta.maxDelegationDepth !== undefined
+        ? { maxDelegationDepth: meta.maxDelegationDepth }
+        : {}),
       ...(meta.history !== undefined ? { history: meta.history } : {}),
       ...(meta.outputSchema !== undefined ? { outputSchema: meta.outputSchema } : {}),
       ...(meta.intake !== undefined ? { intake: meta.intake } : {}),
