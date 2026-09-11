@@ -263,7 +263,7 @@ describe('AgentModule (inline)', () => {
     const built = await buildApp(() => ({ text: 'never reached' }));
     app = built.app;
     const res = await request(app.getHttpServer()).post('/agent/chat').send({ message: 'hi' });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(401);
     expect(res.text).not.toContain('never reached');
     // nothing was persisted for a caller the resolver refused to identify
     expect(built.store.toolCallRows()).toHaveLength(0);
