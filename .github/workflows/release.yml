@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [master]
+  # Re-run a publish that a registry refused. `changeset publish` only pushes versions the
+  # registry does not already have, so a second run is a no-op once they are all there.
+  workflow_dispatch:
 
 # Never run two releases concurrently (avoids a double-publish race).
 concurrency: release-${{ github.ref }}
