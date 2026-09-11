@@ -353,6 +353,11 @@ export interface AgentDefinition {
    */
   maxDelegationDepth?: number;
   /**
+   * How many times one agent may appear on a single delegation chain.
+   * Undefined → {@link DEFAULT_MAX_AGENT_APPEARANCES}.
+   */
+  maxAgentAppearances?: number;
+  /**
    * This agent's own ceiling on how much of a thread rides into its turn, overriding the
    * module-wide one. A persona that reasons over a long back-and-forth and one that answers a single
    * question from a page context want very different windows.

@@ -133,6 +133,9 @@ export class AgentDepsFactory {
       ...(definition?.maxDelegationDepth !== undefined
         ? { maxDelegationDepth: definition.maxDelegationDepth }
         : {}),
+      ...(definition?.maxAgentAppearances !== undefined
+        ? { maxAgentAppearances: definition.maxAgentAppearances }
+        : {}),
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),

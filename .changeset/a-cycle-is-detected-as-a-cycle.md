@@ -31,6 +31,10 @@ at depth 5. If you depended on an agent being delegated to twice on one chain, s
 `maxAgentAppearances`. Note this is strictly earlier, not stricter in the end: such a chain was
 already being cut, just four agent runs later and under a message that named the wrong reason.
 
+Also: the `Required<AgentOptions>` gate added alongside the depth ceiling caught its own author
+forgetting to surface `maxAgentAppearances` on the decorator, within the hour. It only bites under
+`typecheck:specs`, which `@dudousxd/nestjs-agent` does not yet run.
+
 **Known limit, unchanged by this.** `@Agent({ handoff })` cannot express A↔B directly, because a
 class cannot name a class declared after it. Mutual edges arrive through circular imports between
 agent modules, which is the shape this guard is for.

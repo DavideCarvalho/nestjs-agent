@@ -33,6 +33,14 @@ export interface AgentOptions {
    * and nothing caps it. This bounds the chain a `delegatesTo` cycle would otherwise run forever.
    */
   maxDelegationDepth?: number;
+  /**
+   * How many times one agent may appear on a single delegation chain below this one. Default 1.
+   *
+   * This is the exact form of what {@link maxDelegationDepth} approximates: the loop compares a
+   * delegation target against the chain that reached it, so a repeat is a cycle by inspection.
+   * It counts APPEARANCES, so 2 admits exactly one deliberate return to an earlier agent.
+   */
+  maxAgentAppearances?: number;
   /** Allow-list of global tool names this agent may use. Omit → every tool its role allows. */
   tools?: string[];
   /**

@@ -36,6 +36,8 @@ export interface AgentDeps {
   maxSteps: number;
   /** Nesting ceiling for delegation below this agent. Undefined → the loop's default. */
   maxDelegationDepth?: number;
+  /** How many times one agent may appear on a chain. Undefined → the loop's default. */
+  maxAgentAppearances?: number;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
