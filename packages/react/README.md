@@ -46,6 +46,7 @@ The package is **headless by design**, in four layers, and only the top one rend
 | `AgentClient` | The REST calls — threads, quota, attachments, approve/reject/answer/skip | No |
 | `AgentChatTransport` + `useAgentChat` | SSE parsing, resume/reconnect, thread state, HITL routing | No |
 | `useChatTranscript` / `useTranscriptItem` | The transcript model — grouped parts, per-message derived values, action state machines, windowing, stick-to-bottom | No |
+| `useComposerAutocomplete` | The composer's completion model — which trigger the caret is in, the query, the filtered items, the highlight, what a pick does to the text and caret | No |
 | `MessageList` / `MessageItem` / `ChatInput` / `AgentMarkdown` | One rendering of that model | Yes — and optional |
 
 A host with its own design system drives the model and writes its own markup; it never reimplements
@@ -198,6 +199,94 @@ A refused settlement (403 "not your thread", a network failure) lands on `block.
 `call.error` with the affordance still live, rather than escaping as an unhandled rejection. Render
 it — a button that silently does nothing is indistinguishable from a broken one.
 
+### Completing as you type
+
+`useComposerAutocomplete` is the state machine behind a `/`-style menu in the composer. It is
+source-agnostic on purpose: a host supplies **sources**, each with a trigger character, and the same
+machine drives `@` for a mention as drives `/` for a command. Nothing in it knows what a skill is.
+
+```tsx
+import { useComposerAutocomplete, type AutocompleteSource } from '@dudousxd/nestjs-agent-react';
+
+const skills: AutocompleteSource = {
+  id: 'skills',
+  label: 'Skills',
+  trigger: '/',
+  position: 'start',
+  getItems: async (query, signal) => {
+    const rows = await fetch(`/agent/skills?q=${query}`, { signal }).then((r) => r.json());
+    return rows.map((row) => ({ id: row.name, label: row.name, description: row.description }));
+  },
+  // The endpoint already matched; re-filtering here would undo it.
+  filter: (items) => items,
+};
+
+const autocomplete = useComposerAutocomplete({ value: draft, onValueChange: setDraft, sources: [skills] });
+```
+
+| On the instance | What it is |
+|---|---|
+| `isOpen` / `source` / `trigger` / `query` | Whether the caret is inside a live trigger token, and which one |
+| `items` / `activeIndex` / `activeItem` | The filtered candidates and the highlight |
+| `isLoading` / `error` | An async source that has not answered, and one that threw |
+| `highlight(i)` / `moveHighlight(±1)` | Move the highlight; `moveHighlight` wraps at both ends |
+| `accept(item?)` | Insert — the highlighted item by default. A click handler calls this directly |
+| `dismiss()` | Close for the token being typed, without touching the text |
+| `getInputProps()` | The textarea's combobox wiring (`role`, `aria-expanded`, `aria-controls`, `aria-activedescendant`) plus the keys the menu owns |
+| `getListboxProps()` / `getOptionProps(i)` | `role="listbox"` / `role="option"` with the ids `aria-activedescendant` points at |
+
+**The trigger rule is per source, and there is no default.** `position: 'start'` fires only as the
+first character of the input — `/deploy` is a command, `src/foo` and `and/or` are not. `position:
+'word'` fires at the start of any word, which is how `@ada` reads mid-sentence while `ada@example`
+does not. Getting this wrong breaks the thing people type most, so the source has to say.
+
+**Insertion** replaces the token, keeps the trigger, and appends a space: `/roll` + *rollback* →
+`/rollback ` with the caret after the space, and anything already to the right of the caret is left
+where it was. The space both closes the menu and puts the caret where the command's argument goes,
+so typing straight on is free text. A source that wants the menu to stay open sets `insertSuffix: ''`.
+
+**Keys.** ↑/↓ move (wrapping), Enter and Tab accept, Escape closes for that token. Shift+Tab is left
+alone — a completion menu is not a focus trap. Every key the menu takes is `preventDefault`ed, which
+is how a composer that sends on Enter knows to stand down:
+
+```tsx
+function onKeyDown(event) {
+  inputProps.onKeyDown(event);
+  if (event.defaultPrevented) return;   // the menu took it
+  if (event.key === 'Enter' && !event.shiftKey) submit();
+}
+```
+
+**Async sources** are asked per query with an `AbortSignal`; an answer to a query the user has
+already typed past is discarded rather than allowed to overwrite a newer list, and its request is
+aborted. A source that throws leaves the draft alone, reports itself on `error`, and calls `onError`
+— typing and sending carry on.
+
+**Skills are one source, not a special case.** `createSkillsSource` is `GET /agent/skills` — the
+scope-resolved list of what THIS actor can invoke, built by the same call that offers the catalog to
+the model, so a `/` menu and the agent's own reach cannot drift apart:
+
+```tsx
+import { createSkillsSource, useAgentChat } from '@dudousxd/nestjs-agent-react';
+
+const chat = useAgentChat({ baseUrl: '/agent', onThreadCreated: setThreadId });
+// Identity-stable so the list is read once per thread, not once per keystroke.
+const sources = useMemo(
+  () => [createSkillsSource({ client: chat.client, getThreadId: () => threadId })],
+  [chat.client],
+);
+```
+
+Each item carries its provenance twice: as a `hint` the rendered row right-aligns
+(`tenant:base-7 · overrides global`), and raw on `data` as `{ scope, shadows? }` for a host that
+wants to draw it differently. `shadows` is present only on a clash, so "there is no org default" and
+"there is one and yours wins" stay distinguishable. The list arrives ordered most-specific-scope
+first, then alphabetically — that order IS the precedence, and it is passed through untouched. The
+type-ahead narrows the list it received; it never re-derives which skills apply.
+
+The shadcn `ChatComposer` wires all of this for you: pass `autocompleteSources` and it renders the
+menu (`ChatCommandPalette`, grown into the combobox's listbox) above the composer card.
+
 ### Designed components, as copy-in source
 
 `MessageList`/`MessageItem`/`ChatInput` are deliberately minimal. For a styled, accessible chat
@@ -259,6 +348,14 @@ function CustomChat({ threadId }: { threadId?: string }) {
   );
 }
 ```
+
+`sendMessage` and `regenerate` refuse a turn while one is already in flight, and a resume never
+attaches to a run this session is already streaming. The AI SDK keeps one in-flight response per
+chat and decides whether it replaces the list's last entry or is appended by looking at that last
+entry alone, so two overlapping turns append alternating copies of each other and the list ends up
+with several entries under one id — React's "two children with the same key". A composer that
+disables itself while busy never noticed; a double-submitted one, and StrictMode's doubled resume
+effect, did.
 
 `chat` is the AI SDK v7 `useChat` return value (`messages`, `status`, `sendMessage`, `stop`, …) spread
 together with the extras: `runId`/`activeRunId`, `client` (the raw `AgentClient`), thread list/CRUD

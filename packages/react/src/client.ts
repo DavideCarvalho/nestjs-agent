@@ -1,6 +1,7 @@
 import type {
   MessageAttachment,
   QuotaView,
+  SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
@@ -64,6 +65,17 @@ export class AgentClient {
 
   listThreads(): Promise<ThreadSummary[]> {
     return this.request<ThreadSummary[]>('GET', '/agent/threads');
+  }
+
+  /**
+   * The skills this caller can invoke right now, scope-resolved — the same list, built by the same
+   * call, that the model is offered, so what a user can type after a `/` and what the agent can
+   * reach cannot drift apart. `threadId` reaches the host's own resolver, which may scope a skill to
+   * one conversation; omitted, the server reads it as a brand-new thread.
+   */
+  listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
+    const query = threadId === undefined ? '' : `?threadId=${encodeURIComponent(threadId)}`;
+    return this.request<SkillCatalogEntry[]>('GET', `/agent/skills${query}`);
   }
 
   getThread(id: string): Promise<ThreadDetail> {

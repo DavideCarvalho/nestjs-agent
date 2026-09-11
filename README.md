@@ -333,6 +333,134 @@ suspend, not a held socket.
 
 Declare neither and nothing changes: no new checkpoint, no new tool, no change to the sequence.
 
+## Skills (scoped, loaded on demand)
+
+Instructions that are true *sometimes* — how one base formats a unit designation, what counts as a
+valid work order — have nowhere good to live. In the system prompt they are paid for on every turn by
+every user; hardcoded as a tool they are a deploy away from changing. A **skill** splits the two
+halves: the prompt carries a one-line-each catalog, and the body is read on demand through a built-in
+`skill` tool, arriving as an ordinary tool result.
+
+```ts
+AgentModule.forRoot({ /* … */ skills: {} });
+
+@Skill({
+  name: 'normalize-unit',
+  description: 'Normalise a unit designation to DPAS form.',
+  scope: 'tenant:base-7',
+})
+@Injectable()
+export class NormalizeUnitSkill implements SkillBody {
+  constructor(private readonly units: UnitService) {}
+  body(ctx: SkillContext): string {
+    return `Strip any squadron suffix, then match against DPAS…`;
+  }
+}
+```
+
+**A skill is not an agent.** An `@Agent` is *who is answering*; a skill is *how one task is done*, and
+any agent may load it. An instruction that applies to every turn of a persona is still that persona's
+`systemPrompt`.
+
+**Scoping is an opaque token you order.** A skill is published at `actor:u1`, `tenant:base-7`,
+`global` — or your own `sector:logistics`. Which tokens apply is a `ScopeResolver` returning them
+most-specific-first, so precedence falls out of the order and a new axis is a resolver you write
+rather than an enum you wait for. Omit it and you get the actor's own scope, their tenant's, and
+`global`. **This library owns no skill table**: rows a person administers live behind your own
+`SkillProvider` (`list(scopes, ctx)` for the catalog, `load(name, scope, ctx)` for one body), so your
+`Sector` entity relates to them however it likes and your migrations never meet the `agent_*` schema
+heal.
+
+Most specific wins, and the entry records what it **shadowed**, so the agent can say "I followed your
+base's version, which differs from the org default" instead of choosing silently.
+
+```http
+GET /agent/skills → [{ name, description, scope, shadows? }]
+```
+
+The same list the model is offered, from the same call — so a `/`-autocomplete can never offer a skill
+the agent has never heard of. There is no write endpoint: `skillWriteVerdict` is the rule for your own
+console — your own scope is yours, a wider one needs an elevated **human**, and nothing but a human
+may ever write above its own scope.
+
+One new checkpoint (`skills:catalog`) holds the whole offer; a load rides a plain read tool's
+positions and returns the body *from* the checkpoint, so a skill edited mid-run never rewrites the
+prompt of a run in flight, and the journaled catalog — not the provider — decides what a turn may
+reach. Declare none and the turn's sequence is byte-identical.
+
+## Memory (what it knows about you)
+
+Everything the agent works out about a person dies at the end of the turn. **Memory** is the bounded
+set of conclusions that survives it — a keyed fact at a scope, one line in the system block, written
+by the model and deletable by the person it is about.
+
+```ts
+AgentModule.forRoot({ /* … */ memory: { provider: myMemoryProvider } });
+```
+
+```ts
+// MemoryProvider — your rows, your table. `forget` is required; `write` is what decides
+// whether the model is offered the built-in `remember` tool at all.
+{
+  list: ({ scopes }) => this.repo.find({ scope: { $in: [...scopes] } }),
+  forget: ({ id }) => this.repo.nativeDelete({ id }).then((n) => n > 0),
+  write: ({ key, text, scope, origin }) => this.repo.upsert({ key, text, scope, origin }),
+}
+```
+
+```text
+<memory>
+What you concluded about this user and their organisation on earlier turns. These are your own
+notes, not documents anyone wrote: they may be wrong or out of date…
+- [actor:u1] fiscal-year: they report on the calendar year
+    ↳ [global] instead has: the fiscal year starts in October
+- [global] units: report distances in nautical miles
+</memory>
+```
+
+**It is not RAG.** Retrieval answers *what do the documents say*, and cites them. Memory answers
+*what did I decide about you*, and has no source to go and fix. So every record carries an **origin**
+(which conversation, which run, agent or person), the block tells the model these are its own
+fallible notes, and `MemoryProvider.forget` is required rather than optional — a deployment may
+serve memory read-only, but none may hold conclusions about someone the someone cannot delete.
+
+**Scoping is the same token, resolved by the same `ScopeResolver` as [skills](#skills-scoped-loaded-on-demand)** —
+`actor:u1`, `sector:logistics`, `tenant:base-7`, `global`, most specific first. Where a narrower
+scope wins a key, the entry carries the beaten **value**, not just its scope, so the agent can say
+*"your setting differs from the org default"* rather than quietly picking one.
+
+**An agent proposes; a person publishes.** The `remember` tool has **no scope parameter** — an agent
+may only ever write the actor it is running for, so there is no request `memoryWriteVerdict`'s third
+rule has to refuse. Promoting a fact to a tenant or a sector is a human act in your own console
+(`memoryWriteVerdict({ …, author: { kind: 'human' }, elevated })`). A tenant memory an agent could
+write is a fact everyone in the tenant is then answered from, with no document to inspect and nobody
+aware it was written.
+
+```http
+GET    /agent/memories        → [{ id, key, text, scope, origin, updatedAt, overrides? }]
+DELETE /agent/memories/:id    → { forgotten: true }
+```
+
+The read-back deliberately **ignores `maxMemories`**: that ceiling is a budget on what a *turn*
+carries, and applying it here would hide a belief the assistant is one write away from acting on
+again. `DELETE` covers the actor's own scope; an id they cannot see answers 404 rather than 403, so
+it cannot be used to discover what the assistant believes about other people. A memory whose source
+conversation was later truncated away is **kept**, shown with an origin that no longer resolves — a
+history ceiling is a cost control and must never double as an eraser.
+
+**Working memory and recall are two features; this is the first.** Searching what was *said* earlier
+is retrieval over a transcript — `Retriever`/`Reranker` already do that. The ceiling here is exactly
+what makes semantic search over memory pointless: it is a search for something already in the prompt.
+
+**Budget.** `maxMemories` lines (default 20), each capped at `maxFactChars` (default 240) *when
+written*, so the block's ceiling is a product an operator can do — and the push-back lands while the
+model is writing an essay instead of a fact. One checkpoint (`memory:digest`) holds the whole digest:
+it is what the block is rendered from *and* what a `remember` call is authorized against, so a replay
+on a pod that resolves the actor differently rebuilds the identical prompt. The write happens inside
+the call's own `tool:` checkpoint, so a resume stores nothing twice. `aviary:agent:memory.resolved`
+and `aviary:agent:memory.written` report what it cost and how much the agent is writing. Configure
+none and the turn's sequence is byte-identical.
+
 ## Multi-agent (orchestrator → sub-agents)
 
 Register named agents with `forFeature`; declare which agents an orchestrator may call via

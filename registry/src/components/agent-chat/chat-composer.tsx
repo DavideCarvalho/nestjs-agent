@@ -1,9 +1,29 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import type { TranscriptStopState } from '@dudousxd/nestjs-agent-react';
-import { type KeyboardEvent, type ReactNode, useState } from 'react';
+import {
+  type AutocompleteSource,
+  type ComposerAutocomplete,
+  type TranscriptStopState,
+  useComposerAutocomplete,
+} from '@dudousxd/nestjs-agent-react';
+import { type ChangeEvent, type KeyboardEvent, type ReactNode, useState } from 'react';
+import { ChatCommandPalette } from './chat-command-palette';
 import { ArrowUpIcon, PaperclipIcon, StopIcon } from './icons';
+
+/** Stable identity so the autocomplete's request effect doesn't re-fire on every render. */
+const NO_SOURCES: readonly AutocompleteSource[] = [];
+
+/**
+ * Why the menu is empty. A source that offered nothing at all and a query that matched nothing are
+ * different facts — "no skills are configured for you" reads as a bug when it says "no matches".
+ */
+function emptyMenuStatus(autocomplete: ComposerAutocomplete): string {
+  if (autocomplete.isLoading) {
+    return 'Searching…';
+  }
+  return autocomplete.query.length > 0 ? 'No matches' : 'Nothing to complete';
+}
 
 export interface ChatComposerProps {
   onSubmit: (text: string) => void;
@@ -26,6 +46,13 @@ export interface ChatComposerProps {
   footer?: ReactNode;
   /** Rendered above the card inside the same rounded shell — e.g. a suggestion palette. */
   overlay?: ReactNode;
+  /**
+   * Triggers the draft completes against — `/` for commands, `@` for a mention. The composer knows
+   * nothing about what a source offers; while one is open it takes over ↑ ↓ Enter Tab Esc, and
+   * Enter stops sending. Omitted, the composer behaves exactly as it did without them.
+   */
+  autocompleteSources?: readonly AutocompleteSource[];
+  onAutocompleteError?: (error: unknown, source: AutocompleteSource) => void;
   submitLabel?: string;
   /** The key that sends, shown as a hint beside submit. `null` hides the hint. */
   submitHint?: string | null;
@@ -49,6 +76,8 @@ export function ChatComposer({
   trailing,
   footer,
   overlay,
+  autocompleteSources,
+  onAutocompleteError,
   submitLabel = 'Send',
   submitHint = 'Enter',
   className,
@@ -64,6 +93,14 @@ export function ChatComposer({
     onValueChange?.(next);
   }
 
+  const autocomplete = useComposerAutocomplete({
+    value: draft,
+    onValueChange: setDraft,
+    sources: autocompleteSources ?? NO_SOURCES,
+    ...(onAutocompleteError !== undefined ? { onError: onAutocompleteError } : {}),
+  });
+  const inputProps = autocomplete.getInputProps();
+
   function submit() {
     const trimmed = draft.trim();
     if (!trimmed || disabled || isBusy) {
@@ -74,10 +111,21 @@ export function ChatComposer({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    // The open menu gets first refusal: it marks the keys it consumed as handled, and Enter picking
+    // a command must never also send the half-typed line.
+    inputProps.onKeyDown(event);
+    if (event.defaultPrevented) {
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
     }
+  }
+
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
+    setDraft(event.target.value);
+    inputProps.onChange(event);
   }
 
   return (
@@ -90,15 +138,39 @@ export function ChatComposer({
         className,
       )}
     >
-      {overlay}
+      {autocomplete.isOpen ? (
+        <ChatCommandPalette
+          suggestions={autocomplete.items.map((item) => ({
+            id: item.id,
+            label: item.label,
+            ...(item.description !== undefined ? { description: item.description } : {}),
+            ...(item.hint !== undefined ? { hint: item.hint } : {}),
+          }))}
+          onSelect={(suggestion) => {
+            const picked = autocomplete.items.find((item) => item.id === suggestion.id);
+            if (picked) {
+              autocomplete.accept(picked);
+            }
+          }}
+          onClose={autocomplete.dismiss}
+          activeIndex={autocomplete.activeIndex}
+          onActiveIndexChange={autocomplete.highlight}
+          listboxProps={autocomplete.getListboxProps()}
+          getOptionProps={autocomplete.getOptionProps}
+          status={autocomplete.error ?? emptyMenuStatus(autocomplete)}
+        />
+      ) : (
+        overlay
+      )}
       <div className="px-3 pt-3">
         <textarea
+          {...inputProps}
           rows={2}
           value={draft}
           disabled={disabled}
           placeholder={placeholder}
           aria-label={placeholder}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
           // `field-sizing-content` grows the box with the text and needs no measuring pass; the
           // max height keeps a pasted essay from swallowing the transcript.

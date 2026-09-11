@@ -12,6 +12,8 @@ import {
   traceLlmTurn,
   traceToolExecution,
   withAskTool,
+  withMemoryTool,
+  withSkillTool,
   withToolTimeout,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
@@ -81,10 +83,29 @@ export class AgentRunSteps {
     // `withAskTool` from THIS worker's own resolved deps, not from the envelope: `ask` is module
     // config, uniform across a deployment, so the worker reaches the same list the loop would have
     // built locally without the wire contract having to carry the flag.
-    const tools = withAskTool(
-      await deps.registry.definitionsFor(input.actor, deps.rolesPolicy, deps.toolAllowList),
-      deps.ask,
-    );
+    // `withSkillTool` for the same reason as `withAskTool` below it: both are module config,
+    // uniform across a deployment, so this worker reaches the same tool list the loop would have
+    // built without the wire contract having to carry either flag. WHICH skills the model may load
+    // is a different question, and it is answered by the catalog in the prompt this envelope
+    // carries — never by this worker's own provider.
+    // `withMemoryTool` on the same footing, and for the same reason: whether this deployment offers
+    // `remember` is module config. WHICH memories the model was shown is a different question, and
+    // it is answered by the block in the prompt this envelope carries — never by this worker's own
+    // provider.
+    const tools = withMemoryTool({
+      tools: withSkillTool({
+        tools: withAskTool({
+          tools: await deps.registry.definitionsFor(
+            input.actor,
+            deps.rolesPolicy,
+            deps.toolAllowList,
+          ),
+          ask: deps.ask,
+        }),
+        enabled: deps.skills !== undefined,
+      }),
+      enabled: deps.memory?.provider.write !== undefined,
+    });
     // `bufferOutput` means the dispatching loop has an output gate to run and this worker's sink is
     // on the far side of it: streaming here would put the answer in front of the reader before the
     // gate ever saw it. Hold the frames and hand them back on the result — the loop releases them

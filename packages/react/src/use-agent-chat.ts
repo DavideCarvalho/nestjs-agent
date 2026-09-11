@@ -223,6 +223,38 @@ export function useAgentChat(options: UseAgentChatOptions) {
   const chatRef = useRef(chat);
   chatRef.current = chat;
 
+  /**
+   * One turn in flight per chat. The SDK commits its single in-flight response BEFORE it reaches
+   * the transport, so a second overlapping turn cannot be untangled downstream: both write into the
+   * same message list, and the SDK's "replace the list's last entry or append" test — which looks
+   * only at that last entry — then appends alternating copies of each, leaving several entries
+   * under one id. Refusing here is the only point early enough to keep the list honest, and
+   * dropping the extra turn is what a composer that disables itself while busy already does.
+   *
+   * The ref rather than `chat.status`: the SDK awaits once before it touches its own state, so the
+   * status a render can see is still `ready` when a second call arrives in the same tick, and a
+   * double-submitted composer is exactly the case this has to catch.
+   */
+  const turnInFlight = useRef(false);
+  const isTurnInFlight = useCallback(
+    () => turnInFlight.current || transport.isAttemptLive,
+    [transport],
+  );
+
+  type SdkSendMessage = typeof chat.sendMessage;
+  const sendMessage = useCallback<SdkSendMessage>(
+    async (...args: Parameters<SdkSendMessage>) => {
+      if (isTurnInFlight()) return;
+      turnInFlight.current = true;
+      try {
+        await chatRef.current.sendMessage(...args);
+      } finally {
+        turnInFlight.current = false;
+      }
+    },
+    [isTurnInFlight],
+  );
+
   // chat.addToolResult is generic over the backend's tool registry, which
   // we don't statically type here. Expose a string-keyed adapter and narrow
   // once at the SDK boundary. (Documented cast — the only one in this file.)
@@ -366,12 +398,17 @@ export function useAgentChat(options: UseAgentChatOptions) {
   // Re-run the last exchange: flag the next request as a regenerate (so the backend truncates and
   // re-answers instead of appending) and let the SDK re-issue it, dropping the last assistant turn.
   const regenerate = useCallback((): void => {
+    if (isTurnInFlight()) return;
     regenerateNext.current = true;
-    void chatRef.current.regenerate();
-  }, []);
+    turnInFlight.current = true;
+    void chatRef.current.regenerate().finally(() => {
+      turnInFlight.current = false;
+    });
+  }, [isTurnInFlight]);
 
   return {
     ...chat,
+    sendMessage,
     addToolResult,
     runId,
     /** The `resume`-fetched thread's active run id, or `null` once resolved with none. */

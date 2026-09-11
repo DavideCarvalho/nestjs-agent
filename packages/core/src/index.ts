@@ -25,6 +25,8 @@ export * from './history.js';
 export * from './processors.js';
 export * from './structured-output.js';
 export * from './elicitation.js';
+export * from './skills.js';
+export * from './memory.js';
 export { AgentRegistry } from './agent-registry.js';
 export { isReplayIntegrityError } from './replay-integrity.js';
 export { isControlFlowSignal } from './control-flow.js';

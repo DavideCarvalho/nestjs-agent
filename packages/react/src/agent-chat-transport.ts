@@ -84,6 +84,15 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
   private currentRunId: string | undefined;
   private currentThreadId: string | undefined;
 
+  /**
+   * One attempt at a time. The AI SDK keeps a single in-flight response per chat and decides
+   * whether its streamed message REPLACES the list's last entry or is appended by comparing that
+   * response's message id against the last entry alone. Two attempts writing into one chat
+   * therefore append alternating copies of each other's message, and the list ends up holding
+   * several entries under each id — which React renders as duplicate keys.
+   */
+  private attemptLive = false;
+
   constructor(private readonly options: AgentChatTransportOptions = {}) {}
 
   /** Run id of the most recent stream — HITL approve/reject target this. */
@@ -96,63 +105,96 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     return this.currentThreadId;
   }
 
+  /**
+   * True from the moment a send or resume attempt starts until its chunk stream terminates. A
+   * caller that can refuse a turn BEFORE the SDK commits to one — `useAgentChat` wrapping
+   * `sendMessage` — reads this; the transport itself can only refuse a resume, which is the one
+   * attempt the SDK lets a transport decline.
+   */
+  get isAttemptLive(): boolean {
+    return this.attemptLive;
+  }
+
   async sendMessages(
     options: Parameters<ChatTransport<UIMessage>['sendMessages']>[0],
   ): Promise<ReadableStream<UIMessageChunk>> {
     this.options.onAttemptStart?.();
-    const lastMessage = options.messages.at(-1);
-    const message = lastMessage ? extractText(lastMessage) : '';
-    const body: Record<string, unknown> = {
-      ...(this.options.agent !== undefined ? { agent: this.options.agent } : {}),
-      ...(this.options.getBody?.() ?? {}),
-      ...((options.body as Record<string, unknown> | undefined) ?? {}),
-      message,
-    };
-    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        ...(await this.resolveHeaders(options.headers)),
-      },
-      body: JSON.stringify(body),
-      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
-      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
+    this.attemptLive = true;
+    try {
+      const lastMessage = options.messages.at(-1);
+      const message = lastMessage ? extractText(lastMessage) : '';
+      const body: Record<string, unknown> = {
+        ...(this.options.agent !== undefined ? { agent: this.options.agent } : {}),
+        ...(this.options.getBody?.() ?? {}),
+        ...((options.body as Record<string, unknown> | undefined) ?? {}),
+        message,
+      };
+      const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          ...(await this.resolveHeaders(options.headers)),
+        },
+        body: JSON.stringify(body),
+        ...(this.options.credentials !== undefined
+          ? { credentials: this.options.credentials }
+          : {}),
+        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
+      }
+      this.captureHeaderMeta(response.headers);
+      return this.toChunkStream(response.body);
+    } catch (error) {
+      this.attemptLive = false;
+      throw error;
     }
-    this.captureHeaderMeta(response.headers);
-    return this.toChunkStream(response.body);
   }
 
   async reconnectToStream(
     options: Parameters<ChatTransport<UIMessage>['reconnectToStream']>[0],
   ): Promise<ReadableStream<UIMessageChunk> | null> {
+    // Already attached: a second reconnect replays the SAME buffered frames into the SAME chat, so
+    // it adds a duplicate of the message the first attempt is writing rather than a second turn.
+    // React StrictMode runs the SDK's resume effect twice on mount, which makes this the ordinary
+    // case and not an edge one. `null` is the SDK's own "nothing to resume" answer and, unlike a
+    // throw, leaves it holding no state for an attempt that never happened.
+    if (this.attemptLive) return null;
     this.options.onAttemptStart?.();
     const runId = this.options.getResumeRunId?.();
     // No buffered run → resolve null without a network round-trip so we
     // never surface a 404 from a doomed resume GET.
     if (runId === undefined) return null;
-    const response = await this.fetchImpl()(
-      `${this.baseUrl()}/agent/chat/${encodeURIComponent(runId)}/stream`,
-      {
-        method: 'GET',
-        headers: {
-          accept: 'text/event-stream',
-          ...(await this.resolveHeaders(options.headers)),
+    this.attemptLive = true;
+    try {
+      const response = await this.fetchImpl()(
+        `${this.baseUrl()}/agent/chat/${encodeURIComponent(runId)}/stream`,
+        {
+          method: 'GET',
+          headers: {
+            accept: 'text/event-stream',
+            ...(await this.resolveHeaders(options.headers)),
+          },
+          ...(this.options.credentials !== undefined
+            ? { credentials: this.options.credentials }
+            : {}),
         },
-        ...(this.options.credentials !== undefined
-          ? { credentials: this.options.credentials }
-          : {}),
-      },
-    );
-    if (response.status === 404) return null;
-    if (!response.ok || !response.body) {
-      throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
+      );
+      if (response.status === 404) {
+        this.attemptLive = false;
+        return null;
+      }
+      if (!response.ok || !response.body) {
+        throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
+      }
+      this.captureHeaderMeta(response.headers);
+      return this.toChunkStream(response.body);
+    } catch (error) {
+      this.attemptLive = false;
+      throw error;
     }
-    this.captureHeaderMeta(response.headers);
-    return this.toChunkStream(response.body);
   }
 
   private fetchImpl(): typeof fetch {
@@ -212,6 +254,11 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     // run replays its buffered frames from the beginning.
     const announced = new Set<string>();
     const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
+    // Every way out of the read loop below passes through here: the attempt is over the moment its
+    // chunk stream terminates, and a latch left set would refuse every later turn.
+    const endAttempt = () => {
+      this.attemptLive = false;
+    };
 
     return new ReadableStream<UIMessageChunk>({
       async pull(controller) {
@@ -363,6 +410,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           closeStep();
           controller.enqueue({ type: 'finish' });
           controller.close();
+          endAttempt();
         }
         try {
           while (true) {
@@ -385,6 +433,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 ensureStarted();
                 controller.enqueue({ type: 'error', errorText: parseErrorText(frame.data) });
                 controller.close();
+                endAttempt();
                 return;
               }
               if (frame.event === 'meta') {
@@ -403,10 +452,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
             errorText: error instanceof Error ? error.message : 'Agent stream error',
           });
           controller.close();
+          endAttempt();
         }
       },
       cancel() {
         void reader.cancel();
+        endAttempt();
       },
     });
   }

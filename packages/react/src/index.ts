@@ -41,6 +41,25 @@ export {
   useSpeechRecognition,
   type UseSpeechRecognitionOptions,
 } from './components/index.js';
+export {
+  applyCompletion,
+  type AutocompleteInputProps,
+  type AutocompleteItem,
+  type AutocompleteListboxProps,
+  type AutocompleteOptionProps,
+  type AutocompleteSource,
+  type CompletionEdit,
+  type ComposerAutocomplete,
+  createSkillsSource,
+  filterAutocompleteItems,
+  findActiveTrigger,
+  type SkillsSourceOptions,
+  type SkillSuggestionData,
+  type TriggerMatch,
+  type TriggerPosition,
+  useComposerAutocomplete,
+  type UseComposerAutocompleteOptions,
+} from './composer/index.js';
 export { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 export {
   type AggregatedTurnUsage,

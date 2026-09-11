@@ -54,3 +54,20 @@ export const AGENT_ATTACHMENT_STAGING = Symbol.for('@dudousxd/nestjs-agent:attac
  * {@link import('./spi/approval-port.js').AgentApprovalPort}.
  */
 export const AGENT_APPROVAL_PORT = Symbol.for('@dudousxd/nestjs-agent:approval-port');
+/**
+ * The resolved `SkillsConfig` (provider + scope resolver + ceiling), or `undefined` where the host
+ * configured no skills. Bound once and read by BOTH the loop's deps and the listing endpoint, so
+ * what a user can invoke and what the model can reach are the same resolution.
+ */
+export const AGENT_SKILLS = Symbol.for('@dudousxd/nestjs-agent:skills');
+/**
+ * The resolved `MemoryConfig` (provider + scope resolver + ceilings), or `undefined` where the host
+ * configured no memory. Bound once and read by BOTH the loop's deps and the read-back endpoint, so
+ * what a person is shown and what the model was shown are the same resolution.
+ */
+export const AGENT_MEMORY = Symbol.for('@dudousxd/nestjs-agent:memory');
+/**
+ * A shared, mutable list `SkillDiscoveryService` fills with `@Skill`-decorated providers. Read
+ * lazily by the bound {@link AGENT_SKILLS} provider — discovery runs after DI has built it.
+ */
+export const AGENT_SKILL_SOURCES = Symbol.for('@dudousxd/nestjs-agent:skill-sources');

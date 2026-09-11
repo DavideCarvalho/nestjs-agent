@@ -1,4 +1,5 @@
 import {
+  AGENT_MEMORY,
   AGENT_MODEL,
   AGENT_PRICING_STORE,
   AGENT_PROMPT_CONTRIBUTORS,
@@ -6,6 +7,7 @@ import {
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
   AGENT_SINK,
+  AGENT_SKILLS,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   type AgentDefinition,
@@ -14,10 +16,12 @@ import {
   AgentRegistry,
   type AgentStore,
   type HistoryPolicy,
+  type MemoryConfig,
   type ModelProvider,
   type PromptContributor,
   type QuotaStore,
   type RolesPolicy,
+  type SkillsConfig,
   type TokenStreamSink,
   ToolRegistry,
   summarizeWithModel,
@@ -52,7 +56,27 @@ export class AgentDepsFactory {
     @Optional()
     @Inject(AGENT_PRICING_STORE)
     private readonly pricingStore: AgentPricingStore | undefined,
+    // Optional for the same reason, plus one of its own: `undefined` is the CONFIGURED state for a
+    // host that declared no skills, not an unbound dependency.
+    @Optional()
+    @Inject(AGENT_SKILLS)
+    private readonly skills: SkillsConfig | undefined,
+    // Optional for the same reason: `undefined` is the CONFIGURED state for a host that wired no
+    // memory, not an unbound dependency.
+    @Optional()
+    @Inject(AGENT_MEMORY)
+    private readonly memory: MemoryConfig | undefined,
   ) {}
+
+  /** The turn's memory seam, shared with the read-back endpoint. Undefined → memory is not configured. */
+  memoryConfig(): MemoryConfig | undefined {
+    return this.memory;
+  }
+
+  /** The turn's skills seam, shared with the listing endpoint. Undefined → skills are not configured. */
+  skillsConfig(): SkillsConfig | undefined {
+    return this.skills;
+  }
 
   /**
    * The agent a turn uses when the caller names none: the explicit `defaultAgent` option, else the
@@ -108,6 +132,14 @@ export class AgentDepsFactory {
       // Most specific wins, exactly as `historyPolicy` resolves: the agent's own `@Agent({ ask })`,
       // else the module-wide flag. Both are module config, so every process of a deployment agrees.
       ...(ask === true ? { ask: true } : {}),
+      // Module-wide, never per-agent: a skill is a procedure, not a persona, and an agent that could
+      // opt out of one would make the catalog depend on which agent a turn happened to select — a
+      // per-turn fact the worker re-deriving the tool list cannot see.
+      ...(this.skills !== undefined ? { skills: this.skills } : {}),
+      // Module-wide, never per-agent, for the same reason skills are: which memories a turn carries
+      // cannot depend on which persona answered it, or the worker re-deriving a dispatched turn's
+      // tool list would disagree with the loop about whether `remember` was offered.
+      ...(this.memory !== undefined ? { memory: this.memory } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
       ...(this.options.toolTimeoutMs !== undefined
         ? { toolTimeoutMs: this.options.toolTimeoutMs }

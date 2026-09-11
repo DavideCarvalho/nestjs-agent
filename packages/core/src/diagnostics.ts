@@ -52,6 +52,64 @@ export interface AgentRetrieved {
   count: number;
 }
 /**
+ * The skills a turn was offered, published once per run at the `skills:catalog` checkpoint. Metadata
+ * only — counts and the block's size, never a skill's name or its body.
+ */
+export interface AgentSkillsResolved {
+  runId: string;
+  /** How many scope tokens the resolver returned for this turn. */
+  scopes: number;
+  /** Skills in the catalog block the model was shown. */
+  offered: number;
+  /** Applicable skills the `maxSkills` ceiling left out — non-zero means the catalog is partial. */
+  omitted: number;
+  /**
+   * Characters the catalog block added to the system prompt. The WHOLE of what skills cost it: a
+   * skill's body never enters the system block, it arrives as a tool result on the transcript.
+   */
+  promptChars: number;
+}
+/**
+ * The memories a turn was shown, published once per run at the `memory:digest` checkpoint. Metadata
+ * only — counts and the block's size, never a memory's key or its text. A key is as revealing as a
+ * fact (`diagnosis`, `clearance`), so it does not travel on a diagnostics channel either.
+ */
+export interface AgentMemoryResolved {
+  runId: string;
+  /** How many scope tokens the resolver returned for this turn. */
+  scopes: number;
+  /** Memories in the block the model was shown. */
+  offered: number;
+  /** Applicable memories the `maxMemories` ceiling left out — non-zero means the block is partial. */
+  omitted: number;
+  /**
+   * Of `omitted`, how many were ALWAYS-ON. The one to alert on: ordinary omission is the budget
+   * working, while a dropped always-on memory is a deployment's own standing policies having stopped
+   * reaching any prompt — more was pinned than the block holds.
+   */
+  pinnedOmitted: number;
+  /**
+   * Whether the block was selected by relevance to this turn rather than read whole. Distinguishes
+   * "this deployment holds few memories" from "this turn drew twenty out of two thousand", which
+   * `offered` alone reports identically.
+   */
+  recalled: boolean;
+  /** Characters the memory block added to the system prompt. The WHOLE of what memory cost it. */
+  promptChars: number;
+}
+/**
+ * A turn writing one memory — the event an operator watches to see the agent's own write volume,
+ * which is the risk surface memory has and retrieval does not. The scope token travels (it is what
+ * says whose prompt just changed, and `run.started` already carries an actor id); the key and the
+ * text do not.
+ */
+export interface AgentMemoryWritten {
+  runId: string;
+  scope: string;
+  /** Length of the stored fact in characters — never the fact itself. */
+  chars: number;
+}
+/**
  * A transient-classified tool error being retried in place (no new checkpoint) — see
  * `invokeWithTransientRetry`. Emitted once per retry (not for the final, non-retried outcome).
  */
@@ -121,6 +179,9 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'run.failed': AgentRunFailed;
       delegated: AgentDelegated;
       retrieved: AgentRetrieved;
+      'skills.resolved': AgentSkillsResolved;
+      'memory.resolved': AgentMemoryResolved;
+      'memory.written': AgentMemoryWritten;
       'tool.retry': AgentToolRetry;
       // Span-only events (published via trace() on :start/:end/:asyncStart/:asyncEnd/:error
       // sub-channels, never as point events) — see AgentSpanEvent below.
@@ -160,6 +221,15 @@ export function publishAgentRetrieved(payload: AgentRetrieved): void {
 export function publishAgentToolRetry(payload: AgentToolRetry): void {
   emit('agent', 'tool.retry', payload);
 }
+export function publishAgentSkillsResolved(payload: AgentSkillsResolved): void {
+  emit('agent', 'skills.resolved', payload);
+}
+export function publishAgentMemoryResolved(payload: AgentMemoryResolved): void {
+  emit('agent', 'memory.resolved', payload);
+}
+export function publishAgentMemoryWritten(payload: AgentMemoryWritten): void {
+  emit('agent', 'memory.written', payload);
+}
 
 /**
  * Events published ONLY as spans — via `trace('agent', ...)` on the five `:start`/`:end`/
@@ -194,7 +264,7 @@ void agentSpanEventsAreRegistered;
 export type AgentDiagnosticEvent = Exclude<keyof ChannelRegistry['agent'], AgentSpanEvent>;
 
 /**
- * All 9 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
+ * All 12 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
  * subscribers (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). Span-only events (see
  * {@link AgentSpanEvent}) are excluded. A drift between this list and the registry is a compile
  * error in both directions: an extra/misspelled entry fails this array's own
@@ -210,6 +280,9 @@ export const AGENT_DIAGNOSTIC_EVENTS: readonly AgentDiagnosticEvent[] = [
   'run.failed',
   'delegated',
   'retrieved',
+  'skills.resolved',
+  'memory.resolved',
+  'memory.written',
   'tool.retry',
 ];
 

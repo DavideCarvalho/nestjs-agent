@@ -2,6 +2,7 @@
 
 import { cn } from '@/lib/utils';
 import {
+  type AutocompleteSource,
   type ChatStatus,
   type MessageUsageInfo,
   type TranscriptSource,
@@ -59,6 +60,13 @@ export interface AgentChatProps {
   onSuggestionSelect?: (suggestion: ChatSuggestion) => void;
   onDismissSuggestions?: () => void;
 
+  /**
+   * What the composer completes, and after which character — `/` for a skill, `@` for a mention.
+   * Nothing here knows what a source offers; adding a second trigger is another entry in the array.
+   */
+  autocompleteSources?: readonly AutocompleteSource[];
+  onAutocompleteError?: (error: unknown, source: AutocompleteSource) => void;
+
   onAttach?: () => void;
   /** Left of the submit control — a model picker, a temperature toggle. */
   composerTrailing?: ReactNode;
@@ -108,6 +116,8 @@ export function AgentChat({
   suggestions,
   onSuggestionSelect,
   onDismissSuggestions,
+  autocompleteSources,
+  onAutocompleteError,
   onAttach,
   composerTrailing,
   placeholder,
@@ -145,6 +155,8 @@ export function AgentChat({
       placeholder={placeholder}
       onAttach={onAttach}
       trailing={composerTrailing}
+      {...(autocompleteSources !== undefined ? { autocompleteSources } : {})}
+      {...(onAutocompleteError !== undefined ? { onAutocompleteError } : {})}
       overlay={
         suggestions && onSuggestionSelect ? (
           <ChatCommandPalette

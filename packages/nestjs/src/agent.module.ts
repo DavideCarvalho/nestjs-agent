@@ -3,6 +3,7 @@ import {
   AGENT_APPROVAL_PORT,
   AGENT_DEPS_FACTORY,
   AGENT_DURABLE_RUNNER,
+  AGENT_MEMORY,
   AGENT_MODEL,
   AGENT_OPTIONS,
   AGENT_PROMPT_CONTRIBUTORS,
@@ -11,6 +12,8 @@ import {
   AGENT_ROLES_POLICY,
   AGENT_RUNNER,
   AGENT_SINK,
+  AGENT_SKILLS,
+  AGENT_SKILL_SOURCES,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   AgentRegistry,
@@ -35,14 +38,18 @@ import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
 import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
+import { MemoriesController } from './controller/memories.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
+import { SkillsController } from './controller/skills.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
 import { ToolCallController } from './controller/tool-call.controller.js';
 import { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
+import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaStore } from './ledger-quota-store.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
+import { resolveSkillsConfig } from './skills-config.js';
 
 /** Default route prefix the controllers mount under. */
 const DEFAULT_PATH = 'agent';
@@ -59,6 +66,25 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     { provide: AGENT_REGISTRY, useFactory: () => new AgentRegistry() },
     // A shared, mutable list AgentDiscoveryService fills with `@SystemPromptContributor()` methods.
     { provide: AGENT_PROMPT_CONTRIBUTORS, useFactory: () => [] },
+    // Likewise for `@Skill`-decorated providers — filled by SkillDiscoveryService at onModuleInit,
+    // read lazily by the AGENT_SKILLS provider below (which DI builds before discovery has run).
+    { provide: AGENT_SKILL_SOURCES, useFactory: () => [] },
+    {
+      // One resolution, shared by the loop's deps and the listing endpoint: a second one would
+      // drift, and a user would be offered a skill the agent cannot reach. `undefined` when the
+      // host configured none — which is what keeps the turn's checkpoint sequence unchanged.
+      provide: AGENT_SKILLS,
+      useFactory: (options: AgentModuleOptions, declared: DeclaredSkill[]) =>
+        resolveSkillsConfig(options.skills, declared),
+      inject: [AGENT_OPTIONS, AGENT_SKILL_SOURCES],
+    },
+    {
+      // One resolution, shared by the loop's deps and the read-back endpoint: a person has to be
+      // shown what the model was shown, and two resolutions would eventually disagree about that.
+      provide: AGENT_MEMORY,
+      useFactory: (options: AgentModuleOptions) => options.memory,
+      inject: [AGENT_OPTIONS],
+    },
     {
       provide: AGENT_SINK,
       useFactory: (options: AgentModuleOptions) => options.sink ?? new InProcessTokenStreamSink(),
@@ -98,6 +124,7 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     // handoff tools (onApplicationBootstrap) reads the registry.
     AgentDiscoveryService,
     AiToolDiscoveryService,
+    SkillDiscoveryService,
     InlineAgentRunner,
     AgentService,
     // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
@@ -150,6 +177,8 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     ...(includeStore ? [AGENT_STORE] : []),
     AGENT_QUOTA_STORE,
     AGENT_PROMPT_CONTRIBUTORS,
+    AGENT_SKILLS,
+    AGENT_MEMORY,
     AGENT_DEPS_FACTORY,
     AgentDepsFactory,
     AgentService,
@@ -164,12 +193,14 @@ const BASE_CONTROLLERS = [
   ToolCallController,
   QuotaController,
   AgentsController,
+  SkillsController,
+  MemoriesController,
 ];
 
 /** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */
 const GUARDABLE_CONTROLLERS = [...BASE_CONTROLLERS, AttachmentsController];
 
-/** The controllers to mount: the base five, plus attachments when the host opted into uploads. */
+/** The controllers to mount: the base six, plus attachments when the host opted into uploads. */
 function controllersFor(mountAttachments: boolean): Type<object>[] {
   return mountAttachments ? [...BASE_CONTROLLERS, AttachmentsController] : BASE_CONTROLLERS;
 }

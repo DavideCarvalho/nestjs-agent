@@ -11,7 +11,7 @@ export interface Actor {
   tenantRef?: string;
 }
 
-export type ToolKind = 'read' | 'action' | 'agent' | 'ask';
+export type ToolKind = 'read' | 'action' | 'agent' | 'ask' | 'skill' | 'memory';
 
 /**
  * Declared shape of a tool.
@@ -22,6 +22,15 @@ export type ToolKind = 'read' | 'action' | 'agent' | 'ask';
  *  - `ask`    puts a question set to the user and waits for the answers (see `elicitation.ts`).
  *             Handled at the loop level and never registered, so no `ToolSpec` carries this kind:
  *             the only tool that has it is the built-in `ask`, whose definition the loop supplies.
+ *  - `skill`  reads one of the procedures offered in the turn's `<skills>` catalog (see `skills.ts`).
+ *             Auto-executes like a read and performs nothing, but is served by the LOOP from the
+ *             catalog the journal holds rather than by a registered handler — so, like `ask`, no
+ *             `ToolSpec` carries this kind.
+ *  - `memory` records one fact about the actor for later turns (see `memory.ts`). Served by the LOOP
+ *             and never registered, like `skill`. It WRITES, but auto-executes rather than asking
+ *             for approval: an agent may only ever write the scope of the actor it is running for,
+ *             so the blast radius of a bad one is the prompt of the person who was talking, and the
+ *             remedy is the read-back that lets them delete it.
  */
 export interface ToolSpec {
   name: string;

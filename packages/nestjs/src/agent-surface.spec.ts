@@ -63,13 +63,14 @@ afterEach(async () => {
   app = undefined;
 });
 
-/** Every route the base five controllers mount, with a request that would succeed if reachable. */
+/** Every route the base six controllers mount, with a request that would succeed if reachable. */
 const AGENT_ROUTES: [string, string, Record<string, string>][] = [
   ['post', '/agent/chat', { 'x-actor-id': 'u1', 'x-actor-role': 'ADMIN' }],
   ['get', '/agent/threads', { 'x-actor-id': 'u1' }],
   ['post', '/agent/tool-call/approve', { 'x-actor-id': 'u1' }],
   ['get', '/agent/quota/today', { 'x-actor-id': 'u1' }],
   ['get', '/agent/agents', { 'x-actor-id': 'u1' }],
+  ['get', '/agent/skills', { 'x-actor-id': 'u1' }],
 ];
 
 /** A body that satisfies each POST route's own DTO well enough to avoid an unrelated 500. */

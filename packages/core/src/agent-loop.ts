@@ -6,11 +6,14 @@ import { isControlFlowSignal } from './control-flow.js';
 import {
   type AgentSpanEvent,
   publishAgentDelegated,
+  publishAgentMemoryResolved,
+  publishAgentMemoryWritten,
   publishAgentMessage,
   publishAgentQuotaExceeded,
   publishAgentRetrieved,
   publishAgentRunFinished,
   publishAgentRunStarted,
+  publishAgentSkillsResolved,
   publishAgentToolCall,
   publishAgentToolRetry,
 } from './diagnostics.js';
@@ -28,6 +31,17 @@ import {
 } from './elicitation.js';
 import { estimateCost } from './governance/compute.js';
 import {
+  type MemoryConfig,
+  type MemoryDigest,
+  type MemoryRecord,
+  REMEMBER_TOOL_NAME,
+  buildMemoryBlock,
+  offerMemories,
+  rememberInputSchema,
+  withMemoryTool,
+  writeMemory,
+} from './memory.js';
+import {
   createFrameBuffer,
   createIncrementalGate,
   gateFollowUps,
@@ -39,6 +53,17 @@ import {
   runOutputProcessors,
 } from './processors.js';
 import { isReplayIntegrityError } from './replay-integrity.js';
+import {
+  SKILL_TOOL_NAME,
+  type SkillContext,
+  type SkillOffer,
+  type SkillsConfig,
+  buildSkillsBlock,
+  loadSkill,
+  offerSkills,
+  skillInputSchema,
+  withSkillTool,
+} from './skills.js';
 import type { AgentStore } from './spi/agent-store.js';
 import type {
   HistoryPolicy,
@@ -244,6 +269,44 @@ export interface AgentLoopDeps<TOutput = unknown> {
    * therefore uniform across a deployment. Undefined/false → the model never sees it.
    */
   ask?: boolean;
+  /**
+   * Authored procedures the model may pull in when a task calls for one, resolved per turn against
+   * the actor's scopes — see `skills.ts`. Undefined → no catalog block, no `skill` tool, and a
+   * turn's checkpoint sequence is byte-identical to one that never had the option.
+   *
+   * HOW IT COMPOSES WITH THE OTHER FOUR THINGS THAT WRITE THE PROMPT. The system block is assembled
+   * in one fixed order — the agent's base prompt, then each `promptContributors` section, then
+   * {@link memory}, then the injected retrieval block, then the skills CATALOG — and skills are the
+   * cheapest of the five by construction: the catalog is one line per skill and nothing else. The
+   * instructions themselves arrive as a tool RESULT, on the transcript, which means the budget they
+   * draw on is the one `historyPolicy` already governs rather than a private allowance of their own.
+   *
+   * A BODY IS NOT LIKE A MEMORY, which does ride the system block. A body is read BECAUSE the model
+   * went and asked for it, so the transcript — what this conversation happened to pull in — is where
+   * it belongs. A memory is worthless unless it is in front of the model on the turn nobody thought
+   * to look for it, and it is affordable there only because it has no body to carry.
+   */
+  skills?: SkillsConfig;
+  /**
+   * What the assistant has previously concluded about the actor and their organisation, resolved per
+   * turn against the same scope tokens skills use — see `memory.ts`. Undefined → no memory block, no
+   * `remember` tool, and a turn's checkpoint sequence is byte-identical to one that never had the
+   * option.
+   *
+   * WHERE IT SITS IN THE PROMPT. The system block is assembled most-durable-first: the agent's base
+   * prompt (the same for everyone, every turn), then `promptContributors`, then MEMORY (the same for
+   * this person, every turn), then the injected retrieval block (this question only), then the
+   * skills catalog (a menu rather than an instruction, so a reader meets instructions before
+   * options).
+   *
+   * WHY IT IS IN THE SYSTEM BLOCK AT ALL, when a skill's body deliberately is not. A body is read
+   * BECAUSE the model went and asked for it; a memory is worthless unless it is in front of the
+   * model on the turn nobody thought to look for it — "they report in nautical miles" only works
+   * unprompted. What makes that affordable is that a memory has no body: `maxMemories` lines, each
+   * capped at `maxFactChars` when it is written, so the block's ceiling is a product of two numbers
+   * an operator set rather than however much the model felt like writing down.
+   */
+  memory?: MemoryConfig;
 }
 
 /**
@@ -924,14 +987,35 @@ function declaredKind(deps: AgentLoopDeps, name: string): ToolKind {
   if (deps.ask === true && name === ASK_TOOL_NAME) {
     return 'ask';
   }
+  // Same reserved-name reasoning as `ask`: `skill` has no handler either, and it is the JOURNALED
+  // value below — not this config — that every replay reads the branch back from.
+  if (deps.skills !== undefined && name === SKILL_TOOL_NAME) {
+    return 'skill';
+  }
+  if (memoryIsWritable(deps) && name === REMEMBER_TOOL_NAME) {
+    return 'memory';
+  }
   return deps.registry.spec(name)?.kind ?? 'read';
+}
+
+/**
+ * Does this deployment offer the `remember` tool at all? Memory a host serves read-only (a provider
+ * with no `write`) still writes its block into the prompt and still spends `memory:digest`, but the
+ * model is never shown a tool it would only be refused by. Module config either way, so the worker
+ * re-deriving a dispatched turn's tool list reaches the same answer as the loop.
+ */
+function memoryIsWritable(deps: AgentLoopDeps): boolean {
+  return deps.memory?.provider.write !== undefined;
 }
 
 /**
  * Append the built-in `ask` definition to a turn's tool list. Exported because the dispatched llm
  * step re-derives the tool list on a worker and has to reach the same list the loop would have.
  */
-export function withAskTool(tools: ToolDefinition[], ask: boolean | undefined): ToolDefinition[] {
+export function withAskTool({
+  tools,
+  ask,
+}: { tools: ToolDefinition[]; ask: boolean | undefined }): ToolDefinition[] {
   return ask === true ? [...tools, askToolDefinition()] : tools;
 }
 
@@ -1151,6 +1235,17 @@ interface ToolTurnContext {
   messageId: string;
   /** The run's live stream — an `ask` posts its question set here while the turn parks. */
   writer: SinkWriter;
+  /**
+   * What `skills:catalog` recorded this turn, or undefined where skills are not configured. A
+   * `skill` call is served against THIS, never against a fresh provider read — see {@link loadSkill}.
+   */
+  skills?: SkillOffer;
+  /**
+   * What `memory:digest` recorded this turn, or undefined where memory is not configured. A
+   * `remember` call is authorized against THIS digest's scopes, never a fresh resolution — see
+   * {@link writeMemory}.
+   */
+  memory?: MemoryDigest;
 }
 
 /** A tool call whose kind has been settled by its `persist:toolcall` checkpoint. */
@@ -1222,6 +1317,144 @@ async function claimToolCall(
   };
 }
 
+/** What a served `skill` call hands back to the model — the procedure, and where it came from. */
+interface LoadedSkillOutput {
+  name: string;
+  scope: string;
+  body: string;
+  /** Scopes of same-named skills this one overrode. Present only when it overrode something. */
+  shadows?: string[];
+}
+
+/**
+ * Serve one `skill` call: read the body and hand it to the model as an ordinary tool result.
+ *
+ * WHY THE BODY IS RETURNED FROM THE CHECKPOINT. Which instructions entered a turn's prompt is a
+ * decision about the turn, and a decision about a turn has to be readable from its journal — the
+ * same property `persist:toolcall` gives the read/action branch. A replay that re-read the provider
+ * would compose a DIFFERENT prompt from a skill edited in between, on a transcript position the
+ * history already holds: the model would then be answering something nobody can reconstruct from the
+ * record, and a turn whose step count depends on what it was told would ask for a position its
+ * history has no room for. Inside `tool:<callId>` the first attempt's text is the only text there
+ * ever was.
+ *
+ * The positions are a read tool's, exactly (`persist:toolcall` above, `tool:<id>` here,
+ * `persist:toolexec:<id>`/`persist:toolfail:<id>` after), so nothing about the shape of a turn
+ * depends on whether a call was a skill — only on the kind the journal recorded.
+ */
+async function loadSkillIntoTurn(
+  turn: ToolTurnContext,
+  claimed: ClaimedToolCall,
+  startedAt: number,
+): Promise<ToolOutcome> {
+  const { deps, input, hooks } = turn;
+  const { call } = claimed;
+  const config = deps.skills;
+  const offer = turn.skills;
+  const outcome = await hooks.step(
+    `tool:${call.id}`,
+    async (): Promise<{ ok: true; output: LoadedSkillOutput } | { ok: false; error: string }> => {
+      if (config === undefined || offer === undefined) {
+        // Reachable only where a call's journaled kind is `skill` but this process has no skills
+        // configured — a deployment mid-rollout. A tool failure, because it is the one vocabulary
+        // the model can act on, and because failing the run would strand a turn over a lookup.
+        return { ok: false, error: 'Skills are not available in this deployment.' };
+      }
+      const parsed = await skillInputSchema['~standard'].validate(call.input);
+      if (parsed.issues !== undefined) {
+        return {
+          ok: false,
+          error: `invalid skill input: ${parsed.issues.map((each) => `${(each.path ?? []).join('.') || '(root)'}: ${each.message}`).join('; ')}`,
+        };
+      }
+      const loaded = await loadSkill(config, offer, parsed.value.name, skillContext(input));
+      if (!loaded.ok) {
+        return { ok: false, error: loaded.error };
+      }
+      return {
+        ok: true,
+        output: {
+          name: loaded.skill.name,
+          scope: loaded.skill.scope,
+          body: loaded.skill.body,
+          ...(loaded.shadows !== undefined ? { shadows: loaded.shadows } : {}),
+        },
+      };
+    },
+  );
+  return outcome.ok
+    ? { status: 'executed', output: outcome.output, executionMs: Date.now() - startedAt }
+    : { status: 'failed', error: outcome.error, executionMs: Date.now() - startedAt };
+}
+
+/**
+ * Serve one `remember` call: write the fact and hand the stored record back as an ordinary tool
+ * result.
+ *
+ * WHY THE WRITE HAPPENS INSIDE THE CHECKPOINT. Two reasons, and the second is the one that is easy
+ * to miss. It makes the write idempotent under replay — a resumed run reads the record back from
+ * `tool:<callId>` instead of storing a second copy of a fact the model only decided once. And it
+ * makes what the model was TOLD about the write part of the journal, so the transcript a later step
+ * reads is the one the first attempt built, rather than whatever a second write would have returned.
+ *
+ * The positions are a read tool's, exactly, so nothing about the shape of a turn depends on whether
+ * a call wrote a memory — only on the kind the journal recorded.
+ */
+async function rememberIntoTurn(
+  turn: ToolTurnContext,
+  claimed: ClaimedToolCall,
+  startedAt: number,
+): Promise<ToolOutcome> {
+  const { deps, input, hooks } = turn;
+  const { call } = claimed;
+  const config = deps.memory;
+  const digest = turn.memory;
+  const outcome = await hooks.step(
+    `tool:${call.id}`,
+    async (): Promise<{ ok: true; record: MemoryRecord } | { ok: false; error: string }> => {
+      if (config === undefined || digest === undefined) {
+        // Reachable only where a call's journaled kind is `memory` but this process has none
+        // configured — a deployment mid-rollout. A tool failure, because it is the one vocabulary
+        // the model can act on, and because failing the run would strand a turn over a lookup.
+        return { ok: false, error: 'Memory is not available in this deployment.' };
+      }
+      const parsed = await rememberInputSchema['~standard'].validate(call.input);
+      if (parsed.issues !== undefined) {
+        return {
+          ok: false,
+          error: `invalid remember input: ${parsed.issues.map((each) => `${(each.path ?? []).join('.') || '(root)'}: ${each.message}`).join('; ')}`,
+        };
+      }
+      return await writeMemory({
+        config,
+        digest,
+        call: parsed.value,
+        ctx: skillContext(input),
+        runId: hooks.runId,
+      });
+    },
+  );
+  if (!outcome.ok) {
+    return { status: 'failed', error: outcome.error, executionMs: Date.now() - startedAt };
+  }
+  publishAgentMemoryWritten({
+    runId: hooks.runId,
+    scope: outcome.record.scope,
+    chars: outcome.record.text.length,
+  });
+  return { status: 'executed', output: outcome.record, executionMs: Date.now() - startedAt };
+}
+
+/** The turn's identity as the skills seam sees it — the same inputs the prompt is resolved from. */
+function skillContext(input: AgentRunInput): SkillContext {
+  return {
+    actor: input.actor,
+    threadId: input.threadId,
+    ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+  };
+}
+
 /**
  * Execute one claimed call. Requests its checkpoint SYNCHRONOUSLY (nothing is awaited before
  * `hooks.dispatchTool`/`hooks.step`), which is what lets a batch of these be launched together and
@@ -1244,6 +1477,14 @@ async function invokeClaimedTool(
   const toolType = claimed.toolType === 'action' ? 'action' : 'read';
   const startedAt = Date.now();
   try {
+    // Inside the same `try` as a registered tool's invocation, so a provider that throws is recorded
+    // as this call's failure — and a suspend or a replay refusal still leaves untouched below.
+    if (claimed.toolType === 'skill') {
+      return await loadSkillIntoTurn(turn, claimed, startedAt);
+    }
+    if (claimed.toolType === 'memory') {
+      return await rememberIntoTurn(turn, claimed, startedAt);
+    }
     let output: unknown;
     if (hooks.dispatchTool) {
       const stepCtx: ToolStepCtx = {
@@ -1659,6 +1900,57 @@ export async function runAgentLoop<TOutput = unknown>(
     });
   });
 
+  // What the assistant already believes about this person, folded in ABOVE the retrieved passages
+  // and the skills catalog — see `AgentLoopDeps.memory` for why the order runs most-durable-first.
+  // Below `persist:run:start` on purpose: that step hashes the prompt VERSION, and a hash that moved
+  // with whose memory was loaded would identify a person rather than a prompt.
+  //
+  // One checkpoint, holding the WHOLE digest: the scopes the resolver returned and the entries that
+  // survived selection, precedence and the ceiling. That payload is what the block is rendered from
+  // AND what a later `remember` call is authorized against — so which memories entered this prompt,
+  // and which scopes this turn could write, are facts the journal holds rather than answers a
+  // replaying process's provider would give afresh. Where the host runs an index, the SEARCH happens
+  // in here too: a ranking is the most re-derivable decision in this library, so a replay has to
+  // read its result back rather than ask an index that has since moved.
+  //
+  // THE QUERY IS THE USER'S OWN MESSAGE, and nothing else. It is the only thing available before the
+  // first model call — which is where memory has to be, since a memory is worthless unless it is in
+  // front of the model on the turn nobody thought to look — and it is already a journaled input to
+  // this run, so it needs no determinism machinery of its own. What it fails at is a turn with no
+  // topic ("and the other thing?"): `pinned` is the answer to those, not a cleverer query.
+  let memoryDigest: MemoryDigest | undefined;
+  if (deps.memory !== undefined) {
+    const config = deps.memory;
+    memoryDigest = await hooks.step('memory:digest', () =>
+      offerMemories({ config, ctx: skillContext(input), query: input.userText }),
+    );
+    // No entries, no block: an actor the assistant has concluded nothing about pays nothing, rather
+    // than reading a heading over an empty list and inferring something from its presence.
+    const digest = memoryDigest;
+    const block =
+      digest.entries.length > 0
+        ? buildMemoryBlock({
+            entries: digest.entries,
+            writable: memoryIsWritable(deps),
+            partial: digest.omitted > 0 || digest.recalled === true,
+          })
+        : '';
+    if (block.length > 0) {
+      system = `${system}\n\n${block}`;
+    }
+    // What memory cost this prompt, next to what the ceiling left out — the only way an operator can
+    // name which of the prompt's contributors grew when a turn's input tokens jump.
+    publishAgentMemoryResolved({
+      runId: hooks.runId,
+      scopes: digest.scopes.length,
+      offered: digest.entries.length,
+      omitted: digest.omitted,
+      pinnedOmitted: digest.pinnedOmitted,
+      recalled: digest.recalled === true,
+      promptChars: block.length,
+    });
+  }
+
   // Inject-mode RAG: retrieve once for the user message and fold the passages into the system prompt
   // (a `ctx.step` so it's replay-cached under durable). Recorded below as a synthetic tool call on
   // the first assistant message, so citations surface through the same machinery as agentic search.
@@ -1680,6 +1972,36 @@ export async function runAgentLoop<TOutput = unknown>(
       system = `${system}\n\n${buildContextBlock(passages)}`;
     }
     publishAgentRetrieved({ runId: hooks.runId, query: input.userText, count: passages.length });
+  }
+
+  // The skills catalog, LAST of the four things that write the system block (base prompt,
+  // contributors, retrieved context, this) — so a reader of the assembled prompt meets the agent's
+  // own instructions before the menu of ones it could go and fetch.
+  //
+  // One checkpoint, holding the WHOLE offer: the scopes the resolver returned and the entries that
+  // survived precedence. That payload is what the block is rendered from and what a later `skill`
+  // call is served against, so the two things a turn's prompt depends on — which scopes applied, and
+  // which skills they yielded — are facts the journal holds rather than answers a replaying
+  // process's provider would give afresh.
+  let skillOffer: SkillOffer | undefined;
+  if (deps.skills !== undefined) {
+    const config = deps.skills;
+    skillOffer = await hooks.step('skills:catalog', () => offerSkills(config, skillContext(input)));
+    // No entries, no block: an actor whose scopes yield nothing pays nothing, rather than reading a
+    // heading over an empty list and wondering what it was for.
+    const block = skillOffer.entries.length > 0 ? buildSkillsBlock(skillOffer.entries) : '';
+    if (block.length > 0) {
+      system = `${system}\n\n${block}`;
+    }
+    // What skills cost this prompt, reported next to what they left out — the only way an operator
+    // can name which of the prompt's contributors grew when a turn's input tokens jump.
+    publishAgentSkillsResolved({
+      runId: hooks.runId,
+      scopes: skillOffer.scopes.length,
+      offered: skillOffer.entries.length,
+      omitted: skillOffer.omitted,
+      promptChars: block.length,
+    });
   }
 
   // Fetched ONCE per run (not per step/message) and reused for every step's cost estimate below.
@@ -1761,10 +2083,20 @@ export async function runAgentLoop<TOutput = unknown>(
         ...(gated ? { bufferOutput: true } : {}),
       });
     } else {
-      const tools = withAskTool(
-        await deps.registry.definitionsFor(input.actor, deps.rolesPolicy, deps.toolAllowList),
-        deps.ask,
-      );
+      const tools = withMemoryTool({
+        tools: withSkillTool({
+          tools: withAskTool({
+            tools: await deps.registry.definitionsFor(
+              input.actor,
+              deps.rolesPolicy,
+              deps.toolAllowList,
+            ),
+            ask: deps.ask,
+          }),
+          enabled: deps.skills !== undefined,
+        }),
+        enabled: memoryIsWritable(deps),
+      });
       turn = await hooks.step(`llm:${i}`, async () => {
         // Both of these ride the CHECKPOINT rather than a local variable: a run that suspends
         // between the model call and the gate resumes with `llm:<i>` served from the journal, and
@@ -2064,7 +2396,15 @@ export async function runAgentLoop<TOutput = unknown>(
     await haltIfCancelled(hooks, cancellable, `cancel:tools:${i}`);
 
     const results: ToolResult[] = [];
-    const turnCalls: ToolTurnContext = { deps, input, hooks, messageId: assistant.id, writer };
+    const turnCalls: ToolTurnContext = {
+      deps,
+      input,
+      hooks,
+      messageId: assistant.id,
+      writer,
+      ...(skillOffer !== undefined ? { skills: skillOffer } : {}),
+      ...(memoryDigest !== undefined ? { memory: memoryDigest } : {}),
+    };
     // A model routinely asks for several tools at once, and running them back to back makes the turn
     // cost their sum. Overlapping them is safe here because a checkpoint position is handed out on
     // the CALL, not when the work settles: launching every invocation in one tick — what
@@ -2093,7 +2433,16 @@ export async function runAgentLoop<TOutput = unknown>(
       for (const call of toolCallsWithKind) {
         claimed.push(await claimToolCall(turnCalls, call));
       }
-      if (claimed.every((entry) => entry.toolType === 'read')) {
+      // A `skill` load and a `remember` write qualify alongside a `read`: each takes its position on
+      // the call exactly as a read does, and each spends a read's `tool:`/`persist:` names. What
+      // disqualifies the other two kinds is not that they have effects — it is that an `action`
+      // suspends on human time and an `agent` delegation is the runtime's own `ctx.all`.
+      if (
+        claimed.every(
+          (entry) =>
+            entry.toolType === 'read' || entry.toolType === 'skill' || entry.toolType === 'memory',
+        )
+      ) {
         results.push(...(await invokeClaimedToolsTogether(turnCalls, parallel, claimed)));
       } else {
         for (const entry of claimed) {

@@ -4,6 +4,8 @@ export type {
   AgentModuleOptions,
   AgentModuleAsyncOptions,
   AgentAttachmentsOptions,
+  AgentSkillsOptions,
+  AgentMemoryOptions,
   AgentSurface,
 } from './agent.options.js';
 export {
@@ -30,6 +32,14 @@ export {
   readAgentMetadata,
 } from './decorator/agent.decorator.js';
 export {
+  Skill,
+  type SkillOptions,
+  type SkillBody,
+  SKILL_METADATA,
+  readSkillMetadata,
+  skillScope,
+} from './decorator/skill.decorator.js';
+export {
   SystemPrompt,
   SystemPromptContributor,
   SYSTEM_PROMPT_METADATA,
@@ -37,6 +47,13 @@ export {
 } from './decorator/system-prompt.decorator.js';
 export { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 export { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
+export {
+  SkillDiscoveryService,
+  type DeclaredSkill,
+} from './discovery/skill-discovery.service.js';
+export { SkillsController } from './controller/skills.controller.js';
+export { MemoriesController } from './controller/memories.controller.js';
+export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';
 export {
   provideAgentTool,
   AGENT_TOOL_BRAND,

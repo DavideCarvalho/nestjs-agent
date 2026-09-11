@@ -4,6 +4,7 @@ import type {
   AgentStore,
   HistoryPolicy,
   InputProcessor,
+  MemoryConfig,
   ModelProvider,
   OutputProcessor,
   PromptBuilder,
@@ -12,6 +13,7 @@ import type {
   Retriever,
   RolesPolicy,
   SinkWriter,
+  SkillsConfig,
   TokenStreamSink,
   ToolRegistry,
   ToolTransientRetrySetting,
@@ -63,6 +65,16 @@ export interface AgentDeps {
   intake?: AgentIntake;
   /** Whether the model may call the built-in `ask` tool this turn. Undefined/false → it never sees it. */
   ask?: boolean;
+  /**
+   * The resolved skills seam (`forRoot({ skills })` + discovered `@Skill` providers). Undefined →
+   * no catalog, no `skill` tool, and the turn spends no checkpoint on either.
+   */
+  skills?: SkillsConfig;
+  /**
+   * The resolved memory seam (`forRoot({ memory })`). Undefined → no block, no `remember` tool, and
+   * the turn spends no checkpoint on either.
+   */
+  memory?: MemoryConfig;
 }
 
 export function utcDay(date = new Date()): string {
