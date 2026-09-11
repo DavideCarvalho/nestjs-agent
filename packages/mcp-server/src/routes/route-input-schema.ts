@@ -89,7 +89,9 @@ function readSlots(route: NestRoute): RouteSlots {
   const paramProperties: Record<string, object> = {};
   const queryProperties: Record<string, object> = {};
   const bodyProperties: Record<string, object> = {};
-  const requiredParams: string[] = [];
+  // A set: `@Param()` alongside `@Param('id')` names the same placeholder twice, and `required`
+  // listing it twice is a schema a strict client rejects.
+  const requiredParams = new Set<string>();
   const requiredBody: string[] = [];
   let openQuery = false;
   let hasBody = false;
@@ -102,7 +104,7 @@ function readSlots(route: NestRoute): RouteSlots {
       for (const name of key === undefined ? pathParamNames(route.path) : [key]) {
         // Always a string: a path segment is text until a pipe says otherwise.
         paramProperties[name] = { type: 'string' };
-        requiredParams.push(name);
+        requiredParams.add(name);
       }
       continue;
     }
@@ -145,7 +147,7 @@ function readSlots(route: NestRoute): RouteSlots {
   return {
     params: slotOrUndefined({
       properties: paramProperties,
-      required: requiredParams,
+      required: [...requiredParams],
       open: false,
       description: undefined,
     }),
@@ -156,7 +158,7 @@ function readSlots(route: NestRoute): RouteSlots {
       description: undefined,
     }),
     body,
-    requiredParams,
+    requiredParams: [...requiredParams],
     hasBody,
   };
 }

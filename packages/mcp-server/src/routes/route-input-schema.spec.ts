@@ -70,6 +70,19 @@ describe('routeInputSchema — what the route already declares', () => {
     });
   });
 
+  it('names a placeholder once when both a bare and a keyed @Param() reach it', () => {
+    // `required: ['id', 'id']` is a schema a strict client rejects.
+    expect(
+      advertised({
+        path: '/orders/:id',
+        params: [
+          { slot: ROUTE_PARAM.param, key: undefined, metatype: Object },
+          { slot: ROUTE_PARAM.param, key: 'id', metatype: String },
+        ],
+      }),
+    ).toMatchObject({ properties: { params: { required: ['id'] } } });
+  });
+
   it('takes only the placeholder a keyed @Param() named', () => {
     expect(
       advertised({

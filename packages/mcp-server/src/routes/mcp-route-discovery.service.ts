@@ -3,14 +3,22 @@ import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
 import { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from '../tokens.js';
-import { McpRouteDispatcher, defaultMcpRoutePrincipal } from './mcp-route-dispatcher.js';
+import {
+  McpRouteDispatcher,
+  type McpRoutePrincipalFactory,
+  defaultMcpRoutePrincipal,
+} from './mcp-route-dispatcher.js';
 import {
   type McpRouteTool,
   assertRouteToolNamesAreFree,
   buildRouteTool,
   routeToolRef,
 } from './mcp-route-tools.js';
-import { McpRouteDeclarationError, readMcpRouteMetadata } from './mcp.decorator.js';
+import {
+  McpRouteDeclarationError,
+  type McpRouteOptions,
+  readMcpRouteMetadata,
+} from './mcp.decorator.js';
 import { ROUTE_PARAM, readNestRoute } from './nest-route-metadata.js';
 
 /**
@@ -38,6 +46,12 @@ const UNSUPPORTED_SLOTS = new Map<number, string>([
     '@RawBody() — an MCP call carries JSON arguments, never a raw request body',
   ],
 ]);
+
+/**
+ * One controller as the discovery walk hands it over. Nest's `InstanceWrapper` is not part of
+ * `@nestjs/core`'s public surface, so it is named through the method that returns it.
+ */
+type ControllerWrapper = ReturnType<DiscoveryService['getControllers']>[number];
 
 /** Fail the boot if a controller with no static instance carries `@Mcp()` anywhere. */
 function assertNoMcpRoutesOn(input: { metatype: unknown; methods: MetadataScanner }): void {
@@ -84,73 +98,11 @@ export class McpRouteDiscoveryService implements OnApplicationBootstrap {
 
   onApplicationBootstrap(): void {
     const principal = this.options.routes?.principal ?? defaultMcpRoutePrincipal;
-    const tools: McpRouteTool[] = [];
-    for (const wrapper of this.discovery.getControllers()) {
-      // A request-scoped controller has no static instance to dispatch against — what stands in
-      // `instance` is a prototype-only placeholder with none of its dependencies injected, and a
-      // tool call has no request for Nest to build the real one from. Refused rather than served
-      // half-built, and refused rather than skipped: a route that declared @Mcp() and then quietly
-      // was not there is the worse of the two answers.
-      if (!wrapper.isDependencyTreeStatic()) {
-        assertNoMcpRoutesOn({ metatype: wrapper.metatype, methods: this.methods });
-        continue;
-      }
-      const instance = wrapper.instance;
-      if (instance === null || instance === undefined || typeof instance !== 'object') {
-        assertNoMcpRoutesOn({ metatype: wrapper.metatype, methods: this.methods });
-        continue;
-      }
-      const moduleKey = wrapper.host?.token ?? '';
-      const prototype: unknown = Object.getPrototypeOf(instance);
-      if (typeof prototype !== 'object' || prototype === null) {
-        continue;
-      }
-      for (const methodName of this.methods.getAllMethodNames(prototype)) {
-        const options = readMcpRouteMetadata({ prototype, methodName });
-        if (options === undefined) {
-          continue;
-        }
-        const controllerName = instance.constructor.name;
-        const label = `${controllerName}.${methodName}`;
-        const handler: unknown = Reflect.get(prototype, methodName);
-        if (typeof handler !== 'function') {
-          throw new McpRouteDeclarationError(label, 'it is not a method.');
-        }
-        const route = readNestRoute({
-          controller: instance.constructor,
-          handler,
-          methodName,
-        });
-        if (route === undefined) {
-          throw new McpRouteDeclarationError(
-            label,
-            'it is not an HTTP route with one verb. Put it on a @Get/@Post/@Put/@Patch/@Delete handler — @All() has no single verb a dispatched request could carry.',
-          );
-        }
-        for (const declaration of route.params) {
-          const unsupported =
-            declaration.slot === undefined ? undefined : UNSUPPORTED_SLOTS.get(declaration.slot);
-          if (unsupported !== undefined) {
-            throw new McpRouteDeclarationError(label, `it declares ${unsupported}.`);
-          }
-        }
-        const ref = routeToolRef({ options, route, controllerName, methodName });
-        tools.push(
-          buildRouteTool({
-            options,
-            route,
-            ref,
-            dispatch: this.dispatcher.compile({
-              instance,
-              methodName,
-              moduleKey,
-              route: ref,
-              principal,
-            }),
-          }),
-        );
-      }
-    }
+    const tools = this.discovery
+      .getControllers()
+      .flatMap((wrapper) => this.toolsOn({ wrapper, principal }));
+    // Every name is checked before any tool is registered, so a boot that is going to fail fails
+    // with nothing half-registered behind it.
     assertRouteToolNamesAreFree({ tools, aiTools: this.aiTools });
     for (const tool of tools) {
       this.routeTools.register(tool.spec, tool.handler);
@@ -158,5 +110,80 @@ export class McpRouteDiscoveryService implements OnApplicationBootstrap {
     if (tools.length > 0) {
       this.logger.log(`exposed ${tools.length} controller route(s) over MCP`);
     }
+  }
+
+  private toolsOn(input: {
+    wrapper: ControllerWrapper;
+    principal: McpRoutePrincipalFactory;
+  }): McpRouteTool[] {
+    const { wrapper, principal } = input;
+    const instance: unknown = wrapper.isDependencyTreeStatic() ? wrapper.instance : undefined;
+    if (typeof instance !== 'object' || instance === null) {
+      // A request-scoped controller has no static instance to dispatch against: what stands in
+      // `instance` is a prototype-only placeholder with none of its dependencies injected, and a
+      // tool call has no request for Nest to build the real one from. Refused rather than served
+      // half-built, and refused rather than skipped — a route that declared `@Mcp()` and then
+      // quietly was not there is the worse of the two answers.
+      assertNoMcpRoutesOn({ metatype: wrapper.metatype, methods: this.methods });
+      return [];
+    }
+    const prototype: unknown = Object.getPrototypeOf(instance);
+    if (typeof prototype !== 'object' || prototype === null) {
+      return [];
+    }
+    const tools: McpRouteTool[] = [];
+    for (const methodName of this.methods.getAllMethodNames(prototype)) {
+      const options = readMcpRouteMetadata({ prototype, methodName });
+      if (options !== undefined) {
+        tools.push(this.toolFor({ instance, prototype, methodName, options, principal, wrapper }));
+      }
+    }
+    return tools;
+  }
+
+  /** One `@Mcp()` route, or a boot failure naming it. */
+  private toolFor(input: {
+    instance: object;
+    prototype: object;
+    methodName: string;
+    options: McpRouteOptions;
+    principal: McpRoutePrincipalFactory;
+    wrapper: ControllerWrapper;
+  }): McpRouteTool {
+    const { instance, prototype, methodName, options, principal, wrapper } = input;
+    const controllerName = instance.constructor.name;
+    const label = `${controllerName}.${methodName}`;
+    const handler: unknown = Reflect.get(prototype, methodName);
+    if (typeof handler !== 'function') {
+      throw new McpRouteDeclarationError(label, 'it is not a method.');
+    }
+    const route = readNestRoute({ controller: instance.constructor, handler, methodName });
+    if (route === undefined) {
+      throw new McpRouteDeclarationError(
+        label,
+        'it is not an HTTP route with one verb. Put it on a @Get/@Post/@Put/@Patch/@Delete handler — @All() has no single verb a dispatched request could carry.',
+      );
+    }
+    for (const declaration of route.params) {
+      const unsupported =
+        declaration.slot === undefined ? undefined : UNSUPPORTED_SLOTS.get(declaration.slot);
+      if (unsupported !== undefined) {
+        throw new McpRouteDeclarationError(label, `it declares ${unsupported}.`);
+      }
+    }
+    const ref = routeToolRef({ options, route, controllerName, methodName });
+    return buildRouteTool({
+      options,
+      route,
+      ref,
+      dispatch: this.dispatcher.compile({
+        instance,
+        methodName,
+        // The controller's host module, whose injectable guards, pipes and interceptors apply.
+        moduleKey: wrapper.host?.token ?? '',
+        route: ref,
+        principal,
+      }),
+    });
   }
 }

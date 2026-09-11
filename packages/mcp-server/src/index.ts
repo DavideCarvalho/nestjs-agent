@@ -33,27 +33,17 @@ export {
   type McpRouteRef,
 } from './routes/mcp-route-dispatcher.js';
 export {
-  buildRouteTool,
   defaultRouteToolName,
   McpRouteToolNameCollisionError,
-  routeToolRef,
-  type McpRouteTool,
 } from './routes/mcp-route-tools.js';
 export {
   Mcp,
   McpRouteDeclarationError,
-  MCP_ROUTE_METADATA,
-  normalizeMcpRouteOptions,
   readMcpRouteMetadata,
   type McpRouteOptions,
 } from './routes/mcp.decorator.js';
 export {
-  joinRoutePath,
-  pathParamNames,
   readNestRoute,
-  readRouteMethod,
-  readRouteParams,
-  readRoutePath,
   ROUTE_PARAM,
   type NestRoute,
   type RouteParamDeclaration,
