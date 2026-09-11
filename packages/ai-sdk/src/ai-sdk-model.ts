@@ -21,6 +21,7 @@ import {
   type JSONValue,
   type LanguageModel,
   type LanguageModelUsage,
+  Output,
   type ProviderMetadata,
   type ModelMessage as SdkModelMessage,
   type TextPart,
@@ -68,6 +69,12 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
         messages: mapMessages(args.messages),
         tools: mapTools(args.tools),
         ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
+        // `Output.object` asks the provider for its JSON/response-format mode. The agent loop only
+        // ever sets `outputSchema` on a call that carries no tools, which is what keeps this off the
+        // collision most providers have between a response format and a tool set.
+        ...(args.outputSchema
+          ? { output: Output.object({ schema: toSdkInputSchema(args.outputSchema) }) }
+          : {}),
       });
 
       // Translate the model's streamed parts into the neutral AgentStreamEvent vocabulary and write
@@ -126,6 +133,7 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
 
       const modelId = finalStep.response.modelId;
       const costUsd = extractCostUsd(finalStep.providerMetadata);
+      const object = args.outputSchema ? await parsedOutput(result.output) : undefined;
 
       return {
         text,
@@ -133,9 +141,25 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
         usage: mapUsage(usage),
         ...(typeof modelId === 'string' && modelId.length > 0 ? { modelId } : {}),
         ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(object !== undefined ? { object } : {}),
       };
     },
   };
+}
+
+/**
+ * The SDK's own parse of a constrained reply, or `undefined` when it refused to produce one (its
+ * `NoObjectGeneratedError`). A refusal is deliberately NOT rethrown: `object` is only ever a fast
+ * path past the agent loop's own validation, and the loop turns an unparseable reply into a
+ * `StructuredOutputError` that carries the offending text and can be repaired — strictly more than
+ * a throw from here would leave it with.
+ */
+async function parsedOutput(output: PromiseLike<unknown>): Promise<unknown> {
+  try {
+    return await output;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

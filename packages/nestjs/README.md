@@ -41,6 +41,66 @@ The module mounts SSE + REST endpoints under `/agent` (`POST /agent/chat`, tool-
 threads, quota). Add `durable: true` + `AgentDurableModule` for the durable runner;
 `AgentModule.forFeature([…])` for multi-agent orchestration.
 
+### Message attachments
+
+A chat turn attaches a file by **`mediaId` only**:
+
+```jsonc
+POST /agent/chat
+{ "message": "what is in this?", "attachments": [{ "mediaId": "med_8f21…" }] }
+```
+
+Every other field a client sends with it is discarded. The url the model provider fetches is read
+back from the `AttachmentStagingStore` bound to `AGENT_ATTACHMENT_STAGING`, whose `resolve({ mediaId,
+actor })` returns the attachment or `null` when the id is unknown or is not that actor's — so a
+caller can never point the server at a url it chose (link-local metadata, an internal service), and
+never at another actor's file. Resolution happens per turn, so a short-lived presigned url is minted
+fresh rather than replayed from the stored message.
+
+With nothing bound to `AGENT_ATTACHMENT_STAGING` there is no way to tell whose media an id is, so a
+turn carrying attachments is refused with `501`. Text-only turns are unaffected. At most 10
+attachments per turn.
+
+The optional `POST /agent/attachments` upload route (`attachments: { upload: true }`) aborts a body
+larger than `HARD_MAX_ATTACHMENT_BYTES` (32 MiB) while it streams; `attachments.maxBytes` narrows
+that ceiling at request time and cannot raise it.
+
+### Sweeping attachments nobody sent
+
+`stage()` writes bytes before any message exists, so a user who attaches a file and then never sends
+it leaves media with nothing pointing at it. Two optional methods make that findable — `list` on
+your `AttachmentStagingStore` (you stored the bytes, so only you can enumerate them) and
+`referencedMediaIds` on your `AgentStore` (only it can see which media a live message carries).
+
+```ts
+// a job the host runs; nothing here is reachable over HTTP
+const olderThan = new Date(Date.now() - 48 * 60 * 60 * 1000);
+for (const entry of await agents.collectableAttachments(actor, { olderThan })) {
+  await myMediaStore.delete(entry.mediaId); // the library never deletes your bytes
+}
+```
+
+`olderThan` is required and has no default: freshly staged media is an upload in flight, not
+garbage, and only you know how long one of your composers may sit open. It is pushed down to `list`
+and re-applied to the result, so a store that ignores the hint still cannot delete a live upload.
+
+References are re-derived on every call rather than latched, because `truncateFrom` — which is what
+regenerating a turn does — deletes messages and frees their media again. If either method is
+missing the call raises `501` rather than reporting everything as collectable.
+
+`GET /agent/attachments` returns the caller's own staged files as metadata (no urls — those are
+minted per turn by `resolve`), bounded to `ATTACHMENT_PAGE_SIZE`, and rides the same
+`attachments: { upload: true }` flag. It takes no `threadId` filter: a thread's attachments already
+ride on its messages in `GET /agent/threads/:id`.
+
+### Who may read a run
+
+`GET /agent/chat/:runId/stream` and `POST /agent/chat/:runId/cancel` both resolve the acting actor
+and require they own the run currently streaming — `403` for another actor's run, `404` for a run
+nobody is streaming (including one that has already finished). In-process callers that are
+authorized elsewhere use `AgentService.subscribe(runId)`; anything reachable from a request must go
+through `AgentService.subscribeAs(actor, runId)`.
+
 ### Deploying split API/worker pods
 
 By default `AgentModule`/`AgentDurableModule` wire everything: every controller, the `agent.run`

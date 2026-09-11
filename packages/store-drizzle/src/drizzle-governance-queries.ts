@@ -78,7 +78,7 @@ function isToolKind(value: string): value is ToolKind {
   return TOOL_KINDS.includes(value);
 }
 
-const RUN_STATUSES: readonly string[] = ['running', 'completed', 'failed'];
+const RUN_STATUSES: readonly string[] = ['running', 'completed', 'failed', 'cancelled'];
 function isRunStatus(value: string): value is AgentRunStatus {
   return RUN_STATUSES.includes(value);
 }

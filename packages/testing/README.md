@@ -40,6 +40,11 @@ AgentModule.forRoot({
 
 `InMemoryAgentStore` also exposes inspection helpers (`toolCallRows()`, `usageRows()`) for assertions.
 
+`InMemoryAttachmentStagingStore` is the host half of the attachment surface — `stage` / `resolve` /
+`list`, plus `setClock()` to stage media at a chosen instant and `delete()` to stand in for a host
+collecting bytes. It is a complete implementation, per-actor checks included, so a sweep
+(`AgentService.collectableAttachments`) can be exercised end to end without an object store.
+
 ## License
 
 MIT © Davide Carvalho

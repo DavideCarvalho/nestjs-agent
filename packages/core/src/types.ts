@@ -1,4 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { AgentIntake, ElicitationReply } from './elicitation.js';
+import type { AgentHistoryWindow } from './spi/history-policy.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
@@ -9,7 +11,7 @@ export interface Actor {
   tenantRef?: string;
 }
 
-export type ToolKind = 'read' | 'action' | 'agent';
+export type ToolKind = 'read' | 'action' | 'agent' | 'ask';
 
 /**
  * Declared shape of a tool.
@@ -17,6 +19,9 @@ export type ToolKind = 'read' | 'action' | 'agent';
  *  - `action` never auto-executes — requires HITL approval.
  *  - `agent`  delegates to another named agent (durable: a child workflow; inline: a nested loop),
  *             handled at the loop level — NOT via a handler. Carries `targetAgent`.
+ *  - `ask`    puts a question set to the user and waits for the answers (see `elicitation.ts`).
+ *             Handled at the loop level and never registered, so no `ToolSpec` carries this kind:
+ *             the only tool that has it is the built-in `ask`, whose definition the loop supplies.
  */
 export interface ToolSpec {
   name: string;
@@ -115,7 +120,14 @@ export interface MessageUsage {
   costUsd?: number | null;
 }
 
-export type UsagePurpose = 'chat' | 'follow_ups';
+/**
+ * What a usage row was spent ON. `chat` is a model step of the turn itself; `follow_ups` is the
+ * extra call that proposes follow-up questions; `history_summary` is the extra call a
+ * {@link import('./spi/history-policy.js').HistoryPolicy} makes to fold windowed-out messages into a
+ * summary — so bounding context cost never becomes spend nothing accounts for; `structured_output`
+ * is the formatting pass that restates a finished answer as `AgentLoopDeps.outputSchema` requires.
+ */
+export type UsagePurpose = 'chat' | 'follow_ups' | 'history_summary' | 'structured_output';
 
 export interface QuotaState {
   usedTokens: number;
@@ -135,6 +147,13 @@ export interface QuotaView {
   withinLimit: boolean;
   costUsd: number;
 }
+
+/**
+ * Anything a human sends back into a parked run: a {@link Decision} on an action tool, or an
+ * `ElicitationReply` answering a question set. Both travel the same `tool:<runId>:<toolCallId>`
+ * signal, so the runner that delivers them does not need to know which it is carrying.
+ */
+export type HumanReply = Decision | ElicitationReply;
 
 /** A human decision on a pending action tool call. */
 export interface Decision {
@@ -260,6 +279,32 @@ export interface AgentDefinition {
   delegatesTo?: string[];
   modelId?: string;
   maxSteps?: number;
+  /**
+   * This agent's own ceiling on how much of a thread rides into its turn, overriding the
+   * module-wide one. A persona that reasons over a long back-and-forth and one that answers a single
+   * question from a page context want very different windows.
+   */
+  history?: AgentHistoryWindow;
+  /**
+   * Constrain this agent's final answer to a schema. A live schema INSTANCE, so it is resolved from
+   * DI on whichever process runs the turn and never travels on `AgentRunInput` — a Standard Schema
+   * cannot survive the JSON hop into a durable workflow, which is why there is no per-request
+   * override on the HTTP surface.
+   */
+  outputSchema?: StandardSchemaV1;
+  /**
+   * Extra model calls allowed to fix an answer that failed {@link outputSchema}. Undefined → 1.
+   */
+  outputRepairAttempts?: number;
+  /**
+   * Questions this agent puts to the user BEFORE it starts working. Authored, so the turn pays no
+   * model call to produce them and a client knows the total up front. Undefined → no intake.
+   */
+  intake?: AgentIntake;
+  /**
+   * Whether this agent is offered the built-in `ask` tool. Undefined → the module-wide setting.
+   */
+  ask?: boolean;
 }
 
 /**
@@ -306,6 +351,8 @@ export interface StoredMessage {
   attachments?: MessageAttachment[];
   followUps?: string[];
   usage?: MessageUsage;
+  /** The run (turn) that produced this message; absent on a row written before this was recorded. */
+  runId?: string;
   createdAt: string;
 }
 
@@ -332,6 +379,13 @@ export interface LlmStepEnvelope {
   messages: ModelMessage[];
   /** The turn's actor — the handler re-derives tool definitions from it (definitionsFor). */
   actor: Actor;
+  /**
+   * Hold this call's stream frames rather than writing them to the run's sink, and return them on
+   * the result. Set by the loop when an output processor has to see the whole answer before the
+   * subscriber does — the dispatched handler streams to a worker-side sink the loop cannot
+   * interpose on, so the instruction has to ride the envelope. Absent → stream live, as before.
+   */
+  bufferOutput?: boolean;
 }
 
 /**

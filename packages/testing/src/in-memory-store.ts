@@ -8,6 +8,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
   ToolCallStatus,
+  ToolResult,
   UpdateThreadInput,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
@@ -120,7 +121,7 @@ interface RunRow {
   threadId: string;
   actorRef: string;
   agentName?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
@@ -137,7 +138,7 @@ export interface GovernanceRunRow {
   threadId: string;
   actorRef: string;
   agentName?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
   errorCode?: string;
   errorMessage?: string;
@@ -215,6 +216,7 @@ export class InMemoryAgentStore implements AgentStore {
       createdAt: ts,
       updatedAt: ts,
       messages: kept.map((message) => ({ ...message })),
+      ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
     };
     this.threads.set(id, row);
     return this.toSummary(row);
@@ -237,7 +239,7 @@ export class InMemoryAgentStore implements AgentStore {
     if (call === undefined) {
       return null;
     }
-    return this.threads.get(call.threadId)?.activeStreamId ?? null;
+    return call.runId ?? this.threads.get(call.threadId)?.activeStreamId ?? null;
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -275,6 +277,15 @@ export class InMemoryAgentStore implements AgentStore {
     return this.threads.get(threadId)?.activeStreamId ?? null;
   }
 
+  /**
+   * The thread's default agent, projected. A map lookup here, but the SQL adapters answer this with
+   * a one-column read instead of materializing the whole transcript — so the caller that only needs
+   * this scalar has a method to ask for it.
+   */
+  async defaultAgentForThread(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.defaultAgent ?? null;
+  }
+
   /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
   async recordRunStart(run: {
     runId: string;
@@ -298,7 +309,7 @@ export class InMemoryAgentStore implements AgentStore {
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
   async recordRunEnd(end: {
     runId: string;
-    status: 'completed' | 'failed';
+    status: 'completed' | 'failed' | 'cancelled';
     durationMs?: number;
     errorCode?: string;
     errorMessage?: string;
@@ -360,13 +371,25 @@ export class InMemoryAgentStore implements AgentStore {
       createdAt: this.now(),
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
     };
     row.messages.push(message);
     row.updatedAt = message.createdAt;
     return message;
+  }
+
+  async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
+    for (const row of this.threads.values()) {
+      const message = row.messages.find((candidate) => candidate.id === messageId);
+      if (message !== undefined) {
+        message.toolResults = results;
+        return;
+      }
+    }
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
@@ -378,6 +401,32 @@ export class InMemoryAgentStore implements AgentStore {
     if (cutoff >= 0) {
       row.messages = row.messages.slice(0, cutoff);
     }
+  }
+
+  /**
+   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   * Re-derived from the messages each call, so a media whose message was truncated away reads as
+   * unreferenced again.
+   */
+  async referencedMediaIds(actorRef: string, mediaIds: readonly string[]): Promise<string[]> {
+    if (mediaIds.length === 0) {
+      return [];
+    }
+    const wanted = new Set(mediaIds);
+    const found = new Set<string>();
+    for (const thread of this.threads.values()) {
+      if (thread.actorRef !== actorRef) {
+        continue;
+      }
+      for (const message of thread.messages) {
+        for (const attachment of message.attachments ?? []) {
+          if (wanted.has(attachment.mediaId)) {
+            found.add(attachment.mediaId);
+          }
+        }
+      }
+    }
+    return [...wanted].filter((mediaId) => found.has(mediaId));
   }
 
   async recordToolCall(input: RecordToolCallInput): Promise<void> {
@@ -569,11 +618,24 @@ export class InMemoryAgentStore implements AgentStore {
   }
 
   /** Test helper: read the recorded tool-call rows. */
-  toolCallRows(): { toolName: string; status: ToolCallStatus; output?: unknown; runId?: string }[] {
+  toolCallRows(): {
+    toolCallId: string;
+    toolName: string;
+    toolType: 'read' | 'action';
+    status: ToolCallStatus;
+    input?: unknown;
+    output?: unknown;
+    error?: string;
+    runId?: string;
+  }[] {
     return [...this.toolCalls.values()].map((row) => ({
+      toolCallId: row.toolCallId,
       toolName: row.toolName,
+      toolType: row.toolType,
       status: row.status,
+      input: row.input,
       ...(row.output !== undefined ? { output: row.output } : {}),
+      ...(row.error !== undefined ? { error: row.error } : {}),
       ...(row.runId !== undefined ? { runId: row.runId } : {}),
     }));
   }
@@ -587,7 +649,7 @@ export class InMemoryAgentStore implements AgentStore {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       ...(last !== undefined ? { lastMessagePreview: last.content.slice(0, 120) } : {}),
-      ...(row.defaultAgent !== undefined ? { defaultAgent: row.defaultAgent } : {}),
+      defaultAgent: row.defaultAgent ?? null,
     };
   }
 }

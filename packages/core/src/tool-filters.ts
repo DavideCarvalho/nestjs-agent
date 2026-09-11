@@ -19,7 +19,7 @@ export async function isToolEnabled(spec: ToolSpec, handler?: ToolHandler): Prom
 }
 
 /**
- * Zeroth filter layer: drop tools this deployment has turned off, before anyone asks who may call
+ * Second filter layer: drop tools this deployment has turned off, before anyone asks who may call
  * them. A disabled tool is absent, not forbidden — the difference matters, because "forbidden"
  * tells the model (and the user reading a refusal) that the capability exists.
  */
@@ -44,7 +44,7 @@ export async function canActorUseTool(actor: Actor, handler?: ToolHandler): Prom
 }
 
 /**
- * Third filter layer: drop tools whose own `canUse` refuses this actor. Runs after the app-wide
+ * Fourth filter layer: drop tools whose own `canUse` refuses this actor. Runs after the app-wide
  * `RolesPolicy`, and is additive to it — a tool can narrow who reaches it, never widen.
  */
 export async function filterToolsByCanUse<T extends { spec: ToolSpec; handler?: ToolHandler }>(
@@ -60,7 +60,7 @@ export async function filterToolsByCanUse<T extends { spec: ToolSpec; handler?: 
   return checked.filter((row) => row.allowed).map((row) => row.entry);
 }
 
-/** First filter layer: drop tools the actor's role may not invoke. `can` may be async (authz). */
+/** Third filter layer: drop tools the actor's role may not invoke. `can` may be async (authz). */
 export async function filterToolsByRole(
   tools: ToolSpec[],
   actor: Actor,
@@ -72,7 +72,11 @@ export async function filterToolsByRole(
   return checked.filter((entry) => entry.allowed).map((entry) => entry.tool);
 }
 
-/** Second filter layer: if the agent pins an allow-list, keep only those tool names. */
+/**
+ * First filter layer: if the agent pins an allow-list, keep only those tool names. Pure and
+ * synchronous, which is why it runs ahead of the three gates that may do I/O — see
+ * `ToolRegistry.definitionsFor`.
+ */
 export function filterToolsByAllowList(
   tools: ToolSpec[],
   allowedTools: string[] | undefined,

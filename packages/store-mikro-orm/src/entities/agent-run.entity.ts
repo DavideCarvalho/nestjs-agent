@@ -1,8 +1,14 @@
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 
-/** A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only. */
-export type AgentRunStatus = 'running' | 'completed' | 'failed';
+/**
+ * A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only.
+ *
+ * `cancelled` is a third TERMINAL, not a flavour of `failed`: someone asked the run to stop and it
+ * did. A reliability read that folded it into `failed` would page whoever is on call for model
+ * failures every time a user pressed Stop.
+ */
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * One recorded run (turn) outcome — the durable half of what `aviary:agent:*` diagnostics report

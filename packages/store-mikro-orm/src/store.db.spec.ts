@@ -1,12 +1,18 @@
 // Integration: MikroOrmAgentStore + ensureAgentSchema against an in-memory SQLite
 // (better-sqlite3, via @mikro-orm/sqlite). Runs only under `pnpm test:db`.
-import type { StoredMessage, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type {
+  RecordRunEndInput,
+  StoredMessage,
+  ThreadSummary,
+  UpdateThreadInput,
+} from '@dudousxd/nestjs-agent-core';
+import { EVERY_MESSAGE_FIELD } from '@dudousxd/nestjs-agent-testing';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
 import { agentManagedTables, ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
-import { AgentRun } from './entities/agent-run.entity';
+import { AgentRun, type AgentRunStatus } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
@@ -417,5 +423,226 @@ describe('agentSchemaSql', () => {
     } finally {
       await fresh.close(true);
     }
+  });
+});
+
+describe('MikroOrmAgentStore — a turn a client reads back', () => {
+  it('pairs every tool call on a message with the result the turn settled it with', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [
+        { id: 'c1', name: 'lookup', input: {}, kind: 'read' },
+        { id: 'c2', name: 'retrieve', input: { query: 'refunds' }, kind: 'read' },
+      ],
+      toolResults: [{ id: 'c2', name: 'retrieve', output: { passages: [] } }],
+    });
+
+    await store.setMessageToolResults(message.id, [
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+
+    const stored = (await store.getThread(thread.id))?.messages.find(
+      (candidate) => candidate.id === message.id,
+    );
+    // The message's own list, in the order the turn settled it — not one re-derived from the
+    // tool-call rows, whose order is their own and whose shape for a rejection is not this one.
+    expect(stored?.toolResults).toEqual([
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+  });
+
+  it('completes a message that carries calls and no results of its own from their rows', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [{ id: 'orphan-1', name: 'lookup', input: {}, kind: 'read' }],
+    });
+    await store.recordToolCall({
+      toolCallId: 'orphan-1',
+      messageId: message.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+    await store.updateToolCall({
+      toolCallId: 'orphan-1',
+      status: 'executed',
+      output: { rows: 2 },
+    });
+
+    const stored = (await store.getThread(thread.id))?.messages.find(
+      (candidate) => candidate.id === message.id,
+    );
+    expect(stored?.toolResults).toEqual([{ id: 'orphan-1', name: 'lookup', output: { rows: 2 } }]);
+  });
+});
+
+describe('MikroOrmAgentStore — a thread patch a client reads back', () => {
+  /**
+   * Typed `Required<UpdateThreadInput>` so a new field on the patch fails to COMPILE here until this
+   * adapter round-trips it. The column and the write existed; `toSummary` never emitted the value,
+   * so `getThread` reported no default agent and a turn fell back to the module's.
+   */
+  const EVERY_PATCH_FIELD: Required<UpdateThreadInput> = {
+    title: 'Renamed',
+    defaultAgent: 'researcher',
+  };
+
+  it('returns every patched field from getThread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch' } });
+
+    await store.updateThread(thread.id, EVERY_PATCH_FIELD);
+
+    expect(await store.getThread(thread.id)).toMatchObject(EVERY_PATCH_FIELD);
+  });
+
+  it('reports a never-set default agent as null, and clears it on an explicit null', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch-2' } });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBe('researcher');
+
+    await store.updateThread(thread.id, { defaultAgent: null });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+  });
+
+  it('reads the default agent without materializing the thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-projection' } });
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect(await store.defaultAgentForThread(thread.id)).toBe('researcher');
+
+    expect(await store.defaultAgentForThread('missing')).toBeNull();
+    await store.softDeleteThread(thread.id);
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+  });
+});
+
+/**
+ * Every terminal the SPI can hand a store has to be NAMEABLE by the row it lands in. The
+ * `satisfies` is the whole check: a `recordRunEnd` declaring a narrower parameter still accepts
+ * `'cancelled'` and writes it through (method parameters are bivariant), so at runtime nothing is
+ * wrong — but the entity tells every reader a cancelled run is impossible, and a reliability read
+ * then has no way to leave a user pressing Stop out of its failure count.
+ */
+const TERMINALS = ['completed', 'failed', 'cancelled'] as const satisfies readonly (AgentRunStatus &
+  RecordRunEndInput['status'])[];
+
+describe('MikroOrmAgentStore — the terminals a run can settle on', () => {
+  it('records and reads back each of them', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-terminals' } });
+
+    for (const status of TERMINALS) {
+      const runId = `run-${status}`;
+      await store.recordRunStart({ runId, threadId: thread.id, actorRef: 'actor-terminals' });
+      await store.recordRunEnd({ runId, status, durationMs: 42 });
+
+      const settled = await orm.em.fork().findOne(AgentRun, { id: runId });
+      expect(settled?.status).toBe(status);
+      expect(settled?.durationMs).toBe(42);
+    }
+  });
+
+  it('leaves a cancelled run undiagnosed — a stop is not an error', async () => {
+    const cancelled = await orm.em.fork().findOne(AgentRun, { id: 'run-cancelled' });
+    expect(cancelled?.errorCode).toBeNull();
+    expect(cancelled?.errorMessage).toBeNull();
+  });
+});
+
+describe('agent_tool_call.message_id is indexed', () => {
+  it('renders an index on the column the message-scoped reads run against', async () => {
+    // `loadToolResults`' IN (…) and `truncateFrom`'s delete both filter on this column, and MySQL
+    // indexes a foreign key for you while Postgres does not. Here the index comes from the ORM (it
+    // indexes every m:1 on any SQL platform), so the entity declares none of its own — a second
+    // declared index would be a duplicate on every dialect. This pins the coverage we're relying on.
+    const statements = await agentSchemaSql(orm, { ifNotExists: false });
+    expect(
+      statements.some(
+        (sql) =>
+          /^create index/i.test(sql) && /agent_tool_call/.test(sql) && /message_id/.test(sql),
+      ),
+    ).toBe(true);
+  });
+});
+
+const IMAGE = { url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' };
+
+describe('MikroOrmAgentStore — which media a live message still references', () => {
+  it('reports the referenced subset, scoped to the asking actor', async () => {
+    const mine = await store.createThread({ actor: { id: 'actor-ref-1' } });
+    const theirs = await store.createThread({ actor: { id: 'actor-ref-2' } });
+    await store.appendMessage({
+      threadId: mine.id,
+      role: 'user',
+      content: 'mine',
+      attachments: [{ mediaId: 'ref-mine', ...IMAGE }],
+    });
+    await store.appendMessage({
+      threadId: theirs.id,
+      role: 'user',
+      content: 'theirs',
+      attachments: [{ mediaId: 'ref-theirs', ...IMAGE }],
+    });
+
+    expect(
+      await store.referencedMediaIds('actor-ref-1', ['ref-mine', 'ref-theirs', 'ref-never']),
+    ).toEqual(['ref-mine']);
+  });
+
+  it('re-derives after truncateFrom, so a regenerated turn frees its media again', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-3' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'ref-sent', ...IMAGE }],
+    });
+    expect(await store.referencedMediaIds('actor-ref-3', ['ref-sent'])).toEqual(['ref-sent']);
+
+    await store.truncateFrom(thread.id, message.id);
+
+    expect(await store.referencedMediaIds('actor-ref-3', ['ref-sent'])).toEqual([]);
+  });
+
+  it('still counts a reference held by a soft-deleted thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-4' } });
+    await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'ref-kept', ...IMAGE }],
+    });
+
+    await store.softDeleteThread(thread.id);
+
+    // The message row survives a soft delete, so the bytes it points at are not garbage yet — a
+    // host that wants them collected removes the thread for real and lets the cascade do it.
+    expect(await store.referencedMediaIds('actor-ref-4', ['ref-kept'])).toEqual(['ref-kept']);
+  });
+
+  it('carries every message field onto a fork', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-fork' } });
+    const appended = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'here it is',
+      ...EVERY_MESSAGE_FIELD,
+    });
+
+    const fork = await store.forkThread(thread.id, appended.id);
+
+    const [copied] = (await store.getThread(fork.id))?.messages ?? [];
+    expect(copied).toMatchObject(EVERY_MESSAGE_FIELD);
   });
 });

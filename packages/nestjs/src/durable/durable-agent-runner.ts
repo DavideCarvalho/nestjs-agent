@@ -1,19 +1,39 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRunInput, AgentRunner, Decision } from '@dudousxd/nestjs-agent-core';
-import { WorkflowService } from '@dudousxd/nestjs-durable';
-import { isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
-import { Injectable } from '@nestjs/common';
+import {
+  AGENT_SINK,
+  AGENT_STORE,
+  type AgentRunInput,
+  type AgentRunner,
+  type AgentStore,
+  type HumanReply,
+  type TokenStreamSink,
+  encodeStreamEvent,
+} from '@dudousxd/nestjs-agent-core';
+import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
+import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
 
 /**
  * Runs the agent turn as a `@dudousxd/nestjs-durable` workflow. `start` creates the run and returns
- * its id immediately; a worker runs the body and streams tokens to the sink. HITL approval is
- * delivered as a durable signal namespaced by run, so it can never cross-resolve another run.
+ * its id immediately; a worker runs the body and streams tokens to the sink. Everything a human
+ * sends back into a parked run — a HITL approval, or the answers to a question set — is delivered as
+ * a durable signal namespaced by run, so it can never cross-resolve another run.
  */
 @Injectable()
 export class DurableAgentRunner implements AgentRunner {
-  constructor(private readonly workflows: WorkflowService) {}
+  private readonly logger = new Logger(DurableAgentRunner.name);
+
+  constructor(
+    private readonly workflows: WorkflowService,
+    // The runtime's own read/control surface, bound by `DurableModule` under BOTH topologies — the
+    // store-backed gateway on an operator, a transport proxy on a tenant. `WorkflowService` has no
+    // cancel, and reaching for `WorkflowEngine` instead would work only on the operator.
+    @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
+    @Inject(AGENT_STORE) private readonly store: AgentStore,
+    @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
+  ) {}
 
   async start(input: AgentRunInput): Promise<{ runId: string }> {
     const stamped: AgentRunInput = { ...input, day: input.day ?? utcDay() };
@@ -37,13 +57,33 @@ export class DurableAgentRunner implements AgentRunner {
     return { runId };
   }
 
-  async signal(runId: string, toolCallId: string, decision: Decision): Promise<void> {
-    await this.workflows.signal(`tool:${runId}:${toolCallId}`, decision);
+  async signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void> {
+    await this.workflows.signal(`tool:${runId}:${toolCallId}`, reply);
   }
 
-  async cancel(_runId: string): Promise<void> {
-    // WorkflowService exposes no hard cancel; rely on the execution timeout / control plane.
-    // Apps needing immediate cancel can resolve WorkflowEngine and call engine.cancel(runId).
-    await Promise.resolve();
+  /**
+   * Stop a run, and settle what the durable runtime knows nothing about.
+   *
+   * `compensate: true` is the form that gives the BODY a chance: it moves the run to `cancelling`
+   * (which is what the workflow's own cancel observation reads) and then re-drives it, so a turn
+   * running in-process unwinds at its next safe point instead of finishing. It also guarantees the
+   * outcome for the turn that CANNOT observe anything — one parked on `waitForSignal`, suspended
+   * inside a position its journal already holds — because that re-drive re-suspends and the runtime
+   * settles the run `cancelled` regardless. The cascade to child runs comes with it.
+   *
+   * Neither of those settles the agent's own state, so this does: the run row gets its own terminal,
+   * and the subscriber gets a `cancelled` frame followed by a normal end. Both are keyed by runId
+   * alone, which is why they belong here rather than in the body — the body is the only place that
+   * knows which THREAD was streaming, so releasing that stays there (see `AgentRunWorkflow`).
+   *
+   * A tool already executing is not interrupted, here or anywhere: see `haltIfCancelled` in core.
+   */
+  async cancel(runId: string): Promise<void> {
+    this.logger.log(`cancelling agent run ${runId}`);
+    await this.runs.cancel(runId, { compensate: true });
+    const writer = await this.sink.open(runId);
+    await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
+    await writer.end();
+    await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
   }
 }

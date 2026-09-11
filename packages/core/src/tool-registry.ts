@@ -89,17 +89,25 @@ export class ToolRegistry {
 
   /**
    * The tools to offer the model for this actor+agent, after the four filter layers: what this
-   * deployment has enabled, what this actor's role allows, what each tool's own `canUse` allows
-   * this actor, and finally what this agent pinned.
+   * agent pinned, what this deployment has enabled, what this actor's role allows, and what each
+   * tool's own `canUse` allows this actor.
    *
    * Every layer only ever removes tools, so no arrangement of them can widen what a turn reaches.
+   * The agent's allow-list therefore goes FIRST, even though it is the narrowest statement: it is a
+   * pure name-set match, while each of the three below it may be a round trip — an authz service, a
+   * feature-flag store, an MCP server — and this runs once per model step. Asking those about a
+   * tool the allow-list has already excluded is a call whose answer nothing reads.
    */
   async definitionsFor(
     actor: Actor,
     policy: RolesPolicy,
     allowedTools?: string[],
   ): Promise<ToolDefinition[]> {
-    const live = await filterToolsByEnabled([...this.entries.values()]);
+    const pinnedNames = new Set(
+      filterToolsByAllowList(this.allSpecs(), allowedTools).map((spec) => spec.name),
+    );
+    const pinned = [...this.entries.values()].filter((entry) => pinnedNames.has(entry.spec.name));
+    const live = await filterToolsByEnabled(pinned);
     const allowedByRole = new Set(
       (
         await filterToolsByRole(
@@ -111,11 +119,7 @@ export class ToolRegistry {
     );
     const roleScoped = live.filter((entry) => allowedByRole.has(entry.spec.name));
     const actorScoped = await filterToolsByCanUse(roleScoped, actor);
-    const allowScoped = filterToolsByAllowList(
-      actorScoped.map((entry) => entry.spec),
-      allowedTools,
-    );
-    return allowScoped.map((spec) => ({
+    return actorScoped.map(({ spec }) => ({
       name: spec.name,
       kind: spec.kind,
       description: spec.description,

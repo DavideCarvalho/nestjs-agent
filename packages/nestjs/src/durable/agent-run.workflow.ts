@@ -2,18 +2,28 @@ import {
   AGENT_DEPS_FACTORY,
   AGENT_STORE,
   type AgentLoopHooks,
+  type AgentLoopResult,
   type AgentRunInput,
   type AgentStore,
   type Decision,
+  type ElicitationReply,
   type LlmStepEnvelope,
   QuotaExceededError,
+  RunCancelledError,
   type ToolCallRequest,
   type ToolStepEnvelope,
+  agentFailureCode,
+  isReplayIntegrityError,
   publishAgentRunFailed,
   runAgentLoop,
+  settleAll,
 } from '@dudousxd/nestjs-agent-core';
-import { Workflow } from '@dudousxd/nestjs-durable';
-import { type WorkflowCtx, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
+import { RUN_GATEWAY, Workflow } from '@dudousxd/nestjs-durable';
+import {
+  type RunGateway,
+  type WorkflowCtx,
+  isWorkflowControlFlowSignal,
+} from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
@@ -38,26 +48,65 @@ export class AgentRunWorkflow {
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    // OPTIONAL: `AgentDurableModule.forRoot({ surface: 'http' })` registers this workflow (so
-    // `WorkflowService.start(AgentRunWorkflow, …)` finds it locally-registered — required even on
-    // an enqueue-only pod, since `engine.start` validates registration before persisting the run)
-    // but deliberately does NOT provide `AgentRunSteps` — an http pod that also registered the
-    // dispatched-step handlers would subscribe their queues and run LLM/tool work it shouldn't (the
-    // flip incident this module's `surface` option exists to prevent). `@Optional()` lets this
-    // class construct without it; see the `steps === undefined` branch below.
-    @Optional() private readonly steps: AgentRunSteps | undefined,
+    // NOTE: `AgentRunSteps` is deliberately NOT injected here. `AgentDurableModule.forRoot({
+    // surface: 'http' })` registers this workflow (so `WorkflowService.start` finds it locally —
+    // `engine.start` validates registration before persisting a run, even on an enqueue-only pod)
+    // but provides no `AgentRunSteps`, because an http pod that registered the dispatched-step
+    // handlers would subscribe their queues and run LLM/tool work meant for the worker fleet.
+    // Depending on the instance here would make the workflow BODY differ between the two surfaces,
+    // which is a replay divergence, not a degradation — see `run()`.
     @Inject(AGENT_DISPATCHED_STEPS) private readonly dispatchedSteps: boolean,
+    // The runtime's own view of this run, used for ONE question: has it been cancelled. `@Optional`
+    // so a host that wired no gateway still boots — but note that the hook built from it is wired
+    // UNCONDITIONALLY below. Its presence decides how many checkpoints a turn writes, and that must
+    // not vary between two pods of the same deployment; only the ANSWER may degrade, and the answer
+    // is journaled.
+    @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
   ) {}
 
-  async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<{ text: string }> {
+  /**
+   * Has someone asked this run to stop? Read from the runtime's own run status, which is where
+   * `DurableAgentRunner.cancel` puts it — `cancelling` while a compensating cancel is in flight,
+   * `cancelled` once it has settled.
+   *
+   * Costs a run read at each of the loop's observation points (two per step). That is a row the
+   * control plane already has, against a turn that is otherwise making model calls, and it buys the
+   * property that matters: the answer comes from a place BOTH the canceller and every pod that might
+   * replay this run can see.
+   *
+   * Failing to ask is not a cancel. A tenant with no gateway wired, or an operator briefly
+   * unreachable, answers "no" and the run carries on — the alternative is failing healthy runs
+   * because a status read timed out. The loop journals that answer like any other, so two processes
+   * can never disagree about what was seen here.
+   */
+  private async isCancelled(runId: string): Promise<boolean> {
+    try {
+      const status = (await this.runs?.getRunDetail(runId))?.run.status;
+      return status === 'cancelled' || status === 'cancelling';
+    } catch {
+      return false;
+    }
+  }
+
+  async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<AgentLoopResult> {
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
-    // `undefined` on a pod that never provided AgentRunSteps (`surface: 'http'`) — this workflow is
-    // registered there ONLY so `start()` can enqueue it (see the constructor comment); it must never
-    // actually EXECUTE this far on that pod (pair `surface: 'http'` with the durable `drive: false`
-    // enqueue-only DurableModule config). If it somehow does, fall back to non-dispatched inline
-    // execution rather than crash — degraded, not broken.
-    const dispatchSteps = this.dispatchedSteps ? this.steps : undefined;
+    // Whether a turn dispatches decides which checkpoint NAMES it writes — the routed
+    // `AgentRunSteps.llm`/`.tool` groups instead of the in-process `llm:<i>`/`tool:<callId>` — so the
+    // answer must not come from anything local to the process that happens to be replaying.
+    //
+    // It therefore reads NOTHING off `this.steps`. `ctx.step` routes by the `@Step`-stamped name and
+    // never invokes the reference (the serving worker re-resolves the real handler from its own DI),
+    // so the names come off the prototype and a pod that provides no `AgentRunSteps` — `surface:
+    // 'http'`, which registers this workflow only so `start()` can enqueue it — still replays the
+    // same branch instead of silently degrading to the in-process one and diverging from the
+    // history an engine pod wrote.
+    //
+    // `ctx.patched` is what keeps a run that journaled the in-process names finishing on them: it
+    // consumes a position for a fresh run and rewinds for an in-flight one. It sits behind the
+    // config flag only, which is built from the same `AgentModuleOptions` on every surface of a
+    // deployment, so every pod agrees on whether the position is spent at all.
+    const dispatchSteps = this.dispatchedSteps && (await ctx.patched('agent:dispatched-steps'));
     // A sub-agent run (one with an ancestor sink) marks its subthread as streaming THIS child run,
     // so a human approving its action tool routes the signal back here (runForToolCall).
     if (input.sinkRunId !== undefined) {
@@ -72,7 +121,19 @@ export class AgentRunWorkflow {
           ? childSinkWriter(await deps.sink.open(sinkRunId))
           : deps.sink.open(ctx.runId),
       awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
+      // The same wait, on the same signal key, carrying a typed answer instead of a yes/no — so a
+      // question set and an approval reach a parked run through one path, and the HTTP surface that
+      // settles either one is the same `POST /agent/tool-call/*` family.
+      awaitAnswers: (request) =>
+        ctx.waitForSignal<ElicitationReply>(`tool:${ctx.runId}:${request.id}`),
       step: (name, fn) => ctx.localStep(name, fn),
+      // Both durable step primitives take their checkpoint position on the CALL, before their first
+      // await, so launching a batch in one tick — what `settleAll` does — fixes the block of
+      // positions in call order however the tools then settle. `ctx.patched` keeps a run that
+      // recorded the one-call-at-a-time shape replaying against that shape.
+      parallel: settleAll,
+      cancelled: () => this.isCancelled(ctx.runId),
+      patched: (id) => ctx.patched(id),
       // Dispatched-step suspends must escape the loop's tool catch — control flow, not a tool
       // failure. Marker-based predicate, NOT instanceof: the signal's CLASS differs by runtime
       // (engine in-process throws durable-core's WorkflowSuspended/ContinueAsNew; the BullMQ thin
@@ -100,10 +161,10 @@ export class AgentRunWorkflow {
       // `ctx.localStep`s, so a turn isn't pinned to this workflow worker for the model call or a tool
       // execution. `sinkRunId`/`childSink` are sink routing this workflow already resolved above —
       // core's dispatchLlm signature stays sink-topology-agnostic, so we add them here, not in core.
-      ...(dispatchSteps !== undefined
+      ...(dispatchSteps
         ? {
             dispatchLlm: (index: number, envelope: LlmStepEnvelope) =>
-              ctx.step(dispatchSteps.llm, {
+              ctx.step(AgentRunSteps.prototype.llm, {
                 ...envelope,
                 runId: ctx.runId,
                 step: index,
@@ -116,7 +177,7 @@ export class AgentRunWorkflow {
             // isn't 'action' is defensively 'read' — the same posture core takes for an
             // unresolvable `kind`.
             dispatchTool: (call: ToolCallRequest, envelope: ToolStepEnvelope) =>
-              ctx.step(dispatchSteps.tool, {
+              ctx.step(AgentRunSteps.prototype.tool, {
                 ...envelope,
                 toolCallId: call.id,
                 toolType: call.kind === 'action' ? 'action' : 'read',
@@ -144,12 +205,33 @@ export class AgentRunWorkflow {
       if (isWorkflowControlFlowSignal(error)) {
         throw error;
       }
+      // A cancel is neither a failure nor control flow — it is the run doing what it was asked. The
+      // runner that requested it has already settled the run row and the subscriber's stream (both
+      // keyed by runId alone). The thread is the one thing it could not reach, because only this
+      // body knows which thread this run was streaming, so releasing it is all that is left here.
+      // Nothing is published as a failure, and the error is rethrown so the runtime records the run
+      // `cancelled` rather than completed.
+      if (error instanceof RunCancelledError) {
+        await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+        throw error;
+      }
+      // A replay-integrity failure gets the sink half of this path but NOT the checkpoint half. The
+      // journal has already diverged, so the two `ctx.localStep`s below would each ask for a
+      // position the history cannot supply and raise their own refusal — burying the one that names
+      // the checkpoints that actually disagreed. The stream still has to be settled, though, or the
+      // subscriber hangs on a run the engine is about to fail.
+      if (isReplayIntegrityError(error)) {
+        const failure = { code: 'run_failed' as const, message: (error as Error).message };
+        publishAgentRunFailed({ runId: ctx.runId, ...failure });
+        await (await hooks.openSink()).fail(failure);
+        throw error;
+      }
       // A real failure (e.g. quota exceeded, which throws before the sink is even opened) would
       // otherwise leave the HTTP subscriber hanging on a stream that never ends. Fail the sink with
       // a typed terminal so the controller emits an `event: error` frame, then rethrow so the engine
       // still records the run as failed.
       const message = error instanceof Error ? error.message : String(error);
-      const code = error instanceof QuotaExceededError ? 'quota_exceeded' : 'run_failed';
+      const code = agentFailureCode(error);
       publishAgentRunFailed({ runId: ctx.runId, code, message });
       // Settle the run's persisted outcome (the loop only records completions — it can't catch its
       // own crash). Optional-call: a store without run recording degrades to no reliability metrics.

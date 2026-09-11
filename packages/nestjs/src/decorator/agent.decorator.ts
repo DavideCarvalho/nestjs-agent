@@ -1,5 +1,7 @@
 import 'reflect-metadata';
+import type { AgentHistoryWindow, AgentIntake } from '@dudousxd/nestjs-agent-core';
 import type { Type } from '@nestjs/common';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**
  * Declares a class as an agent. The class is discovered at boot (via `DiscoveryService`) and
@@ -28,6 +30,46 @@ export interface AgentOptions {
   tools?: string[];
   /** Other `@Agent` classes this agent may hand off to (auto-exposed as handoff tools). */
   handoff?: Type[];
+  /**
+   * How much of the thread this agent's turns carry, overriding `AgentModule.forRoot({ history })`.
+   * `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit; `{ summarize: true }` folds
+   * the rest into a leading summary, at one extra model call per run. Omit → the module-wide
+   * ceiling, or none.
+   */
+  history?: AgentHistoryWindow;
+  /**
+   * Constrain this agent's final answer to a schema (any [Standard Schema](https://standardschema.dev)
+   * — Zod, Valibot, ArkType). The turn calls its tools exactly as it would without one; the schema is
+   * satisfied by one extra formatting call afterwards, so it works on providers that refuse a
+   * response format and a tool set in the same request. The validated value comes back as `object`
+   * on the run's result and is recorded on the assistant message as a `structured_output` tool call.
+   *
+   * Declared HERE rather than per request: a schema is a live object, and `AgentRunInput` crosses a
+   * JSON boundary on its way into a durable workflow.
+   */
+  outputSchema?: StandardSchemaV1;
+  /**
+   * Extra model calls allowed to fix an answer that failed {@link outputSchema}, each shown the
+   * previous attempt's validation issues. Omit → 1; `0` → fail on the first invalid reply with a
+   * `StructuredOutputError`.
+   */
+  outputRepairAttempts?: number;
+  /**
+   * Questions this agent puts to the user BEFORE it starts working — the scope it needs, collected
+   * up front rather than guessed. Authored here, so the turn spends no model call producing them
+   * and a client knows the total ("Question 1 of 3") the moment the form appears. Every question
+   * should pre-pick a default: the claim the surface makes is that confirming is enough.
+   *
+   * `when: 'thread-start'` (the default) asks once per thread; `'every-turn'` asks before each turn.
+   * Omit → no intake.
+   */
+  intake?: AgentIntake;
+  /**
+   * Let the model ask its OWN clarifying question set, via the built-in `ask` tool, when it judges
+   * the scope is missing. Overrides `AgentModule.forRoot({ ask })` for this agent. Omit → the
+   * module-wide setting.
+   */
+  ask?: boolean;
 }
 
 export const AGENT_METADATA = Symbol.for('@dudousxd/nestjs-agent:agent-metadata');

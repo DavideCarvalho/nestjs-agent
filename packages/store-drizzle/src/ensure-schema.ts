@@ -15,6 +15,7 @@ const statements: string[] = [
     title TEXT NOT NULL,
     transient INTEGER NOT NULL DEFAULT 0,
     active_stream_id TEXT,
+    default_agent TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
@@ -28,9 +29,11 @@ const statements: string[] = [
     content TEXT NOT NULL,
     tool_calls TEXT,
     tool_results TEXT,
+    attachments TEXT,
     follow_ups TEXT,
     usage TEXT,
     agent_name TEXT,
+    run_id TEXT,
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS agent_message_thread_created_idx
@@ -50,6 +53,8 @@ const statements: string[] = [
     executed_at INTEGER,
     run_id TEXT
   )`,
+  `CREATE INDEX IF NOT EXISTS agent_tool_call_message_idx
+    ON agent_tool_call (message_id)`,
   `CREATE TABLE IF NOT EXISTS agent_token_usage (
     id TEXT PRIMARY KEY NOT NULL,
     thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
@@ -94,9 +99,49 @@ const statements: string[] = [
     ON agent_run (started_at)`,
 ];
 
-/** Runs the `CREATE TABLE IF NOT EXISTS` DDL above against the supplied Drizzle SQLite db. */
+/**
+ * Columns added to a table this package already shipped. `CREATE TABLE IF NOT EXISTS` above is inert
+ * against a database that already has the table, so a column introduced later would land on fresh
+ * databases only and be missing everywhere the store is actually running. The MikroORM adapter has
+ * no such gap — its `ensureAgentSchema` applies `getUpdateSchemaSQL({ safe: true })`, which is
+ * add-column-capable — so without this list the two adapters would disagree about what the schema is
+ * after an upgrade.
+ *
+ * Add-column only, never a type change or a drop: `safe` in the same sense as the sibling adapter.
+ */
+const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
+  {
+    table: 'agent_message',
+    column: 'run_id',
+    ddl: 'ALTER TABLE agent_message ADD COLUMN run_id TEXT',
+  },
+  {
+    table: 'agent_message',
+    column: 'attachments',
+    ddl: 'ALTER TABLE agent_message ADD COLUMN attachments TEXT',
+  },
+  {
+    table: 'agent_thread',
+    column: 'default_agent',
+    ddl: 'ALTER TABLE agent_thread ADD COLUMN default_agent TEXT',
+  },
+];
+
+/**
+ * Runs the `CREATE TABLE IF NOT EXISTS` DDL above against the supplied Drizzle SQLite db, then adds
+ * any column missing from a table that already existed.
+ */
 export async function ensureAgentSchema(db: AgentDrizzleDb): Promise<void> {
   for (const statement of statements) {
     await db.run(sql.raw(statement));
+  }
+  for (const { table, column, ddl } of additiveColumns) {
+    // Asking the table what it has, rather than running the ALTER and swallowing the failure: a
+    // swallowed error cannot tell "the column is already there" apart from "the ALTER is malformed",
+    // and the second one would then go unnoticed until a query hit the missing column.
+    const existing = await db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`));
+    if (!existing.some((row) => row.name === column)) {
+      await db.run(sql.raw(ddl));
+    }
   }
 }

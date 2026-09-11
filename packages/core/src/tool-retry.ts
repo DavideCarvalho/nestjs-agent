@@ -8,6 +8,8 @@
  * checkpoint; history still shows exactly one step per tool call.
  */
 
+import { isControlFlowSignal } from './control-flow.js';
+
 /** Narrow, structural check for a MySQL/Postgres/SQLite transient error shape — no casts. */
 function hasTransientShape(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) {
@@ -98,9 +100,10 @@ export function resolveToolTransientRetryNumbers(
 
 export interface InvokeWithTransientRetryOptions {
   /**
-   * Recognizes the runner's control-flow signals (durable suspend / continue-as-new) so a retry
-   * never swallows one — same rule the loop's tool catch already applies. Undefined for a call site
-   * with no such notion (e.g. the dispatched step handler, which has no workflow ctx of its own).
+   * Widens what counts as a control-flow signal (durable suspend / continue-as-new) so a retry never
+   * swallows one — same rule the loop's tool catch applies. An ADDITION to the built-in marker check
+   * ({@link isControlFlowSignal}), which already covers every signal the durable runtimes raise;
+   * supply this only for a runner whose signals carry no marker.
    */
   isControlFlowError?: (error: unknown) => boolean;
   /**
@@ -142,7 +145,7 @@ export async function invokeWithTransientRetry<T>(
     try {
       return await fn();
     } catch (error) {
-      if (options?.isControlFlowError?.(error) === true) {
+      if (isControlFlowSignal(error) || options?.isControlFlowError?.(error) === true) {
         throw error;
       }
       const attemptsRemain = attempt < attempts;

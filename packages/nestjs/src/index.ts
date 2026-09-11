@@ -6,9 +6,14 @@ export type {
   AgentAttachmentsOptions,
   AgentSurface,
 } from './agent.options.js';
-export { AgentService, type ChatParams } from './agent.service.js';
+export {
+  AgentService,
+  type ChatParams,
+  type ThreadDefaultAgentReader,
+} from './agent.service.js';
 export {
   AttachmentsController,
+  ATTACHMENT_PAGE_SIZE,
   DEFAULT_MAX_ATTACHMENT_BYTES,
   DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES,
 } from './controller/attachments.controller.js';

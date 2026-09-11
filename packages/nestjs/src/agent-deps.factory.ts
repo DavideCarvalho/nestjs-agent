@@ -9,15 +9,19 @@ import {
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   type AgentDefinition,
+  type AgentHistoryWindow,
   type AgentPricingStore,
   AgentRegistry,
   type AgentStore,
+  type HistoryPolicy,
   type ModelProvider,
   type PromptContributor,
   type QuotaStore,
   type RolesPolicy,
   type TokenStreamSink,
   ToolRegistry,
+  summarizeWithModel,
+  windowHistory,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
@@ -79,6 +83,8 @@ export class AgentDepsFactory {
     const toolAllowList = this.effectiveTools(definition);
     const followUpsCount = this.followUpsCount();
     const retrieval = this.options.retrieval;
+    const historyPolicy = this.historyPolicy(definition);
+    const ask = definition?.ask ?? this.options.ask;
     return {
       model: this.model,
       store: this.store,
@@ -91,6 +97,17 @@ export class AgentDepsFactory {
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
       ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),
+      ...(historyPolicy !== undefined ? { historyPolicy } : {}),
+      inputProcessors: this.options.inputProcessors ?? [],
+      outputProcessors: this.options.outputProcessors ?? [],
+      ...(definition?.outputSchema !== undefined ? { outputSchema: definition.outputSchema } : {}),
+      ...(definition?.outputRepairAttempts !== undefined
+        ? { outputRepairAttempts: definition.outputRepairAttempts }
+        : {}),
+      ...(definition?.intake !== undefined ? { intake: definition.intake } : {}),
+      // Most specific wins, exactly as `historyPolicy` resolves: the agent's own `@Agent({ ask })`,
+      // else the module-wide flag. Both are module config, so every process of a deployment agrees.
+      ...(ask === true ? { ask: true } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
       ...(this.options.toolTimeoutMs !== undefined
         ? { toolTimeoutMs: this.options.toolTimeoutMs }
@@ -106,6 +123,32 @@ export class AgentDepsFactory {
           }
         : {}),
     };
+  }
+
+  /**
+   * The ceiling on how much of a thread this agent's turns carry, most specific wins: the agent's
+   * own `@Agent({ history })`, else a module-wide custom `historyPolicy`, else the module-wide
+   * `history` window. Undefined → unbounded, the behaviour of a module that configures none.
+   */
+  private historyPolicy(definition: AgentDefinition | undefined): HistoryPolicy | undefined {
+    if (definition?.history !== undefined) {
+      return this.window(definition.history);
+    }
+    if (this.options.historyPolicy !== undefined) {
+      return this.options.historyPolicy;
+    }
+    return this.options.history === undefined ? undefined : this.window(this.options.history);
+  }
+
+  /** Build the built-in window policy from the declarative `{ maxMessages, maxTokens, summarize }`. */
+  private window(config: AgentHistoryWindow): HistoryPolicy {
+    return windowHistory({
+      ...(config.maxMessages !== undefined ? { maxMessages: config.maxMessages } : {}),
+      ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
+      // The shared module model, not a per-agent one: an agent's `modelId` is an accounting label,
+      // and only one provider is ever bound.
+      ...(config.summarize === true ? { summarize: summarizeWithModel(this.model) } : {}),
+    });
   }
 
   /** Normalize the `followUps` option (`true` → 3, `{ count }` → count) to a number, or undefined. */

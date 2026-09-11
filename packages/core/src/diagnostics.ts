@@ -97,6 +97,18 @@ export interface AgentFollowUpsSpan {
   count: number;
 }
 
+/**
+ * START payload of an `aviary:agent:structured-output:*` span — the formatting pass that restates a
+ * finished answer as `AgentLoopDeps.outputSchema`. `attempt` is 0 for the pass itself and counts up
+ * for each bounded repair, so a run that needed three tries is visible as three spans.
+ */
+export interface AgentStructuredOutputSpan {
+  runId: string;
+  /** Zero-based model-call index of the final turn whose answer is being restated. */
+  step: number;
+  attempt: number;
+}
+
 /** Declaration-merge so `emit('agent', ...)`, `trace('agent', ...)` and telescope infer the agent payloads. */
 declare module '@dudousxd/nestjs-diagnostics' {
   interface ChannelRegistry {
@@ -116,6 +128,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'tool.execution': AgentToolExecutionSpan;
       retrieval: AgentRetrievalSpan;
       'follow-ups': AgentFollowUpsSpan;
+      'structured-output': AgentStructuredOutputSpan;
     };
   }
 }
@@ -155,7 +168,12 @@ export function publishAgentToolRetry(payload: AgentToolRetry): void {
  * nothing to subscribe to on their base channels, and claiming their keys would be meaningless
  * (the generic bridge only records point traffic).
  */
-export type AgentSpanEvent = 'llm.turn' | 'tool.execution' | 'retrieval' | 'follow-ups';
+export type AgentSpanEvent =
+  | 'llm.turn'
+  | 'tool.execution'
+  | 'retrieval'
+  | 'follow-ups'
+  | 'structured-output';
 
 /** All span-only events, in a stable order — for a future span recorder to derive sub-channels from. */
 export const AGENT_SPAN_EVENTS: readonly AgentSpanEvent[] = [

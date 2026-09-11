@@ -1,7 +1,11 @@
 import type {
   ActorResolver,
+  AgentHistoryWindow,
   AgentStore,
+  HistoryPolicy,
+  InputProcessor,
   ModelProvider,
+  OutputProcessor,
   QuotaStore,
   Retriever,
   RolesPolicy,
@@ -149,6 +153,54 @@ export interface AgentModuleOptions {
    * this — instead expose the tool: `provideAgentTool(createRetrievalTool(retriever))`. Omit → off.
    */
   retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
+
+  /**
+   * Bounds how much of a thread rides into each turn. Omit and a turn carries EVERY message the
+   * thread holds, so a long-lived thread costs more each time and eventually exceeds the model's
+   * context limit outright. `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit;
+   * `{ summarize: true }` folds what they left out into a leading summary, at the price of one extra
+   * model call per run (recorded as `history_summary` usage). An agent can override this for itself
+   * with `@Agent({ history })`.
+   */
+  history?: AgentHistoryWindow;
+  /**
+   * A {@link HistoryPolicy} of your own — for a window the built-in can't express (pinning the
+   * thread's opening brief, keeping every message that carries a tool result, a budget that varies
+   * by actor). A convenience-vs-custom pair like `quotaLimitTokens`/`quota`: this outranks a
+   * module-wide `history`, and `@Agent({ history })` outranks both for the agent that declares it.
+   * `select` MUST be pure — see the SPI's determinism contract.
+   */
+  historyPolicy?: HistoryPolicy;
+
+  /**
+   * Rewrites the prompt before every model call — masking identifiers, stamping a policy preamble,
+   * trimming an oversized tool result. Applies to EVERY agent: a transformation one persona can opt
+   * out of is not a control. Transformation only; `history`/`historyPolicy` still own which messages
+   * are there to transform. A processor needing DI-resolved dependencies is built in
+   * `forRootAsync`'s `useFactory` (which has `inject`), the same way `retrieval.retriever` is.
+   */
+  inputProcessors?: InputProcessor[];
+  /**
+   * Gates every model answer before the stream, the store or the next step sees it — redact,
+   * replace, or refuse the turn outright (which fails it with an `output_rejected` stream error).
+   *
+   * REGISTERING ONE TURNS OFF LIVE TOKEN STREAMING. Reading the whole answer and streaming it as it
+   * is generated cannot both be true, so the turn's model output is buffered and released in one
+   * frame once the chain passes. That is the price of a gate that actually gates; see
+   * `AgentLoopDeps.outputProcessors` for exactly what a subscriber still receives live.
+   */
+  outputProcessors?: OutputProcessor[];
+
+  /**
+   * Offer every agent the built-in `ask` tool, so the model can put its own clarifying question set
+   * to the user when it judges the scope is missing. The turn parks on the answers exactly as it
+   * parks on a HITL approval, and they arrive through `POST /agent/tool-call/answer`.
+   *
+   * `ask` is not a registered tool and has no handler — the loop settles it against a person — so no
+   * `RolesPolicy` gates it: asking a question performs nothing. An `@Agent({ ask })` overrides this
+   * for one persona. Omit → the model never sees it, and nothing about a turn changes.
+   */
+  ask?: boolean;
 
   /**
    * The name of the agent a turn uses when the caller doesn't select one. Omit → the single

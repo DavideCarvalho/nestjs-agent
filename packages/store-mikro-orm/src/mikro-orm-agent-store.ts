@@ -55,11 +55,10 @@ export class MikroOrmAgentStore implements AgentStore {
       { thread },
       { orderBy: { createdAt: 'asc', id: 'asc' } },
     );
-    // Tool RESULTS live on the `agent_tool_call` records (the source of truth for outputs), not on
-    // the message row. Rebuild each assistant message's `toolResults` from its resolved calls so a
-    // reloaded thread feeds a complete assistant+tool pair back to the model — without this a
-    // multi-turn thread that used tools throws MissingToolResultsError on the NEXT turn, since the
-    // prior assistant message would carry tool calls with no matching results.
+    // A message that carries tool calls and no results of its own is completed from the
+    // `agent_tool_call` rows: an assistant message whose calls have no matching results makes the
+    // NEXT turn throw MissingToolResultsError at the provider, and the rows are the only other
+    // place an output survives.
     const resultsByMessage = await this.loadToolResults(em, messages);
     const last = messages[messages.length - 1];
     return {
@@ -72,15 +71,18 @@ export class MikroOrmAgentStore implements AgentStore {
   }
 
   /**
-   * Group each message's resolved tool calls into `ToolResult[]`, keyed by message id. A call is
-   * "resolved" once it has run (executed/failed/rejected) — a pending-approval call has no result
-   * yet and is skipped, so a mid-approval turn doesn't inject a phantom empty result.
+   * Group the resolved tool calls of each message that has none of its own into `ToolResult[]`,
+   * keyed by message id. A call is "resolved" once it has run (executed/failed/rejected) — a
+   * pending-approval call has no result yet and is skipped, so a mid-approval turn doesn't inject
+   * a phantom empty result.
    */
   private async loadToolResults(
     em: EntityManager,
     messages: AgentMessage[],
   ): Promise<Map<string, ToolResult[]>> {
-    const withCalls = messages.filter((message) => message.toolCalls != null);
+    const withCalls = messages.filter(
+      (message) => message.toolCalls != null && message.toolResults == null,
+    );
     const byMessage = new Map<string, ToolResult[]>();
     if (withCalls.length === 0) {
       return byMessage;
@@ -154,6 +156,7 @@ export class MikroOrmAgentStore implements AgentStore {
       createdAt: now,
       updatedAt: now,
       ...(source.tenantRef != null ? { tenantRef: source.tenantRef } : {}),
+      ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
     });
     em.persist(fork);
     for (const message of kept) {
@@ -166,9 +169,14 @@ export class MikroOrmAgentStore implements AgentStore {
           createdAt: message.createdAt,
           ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
           ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
+          ...(message.attachments != null ? { attachments: message.attachments } : {}),
           ...(message.followUps != null ? { followUps: message.followUps } : {}),
           ...(message.usage != null ? { usage: message.usage } : {}),
           ...(message.agentName != null ? { agentName: message.agentName } : {}),
+          // The copy is the same message, so it keeps the run that wrote it. A reader asking which
+          // turn produced this text gets the truthful answer; the run's own thread is still the
+          // original, so a run-scoped read never picks the fork's rows up.
+          ...(message.runId != null ? { runId: message.runId } : {}),
         }),
       );
     }
@@ -206,7 +214,7 @@ export class MikroOrmAgentStore implements AgentStore {
       { id: toolCallId },
       { populate: ['message.thread'] },
     );
-    return toolCall?.message.thread.activeStreamId ?? null;
+    return toolCall?.runId ?? toolCall?.message.thread.activeStreamId ?? null;
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -276,6 +284,22 @@ export class MikroOrmAgentStore implements AgentStore {
   }
 
   /**
+   * The thread's default agent, projected — the caller wants one nullable scalar to decide which
+   * agent answers the next turn, and {@link getThread} would materialize the whole transcript (every
+   * message, every tool output) to hand it over. `null` when the thread is unknown, soft-deleted, or
+   * has no default set.
+   */
+  async defaultAgentForThread(threadId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: threadId, deletedAt: null },
+      { fields: ['defaultAgent'] },
+    );
+    return thread?.defaultAgent ?? null;
+  }
+
+  /**
    * The runId currently streaming this thread (its `activeStreamId`), or `null` if the thread is
    * unknown, soft-deleted, or has no active run. This is the same field {@link setActiveStream} writes
    * and {@link ownerOfActiveStream}/{@link runForToolCall} already read by runId — this is the reverse
@@ -317,7 +341,7 @@ export class MikroOrmAgentStore implements AgentStore {
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
   async recordRunEnd(end: {
     runId: string;
-    status: 'completed' | 'failed';
+    status: 'completed' | 'failed' | 'cancelled';
     durationMs?: number;
     errorCode?: string;
     errorMessage?: string;
@@ -366,11 +390,22 @@ export class MikroOrmAgentStore implements AgentStore {
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.runId !== undefined ? { runId: input.runId } : {}),
     });
     thread.updatedAt = now;
     em.persist(message);
     await em.flush();
     return this.toStoredMessage(message);
+  }
+
+  async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
+    const em = this.em.fork();
+    const message = await em.findOne(AgentMessage, { id: messageId });
+    if (message === null) {
+      return;
+    }
+    message.toolResults = results;
+    await em.flush();
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
@@ -434,6 +469,40 @@ export class MikroOrmAgentStore implements AgentStore {
     await em.flush();
   }
 
+  /**
+   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   *
+   * Reads the `attachments` JSON back out and matches in memory rather than pushing the match into
+   * SQL: the column holds an array of objects, and each dialect this adapter supports spells that
+   * query differently (`jsonb` containment, `json_table`, `json_each`), while none of them can use
+   * an index for it anyway. The scan is bounded by ONE actor's attachment-bearing messages, which
+   * is a small set — attachments are rare, and a message without one never leaves the database.
+   *
+   * Soft-deleted threads are deliberately included: their message rows survive, so the bytes they
+   * point at are still reachable from stored state and are not garbage.
+   */
+  async referencedMediaIds(actorRef: string, mediaIds: readonly string[]): Promise<string[]> {
+    if (mediaIds.length === 0) {
+      return [];
+    }
+    const em = this.em.fork();
+    const messages = await em.find(
+      AgentMessage,
+      { thread: { actorRef }, attachments: { $ne: null } },
+      { fields: ['attachments'] },
+    );
+    const wanted = new Set(mediaIds);
+    const found = new Set<string>();
+    for (const message of messages) {
+      for (const attachment of message.attachments ?? []) {
+        if (wanted.has(attachment.mediaId)) {
+          found.add(attachment.mediaId);
+        }
+      }
+    }
+    return [...wanted].filter((mediaId) => found.has(mediaId));
+  }
+
   async recordUsage(input: RecordUsageInput): Promise<void> {
     const em = this.em.fork();
     const usage = em.create(AgentTokenUsage, {
@@ -481,14 +550,17 @@ export class MikroOrmAgentStore implements AgentStore {
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
+      defaultAgent: thread.defaultAgent ?? null,
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }
 
   private toStoredMessage(message: AgentMessage, toolResults?: ToolResult[]): StoredMessage {
-    // Prefer results rebuilt from the tool-call records; fall back to the (legacy) message column.
+    // The message's own results are the answer — the same list every other adapter returns. The
+    // rebuilt ones only ever arrive for a message that has none.
     const resolvedResults =
-      toolResults !== undefined && toolResults.length > 0 ? toolResults : message.toolResults;
+      message.toolResults ??
+      (toolResults !== undefined && toolResults.length > 0 ? toolResults : undefined);
     return {
       id: message.id,
       role: message.role,
@@ -500,6 +572,7 @@ export class MikroOrmAgentStore implements AgentStore {
       ...(message.attachments != null ? { attachments: message.attachments } : {}),
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
+      ...(message.runId != null ? { runId: message.runId } : {}),
     };
   }
 }

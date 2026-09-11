@@ -1,7 +1,11 @@
 import type {
+  AgentIntake,
   AgentPricingStore,
   AgentStore,
+  HistoryPolicy,
+  InputProcessor,
   ModelProvider,
+  OutputProcessor,
   PromptBuilder,
   PromptContributor,
   QuotaStore,
@@ -12,6 +16,7 @@ import type {
   ToolRegistry,
   ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
 export interface AgentDeps {
@@ -44,6 +49,20 @@ export interface AgentDeps {
   retrievalTopK?: number;
   /** Bound `AGENT_PRICING_STORE`, when a module (e.g. a store's) provides one. Undefined → no pricing. */
   pricingStore?: AgentPricingStore;
+  /** The agent's history ceiling, resolved from `@Agent({ history })` / module options. Undefined → unbounded. */
+  historyPolicy?: HistoryPolicy;
+  /** Module-wide prompt rewriters, applied before every model call. Empty → none. */
+  inputProcessors: InputProcessor[];
+  /** Module-wide answer gates. NON-EMPTY MEANS THE TURN'S MODEL OUTPUT IS BUFFERED, not streamed. */
+  outputProcessors: OutputProcessor[];
+  /** The agent's `@Agent({ outputSchema })`, resolved from DI — never over the wire. Undefined → free text. */
+  outputSchema?: StandardSchemaV1;
+  /** Extra model calls allowed to repair an answer that failed `outputSchema`. Undefined → 1. */
+  outputRepairAttempts?: number;
+  /** The agent's `@Agent({ intake })` question set, asked before the turn starts. Undefined → none. */
+  intake?: AgentIntake;
+  /** Whether the model may call the built-in `ask` tool this turn. Undefined/false → it never sees it. */
+  ask?: boolean;
 }
 
 export function utcDay(date = new Date()): string {

@@ -1,14 +1,17 @@
 import {
   AGENT_DEPS_FACTORY,
   type AiToolCtx,
+  type BufferedModelTurnResult,
   type LlmStepEnvelope,
-  type ModelTurnResult,
+  type SinkWriter,
   type ToolStepEnvelope,
   type ToolTransientRetrySetting,
+  createFrameBuffer,
   invokeWithTransientRetry,
   publishAgentToolRetry,
   traceLlmTurn,
   traceToolExecution,
+  withAskTool,
   withToolTimeout,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
@@ -70,24 +73,37 @@ export class AgentRunSteps {
    * across however many turns/retries it takes.
    */
   @Step({ retries: 3 })
-  async llm(input: DispatchedLlmInput): Promise<ModelTurnResult> {
+  async llm(input: DispatchedLlmInput): Promise<BufferedModelTurnResult> {
     const deps = this.factory.forAgent(input.agentName);
     // The envelope carries only wire-safe data — a `ToolDefinition` holds a live Zod/StandardSchema
     // instance that can't survive JSON transport, so this handler re-derives it from `input.actor`,
     // exactly like the loop's own non-dispatched branch does.
-    const tools = await deps.registry.definitionsFor(
-      input.actor,
-      deps.rolesPolicy,
-      deps.toolAllowList,
+    // `withAskTool` from THIS worker's own resolved deps, not from the envelope: `ask` is module
+    // config, uniform across a deployment, so the worker reaches the same list the loop would have
+    // built locally without the wire contract having to carry the flag.
+    const tools = withAskTool(
+      await deps.registry.definitionsFor(input.actor, deps.rolesPolicy, deps.toolAllowList),
+      deps.ask,
     );
-    const opened = await deps.sink.open(input.sinkRunId);
-    const writer = input.childSink ? childSinkWriter(opened) : opened;
+    // `bufferOutput` means the dispatching loop has an output gate to run and this worker's sink is
+    // on the far side of it: streaming here would put the answer in front of the reader before the
+    // gate ever saw it. Hold the frames and hand them back on the result — the loop releases them
+    // (or does not) from the checkpoint that carries the verdict. A durable retry of this step
+    // simply re-buffers, so no half-gated turn can reach the sink.
+    const buffer = input.bufferOutput === true ? createFrameBuffer() : undefined;
+    let writer: SinkWriter;
+    if (buffer !== undefined) {
+      writer = buffer.writer;
+    } else {
+      const opened = await deps.sink.open(input.sinkRunId);
+      writer = input.childSink ? childSinkWriter(opened) : opened;
+    }
     // Span-wrapped HERE (the genuine execution site), emitting the identical `aviary:agent:llm.turn`
     // span core's non-dispatched branch emits — from whichever worker actually serves the step.
     // Replay-safe by construction: a dispatched step's handler only runs on genuine dispatch (replay
     // resolves the step from its checkpoint without re-invoking a worker), which is exactly why core
     // exports the helper instead of wrapping the `hooks.dispatchLlm` CALL site itself.
-    return traceLlmTurn(input.runId, input.step, () =>
+    const turn = await traceLlmTurn(input.runId, input.step, () =>
       deps.model.runTurn({
         system: input.system,
         messages: input.messages,
@@ -95,6 +111,7 @@ export class AgentRunSteps {
         sink: writer,
       }),
     );
+    return buffer === undefined ? turn : { ...turn, bufferedFrames: buffer.frames() };
   }
 
   /**
@@ -110,6 +127,18 @@ export class AgentRunSteps {
   @Step()
   async tool(input: DispatchedToolInput): Promise<unknown> {
     const deps = this.factory.forAgent(input.ctx.agentName);
+    // The approval gate lives in the LOOP, which resolved this call's kind from the registry of the
+    // process that ran the body. This worker has its own registry, and it is the process that
+    // actually runs the tool — so if it knows the tool as an `action` while the envelope says the
+    // loop auto-executed it, the loop resolved the kind against a registry that was missing it, and
+    // running the tool here would perform an approved-only action nobody approved. Refuse: the loop
+    // reports it as a tool failure the model can answer for, which is recoverable, unlike the side
+    // effect.
+    if (deps.registry.spec(input.toolName)?.kind === 'action' && input.toolType !== 'action') {
+      throw new Error(
+        `tool "${input.toolName}" is an action tool but was dispatched without approval: the dispatching process resolved its kind against a registry that does not have it`,
+      );
+    }
     // AgentDeps carries no `host` today (AgentDepsFactory never populates one), so the rebuilt ctx
     // is exactly `input.ctx` — no narrower than what the non-dispatched path already threads through.
     const ctx: AiToolCtx = { ...input.ctx };

@@ -1,4 +1,4 @@
-import type { AgentRunInput, Decision } from '../types.js';
+import type { AgentRunInput, HumanReply } from '../types.js';
 
 /**
  * Runs an agent turn. Two impls exist:
@@ -12,7 +12,11 @@ import type { AgentRunInput, Decision } from '../types.js';
  */
 export interface AgentRunner {
   start(input: AgentRunInput): Promise<{ runId: string }>;
-  /** Deliver a HITL decision for a pending action tool call. */
-  signal(runId: string, toolCallId: string, decision: Decision): Promise<void>;
+  /**
+   * Deliver a human's reply to a parked tool call — a {@link import('../types.js').Decision} on an
+   * action tool, or an `ElicitationReply` answering a question set. One channel for both, because
+   * both park the run the same way and a runner has no reason to tell them apart.
+   */
+  signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void>;
   cancel(runId: string): Promise<void>;
 }

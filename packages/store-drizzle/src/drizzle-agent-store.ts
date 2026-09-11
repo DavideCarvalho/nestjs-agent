@@ -7,9 +7,11 @@ import type {
   StoredMessage,
   ThreadDetail,
   ThreadSummary,
+  ToolResult,
+  UpdateThreadInput,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   type AgentMessageRow,
@@ -40,6 +42,7 @@ export class DrizzleAgentStore implements AgentStore {
       title: input.title ?? 'New chat',
       transient: input.transient ?? false,
       activeStreamId: null,
+      defaultAgent: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -122,6 +125,7 @@ export class DrizzleAgentStore implements AgentStore {
       title: source.title,
       transient: false,
       activeStreamId: null,
+      defaultAgent: source.defaultAgent,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -136,9 +140,14 @@ export class DrizzleAgentStore implements AgentStore {
           content: message.content,
           toolCalls: message.toolCalls,
           toolResults: message.toolResults,
+          attachments: message.attachments,
           followUps: message.followUps,
           usage: message.usage,
           agentName: message.agentName,
+          // The copy is the same message, so it keeps the run that wrote it. A reader asking which
+          // turn produced this text gets the truthful answer; the run's own thread is still the
+          // original, so a run-scoped read never picks the fork's rows up.
+          runId: message.runId,
           createdAt: message.createdAt,
         })),
       );
@@ -166,12 +175,12 @@ export class DrizzleAgentStore implements AgentStore {
 
   async runForToolCall(toolCallId: string): Promise<string | null> {
     const [row] = await this.db
-      .select({ activeStreamId: agentThread.activeStreamId })
+      .select({ runId: agentToolCall.runId, activeStreamId: agentThread.activeStreamId })
       .from(agentToolCall)
       .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
       .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
       .where(eq(agentToolCall.id, toolCallId));
-    return row?.activeStreamId ?? null;
+    return row?.runId ?? row?.activeStreamId ?? null;
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -203,6 +212,40 @@ export class DrizzleAgentStore implements AgentStore {
       .where(eq(agentThread.id, threadId));
   }
 
+  /**
+   * Patch a thread's `title` and/or `defaultAgent`. Each field is only touched when PRESENT in
+   * `patch` — `defaultAgent: null` clears it (falls back to the app default), while an omitted
+   * `defaultAgent` leaves whatever is stored untouched. A no-op (including `updatedAt`) when the
+   * patch is empty or the thread doesn't exist.
+   */
+  async updateThread(threadId: string, patch: UpdateThreadInput): Promise<void> {
+    const updates: Partial<typeof agentThread.$inferInsert> = {};
+    if (patch.title !== undefined) {
+      updates.title = patch.title;
+    }
+    if (patch.defaultAgent !== undefined) {
+      updates.defaultAgent = patch.defaultAgent;
+    }
+    if (Object.keys(updates).length === 0) {
+      return;
+    }
+    updates.updatedAt = new Date();
+    await this.db.update(agentThread).set(updates).where(eq(agentThread.id, threadId));
+  }
+
+  /**
+   * The thread's default agent, projected — the caller wants one nullable scalar to decide which
+   * agent answers the next turn, and {@link getThread} would materialize the whole transcript to
+   * hand it over. `null` when the thread is unknown, soft-deleted, or has no default set.
+   */
+  async defaultAgentForThread(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ defaultAgent: agentThread.defaultAgent })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+    return thread?.defaultAgent ?? null;
+  }
+
   /** Persist the start of a run (turn). Replay-safe: called under a durable localStep. */
   async recordRunStart(run: {
     runId: string;
@@ -231,7 +274,7 @@ export class DrizzleAgentStore implements AgentStore {
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
   async recordRunEnd(end: {
     runId: string;
-    status: 'completed' | 'failed';
+    status: 'completed' | 'failed' | 'cancelled';
     durationMs?: number;
     errorCode?: string;
     errorMessage?: string;
@@ -276,9 +319,11 @@ export class DrizzleAgentStore implements AgentStore {
       content: input.content,
       toolCalls: input.toolCalls ?? null,
       toolResults: input.toolResults ?? null,
+      attachments: input.attachments ?? null,
       followUps: input.followUps ?? null,
       usage: input.usage ?? null,
       agentName: input.agentName ?? null,
+      runId: input.runId ?? null,
       createdAt: now,
     };
     await this.db.insert(agentMessage).values(message);
@@ -287,6 +332,13 @@ export class DrizzleAgentStore implements AgentStore {
       .set({ updatedAt: now })
       .where(eq(agentThread.id, input.threadId));
     return this.toStoredMessage(message);
+  }
+
+  async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
+    await this.db
+      .update(agentMessage)
+      .set({ toolResults: results })
+      .where(eq(agentMessage.id, messageId));
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
@@ -342,6 +394,40 @@ export class DrizzleAgentStore implements AgentStore {
     await this.db.update(agentToolCall).set(updates).where(eq(agentToolCall.id, input.toolCallId));
   }
 
+  /**
+   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   *
+   * Reads the `attachments` JSON back out and matches in memory rather than pushing the match into
+   * SQL: the column holds an array of objects, and every dialect this adapter's sibling targets
+   * spells that query differently (`jsonb` containment, `json_table`, `json_each`), while none of
+   * them can use an index for it anyway. The scan is bounded by ONE actor's attachment-bearing
+   * messages, which is a small set — attachments are rare, and a message without one is excluded
+   * by the `is not null` before any JSON is parsed.
+   *
+   * Soft-deleted threads are deliberately included: their message rows survive, so the bytes they
+   * point at are still reachable from stored state and are not garbage.
+   */
+  async referencedMediaIds(actorRef: string, mediaIds: readonly string[]): Promise<string[]> {
+    if (mediaIds.length === 0) {
+      return [];
+    }
+    const rows = await this.db
+      .select({ attachments: agentMessage.attachments })
+      .from(agentMessage)
+      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .where(and(eq(agentThread.actorRef, actorRef), isNotNull(agentMessage.attachments)));
+    const wanted = new Set(mediaIds);
+    const found = new Set<string>();
+    for (const row of rows) {
+      for (const attachment of row.attachments ?? []) {
+        if (wanted.has(attachment.mediaId)) {
+          found.add(attachment.mediaId);
+        }
+      }
+    }
+    return [...wanted].filter((mediaId) => found.has(mediaId));
+  }
+
   async recordUsage(input: RecordUsageInput): Promise<void> {
     await this.db.insert(agentTokenUsage).values({
       id: crypto.randomUUID(),
@@ -387,6 +473,7 @@ export class DrizzleAgentStore implements AgentStore {
       transient: thread.transient,
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
+      defaultAgent: thread.defaultAgent,
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }
@@ -399,9 +486,11 @@ export class DrizzleAgentStore implements AgentStore {
       createdAt: message.createdAt.toISOString(),
       ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
       ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
+      ...(message.attachments != null ? { attachments: message.attachments } : {}),
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
       ...(message.agentName != null ? { agentName: message.agentName } : {}),
+      ...(message.runId != null ? { runId: message.runId } : {}),
     };
   }
 }

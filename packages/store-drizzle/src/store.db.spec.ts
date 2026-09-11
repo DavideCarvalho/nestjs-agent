@@ -1,14 +1,20 @@
 // Integration: DrizzleAgentStore + ensureAgentSchema against an in-memory SQLite
 // (better-sqlite3, via drizzle-orm/better-sqlite3). Runs only under `pnpm test:db`.
-import type { StoredMessage, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type {
+  RecordRunEndInput,
+  StoredMessage,
+  ThreadSummary,
+  UpdateThreadInput,
+} from '@dudousxd/nestjs-agent-core';
+import { EVERY_MESSAGE_FIELD } from '@dudousxd/nestjs-agent-testing';
 import Database from 'better-sqlite3';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import { ensureAgentSchema } from './ensure-schema.js';
-import { agentRun, agentSchema, agentToolCall } from './schema.js';
+import { type AgentRunStatus, agentRun, agentSchema, agentToolCall } from './schema.js';
 
 let db: BetterSQLite3Database<typeof agentSchema>;
 let store: DrizzleAgentStore;
@@ -255,5 +261,255 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     const secondPrice = secondPrices.filter((price) => price.modelId === 'm');
     expect(secondPrice).toHaveLength(1);
     expect(secondPrice[0]?.inputPricePer1m).toBe(4);
+  });
+});
+
+describe('DrizzleAgentStore — a turn a client reads back', () => {
+  it('pairs every tool call on a message with the result the turn settled it with', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'looking',
+      toolCalls: [
+        { id: 'c1', name: 'lookup', input: {}, kind: 'read' },
+        { id: 'c2', name: 'retrieve', input: { query: 'refunds' }, kind: 'read' },
+      ],
+      toolResults: [{ id: 'c2', name: 'retrieve', output: { passages: [] } }],
+    });
+
+    await store.setMessageToolResults(message.id, [
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+
+    const [stored] = (await store.getThread(thread.id))?.messages ?? [];
+    expect(stored?.toolResults).toEqual([
+      { id: 'c1', name: 'lookup', output: { rows: 1 } },
+      { id: 'c2', name: 'retrieve', output: { passages: [] } },
+    ]);
+  });
+});
+
+describe('DrizzleAgentStore — a thread patch a client reads back', () => {
+  /**
+   * Typed `Required<UpdateThreadInput>` so a new field on the patch fails to COMPILE here until this
+   * adapter round-trips it. `defaultAgent` had no column at all on this adapter and no test noticed:
+   * the write went nowhere and the value could never be read back.
+   */
+  const EVERY_PATCH_FIELD: Required<UpdateThreadInput> = {
+    title: 'Renamed',
+    defaultAgent: 'researcher',
+  };
+
+  it('returns every patched field from getThread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch' } });
+
+    await store.updateThread(thread.id, EVERY_PATCH_FIELD);
+
+    expect(await store.getThread(thread.id)).toMatchObject(EVERY_PATCH_FIELD);
+  });
+
+  it('patches each field independently and clears defaultAgent on an explicit null', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-patch-2' }, title: 'Original' });
+    // never set — the column is there and holds null, which is NOT the same as the store not
+    // knowing the field (that reads as undefined, and the service normalizes it the same way)
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+
+    await store.updateThread(thread.id, { title: 'Renamed' });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    const patched = await store.getThread(thread.id);
+    expect(patched?.title).toBe('Renamed');
+    expect(patched?.defaultAgent).toBe('researcher');
+
+    await store.updateThread(thread.id, { defaultAgent: null });
+    expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
+
+    await expect(store.updateThread('missing', { title: 'x' })).resolves.toBeUndefined();
+  });
+
+  it('reads the default agent without materializing the thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-projection' } });
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+
+    await store.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect(await store.defaultAgentForThread(thread.id)).toBe('researcher');
+
+    expect(await store.defaultAgentForThread('missing')).toBeNull();
+    await store.softDeleteThread(thread.id);
+    expect(await store.defaultAgentForThread(thread.id)).toBeNull();
+  });
+});
+
+/**
+ * Every terminal the SPI can hand a store has to be NAMEABLE by the row it lands in. The
+ * `satisfies` is the whole check: a `recordRunEnd` declaring a narrower parameter still accepts
+ * `'cancelled'` and writes it through (method parameters are bivariant), so at runtime nothing is
+ * wrong — but the row type tells every reader a cancelled run is impossible, and a reliability read
+ * then has no way to leave a user pressing Stop out of its failure count.
+ */
+const TERMINALS = ['completed', 'failed', 'cancelled'] as const satisfies readonly (AgentRunStatus &
+  RecordRunEndInput['status'])[];
+
+describe('DrizzleAgentStore — the terminals a run can settle on', () => {
+  it('records and reads back each of them, leaving a cancelled run undiagnosed', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-terminals' } });
+
+    for (const status of TERMINALS) {
+      const runId = `run-${status}`;
+      await store.recordRunStart({ runId, threadId: thread.id, actorRef: 'actor-terminals' });
+      await store.recordRunEnd({ runId, status, durationMs: 42 });
+
+      const [settled] = await db.select().from(agentRun).where(eq(agentRun.id, runId));
+      expect(settled?.status).toBe(status);
+      expect(settled?.durationMs).toBe(42);
+    }
+
+    // a stop is not a diagnosis — nothing to page anyone about
+    const [cancelled] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-cancelled'));
+    expect(cancelled?.errorCode).toBeNull();
+    expect(cancelled?.errorMessage).toBeNull();
+  });
+});
+
+describe('ensureAgentSchema (drizzle)', () => {
+  it('declares an index on agent_tool_call.message_id', async () => {
+    const indexes = await db.all<{ name: string }>(sql.raw('PRAGMA index_list(agent_tool_call)'));
+    const indexed: string[] = [];
+    for (const { name } of indexes) {
+      const columns = await db.all<{ name: string }>(sql.raw(`PRAGMA index_info(${name})`));
+      indexed.push(...columns.map((column) => column.name));
+    }
+    expect(indexed).toContain('message_id');
+  });
+
+  it('upgrades tables an older release of this package created', async () => {
+    const sqlite = new Database(':memory:');
+    // `CREATE TABLE IF NOT EXISTS` is inert against a table that already exists, so the column and
+    // the index below only ever land on a running deployment through the additive pass.
+    sqlite.exec(`CREATE TABLE agent_thread (
+      id TEXT PRIMARY KEY NOT NULL,
+      actor_ref TEXT NOT NULL,
+      tenant_ref TEXT,
+      title TEXT NOT NULL,
+      transient INTEGER NOT NULL DEFAULT 0,
+      active_stream_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    )`);
+    sqlite.exec(`CREATE TABLE agent_message (
+      id TEXT PRIMARY KEY NOT NULL,
+      thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tool_calls TEXT,
+      tool_results TEXT,
+      attachments TEXT,
+      follow_ups TEXT,
+      usage TEXT,
+      agent_name TEXT,
+      run_id TEXT,
+      created_at INTEGER NOT NULL
+    )`);
+    sqlite.exec(`CREATE TABLE agent_tool_call (
+      id TEXT PRIMARY KEY NOT NULL,
+      message_id TEXT NOT NULL REFERENCES agent_message(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      tool_type TEXT NOT NULL,
+      input TEXT,
+      output TEXT,
+      status TEXT NOT NULL,
+      executed_by_ref TEXT,
+      execution_ms INTEGER,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      executed_at INTEGER,
+      run_id TEXT
+    )`);
+    const aged = drizzle(sqlite, { schema: agentSchema });
+
+    await ensureAgentSchema(aged);
+
+    const agedStore = new DrizzleAgentStore(aged);
+    const thread = await agedStore.createThread({ actor: { id: 'actor-upgraded' } });
+    await agedStore.updateThread(thread.id, { defaultAgent: 'researcher' });
+    expect((await agedStore.getThread(thread.id))?.defaultAgent).toBe('researcher');
+
+    const indexes = await aged.all<{ name: string }>(sql.raw('PRAGMA index_list(agent_tool_call)'));
+    expect(indexes.map((index) => index.name)).toContain('agent_tool_call_message_idx');
+  });
+});
+
+const IMAGE = { url: 'https://cdn/a.png', contentType: 'image/png', name: 'a.png' };
+
+describe('DrizzleAgentStore — which media a live message still references', () => {
+  it('reports the referenced subset, scoped to the asking actor', async () => {
+    const mine = await store.createThread({ actor: { id: 'actor-ref-1' } });
+    const theirs = await store.createThread({ actor: { id: 'actor-ref-2' } });
+    await store.appendMessage({
+      threadId: mine.id,
+      role: 'user',
+      content: 'mine',
+      attachments: [{ mediaId: 'mine', ...IMAGE }],
+    });
+    await store.appendMessage({
+      threadId: theirs.id,
+      role: 'user',
+      content: 'theirs',
+      attachments: [{ mediaId: 'theirs', ...IMAGE }],
+    });
+
+    expect(await store.referencedMediaIds('actor-ref-1', ['mine', 'theirs', 'never'])).toEqual([
+      'mine',
+    ]);
+  });
+
+  it('re-derives after truncateFrom, so a regenerated turn frees its media again', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-3' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'sent', ...IMAGE }],
+    });
+    expect(await store.referencedMediaIds('actor-ref-3', ['sent'])).toEqual(['sent']);
+
+    await store.truncateFrom(thread.id, message.id);
+
+    expect(await store.referencedMediaIds('actor-ref-3', ['sent'])).toEqual([]);
+  });
+
+  it('still counts a reference held by a soft-deleted thread', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-ref-4' } });
+    await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [{ mediaId: 'kept', ...IMAGE }],
+    });
+
+    await store.softDeleteThread(thread.id);
+
+    // The message row survives a soft delete, so the bytes it points at are not garbage yet — a
+    // host that wants them collected removes the thread for real and lets the cascade do it.
+    expect(await store.referencedMediaIds('actor-ref-4', ['kept'])).toEqual(['kept']);
+  });
+
+  it('carries every message field onto a fork', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-fork' } });
+    const appended = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'here it is',
+      ...EVERY_MESSAGE_FIELD,
+    });
+
+    const fork = await store.forkThread(thread.id, appended.id);
+
+    const [copied] = (await store.getThread(fork.id))?.messages ?? [];
+    expect(copied).toMatchObject(EVERY_MESSAGE_FIELD);
   });
 });

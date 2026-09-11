@@ -12,6 +12,7 @@ import type {
   StoredMessage,
   ThreadDetail,
   ThreadSummary,
+  ToolResult,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_APPROVAL_PORT, AGENT_PRICING_STORE } from '@dudousxd/nestjs-agent-core';
@@ -103,6 +104,9 @@ class MinimalAgentStore implements AgentStore {
   }
   appendMessage(input: AppendMessageInput): Promise<StoredMessage> {
     return this.inner.appendMessage(input);
+  }
+  setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
+    return this.inner.setMessageToolResults(messageId, results);
   }
   truncateFrom(threadId: string, messageId: string): Promise<void> {
     return this.inner.truncateFrom(threadId, messageId);

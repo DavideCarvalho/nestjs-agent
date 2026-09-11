@@ -60,6 +60,13 @@ export class AgentDiscoveryService implements OnModuleInit {
       ...(meta.tools !== undefined ? { tools: meta.tools } : {}),
       ...(meta.model !== undefined ? { modelId: meta.model } : {}),
       ...(meta.maxSteps !== undefined ? { maxSteps: meta.maxSteps } : {}),
+      ...(meta.history !== undefined ? { history: meta.history } : {}),
+      ...(meta.outputSchema !== undefined ? { outputSchema: meta.outputSchema } : {}),
+      ...(meta.intake !== undefined ? { intake: meta.intake } : {}),
+      ...(meta.ask !== undefined ? { ask: meta.ask } : {}),
+      ...(meta.outputRepairAttempts !== undefined
+        ? { outputRepairAttempts: meta.outputRepairAttempts }
+        : {}),
       ...(meta.handoff !== undefined ? { delegatesTo: this.handoffNames(meta) } : {}),
     };
   }

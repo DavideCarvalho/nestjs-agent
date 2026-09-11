@@ -24,6 +24,8 @@ export class AgentMessage {
   followUps?: string[] | null;
   usage?: MessageUsage | null;
   agentName?: string | null;
+  /** The run (turn) that produced this message; `null` for a pre-rollout row. */
+  runId?: string | null;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentMessageRepository;
 }
@@ -56,6 +58,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       followUps: { type: 'json', nullable: true, fieldName: 'follow_ups' },
       usage: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
+      runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
     },
   });
