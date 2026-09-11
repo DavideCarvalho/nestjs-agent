@@ -1,6 +1,14 @@
 import type { RouteDescriptor } from '@dudousxd/nestjs-codegen';
 import type { CodegenExtension } from '@dudousxd/nestjs-codegen/extension';
 
+/**
+ * What {@link nestjsAgentCodegen} returns. `transformRoutes` is always present, runs synchronously
+ * and ignores the extension context — it only appends a fixed route list.
+ */
+export interface AgentCodegenExtension extends CodegenExtension {
+  transformRoutes(routes: RouteDescriptor[]): RouteDescriptor[];
+}
+
 /** Options for {@link nestjsAgentCodegen}. */
 export interface AgentCodegenOptions {
   /**
@@ -143,7 +151,7 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
  * defineConfig({ extensions: [nestjsAgentCodegen({ basePath: '/api' })] });
  * ```
  */
-export function nestjsAgentCodegen(options: AgentCodegenOptions = {}): CodegenExtension {
+export function nestjsAgentCodegen(options: AgentCodegenOptions = {}): AgentCodegenExtension {
   const base = (options.basePath ?? '').replace(/\/+$/, '');
   const ns = options.name ?? 'agent';
   const injected = agentRoutes(base, ns);
