@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.1.1
+
+### Patch Changes
+
+- [#79](https://github.com/DavideCarvalho/nestjs-agent/pull/79) [`d950e64`](https://github.com/DavideCarvalho/nestjs-agent/commit/d950e6499cf1835a00bfa87a99c511874bd59f36) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Say what `BearerTokenActorResolver`'s token comparison actually guarantees: the contents are compared in time that does not depend on them, while the length check short-circuits by design.
+
 ## 0.1.0
 
 ### Minor Changes
