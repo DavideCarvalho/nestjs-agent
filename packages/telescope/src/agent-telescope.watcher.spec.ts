@@ -65,6 +65,8 @@ describe('AgentTelescopeWatcher', () => {
       scopes: 3,
       offered: 4,
       omitted: 1,
+      pinnedOmitted: 0,
+      recalled: false,
       promptChars: 260,
     });
     publishAgentMemoryWritten({ runId: 'r1', scope: 'actor:u1', chars: 42 });

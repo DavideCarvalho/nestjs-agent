@@ -14,14 +14,18 @@ class FakeRunner implements QueryRunner {
 }
 
 function ctx(
-  overrides: Partial<AiToolCtx> & { roles?: string[]; tenantRef?: string } = {},
+  overrides: Partial<AiToolCtx> & { roles?: string[]; tenantRef?: string | undefined } = {},
 ): AiToolCtx {
   const { roles, tenantRef, ...ctxOverrides } = overrides;
   return {
     threadId: 'thread-1',
     runId: 'run-1',
     requestId: 'req-1',
-    actor: { id: 'actor-1', roles: roles ?? ['ANALYST'], tenantRef },
+    actor: {
+      id: 'actor-1',
+      roles: roles ?? ['ANALYST'],
+      ...(tenantRef !== undefined ? { tenantRef } : {}),
+    },
     ...ctxOverrides,
   };
 }

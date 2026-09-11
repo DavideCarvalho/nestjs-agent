@@ -26,6 +26,7 @@ function createSink(): CollectingSink {
       written += decoder.decode(chunk);
     },
     end() {},
+    fail() {},
     get written() {
       return written;
     },

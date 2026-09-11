@@ -12,27 +12,36 @@ import { aiSdkModel } from './ai-sdk-model.js';
 // its true parameter shapes rather than being flattened to a permissive object.
 
 function createSink(): SinkWriter {
-  return { write() {}, end() {} };
+  return { write() {}, end() {}, fail() {} };
 }
 
+/** The stream part the mock model must emit, taken from the SDK's own `doStream` contract. */
+type ModelStreamPart = Awaited<
+  ReturnType<MockLanguageModelV3['doStream']>
+>['stream'] extends ReadableStream<infer Part>
+  ? Part
+  : never;
+
 function recordingModel(): MockLanguageModelV3 {
-  return new MockLanguageModelV3({
-    doStream: async () => ({
-      stream: simulateReadableStream({
-        chunks: [
-          { type: 'stream-start', warnings: [] },
-          { type: 'text-start', id: '1' },
-          { type: 'text-delta', id: '1', delta: 'ok' },
-          { type: 'text-end', id: '1' },
-          {
-            type: 'finish',
-            finishReason: 'stop',
-            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  const doStream: MockLanguageModelV3['doStream'] = async () => ({
+    stream: simulateReadableStream<ModelStreamPart>({
+      chunks: [
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: '1' },
+        { type: 'text-delta', id: '1', delta: 'ok' },
+        { type: 'text-end', id: '1' },
+        {
+          type: 'finish',
+          finishReason: { unified: 'stop', raw: 'stop' },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
           },
-        ],
-      }),
+        },
+      ],
     }),
   });
+  return new MockLanguageModelV3({ doStream });
 }
 
 /** The JSON schema the SDK handed the model for `toolName`, dug out of the recorded call. */
