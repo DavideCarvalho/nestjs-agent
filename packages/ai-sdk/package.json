@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
-    "ai": "7.0.16",
+    "ai": "7.0.94",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
     "vitest": "2.1.9",

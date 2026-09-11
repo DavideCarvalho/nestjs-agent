@@ -15,7 +15,7 @@
     "@testing-library/dom": "10.4.0",
     "@testing-library/react": "16.3.0",
     "@types/react": "19.2.5",
-    "ai": "7.0.16",
+    "ai": "7.0.94",
     "clsx": "2.1.1",
     "jsdom": "26.1.0",
     "react": "19.2.5",
