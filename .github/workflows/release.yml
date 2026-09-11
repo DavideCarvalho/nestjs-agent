@@ -28,12 +28,21 @@ jobs:
         uses: pnpm/action-setup@v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v7.0.0
+        uses: actions/setup-node@v4
         with:
           node-version: 22.23.2
           cache: pnpm
           # Point npm at the public registry; publish auth comes from OIDC trusted
           # publishing (see the changesets step), not a token.
+          #
+          # HELD AT v4 while every other action here moved to a Node-24 one. v7 stops exporting
+          # setup-node's dummy `NODE_AUTH_TOKEN` — which its authors did precisely because the
+          # placeholder interfered with OIDC publishing — but it still writes
+          # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into the .npmrc either way, so
+          # with the variable unset that line carries an unresolved reference. Whether npm then
+          # falls through to the OIDC exchange or sends an empty credential decides whether this
+          # job can publish at all, and the only thing that settles it is a real release. Bump it
+          # on its own, with a package to publish, rather than inside a routine runtime bump.
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
