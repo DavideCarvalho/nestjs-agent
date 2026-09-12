@@ -1,7 +1,17 @@
-import type { ModelProvider, ModelTurnArgs, ModelTurnResult } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentLoopResult,
+  AgentRunInput,
+  ModelProvider,
+  ModelTurnArgs,
+  ModelTurnResult,
+} from '@dudousxd/nestjs-agent-core';
 import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
+import {
+  InMemoryStateStore,
+  type WorkflowCtx,
+  WorkflowEngine,
+} from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -66,30 +76,51 @@ class OneToolModel implements ModelProvider {
   }
 }
 
-async function buildApp(
-  dispatchedSteps?: boolean,
-  shared?: { stateStore: InMemoryStateStore; agentStore: InMemoryAgentStore; model: ModelProvider },
-) {
-  const stateStore = shared?.stateStore ?? new InMemoryStateStore();
-  const agentStore = shared?.agentStore ?? new InMemoryAgentStore();
-  const moduleRef = await Test.createTestingModule({
+/**
+ * The `agent.run` body as a release that ran the two long steps in-process journaled it:
+ * `ctx.patched('agent:dispatched-steps')` answers `false` without consuming a position, which is
+ * exactly what the real `ctx.patched` answers on every replay of such a run (its first position
+ * holds a real step, so the marker rewinds). Registered in place of `AgentRunWorkflow` where a test
+ * needs to PRODUCE that journal — there is no configuration that writes it any more.
+ */
+@Injectable()
+class InProcessJournalWorkflow extends AgentRunWorkflow {
+  override run(ctx: WorkflowCtx, input: AgentRunInput): Promise<AgentLoopResult> {
+    const legacy: WorkflowCtx = {
+      ...ctx,
+      patched: (id) => (id === 'agent:dispatched-steps' ? Promise.resolve(false) : ctx.patched(id)),
+    };
+    return super.run(legacy, input);
+  }
+}
+
+async function buildApp(options?: {
+  shared?: { stateStore: InMemoryStateStore; agentStore: InMemoryAgentStore; model: ModelProvider };
+  journalPredatingDispatch?: boolean;
+}) {
+  const stateStore = options?.shared?.stateStore ?? new InMemoryStateStore();
+  const agentStore = options?.shared?.agentStore ?? new InMemoryAgentStore();
+  const builder = Test.createTestingModule({
     imports: [
       DurableModule.forRoot({
         store: stateStore,
         transport: new EventEmitterTransport(new EventEmitter2()),
       }),
       AgentModule.forRoot({
-        model: shared?.model ?? new OneToolModel(),
+        model: options?.shared?.model ?? new OneToolModel(),
         store: agentStore,
         actorResolver: new HeaderActorResolver(),
         durable: true,
         defaultAgent: 'default',
-        ...(dispatchedSteps !== undefined ? { dispatchedSteps } : {}),
       }),
       AgentDurableModule,
     ],
     providers: [PeekTool, CommitTool, DefaultAgent],
-  }).compile();
+  });
+  const moduleRef = await (options?.journalPredatingDispatch === true
+    ? builder.overrideProvider(AgentRunWorkflow).useClass(InProcessJournalWorkflow)
+    : builder
+  ).compile();
   await moduleRef.init();
   return { moduleRef, stateStore, agentStore };
 }
@@ -105,9 +136,9 @@ async function pendingApproval(store: InMemoryAgentStore): Promise<void> {
   throw new Error('the turn never parked its action tool on an approval');
 }
 
-describe('dispatched steps under the durable runner', () => {
+describe('a turn\u2019s long steps are dispatched, because that is what ctx.step means', () => {
   it('provides AgentRunSteps under the full wiring, so the routed group has a server', async () => {
-    const { moduleRef } = await buildApp(true);
+    const { moduleRef } = await buildApp();
     try {
       // The workflow dispatches by name and never holds this instance; what matters is that the
       // full wiring registers the handler, or the group it routes to would go unserved.
@@ -118,7 +149,7 @@ describe('dispatched steps under the durable runner', () => {
   });
 
   it('journals the routed step groups, not the in-process checkpoint names', async () => {
-    const { moduleRef, stateStore } = await buildApp(true);
+    const { moduleRef, stateStore } = await buildApp();
     try {
       const { runId } = await moduleRef
         .get(AgentService)
@@ -139,46 +170,19 @@ describe('dispatched steps under the durable runner', () => {
     }
   });
 
-  it('leaves the journal untouched where the deployment does not dispatch', async () => {
-    const { moduleRef, stateStore } = await buildApp(false);
-    try {
-      const { runId } = await moduleRef
-        .get(AgentService)
-        .chat({ actor: ACTOR, message: 'have a look' });
-      const engine = moduleRef.get(WorkflowEngine);
-      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
-
-      const journal = (await stateStore.listCheckpoints(runId))
-        .sort((left, right) => left.seq - right.seq)
-        .map((checkpoint) => checkpoint.name);
-
-      // No marker is spent on a deployment that could never take the dispatched branch anyway.
-      expect(journal).not.toContain('patch:agent:dispatched-steps');
-      expect(journal).toContain('llm:0');
-      expect(journal).toContain('tool:call-peek');
-    } finally {
-      await moduleRef.close();
-    }
-  });
-
   /**
-   * The one thing a behavioural assertion cannot see. Both paths execute the same tool and produce
-   * the same row, so a durable host only finds out that its `@AiTool` handlers moved into another
-   * worker when one of them reaches for something only its caller's execution context holds — a
-   * request-scoped ORM EntityManager, an AsyncLocalStorage tenant. An approved action tool is where
-   * that surfaces worst: the human's decision is spent and the action does not happen.
-   *
-   * The journal is what says where the turn ran, so that is what this asserts, for a `durable: true`
-   * host that says nothing about dispatch.
+   * The approved tool is where dispatch costs a host most, so it gets its own end-to-end pass: the
+   * human's decision reaches a run parked on a signal, and the tool it approved executes in the
+   * routed group rather than in the body that asked. A handler that cannot rebuild its execution
+   * context there fails the call, the model is handed the error, and the turn completes \u2014 an
+   * approval spent on an action that never happened, which is why `@AiTool` handlers carry
+   * `@CreateRequestContext` exactly as `@Step` handlers do.
    */
-  it('keeps a turn — HITL approval included — on the in-process names unless asked otherwise', async () => {
+  it('dispatches an approved action tool too, and records it executed', async () => {
     const stateStore = new InMemoryStateStore();
     const agentStore = new InMemoryAgentStore();
-    // No `dispatchedSteps` key at all: what a durable host that never considered the question gets.
-    const { moduleRef } = await buildApp(undefined, {
-      stateStore,
-      agentStore,
-      model: new ActionToolModel(),
+    const { moduleRef } = await buildApp({
+      shared: { stateStore, agentStore, model: new ActionToolModel() },
     });
     try {
       const service = moduleRef.get(AgentService);
@@ -199,45 +203,74 @@ describe('dispatched steps under the durable runner', () => {
       const journal = (await stateStore.listCheckpoints(runId))
         .sort((left, right) => left.seq - right.seq)
         .map((checkpoint) => checkpoint.name);
-
-      // The model call and the approved tool both ran in the workflow body — their own checkpoints
-      // rather than a routed group — and no marker is spent on a branch nobody asked to take.
-      expect(journal).toContain('llm:0');
-      expect(journal).toContain('tool:call-commit');
-      expect(journal).not.toContain('patch:agent:dispatched-steps');
+      expect(journal[0]).toBe('patch:agent:dispatched-steps');
+      expect(journal).not.toContain('tool:call-commit');
     } finally {
       await moduleRef.close();
     }
   });
 
+  it('replays a run journaled before dispatch on the in-process names it holds', async () => {
+    const { moduleRef, stateStore } = await buildApp({ journalPredatingDispatch: true });
+    try {
+      const { runId } = await moduleRef
+        .get(AgentService)
+        .chat({ actor: ACTOR, message: 'have a look' });
+      const engine = moduleRef.get(WorkflowEngine);
+      await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+
+      const journal = (await stateStore.listCheckpoints(runId))
+        .sort((left, right) => left.seq - right.seq)
+        .map((checkpoint) => checkpoint.name);
+
+      // No marker: the rewind spends no position, so such a run's history is untouched by the
+      // guard that reads it.
+      expect(journal).not.toContain('patch:agent:dispatched-steps');
+      expect(journal).toContain('llm:0');
+      expect(journal).toContain('tool:call-peek');
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  /**
+   * The constraint that outranks the design: a decision that changes a checkpoint's name, position
+   * or count must come from the journal, never from the code that happens to be replaying. This run
+   * is half-finished under the in-process names when the process that wrote them goes away, and the
+   * process that resumes it dispatches everything it starts.
+   */
   it('finishes a turn parked before dispatch existed on the shape it started with', async () => {
     const stateStore = new InMemoryStateStore();
     const agentStore = new InMemoryAgentStore();
     const model = new ActionToolModel();
+    const shared = { stateStore, agentStore, model };
 
-    // First process: no dispatch. The turn parks on the action tool's approval signal, having
-    // journaled the in-process names.
-    const first = await buildApp(false, { stateStore, agentStore, model });
+    // First process: the body that ran its model call in-process. The turn parks on the action
+    // tool's approval signal, having journaled `llm:0` where the routed group now sits.
+    const first = await buildApp({ shared, journalPredatingDispatch: true });
     let runId: string;
     try {
       ({ runId } = await first.moduleRef.get(AgentService).chat({ actor: ACTOR, message: 'go' }));
-      await first.moduleRef
-        .get(WorkflowEngine)
-        .waitForRun(runId, { timeoutMs: 5000, until: 'settled' });
+      await pendingApproval(agentStore);
       expect((await stateStore.listCheckpoints(runId)).map((c) => c.name)).toContain('llm:0');
     } finally {
       await first.moduleRef.close();
     }
 
-    // Second process: dispatch on. Approving resumes the SAME run, which must not switch shape
-    // mid-flight — the routed names would land at positions the history recorded under others.
-    const second = await buildApp(true, { stateStore, agentStore, model });
+    // Second process: today's body, which dispatches. Approving resumes the SAME run, which must
+    // not switch shape mid-flight — the routed names would land at positions the history recorded
+    // under others, and the resume would die a NonDeterminismError instead of answering.
+    const second = await buildApp({ shared });
     try {
       await second.moduleRef.get(AgentService).approve(ACTOR, 'call-commit');
       const result = await second.moduleRef
         .get(WorkflowEngine)
         .waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       expect(result.status).toBe('completed');
+      expect(agentStore.toolCallRows()[0]).toMatchObject({
+        toolName: 'commit',
+        status: 'executed',
+      });
 
       const journal = (await stateStore.listCheckpoints(runId))
         .sort((left, right) => left.seq - right.seq)

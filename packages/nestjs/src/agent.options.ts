@@ -163,31 +163,20 @@ export interface AgentModuleOptions {
   /**
    * Run each turn as a durable workflow instead of in-process. Requires importing
    * `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` and a configured `DurableModule`.
+   *
+   * The turn's model call and its tool executions are dispatched steps
+   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`), so a `@AiTool` handler runs in whichever worker
+   * serves the routed group rather than in the pod that took the request. A handler that resolves
+   * anything per invocation from its caller's execution context — a request-scoped ORM
+   * EntityManager, an AsyncLocalStorage tenant, a CLS transaction — must establish that context
+   * itself (`@CreateRequestContext`/`@EnsureRequestContext` under MikroORM), exactly as a `@Step`
+   * handler does.
+   *
+   * Multi-pod fleets MUST also wire a cross-process token sink (e.g. a Redis pub/sub
+   * `TokenStreamSink`): the turn runs on whichever worker takes `agent.run`, which may not be the
+   * pod holding the SSE connection.
    */
   durable?: boolean;
-  /**
-   * Dispatch the turn's model call and tool executions as routed durable steps
-   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of in-process `ctx.localStep`s. OMITTED
-   * keeps them in-process; `true` without `durable: true` throws at module build.
-   *
-   * WHAT IT BUYS: the run is not pinned to one pod for the two long parts of a turn, so a fleet can
-   * scale the model call and tool execution separately from the workflow itself.
-   *
-   * WHY IT IS NOT A DEFAULT. It relocates the HOST's own code. A tool handler no longer runs inside
-   * the turn's workflow body but inside whichever worker serves the routed group, and the `llm`
-   * step re-runs the host's tool-visibility callbacks there to rebuild its tool list. A handler
-   * that resolves anything per invocation from its caller's execution context — a request-scoped
-   * ORM EntityManager, an AsyncLocalStorage tenant, a CLS transaction — finds nothing in that
-   * worker, and the library has no way to know which handlers do that. Turn this on once the tools
-   * this deployment registers establish whatever context they need themselves.
-   *
-   * The cross-process-sink requirement is a property of `durable: true` itself, not of this flag:
-   * the turn already runs on whichever worker takes `agent.run`, which may not be the pod holding
-   * the SSE connection — multi-pod fleets MUST wire a cross-process token sink (e.g. a Redis
-   * pub/sub `TokenStreamSink`) either way. STATIC top-level flag (like `durable`/
-   * `attachments.upload`): it decides how the workflow dispatches at module build time.
-   */
-  dispatchedSteps?: boolean;
   /**
    * Static functional tools (`{ spec, handler }`, e.g. from `createExecuteSqlTool`) to register at
    * boot. For tools that need DI-resolved dependencies, use `provideAgentTool(factory, inject)` in a
@@ -338,14 +327,6 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
    */
   durable?: boolean;
-  /**
-   * Dispatch the turn's model call and tool executions as routed durable steps. Omitted keeps the
-   * turn's steps in-process localSteps. Same static-wiring reasoning as `durable` above — it lives
-   * here (not in the async factory result) because it decides how `AgentRunWorkflow` builds its
-   * hooks at module build time. `true` without `durable: true` throws at module build. See
-   * `AgentModuleOptions.dispatchedSteps` for the full contract.
-   */
-  dispatchedSteps?: boolean;
   /**
    * Set when `AGENT_STORE` is bound by a globally-imported store module (e.g.
    * `MikroOrmAgentStoreModule.forFeature()`) instead of returned as `store` from `useFactory`.

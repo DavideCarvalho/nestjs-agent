@@ -175,7 +175,7 @@ Only the invocations overlap. The turn's bookkeeping stays strictly in call orde
 claimed first, then the batch is launched in one tick, then the results are recorded — because under
 `durable: true` the loop body is *replayed*, and checkpoint positions are handed out as the body
 runs. Ordering them by whichever tool finished first would give the replay a different journal than
-the original run. (Worse, under dispatched steps every tool call checkpoints under the same routing
+the original run. (Worse, every tool call is a dispatched step and so checkpoints under the same routing
 name, so a swapped pair raises no error at all — it hands one call's output to another.)
 
 A turn is eligible only when every call is a `read`. An `action` waits on a human, which is decision
@@ -249,8 +249,8 @@ AgentModule.forRoot({
 read the whole answer cannot run after the answer has already reached the reader, so the model call
 writes to a buffer and the loop releases it as one `text` frame once the chain passes. Step
 boundaries and the turn's tool-call frames still arrive live; token-by-token text does not. That is
-the price of a gate that gates — and it holds under `dispatchedSteps: true` too, where the model runs
-on another worker and hands its held frames back on the step result.
+the price of a gate that gates — and it holds under `durable: true`, where the model call is a
+dispatched step: the worker running it holds its frames and hands them back on the step result.
 
 Register neither and nothing changes, checkpoint names and positions included.
 

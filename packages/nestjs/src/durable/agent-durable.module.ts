@@ -1,18 +1,9 @@
-import {
-  AGENT_DURABLE_RUNNER,
-  AGENT_OPTIONS,
-  AGENT_SINK,
-  type TokenStreamSink,
-} from '@dudousxd/nestjs-agent-core';
-import { type DynamicModule, Global, Logger, Module, type Provider } from '@nestjs/common';
-import type { AgentModuleOptions, AgentSurface } from '../agent.options.js';
-import { InProcessTokenStreamSink } from '../in-process-sink.js';
+import { AGENT_DURABLE_RUNNER } from '@dudousxd/nestjs-agent-core';
+import { type DynamicModule, Global, Module, type Provider } from '@nestjs/common';
+import type { AgentSurface } from '../agent.options.js';
 import { AgentRunSteps } from './agent-run.steps.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
-import { AGENT_DISPATCHED_STEPS } from './dispatched-steps.token.js';
 import { DurableAgentRunner } from './durable-agent-runner.js';
-
-const logger = new Logger('AgentDurableModule');
 
 /**
  * `AgentDurableModule.forRoot()` options. `surface` mirrors `AgentModuleOptions.surface` — it has
@@ -42,52 +33,21 @@ export interface AgentDurableModuleOptions {
 
 /** Surface-invariant: the durable runner AgentModule binds `AGENT_RUNNER` to, needed under every `surface`. */
 function runnerProviders(): Provider[] {
-  return [
-    DurableAgentRunner,
-    { provide: AGENT_DURABLE_RUNNER, useExisting: DurableAgentRunner },
-    {
-      provide: AGENT_DISPATCHED_STEPS,
-      useFactory: (options: AgentModuleOptions, sink: TokenStreamSink) => {
-        // STATED, never inferred. Dispatching moves the turn's model call and its tool executions
-        // out of the workflow body and into whichever worker serves the routed groups — so the
-        // HOST's `@AiTool` handlers, and the host callbacks the `llm` step re-runs to build its
-        // tool list, execute somewhere the process that started the turn never entered. A handler
-        // that resolves anything per invocation from its caller's execution context (a
-        // request-scoped ORM EntityManager, an AsyncLocalStorage tenant, a CLS transaction) finds
-        // nothing there, and no amount of library-side care can tell whether a given host's tools
-        // do that. Where the host's own code runs is the host's call to make out loud.
-        const enabled = options.durable === true && options.dispatchedSteps === true;
-        // The default sink only buffers in-process: a dispatched `llm` step served by another
-        // worker has no way to reach a buffer that lives in THIS process's memory. Detectable only
-        // via `instanceof` (the sink SPI carries no "am I cross-process" capability) — good enough
-        // for the built-in default, silent for any custom sink (which may well be cross-process).
-        if (enabled && sink instanceof InProcessTokenStreamSink) {
-          logger.warn(
-            'dispatchedSteps: true with the default InProcessTokenStreamSink, which only buffers ' +
-              'tokens in-process. A dispatched `llm` step served by a different worker cannot ' +
-              'stream into this buffer. Wire a cross-process TokenStreamSink (e.g. a Redis ' +
-              'pub/sub sink) via AgentModule.forRoot({ sink }) before running multi-pod, or drop ' +
-              'dispatchedSteps to keep the turn in-process localSteps.',
-          );
-        }
-        return enabled;
-      },
-      inject: [AGENT_OPTIONS, AGENT_SINK],
-    },
-  ];
+  return [DurableAgentRunner, { provide: AGENT_DURABLE_RUNNER, useExisting: DurableAgentRunner }];
 }
 
 /**
  * `surface: 'http'` wiring — the runner (so `AgentService.chat`/`.approve` and HITL signal delivery
  * all keep working) and the `agent.run` workflow (registered so `start()` succeeds — see
  * `AgentDurableModuleOptions.surface`), but NOT `AgentRunSteps`: this process must never subscribe
- * the dispatched-step queues. `AgentRunWorkflow`'s `AgentRunSteps` dependency is `@Optional()`
- * specifically so it can construct here without it (see that class's doc).
+ * the dispatched-step queues. `AgentRunWorkflow` takes no `AgentRunSteps` dependency at all — it
+ * routes by the `@Step`-stamped name off the prototype — so its body is the same here as on an
+ * engine pod (see that class's doc).
  */
 @Global()
 @Module({
   providers: [AgentRunWorkflow, ...runnerProviders()],
-  exports: [AGENT_DURABLE_RUNNER, AgentRunWorkflow, AGENT_DISPATCHED_STEPS],
+  exports: [AGENT_DURABLE_RUNNER, AgentRunWorkflow],
 })
 class AgentDurableHttpModule {}
 
@@ -97,16 +57,15 @@ class AgentDurableHttpModule {}
  * and exposes the durable runner via `AGENT_DURABLE_RUNNER`, which AgentModule binds to
  * `AGENT_RUNNER`. Forgetting this import makes AgentModule throw a clear error at boot.
  *
- * Always provides `AgentRunSteps` regardless of `dispatchedSteps` — the worker group it serves
- * (`AgentRunSteps.llm`/`.tool`) must never be orphaned by a config flag the durable step registrar
- * can't see ahead of time. This is the FULL ('both'/'engine'-equivalent) wiring: bare-importing this
- * class (no `forRoot()` call) always gets it, unconditionally — `forRoot({ surface: 'http' })` is
- * the only form that diverges (see `AgentDurableHttpModule` above).
+ * Provides `AgentRunSteps`, whose two groups (`AgentRunSteps.llm`/`.tool`) every turn dispatches to.
+ * This is the FULL ('both'/'engine'-equivalent) wiring: bare-importing this class (no `forRoot()`
+ * call) always gets it, unconditionally — `forRoot({ surface: 'http' })` is the only form that
+ * diverges (see `AgentDurableHttpModule` above).
  */
 @Global()
 @Module({
   providers: [AgentRunWorkflow, AgentRunSteps, ...runnerProviders()],
-  exports: [AGENT_DURABLE_RUNNER, AgentRunWorkflow, AgentRunSteps, AGENT_DISPATCHED_STEPS],
+  exports: [AGENT_DURABLE_RUNNER, AgentRunWorkflow, AgentRunSteps],
 })
 export class AgentDurableModule {
   /**

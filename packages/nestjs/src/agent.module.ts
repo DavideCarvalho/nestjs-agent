@@ -256,28 +256,10 @@ function routerFor(path: string): DynamicModule {
   return RouterModule.register([{ path, module: AgentModule }]);
 }
 
-/**
- * `dispatchedSteps` routes the turn's model/tool calls through `AgentRunSteps` — a durable-only
- * worker group (see `AgentModuleOptions.dispatchedSteps`). Without `durable: true` there is no
- * workflow to dispatch from, so the flag would silently no-op — fail loudly at build time instead.
- */
-function assertDispatchedStepsRequiresDurable(dispatchedSteps: boolean, durable: boolean): void {
-  if (dispatchedSteps && !durable) {
-    throw new Error(
-      'AgentModule dispatchedSteps: true requires durable: true — dispatched steps are routed ' +
-        'durable steps (AgentRunSteps.llm/tool) with no in-process equivalent.',
-    );
-  }
-}
-
 @Global()
 @Module({})
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
-    assertDispatchedStepsRequiresDurable(
-      options.dispatchedSteps ?? false,
-      options.durable ?? false,
-    );
     const path = options.path ?? DEFAULT_PATH;
     // Bind AGENT_STORE locally only when the host passes a store; otherwise defer to a global one.
     const includeStore = options.store !== undefined;
@@ -297,10 +279,6 @@ export class AgentModule {
   }
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
-    assertDispatchedStepsRequiresDurable(
-      options.dispatchedSteps ?? false,
-      options.durable ?? false,
-    );
     const path = options.path ?? DEFAULT_PATH;
     // The async factory resolves too late to inspect `store`, so `forRootAsync` binds AGENT_STORE
     // locally from the factory result by default. `externalStore: true` opts out — deferring to a
@@ -316,20 +294,16 @@ export class AgentModule {
       providers: [
         {
           provide: AGENT_OPTIONS,
-          // Stamp the STATIC wiring flags onto the factory result: `durable`/`dispatchedSteps`/
-          // `surface` are authoritative on the async config object (they decided the actual wiring
-          // above), and `AgentDurableModule` derives the effective dispatched-steps value from
-          // AGENT_OPTIONS — without this stamp, an async host would get in-process localSteps
-          // despite durable: true. `surface` isn't read back by anything today (AgentDurableModule
-          // takes its own mirror option — see its doc for why), but it's stamped here too so the
-          // EFFECTIVE value is always observable off AGENT_OPTIONS, sync or async alike.
+          // Stamp the STATIC wiring flags onto the factory result: `durable`/`surface` are
+          // authoritative on the async config object (they decided the actual wiring above), and
+          // the durable module reads `durable` back off AGENT_OPTIONS. `surface` isn't read back by
+          // anything today (AgentDurableModule takes its own mirror option — see its doc for why),
+          // but it's stamped here too so the EFFECTIVE value is always observable off
+          // AGENT_OPTIONS, sync or async alike.
           useFactory: async (...args: never[]) => ({
             ...(await options.useFactory(...args)),
             durable: options.durable ?? false,
             surface: options.surface ?? 'both',
-            ...(options.dispatchedSteps !== undefined
-              ? { dispatchedSteps: options.dispatchedSteps }
-              : {}),
           }),
           inject: options.inject ?? [],
         },

@@ -101,6 +101,40 @@ nobody is streaming (including one that has already finished). In-process caller
 authorized elsewhere use `AgentService.subscribe(runId)`; anything reachable from a request must go
 through `AgentService.subscribeAs(actor, runId)`.
 
+### A durable turn's model call and tools run in a worker
+
+Under `durable: true` the turn's model call and each of its tool executions are **dispatched steps**
+(`AgentRunSteps.llm` / `AgentRunSteps.tool`), which is what `ctx.step` means in
+[`@dudousxd/nestjs-durable`](https://davidecarvalho.github.io/aviary/docs/durable): they are routed
+to whichever worker serves those groups, not run in the pod that took the request. There is no
+option to place them anywhere else.
+
+So a `@AiTool` handler is in the same position as any `@Step` handler: it has no caller's execution
+context to inherit. A handler that reaches for a request-scoped ORM EntityManager, an
+AsyncLocalStorage tenant or a CLS transaction must establish that itself — under MikroORM, that is
+`@CreateRequestContext()` (or `@EnsureRequestContext()`) on the handler:
+
+```ts
+@AiTool({ name: 'closeWorkOrder', kind: 'action', description: '…', input: z.object({ id: z.string() }) })
+export class CloseWorkOrderTool implements ToolHandler<{ id: string }> {
+  constructor(private readonly em: EntityManager) {}
+
+  @CreateRequestContext()
+  async execute(input: { id: string }) {
+    /* … */
+  }
+}
+```
+
+A handler that skips it fails inside the worker, and an `action` tool is where that costs most: the
+call is recorded `failed`, the error is handed to the model, the turn completes — and a human's
+approval has been spent on an action that never ran.
+
+Multi-pod fleets also need a cross-process `TokenStreamSink` (e.g.
+`@dudousxd/nestjs-agent/sink-redis`), since the worker writing tokens is generally not the pod
+holding the reader's SSE connection. The default in-process sink logs a warning at boot under
+`durable: true` for exactly this reason.
+
 ### Deploying split API/worker pods
 
 By default `AgentModule`/`AgentDurableModule` wire everything: every controller, the `agent.run`

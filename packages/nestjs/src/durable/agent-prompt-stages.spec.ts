@@ -219,12 +219,12 @@ describe('the three optional prompt stages, as a run in flight sees them', () =>
   });
 
   /**
-   * Why `quota:check` is NOT one of the three, pinned so nobody adds it. The only marker position
-   * that precedes it is the loop's first, which for a top-level run with no dispatch marker written
-   * is the WORKFLOW's first — and that is the one `agent:dispatched-steps` probes. Two different
-   * `patch:` markers at one position is the case `ctx.patched` refuses outright instead of
-   * rewinding, so a marker here would turn opting into `dispatchedSteps` under a parked run from a
-   * safe rewind into a hard replay failure.
+   * Why `quota:check` is NOT one of the three, pinned so nobody adds it. Its position is the loop's
+   * first, and the workflow's first belongs to `agent:dispatched-steps`, which the run probes
+   * before the loop starts. Two different `patch:` markers at one position is the case
+   * `ctx.patched` refuses outright instead of rewinding — so a marker here would turn a run
+   * journaled before dispatch, which needs that rewind to finish on the names it holds, into a hard
+   * replay failure.
    */
   it('leaves the first position to the dispatched-steps marker, spending none of its own', async () => {
     const shared = fresh();
@@ -233,7 +233,7 @@ describe('the three optional prompt stages, as a run in flight sees them', () =>
       const { runId } = await moduleRef.get(AgentService).chat({ actor: ACTOR, message: 'go' });
       await pendingApproval(shared.agentStore);
       const names = await journal(shared.stateStore, runId);
-      expect(names[0]).toBe('persist:user');
+      expect(names[0]).toBe('patch:agent:dispatched-steps');
     } finally {
       await moduleRef.close();
     }
@@ -254,7 +254,7 @@ describe('the three optional prompt stages, as a run in flight sees them', () =>
       await pendingApproval(shared.agentStore);
       const parked = await journal(shared.stateStore, runId);
       expect(parked).not.toContain('memory:digest');
-      expect(parked).toContain('llm:0');
+      expect(parked).toContain('AgentRunSteps.llm');
     } finally {
       await first.close();
     }

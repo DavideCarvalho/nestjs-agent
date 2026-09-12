@@ -76,7 +76,6 @@ async function buildApp(options: { model: ModelProvider; outputProcessors: Outpu
         sink,
         durable: true,
         defaultAgent: 'default',
-        dispatchedSteps: true,
         outputProcessors: options.outputProcessors,
       }),
       AgentDurableModule,
