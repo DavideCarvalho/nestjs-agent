@@ -1,5 +1,22 @@
 # @dudousxd/nestjs-agent-codegen
 
+## 0.5.0
+
+### Minor Changes
+
+- [#114](https://github.com/DavideCarvalho/nestjs-agent/pull/114) [`a7b848a`](https://github.com/DavideCarvalho/nestjs-agent/commit/a7b848a53e696f03ab0b8539260f7b51b019ff3b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Six JSON routes the library serves were missing from the generated client, so every host using
+  codegen had no typed way to call them: `GET /agent/skills`, `GET /agent/memories`, `DELETE
+/agent/memories/:id`, `POST /agent/tool-call/answer`, `POST /agent/tool-call/skip` and `GET
+/agent/attachments`. Their siblings were all there, which is what made the gap invisible — a
+  frontend reaching for `api.agent.skills.list()` found nothing and had no reason to suspect the
+  endpoint existed.
+
+  The list is hand-written against controllers this package deliberately does not import, so it can
+  only drift. `covers-every-json-route.spec.ts` now reads those controllers off disk and fails when a
+  route is in neither the injected list nor an explicit not-modelled list. Three routes are on that
+  list, each for a reason codegen cannot express: the two SSE chat endpoints, and the multipart
+  `POST /agent/attachments`.
+
 ## 0.4.0
 
 ### Minor Changes
