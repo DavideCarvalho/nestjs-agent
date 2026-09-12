@@ -4,11 +4,12 @@ import {
   AGENT_STORE,
   type AgentPricingStore,
 } from '@dudousxd/nestjs-agent-core';
-import { type DynamicModule, Module, type Type } from '@nestjs/common';
+import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
 import { DrizzleMemoryProvider } from './drizzle-memory-provider.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
+import { DrizzleRagIngestionLog } from './drizzle-rag-ingestion-log.js';
 import type { AgentDrizzleDb } from './schema.js';
 
 /** Options for {@link DrizzleAgentStoreModule.forRoot}. The app owns and supplies the db handle. */
@@ -21,6 +22,18 @@ export interface DrizzleAgentStoreModuleOptions {
    * table the single source of cost truth without touching `agent_model_pricing`.
    */
   pricingStore?: Type<AgentPricingStore>;
+  /**
+   * Record every RAG ingestion outcome into `rag_ingestion_log` by subscribing to the `aviary:rag:*`
+   * diagnostics channels (default `true`, matching the MikroORM adapter). This is the only place a
+   * *failed* or *skipped* document is visible — one that produced no chunks doesn't exist as far as
+   * `VectorStore.listDocuments()` is concerned. Set `false` if you don't ingest media into RAG, or
+   * record outcomes yourself.
+   *
+   * The table has to exist: `ensureAgentSchema` creates it, or write the `CREATE TABLE` into
+   * your own migrations. Writes are best-effort, so a missing table costs a warning per ingestion
+   * rather than a failed ingestion.
+   */
+  ragIngestionLog?: boolean;
 }
 
 /**
@@ -43,10 +56,20 @@ export interface DrizzleAgentStoreModuleOptions {
 @Module({})
 export class DrizzleAgentStoreModule {
   static forRoot(options: DrizzleAgentStoreModuleOptions): DynamicModule {
+    const ragProviders: Provider[] =
+      options.ragIngestionLog === false
+        ? []
+        : [
+            {
+              provide: DrizzleRagIngestionLog,
+              useFactory: () => new DrizzleRagIngestionLog(options.db),
+            },
+          ];
     return {
       module: DrizzleAgentStoreModule,
       global: true,
       providers: [
+        ...ragProviders,
         { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db) },
         { provide: AGENT_STORE, useExisting: DrizzleAgentStore },
         // Exported, never bound to AGENT_MEMORY: that token's PRESENCE is what turns memory on, so
@@ -71,6 +94,7 @@ export class DrizzleAgentStoreModule {
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: DrizzleGovernanceQueries },
       ],
       exports: [
+        ...(options.ragIngestionLog === false ? [] : [DrizzleRagIngestionLog]),
         DrizzleAgentStore,
         AGENT_STORE,
         DrizzleMemoryProvider,

@@ -22,7 +22,8 @@ import {
 
 /**
  * Drizzle schema mirroring the MikroORM agent entities (same logical columns/relations):
- * threads, messages, tool calls, token usage, model pricing and run outcomes. Targets the SQLite core so the
+ * threads, messages, tool calls, token usage, model pricing, run outcomes and the RAG ingestion
+ * ledger. Targets the SQLite core so the
  * db-test runs on an in-memory better-sqlite3; timestamps are stored as integer epoch-ms columns
  * (`{ mode: 'timestamp_ms' }`) which Drizzle round-trips to/from JS `Date`, and the model-facing
  * message extras (tool calls/results, follow-ups, usage) live in JSON `text` columns.
@@ -232,8 +233,49 @@ export const agentMemory = sqliteTable(
   },
   (table) => [uniqueIndex('agent_memory_scope_key_uq').on(table.scope, table.key)],
 );
+/** The terminal states an ingestion attempt can land in. Mirrors `MediaIngestOutcome`. */
+export type RagIngestionStatus = 'ingested' | 'skipped' | 'failed' | 'removed';
 
-/** The seven agent tables as one schema object, ready for `drizzle(client, { schema })`. */
+/**
+ * The latest ingestion outcome for one RAG document — one row per document id, overwritten on
+ * re-ingest by {@link import('./drizzle-rag-ingestion-log.js').DrizzleRagIngestionLog}.
+ *
+ * This exists because the vector store can only enumerate what it *has*: a document whose extraction
+ * produced no text, whose mime type had no extractor, or whose embedding call blew up has zero chunks
+ * and is therefore invisible to `VectorStore.listDocuments()`. Without this table, a scanned PDF that
+ * silently failed to index is indistinguishable from one that was never uploaded.
+ *
+ * `collection` / `ownerType` / `ownerId` are opaque strings copied off the diagnostics payload — this
+ * package never interprets them, and deliberately has no foreign key to a host's own collection
+ * table, which it cannot know about. The index on (`collection`, `updated_at`) is what the
+ * per-collection listing reads.
+ */
+export const ragIngestionLog = sqliteTable(
+  'rag_ingestion_log',
+  {
+    /** The vector-store document id (chunk ids are `${documentId}#<n>`). */
+    documentId: text('document_id').primaryKey(),
+    status: text('status').$type<RagIngestionStatus>().notNull(),
+    collection: text('collection'),
+    ownerType: text('owner_type'),
+    ownerId: text('owner_id'),
+    /** Citation-facing origin — the media record's path. */
+    source: text('source'),
+    mimeType: text('mime_type'),
+    size: integer('size'),
+    /** Chunk count on `ingested`; null otherwise. */
+    chunks: integer('chunks'),
+    /** Skip reason on `skipped` (`unsupported-type` | `too-large` | `empty-text`); null otherwise. */
+    reason: text('reason'),
+    /** Error message on `failed`; null otherwise. */
+    error: text('error'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('rag_ingestion_log_collection_idx').on(table.collection, table.updatedAt)],
+);
+
+/** The tables this store owns, as one schema object, ready for `drizzle(client, { schema })`. */
 export const agentSchema = {
   agentThread,
   agentMessage,
@@ -242,6 +284,7 @@ export const agentSchema = {
   agentModelPricing,
   agentRun,
   agentMemory,
+  ragIngestionLog,
 };
 
 /**
@@ -264,3 +307,5 @@ export type AgentMessageRow = typeof agentMessage.$inferSelect;
 export type AgentRunRow = typeof agentRun.$inferSelect;
 /** A persisted memory row as Drizzle selects it. */
 export type AgentMemoryRow = typeof agentMemory.$inferSelect;
+/** A persisted RAG ingestion outcome as Drizzle selects it. */
+export type RagIngestionLogRow = typeof ragIngestionLog.$inferSelect;

@@ -36,7 +36,8 @@ export class AppModule {}
 ```
 
 The package ships the `agentSchema` (Drizzle tables), `ensureAgentSchema` (a non-destructive
-DDL helper for a quick start), `DrizzleAgentStore`, and `DrizzleGovernanceQueries`. For production,
+DDL helper for a quick start), `DrizzleAgentStore`, `DrizzleGovernanceQueries`, and
+`DrizzleRagIngestionLog`. For production,
 prefer your normal drizzle-kit migrations over the `ensureAgentSchema` helper.
 
 ## The read a turn makes
@@ -137,6 +138,30 @@ actor's attachment-bearing messages, and a message with no attachments never lea
 A thread that was soft-deleted still counts as holding its references: the message rows survive, so
 the bytes are still reachable from stored state. Delete the thread for real and the cascade makes
 them collectable on the next sweep.
+
+## RAG ingestion outcomes
+
+`rag_ingestion_log` holds the latest outcome for every RAG document — ingested, skipped, failed,
+removed — one row per document id, overwritten on re-ingest. It answers the question a vector store
+structurally cannot: *which documents failed to index, and why*. A document whose extraction came
+back empty, whose mime type had no extractor, or whose embedding call threw produces zero chunks, so
+`VectorStore.listDocuments()` cannot tell it from one nobody ever uploaded. Pair the two: the index
+is the truth about what is retrievable, this table is the truth about what was attempted.
+
+`DrizzleRagIngestionLog` fills it by subscribing to the `aviary:rag:*` diagnostics
+`@dudousxd/nestjs-agent-rag-media` publishes — the RAG package owns no storage of its own. It is
+bound and exported by `DrizzleAgentStoreModule.forRoot({ db })` by default; pass
+`{ ragIngestionLog: false }` to bind nothing at all. `ensureAgentSchema` creates the table, indexed
+by (`collection`, `updated_at`) for the per-collection listing.
+
+Reads: `list` / `listPage` (a page plus the unpaginated total), `get`, `remove`,
+`removeByCollection`, a delete-safe keyset `iterate`, and `listDocumentIds` for an orphan sweep that
+wants a collection's id set without hydrating every stack trace in the table. The paging order is
+exported as `RAG_INGESTION_LOG_PAGE_ORDER` — `updated_at desc` tiebroken on the primary key, which
+is what keeps consecutive pages disjoint when a bulk upload stamps a whole batch with one timestamp.
+
+Writes are best-effort: the recorder runs detached on a diagnostics channel, so a failed write is
+reported and dropped rather than taking down the ingestion that triggered it.
 
 ## Cost accounting
 
