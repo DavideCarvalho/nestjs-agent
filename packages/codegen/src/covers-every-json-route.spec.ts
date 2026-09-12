@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { nestjsAgentCodegen } from './index.js';
 
@@ -14,7 +15,7 @@ import { nestjsAgentCodegen } from './index.js';
  * onto the Nest runtime would be the wrong direction, and nothing about a route's PATH needs Nest to
  * be running to be read.
  */
-const CONTROLLERS = join(import.meta.dirname, '../../nestjs/src/controller');
+const CONTROLLERS = fileURLToPath(new URL('../../nestjs/src/controller', import.meta.url));
 
 /**
  * Routes deliberately not in the generated client, each for a reason codegen cannot express.
