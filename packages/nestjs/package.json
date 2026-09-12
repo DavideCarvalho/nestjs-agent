@@ -81,7 +81,7 @@
   "devDependencies": {
     "@dudousxd/durable-worker": "0.7.1",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
-    "@dudousxd/nestjs-context": "0.2.0",
+    "@dudousxd/nestjs-context": "0.2.1",
     "@dudousxd/nestjs-durable": "0.34.0",
     "@dudousxd/nestjs-durable-core": "0.52.0",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.0",
