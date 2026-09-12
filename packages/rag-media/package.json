@@ -6,6 +6,16 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/rag-media"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "rag",
+    "media"
+  ],
   "description": "Auto-ingest @dudousxd/nestjs-media uploads into agent RAG — extract, chunk, embed, index, owner-scoped, with delete kept in sync. Couples via the diagnostics channel, no hard media dependency",
   "license": "MIT",
   "author": "Davide Carvalho",

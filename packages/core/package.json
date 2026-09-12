@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/core"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "core"
+  ],
   "description": "nestjs-agent core — agent loop, tool registry, governance SPIs",
   "license": "MIT",
   "author": "Davide Carvalho",

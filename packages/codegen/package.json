@@ -6,6 +6,18 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/codegen"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "ai",
+    "agent",
+    "nestjs-codegen",
+    "codegen",
+    "tanstack-query"
+  ],
   "description": "nestjs-codegen extension for @dudousxd/nestjs-agent — emits the /agent REST API into your generated client",
   "license": "MIT",
   "author": "Davide Carvalho",
@@ -27,14 +39,6 @@
   },
   "files": [
     "dist"
-  ],
-  "keywords": [
-    "nestjs",
-    "ai",
-    "agent",
-    "nestjs-codegen",
-    "codegen",
-    "tanstack-query"
   ],
   "scripts": {
     "build": "tsup",

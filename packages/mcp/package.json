@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/mcp"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "mcp"
+  ],
   "description": "nestjs-agent MCP client — import an external Model Context Protocol server's tools as governed nestjs-agent tools",
   "license": "MIT",
   "author": "Davide Carvalho",

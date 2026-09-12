@@ -6,6 +6,16 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/mcp-server"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "mcp",
+    "server"
+  ],
   "description": "nestjs-agent MCP server — expose this deployment's @AiTools to an external Model Context Protocol client, under the same authorization the agent loop applies",
   "license": "MIT",
   "author": "Davide Carvalho",

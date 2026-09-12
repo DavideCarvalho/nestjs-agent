@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/dashboard"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "dashboard"
+  ],
   "description": "Embedded AI-gateway governance console (spend, models, actors/budgets, runs/tools, live feed) for nestjs-agent — bundled React SPA served by NestJS",
   "license": "MIT",
   "author": "Davide Carvalho",

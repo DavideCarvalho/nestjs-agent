@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/telescope"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "telescope"
+  ],
   "description": "nestjs-agent telescope extension — an 'Agent' dashboard tab",
   "license": "MIT",
   "author": "Davide Carvalho",

@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/data"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "data"
+  ],
   "description": "nestjs-agent data — governed read-only SQL satellite (single-SELECT validation, fail-closed table access, tenant scoping)",
   "license": "MIT",
   "author": "Davide Carvalho",

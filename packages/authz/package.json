@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/authz"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "authz"
+  ],
   "description": "nestjs-agent authz adapter — plug @dudousxd/nestjs-authz into tool authorization",
   "license": "MIT",
   "author": "Davide Carvalho",

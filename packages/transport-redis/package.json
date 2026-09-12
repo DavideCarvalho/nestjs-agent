@@ -6,6 +6,16 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/transport-redis"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "transport",
+    "redis"
+  ],
   "description": "nestjs-agent Redis token-stream transport — a multi-replica TokenStreamSink over Redis pub/sub + list replay",
   "license": "MIT",
   "author": "Davide Carvalho",

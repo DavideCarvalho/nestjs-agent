@@ -6,6 +6,15 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/evals"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "evals"
+  ],
   "description": "nestjs-agent evals — offline-first quality scoring over stored runs (rule-based, statistical and model-graded scorers, incl. HITL approval mining)",
   "license": "MIT",
   "author": "Davide Carvalho",

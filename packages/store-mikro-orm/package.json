@@ -6,6 +6,17 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/store-mikro-orm"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "store",
+    "mikro",
+    "orm"
+  ],
   "description": "nestjs-agent MikroORM agent store (threads, messages, tool calls, usage)",
   "license": "MIT",
   "author": "Davide Carvalho",

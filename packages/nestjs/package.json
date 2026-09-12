@@ -6,6 +6,14 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/nestjs"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent"
+  ],
   "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
   "license": "MIT",
   "author": "Davide Carvalho",

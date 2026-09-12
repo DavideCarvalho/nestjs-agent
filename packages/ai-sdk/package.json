@@ -6,6 +6,16 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/ai-sdk"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "ai",
+    "sdk"
+  ],
   "description": "nestjs-agent Vercel AI SDK v7 adapter — maps streamText to the core ModelProvider SPI (aiSdkModel)",
   "license": "MIT",
   "author": "Davide Carvalho",

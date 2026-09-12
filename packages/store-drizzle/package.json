@@ -6,6 +6,16 @@
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
     "directory": "packages/store-drizzle"
   },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "store",
+    "drizzle"
+  ],
   "description": "nestjs-agent Drizzle ORM agent store (threads, messages, tool calls, usage)",
   "license": "MIT",
   "author": "Davide Carvalho",
