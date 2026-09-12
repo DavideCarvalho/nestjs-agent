@@ -1,5 +1,19 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.6.3
+
+### Patch Changes
+
+- [`6b12f22`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b12f227f1d767aa579df91e2c2c473c0a46b0b2) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix a stale symbol reference in the `storedThreadToUiMessages` docblock
+
+  The note explaining why `{type: 'step-start'}` parts are not reproduced pointed at
+  `MessageItem`'s `renderParts`, which exists nowhere in the repo — the function is
+  `renderBlocks` in `components/message-item.tsx`. The same sentence also claimed it
+  "only special-cases text and tool parts", while `renderBlocks` branches on four block
+  kinds: text, reasoning, files and tools.
+
+  Comment-only; no runtime change.
+
 ## 0.6.2
 
 ### Patch Changes
