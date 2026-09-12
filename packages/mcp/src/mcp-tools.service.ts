@@ -92,11 +92,36 @@ export class McpToolsService implements OnApplicationBootstrap, OnApplicationShu
     );
     let total = 0;
     for (const { config, tools } of listed) {
+      // `undefined` is a server that could not be REACHED, and it must not reconcile: dropping a
+      // tool because a server is down would take it away from the model on the first blip and only
+      // give it back on a later refresh. `[]` is a server that answered and offers nothing, which
+      // is a real answer and does reconcile.
       if (tools !== undefined) {
         total += this.register(config, tools);
+        this.retire(config, tools);
       }
     }
     return total;
+  }
+
+  /**
+   * Hand back the names this server owned and has now stopped exporting.
+   *
+   * Without this, `refresh` only ever adds: a tool a server has removed stays registered, stays in
+   * the catalog the model is offered, and fails at the remote when it is called — a tool the model
+   * is told it has and cannot use. Only names this server OWNS are given back, so a name it lost a
+   * collision for (owned by the application, or by a server configured earlier) is untouched.
+   */
+  private retire(config: McpServerConfig, tools: McpImportedTool[]): void {
+    const offered = new Set(tools.map((tool) => tool.spec.name));
+    for (const [name, owner] of [...this.owners]) {
+      if (owner.serverName !== config.name || offered.has(name)) continue;
+      this.registry.unregister(name);
+      this.owners.delete(name);
+      this.logger.log(
+        `MCP server "${config.name}": tool "${name}" is no longer offered — unregistered.`,
+      );
+    }
   }
 
   /** Every tool currently imported, and where each came from. */

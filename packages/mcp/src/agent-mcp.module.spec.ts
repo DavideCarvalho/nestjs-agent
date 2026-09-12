@@ -354,3 +354,113 @@ describe('AgentMcpModule tool-name ownership', () => {
     ]);
   });
 });
+
+/**
+ * A server whose tool list the test can change between refreshes, and which can be made to fail
+ * the LIST call itself. Failing the list is how a connected server goes unreachable: the transport
+ * is created once, so flipping a flag the `create` callback reads does nothing after boot.
+ */
+function shiftingServer(tools: () => Tool[]): () => Promise<Transport> {
+  return async () => {
+    const server = new Server(
+      { name: 'shifting', version: '1.0.0' },
+      { capabilities: { tools: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, () => Promise.resolve({ tools: tools() }));
+    server.setRequestHandler(CallToolRequestSchema, () =>
+      Promise.resolve({ content: [{ type: 'text', text: 'ok' }] }),
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    return clientTransport;
+  };
+}
+
+const tideTool: Tool = {
+  name: 'get_tide',
+  description: 'Tide for a port.',
+  inputSchema: { type: 'object', properties: { port: { type: 'string' } }, required: ['port'] },
+};
+
+describe('AgentMcpModule refresh reconciles', () => {
+  it('gives back a tool the server has stopped offering', async () => {
+    let offered = [weatherTool, tideTool];
+    const context = await buildApp([
+      {
+        name: 'marine',
+        namespace: false,
+        transport: { type: 'custom', create: shiftingServer(() => offered) },
+      },
+    ]);
+    const registry = context.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+    const service = context.get(McpToolsService);
+
+    expect(registry.has('get_tide')).toBe(true);
+
+    offered = [weatherTool];
+    await service.refresh('marine');
+
+    // Without this, the model keeps being offered `get_tide` and the call fails at the remote — a
+    // tool it is told it has and cannot use.
+    expect(registry.has('get_tide')).toBe(false);
+    expect(registry.has('get_weather')).toBe(true);
+    expect(service.importedTools().map((tool) => tool.name)).toEqual(['get_weather']);
+  });
+
+  it('keeps a down server’s tools, because unreachable is not the same as withdrawn', async () => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    let reachable = true;
+    const context = await buildApp([
+      {
+        name: 'marine',
+        namespace: false,
+        transport: {
+          type: 'custom',
+          create: shiftingServer(() => {
+            if (!reachable) throw new Error('connect ECONNREFUSED 127.0.0.1:9999');
+            return [weatherTool];
+          }),
+        },
+      },
+    ]);
+    const registry = context.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+
+    expect(registry.has('get_weather')).toBe(true);
+
+    reachable = false;
+    // The refresh reports nothing imported, which is the signal that the server said nothing at all.
+    expect(await context.get(McpToolsService).refresh('marine')).toBe(0);
+
+    // Dropping it here would take the tool away on the first blip and only give it back on a later
+    // refresh. A server that could not be reached said nothing about what it offers.
+    expect(registry.has('get_weather')).toBe(true);
+  });
+
+  it('gives back only what it owns, never a name it lost a collision for', async () => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    let impostorOffers = [weatherTool];
+    const context = await buildApp([
+      {
+        name: 'primary',
+        namespace: false,
+        transport: { type: 'custom', create: weatherServer('primary') },
+      },
+      {
+        name: 'impostor',
+        namespace: false,
+        transport: { type: 'custom', create: shiftingServer(() => impostorOffers) },
+      },
+    ]);
+    const registry = context.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+
+    // `primary` was configured first, so it owns the contested name and `impostor` owns nothing.
+    expect(registry.spec('get_weather')?.description).toBe('weather from primary');
+
+    impostorOffers = [];
+    await context.get(McpToolsService).refresh('impostor');
+
+    // The retire walk is keyed by owner: a name this server never held is not its to hand back.
+    expect(registry.has('get_weather')).toBe(true);
+    expect(registry.spec('get_weather')?.description).toBe('weather from primary');
+  });
+});
