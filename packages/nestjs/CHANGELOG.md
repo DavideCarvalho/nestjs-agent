@@ -1,5 +1,159 @@
 # @dudousxd/nestjs-agent
 
+## 1.0.0
+
+### Major Changes
+
+- [#98](https://github.com/DavideCarvalho/nestjs-agent/pull/98) [`24c01fa`](https://github.com/DavideCarvalho/nestjs-agent/commit/24c01fae1792204892dfa082d58bdeaa84b1bdb8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Breaking.** `dispatchedSteps` is gone from `AgentModuleOptions` and
+  `AgentModuleAsyncOptions`. A turn's model call and each of its tool executions are dispatched steps
+  (`AgentRunSteps.llm` / `AgentRunSteps.tool`), always. `AGENT_DISPATCHED_STEPS` is no longer exported
+  from `@dudousxd/nestjs-agent/durable`.
+
+  **Why there is no option.** `@dudousxd/nestjs-durable` deliberately has one step primitive:
+  `ctx.step` is "always dispatched, always engine-scheduled", and `ctx.localStep` is the named escape
+  hatch for work that must run in the workflow body. In that ecosystem dispatch is not a
+  configuration; it is what a step IS. `dispatchedSteps` reintroduced exactly the placement choice
+  durable removed, and the objection to dispatching — that it relocates the host's `@AiTool` handlers
+  into a worker where a request-scoped dependency does not exist — is not special to the agent. It is
+  the ordinary condition of every `@Step` handler, and hosts already pay it.
+
+  **Why the field is deleted rather than deprecated.** Removing it makes a deployment that sets it
+  fail to COMPILE, which is louder and earlier than a boot warning, and cannot be scrolled past.
+
+  **Upgrading.** Delete the option. Then, because this is the release where it stops being a no-op,
+  work through what dispatch actually asks of your code:
+
+  - **Every `@AiTool` handler that reaches infrastructure needs its own execution context** —
+    `@CreateRequestContext()` or `@EnsureRequestContext()` under MikroORM, an explicit `fork()`, your
+    own AsyncLocalStorage entry — exactly as every `@Step` handler in this ecosystem already does. The
+    `llm` step re-runs your tool-visibility callbacks in that worker too.
+  - **The failure mode if you skip it** is not a crash you will notice. Under NestJS + MikroORM with
+    `allowGlobalContext: false`, the handler throws in the worker, the loop records the tool call
+    `failed`, the error is handed to the model as a tool result, and the turn completes normally. On an
+    `action` tool that means a human's HITL approval has been **spent** on a tool that never ran, and
+    the audit row reads like the tool's own bug.
+  - **Confirm the routed groups are served.** `AgentRunSteps.llm`/`.tool` are registered by
+    `AgentDurableModule` under every surface except `'http'`; a fleet whose only agent pods are
+    `surface: 'http'` has nothing to dispatch to.
+  - **Wire a cross-process `TokenStreamSink`** (e.g. the `/sink-redis` subpath) on more than one pod.
+    The boot warning for the default in-process sink now fires on `durable: true` itself, from
+    `DurableAgentRunner`, since the turn already leaves the pod that took the request.
+
+  **The history matters here, because it is what makes this surprising.** The flag defaulted ON and was
+  _inert_ for twelve minor releases — `AgentRunWorkflow` took it as an `@Optional()` parameter typed
+  `AgentRunSteps | undefined`, a union, so `design:paramtypes` carried `Object`, Nest had no token to
+  resolve, and `undefined` was injected. Every turn ran in-process whatever the flag said. 0.12.0 made
+  it live; 0.13.0 then made it default OFF and required a deployment to state `dispatchedSteps: true`.
+  So for a host coming from `≤0.11.x`, **this is the first version in which their tool handlers
+  actually move off the pod.** The parameter is not coming back in any form: the workflow routes by the
+  `@Step`-stamped name off `AgentRunSteps.prototype` and needs no instance, which is also what lets an
+  `'http'` pod that provides no `AgentRunSteps` write the same checkpoint names an engine pod does.
+
+  **A run already in flight is unaffected.** Which names a turn writes — the routed groups or the
+  in-process `llm:<i>`/`tool:<callId>` — is answered by `ctx.patched('agent:dispatched-steps')`, from
+  the run's own journal and nothing process-local: a fresh run records the marker and dispatches, and a
+  run whose position already holds a real step rewinds (spending no position) and finishes on the names
+  its history holds. The marker therefore cannot be retired while any run journaled by an earlier
+  release can still resume.
+
+  **Also in this release:** `DurableAgentRunner.cancel` now releases the thread's active stream itself,
+  reading the thread id off the run's own recorded input. It used to be left to the workflow body, on
+  the reasoning that only the body knows which thread was streaming — but a cancelled turn is usually
+  suspended (parked on a human, or on one of the dispatched steps a turn now spends most of its life
+  in), and a suspended body never reaches its own catch: the runtime settles the run from outside it.
+  Left alone, the thread reported a live stream for a run that had stopped, for ever.
+
+### Minor Changes
+
+- [#102](https://github.com/DavideCarvalho/nestjs-agent/pull/102) [`d7f2cf2`](https://github.com/DavideCarvalho/nestjs-agent/commit/d7f2cf260ab0e87a012b21d681f805eb6758129a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A run now holds which of its optional prompt stages it had, so switching one on cannot move the
+  positions of a turn already in flight.
+
+  `memory:digest`, `retrieve` and `skills:catalog` are checkpoint positions that exist only where a
+  host wired `memory`, `retrieval` or `skills`. Until now each was decided by reading module config at
+  replay time. So a turn journaled before a deployment enabled memory — `persist:user`,
+  `load:thread`, `run:started-at`, `persist:run:start`, `patch:agent:cancellation`, `llm:0`,
+  `persist:toolcall:<id>`, parked on an action tool's approval — resumed into a body that asks for
+  `memory:digest` at the position its history spent on `patch:agent:cancellation`. The approval a
+  person was waiting on died with:
+
+  ```
+  non-determinism at <runId>#7: code expects "memory:digest" but history recorded
+  "patch:agent:cancellation". The workflow changed under an in-flight run
+  ```
+
+  The three answers are now read from config ONCE, at a single marker's position, and journaled as
+  `run:prompt-stages`. Every later replay reads them back, so the enabled set is a fact about the RUN
+  rather than about the deployment replaying it — in both directions: enabling memory cannot insert a
+  position into a parked run, and disabling it cannot take one away.
+
+  **One marker, not one per stage.** Three separately configurable switches invite three markers, one
+  guarding each stage's own position. That is wrong, and not marginally: a stage's position is already
+  occupied on every deployment that has the stage switched on. A journal written with memory enabled
+  holds `memory:digest` exactly where that marker would sit; `ctx.patched` rewinds there and answers
+  `false`; the guard then skips a checkpoint the history holds and the run dies a few positions later
+  with `code expects "stream:step-start:0" but history recorded "memory:digest"` — on every in-flight
+  run of every host already using the feature, with no config change at all. `agent:dispatched-steps`
+  can be guarded per-position only because its marker and the behaviour it guards shipped together, so
+  no journal can hold the new shape without the marker. Memory, retrieval and skills have been
+  shipping for releases. So the marker records a property of the BODY ("this run journals which stages
+  it had") and the three independent answers ride in a checkpoint, where they can be stated separately
+  without one boolean standing in for all of them.
+
+  **`quota` shares the hole and is NOT fixed.** `quota:check` is the loop's first position, so the only
+  marker position that precedes it is the loop's first — which, for a top-level run on a deployment
+  that has not opted into `dispatchedSteps`, is the workflow's first, and that one is
+  `agent:dispatched-steps`'s. Two different `patch:` markers at one position is the case `ctx.patched`
+  refuses outright rather than rewinding, so a quota marker there would convert opting into
+  `dispatchedSteps` under a parked run from a safe rewind into
+  `code expects "patch:agent:dispatched-steps" but history recorded "patch:agent:quota"`. Enabling a
+  quota store under a run in flight therefore still shifts its sequence. A test pins the first position
+  as the dispatch marker's to spend, so the next reader meets the constraint rather than rediscovering
+  it.
+
+  `pricingStore` (`pricing:list`), `intake` (`intake:ask`/`intake:answers`), `inputProcessors`
+  (`process:input:<step>`), `outputProcessors` (`process:output:<step>` and the follow-ups gate),
+  `followUpsCount` (`followups:<step>` and its usage row) and `outputSchema` (`structured:*`) sit on the
+  same footing and are likewise not covered. They all sit AFTER the marker, so they can join
+  `run:prompt-stages` later: a field added for one of them reads back `undefined` on a run journaled
+  before it, which means "fall back to config", leaving that run's exposure unchanged rather than
+  inverted.
+
+  **The marker cannot be retired.** Not while any run journaled by an older release can still resume —
+  and a turn parked on a human's approval has no upper bound on how long that is. `agent:prompt-stages`
+  answering `false` is the only thing that keeps such a run deciding its stages the way the body that
+  wrote its journal did, so removing the guard and keeping the new branch would break exactly the runs
+  the guard exists for. The same is true of `agent:dispatched-steps`, `agent:selected-history`,
+  `agent:cancellation` and `agent:parallel-tools`: these markers are permanent fixtures, not a
+  migration step with an end date.
+
+  **What stays module config, deliberately.** The turn's tool list. Whether the model is offered `skill`
+  or `remember` is uniform across a deployment and is re-derived on whichever worker serves a
+  dispatched model call, and both handlers already answer a call they have no catalog or digest for as
+  a tool failure. Only positions are journaled here.
+
+  Costs one marker and one checkpoint per run. Nothing about a fresh run's behaviour changes: the
+  stages it takes are the ones its config names, read one position earlier than before.
+
+### Patch Changes
+
+- [#98](https://github.com/DavideCarvalho/nestjs-agent/pull/98) [`24c01fa`](https://github.com/DavideCarvalho/nestjs-agent/commit/24c01fae1792204892dfa082d58bdeaa84b1bdb8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `DurableAgentRunner.cancel` no longer lets a run-gateway read failure stop the cancel.
+
+  The thread a run was streaming is read off the run's recorded input so the active stream can be
+  cleared. That read was on the critical path: if `getRunDetail` rejected — a transient gateway, an
+  operator briefly unreachable, a tenant's transport proxy timing out — `cancel` threw before reaching
+  `runs.cancel`, so the run was never told to stop, the stream never got its `cancelled` frame or its
+  terminal, and the run row never got its own. A subscriber then waits on a stream that never settles,
+  from the one call whose entire job is to make a run stop.
+
+  The read is now best-effort: the thread is resolved if the gateway can answer, `undefined` if it
+  cannot, and the cancel, the stream's terminal and the run's terminal happen either way. That mirrors
+  the posture `AgentRunWorkflow.isCancelled` already takes for the same gateway on the same run —
+  failing to ask is not an answer worth failing a run over. Nothing is guessed at: with no thread named,
+  no thread is released.
+
+- Updated dependencies [[`d7f2cf2`](https://github.com/DavideCarvalho/nestjs-agent/commit/d7f2cf260ab0e87a012b21d681f805eb6758129a), [`31caa9e`](https://github.com/DavideCarvalho/nestjs-agent/commit/31caa9e48e9b8be948b54dd252057a01355f4924)]:
+  - @dudousxd/nestjs-agent-core@0.14.0
+
 ## 0.13.0
 
 ### Minor Changes

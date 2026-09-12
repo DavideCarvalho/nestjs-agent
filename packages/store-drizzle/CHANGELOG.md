@@ -1,5 +1,94 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.10.0
+
+### Minor Changes
+
+- [#101](https://github.com/DavideCarvalho/nestjs-agent/pull/101) [`a60bd23`](https://github.com/DavideCarvalho/nestjs-agent/commit/a60bd2359bcdfa51c22fea60034635a0a5b3af41) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `agent_memory` and `DrizzleMemoryProvider` — the same memory storage the MikroORM adapter gained, on
+  this store's own schema and DDL pass, so a host does not pick its memory implementation by picking
+  its ORM.
+
+  - `agentSchema` gains `agentMemory`, with one unique index on (`scope`, `key`). That index is what
+    the upsert conflicts against, and it doubles as the index every read uses — `list` filters
+    `scope in (…)`, which is its leading column, so a second index on `scope` alone would be maintained
+    on every write and read by nothing. `origin_thread_id` is deliberately not a foreign key, unlike
+    every other table here: a memory outlives the conversation it came from, and a cascade off
+    `agent_thread` would delete beliefs when a transcript aged out.
+  - `ensureAgentSchema` creates it. It needs no entry in the additive-column pass — that list exists for
+    a column added to a table this package already shipped, and `CREATE TABLE IF NOT EXISTS` covers a
+    whole new one on a database of any age. `key` and `text` are quoted in the DDL: both are keywords in
+    at least one engine, and they are the SPI's own field names, which is worth more than dodging the
+    quoting.
+  - `DrizzleMemoryProvider` implements `list`, `write` and `forget`. The scope filter is in the query;
+    `forget` puts the actor's own scope in the `where`, so an id alone cannot reach a tenant's memory,
+    and "no such id" and "not yours" answer identically. `write` upserts in one statement, and its
+    conflict `set` names exactly what a rewrite may change — so `pinned`, `created_at` and `id` are
+    left alone by construction rather than by an exclusion list anyone could forget to extend.
+  - `write` refuses an **agent-authored** record at any scope but the actor's own, the storage half of
+    `memoryWriteVerdict`'s third rule. A human-authored one above it is allowed: that is what a console
+    publishing an organisation's policy does, and whether that person may write there needs facts a
+    provider is not handed.
+  - `pin({ id, pinned })` is the operator act the SPI has no method for. A pin grants a fact a permanent
+    place in every future prompt, so nothing an agent can reach may set it.
+
+  **`search` is not implemented**, for the same reason as the sibling adapter: it needs an index over
+  the memories themselves, whose shape depends entirely on what a deployment already runs, and without
+  it `list` reads the applicable scopes whole so the ceiling never bites. `MemoryDigest.omitted` going
+  non-zero — `pinnedOmitted` especially — is the signal that it is worth building.
+
+  `DrizzleAgentStoreModule.forRoot({ db })` exports the provider but never binds `AGENT_MEMORY`: that
+  token's presence is what turns memory on, so binding it would switch the feature on for every host
+  that installs the store. Name the provider in `AgentModule`'s `memory: { provider }` to opt in.
+
+- [#106](https://github.com/DavideCarvalho/nestjs-agent/pull/106) [`2e2c04c`](https://github.com/DavideCarvalho/nestjs-agent/commit/2e2c04c50195ffcc5acdc7dca5df7e46e239230e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The RAG ingestion ledger is no longer something only the MikroORM adapter can keep.
+
+  `rag_ingestion_log` records the outcome of every RAG ingestion — ingested, skipped, failed, removed
+  — and it is the only place a document that produced **no chunks** is visible at all. A scanned PDF
+  whose extraction came back empty, a mime type with no extractor, an embedding call that blew up:
+  each produces zero chunks, so `VectorStore.listDocuments()` cannot tell any of them from a document
+  nobody ever uploaded. Until now that table existed for `store-mikro-orm` only, so choosing Drizzle
+  silently decided that a deployment could not audit its own ingestions.
+
+  `@dudousxd/nestjs-agent-rag` owns no storage here and never did: it publishes `aviary:rag:*`
+  diagnostics, and a store _subscribes_. This release adds the Drizzle subscriber:
+
+  - `ragIngestionLog` in `agentSchema`, created by `ensureAgentSchema` and indexed by
+    (`collection`, `updated_at`) for the per-collection listing.
+  - `DrizzleRagIngestionLog` — the recorder. Upserts on the document id, so the row is the document's
+    _current_ state: a successful retry overwrites the failure it replaces instead of leaving a stale
+    error beside a working document, and `created_at` survives, so a row still answers "when was this
+    first attempted?". A sparser later event (`removed` knows the owner but not the collection) leaves
+    what an earlier event recorded alone. Writes are best-effort and never throw — this runs detached
+    on a diagnostics channel, so a failed write is reported and dropped rather than taking down the
+    ingestion that triggered it.
+  - The read path a console needs: `list`, `listPage` (page plus the unpaginated total), `get`,
+    `remove`, `removeByCollection`, the delete-safe keyset `iterate`, and `listDocumentIds` for an
+    orphan sweep that wants a collection's id set and not every stack trace in the table.
+    `RAG_INGESTION_LOG_PAGE_ORDER` is exported because the order is a contract: `updated_at desc`
+    tiebroken on the primary key, which is what keeps consecutive pages disjoint when a bulk upload
+    stamps a whole batch with one timestamp.
+
+  `DrizzleAgentStoreModule.forRoot({ db })` binds and exports it by default, the same as
+  `MikroOrmAgentStoreModule.forFeature()` — a default of off would have left the gap this closes
+  open for anyone who did not know to look for the switch. `{ ragIngestionLog: false }` binds nothing
+  at all, for a host that records outcomes itself or ingests no media. The table has to exist:
+  `ensureAgentSchema` creates it, or write the `CREATE TABLE` into your own migrations.
+
+  **Upgrading an existing Drizzle database.** Nothing to do beyond running `ensureAgentSchema`, which
+  is where a new table belongs rather than in the add-column pass: `CREATE TABLE IF NOT EXISTS` is
+  only inert against a database that already has the table, and no database has this one, so it is
+  created in full — every column and its index — on a database of any age.
+
+  Both adapters' suites now assert the same behaviours in the same words, and the MikroORM side picks
+  up the four its sibling exposed as untested: `created_at` surviving an upsert, the recorder going
+  quiet once torn down, a page total that counts the filter rather than the page, and a write failure
+  being reported instead of escaping.
+
+### Patch Changes
+
+- Updated dependencies [[`d7f2cf2`](https://github.com/DavideCarvalho/nestjs-agent/commit/d7f2cf260ab0e87a012b21d681f805eb6758129a), [`31caa9e`](https://github.com/DavideCarvalho/nestjs-agent/commit/31caa9e48e9b8be948b54dd252057a01355f4924)]:
+  - @dudousxd/nestjs-agent-core@0.14.0
+
 ## 0.9.0
 
 ### Minor Changes
