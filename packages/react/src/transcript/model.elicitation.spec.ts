@@ -69,7 +69,7 @@ function elicitationOptions(
     canSkip: true,
     answer: () => undefined,
     skip: () => undefined,
-    isSubmitting: () => false,
+    submitting: () => null,
     errorOf: () => null,
     ...overrides,
   };
@@ -195,12 +195,20 @@ describe('buildTranscriptBlocks — a parked question set', () => {
   });
 
   it('reports the submission in flight until the run settles the part', () => {
-    expect(only([askPart()], { isSubmitting: () => true }).answer.isSubmitting).toBe(true);
+    expect(only([askPart()], { submitting: () => 'answer' }).answer.isSubmitting).toBe(true);
     expect(
       only([askPart({ state: 'output-available', output: { answers: {}, skipped: true } })], {
-        isSubmitting: () => true,
+        submitting: () => 'answer',
       }).answer.isSubmitting,
     ).toBe(false);
+  });
+
+  it('reports the submission on the action that was sent, and on no other', () => {
+    // One call settles one way at a time. A block that raised both would report the decline it is
+    // carrying out as a confirmation in progress.
+    const declining = only([askPart()], { submitting: () => 'skip' });
+    expect(declining.skip.isSubmitting).toBe(true);
+    expect(declining.answer.isSubmitting).toBe(false);
   });
 
   it('withholds each action the host gave it nowhere to send', () => {
@@ -237,7 +245,7 @@ describe('buildTranscriptBlocks — a tool call parked on approval', () => {
         canReject: true,
         approve: () => undefined,
         reject: () => undefined,
-        isSubmitting: () => false,
+        submitting: () => null,
         errorOf: () => null,
       },
     })[0] as TranscriptToolBlock;

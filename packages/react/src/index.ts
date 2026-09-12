@@ -94,6 +94,7 @@ export {
   type TranscriptQuestion,
   type TranscriptQuestionOption,
   type TranscriptReasoningBlock,
+  type SettleAction,
   type TranscriptSettleState,
   type TranscriptSource,
   type TranscriptSourcesBlock,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type ChatStatus,
   type MessageUsageInfo,
+  type SettleAction,
   type TimestampInfo,
   type TranscriptBlock,
   type UsageSummary,
@@ -308,7 +309,9 @@ function useTranscriptItems({
   // A question's picks, under `toolCallId|questionId`. Presence IS "the user touched this
   // question" — an absent entry is what makes the submission omit it and take the server's default.
   const [picks, setPicks] = useState<ReadonlyMap<string, string[]>>(() => new Map());
-  const [settling, setSettling] = useState<ReadonlySet<string>>(() => new Set());
+  // Which decision each parked call is sending, not merely that one is: the two affordances on a
+  // call are never in flight together, and only the pressed one should report progress.
+  const [settling, setSettling] = useState<ReadonlyMap<string, SettleAction>>(() => new Map());
   const [settleErrors, setSettleErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
 
   const latest = useRef({ options, drafts, picks, messages });
@@ -357,37 +360,40 @@ function useTranscriptItems({
    * call stays parked either way, and a form that silently does nothing on submit is
    * indistinguishable from a broken button.
    */
-  const settle = useCallback((toolCallId: string, send: () => void | Promise<void>) => {
-    setSettleErrors((current) => {
-      if (!current.has(toolCallId)) {
-        return current;
-      }
-      const next = new Map(current);
-      next.delete(toolCallId);
-      return next;
-    });
-    setSettling((current) => new Set(current).add(toolCallId));
-    const failed = (error: unknown) => {
-      setSettling((current) => {
-        const next = new Set(current);
+  const settle = useCallback(
+    (toolCallId: string, action: SettleAction, send: () => void | Promise<void>) => {
+      setSettleErrors((current) => {
+        if (!current.has(toolCallId)) {
+          return current;
+        }
+        const next = new Map(current);
         next.delete(toolCallId);
         return next;
       });
-      setSettleErrors((current) =>
-        new Map(current).set(
-          toolCallId,
-          error instanceof Error ? error.message : 'Could not settle this',
-        ),
-      );
-    };
-    // Sent in the click's own tick, not a microtask later — a synchronous throw and a rejected
-    // promise are the same failure to the person looking at the form.
-    try {
-      void Promise.resolve(send()).catch(failed);
-    } catch (error) {
-      failed(error);
-    }
-  }, []);
+      setSettling((current) => new Map(current).set(toolCallId, action));
+      const failed = (error: unknown) => {
+        setSettling((current) => {
+          const next = new Map(current);
+          next.delete(toolCallId);
+          return next;
+        });
+        setSettleErrors((current) =>
+          new Map(current).set(
+            toolCallId,
+            error instanceof Error ? error.message : 'Could not settle this',
+          ),
+        );
+      };
+      // Sent in the click's own tick, not a microtask later — a synchronous throw and a rejected
+      // promise are the same failure to the person looking at the form.
+      try {
+        void Promise.resolve(send()).catch(failed);
+      } catch (error) {
+        failed(error);
+      }
+    },
+    [],
+  );
 
   const answer = useCallback(
     (toolCallId: string) => {
@@ -396,7 +402,9 @@ function useTranscriptItems({
       if (!onAnswer) {
         return;
       }
-      settle(toolCallId, () => onAnswer(toolCallId, answersFor(current.picks, toolCallId)));
+      settle(toolCallId, 'answer', () =>
+        onAnswer(toolCallId, answersFor(current.picks, toolCallId)),
+      );
     },
     [settle],
   );
@@ -405,7 +413,7 @@ function useTranscriptItems({
     (toolCallId: string) => {
       const onSkip = latest.current.options.onSkip;
       if (onSkip) {
-        settle(toolCallId, () => onSkip(toolCallId));
+        settle(toolCallId, 'skip', () => onSkip(toolCallId));
       }
     },
     [settle],
@@ -415,7 +423,7 @@ function useTranscriptItems({
     (toolCallId: string) => {
       const onApprove = latest.current.options.onApprove;
       if (onApprove) {
-        settle(toolCallId, () => onApprove(toolCallId));
+        settle(toolCallId, 'approve', () => onApprove(toolCallId));
       }
     },
     [settle],
@@ -425,7 +433,7 @@ function useTranscriptItems({
     (toolCallId: string) => {
       const onReject = latest.current.options.onReject;
       if (onReject) {
-        settle(toolCallId, () => onReject(toolCallId));
+        settle(toolCallId, 'reject', () => onReject(toolCallId));
       }
     },
     [settle],
@@ -563,7 +571,7 @@ function useTranscriptItems({
                 canSkip: options.onSkip !== undefined,
                 answer,
                 skip,
-                isSubmitting: (toolCallId) => settling.has(toolCallId),
+                submitting: (toolCallId) => settling.get(toolCallId) ?? null,
                 errorOf: (toolCallId) => settleErrors.get(toolCallId) ?? null,
               },
             }
@@ -575,7 +583,7 @@ function useTranscriptItems({
                 canReject: options.onReject !== undefined,
                 approve,
                 reject,
-                isSubmitting: (toolCallId) => settling.has(toolCallId),
+                submitting: (toolCallId) => settling.get(toolCallId) ?? null,
                 errorOf: (toolCallId) => settleErrors.get(toolCallId) ?? null,
               },
             }

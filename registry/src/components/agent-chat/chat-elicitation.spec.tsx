@@ -193,6 +193,20 @@ describe('ChatElicitation', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy();
   });
 
+  it('closes both doors once a submission is on its way, so the other cannot follow it', () => {
+    // A second `settle` for the same call overwrites the first, so both would be in flight while
+    // only the later one reported progress — the first spinner clearing while its promise is still
+    // pending. Reports on the pressed affordance, holds both.
+    const onSkip = vi.fn();
+    render(<Harness onAnswer={() => new Promise<void>(() => undefined)} onSkip={onSkip} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Confirming…' })).toBeTruthy();
+  });
+
   it('renders inline in the message, where the turn is', () => {
     const { container } = render(<Harness wholeMessage />);
 
