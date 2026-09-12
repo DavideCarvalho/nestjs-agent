@@ -4,6 +4,7 @@ import { agentManagedTables } from './ensure-schema';
 describe('agentManagedTables', () => {
   it('returns every table this store owns', () => {
     expect(agentManagedTables().sort()).toEqual([
+      'agent_memory',
       'agent_message',
       'agent_model_pricing',
       'agent_run',
