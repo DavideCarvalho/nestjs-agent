@@ -83,6 +83,10 @@ function ToolApproval({ call }: { call: TranscriptToolCall }) {
   if (!call.approve.available && !call.reject.available && call.error === null) {
     return null;
   }
+  // Both doors close once either decision is on its way, so a second one cannot follow the first
+  // for a call the server is already settling. Only the pressed one reports progress — the two
+  // `isSubmitting` flags name WHICH decision is going, not merely that one is.
+  const isSettling = call.approve.isSubmitting || call.reject.isSubmitting;
   return (
     <div className="flex items-center gap-2 border-t border-border px-3 py-2">
       {call.error ? (
@@ -98,7 +102,7 @@ function ToolApproval({ call }: { call: TranscriptToolCall }) {
         <button
           type="button"
           onClick={call.reject.run}
-          disabled={call.reject.isSubmitting}
+          disabled={isSettling}
           className={cn(
             'shrink-0 rounded-lg px-2.5 py-1 text-xs text-muted-foreground',
             'transition-colors outline-none hover:bg-accent hover:text-foreground',
@@ -113,7 +117,7 @@ function ToolApproval({ call }: { call: TranscriptToolCall }) {
         <button
           type="button"
           onClick={call.approve.run}
-          disabled={call.approve.isSubmitting}
+          disabled={isSettling}
           className={cn(
             'shrink-0 rounded-lg bg-foreground px-2.5 py-1 text-xs text-background',
             'transition-opacity outline-none hover:opacity-90',

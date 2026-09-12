@@ -67,6 +67,13 @@ export interface TranscriptReasoningBlock {
 }
 
 /** An action a run is waiting on a human for: approve, reject, answer, skip. */
+/**
+ * Which decision a parked call is currently sending. One call can only be settling one way at a
+ * time, and WHICH one is what lets a surface report progress on the affordance the person pressed
+ * instead of on all of them.
+ */
+export type SettleAction = 'approve' | 'reject' | 'answer' | 'skip';
+
 export interface TranscriptSettleState {
   available: boolean;
   /** True from the click until the run resumes and settles the call. */
@@ -220,7 +227,8 @@ export interface ElicitationBlockOptions {
   canSkip: boolean;
   answer: (toolCallId: string) => void;
   skip: (toolCallId: string) => void;
-  isSubmitting: (toolCallId: string) => boolean;
+  /** Which decision this call is sending, or `null` for none. */
+  submitting: (toolCallId: string) => SettleAction | null;
   errorOf: (toolCallId: string) => string | null;
 }
 
@@ -230,7 +238,8 @@ export interface ApprovalBlockOptions {
   canReject: boolean;
   approve: (toolCallId: string) => void;
   reject: (toolCallId: string) => void;
-  isSubmitting: (toolCallId: string) => boolean;
+  /** Which decision this call is sending, or `null` for none. */
+  submitting: (toolCallId: string) => SettleAction | null;
   errorOf: (toolCallId: string) => string | null;
 }
 
@@ -445,7 +454,9 @@ function isAwaitingApproval(part: AnyToolUIPart): boolean {
 function buildToolCall(part: AnyToolUIPart, options?: ApprovalBlockOptions): TranscriptToolCall {
   const toolCallId = part.toolCallId;
   const awaiting = isAwaitingApproval(part);
-  const isSubmitting = awaiting && options?.isSubmitting(toolCallId) === true;
+  // Per decision, not per call: the two are never in flight together, and a surface that read one
+  // flag for both would report the refusal it is carrying out as an approval in progress.
+  const sending = awaiting ? (options?.submitting(toolCallId) ?? null) : null;
   return {
     part,
     toolCallId,
@@ -453,12 +464,12 @@ function buildToolCall(part: AnyToolUIPart, options?: ApprovalBlockOptions): Tra
     isAwaitingApproval: awaiting,
     approve: {
       available: awaiting && options?.canApprove === true,
-      isSubmitting,
+      isSubmitting: sending === 'approve',
       run: () => options?.approve(toolCallId),
     },
     reject: {
       available: awaiting && options?.canReject === true,
-      isSubmitting,
+      isSubmitting: sending === 'reject',
       run: () => options?.reject(toolCallId),
     },
     error: options?.errorOf(toolCallId) ?? null,
@@ -596,7 +607,7 @@ function buildElicitationBlock(
       })),
     };
   });
-  const isSubmitting = isPending && options.isSubmitting(toolCallId);
+  const sending = isPending ? options.submitting(toolCallId) : null;
   return {
     kind: 'elicitation',
     key,
@@ -609,12 +620,12 @@ function buildElicitationBlock(
     error: options.errorOf(toolCallId),
     answer: {
       available: isPending && options.canAnswer,
-      isSubmitting,
+      isSubmitting: sending === 'answer',
       run: () => options.answer(toolCallId),
     },
     skip: {
       available: isPending && options.canSkip,
-      isSubmitting,
+      isSubmitting: sending === 'skip',
       run: () => options.skip(toolCallId),
     },
   };
