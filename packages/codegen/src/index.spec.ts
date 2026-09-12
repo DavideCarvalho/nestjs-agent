@@ -18,6 +18,12 @@ describe('nestjsAgentCodegen', () => {
     expect(names).toContain('agent.toolCall.reject');
     expect(names).toContain('agent.quota');
     expect(names).toContain('agent.chat.cancel');
+    expect(names).toContain('agent.toolCall.answer');
+    expect(names).toContain('agent.toolCall.skip');
+    expect(names).toContain('agent.skills.list');
+    expect(names).toContain('agent.memories.list');
+    expect(names).toContain('agent.memories.forget');
+    expect(names).toContain('agent.attachments.list');
     // the persona catalog route was deleted along with the persona concept
     expect(names).not.toContain('agent.personas');
   });

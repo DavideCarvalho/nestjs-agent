@@ -40,6 +40,18 @@ const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAG
 /** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
 const AGENT_CATALOG_ENTRY = '{ name: string; description: string; isDefault?: boolean }';
 
+/** `GET /agent/skills` — mirrors `SkillCatalogEntry` in core/src/skills.ts. */
+const SKILL_CATALOG_ENTRY =
+  '{ name: string; description: string; scope: string; shadows?: string[] }';
+const MEMORY_ORIGIN =
+  "{ author: 'agent' | 'human'; threadId?: string; runId?: string; actorRef?: string }";
+const OVERRIDDEN_MEMORY = "{ scope: string; text: string; author: 'agent' | 'human' }";
+/** `GET /agent/memories` — mirrors `MemoryDigestEntry` in core/src/memory.ts. */
+const MEMORY_ENTRY = `{ id: string; key: string; text: string; scope: string; origin: ${MEMORY_ORIGIN}; updatedAt: string; pinned?: boolean; overrides?: ${OVERRIDDEN_MEMORY}[] }`;
+/** `GET /agent/attachments` — mirrors `StagedAttachment` in core/src/spi/attachment-staging.ts. */
+const STAGED_ATTACHMENT =
+  '{ mediaId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }';
+
 function route(
   method: string,
   path: string,
@@ -121,6 +133,50 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       body: '{ runId: string; toolCallId: string; reason?: string }',
       response: 'void',
     }),
+    route(
+      'GET',
+      `${root}/skills`,
+      `${ns}.skills.list`,
+      {
+        query: '{ threadId?: string }',
+        body: null,
+        response: `${SKILL_CATALOG_ENTRY}[]`,
+      },
+      [{ name: 'threadId', source: 'query' }],
+    ),
+    route(
+      'GET',
+      `${root}/memories`,
+      `${ns}.memories.list`,
+      {
+        query: '{ threadId?: string }',
+        body: null,
+        response: `${MEMORY_ENTRY}[]`,
+      },
+      [{ name: 'threadId', source: 'query' }],
+    ),
+    route(
+      'DELETE',
+      `${root}/memories/:id`,
+      `${ns}.memories.forget`,
+      { query: null, body: null, response: '{ forgotten: boolean }' },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route('POST', `${root}/tool-call/answer`, `${ns}.toolCall.answer`, {
+      query: null,
+      body: '{ toolCallId: string; answers?: Record<string, string[]> }',
+      response: '{ ok: boolean }',
+    }),
+    route('POST', `${root}/tool-call/skip`, `${ns}.toolCall.skip`, {
+      query: null,
+      body: '{ toolCallId: string }',
+      response: '{ ok: boolean }',
+    }),
+    route('GET', `${root}/attachments`, `${ns}.attachments.list`, {
+      query: null,
+      body: null,
+      response: `${STAGED_ATTACHMENT}[]`,
+    }),
     route('GET', `${root}/quota/today`, `${ns}.quota`, {
       query: null,
       body: null,
@@ -139,13 +195,16 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
 /**
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
  * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
- * rename/promote/fork/truncate, tool-call approve/reject, quota, cancel) into your generated
- * `api.ts` — so they're available as a typed client / TanStack hooks in your frontend.
+ * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, skills, memories, staged
+ * attachments, quota, cancel) into your generated `api.ts` — so they're available as a typed client
+ * / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static
- * AST discovery can't see them. The streaming `POST /agent/chat` + `GET /agent/chat/:runId/stream`
- * SSE endpoints are deliberately omitted — use `@dudousxd/nestjs-agent-react`'s `useAgentChat`
- * (a Vercel AI SDK transport) for those.
+ * AST discovery can't see them. Three endpoints are deliberately left out, and
+ * `covers-every-json-route.spec.ts` fails on any fourth that goes missing by accident: the streaming
+ * `POST /agent/chat` and `GET /agent/chat/:runId/stream` — use `@dudousxd/nestjs-agent-react`'s
+ * `useAgentChat` (a Vercel AI SDK transport) — and `POST /agent/attachments`, a multipart upload
+ * where codegen models JSON bodies.
  *
  * ```ts
  * defineConfig({ extensions: [nestjsAgentCodegen({ basePath: '/api' })] });
