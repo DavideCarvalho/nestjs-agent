@@ -1,24 +1,32 @@
-// Integration: MikroOrmRagIngestionLog against an in-memory SQLite (better-sqlite3, via
-// @mikro-orm/sqlite). Runs only under `pnpm test:db`.
+// Integration: DrizzleRagIngestionLog against an in-memory SQLite (better-sqlite3, via
+// drizzle-orm/better-sqlite3). Runs only under `pnpm test:db`.
+//
+// The sibling suite is `store-mikro-orm`'s `rag-ingestion-log.db.spec.ts`: the same behaviours, in
+// the same order, asserted against the other adapter. Where a behaviour is meant to be identical the
+// two files say so with the same words.
 import { channel } from 'node:diagnostics_channel';
-import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { type DynamicModule, Logger } from '@nestjs/common';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ensureAgentSchema } from './ensure-schema';
-import { agentEntities } from './entities';
+import Database from 'better-sqlite3';
+import { eq, sql } from 'drizzle-orm';
+import { type BetterSQLite3Database, drizzle } from 'drizzle-orm/better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DrizzleAgentStoreModule } from './drizzle-agent-store.module.js';
 import {
-  RagIngestionLog,
-  RagIngestionLogRepository,
-  type RagIngestionStatus,
-} from './entities/rag-ingestion-log.entity';
-import { MikroOrmAgentStoreModule } from './mikro-orm-agent-store.module';
-import {
-  MikroOrmRagIngestionLog,
+  DrizzleRagIngestionLog,
   RAG_INGESTION_LOG_PAGE_ORDER,
-} from './mikro-orm-rag-ingestion-log';
+} from './drizzle-rag-ingestion-log.js';
+import { ensureAgentSchema } from './ensure-schema.js';
+import { type RagIngestionStatus, agentSchema, ragIngestionLog } from './schema.js';
 
-let orm: MikroORM;
-let log: MikroOrmRagIngestionLog;
+let db: BetterSQLite3Database<typeof agentSchema>;
+let log: DrizzleRagIngestionLog;
+
+/** Every SQL statement Drizzle has run since {@link recordQueries} was last called. */
+let queries: string[] = [];
+function recordQueries(): string[] {
+  queries = [];
+  return queries;
+}
 
 const EPOCH = Date.parse('2026-01-01T00:00:00Z');
 
@@ -38,26 +46,27 @@ async function seed(
 ): Promise<string[]> {
   const prefix = options.prefix ?? 'doc';
   const ids = Array.from({ length: count }, (_, i) => `${prefix}-${String(i).padStart(3, '0')}`);
-  await orm.em.fork().insertMany(
-    RagIngestionLog,
-    ids.map((documentId, i) => ({
-      documentId,
-      status: options.status ?? ('ingested' as RagIngestionStatus),
-      collection: options.collection ?? 'col-1',
-      chunks: 1,
-      createdAt: new Date(EPOCH),
-      // distinct timestamps by default; all-tied when the test is about the tiebreaker
-      updatedAt: new Date(options.sameUpdatedAt === true ? EPOCH : EPOCH + i * 1000),
-    })),
-  );
+  const rows = ids.map((documentId, i) => ({
+    documentId,
+    status: options.status ?? ('ingested' as RagIngestionStatus),
+    collection: options.collection ?? 'col-1',
+    chunks: 1,
+    createdAt: new Date(EPOCH),
+    // distinct timestamps by default; all-tied when the test is about the tiebreaker
+    updatedAt: new Date(options.sameUpdatedAt === true ? EPOCH : EPOCH + i * 1000),
+  }));
+  // chunked: one INSERT per row-batch keeps the statement under SQLite's bound-parameter ceiling
+  for (let from = 0; from < rows.length; from += 100) {
+    await db.insert(ragIngestionLog).values(rows.slice(from, from + 100));
+  }
   return ids;
 }
 
 /** Insert one extra row with a hand-picked `updatedAt`, to land it before or after a live cursor. */
 async function insertAt(documentId: string, updatedAt: Date, collection = 'col-1'): Promise<void> {
-  await orm.em.fork().insert(RagIngestionLog, {
+  await db.insert(ragIngestionLog).values({
     documentId,
-    status: 'ingested' as RagIngestionStatus,
+    status: 'ingested',
     collection,
     chunks: 1,
     createdAt: updatedAt,
@@ -67,17 +76,11 @@ async function insertAt(documentId: string, updatedAt: Date, collection = 'col-1
 
 /** The ids currently in the table, in the paging order. */
 async function idsInOrder(): Promise<string[]> {
-  const rows = await orm.em
-    .fork()
-    .find(RagIngestionLog, {}, { orderBy: RAG_INGESTION_LOG_PAGE_ORDER });
+  const rows = await db
+    .select({ documentId: ragIngestionLog.documentId })
+    .from(ragIngestionLog)
+    .orderBy(...RAG_INGESTION_LOG_PAGE_ORDER);
   return rows.map((row) => row.documentId);
-}
-
-/** Every SQL statement the ORM has run since {@link recordQueries} was last called. */
-let queries: string[] = [];
-function recordQueries(): string[] {
-  queries = [];
-  return queries;
 }
 
 /**
@@ -90,31 +93,26 @@ async function publish(event: string, payload: Record<string, unknown>): Promise
   await log.settle();
 }
 
-beforeAll(async () => {
-  orm = await MikroORM.init({
-    driver: SqliteDriver,
-    dbName: ':memory:',
-    // No collation: SQLite rejects named MySQL collations. Production uses AGENT_ENTITIES.
-    entities: agentEntities(),
-    allowGlobalContext: true,
+beforeEach(async () => {
+  const sqlite = new Database(':memory:');
+  db = drizzle(sqlite, {
+    schema: agentSchema,
     // Captured, not printed: one test asserts on the columns listDocumentIds actually selects.
-    debug: ['query'],
-    logger: (message: string) => {
-      queries.push(message);
+    logger: {
+      logQuery: (query: string) => {
+        queries.push(query);
+      },
     },
   });
-  await ensureAgentSchema(orm);
-  log = new MikroOrmRagIngestionLog(orm.em);
+  await ensureAgentSchema(db);
+  log = new DrizzleRagIngestionLog(db);
   log.onModuleInit();
 });
 
-afterAll(async () => {
-  await log?.onModuleDestroy();
-  await orm?.close(true);
-});
-
-beforeEach(async () => {
-  await orm.em.fork().nativeDelete(RagIngestionLog, {});
+afterEach(async () => {
+  // Unsubscribes: a recorder left listening would keep writing to a closed database on every later
+  // test's publish, and the assertions would be reading a table two recorders wrote.
+  await log.onModuleDestroy();
 });
 
 /** Whether the module's provider list actually binds the recorder, not just re-exports the name. */
@@ -124,45 +122,47 @@ function bindsRecorder(module: DynamicModule): boolean {
       typeof provider === 'object' &&
       provider !== null &&
       'provide' in provider &&
-      provider.provide === MikroOrmRagIngestionLog,
+      provider.provide === DrizzleRagIngestionLog,
   );
 }
 
-describe('MikroOrmAgentStoreModule wiring', () => {
-  it('binds and exports the recorder by default, matching the Drizzle adapter', () => {
-    const module = MikroOrmAgentStoreModule.forFeature();
+describe('DrizzleAgentStoreModule wiring', () => {
+  it('binds and exports the recorder by default, matching the MikroORM adapter', () => {
+    const module = DrizzleAgentStoreModule.forRoot({ db });
 
     expect(bindsRecorder(module)).toBe(true);
-    expect(module.exports).toContain(MikroOrmRagIngestionLog);
+    expect(module.exports).toContain(DrizzleRagIngestionLog);
   });
 
   it('binds nothing at all when ragIngestionLog is off', () => {
-    const module = MikroOrmAgentStoreModule.forFeature({ ragIngestionLog: false });
+    const module = DrizzleAgentStoreModule.forRoot({ db, ragIngestionLog: false });
 
     // a host that records outcomes itself gets no second writer, and no subscriber on the channel
     expect(bindsRecorder(module)).toBe(false);
-    expect(module.exports).not.toContain(MikroOrmRagIngestionLog);
+    expect(module.exports).not.toContain(DrizzleRagIngestionLog);
   });
 });
 
-describe('RagIngestionLog custom repository', () => {
-  it('is what a booted ORM hands back for the entity', () => {
-    // The point of wiring `repository` into the schema: a host resolves the repository by type
-    // (`em.getRepository(RagIngestionLog)`, `@InjectRepository`) instead of threading the entity
-    // through every `em.find(RagIngestionLog, …)` call.
-    const repository = orm.em.fork().getRepository(RagIngestionLog);
-    expect(repository).toBeInstanceOf(RagIngestionLogRepository);
+describe('ensureAgentSchema creates rag_ingestion_log', () => {
+  it('creates the table on a database that already has the agent tables', async () => {
+    // the upgrade case: the agent tables predate this one, so `CREATE TABLE IF NOT EXISTS` is inert
+    // for them and has to do the whole job for the table nothing has ever created
+    await db.run(sql.raw('DROP TABLE rag_ingestion_log'));
+    await expect(log.list()).rejects.toThrow();
+
+    await ensureAgentSchema(db);
+
+    expect(await log.list()).toEqual([]);
   });
 
-  it('reads the same rows the entity manager does', async () => {
-    await seed(3);
+  it('indexes it by collection, which is what the per-collection listing reads', async () => {
+    const indexes = await db.all<{ name: string }>(sql.raw('PRAGMA index_list(rag_ingestion_log)'));
 
-    const rows = await orm.em.fork().getRepository(RagIngestionLog).findAll();
-    expect(rows.map((row) => row.documentId).sort()).toEqual(['doc-000', 'doc-001', 'doc-002']);
+    expect(indexes.map((row) => row.name)).toContain('rag_ingestion_log_collection_idx');
   });
 });
 
-describe('MikroOrmRagIngestionLog (sqlite)', () => {
+describe('DrizzleRagIngestionLog (better-sqlite3)', () => {
   it('records a successful ingestion with its chunk count and coordinates', async () => {
     await publish('media.ingested', {
       mediaId: 'rag/col-1/handbook.pdf',
@@ -217,18 +217,11 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
 
   it('records nothing at all once it has been torn down', async () => {
     await log.onModuleDestroy();
-    try {
-      await publish('media.ingested', {
-        mediaId: 'after-teardown',
-        collection: 'col-1',
-        chunks: 1,
-      });
 
-      // the row can only be here because THIS event was observed — nothing else writes the table
-      expect(await log.get('after-teardown')).toBeNull();
-    } finally {
-      log.onModuleInit();
-    }
+    await publish('media.ingested', { mediaId: 'after-teardown', collection: 'col-1', chunks: 1 });
+
+    // the row can only be here because THIS event was observed — nothing else writes the table
+    expect(await log.get('after-teardown')).toBeNull();
   });
 
   it('lets a successful retry clear the previous attempt error', async () => {
@@ -321,9 +314,7 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
     }
     // a bulk upload stamps the whole batch with the same second, so every row ties on the ordering
     // column and only the tiebreaker keeps consecutive pages disjoint
-    await orm.em
-      .fork()
-      .nativeUpdate(RagIngestionLog, {}, { updatedAt: new Date('2026-01-01T00:00:00Z') });
+    await db.update(ragIngestionLog).set({ updatedAt: new Date(EPOCH) });
 
     const paged: string[] = [];
     const listed: string[] = [];
@@ -372,15 +363,14 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
   it('reports a write failure instead of letting it escape the recorder', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     // the table is out of reach, so the upsert throws
-    const connection = orm.em.getConnection();
-    await connection.execute('alter table rag_ingestion_log rename to rag_ingestion_log_hidden');
+    await db.run(sql.raw('ALTER TABLE rag_ingestion_log RENAME TO rag_ingestion_log_hidden'));
     let warned: unknown[][] = [];
     try {
       await publish('media.ingested', { mediaId: 'doomed', collection: 'col-1', chunks: 1 });
       warned = warn.mock.calls.map((call) => [...call]);
     } finally {
       warn.mockRestore();
-      await connection.execute('alter table rag_ingestion_log_hidden rename to rag_ingestion_log');
+      await db.run(sql.raw('ALTER TABLE rag_ingestion_log_hidden RENAME TO rag_ingestion_log'));
     }
 
     // the write is best-effort: it runs detached on a diagnostics channel, so a failed one has
@@ -390,24 +380,17 @@ describe('MikroOrmRagIngestionLog (sqlite)', () => {
     expect(await log.get('doomed')).toBeNull();
   });
 
-  it('lets a caller override the page order without changing the default', async () => {
+  it('lists in the order it exports, so a caller composing its own query matches', async () => {
     const ids = await seed(5);
 
-    const byDefault = await log.listPage({ limit: 5 });
     // the documented default, spelled out: newest first
-    expect(byDefault.rows.map((row) => row.documentId)).toEqual([...ids].reverse());
-    // passing the exported constant explicitly is a no-op — it IS the default
-    const explicit = await log.listPage({ limit: 5, orderBy: RAG_INGESTION_LOG_PAGE_ORDER });
-    expect(explicit.rows.map((row) => row.documentId)).toEqual([...ids].reverse());
-
-    // and an override actually takes effect, so a caller no longer has to bypass the class to sort
-    const overridden = await log.listPage({ limit: 5, orderBy: { documentId: 'asc' } });
-    expect(overridden.rows.map((row) => row.documentId)).toEqual(ids);
-    expect(overridden.total).toBe(5);
+    expect((await log.list({ limit: 5 })).map((row) => row.documentId)).toEqual([...ids].reverse());
+    // and the exported constant IS that order — the contract a console or a sweep builds on
+    expect(await idsInOrder()).toEqual([...ids].reverse());
   });
 });
 
-describe('MikroOrmRagIngestionLog.iterate (keyset sweep)', () => {
+describe('DrizzleRagIngestionLog.iterate (keyset sweep)', () => {
   it('walks every row exactly once across many batches', async () => {
     const ids = await seed(25);
 
@@ -531,9 +514,10 @@ describe('MikroOrmRagIngestionLog.iterate (keyset sweep)', () => {
   it('honours the collection and status filters per batch', async () => {
     await seed(6, { collection: 'col-1' });
     await seed(6, { collection: 'col-2', prefix: 'other' });
-    await orm.em
-      .fork()
-      .nativeUpdate(RagIngestionLog, { documentId: 'doc-002' }, { status: 'failed' });
+    await db
+      .update(ragIngestionLog)
+      .set({ status: 'failed' })
+      .where(eq(ragIngestionLog.documentId, 'doc-002'));
 
     const inCollection: string[] = [];
     for await (const row of log.iterate({ collection: 'col-1' }, { batchSize: 2 })) {
@@ -568,7 +552,7 @@ describe('MikroOrmRagIngestionLog.iterate (keyset sweep)', () => {
   });
 });
 
-describe('MikroOrmRagIngestionLog.listDocumentIds', () => {
+describe('DrizzleRagIngestionLog.listDocumentIds', () => {
   it('returns every id, past the row cap list() stops at', async () => {
     const ids = await seed(250);
 
@@ -587,17 +571,17 @@ describe('MikroOrmRagIngestionLog.listDocumentIds', () => {
     const captured = recordQueries();
     await log.listDocumentIds({ collection: 'col-1' });
     const selects = captured.filter(
-      (sql) => sql.includes('select') && sql.includes('rag_ingestion_log'),
+      (statement) => statement.includes('select') && statement.includes('rag_ingestion_log'),
     );
 
     expect(selects.length).toBeGreaterThan(0);
-    for (const sql of selects) {
-      expect(sql).toContain('document_id');
-      expect(sql).toContain('updated_at');
+    for (const statement of selects) {
+      expect(statement).toContain('document_id');
+      expect(statement).toContain('updated_at');
       // the whole point of the projection: `error` is a TEXT column, and an orphan sweep that only
       // wants the id set has no business dragging every stack trace in the table into memory
-      expect(sql).not.toContain('error');
-      expect(sql).not.toContain('mime_type');
+      expect(statement).not.toContain('error');
+      expect(statement).not.toContain('mime_type');
     }
   });
 

@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { AgentDrizzleDb } from './schema.js';
 
 /**
- * Idempotent `CREATE TABLE IF NOT EXISTS` DDL for the seven agent tables, mirroring
+ * Idempotent `CREATE TABLE IF NOT EXISTS` DDL for the tables in
  * {@link import('./schema.js').agentSchema}. SQLite dialect (the db-test driver); kept here rather
  * than relying on drizzle-kit so the package can stand up its schema with no migration files. Safe
  * to run on boot against a shared database — it never drops or alters existing columns.
@@ -115,6 +115,23 @@ const statements: string[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS agent_memory_scope_key_uq
     ON agent_memory (scope, "key")`,
+  `CREATE TABLE IF NOT EXISTS rag_ingestion_log (
+    document_id TEXT PRIMARY KEY NOT NULL,
+    status TEXT NOT NULL,
+    collection TEXT,
+    owner_type TEXT,
+    owner_id TEXT,
+    source TEXT,
+    mime_type TEXT,
+    size INTEGER,
+    chunks INTEGER,
+    reason TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS rag_ingestion_log_collection_idx
+    ON rag_ingestion_log (collection, updated_at)`,
 ];
 
 /**
@@ -124,6 +141,10 @@ const statements: string[] = [
  * no such gap — its `ensureAgentSchema` applies `getUpdateSchemaSQL({ safe: true })`, which is
  * add-column-capable — so without this list the two adapters would disagree about what the schema is
  * after an upgrade.
+ *
+ * A whole new *table* belongs in {@link statements} and not here: the create guard is only inert
+ * against a database that already has the table, so a table nothing has ever created is created in
+ * full — every column and index — on a database of any age.
  *
  * Add-column only, never a type change or a drop: `safe` in the same sense as the sibling adapter.
  */
