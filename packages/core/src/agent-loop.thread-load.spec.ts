@@ -275,7 +275,12 @@ describe('agent loop — what `load:thread` puts in the journal', () => {
     await pass({ journal, store, threadId: thread.id });
 
     expect(journal.names().some((name) => name.startsWith('patch:'))).toBe(false);
-    expect(journal.names().slice(0, 3)).toEqual(['persist:user', 'load:thread', 'run:started-at']);
+    expect(journal.names().slice(0, 4)).toEqual([
+      'persist:user',
+      'load:thread',
+      'run:prompt-stages',
+      'run:started-at',
+    ]);
   });
 });
 

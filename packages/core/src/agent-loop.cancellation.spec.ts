@@ -212,6 +212,7 @@ describe('the cancel observation and the journal', () => {
     expect(journal.names()).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'cancel:check:0',

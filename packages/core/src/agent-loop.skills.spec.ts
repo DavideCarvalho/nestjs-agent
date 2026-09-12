@@ -134,6 +134,7 @@ describe('agent loop — skills and the turn shape', () => {
     expect(names).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'stream:step-start:0',

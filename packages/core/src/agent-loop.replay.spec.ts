@@ -171,6 +171,7 @@ describe('agent loop — checkpoint positions under processors and structured ou
     expect(journal.names()).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'stream:step-start:0',
@@ -283,6 +284,7 @@ describe('agent loop — checkpoint positions under retrieval and structured out
     expect(recorded).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'retrieve',

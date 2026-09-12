@@ -193,7 +193,9 @@ export interface AgentLoopDeps<TOutput = unknown> {
   /**
    * Enables always-on ("inject") RAG: before the turn, retrieve passages for the user message and
    * augment the system prompt with them. Its presence IS inject mode — agentic (tool) retrieval sets
-   * no retriever here (it rides a normal `read` tool). Undefined → no injection.
+   * no retriever here (it rides a normal `read` tool). Undefined → no injection, and no `retrieve`
+   * position: which answer a RUN got is journaled (see {@link PromptStages}), so wiring one does not
+   * move the checkpoints of a turn already in flight.
    */
   retriever?: Retriever;
   /** How many passages inject-mode retrieval requests. Undefined → 5. */
@@ -297,7 +299,9 @@ export interface AgentLoopDeps<TOutput = unknown> {
   /**
    * Authored procedures the model may pull in when a task calls for one, resolved per turn against
    * the actor's scopes — see `skills.ts`. Undefined → no catalog block, no `skill` tool, and a
-   * turn's checkpoint sequence is byte-identical to one that never had the option.
+   * turn's checkpoint sequence is byte-identical to one that never had the option — including for a
+   * turn that was already in flight when this was wired, because which answer a RUN got is journaled
+   * (see {@link PromptStages}).
    *
    * HOW IT COMPOSES WITH THE OTHER FOUR THINGS THAT WRITE THE PROMPT. The system block is assembled
    * in one fixed order — the agent's base prompt, then each `promptContributors` section, then
@@ -316,7 +320,8 @@ export interface AgentLoopDeps<TOutput = unknown> {
    * What the assistant has previously concluded about the actor and their organisation, resolved per
    * turn against the same scope tokens skills use — see `memory.ts`. Undefined → no memory block, no
    * `remember` tool, and a turn's checkpoint sequence is byte-identical to one that never had the
-   * option.
+   * option — including for a turn that was already in flight when this was wired, because which
+   * answer a RUN got is journaled (see {@link PromptStages}).
    *
    * WHERE IT SITS IN THE PROMPT. The system block is assembled most-durable-first: the agent's base
    * prompt (the same for everyone, every turn), then `promptContributors`, then MEMORY (the same for
@@ -1365,6 +1370,101 @@ const CANCELLATION_PATCH = 'agent:cancellation';
 const SELECTED_HISTORY_PATCH = 'agent:selected-history';
 
 /**
+ * Identifies the JOURNALED prompt-stage set to {@link AgentLoopHooks.patched} — the marker that lets
+ * {@link PromptStages} be read back from a run's own history instead of re-derived from whatever
+ * module config the process replaying it happens to hold.
+ *
+ * WHERE IT SITS, and why the choice is narrow. Probed after the history load and immediately before
+ * `run:started-at`. The position has to be one that every journal written before this marker existed
+ * fills with a REAL step whatever it was configured with — because `patched` refuses, raising
+ * `NonDeterminismError` rather than rewinding, when it finds a DIFFERENT `patch:` marker where it
+ * looks. That rules out the position after `persist:user`, which holds `agent:selected-history`, and
+ * the position after `persist:run:start`, which holds `agent:cancellation` on a deployment that
+ * enables none of the three stages. `load:thread`, `run:started-at` and `persist:run:start` are the
+ * unconditional steps in between, and this marker takes the gap before the second of them.
+ *
+ * WHY NOT A MARKER PER STAGE, guarding each stage's own position. Because a stage's position is
+ * already occupied on every deployment that has the stage switched on: a journal written with memory
+ * enabled holds `memory:digest` exactly where that marker would sit, `patched` rewinds and answers
+ * false there, and the guard would then SKIP a checkpoint the history holds — diverging a few
+ * positions later, on every in-flight run of every host already using the feature. That is the
+ * opposite of the protection it was reached for. `agent:dispatched-steps` can be guarded that way
+ * only because no journal anywhere holds the shape it guards without also holding the marker.
+ * Journals DO hold `memory:digest`, `retrieve` and `skills:catalog` with no marker in front of them.
+ *
+ * So the marker records a property of the BODY — "this run journals which prompt stages it had" —
+ * and the per-stage answers ride in the checkpoint below, where three independent switches are
+ * stated separately instead of one boolean standing in for all of them.
+ */
+const PROMPT_STAGES_PATCH = 'agent:prompt-stages';
+
+/**
+ * Which of the three optional prompt stages this RUN had. Each spends a checkpoint position that
+ * exists only where a host wired the matching dep, so together they decide the turn's checkpoint
+ * SEQUENCE:
+ *
+ * - `memory` → `memory:digest`
+ * - `retriever` → `retrieve`
+ * - `skills` → `skills:catalog`
+ *
+ * Read from module config ONCE, at {@link PROMPT_STAGES_PATCH}'s position, and journaled there.
+ * Every later replay reads those three answers back — so enabling memory on a deployment cannot
+ * insert a position into a run that is parked on a human's approval, and disabling it cannot take
+ * one away.
+ *
+ * WHAT IT DOES NOT COVER, because the next reader should not have to assume. `quota` is the one
+ * stage of this kind that CANNOT be guarded this way: `quota:check` is the loop's first position, so
+ * the only marker position that precedes it is the workflow's own first, which
+ * `agent:dispatched-steps` already owns — and a second marker there would make that guard raise
+ * instead of rewind. Enabling a quota store under a parked run therefore still shifts its sequence.
+ * `pricingStore` (`pricing:list`), `intake` (`intake:ask`/`intake:answers`), `inputProcessors`
+ * (`process:input:<step>`), `outputProcessors` (`process:output:<step>` and the follow-ups gate),
+ * `followUpsCount` (`followups:<step>` and its usage row) and `outputSchema` (`structured:*`) all
+ * sit after this marker and so COULD join this payload; they do not yet. A field added here for one
+ * of them reads back `undefined` on a run journaled before it, which has to mean "fall back to
+ * config" — that run's exposure unchanged rather than inverted.
+ *
+ * WHAT STAYS MODULE CONFIG, deliberately: the turn's TOOL LIST. Whether the model is offered `skill`
+ * or `remember` is uniform across a deployment and is re-derived on whichever worker serves a
+ * dispatched model call, and the `skill`/`remember` handlers already answer a call they have no
+ * catalog or digest for as a tool failure. Only positions are journaled here.
+ */
+interface PromptStages {
+  memory: boolean;
+  retriever: boolean;
+  skills: boolean;
+}
+
+/**
+ * The prompt stages this run is held to: the journal's record of them, or — for a run whose journal
+ * predates {@link PROMPT_STAGES_PATCH} — the live configuration, which is what that run's own body
+ * used.
+ */
+async function resolvePromptStages(
+  deps: AgentLoopDeps,
+  hooks: AgentLoopHooks,
+): Promise<PromptStages> {
+  const configured: PromptStages = {
+    memory: deps.memory !== undefined,
+    retriever: deps.retriever !== undefined,
+    skills: deps.skills !== undefined,
+  };
+  return (await (hooks.patched?.(PROMPT_STAGES_PATCH) ?? Promise.resolve(true)))
+    ? hooks.step('run:prompt-stages', () => Promise.resolve(configured))
+    : configured;
+}
+
+// What a stage answers where the RUN recorded it but this process has nothing wired to serve it —
+// the mid-rollout case of a dep taken away under a run that is still in flight.
+//
+// Reachable only on the attempt that first ARRIVES at the position: a replay is served the journaled
+// payload without running the body at all. So what it costs is one run's worth of the stage
+// degrading to nothing, in exchange for the position staying where the history put it — the same
+// posture the `skill` and `remember` handlers take when their config has gone.
+const UNSERVED_MEMORY: MemoryDigest = { scopes: [], entries: [], omitted: 0, pinnedOmitted: 0 };
+const UNSERVED_SKILLS: SkillOffer = { scopes: [], entries: [], omitted: 0 };
+
+/**
  * Read the cancel flag at one of the loop's safe points, and unwind the turn if it is set.
  *
  * The read is a checkpoint, which is the whole design: the answer becomes a fact the journal holds
@@ -2069,6 +2169,12 @@ export async function runAgentLoop<TOutput = unknown>(
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
   });
 
+  // Which of the three optional prompt stages below this run takes a position for, decided ONCE and
+  // journaled — see {@link PromptStages}. Every `stages.*` read after this is therefore a fact about
+  // the run rather than about the deployment replaying it, which is what lets a turn parked on a
+  // human survive an operator switching one of them on.
+  const stages = await resolvePromptStages(deps, hooks);
+
   // Its own step so durable replay reuses the ORIGINAL wall-clock start — durationMs stays honest
   // across suspend/resume.
   const startedAt = await hooks.step('run:started-at', () => Promise.resolve(Date.now()));
@@ -2106,10 +2212,12 @@ export async function runAgentLoop<TOutput = unknown>(
   // this run, so it needs no determinism machinery of its own. What it fails at is a turn with no
   // topic ("and the other thing?"): `pinned` is the answer to those, not a cleverer query.
   let memoryDigest: MemoryDigest | undefined;
-  if (deps.memory !== undefined) {
+  if (stages.memory) {
     const config = deps.memory;
     memoryDigest = await hooks.step('memory:digest', () =>
-      offerMemories({ config, ctx: skillContext(input), query: input.userText }),
+      config === undefined
+        ? Promise.resolve(UNSERVED_MEMORY)
+        : offerMemories({ config, ctx: skillContext(input), query: input.userText }),
     );
     // No entries, no block: an actor the assistant has concluded nothing about pays nothing, rather
     // than reading a heading over an empty list and inferring something from its presence.
@@ -2142,7 +2250,7 @@ export async function runAgentLoop<TOutput = unknown>(
   // (a `ctx.step` so it's replay-cached under durable). Recorded below as a synthetic tool call on
   // the first assistant message, so citations surface through the same machinery as agentic search.
   let injectedPassages: Passage[] | undefined;
-  if (deps.retriever !== undefined) {
+  if (stages.retriever) {
     const retriever = deps.retriever;
     const topK = deps.retrievalTopK ?? 5;
     const passages = await hooks.step('retrieve', () =>
@@ -2150,7 +2258,7 @@ export async function runAgentLoop<TOutput = unknown>(
         'retrieval',
         hooks.runId,
         { runId: hooks.runId, queryLength: input.userText.length, topK },
-        () => retriever.retrieve(input.userText, { topK }),
+        () => retriever?.retrieve(input.userText, { topK }) ?? Promise.resolve([]),
         (retrieved) => ({ count: retrieved.length }),
       ),
     );
@@ -2171,9 +2279,13 @@ export async function runAgentLoop<TOutput = unknown>(
   // which skills they yielded — are facts the journal holds rather than answers a replaying
   // process's provider would give afresh.
   let skillOffer: SkillOffer | undefined;
-  if (deps.skills !== undefined) {
+  if (stages.skills) {
     const config = deps.skills;
-    skillOffer = await hooks.step('skills:catalog', () => offerSkills(config, skillContext(input)));
+    skillOffer = await hooks.step('skills:catalog', () =>
+      config === undefined
+        ? Promise.resolve(UNSERVED_SKILLS)
+        : offerSkills(config, skillContext(input)),
+    );
     // No entries, no block: an actor whose scopes yield nothing pays nothing, rather than reading a
     // heading over an empty list and wondering what it was for.
     const block = skillOffer.entries.length > 0 ? buildSkillsBlock(skillOffer.entries) : '';
