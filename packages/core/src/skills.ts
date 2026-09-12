@@ -70,9 +70,9 @@ export function tenantScope(tenantRef: string): string {
  *
  * A HOST-SUPPLIED FUNCTION rather than an enum this library owns, because the axes a deployment
  * scopes by are the deployment's own. `Actor` gives an id and a tenant; it does not give a sector, a
- * squadron, a base, a shift — and every one of those is a real axis in some consumer. An enum here
+ * region, a warehouse, a shift — and every one of those is a real axis in some consumer. An enum here
  * would make each of them a schema change in a library that has no business knowing they exist,
- * while a token is a string a host mints for itself. Return `['sector:logistics', 'tenant:base-7',
+ * while a token is a string a host mints for itself. Return `['sector:logistics', 'tenant:berlin',
  * 'global']` and precedence follows, with nothing in this package edited.
  *
  * MUST be a pure function of its context. It runs inside the `skills:catalog` checkpoint and its

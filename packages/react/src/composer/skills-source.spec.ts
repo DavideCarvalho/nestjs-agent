@@ -6,9 +6,9 @@ import { type SkillSuggestionData, createSkillsSource } from './skills-source.js
 /** As the endpoint answers: most specific scope first, then alphabetical. `shadows` only on a clash. */
 const CATALOG = [
   {
-    name: 'normalize-unit',
-    description: 'Normalise a unit designation to DPAS form.',
-    scope: 'tenant:base-7',
+    name: 'label-pallet',
+    description: 'Label a pallet for outbound freight.',
+    scope: 'tenant:berlin',
     shadows: ['global'],
   },
   { name: 'work-order', description: 'Open and route a work order.', scope: 'global' },
@@ -37,13 +37,13 @@ describe('createSkillsSource', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/agent/skills');
     expect(items).toEqual([
       {
-        id: 'normalize-unit',
-        label: 'normalize-unit',
-        description: 'Normalise a unit designation to DPAS form.',
+        id: 'label-pallet',
+        label: 'label-pallet',
+        description: 'Label a pallet for outbound freight.',
         // A clash is said out loud: "there is no org default" and "there is one and mine wins"
         // are different facts, and only one of them is worth a user's attention.
-        hint: 'tenant:base-7 · overrides global',
-        data: { scope: 'tenant:base-7', shadows: ['global'] },
+        hint: 'tenant:berlin · overrides global',
+        data: { scope: 'tenant:berlin', shadows: ['global'] },
       },
       {
         id: 'work-order',
@@ -60,14 +60,18 @@ describe('createSkillsSource', () => {
     // Deliberately NOT alphabetical: the endpoint orders by scope first, so a client that re-sorted
     // by name would hide which scope won.
     const { client } = clientReturning([
-      { name: 'work-order', description: 'Open and route a work order.', scope: 'tenant:base-7' },
-      { name: 'normalize-unit', description: 'Normalise a unit designation.', scope: 'global' },
+      { name: 'work-order', description: 'Open and route a work order.', scope: 'tenant:berlin' },
+      {
+        name: 'label-pallet',
+        description: 'Label a pallet for outbound freight.',
+        scope: 'global',
+      },
     ]);
     const source = createSkillsSource({ client });
 
     const items = await source.getItems('', NO_SIGNAL);
 
-    expect(items.map((item) => item.id)).toEqual(['work-order', 'normalize-unit']);
+    expect(items.map((item) => item.id)).toEqual(['work-order', 'label-pallet']);
   });
 
   it('is a command trigger: the first character of the line, and nowhere else', () => {

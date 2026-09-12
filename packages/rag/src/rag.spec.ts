@@ -65,7 +65,7 @@ describe('chunkText default path is unchanged by the separator option', () => {
 
 describe('chunkText with a record separator', () => {
   const record = (row: number): string =>
-    `MVR row ${row} | Vehicle: 4A218${row} | Odometer: ${41000 + row} | Fuel Type: DIESEL | Remarks: none`;
+    `Pallet ${row} | SKU: 4A218${row} | Weight: ${41000 + row}g | Carrier: DHL | Remarks: none`;
   const records = Array.from({ length: 40 }, (_, index) => record(index));
   const document = records.join('\n');
   const options = { chunkSize: 200, separator: '\n' };
@@ -149,7 +149,7 @@ describe('chunkText with a record separator', () => {
   it('carries through ingestion, so a collection can be chunked by record end to end', async () => {
     const embedder = new FakeEmbeddingProvider();
     const store = new MemoryVectorStore();
-    const written = await ingestDocuments([{ id: 'mvr', text: document }], {
+    const written = await ingestDocuments([{ id: 'pallet-manifest', text: document }], {
       embedder,
       store,
       ...options,

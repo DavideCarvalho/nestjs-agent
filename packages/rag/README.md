@@ -43,7 +43,7 @@ in different chunks, where **neither can answer a question about that row**. Tel
 records are:
 
 ```ts
-await ingestDocuments([{ id: 'mvr-2026', text: rows.join('\n') }], {
+await ingestDocuments([{ id: 'pallet-manifest-2026', text: rows.join('\n') }], {
   embedder,
   store,
   chunkSize: 800,

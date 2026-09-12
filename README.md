@@ -336,8 +336,8 @@ Declare neither and nothing changes: no new checkpoint, no new tool, no change t
 
 ## Skills (scoped, loaded on demand)
 
-Instructions that are true *sometimes* — how one base formats a unit designation, what counts as a
-valid work order — have nowhere good to live. In the system prompt they are paid for on every turn by
+Instructions that are true *sometimes* — how one warehouse labels a pallet, what counts as an
+expedited order — have nowhere good to live. In the system prompt they are paid for on every turn by
 every user; hardcoded as a tool they are a deploy away from changing. A **skill** splits the two
 halves: the prompt carries a one-line-each catalog, and the body is read on demand through a built-in
 `skill` tool, arriving as an ordinary tool result.
@@ -346,15 +346,15 @@ halves: the prompt carries a one-line-each catalog, and the body is read on dema
 AgentModule.forRoot({ /* … */ skills: {} });
 
 @Skill({
-  name: 'normalize-unit',
-  description: 'Normalise a unit designation to DPAS form.',
-  scope: 'tenant:base-7',
+  name: 'label-pallet',
+  description: 'Label a pallet for outbound freight.',
+  scope: 'tenant:berlin',
 })
 @Injectable()
-export class NormalizeUnitSkill implements SkillBody {
-  constructor(private readonly units: UnitService) {}
+export class LabelPalletSkill implements SkillBody {
+  constructor(private readonly manifests: ManifestService) {}
   body(ctx: SkillContext): string {
-    return `Strip any squadron suffix, then match against DPAS…`;
+    return `Strip any carrier prefix, then match against the manifest…`;
   }
 }
 ```
@@ -363,17 +363,17 @@ export class NormalizeUnitSkill implements SkillBody {
 any agent may load it. An instruction that applies to every turn of a persona is still that persona's
 `systemPrompt`.
 
-**Scoping is an opaque token you order.** A skill is published at `actor:u1`, `tenant:base-7`,
-`global` — or your own `sector:logistics`. Which tokens apply is a `ScopeResolver` returning them
+**Scoping is an opaque token you order.** A skill is published at `actor:u1`, `tenant:berlin`,
+`global` — or your own `depot:north`. Which tokens apply is a `ScopeResolver` returning them
 most-specific-first, so precedence falls out of the order and a new axis is a resolver you write
 rather than an enum you wait for. Omit it and you get the actor's own scope, their tenant's, and
 `global`. **This library owns no skill table**: rows a person administers live behind your own
 `SkillProvider` (`list(scopes, ctx)` for the catalog, `load(name, scope, ctx)` for one body), so your
-`Sector` entity relates to them however it likes and your migrations never meet the `agent_*` schema
+own entities relate to them however they like and your migrations never meet the `agent_*` schema
 heal.
 
 Most specific wins, and the entry records what it **shadowed**, so the agent can say "I followed your
-base's version, which differs from the org default" instead of choosing silently.
+depot's version, which differs from the tenant default" instead of choosing silently.
 
 ```http
 GET /agent/skills → [{ name, description, scope, shadows? }]
@@ -426,7 +426,7 @@ fallible notes, and `MemoryProvider.forget` is required rather than optional —
 serve memory read-only, but none may hold conclusions about someone the someone cannot delete.
 
 **Scoping is the same token, resolved by the same `ScopeResolver` as [skills](#skills-scoped-loaded-on-demand)** —
-`actor:u1`, `sector:logistics`, `tenant:base-7`, `global`, most specific first. Where a narrower
+`actor:u1`, `depot:north`, `tenant:berlin`, `global`, most specific first. Where a narrower
 scope wins a key, the entry carries the beaten **value**, not just its scope, so the agent can say
 *"your setting differs from the org default"* rather than quietly picking one.
 

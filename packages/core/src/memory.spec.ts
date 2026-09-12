@@ -18,9 +18,9 @@ import {
 import { GLOBAL_SCOPE, actorScope, tenantScope } from './skills.js';
 import type { Actor, ToolDefinition } from './types.js';
 
-const actor: Actor = { id: 'u1', tenantRef: 'base-7', roles: ['USER'] };
+const actor: Actor = { id: 'u1', tenantRef: 'berlin', roles: ['USER'] };
 const ctx = { actor, threadId: 't1' };
-const SCOPES = [actorScope(actor), 'sector:logistics', tenantScope('base-7'), GLOBAL_SCOPE];
+const SCOPES = [actorScope(actor), 'sector:logistics', tenantScope('berlin'), GLOBAL_SCOPE];
 
 function record(
   key: string,
@@ -91,13 +91,13 @@ describe('resolveMemoryDigest', () => {
     const { entries } = resolveMemoryDigest({
       records: [
         record('fiscal-year', GLOBAL_SCOPE, 'october'),
-        record('fiscal-year', tenantScope('base-7'), 'july'),
+        record('fiscal-year', tenantScope('berlin'), 'july'),
         record('fiscal-year', 'sector:logistics', 'april'),
       ],
       scopes: SCOPES,
     });
     expect(entries[0]?.overrides?.map((beaten) => beaten.scope)).toEqual([
-      'tenant:base-7',
+      'tenant:berlin',
       GLOBAL_SCOPE,
     ]);
   });
@@ -188,8 +188,8 @@ describe('offerMemories', () => {
       },
       ctx,
     });
-    expect(asked).toEqual([['actor:u1', 'tenant:base-7', 'global']]);
-    expect(digest.scopes).toEqual(['actor:u1', 'tenant:base-7', 'global']);
+    expect(asked).toEqual([['actor:u1', 'tenant:berlin', 'global']]);
+    expect(digest.scopes).toEqual(['actor:u1', 'tenant:berlin', 'global']);
     expect(digest.entries.map((entry) => entry.key)).toEqual(['units']);
   });
 
@@ -294,7 +294,7 @@ describe('the remember tool definition', () => {
 });
 
 describe('memoryWriteVerdict', () => {
-  const scopes = ['actor:u1', 'sector:logistics', 'tenant:base-7', GLOBAL_SCOPE];
+  const scopes = ['actor:u1', 'sector:logistics', 'tenant:berlin', GLOBAL_SCOPE];
 
   it('lets a person write their own memory', () => {
     expect(
@@ -347,7 +347,7 @@ describe('memoryWriteVerdict', () => {
     // nobody in the tenant aware the edit happened.
     expect(
       memoryWriteVerdict({
-        scope: 'tenant:base-7',
+        scope: 'tenant:berlin',
         actor,
         scopes,
         author: { kind: 'agent' },
@@ -356,7 +356,7 @@ describe('memoryWriteVerdict', () => {
     ).toEqual({
       allowed: false,
       reason:
-        'only a human may write a memory at "tenant:base-7"; an agent may write only at "actor:u1"',
+        'only a human may write a memory at "tenant:berlin"; an agent may write only at "actor:u1"',
     });
   });
 });
@@ -519,7 +519,7 @@ describe('resolveMemoryDigest — selection once the store outgrows the block', 
   );
   const organisational = record(
     'rollback-policy',
-    tenantScope('base-7'),
+    tenantScope('berlin'),
     'roll back before 1600 local',
   );
 
@@ -550,7 +550,7 @@ describe('resolveMemoryDigest — selection once the store outgrows the block', 
     const { entries } = resolveMemoryDigest({
       records: [
         record('rollback-policy', 'tenant:base-42', 'another base’s policy'),
-        record('rollback-policy', tenantScope('base-7'), 'ours'),
+        record('rollback-policy', tenantScope('berlin'), 'ours'),
       ],
       scopes: SCOPES,
       maxMemories: 1,
@@ -651,7 +651,7 @@ describe('offerMemories — recall', () => {
           forget: () => true,
           search: ({ scopes, query, limit }) => {
             asked.push({ scopes, query, limit });
-            return [record('rollback-policy', tenantScope('base-7'), 'ours')];
+            return [record('rollback-policy', tenantScope('berlin'), 'ours')];
           },
         },
       },
@@ -660,7 +660,7 @@ describe('offerMemories — recall', () => {
     });
     expect(asked).toEqual([
       {
-        scopes: ['actor:u1', 'tenant:base-7', 'global'],
+        scopes: ['actor:u1', 'tenant:berlin', 'global'],
         query: 'what is our rollback policy',
         limit: 2,
       },
@@ -738,7 +738,7 @@ describe('buildMemoryBlock — whose note the model is reading', () => {
     scopes: SCOPES,
   }).entries;
   const asserted = resolveMemoryDigest({
-    records: [published('rollback-policy', tenantScope('base-7'), 'roll back before 1600 local')],
+    records: [published('rollback-policy', tenantScope('berlin'), 'roll back before 1600 local')],
     scopes: SCOPES,
   }).entries;
 
@@ -748,7 +748,7 @@ describe('buildMemoryBlock — whose note the model is reading', () => {
     const block = buildMemoryBlock({ entries: asserted, writable: false, partial: false });
     expect(block).not.toContain('prefer what the user says now');
     expect(block).not.toContain('your own notes');
-    expect(block).toContain('- [tenant:base-7] rollback-policy: roll back before 1600 local');
+    expect(block).toContain('- [tenant:berlin] rollback-policy: roll back before 1600 local');
     expect(block).toContain('conflicts with');
   });
 

@@ -74,7 +74,7 @@ export interface MemoryRecord {
   /**
    * Always-on: this fact is in the block whether or not the turn is about it. The difference between
    * working memory and recall, drawn per record — "they report on the calendar year" must not depend
-   * on the turn mentioning dates, while "they prefer the shorter runway" can wait until it comes up.
+   * on the turn mentioning dates, while "they prefer the kerbside dock" can wait until it comes up.
    *
    * A PROPERTY OF THE ROW, NOT OF A WRITE. This library reads it and never sets it, the same way it
    * never mints an `id`: an agent deciding its own conclusions are always-on is an agent deciding
@@ -162,7 +162,7 @@ export interface ListMemoriesInput {
  *
  * `scopes` GATES, AND IT GATES FIRST. A search that ranks before it filters is a cross-tenant leak
  * wearing a relevance score: the nearest neighbour to "what is our rollback policy" is another
- * base's rollback policy. Filter in the query, not after it. Records returned outside `scopes` are
+ * tenant's rollback policy. Filter in the query, not after it. Records returned outside `scopes` are
  * dropped rather than trusted, so a mistake here costs throughput rather than privacy — but the
  * drop is a backstop, not the boundary.
  */

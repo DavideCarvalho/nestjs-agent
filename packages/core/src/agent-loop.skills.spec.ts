@@ -18,7 +18,7 @@ import {
 } from './index.js';
 
 const RUN_ID = 'run-1';
-const ACTOR = { id: 'u1', roles: ['ADMIN'], tenantRef: 'base-7' };
+const ACTOR = { id: 'u1', roles: ['ADMIN'], tenantRef: 'berlin' };
 const SKILL_CALL = 'call-0-skill';
 
 /** The durable engine's positional replay contract, reduced to what this file needs. */
@@ -79,7 +79,7 @@ function provider(bodies: Record<string, string>, scopes: Record<string, string>
 
 const loadsASkill: FakeScript = (_args, turnIndex) =>
   turnIndex === 0
-    ? { text: 'let me check', toolCall: { name: 'skill', input: { name: 'normalize-unit' } } }
+    ? { text: 'let me check', toolCall: { name: 'skill', input: { name: 'label-pallet' } } }
     : { text: 'done' };
 
 interface PassResult {
@@ -149,7 +149,7 @@ describe('agent loop — skills and the turn shape', () => {
   it('spends exactly one position on the catalog, before the first model call', async () => {
     const journal = new Journal();
     const { names } = await pass(journal, () => ({ text: 'hi' }), {
-      skills: { provider: provider({ 'normalize-unit': 'body' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'body' }, {}) },
     });
     expect(names.filter((name) => name.startsWith('skills:'))).toEqual(['skills:catalog']);
     expect(names.indexOf('skills:catalog')).toBeLessThan(names.indexOf('stream:step-start:0'));
@@ -158,7 +158,7 @@ describe('agent loop — skills and the turn shape', () => {
   it('serves a loaded skill on a read tool call’s positions, adding no name of its own', async () => {
     const journal = new Journal();
     const { names } = await pass(journal, loadsASkill, {
-      skills: { provider: provider({ 'normalize-unit': 'Strip the suffix.' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'Strip the suffix.' }, {}) },
     });
     expect(names.slice(names.indexOf(`persist:toolcall:${SKILL_CALL}`))).toEqual([
       `persist:toolcall:${SKILL_CALL}`,
@@ -183,20 +183,20 @@ describe('agent loop — what skills put in front of the model', () => {
     const { calls } = await pass(journal, () => ({ text: 'hi' }), {
       skills: {
         provider: provider(
-          { 'normalize-unit': 'Strip the suffix.' },
-          { 'normalize-unit': 'tenant:base-7' },
+          { 'label-pallet': 'Strip the suffix.' },
+          { 'label-pallet': 'tenant:berlin' },
         ),
       },
     });
     const first = calls[0];
-    expect(first?.system).toContain('- normalize-unit [tenant:base-7] — how to normalize-unit');
+    expect(first?.system).toContain('- label-pallet [tenant:berlin] — how to label-pallet');
     expect(first?.tools.map((tool) => tool.name)).toContain('skill');
   });
 
   it('keeps the BODY out of the system prompt and puts it on the transcript', async () => {
     const journal = new Journal();
     const { calls } = await pass(journal, loadsASkill, {
-      skills: { provider: provider({ 'normalize-unit': 'STRIP-THE-SUFFIX' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'STRIP-THE-SUFFIX' }, {}) },
     });
     const second = calls[1];
     expect(second?.system).not.toContain('STRIP-THE-SUFFIX');
@@ -248,7 +248,7 @@ describe('agent loop — a provider that fails', () => {
     const { names, text } = await pass(journal, loadsASkill, {
       skills: {
         provider: {
-          list: () => [{ name: 'normalize-unit', description: 'how to', scope: GLOBAL_SCOPE }],
+          list: () => [{ name: 'label-pallet', description: 'how to', scope: GLOBAL_SCOPE }],
           load: () => {
             throw new Error('the skills table is unreachable');
           },
@@ -264,14 +264,14 @@ describe('agent loop — which skill body entered the prompt comes out of the jo
   it('replays the body the first attempt served, not the one this process’s provider now holds', async () => {
     const journal = new Journal();
     const first = await pass(journal, loadsASkill, {
-      skills: { provider: provider({ 'normalize-unit': 'VERSION-ONE' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'VERSION-ONE' }, {}) },
     });
     expect(JSON.stringify(first.calls[1]?.messages)).toContain('VERSION-ONE');
 
     // The run suspended the moment the body was served, and resumes after someone edited the skill.
     journal.truncateAfter(`tool:${SKILL_CALL}`);
     const replay = await pass(journal, loadsASkill, {
-      skills: { provider: provider({ 'normalize-unit': 'VERSION-TWO' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'VERSION-TWO' }, {}) },
     });
     expect(replay.names).toEqual(first.names);
     // Only the model call after the suspend genuinely ran — and it was shown the journaled body.
@@ -283,7 +283,7 @@ describe('agent loop — which skill body entered the prompt comes out of the jo
   it('replays the same positions in a process whose skills are configured differently', async () => {
     const journal = new Journal();
     const first = await pass(journal, loadsASkill, {
-      skills: { provider: provider({ 'normalize-unit': 'VERSION-ONE' }, {}) },
+      skills: { provider: provider({ 'label-pallet': 'VERSION-ONE' }, {}) },
     });
 
     // A pod that resolves the actor into narrower scopes than the one that started the run — the
@@ -299,6 +299,6 @@ describe('agent loop — which skill body entered the prompt comes out of the jo
     expect(JSON.stringify(replay.calls[0]?.messages)).toContain('VERSION-ONE');
     // And the prompt itself is rebuilt from the journal: this process would have resolved an empty
     // catalog, but the run's system block still carries the one it was started with.
-    expect(replay.calls[0]?.system).toContain('- normalize-unit [global]');
+    expect(replay.calls[0]?.system).toContain('- label-pallet [global]');
   });
 });

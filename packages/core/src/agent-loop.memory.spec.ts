@@ -18,7 +18,7 @@ import {
 } from './index.js';
 
 const RUN_ID = 'run-1';
-const ACTOR = { id: 'u1', roles: ['ADMIN'], tenantRef: 'base-7' };
+const ACTOR = { id: 'u1', roles: ['ADMIN'], tenantRef: 'berlin' };
 const REMEMBER_CALL = 'call-0-remember';
 
 /** The durable engine's positional replay contract, reduced to what this file needs. */
@@ -211,9 +211,9 @@ describe('agent loop — what memory puts in front of the model', () => {
   it('writes the block into the system prompt and offers the tool alongside it', async () => {
     const journal = new Journal();
     const { calls } = await pass(journal, () => ({ text: 'hi' }), {
-      memory: { provider: provider([fact('units', 'tenant:base-7', 'nautical miles')]) },
+      memory: { provider: provider([fact('units', 'tenant:berlin', 'nautical miles')]) },
     });
-    expect(calls[0]?.system).toContain('- [tenant:base-7] units: nautical miles');
+    expect(calls[0]?.system).toContain('- [tenant:berlin] units: nautical miles');
     expect(calls[0]?.tools.map((tool) => tool.name)).toContain('remember');
   });
 
@@ -237,7 +237,7 @@ describe('agent loop — what memory puts in front of the model', () => {
       memory: { provider: provider([fact('units', GLOBAL_SCOPE, 'nautical miles')]) },
       skills: {
         provider: {
-          list: () => [{ name: 'normalize-unit', description: 'how to', scope: GLOBAL_SCOPE }],
+          list: () => [{ name: 'label-pallet', description: 'how to', scope: GLOBAL_SCOPE }],
           load: () => 'body',
         },
       },
@@ -418,7 +418,7 @@ describe('agent loop — recall, once the store outgrows the block', () => {
     fact('coffee', 'actor:u1', 'they take it black'),
     fact('desk', 'actor:u1', 'they sit by the window'),
     fact('shift', 'actor:u1', 'they work nights'),
-    fact('rollback-policy', 'tenant:base-7', 'roll back before 1600 local'),
+    fact('rollback-policy', 'tenant:berlin', 'roll back before 1600 local'),
   ];
 
   it('puts the organisation’s relevant fact in the block though the personal scope alone fills it', async () => {
@@ -431,7 +431,7 @@ describe('agent loop — recall, once the store outgrows the block', () => {
       { memory: { provider: searching(crowded), maxMemories: 2 } },
       'what is our rollback policy',
     );
-    expect(calls[0]?.system).toContain('- [tenant:base-7] rollback-policy: roll back before 1600');
+    expect(calls[0]?.system).toContain('- [tenant:berlin] rollback-policy: roll back before 1600');
     expect(calls[0]?.system).not.toContain('they take it black');
   });
 
@@ -463,7 +463,7 @@ describe('agent loop — recall, once the store outgrows the block', () => {
     const journal = new Journal();
     const rows = [
       ...crowded,
-      pinned(fact('cache-purge', 'tenant:base-7', 'never purge the app-config cache in hours')),
+      pinned(fact('cache-purge', 'tenant:berlin', 'never purge the app-config cache in hours')),
     ];
     const { calls } = await pass(
       journal,
@@ -484,7 +484,7 @@ describe('agent loop — recall, once the store outgrows the block', () => {
       () => ({ text: 'hi' }),
       {
         memory: {
-          provider: searching([fact('rollback-policy', 'tenant:base-7', 'rollback VERSION-ONE')]),
+          provider: searching([fact('rollback-policy', 'tenant:berlin', 'rollback VERSION-ONE')]),
           maxMemories: 2,
         },
       },
@@ -498,7 +498,7 @@ describe('agent loop — recall, once the store outgrows the block', () => {
       () => ({ text: 'hi' }),
       {
         memory: {
-          provider: searching([fact('rollback-policy', 'tenant:base-7', 'rollback VERSION-TWO')]),
+          provider: searching([fact('rollback-policy', 'tenant:berlin', 'rollback VERSION-TWO')]),
           maxMemories: 2,
         },
       },
@@ -513,14 +513,14 @@ describe('agent loop — whose note the model is told it is reading', () => {
   it('does not hedge a memory a person published for the organisation', async () => {
     const journal = new Journal();
     const published: MemoryRecord = {
-      ...fact('rollback-policy', 'tenant:base-7', 'roll back before 1600 local'),
+      ...fact('rollback-policy', 'tenant:berlin', 'roll back before 1600 local'),
       origin: { author: 'human', actorRef: 'admin-1' },
     };
     const { calls } = await pass(journal, () => ({ text: 'hi' }), {
       memory: { provider: provider([published]) },
     });
     const system = calls[0]?.system ?? '';
-    expect(system).toContain('- [tenant:base-7] rollback-policy: roll back before 1600 local');
+    expect(system).toContain('- [tenant:berlin] rollback-policy: roll back before 1600 local');
     expect(system).not.toContain('prefer what the user says now');
   });
 

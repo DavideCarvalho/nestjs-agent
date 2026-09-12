@@ -278,7 +278,7 @@ const sources = useMemo(
 ```
 
 Each item carries its provenance twice: as a `hint` the rendered row right-aligns
-(`tenant:base-7 · overrides global`), and raw on `data` as `{ scope, shadows? }` for a host that
+(`tenant:berlin · overrides global`), and raw on `data` as `{ scope, shadows? }` for a host that
 wants to draw it differently. `shadows` is present only on a clash, so "there is no org default" and
 "there is one and yours wins" stay distinguishable. The list arrives ordered most-specific-scope
 first, then alphabetically — that order IS the precedence, and it is passed through untouched. The

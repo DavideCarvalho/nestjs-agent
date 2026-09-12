@@ -11,9 +11,9 @@ describe('HeaderActorResolver', () => {
 
   it('resolves id, comma-separated roles, and tenantRef from headers', () => {
     const actor = resolver.resolve(
-      req({ 'x-actor-id': 'u1', 'x-actor-role': 'ADMIN, ANALYST', 'x-tenant-ref': 'base-7' }),
+      req({ 'x-actor-id': 'u1', 'x-actor-role': 'ADMIN, ANALYST', 'x-tenant-ref': 'berlin' }),
     );
-    expect(actor).toEqual({ id: 'u1', roles: ['ADMIN', 'ANALYST'], tenantRef: 'base-7' });
+    expect(actor).toEqual({ id: 'u1', roles: ['ADMIN', 'ANALYST'], tenantRef: 'berlin' });
   });
 
   it('grants no roles when x-actor-role is absent (fail-closed, never ADMIN)', () => {
