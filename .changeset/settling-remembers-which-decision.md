@@ -22,5 +22,7 @@ their own options need the one-line change. The new `SettleAction` type is expor
 
 `available` is untouched and still means "this decision can be made at all", not "nothing is in
 flight". Holding both affordances while one is going is the renderer's call, and the two
-`isSubmitting` flags are what let it do that while reporting progress on only the pressed one —
-`registry`'s `ChatToolGroup` shows the shape.
+`isSubmitting` flags are what let it do that while reporting progress on only the pressed one.
+Both `registry` renderers now do it — `ChatToolGroup` and `ChatElicitation` — the second because a
+second `settle` for one call overwrites the first, so both sends would be in flight while only the
+later one reported progress.

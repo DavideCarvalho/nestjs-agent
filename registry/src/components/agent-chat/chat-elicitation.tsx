@@ -17,6 +17,11 @@ export interface ChatElicitationProps {
  * they stand, and only the questions the user actually touched are sent.
  */
 export function ChatElicitation({ block, className }: ChatElicitationProps) {
+  // Both affordances close once either is on its way. A second `settle` for the same call would
+  // overwrite the first, so only the later send would report progress while both were still in
+  // flight — the first spinner clearing while its promise is still pending. The two per-action
+  // flags are what let this hold everything and still report only the one that was pressed.
+  const isSettling = block.answer.isSubmitting || block.skip.isSubmitting;
   return (
     <form
       data-slot="chat-elicitation"
@@ -55,7 +60,7 @@ export function ChatElicitation({ block, className }: ChatElicitationProps) {
           {block.answer.available ? (
             <button
               type="submit"
-              disabled={block.answer.isSubmitting}
+              disabled={isSettling}
               className={cn(
                 'rounded-lg bg-foreground px-3 py-1.5 text-sm text-background',
                 'transition-opacity outline-none hover:opacity-90',
@@ -70,7 +75,7 @@ export function ChatElicitation({ block, className }: ChatElicitationProps) {
             <button
               type="button"
               onClick={block.skip.run}
-              disabled={block.skip.isSubmitting}
+              disabled={isSettling}
               className={cn(
                 'rounded-lg px-3 py-1.5 text-sm text-muted-foreground',
                 'transition-colors outline-none hover:bg-accent hover:text-foreground',

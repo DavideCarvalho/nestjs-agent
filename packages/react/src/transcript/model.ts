@@ -66,14 +66,15 @@ export interface TranscriptReasoningBlock {
   toggle: (open?: boolean) => void;
 }
 
-/** An action a run is waiting on a human for: approve, reject, answer, skip. */
 /**
- * Which decision a parked call is currently sending. One call can only be settling one way at a
- * time, and WHICH one is what lets a surface report progress on the affordance the person pressed
- * instead of on all of them.
+ * A decision a run is waiting on a human for, and which one a parked call is currently sending.
+ *
+ * One call settles one way at a time, and WHICH one is what lets a surface report progress on the
+ * affordance the person pressed instead of on all of them.
  */
 export type SettleAction = 'approve' | 'reject' | 'answer' | 'skip';
 
+/** One such decision: whether it can be made, whether it is on its way, and how to send it. */
 export interface TranscriptSettleState {
   available: boolean;
   /** True from the click until the run resumes and settles the call. */
