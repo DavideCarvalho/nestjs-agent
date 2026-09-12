@@ -39,8 +39,10 @@ function declaredRoutes(): string[] {
     for (const match of source.matchAll(
       new RegExp(`@(${METHODS.join('|')})\\((?:'([^']*)')?\\)`, 'g'),
     )) {
-      const segments = [base, match[2] ?? ''].filter((segment) => segment.length > 0);
-      found.push(`${match[1].toUpperCase()} ${['/agent', ...segments].join('/')}`);
+      const [, method, path] = match;
+      if (method === undefined) continue;
+      const segments = [base, path ?? ''].filter((segment) => segment.length > 0);
+      found.push(`${method.toUpperCase()} ${['/agent', ...segments].join('/')}`);
     }
   }
   return found.sort();
