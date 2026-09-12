@@ -182,6 +182,7 @@ describe('agent loop — input processors', () => {
     expect(stepNames).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'stream:step-start:0',

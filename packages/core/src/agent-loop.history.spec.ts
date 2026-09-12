@@ -111,6 +111,7 @@ describe('agent loop — history ceiling', () => {
     expect(stepNames).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'stream:step-start:0',

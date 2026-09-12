@@ -180,6 +180,7 @@ describe('configured intake — the checkpoints it adds, and to whom', () => {
     expect(journal.names()).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       'stream:step-start:0',
@@ -198,6 +199,7 @@ describe('configured intake — the checkpoints it adds, and to whom', () => {
     expect(journal.names()).toEqual([
       'persist:user',
       'load:thread',
+      'run:prompt-stages',
       'run:started-at',
       'persist:run:start',
       // `intake:ask` carries the verdict AND the write, so a replay reads back whether the turn
