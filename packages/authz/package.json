@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-authz",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
