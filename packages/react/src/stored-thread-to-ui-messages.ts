@@ -56,11 +56,12 @@ export interface StoredTurnMetadata {
  *
  * Deliberately NOT reproduced: the live transport's `{type: 'step-start'}` UI parts (one per model
  * call, emitted by the AI SDK for every `start-step` chunk — see `repro-real-frames.spec.ts` for a
- * captured wire dump). Those are structural brackets `MessageItem`'s `renderParts` never renders
- * (it only special-cases text and tool parts), and `storedMessageToUiMessage` has never emitted them
- * for a single row either — inventing them here would make a merged turn diverge from a same-shaped
- * unmerged one instead of converging on it. "Indistinguishable from the live stream" is scoped to
- * what actually renders: the text/tool-call content in step order, not the step brackets around it.
+ * captured wire dump). Those are structural brackets `MessageItem`'s `renderBlocks` never renders
+ * (it draws only text, reasoning, files and tool blocks), and `storedMessageToUiMessage` has never
+ * emitted them for a single row either — inventing them here would make a merged turn diverge from
+ * a same-shaped unmerged one instead of converging on it. "Indistinguishable from the live stream"
+ * is scoped to what actually renders: the text/tool-call content in step order, not the step
+ * brackets around it.
  */
 export function storedThreadToUiMessages(messages: StoredMessage[]): UIMessage[] {
   const turns: StoredMessage[][] = [];
