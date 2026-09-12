@@ -69,8 +69,8 @@ importers:
         specifier: 0.45.0
         version: 0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-transport-event-emitter':
-        specifier: 0.5.0
-        version: 0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))
+        specifier: 0.5.1
+        version: 0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))
       '@nestjs/common':
         specifier: 12.0.1
         version: 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1)
@@ -451,8 +451,8 @@ importers:
         specifier: 0.52.0
         version: 0.52.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-transport-event-emitter':
-        specifier: 0.5.0
-        version: 0.5.0(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))
+        specifier: 0.5.1
+        version: 0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))
       '@nestjs/common':
         specifier: 12.0.1
         version: 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1)
@@ -1213,11 +1213,11 @@ packages:
       cron-parser:
         optional: true
 
-  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.0':
-    resolution: {integrity: sha512-Ssq4AFR0GrdshYuKRRxvAkxCzaOYRzLOLYU1Q39hUcbZZGzq0TKR4/oAg5nuX2N0GYv4u3CQUkm/wreA5TjqYg==}
+  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1':
+    resolution: {integrity: sha512-uR7nhLl9kjwc+bBMalVdUOl7uzDP1FSxpTn1MXRKMKNMGcBQxWK4kQrkEXs41ByAaTAleGjskEn5ldqXjU5szA==}
     peerDependencies:
       '@dudousxd/nestjs-durable-core': '>=0.1.0 <1.0.0'
-      '@nestjs/event-emitter': ^2.0.0 || ^3.0.0
+      '@nestjs/event-emitter': ^2.0.0 || ^3.0.0 || ^12.0.0
 
   '@dudousxd/nestjs-durable@0.26.0':
     resolution: {integrity: sha512-3CFUBnleNh2cylX0pTJUk9Cl3zUDW1iJDTyyPjBHuNrI5OM/GveFx6aNBXJi5PZqZKflJH+EZy6uymIVOc407g==}
@@ -6029,12 +6029,12 @@ snapshots:
       reflect-metadata: 0.2.2
       zod: 3.25.76
 
-  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))':
+  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@nestjs/event-emitter': 12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)
 
-  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.0(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))':
+  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1))':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.52.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@nestjs/event-emitter': 12.0.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.1))(@nestjs/core@12.0.1)
