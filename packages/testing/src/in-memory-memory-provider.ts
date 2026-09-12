@@ -92,8 +92,8 @@ export class InMemoryMemoryProvider implements MemoryProvider {
       updatedAt: new Date().toISOString(),
       pinned: existing?.pinned ?? false,
     };
-    this.records.set(record.id, record);
-    return record;
+    this.records.set(record.id, copy(record));
+    return copy(record);
   }
 
   /**
@@ -114,11 +114,12 @@ export class InMemoryMemoryProvider implements MemoryProvider {
 
   /** Every record held, at any scope — for a spec asserting on what a write actually stored. */
   all(): MemoryRecord[] {
-    return [...this.records.values()];
+    return [...this.records.values()].map(copy);
   }
 
   private visible(scopes: readonly string[]): StoredMemory[] {
-    return [...this.records.values()].filter((record) => scopes.includes(record.scope));
+    const held = [...this.records.values()];
+    return held.filter((record) => scopes.includes(record.scope)).map(copy);
   }
 
   private at(scope: string, key: string): StoredMemory | undefined {
@@ -132,6 +133,13 @@ export class InMemoryMemoryProvider implements MemoryProvider {
    * and take the best `limit`, then return every record sharing a returned key plus every pinned
    * one. A key scoring nothing is left out rather than padded in — a search that returned the whole
    * scope would make `recalled` a lie about how the block was filled.
+   *
+   * The result is ordered MOST RELEVANT FIRST, by the rank of each record's key, because that order
+   * IS the answer under `ranked` — `resolveMemoryDigest` selects by a record's position rather than
+   * by scope, so a provider that returned the right set in the wrong order would hand the ceiling a
+   * relevance judgement it never made. Records sharing a key stay together, and a pinned record
+   * whose key ranked nothing sorts last: the digest lifts pinned entries ahead of the ceiling
+   * regardless, so spending a relevance slot on one would drop a record that was actually asked for.
    */
   private rank({ scopes, query, limit }: SearchMemoriesInput): MemoryRecord[] {
     const visible = this.visible(scopes);
@@ -141,14 +149,17 @@ export class InMemoryMemoryProvider implements MemoryProvider {
       const score = overlap(terms, words(`${record.key} ${record.text}`));
       best.set(record.key, Math.max(best.get(record.key) ?? 0, score));
     }
-    const ranked = new Set(
+    const ranked = new Map<string, number>(
       [...best]
         .filter(([, score]) => score > 0)
         .sort(([keyA, scoreA], [keyB, scoreB]) => scoreB - scoreA || compare(keyA, keyB))
         .slice(0, Math.max(0, limit))
-        .map(([key]) => key),
+        .map(([key], index): [string, number] => [key, index]),
     );
-    return visible.filter((record) => record.pinned || ranked.has(record.key));
+    const unranked = ranked.size;
+    return visible
+      .filter((record) => record.pinned || ranked.has(record.key))
+      .sort((a, b) => (ranked.get(a.key) ?? unranked) - (ranked.get(b.key) ?? unranked));
   }
 }
 
@@ -178,6 +189,19 @@ function assertAuthorMayWriteScope({
       `InMemoryMemoryProvider: refusing to write an agent-authored memory at "${scope}"; an agent may write only at "${own}"`,
     );
   }
+}
+
+/**
+ * A detached copy of one record, `origin` included.
+ *
+ * Every value crossing the store's boundary — in through `write`, out through `write`'s return,
+ * `list`, `search` and `all` — goes through this, so nothing a caller holds is ever the object the
+ * map holds. A SQL adapter gets this for free by mapping rows; a map-backed one has to do it, and
+ * without it a consumer mutating what it read would silently rewrite the store. That divergence is
+ * the worst kind for this package, whose whole job is to be the shape other adapters are held to.
+ */
+function copy(record: StoredMemory): StoredMemory {
+  return { ...record, origin: { ...record.origin } };
 }
 
 /** Lowercased word tokens, so `Fiscal-Year?` and `fiscal year` match. */

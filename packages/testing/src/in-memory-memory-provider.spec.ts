@@ -176,6 +176,34 @@ describe('InMemoryMemoryProvider — recall', () => {
     expect(found?.[0]?.key).toBe('a');
   });
 
+  it('returns the better match first, whatever order the records were written in', () => {
+    const provider = new InMemoryMemoryProvider({ recall: true });
+    // Written weakest-first, so insertion order and relevance order disagree. `resolveMemoryDigest`
+    // selects by position under `ranked`, so returning these the way they were stored would hand the
+    // ceiling the wrong two of three.
+    provider.write(published(GLOBAL_SCOPE, 'approvals', 'a rollback needs two approvals'));
+    provider.write(published(GLOBAL_SCOPE, 'runbook', 'the rollback drains the queue first'));
+
+    const found = provider.search?.({ scopes, query: 'rollback drains', limit: 20, ctx });
+
+    expect(found?.map((record) => record.key)).toEqual(['runbook', 'approvals']);
+  });
+
+  it('sorts a pinned record that ranked nothing behind every record that did', () => {
+    const provider = new InMemoryMemoryProvider({ recall: true });
+    const standing = provider.write(
+      published(GLOBAL_SCOPE, 'cache-purge', 'never purge the config cache during business hours'),
+    );
+    provider.pin({ id: standing.id, pinned: true });
+    provider.write(published(GLOBAL_SCOPE, 'runbook', 'the rollback drains the queue first'));
+
+    const found = provider.search?.({ scopes, query: 'rollback drains', limit: 20, ctx });
+
+    // The digest lifts pinned entries ahead of the ceiling on its own, so a pinned record placed
+    // among the ranked ones would cost a slot the query actually asked for.
+    expect(found?.map((record) => record.key)).toEqual(['runbook', 'cache-purge']);
+  });
+
   it('leaves out a key nothing in the query touches', () => {
     const provider = new InMemoryMemoryProvider({ recall: true });
     provider.write(published(GLOBAL_SCOPE, 'units', 'report distances in kilometres'));
@@ -183,6 +211,64 @@ describe('InMemoryMemoryProvider — recall', () => {
     const found = provider.search?.({ scopes, query: 'rollback', limit: 20, ctx });
 
     expect(found).toEqual([]);
+  });
+});
+
+/**
+ * A map-backed store is the one shape that CAN hand out its own objects, and a SQL adapter never
+ * does — so a consumer holding this to the contract has to be able to mutate anything it was given
+ * and find the store unmoved.
+ */
+describe('InMemoryMemoryProvider — the store and the caller never share an object', () => {
+  it('does not keep reading the `origin` it was handed after the write returned', () => {
+    const provider = new InMemoryMemoryProvider();
+    const written = everyMemoryField(ctx);
+    provider.write({ ...written, ctx });
+
+    written.origin.runId = 'run-2';
+
+    expect(provider.all()[0]?.origin.runId).toBe('run-1');
+  });
+
+  it('does not hand back the object it filed, so mutating a write’s result changes nothing', () => {
+    const provider = new InMemoryMemoryProvider();
+    const record = provider.write({ ...everyMemoryField(ctx), ctx });
+
+    record.text = 'rewritten by the caller';
+    record.origin.author = 'human';
+
+    const stored = provider.all()[0];
+    expect(stored?.text).toBe('they report on the calendar year');
+    expect(stored?.origin.author).toBe('agent');
+  });
+
+  it('hands `list` a copy, so a consumer walking the results cannot rewrite the store', () => {
+    const provider = new InMemoryMemoryProvider();
+    provider.write({ ...everyMemoryField(ctx), ctx });
+
+    const read = provider.list({ scopes, ctx })[0];
+    if (read === undefined) {
+      throw new Error('expected the actor’s own memory to be visible');
+    }
+    read.text = 'rewritten by the caller';
+    read.origin.runId = 'run-2';
+
+    const stored = provider.list({ scopes, ctx })[0];
+    expect(stored?.text).toBe('they report on the calendar year');
+    expect(stored?.origin.runId).toBe('run-1');
+  });
+
+  it('hands `all` a copy too', () => {
+    const provider = new InMemoryMemoryProvider();
+    provider.write({ ...everyMemoryField(ctx), ctx });
+
+    const read = provider.all()[0];
+    if (read === undefined) {
+      throw new Error('expected the write to be held');
+    }
+    read.pinned = true;
+
+    expect(provider.all()[0]?.pinned).toBe(false);
   });
 });
 
