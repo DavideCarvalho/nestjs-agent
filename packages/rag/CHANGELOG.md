@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.10.1
+
+### Patch Changes
+
+- fix(deps): update dependency @dudousxd/nestjs-diagnostics to v0.7.1 (#110)
+
 ## 0.10.0
 
 ### Minor Changes
