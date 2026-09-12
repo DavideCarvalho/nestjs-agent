@@ -15,7 +15,7 @@
     "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@dudousxd/nestjs-diagnostics": "0.6.1",
     "@dudousxd/durable-worker": "0.5.0",
-    "@dudousxd/nestjs-context": "0.2.0",
+    "@dudousxd/nestjs-context": "0.2.1",
     "@dudousxd/nestjs-durable": "0.26.0",
     "@dudousxd/nestjs-durable-core": "0.45.0",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.0",
