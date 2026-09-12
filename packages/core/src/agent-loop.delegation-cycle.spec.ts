@@ -92,7 +92,7 @@ async function run(args: CycleRunArgs): Promise<{ text: string; delegated: strin
 describe('a delegation chain that has been here before', () => {
   it('refuses the hop that closes the circle, and names the circle', async () => {
     const { text, delegated } = await run({
-      input: { delegationPath: ['research', 'intake'], delegationDepth: 2 },
+      input: { delegationPath: ['research'], delegationDepth: 2 },
     });
     expect(delegated).toEqual([]);
     expect(text).toContain('research → intake → research');
@@ -101,7 +101,7 @@ describe('a delegation chain that has been here before', () => {
 
   it('counts how many times the agent has been on this chain', async () => {
     const { text } = await run({
-      input: { delegationPath: ['research', 'intake', 'research', 'intake'] },
+      input: { delegationPath: ['research', 'intake', 'research'] },
       maxAgentAppearances: 2,
     });
     expect(text).toContain('research 3 times on one chain');
@@ -112,7 +112,7 @@ describe('a delegation chain that has been here before', () => {
     // resembling a cycle; the chain has never reached `research`, so nothing here is circular.
     const { delegated, text } = await run({
       input: {
-        delegationPath: ['a', 'b', 'c', 'd', 'e', 'intake'],
+        delegationPath: ['a', 'b', 'c', 'd', 'e'],
         delegationDepth: 6,
       },
       maxDelegationDepth: 10,
@@ -123,7 +123,7 @@ describe('a delegation chain that has been here before', () => {
 
   it('still stops a long chain that never repeats, on depth alone', async () => {
     const { delegated, text } = await run({
-      input: { delegationPath: ['a', 'b', 'c', 'intake'], delegationDepth: 4 },
+      input: { delegationPath: ['a', 'b', 'c'], delegationDepth: 4 },
       maxDelegationDepth: 4,
     });
     expect(delegated).toEqual([]);
@@ -134,7 +134,7 @@ describe('a delegation chain that has been here before', () => {
     // The depth is the vaguer of the two: it leaves a reader to work out whether the chain was
     // looping or merely long, which is the question the count cannot answer.
     const { text } = await run({
-      input: { delegationPath: ['research', 'intake'], delegationDepth: 9 },
+      input: { delegationPath: ['research'], delegationDepth: 9 },
       maxDelegationDepth: 2,
     });
     expect(text).toContain('cycle');
@@ -144,6 +144,27 @@ describe('a delegation chain that has been here before', () => {
   it('falls back to depth alone when the runner supplies no chain', async () => {
     const { delegated } = await run({ input: { delegationDepth: 0 } });
     expect(delegated).toEqual(['research']);
+  });
+
+  it('names the agent that closed the circle, not the one it closed onto twice', async () => {
+    // `delegationPath` stops short of the agent running now, so naming the chain from it alone
+    // drops the hop being taken: a real alpha→beta→alpha refusal reads `alpha → alpha`, an edge
+    // no deployment declares and nothing a reader can find in their config.
+    const { text } = await run({
+      input: { delegationPath: ['research'], agentName: 'intake' },
+    });
+    expect(text).toContain('research → intake → research');
+  });
+
+  it('catches an agent delegating to ITSELF from a top-level turn', async () => {
+    // Nothing has reached this run, so the path is empty; the only thing making this a cycle is
+    // the running agent's own name. Read from the path alone it is allowed, and the self-call
+    // costs a whole hop before anything notices.
+    const { delegated, text } = await run({
+      input: { delegationPath: [], agentName: 'research' },
+    });
+    expect(delegated).toEqual([]);
+    expect(text).toContain('research → research');
   });
 
   it('falls to the depth ceiling once a raised appearance count lets the chain revisit', async () => {
@@ -162,7 +183,7 @@ describe('a delegation chain that has been here before', () => {
 
   it('admits exactly one return when the host allows two appearances', async () => {
     const { delegated } = await run({
-      input: { delegationPath: ['research', 'intake'] },
+      input: { delegationPath: ['research'] },
       maxAgentAppearances: 2,
     });
     expect(delegated).toEqual(['research']);

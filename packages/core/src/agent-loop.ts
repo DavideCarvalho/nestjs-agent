@@ -596,11 +596,19 @@ export const DEFAULT_MAX_AGENT_APPEARANCES = 1;
  */
 function delegationRefusal(args: {
   deps: Pick<AgentLoopDeps, 'maxAgentAppearances' | 'maxDelegationDepth'>;
-  input: Pick<AgentRunInput, 'delegationDepth' | 'delegationPath'>;
+  input: Pick<AgentRunInput, 'agentName' | 'delegationDepth' | 'delegationPath'>;
   targetAgent: string;
 }): string | null {
   const { deps, input, targetAgent } = args;
-  const ancestry = input.delegationPath ?? [];
+  // `delegationPath` is the chain that REACHED this run, so it stops short of the agent running
+  // now — a runner appends its own name only on the way into a child. Both the count and the named
+  // chain want the hop being taken, so this run's agent joins the end of the ancestry: without it a
+  // mutual handoff is refused as `alpha → alpha`, an edge no deployment declares, and an agent
+  // delegating to ITSELF from a top-level turn is not caught at all until one hop later.
+  const ancestry = [
+    ...(input.delegationPath ?? []),
+    ...(input.agentName !== undefined ? [input.agentName] : []),
+  ];
   const appearances = ancestry.filter((name) => name === targetAgent).length;
   const maxAppearances = deps.maxAgentAppearances ?? DEFAULT_MAX_AGENT_APPEARANCES;
   if (appearances >= maxAppearances) {
