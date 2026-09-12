@@ -1,5 +1,34 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.7.0
+
+### Minor Changes
+
+- [#126](https://github.com/DavideCarvalho/nestjs-agent/pull/126) [`d4fcbd0`](https://github.com/DavideCarvalho/nestjs-agent/commit/d4fcbd05cdecae7815c02a00c89463c69dd4b26f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **A parked call now reports WHICH decision is in flight, not merely that one is.**
+
+  `TranscriptSettleState` is per action — `approve` and `reject` each carry their own
+  `isSubmitting`, as do `answer` and `skip` — so a consumer reasonably reads one as "this decision is
+  being sent". They were always equal: `useChatTranscript` tracked settling in a `Set` of
+  `toolCallId`, which knows that _a_ decision is on its way and discards which, and `buildToolCall`
+  copied that one boolean into both. A surface reading `approve.isSubmitting` therefore said
+  "Working…" on Allow while the run was carrying out a refusal.
+
+  The set is now a `Map<toolCallId, SettleAction>`, and each `isSubmitting` is derived from it. The
+  information was always there — `approve` calls `settle(id, () => onApprove(id))` — it was just not
+  kept.
+
+  **Breaking for anyone calling `buildTranscriptBlocks` directly.** `ElicitationBlockOptions` and
+  `ApprovalBlockOptions` replace `isSubmitting: (toolCallId) => boolean` with
+  `submitting: (toolCallId) => SettleAction | null`. `useChatTranscript` supplies it; hosts that pass
+  their own options need the one-line change. The new `SettleAction` type is exported.
+
+  `available` is untouched and still means "this decision can be made at all", not "nothing is in
+  flight". Holding both affordances while one is going is the renderer's call, and the two
+  `isSubmitting` flags are what let it do that while reporting progress on only the pressed one.
+  Both `registry` renderers now do it — `ChatToolGroup` and `ChatElicitation` — the second because a
+  second `settle` for one call overwrites the first, so both sends would be in flight while only the
+  later one reported progress.
+
 ## 0.6.4
 
 ### Patch Changes
