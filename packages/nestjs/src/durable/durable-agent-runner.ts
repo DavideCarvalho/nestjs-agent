@@ -107,13 +107,14 @@ export class DurableAgentRunner implements AgentRunner {
    * in — and a suspended body never reaches its own catch: the runtime settles the run from outside
    * it. The body still releases the thread on the paths where it does unwind (see
    * `AgentRunWorkflow`); both write the same `null`, and whichever gets there first is right. The
-   * thread id comes off the run's own recorded input, so this holds for a sub-agent's subthread too.
+   * thread id comes off the run's own recorded input, so this holds for a sub-agent's subthread too
+   * — read best-effort, because a gateway that cannot name the thread must not stop the cancel.
    *
    * A tool already executing is not interrupted, here or anywhere: see `haltIfCancelled` in core.
    */
   async cancel(runId: string): Promise<void> {
     this.logger.log(`cancelling agent run ${runId}`);
-    const threadId = threadOfRun((await this.runs.getRunDetail(runId))?.run.input);
+    const threadId = await this.threadOf(runId);
     await this.runs.cancel(runId, { compensate: true });
     if (threadId !== undefined) {
       await this.store.setActiveStream(threadId, null);
@@ -122,5 +123,23 @@ export class DurableAgentRunner implements AgentRunner {
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();
     await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
+  }
+
+  /**
+   * Which thread a run was streaming, or `undefined` where the gateway cannot say.
+   *
+   * A read failure answers `undefined` instead of propagating, the same posture `AgentRunWorkflow`
+   * takes for its own cancel observation: failing to ask is not an answer worth failing a cancel
+   * over. This id is only needed to clear the thread's active stream, and a stream still marked live
+   * is a far smaller fault than the one a throw here would cause — a run nobody ever told to stop,
+   * with a subscriber holding a stream that never settles, from the one call whose entire job is to
+   * make a run stop.
+   */
+  private async threadOf(runId: string): Promise<string | undefined> {
+    try {
+      return threadOfRun((await this.runs.getRunDetail(runId))?.run.input);
+    } catch {
+      return undefined;
+    }
   }
 }

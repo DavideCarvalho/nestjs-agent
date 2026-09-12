@@ -1,5 +1,6 @@
 import { Suspend } from '@dudousxd/durable-worker';
 import type { AgentRunInput, AgentStore, TokenStreamSink } from '@dudousxd/nestjs-agent-core';
+import { decodeStreamEvent } from '@dudousxd/nestjs-agent-core';
 import { InMemoryAgentStore, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
 import type { WorkflowService } from '@dudousxd/nestjs-durable';
 import type { RunDetail, RunGateway } from '@dudousxd/nestjs-durable-core';
@@ -161,7 +162,50 @@ describe('DurableAgentRunner.cancel', () => {
     expect(released).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledWith('run-gone', { compensate: true });
   });
+
+  it('stops the run and settles its stream even when the gateway read REJECTS', async () => {
+    const store = new InMemoryAgentStore();
+    const released = vi.spyOn(store, 'setActiveStream');
+    const cancel = vi.fn(async () => null);
+    const sink = new InMemoryTokenStreamSink();
+    const runner = cancellingRunner(
+      {
+        getRunDetail: async () => {
+          throw new Error('run gateway unreachable');
+        },
+        cancel,
+      },
+      store,
+      sink,
+    );
+
+    await runner.cancel('run-1');
+
+    // Naming the thread is a convenience; stopping the run is the whole point. A read that throws
+    // must not take the cancel and the stream's terminal down with it, or a transient gateway
+    // failure leaves a run nobody told to stop and a subscriber waiting on a stream that never ends.
+    expect(cancel).toHaveBeenCalledWith('run-1', { compensate: true });
+    expect(await framesOf(sink, 'run-1')).toEqual(['cancelled']);
+    expect(released).not.toHaveBeenCalled();
+  });
 });
+
+/**
+ * The kinds the runner wrote to a run's stream, read to the end IT wrote. Returns at all only
+ * because `cancel` ended the stream — an unsettled sink hangs here rather than asserting false.
+ */
+async function framesOf(sink: InMemoryTokenStreamSink, runId: string): Promise<string[]> {
+  const kinds: string[] = [];
+  for await (const chunk of sink.subscribe(runId)) {
+    for (const line of new TextDecoder().decode(chunk).split('\n')) {
+      const event = line.length > 0 ? decodeStreamEvent(line) : null;
+      if (event !== null) {
+        kinds.push(event.kind);
+      }
+    }
+  }
+  return kinds;
+}
 
 describe('the durable runner’s sink check', () => {
   it('warns when a durable deployment keeps the in-process sink', () => {
