@@ -79,6 +79,19 @@ export class ToolRegistry {
     return this.entries.has(name);
   }
 
+  /**
+   * Give a name back, and report whether it was held. For an importer that registered tools on
+   * someone else's behalf — the MCP client is the one in this repo — and has to hand back the ones
+   * its source stopped offering.
+   *
+   * The registry cannot tell whether a caller owns a name, so it does not try: whoever registered a
+   * name is responsible for tracking that it did. Unregistering a name it does not own would
+   * silently take a tool away from whoever does.
+   */
+  unregister(name: string): boolean {
+    return this.entries.delete(name);
+  }
+
   spec(name: string): ToolSpec | undefined {
     return this.entries.get(name)?.spec;
   }
