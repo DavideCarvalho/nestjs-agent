@@ -15,6 +15,7 @@ import {
 import { ensureAgentSchema } from './ensure-schema';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
+import { MikroOrmMemoryProvider } from './mikro-orm-memory-provider';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
 import { MikroOrmRagIngestionLog } from './mikro-orm-rag-ingestion-log';
 
@@ -114,6 +115,14 @@ export class MikroOrmAgentStoreModule {
           inject: [EntityManager],
         },
         { provide: AGENT_STORE, useExisting: MikroOrmAgentStore },
+        // Exported, never bound to AGENT_MEMORY: that token's PRESENCE is what turns memory on, so
+        // binding it here would switch the feature on for every host that installs the store. A
+        // host opts in by naming this provider in `AgentModule.forRoot({ memory: { provider } })`.
+        {
+          provide: MikroOrmMemoryProvider,
+          useFactory: (em: EntityManager) => new MikroOrmMemoryProvider(em),
+          inject: [EntityManager],
+        },
         {
           provide: MikroOrmPricingStore,
           useFactory: (em: EntityManager) => new MikroOrmPricingStore(em),
@@ -136,6 +145,7 @@ export class MikroOrmAgentStoreModule {
         ...(options.ragIngestionLog === false ? [] : [MikroOrmRagIngestionLog]),
         MikroOrmAgentStore,
         AGENT_STORE,
+        MikroOrmMemoryProvider,
         MikroOrmGovernanceQueries,
         AGENT_GOVERNANCE_QUERIES,
         MikroOrmPricingStore,
