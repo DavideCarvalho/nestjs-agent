@@ -7,6 +7,7 @@ import {
 import { type DynamicModule, Module, type Type } from '@nestjs/common';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
+import { DrizzleMemoryProvider } from './drizzle-memory-provider.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import type { AgentDrizzleDb } from './schema.js';
 
@@ -48,6 +49,10 @@ export class DrizzleAgentStoreModule {
       providers: [
         { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db) },
         { provide: AGENT_STORE, useExisting: DrizzleAgentStore },
+        // Exported, never bound to AGENT_MEMORY: that token's PRESENCE is what turns memory on, so
+        // binding it here would switch the feature on for every host that installs the store. A
+        // host opts in by naming this provider in `AgentModule.forRoot({ memory: { provider } })`.
+        { provide: DrizzleMemoryProvider, useFactory: () => new DrizzleMemoryProvider(options.db) },
         {
           provide: DrizzlePricingStore,
           useFactory: () => new DrizzlePricingStore(options.db),
@@ -68,6 +73,7 @@ export class DrizzleAgentStoreModule {
       exports: [
         DrizzleAgentStore,
         AGENT_STORE,
+        DrizzleMemoryProvider,
         DrizzleGovernanceQueries,
         AGENT_GOVERNANCE_QUERIES,
         DrizzlePricingStore,

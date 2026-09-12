@@ -52,6 +52,55 @@ ceiling is only a token budget, names no row bound and the whole thread is read 
 README. Nothing to wire: the loop probes for the method, and `getThread` remains the right read for
 a client rendering a transcript.
 
+## Memory
+
+`DrizzleMemoryProvider` is a `MemoryProvider` over `agent_memory`, a table `ensureAgentSchema`
+creates alongside the other six.
+
+```ts
+import { DrizzleAgentStoreModule, DrizzleMemoryProvider } from '@dudousxd/nestjs-agent-store-drizzle';
+
+AgentModule.forRootAsync({
+  // AGENT_STORE already comes from DrizzleAgentStoreModule.forRoot({ db }), which is global.
+  externalStore: true,
+  inject: [DrizzleMemoryProvider],
+  useFactory: (memory: DrizzleMemoryProvider) => ({
+    model,
+    actorResolver,
+    memory: { provider: memory },
+  }),
+});
+```
+
+The store module exports the provider but never binds `AGENT_MEMORY`: that token's **presence** is
+what turns memory on, so binding it here would switch the feature on for every host that installs the
+store. Naming the provider is how you opt in.
+
+What it holds to:
+
+- `list` filters `scope in (…)` in the **query**. The library drops out-of-scope records it is handed,
+  but that is a backstop — a memory held for another actor or another tenant is never selected, so it
+  is unreachable rather than outranked.
+- `write` upserts on the (`scope`, `key`) unique index in one statement, so two turns concluding the
+  same key at once cannot race to a duplicate-key insert. The conflict `set` names exactly what a
+  rewrite may change, so `pinned`, `created_at` and `id` are left alone by construction: a rewrite
+  must not unpin a record, lose when the belief was formed, or invalidate the delete handle a person
+  was already shown.
+- `write` refuses an **agent-authored** record at any scope but the actor's own. A human-authored one
+  above it is allowed, because that is what a console publishing an organisation's policy does, and
+  whether that person may write there is what `memoryWriteVerdict` answers.
+- `forget` deletes only from the actor's own scope, so an id alone cannot reach a tenant's memory.
+- `pin({ id, pinned })` is the operator act the SPI has no method for — a pin grants a fact a
+  permanent place in every future prompt, so nothing an agent can reach may set it. Authorize it in
+  your own console.
+
+**`search` is not implemented**, deliberately. It buys a block filled by relevance once the applicable
+set outgrows `maxMemories`, and that needs an index over the memories themselves — whose shape depends
+entirely on what you already run. Without it, `list` reads the applicable scopes whole and the ceiling
+never bites. The signal that it is worth building is `MemoryDigest.omitted` going non-zero, and
+`pinnedOmitted` especially: a standing policy that stopped reaching any prompt. Both are on the
+`aviary:agent:memory.resolved` diagnostic.
+
 ## Upgrading a database that already exists
 
 `ensureAgentSchema` is additive only — `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT

@@ -1,4 +1,5 @@
 import type {
+  MemoryOrigin,
   MessageAttachment,
   MessageRole,
   MessageUsage,
@@ -16,6 +17,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
 /**
@@ -191,7 +193,47 @@ export const agentRun = sqliteTable(
   (table) => [index('agent_run_started_idx').on(table.startedAt)],
 );
 
-/** The six agent tables as one schema object, ready for `drizzle(client, { schema })`. */
+/**
+ * One thing the assistant believes, held at one scope — the row behind a core `MemoryRecord`.
+ *
+ * `scope` is an OPAQUE token the host mints (`actor:…`, `tenant:…`, whatever axis a deployment scopes
+ * by), which is what lets this package own the table at all: there is nothing here for a host to
+ * relate its own entities to, so owning the rows takes nothing away from it.
+ *
+ * The origin is flattened into columns rather than stored as JSON so a host's console can filter and
+ * sweep on it. `originThreadId` is deliberately NOT a foreign key — unlike every other table here,
+ * which cascades off `agent_thread`: a memory outlives the conversation it came from, and a cascade
+ * would delete beliefs when a transcript aged out.
+ *
+ * One unique index, on (`scope`, `key`) — what `write` upserts against, and what makes a duplicate
+ * answer to one question impossible rather than merely unlikely. It doubles as the index every read
+ * uses: `list` filters `scope in (…)`, which is that index's leading column, so a second index on
+ * `scope` alone would be maintained on every write and read by nothing.
+ */
+export const agentMemory = sqliteTable(
+  'agent_memory',
+  {
+    id: text('id').primaryKey(),
+    /** The opaque scope token. Unique with `key`: one fact per key per scope. */
+    scope: text('scope').notNull(),
+    /** What the fact is ABOUT. Two scopes sharing a key are one question answered twice. */
+    key: text('key').notNull(),
+    /** The fact itself, one line, as the model reads it. */
+    text: text('text').notNull(),
+    originAuthor: text('origin_author').$type<MemoryOrigin['author']>().notNull(),
+    /** A pointer that is allowed to dangle — see the table note. */
+    originThreadId: text('origin_thread_id'),
+    originRunId: text('origin_run_id'),
+    originActorRef: text('origin_actor_ref'),
+    /** Always-on: carried in every prompt. Set by a host's console, never by a write. */
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [uniqueIndex('agent_memory_scope_key_uq').on(table.scope, table.key)],
+);
+
+/** The seven agent tables as one schema object, ready for `drizzle(client, { schema })`. */
 export const agentSchema = {
   agentThread,
   agentMessage,
@@ -199,6 +241,7 @@ export const agentSchema = {
   agentTokenUsage,
   agentModelPricing,
   agentRun,
+  agentMemory,
 };
 
 /**
@@ -219,3 +262,5 @@ export type AgentThreadRow = typeof agentThread.$inferSelect;
 export type AgentMessageRow = typeof agentMessage.$inferSelect;
 /** A persisted run row as Drizzle selects it. */
 export type AgentRunRow = typeof agentRun.$inferSelect;
+/** A persisted memory row as Drizzle selects it. */
+export type AgentMemoryRow = typeof agentMemory.$inferSelect;
