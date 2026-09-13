@@ -110,10 +110,12 @@ export interface ToolCallRequest {
   name: string;
   input: unknown;
   /**
-   * The tool's declared kind (`ToolSpec.kind`), stamped by the loop from the tool registry so
-   * thread-read consumers know a call's kind without hardcoding a tool-name allowlist. Undefined
-   * only for a call the loop couldn't resolve against the registry (defensively treated as `read`
-   * wherever a definite value is required).
+   * The tool's declared kind (`ToolSpec.kind`), stamped where the tool was OFFERED — inside the llm
+   * checkpoint, by the process that built the definition list the model chose from. It travels with
+   * the call from there, so thread-read consumers know a call's kind without hardcoding a tool-name
+   * allowlist, and the approval branch does not depend on which process replays the turn.
+   * Undefined only for a call that predates the stamp, or one no registry could resolve
+   * (defensively treated as `read` wherever a definite value is required).
    */
   kind?: ToolKind;
 }

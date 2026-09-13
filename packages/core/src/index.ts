@@ -56,6 +56,8 @@ export {
   withToolTimeout,
   settleAll,
   withAskTool,
+  stampToolKinds,
+  type ToolKindDeps,
   traceLlmTurn,
   traceToolExecution,
   type AgentLoopDeps,

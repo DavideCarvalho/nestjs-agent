@@ -1153,6 +1153,38 @@ async function structureAnswer<TOutput>(
 }
 
 /**
+ * What resolving a call's kind needs: the registry, plus the three config flags whose reserved names
+ * have no `ToolSpec` to look up. Narrow on purpose — {@link stampToolKinds} is called from a
+ * dispatched step handler, which holds the host's own deps rather than a loop's.
+ */
+export type ToolKindDeps = Pick<AgentLoopDeps, 'registry' | 'ask' | 'skills' | 'memory'>;
+
+/**
+ * Stamp each of a model turn's calls with the kind declared WHERE THE TOOL WAS OFFERED.
+ *
+ * A call exists only because some process put that tool's definition in front of the model, so that
+ * process is the one that certainly knows the tool. Another process might not: a deployment that
+ * splits its pods by role has one that serves HTTP and replays run bodies without registering the
+ * tool classes, and its registry answers `undefined`. Stamping here, INSIDE the llm checkpoint, is
+ * what puts the kind in the journal — so the branch a call takes is a fact about the turn rather
+ * than about whichever process happened to replay it (see {@link claimToolCall}).
+ *
+ * Only unstamped calls are touched: a kind already on a call was settled upstream, and a process
+ * further down never second-guesses it.
+ */
+export function stampToolKinds<T extends { toolCalls: ToolCallRequest[] }>(
+  result: T,
+  deps: ToolKindDeps,
+): T {
+  return {
+    ...result,
+    toolCalls: result.toolCalls.map((call) =>
+      call.kind === undefined ? { ...call, kind: declaredKind(deps, call.name) } : call,
+    ),
+  };
+}
+
+/**
  * A call's declared kind, as settled inside `persist:toolcall` and journaled from there.
  *
  * The reserved `ask` name resolves from module CONFIG, never from the registry: `ask` has no handler
@@ -1161,7 +1193,7 @@ async function structureAnswer<TOutput>(
  * answer is written into the journal. Every other name is the registry's `ToolSpec`, exactly as
  * before.
  */
-function declaredKind(deps: AgentLoopDeps, name: string): ToolKind {
+function declaredKind(deps: ToolKindDeps, name: string): ToolKind {
   if (deps.ask === true && name === ASK_TOOL_NAME) {
     return 'ask';
   }
@@ -1182,7 +1214,7 @@ function declaredKind(deps: AgentLoopDeps, name: string): ToolKind {
  * model is never shown a tool it would only be refused by. Module config either way, so the worker
  * re-deriving a dispatched turn's tool list reaches the same answer as the loop.
  */
-function memoryIsWritable(deps: AgentLoopDeps): boolean {
+function memoryIsWritable(deps: Pick<AgentLoopDeps, 'memory'>): boolean {
   return deps.memory?.provider.write !== undefined;
 }
 
@@ -1549,11 +1581,21 @@ type ToolOutcome =
  * (`hooks.dispatchTool`) it reaches a worker that DOES have the tool: an action executed with
  * nobody's approval.
  *
- * So the lookup happens INSIDE the `persist:toolcall` step and is RETURNED from it. The first
- * process to reach this call writes the kind into the journal; every later replay reads it back
- * rather than asking its own registry. Same step name at the same position as before, so runs
- * already in flight keep replaying — their checkpoint predates the returned value, which is what the
- * fallback below is for.
+ * Two things keep that from happening, and they answer different halves of it:
+ *
+ *   - The kind is RETURNED from the `persist:toolcall` step, so every replay reads back the same
+ *     verdict instead of asking its own registry. That makes the decision CONSISTENT.
+ *   - The kind it writes is the one {@link stampToolKinds} put on the call inside the llm
+ *     checkpoint, where the tool was offered. That makes the decision CORRECT — the step is not
+ *     necessarily first reached by a process that knows the tool. A dispatched turn resumes on
+ *     whichever instance consumes the model step's result, and settling an approval resumes it on
+ *     whichever instance took the decision; neither is chosen by role. A pod that registers no
+ *     tool classes reached this step and journaled `read` for an action tool, intermittently,
+ *     depending on which pod won that race.
+ *
+ * The local lookup remains as the fallback for a call that arrives unstamped: a journal written
+ * before kinds travelled, or a host driving the loop with no llm checkpoint of its own. Same step
+ * name at the same position throughout, so runs already in flight keep replaying.
  */
 async function claimToolCall(
   turn: ToolTurnContext,
@@ -1562,7 +1604,7 @@ async function claimToolCall(
   const { deps, input, hooks, messageId } = turn;
   const persisted = (await hooks.step(`persist:toolcall:${call.id}`, async () => {
     const spec = deps.registry.spec(call.name);
-    const kind: ToolKind = declaredKind(deps, call.name);
+    const kind: ToolKind = call.kind ?? declaredKind(deps, call.name);
     // Both kinds that park the turn on a person. The store knows read/action only; a delegation is
     // neither approved nor rejected by a human, so it persists as a read.
     const awaitsHuman = kind === 'action' || kind === 'ask';
@@ -2419,13 +2461,19 @@ export async function runAgentLoop<TOutput = unknown>(
               })
             : undefined;
         const buffer = gateMode === 'whole' ? createFrameBuffer() : undefined;
-        const result = await traceLlmTurn(hooks.runId, i, () =>
-          deps.model.runTurn({
-            system: prompt.system,
-            messages: prompt.messages,
-            tools,
-            sink: incremental?.writer ?? buffer?.writer ?? writer,
-          }),
+        // Stamped from THIS process's registry, which is the one that built `tools` above — and
+        // stamped inside the checkpoint, so the kinds are journaled with the calls they describe
+        // rather than re-derived by whatever process replays this turn.
+        const result = stampToolKinds(
+          await traceLlmTurn(hooks.runId, i, () =>
+            deps.model.runTurn({
+              system: prompt.system,
+              messages: prompt.messages,
+              tools,
+              sink: incremental?.writer ?? buffer?.writer ?? writer,
+            }),
+          ),
+          deps,
         );
         if (incremental !== undefined) {
           await incremental.settled();
@@ -2485,11 +2533,14 @@ export async function runAgentLoop<TOutput = unknown>(
     // Provider-reported spend wins; else an estimate from the (once-per-run cached) price list; else
     // `null` — surfaced on the stream's step-finish frame and the persisted assistant message below.
     const costUsd = resolveCostUsd(turn.usage, turn.costUsd, priceByModel.get(resolvedModelId));
-    // Stamp each call's declared kind from the registry so thread-read consumers (and the stream
-    // frames the model adapter writes) know a call's kind without hardcoding a tool-name allowlist.
+    // Each call's declared kind, so thread-read consumers (and the stream frames the model adapter
+    // writes) know it without hardcoding a tool-name allowlist. The kind the llm checkpoint already
+    // stamped WINS: it came from the process that offered the tool, whereas this one is only the
+    // process replaying the turn, and the two disagree exactly when that matters — see
+    // {@link stampToolKinds}. The fallback is for a journal written before kinds travelled.
     const toolCallsWithKind: ToolCallRequest[] = turn.toolCalls.map((call) => ({
       ...call,
-      kind: declaredKind(deps, call.name),
+      kind: call.kind ?? declaredKind(deps, call.name),
     }));
 
     await hooks.step(`persist:usage:${i}`, () =>

@@ -9,6 +9,7 @@ import {
   createFrameBuffer,
   invokeWithTransientRetry,
   publishAgentToolRetry,
+  stampToolKinds,
   traceLlmTurn,
   traceToolExecution,
   withAskTool,
@@ -133,7 +134,13 @@ export class AgentRunSteps {
         sink: writer,
       }),
     );
-    return buffer === undefined ? turn : { ...turn, bufferedFrames: buffer.frames() };
+    // Stamp each call's kind HERE, from the registry that just built `tools` — this handler is the
+    // process that offered the tool, and the kind rides the step's result into the journal from
+    // here. The loop that reads the result back may be a pod that registers no tool classes at all
+    // (it serves HTTP and replays run bodies), and its own registry would answer `undefined` and
+    // downgrade an action to a read — dispatching it, unapproved, to a worker that does know it.
+    const stamped = stampToolKinds(turn, deps);
+    return buffer === undefined ? stamped : { ...stamped, bufferedFrames: buffer.frames() };
   }
 
   /**
