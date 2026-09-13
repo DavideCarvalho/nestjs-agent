@@ -10,9 +10,12 @@ import {
   type AgentLoopHooks,
   DefaultRolesPolicy,
   GLOBAL_SCOPE,
+  type ListMemoriesInput,
   type MemoryProvider,
   type MemoryRecord,
   type ModelTurnArgs,
+  type SearchMemoriesInput,
+  type StoreMemoryInput,
   ToolRegistry,
   runAgentLoop,
 } from './index.js';
@@ -205,6 +208,76 @@ describe('agent loop — memory and the turn shape', () => {
       'persist:title',
       'persist:run:end',
     ]);
+  });
+});
+
+/**
+ * A provider written the way a host writes one: a class holding its storage on `this`.
+ *
+ * Every other provider in these specs is an object literal of arrow functions, which needs no
+ * receiver — so for as long as that was the only shape under test, `writeMemory` could detach the
+ * method (`const write = provider.write`) and nothing here would notice. A real deployment noticed:
+ * every `remember` call failed with "Cannot read properties of undefined", the tool reported a
+ * failure the model narrated as not having the tool at all, and no memory was ever written.
+ */
+class ClassMemoryProvider implements MemoryProvider {
+  private readonly rows: MemoryRecord[] = [];
+
+  list({ scopes }: ListMemoriesInput): MemoryRecord[] {
+    return this.rows.filter((row) => scopes.includes(row.scope));
+  }
+
+  forget({ id }: { id: string }): boolean {
+    const index = this.rows.findIndex((row) => row.id === id);
+    if (index === -1) return false;
+    this.rows.splice(index, 1);
+    return true;
+  }
+
+  // Same receiver dependence on the recall path, which is a second way in: the digest runs on every
+  // turn, so a detached `search` breaks a host before it ever writes anything.
+  search({ scopes, query }: SearchMemoriesInput): MemoryRecord[] {
+    return this.rows.filter((row) => scopes.includes(row.scope) && row.text.includes(query));
+  }
+
+  // `this.rows` is the whole point: it throws unless the caller kept the receiver.
+  write(input: StoreMemoryInput): MemoryRecord {
+    const saved: MemoryRecord = {
+      id: `${input.scope}/${input.key}`,
+      key: input.key,
+      text: input.text,
+      scope: input.scope,
+      origin: input.origin,
+      updatedAt: '2026-09-10T12:00:00.000Z',
+      pinned: false,
+    };
+    this.rows.push(saved);
+    return saved;
+  }
+
+  stored(): MemoryRecord[] {
+    return this.rows;
+  }
+}
+
+describe('agent loop — a provider that is a class keeps its receiver', () => {
+  it('writes the memory instead of failing the call', async () => {
+    const journal = new Journal();
+    const classProvider = new ClassMemoryProvider();
+
+    const { text } = await pass(journal, writesAMemory, {
+      memory: { provider: classProvider },
+    });
+
+    // The fact reached storage, and the turn carried on to its closing answer rather than handing
+    // the model a TypeError to explain.
+    expect(classProvider.stored()).toEqual([
+      expect.objectContaining({
+        key: 'units',
+        text: 'they report distances in nautical miles',
+      }),
+    ]);
+    expect(text).toBe('done');
   });
 });
 
