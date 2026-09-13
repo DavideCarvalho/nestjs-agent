@@ -14,6 +14,7 @@ import {
   type MemoryProvider,
   type MemoryRecord,
   type ModelTurnArgs,
+  type SearchMemoriesInput,
   type StoreMemoryInput,
   ToolRegistry,
   runAgentLoop,
@@ -231,6 +232,12 @@ class ClassMemoryProvider implements MemoryProvider {
     if (index === -1) return false;
     this.rows.splice(index, 1);
     return true;
+  }
+
+  // Same receiver dependence on the recall path, which is a second way in: the digest runs on every
+  // turn, so a detached `search` breaks a host before it ever writes anything.
+  search({ scopes, query }: SearchMemoriesInput): MemoryRecord[] {
+    return this.rows.filter((row) => scopes.includes(row.scope) && row.text.includes(query));
   }
 
   // `this.rows` is the whole point: it throws unless the caller kept the receiver.

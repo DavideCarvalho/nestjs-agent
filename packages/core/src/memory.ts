@@ -431,7 +431,9 @@ export async function offerMemories({
   // plainly rather than making a worse selection out of it. What carries a fact through a turn like
   // that is `pinned`, not a cleverer query.
   const trimmed = query?.trim() ?? '';
-  const search = trimmed.length > 0 ? config.provider.search : undefined;
+  // Bound for the same reason `writeMemory` binds its own: a provider is normally a class, and a
+  // method read off it has lost the receiver its body needs.
+  const search = trimmed.length > 0 ? config.provider.search?.bind(config.provider) : undefined;
   const records =
     search !== undefined
       ? await search({ scopes, query: trimmed, limit: maxMemories, ctx })
