@@ -2070,7 +2070,7 @@ async function runClaimedToolCall(
       return {
         id: call.id,
         name: call.name,
-        output: { rejected: true, reason: decision.reason ?? 'rejected by user' },
+        output: { rejected: true, reason: decision.reason ?? DEFAULT_REFUSAL_REASON },
         denied: true,
         // What the MODEL is told. It used to be the bare word `rejected`, which names no actor and
         // reads exactly like a tool that blew up — so the answer that followed would speculate about
