@@ -1,3 +1,4 @@
+import { DEFAULT_REFUSAL_REASON } from '@dudousxd/nestjs-agent-core';
 import type { StoredMessage, ToolResult } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 
@@ -44,7 +45,7 @@ function refusalReason(result: ToolResult): string | undefined {
   const { output } = result;
   if (output !== null && typeof output === 'object' && 'reason' in output) {
     const reason = (output as { reason: unknown }).reason;
-    return typeof reason === 'string' && reason !== 'rejected by user' ? reason : undefined;
+    return typeof reason === 'string' && reason !== DEFAULT_REFUSAL_REASON ? reason : undefined;
   }
   return undefined;
 }

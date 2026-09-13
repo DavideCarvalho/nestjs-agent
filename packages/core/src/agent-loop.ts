@@ -2114,7 +2114,12 @@ function refusalReason(result: ToolResult): string | undefined {
   return undefined;
 }
 
-const DEFAULT_REFUSAL_REASON = 'rejected by user';
+/**
+ * Stored as the reason when someone declines without giving one. It is a placeholder, not something
+ * a person said, so every reader has to filter it out — which is why it is exported rather than
+ * spelled again wherever a refusal is read back.
+ */
+export const DEFAULT_REFUSAL_REASON = 'rejected by user';
 
 /**
  * How a refusal is put to the model. Written as instructions rather than as a status because the
@@ -2870,7 +2875,8 @@ export async function runAgentLoop<TOutput = unknown>(
 
     // Stream each tool's result so the client flips its live tool card from "running" to the
     // rendered output (renderResult → DataTable/Chart, executeSql → rows). One durable step keeps
-    // replay from re-emitting. `error` covers both a thrown tool and a rejected action.
+    // replay from re-emitting. Which frame each result goes out on is `outputFrame`'s call: a
+    // refusal has its own, and `error` carries only what the model is told.
     await hooks.step(`stream:tool-outputs:${i}`, async () => {
       // The results land on the message from INSIDE this checkpoint rather than at one of their
       // own: this turn's checkpoint sequence is a wire contract with every run already in flight,
