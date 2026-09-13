@@ -25,6 +25,7 @@ import {
   type RecordRunEndInput,
   type RecordRunStartInput,
   type Retriever,
+  type ToolKind,
   ToolRegistry,
   type ToolStepEnvelope,
   type ToolTransientRetrySetting,
@@ -653,6 +654,99 @@ describe('dispatched turn steps (dispatchLlm / dispatchTool)', () => {
     const rows = store.toolCallRows();
     expect(rows[0]).toMatchObject({ toolName: 'purgeCache', status: 'executed' });
     expect(rows[0]?.output).toEqual({ purged: 'dispatched-cfg' });
+  });
+
+  /**
+   * The kind decides whether a human is asked, and it is settled by whoever reaches
+   * `persist:toolcall` first — which is NOT necessarily a process that knows the tool. A dispatched
+   * turn resumes on whichever instance consumes the model step's result, so a pod that registers no
+   * tool classes (it serves HTTP and replays run bodies) can be the one to claim the call. Its own
+   * registry answers `undefined`, and an action tool would be journaled `read`, auto-executed, and
+   * dispatched unapproved to a worker that does know it.
+   *
+   * Here the loop runs with a registry that has ONLY a read tool, and the dispatched turn hands back
+   * a call the serving worker stamped `action` — which is what must decide.
+   */
+  it('honours the kind stamped where the tool was offered, over its own empty registry', async () => {
+    const partial = new ToolRegistry();
+    partial.register(
+      { name: 'getWeather', kind: 'read', description: 'weather', inputSchema: z.object({}) },
+      { execute: async () => ({ tempC: 21 }) },
+    );
+    const dispatchLlm: NonNullable<AgentLoopHooks['dispatchLlm']> = async (index) =>
+      index === 0
+        ? {
+            text: 'about to purge',
+            toolCalls: [
+              {
+                id: 'call-purge',
+                name: 'purgeCache',
+                input: { key: 'cfg' },
+                kind: 'action' as const,
+              },
+            ],
+            usage: { inputTokens: 1, outputTokens: 1 },
+          }
+        : { text: 'purged', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
+    const envelopes: Array<{ toolName: string; toolType: ToolKind | undefined }> = [];
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async (call, envelope) => {
+      envelopes.push({ toolName: envelope.toolName, toolType: call.kind });
+      return { purged: 'cfg' };
+    };
+    let approvalsAsked = 0;
+    const { store } = await run(
+      () => ({ text: 'unused — dispatchLlm short-circuits the model call' }),
+      () => {
+        approvalsAsked += 1;
+        return { approved: true };
+      },
+      undefined,
+      undefined,
+      { dispatchLlm, dispatchTool, registry: partial },
+    );
+    // The load-bearing assertion: a human was asked, by a process whose registry could not have
+    // told it to ask.
+    expect(approvalsAsked).toBe(1);
+    expect(store.toolCallRows()[0]).toMatchObject({
+      toolName: 'purgeCache',
+      toolType: 'action',
+      status: 'executed',
+    });
+    // And the kind reaches the executor, so the worker's own guard has nothing to refuse.
+    expect(envelopes).toEqual([{ toolName: 'purgeCache', toolType: 'action' }]);
+  });
+
+  it('falls back to its own registry for a call that arrives unstamped', async () => {
+    // A journal written before kinds travelled with the call, replayed by a process that does hold
+    // the tool: the local lookup is still what settles it, exactly as before.
+    const dispatchLlm: NonNullable<AgentLoopHooks['dispatchLlm']> = async (index) =>
+      index === 0
+        ? {
+            text: 'about to purge',
+            toolCalls: [{ id: 'call-purge', name: 'purgeCache', input: { key: 'cfg' } }],
+            usage: { inputTokens: 1, outputTokens: 1 },
+          }
+        : { text: 'purged', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
+    const dispatchTool: NonNullable<AgentLoopHooks['dispatchTool']> = async () => ({
+      purged: 'cfg',
+    });
+    let approvalsAsked = 0;
+    const { store } = await run(
+      () => ({ text: 'unused — dispatchLlm short-circuits the model call' }),
+      () => {
+        approvalsAsked += 1;
+        return { approved: true };
+      },
+      undefined,
+      undefined,
+      { dispatchLlm, dispatchTool },
+    );
+    expect(approvalsAsked).toBe(1);
+    expect(store.toolCallRows()[0]).toMatchObject({
+      toolName: 'purgeCache',
+      toolType: 'action',
+      status: 'executed',
+    });
   });
 
   it('does not use dispatchTool for agent-kind delegation (stays loop-level via ctx.runAgent)', async () => {

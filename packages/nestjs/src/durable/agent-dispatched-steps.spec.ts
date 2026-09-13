@@ -148,6 +148,38 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
     }
   });
 
+  /**
+   * The handler is the process that builds the tool list the model chooses from, so it is the one
+   * that certainly knows each call's kind — and the loop reading its result back may be a pod that
+   * registers no tool classes at all. Stamping the kinds onto the result is what carries the
+   * approval branch across that hop instead of leaving it to the reader's own registry.
+   */
+  it('stamps each returned call with the kind of the tool it just offered', async () => {
+    const { moduleRef } = await buildApp({
+      shared: {
+        stateStore: new InMemoryStateStore(),
+        agentStore: new InMemoryAgentStore(),
+        model: new ActionToolModel(),
+      },
+    });
+    try {
+      const turn = await moduleRef.get(AgentRunSteps).llm({
+        system: 'dispatch test agent',
+        messages: [{ role: 'user', content: 'go' }],
+        actor: ACTOR,
+        runId: 'run-stamp',
+        step: 0,
+        sinkRunId: 'run-stamp',
+        childSink: false,
+      });
+      expect(turn.toolCalls).toEqual([
+        { id: 'call-commit', name: 'commit', input: {}, kind: 'action' },
+      ]);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
   it('journals the routed step groups, not the in-process checkpoint names', async () => {
     const { moduleRef, stateStore } = await buildApp();
     try {
