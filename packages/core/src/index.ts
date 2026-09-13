@@ -57,6 +57,7 @@ export {
   settleAll,
   withAskTool,
   stampToolKinds,
+  DEFAULT_REFUSAL_REASON,
   type ToolKindDeps,
   traceLlmTurn,
   traceToolExecution,

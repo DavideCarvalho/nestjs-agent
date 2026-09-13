@@ -37,6 +37,14 @@ export type AgentStreamEvent =
   | { kind: 'tool-output'; id: string; output: unknown }
   | { kind: 'tool-output-error'; id: string; error: string }
   /**
+   * A person was asked to approve an action tool and declined it. Its own frame, NOT
+   * `tool-output-error`: a refusal is a decision with a known outcome — nothing ran — while a
+   * failure is an outcome nobody chose and whose effects are unknown. Rendering them the same way
+   * tells an operator their own "no" was a malfunction. Maps onto the SDK's `output-denied` tool
+   * part state, which a client reads without knowing any tool's name.
+   */
+  | { kind: 'tool-output-denied'; id: string; reason?: string }
+  /**
    * The run has put a question set to the user and is parked until someone answers it (or skips).
    * Written by the LOOP for both elicitation surfaces — the configured intake and the model's `ask`
    * tool — so a client renders one form either way rather than learning to recognise a tool name.

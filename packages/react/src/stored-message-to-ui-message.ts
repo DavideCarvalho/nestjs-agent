@@ -1,4 +1,5 @@
-import type { StoredMessage } from '@dudousxd/nestjs-agent-core';
+import { DEFAULT_REFUSAL_REASON } from '@dudousxd/nestjs-agent-core';
+import type { StoredMessage, ToolResult } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 
 /**
@@ -21,6 +22,34 @@ import type { UIMessage } from 'ai';
  * Live streaming still arrives as fully-typed SDK tool parts (see `AgentChatTransport`); this
  * converter only feeds replayed history, so the tool cards render the same either way.
  */
+/**
+ * Did a person decline this call? `denied` is what the loop sets today. The `output.rejected` shape
+ * is how a refusal was recorded before that flag existed, and threads holding those are still read
+ * back — so both count, and a thread from either era reloads as the same part.
+ */
+function isRefusal(result: ToolResult): boolean {
+  if (result.denied === true) {
+    return true;
+  }
+  const { output } = result;
+  return (
+    output !== null &&
+    typeof output === 'object' &&
+    'rejected' in output &&
+    (output as { rejected: unknown }).rejected === true
+  );
+}
+
+/** The reason given when declining, when one was given. */
+function refusalReason(result: ToolResult): string | undefined {
+  const { output } = result;
+  if (output !== null && typeof output === 'object' && 'reason' in output) {
+    const reason = (output as { reason: unknown }).reason;
+    return typeof reason === 'string' && reason !== DEFAULT_REFUSAL_REASON ? reason : undefined;
+  }
+  return undefined;
+}
+
 export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
   const parts: UIMessage['parts'] = [];
 
@@ -47,7 +76,23 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
       toolCallId: call.id,
       ...(toolKind !== undefined ? { toolMetadata: { toolKind } } : {}),
       ...(result !== undefined
-        ? { state: 'output-available', input: call.input, output: result.output }
+        ? isRefusal(result)
+          ? {
+              // A declined action is NOT an available output. Reloading a thread used to bring one
+              // back as `output-available` carrying `{ rejected: true }`, which a card reads as a
+              // result — so the action a person refused was drawn, after a refresh, as one that
+              // had been carried out.
+              state: 'output-denied',
+              input: call.input,
+              approval: {
+                id: call.id,
+                approved: false,
+                ...(refusalReason(result) !== undefined
+                  ? { reason: refusalReason(result) as string }
+                  : {}),
+              },
+            }
+          : { state: 'output-available', input: call.input, output: result.output }
         : { state: 'input-available', input: call.input }),
     });
   }

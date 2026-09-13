@@ -28,6 +28,61 @@ describe('storedMessageToUiMessage', () => {
     expect(ui.parts).toEqual([]);
   });
 
+  /**
+   * A reloaded thread must not turn a refusal into a result. The stored shape of a declined call is
+   * an output (`{ rejected: true }`) like any other, so mapping it as `output-available` handed a
+   * card the same state a completed action gets — and the action a person refused was drawn, after
+   * a refresh, as one that had been carried out.
+   */
+  it('reloads a declined action as denied, not as an available output', () => {
+    const ui = storedMessageToUiMessage(
+      message({
+        toolCalls: [{ id: 'call-1', name: 'purgeCache', input: { key: 'cfg' }, kind: 'action' }],
+        toolResults: [
+          {
+            id: 'call-1',
+            name: 'purgeCache',
+            output: { rejected: true, reason: 'wrong environment' },
+            denied: true,
+            error: 'The person was asked to approve this action and declined it.',
+          },
+        ],
+      }),
+    );
+
+    expect(ui.parts[0]).toEqual({
+      type: 'tool-purgeCache',
+      toolCallId: 'call-1',
+      toolMetadata: { toolKind: 'action' },
+      state: 'output-denied',
+      input: { key: 'cfg' },
+      approval: { id: 'call-1', approved: false, reason: 'wrong environment' },
+    });
+  });
+
+  it('reloads a refusal recorded before the denied flag existed', () => {
+    // Threads written by an older loop hold only `{ rejected: true }`, and they are still read back.
+    const ui = storedMessageToUiMessage(
+      message({
+        toolCalls: [{ id: 'call-1', name: 'purgeCache', input: { key: 'cfg' }, kind: 'action' }],
+        toolResults: [
+          {
+            id: 'call-1',
+            name: 'purgeCache',
+            output: { rejected: true, reason: 'rejected by user' },
+            error: 'rejected',
+          },
+        ],
+      }),
+    );
+
+    expect(ui.parts[0]).toMatchObject({ state: 'output-denied' });
+    // The placeholder reason is the absence of one, so it is not shown as something a person said.
+    expect(ui.parts[0]).toEqual(
+      expect.objectContaining({ approval: { id: 'call-1', approved: false } }),
+    );
+  });
+
   it('maps attachments to file parts, alongside the text part', () => {
     const ui = storedMessageToUiMessage(
       message({

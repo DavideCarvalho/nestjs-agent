@@ -122,6 +122,13 @@ export interface ToolCallRequest {
 
 /** Result of running a tool. */
 export interface ToolResult {
+  /**
+   * A person declined this action, so the tool never ran. Set INSTEAD of a failure, and read by
+   * every consumer that has to tell the two apart — the stream frame, the replayed transcript. The
+   * `error` field still carries what the MODEL is told, because that is the channel a model reads a
+   * tool's outcome on; this flag is what everything else reads.
+   */
+  denied?: true;
   id: string;
   name: string;
   output: unknown;

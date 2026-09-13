@@ -296,6 +296,54 @@ describe('runAgentLoop', () => {
     expect(rows[0]?.output).toBeUndefined();
   });
 
+  /**
+   * What the model is handed when a person says no. It used to be the single word `rejected`, which
+   * names no actor and is indistinguishable from a tool that threw — so the reply that followed
+   * diagnosed the refusal ("the key may not exist", "there may be permission restrictions") and
+   * offered to retry. The text is asserted through the MODEL's own view of the turn, which is where
+   * the damage was.
+   */
+  it('tells the model a person declined, not that something went wrong', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'understood' };
+    const { detail } = await run(script, () => ({ approved: false }));
+    const results = (detail?.messages ?? []).flatMap((message) => message.toolResults ?? []);
+    expect(results).toHaveLength(1);
+    const narrative = results[0]?.error ?? '';
+    expect(narrative).toContain('declined');
+    expect(narrative).toContain('Nothing ran');
+    // The three moves the bare word invited, named so a rewrite cannot quietly drop them.
+    expect(narrative).toMatch(/do not .*run this action again/);
+    expect(narrative).toContain('not an error');
+    expect(results[0]?.denied).toBe(true);
+  });
+
+  it('carries a given reason into what the model is told', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'understood' };
+    const { detail } = await run(script, () => ({ approved: false, reason: 'wrong environment' }));
+    const results = (detail?.messages ?? []).flatMap((message) => message.toolResults ?? []);
+    expect(results[0]?.error).toContain('wrong environment');
+  });
+
+  it('streams a refusal on its own frame, not the error frame', async () => {
+    const script: FakeScript = (_args, turnIndex) =>
+      turnIndex === 0
+        ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+        : { text: 'understood' };
+    const { events } = await run(script, () => ({ approved: false, reason: 'wrong environment' }));
+    // A client reads the frame kind, and a refusal drawn on the error frame is a person's decision
+    // rendered as a malfunction.
+    expect(events.filter((event) => event.kind === 'tool-output-denied')).toEqual([
+      { kind: 'tool-output-denied', id: expect.any(String), reason: 'wrong environment' },
+    ]);
+    expect(events.some((event) => event.kind === 'tool-output-error')).toBe(false);
+  });
+
   it('blocks when over quota', async () => {
     const quota = new InMemoryQuotaStore(0);
     await expect(

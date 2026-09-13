@@ -401,6 +401,14 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 errorText: event.error,
               });
               break;
+            case 'tool-output-denied':
+              ensureStep();
+              // The SDK's own state for "a person said no": it keeps the part's input and metadata
+              // and only moves its state, so a card can say the decision was carried out instead of
+              // drawing the red treatment an error gets. The reason (when one was given) rides the
+              // persisted call, not this chunk — the SDK's shape carries no room for it.
+              controller.enqueue({ type: 'tool-output-denied', toolCallId: event.id });
+              break;
             default:
               break;
           }
