@@ -93,7 +93,7 @@ import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
-import { encodeStreamEvent } from './stream-events.js';
+import { type AgentStreamEvent, encodeStreamEvent } from './stream-events.js';
 import {
   DEFAULT_STRUCTURED_OUTPUT_INSTRUCTION,
   StructuredOutputError,
@@ -2071,11 +2071,64 @@ async function runClaimedToolCall(
         id: call.id,
         name: call.name,
         output: { rejected: true, reason: decision.reason ?? 'rejected by user' },
-        error: 'rejected',
+        denied: true,
+        // What the MODEL is told. It used to be the bare word `rejected`, which names no actor and
+        // reads exactly like a tool that blew up — so the answer that followed would speculate about
+        // causes ("the key may not exist", "there may be permission restrictions") and offer to try
+        // again. A person's decision is not a fault to diagnose, so this says who decided, that
+        // nothing ran, and what not to do next.
+        error: refusalNarrative(decision.reason),
       };
     }
   }
   return recordToolOutcome(turn, claimed, await invokeClaimedTool(turn, claimed), deciderRef);
+}
+
+/**
+ * The frame a settled call is streamed on. A refusal is its own kind, ahead of the error branch:
+ * `denied` and `error` are both set on a declined call — the first for every consumer, the second
+ * because `error` is the channel a model reads an outcome on — and a client that saw the error
+ * frame would draw a person's "no" as a malfunction.
+ */
+function outputFrame(result: ToolResult): AgentStreamEvent {
+  if (result.denied === true) {
+    const reason = refusalReason(result);
+    return {
+      kind: 'tool-output-denied',
+      id: result.id,
+      ...(reason !== undefined ? { reason } : {}),
+    };
+  }
+  return result.error !== undefined
+    ? { kind: 'tool-output-error', id: result.id, error: result.error }
+    : { kind: 'tool-output', id: result.id, output: result.output };
+}
+
+/** The reason a person gave when declining, if they gave one — read back off the result. */
+function refusalReason(result: ToolResult): string | undefined {
+  const { output } = result;
+  if (output !== null && typeof output === 'object' && 'reason' in output) {
+    const reason = (output as { reason: unknown }).reason;
+    return typeof reason === 'string' && reason !== DEFAULT_REFUSAL_REASON ? reason : undefined;
+  }
+  return undefined;
+}
+
+const DEFAULT_REFUSAL_REASON = 'rejected by user';
+
+/**
+ * How a refusal is put to the model. Written as instructions rather than as a status because the
+ * model's next move is the whole problem: told only that something was "rejected", it treats the
+ * refusal as a fault, lists possible causes it cannot check, and offers to retry the same action —
+ * which asks the person to say no twice.
+ */
+function refusalNarrative(reason: string | undefined): string {
+  const base =
+    'The person was asked to approve this action and declined it. Nothing ran and nothing changed. ' +
+    'This is their decision, not an error, a missing record or a permissions problem — do not ' +
+    'explain it as one, do not guess at causes, and do not run this action again or reach for ' +
+    'another way to do the same thing. Acknowledge the decision and ask what they would like instead.';
+  return reason === undefined ? base : `${base} They said: ${reason}`;
 }
 
 /**
@@ -2825,13 +2878,7 @@ export async function runAgentLoop<TOutput = unknown>(
       // `settledResults` comes from a checkpoint above, so a replay writes the same list anyway.
       await deps.store.setMessageToolResults(assistant.id, settledResults);
       for (const result of results) {
-        await writer.write(
-          encodeStreamEvent(
-            result.error !== undefined
-              ? { kind: 'tool-output-error', id: result.id, error: result.error }
-              : { kind: 'tool-output', id: result.id, output: result.output },
-          ),
-        );
+        await writer.write(encodeStreamEvent(outputFrame(result)));
       }
     });
 

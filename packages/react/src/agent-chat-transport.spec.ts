@@ -103,6 +103,30 @@ describe('AgentChatTransport', () => {
     expect(toolOutput).toMatchObject({ toolCallId: 't1', output: { rows: [] } });
   });
 
+  it('carries a refusal through as the SDK denial, never as an error chunk', async () => {
+    // The state a card branches on. Mapped to `tool-output-error`, a person's own "no" reaches the
+    // UI as the red treatment a crash gets, under whatever text the error carried.
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"step-start"}\n\n',
+          'data: {"kind":"tool-input-available","id":"t1","name":"purgeCache","input":{"key":"cfg"},"toolKind":"action"}\n\n',
+          'data: {"kind":"tool-output-denied","id":"t1","reason":"wrong environment"}\n\n',
+          'data: {"kind":"step-finish"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    expect(chunks.some((chunk) => chunk.type === 'tool-output-error')).toBe(false);
+    expect(chunks.find((chunk) => chunk.type === 'tool-output-denied')).toEqual({
+      type: 'tool-output-denied',
+      toolCallId: 't1',
+    });
+  });
+
   it('forwards per-send attachments (image/PDF) in the POST body alongside the message text', async () => {
     let capturedBody: unknown;
     const capturingFetch = (async (_url: string, init: RequestInit) => {
