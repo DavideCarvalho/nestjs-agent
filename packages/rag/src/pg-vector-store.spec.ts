@@ -126,4 +126,123 @@ describe('PgVectorStore.updateMetadata (NUL byte stripping)', () => {
     expect(removeParam).toEqual(['owner']);
     expect((removeParam as string[]).every((key) => !key.includes(NUL))).toBe(true);
   });
+
+  it('strips a NUL byte from documentId, so it matches what upsert actually stored', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.updateMetadata(`doc${NUL}1`, { owner: 'u1' });
+
+    expect(calls).toHaveLength(1);
+    const [documentIdParam] = calls[0]?.params ?? [];
+    expect(documentIdParam).toBe('doc1');
+  });
+});
+
+describe('PgVectorStore document-id bindings (NUL byte stripping)', () => {
+  it('remove() strips a NUL byte from documentId', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.remove(`doc${NUL}1`);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params).toEqual(['doc1']);
+  });
+
+  it('listChunks() strips a NUL byte from documentId', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.listChunks(`doc${NUL}1`);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params[0]).toBe('doc1');
+  });
+
+  it('removeMany() strips a NUL byte from every documentId', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.removeMany([`doc${NUL}1`, 'doc2']);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params).toEqual([['doc1', 'doc2']]);
+  });
+});
+
+describe('PgVectorStore metadata filter bindings (NUL byte stripping)', () => {
+  it('search() strips a NUL byte from a scalar filter key and value', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.search([1, 0, 0], {
+      topK: 5,
+      filter: { [`ten${NUL}ant`]: `t${NUL}1` },
+    });
+
+    expect(calls).toHaveLength(1);
+    const [, , scalarParam] = calls[0]?.params ?? [];
+    expect(String(scalarParam)).not.toContain(NUL);
+    expect(JSON.parse(scalarParam as string)).toEqual({ tenant: 't1' });
+  });
+
+  it('search() strips a NUL byte from an array filter key and its values', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.search([1, 0, 0], {
+      topK: 5,
+      filter: { [`aud${NUL}ience`]: [`a${NUL}1`, 'a2'] },
+    });
+
+    expect(calls).toHaveLength(1);
+    const [, , keyParam, arrayParam] = calls[0]?.params ?? [];
+    expect(keyParam).toBe('audience');
+    expect(arrayParam).toEqual(['a1', 'a2']);
+  });
+
+  it('removeWhere() strips a NUL byte from the filter before it becomes a binding', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+
+    await store.removeWhere({ [`ow${NUL}ner`]: `u${NUL}1` });
+
+    expect(calls).toHaveLength(1);
+    const [scalarParam] = calls[0]?.params ?? [];
+    expect(String(scalarParam)).not.toContain(NUL);
+    expect(JSON.parse(scalarParam as string)).toEqual({ owner: 'u1' });
+  });
+});
+
+describe('PgVectorStore.upsert (plain-object walk boundary)', () => {
+  it('leaves a Date metadata value untouched instead of collapsing it to {}', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+    const when = new Date('2024-01-01T00:00:00.000Z');
+
+    await store.upsert([{ id: 'doc#0', text: 'clean', embedding: [1, 0, 0], metadata: { when } }]);
+
+    const metadataParam = calls[0]?.params[3];
+    expect(JSON.parse(metadataParam as string)).toEqual({ when: when.toJSON() });
+  });
+
+  it('preserves a metadata key literally named "__proto__" as an ordinary data property', async () => {
+    const { client, calls } = fakeClient();
+    const store = new PgVectorStore(client, { dimensions: 3 });
+    const metadata: Record<string, unknown> = {};
+    Object.defineProperty(metadata, '__proto__', {
+      value: `admin${NUL}`,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+
+    await store.upsert([{ id: 'doc#0', text: 'clean', embedding: [1, 0, 0], metadata }]);
+
+    const metadataParam = calls[0]?.params[3];
+    const parsed = JSON.parse(metadataParam as string) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(parsed, '__proto__')).toBe(true);
+    expect(parsed.__proto__).toBe('admin');
+  });
 });

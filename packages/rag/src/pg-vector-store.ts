@@ -36,11 +36,16 @@ const NUL_BYTE = String.fromCharCode(0);
  * Strip the NUL byte (U+0000) out of a value before it reaches Postgres. `text` and `jsonb` columns
  * reject it outright — `invalid byte sequence for encoding "UTF8": 0x00` — and text extracted from
  * PDFs occasionally carries one even though other stores (Qdrant) accept it happily, so a chunk that
- * ingested fine elsewhere can fail here. Strings have the byte removed; arrays and plain objects are
- * walked recursively (object keys included, since a NUL can land in a metadata key too); every other
- * value passes through unchanged.
+ * ingested fine elsewhere can fail here. Strings have the byte removed; arrays and **plain** objects
+ * are walked recursively (object keys included, since a NUL can land in a metadata key too).
+ *
+ * "Plain" is deliberately narrow — `Object.getPrototypeOf(value)` must be `Object.prototype` or
+ * `null` — so a `Date`, a `Buffer`, a class instance or any other non-plain object passes through
+ * untouched rather than collapsing to `{}` via a blind `Object.entries`. Rebuilt objects go through
+ * `Object.fromEntries` rather than assignment into a fresh `{}`, so a metadata key literally named
+ * `__proto__` becomes an ordinary own property instead of silently repointing the result's prototype.
  */
-export function stripNulBytes<T>(value: T): T {
+function stripNulBytes<T>(value: T): T {
   if (typeof value === 'string') {
     return (value.includes(NUL_BYTE) ? value.split(NUL_BYTE).join('') : value) as unknown as T;
   }
@@ -48,11 +53,16 @@ export function stripNulBytes<T>(value: T): T {
     return value.map((item) => stripNulBytes(item)) as unknown as T;
   }
   if (value !== null && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      result[stripNulBytes(key)] = stripNulBytes(entry);
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      return value;
     }
-    return result as unknown as T;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        stripNulBytes(key),
+        stripNulBytes(entry),
+      ]),
+    ) as unknown as T;
   }
   return value;
 }
@@ -146,8 +156,10 @@ export class PgVectorStore implements VectorStore {
   }
 
   async remove(documentId: string): Promise<void> {
+    // Stripped so it matches the id `upsert` actually stored, and so a NUL-bearing id can't 0x00
+    // the DELETE itself.
     await this.client.query(`DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1`, [
-      documentId,
+      stripNulBytes(documentId),
     ]);
   }
 
@@ -167,14 +179,15 @@ export class PgVectorStore implements VectorStore {
     if (isEmptyMetadataPatch(patch)) {
       return 0;
     }
-    // Postgres rejects the NUL byte in text/jsonb — see stripNulBytes.
+    // Postgres rejects the NUL byte in text/jsonb — see stripNulBytes. `documentId` too, so it
+    // matches the id `upsert` actually stored.
     const { set, remove } = splitMetadataPatch(stripNulBytes(patch));
     const rows = await this.client.query<{ id: string }>(
       `UPDATE ${this.table}
           SET metadata = (COALESCE(metadata, '{}'::jsonb) || $2::jsonb) - $3::text[]
         WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1
         RETURNING id`,
-      [documentId, JSON.stringify(set), remove],
+      [stripNulBytes(documentId), JSON.stringify(set), remove],
     );
     return rows.length;
   }
@@ -211,7 +224,8 @@ export class PgVectorStore implements VectorStore {
    * caller reading text back.
    */
   async listChunks(documentId: string, options?: ListChunksOptions): Promise<StoredChunk[]> {
-    const params: unknown[] = [documentId];
+    // Stripped so it matches the id `upsert` actually stored.
+    const params: unknown[] = [stripNulBytes(documentId)];
     let sql = `SELECT id, ${CHUNK_INDEX_FROM_ID} AS chunk_index, text, metadata
        FROM ${this.table}
        WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1
@@ -259,9 +273,10 @@ export class PgVectorStore implements VectorStore {
     if (documentIds.length === 0) {
       return;
     }
+    // Stripped so every id matches what `upsert` actually stored.
     await this.client.query(
       `DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = ANY($1::text[])`,
-      [documentIds],
+      [stripNulBytes(documentIds)],
     );
   }
 
@@ -342,6 +357,10 @@ interface PgRow {
  * array. An empty array can never match (deny primitive). Keys are passed as parameters (`metadata->$k`)
  * so a caller-supplied metadata key can't inject SQL. Returns `{ sql: '', params: [] }` when there is
  * no filter, preserving the previous unfiltered query shape.
+ *
+ * The filter is run through {@link stripNulBytes} up front: both the keys (bound as `$k` params) and
+ * the scalar/array values end up as query bindings, and a caller-supplied filter is exactly as
+ * capable of carrying a NUL byte as the text it is filtering.
  */
 function buildWhere(
   filter: Record<string, unknown> | undefined,
@@ -350,11 +369,12 @@ function buildWhere(
   if (filter === undefined || Object.keys(filter).length === 0) {
     return { sql: '', params: [] };
   }
+  const stripped = stripNulBytes(filter);
   const clauses: string[] = [];
   const params: unknown[] = [];
   const scalar: Record<string, unknown> = {};
   let index = startIndex;
-  for (const [key, value] of Object.entries(filter)) {
+  for (const [key, value] of Object.entries(stripped)) {
     if (Array.isArray(value)) {
       if (value.length === 0) {
         clauses.push('false');
