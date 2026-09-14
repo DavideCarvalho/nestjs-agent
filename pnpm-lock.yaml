@@ -686,8 +686,8 @@ importers:
         specifier: 7.1.4
         version: 7.1.4
       '@mikro-orm/nestjs':
-        specifier: 7.0.2
-        version: 7.0.2(@mikro-orm/core@7.1.4)(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)
+        specifier: 7.1.0
+        version: 7.1.0(@mikro-orm/core@7.1.4)(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)
       '@mikro-orm/sqlite':
         specifier: 7.1.4
         version: 7.1.4(@mikro-orm/core@7.1.4)
@@ -1816,13 +1816,13 @@ packages:
       dataloader:
         optional: true
 
-  '@mikro-orm/nestjs@7.0.2':
-    resolution: {integrity: sha512-0iEr+YzhXQ8cZaAKzfJNijHHAL1Fg/PrauaMiwlZpaxOy0aMAPCQEwaSuxsz43X6XShrCv/TlE6kRn/QPIMzZA==}
+  '@mikro-orm/nestjs@7.1.0':
+    resolution: {integrity: sha512-S7UXOR4jYtl+lSl23GxQNoWaI3naf5WGUaWMjqZ1o+xcp+fha8une9Yu3qEizZNA+iulE4qA+yaB6sKnA67fbw==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
       '@mikro-orm/core': ^7.0.0 || ^7.0.0-dev.0
-      '@nestjs/common': ^11.0.5
-      '@nestjs/core': ^11.0.5
+      '@nestjs/common': ^11.0.5 || ^12.0.0
+      '@nestjs/core': ^11.0.5 || ^12.0.0
       reflect-metadata: ^0.1.0 || ^0.2.0
 
   '@mikro-orm/sql@7.1.4':
@@ -6406,7 +6406,7 @@ snapshots:
 
   '@mikro-orm/core@7.1.4': {}
 
-  '@mikro-orm/nestjs@7.0.2(@mikro-orm/core@7.1.4)(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)':
+  '@mikro-orm/nestjs@7.1.0(@mikro-orm/core@7.1.4)(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.1)(reflect-metadata@0.2.2)':
     dependencies:
       '@mikro-orm/core': 7.1.4
       '@nestjs/common': 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)
