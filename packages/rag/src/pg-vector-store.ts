@@ -29,6 +29,34 @@ export interface PgVectorStoreOptions {
   dimensions?: number;
 }
 
+/** The one byte Postgres `text`/`jsonb` columns refuse outright. */
+const NUL_BYTE = String.fromCharCode(0);
+
+/**
+ * Strip the NUL byte (U+0000) out of a value before it reaches Postgres. `text` and `jsonb` columns
+ * reject it outright — `invalid byte sequence for encoding "UTF8": 0x00` — and text extracted from
+ * PDFs occasionally carries one even though other stores (Qdrant) accept it happily, so a chunk that
+ * ingested fine elsewhere can fail here. Strings have the byte removed; arrays and plain objects are
+ * walked recursively (object keys included, since a NUL can land in a metadata key too); every other
+ * value passes through unchanged.
+ */
+export function stripNulBytes<T>(value: T): T {
+  if (typeof value === 'string') {
+    return (value.includes(NUL_BYTE) ? value.split(NUL_BYTE).join('') : value) as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stripNulBytes(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      result[stripNulBytes(key)] = stripNulBytes(entry);
+    }
+    return result as unknown as T;
+  }
+  return value;
+}
+
 /**
  * A pgvector-backed {@link VectorStore} — the production reference adapter. Cosine distance via the
  * `<=>` operator over an HNSW index; metadata in a `jsonb` column filtered with `@>`. Call
@@ -93,6 +121,11 @@ export class PgVectorStore implements VectorStore {
 
   async upsert(records: VectorRecord[]): Promise<void> {
     for (const record of records) {
+      // Postgres rejects the NUL byte in text/jsonb — see stripNulBytes.
+      const id = stripNulBytes(record.id);
+      const text = stripNulBytes(record.text);
+      const source = record.source !== undefined ? stripNulBytes(record.source) : undefined;
+      const metadata = record.metadata !== undefined ? stripNulBytes(record.metadata) : undefined;
       await this.client.query(
         `INSERT INTO ${this.table} (id, text, source, metadata, embedding)
          VALUES ($1, $2, $3, $4, $5)
@@ -102,10 +135,10 @@ export class PgVectorStore implements VectorStore {
            metadata = EXCLUDED.metadata,
            embedding = EXCLUDED.embedding`,
         [
-          record.id,
-          record.text,
-          record.source ?? null,
-          record.metadata !== undefined ? JSON.stringify(record.metadata) : null,
+          id,
+          text,
+          source ?? null,
+          metadata !== undefined ? JSON.stringify(metadata) : null,
           toVectorLiteral(record.embedding),
         ],
       );
@@ -134,7 +167,8 @@ export class PgVectorStore implements VectorStore {
     if (isEmptyMetadataPatch(patch)) {
       return 0;
     }
-    const { set, remove } = splitMetadataPatch(patch);
+    // Postgres rejects the NUL byte in text/jsonb — see stripNulBytes.
+    const { set, remove } = splitMetadataPatch(stripNulBytes(patch));
     const rows = await this.client.query<{ id: string }>(
       `UPDATE ${this.table}
           SET metadata = (COALESCE(metadata, '{}'::jsonb) || $2::jsonb) - $3::text[]
