@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.10.2
+
+### Patch Changes
+
+- [#144](https://github.com/DavideCarvalho/nestjs-agent/pull/144) [`45f62f7`](https://github.com/DavideCarvalho/nestjs-agent/commit/45f62f73e5e85b7704f3a909e937e68a553ff453) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `PgVectorStore` strips the NUL byte (0x00) from every id, text, source, metadata and filter binding it sends to Postgres, which rejects it in `text`/`jsonb` columns.
+
 ## 0.10.1
 
 ### Patch Changes
