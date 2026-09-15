@@ -134,7 +134,7 @@
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",
     "remark-math": "6.0.0",
-    "streamdown": "2.5.0",
+    "streamdown": "2.6.0",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
     "unist-util-visit": "5.1.0",
