@@ -70,7 +70,7 @@
     }
   },
   "dependencies": {
-    "@dudousxd/nestjs-diagnostics": "0.7.1",
+    "@dudousxd/nestjs-diagnostics": "0.7.2",
     "react-is": "19.2.8",
     "recharts": "3.10.1"
   },

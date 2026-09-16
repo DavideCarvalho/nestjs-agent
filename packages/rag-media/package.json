@@ -50,7 +50,7 @@
     "reflect-metadata": "^0.2.0"
   },
   "dependencies": {
-    "@dudousxd/nestjs-diagnostics": "0.7.1"
+    "@dudousxd/nestjs-diagnostics": "0.7.2"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
