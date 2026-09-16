@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
-    "@dudousxd/nestjs-diagnostics": "0.7.1"
+    "@dudousxd/nestjs-diagnostics": "0.7.2"
   },
   "peerDependencies": {
     "@dudousxd/nestjs-telescope": ">=1.18.0"
