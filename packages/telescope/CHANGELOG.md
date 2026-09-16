@@ -1,5 +1,14 @@
 # @dudousxd/nestjs-agent-telescope
 
+## 0.8.10
+
+### Patch Changes
+
+- fix(deps): update dependency @dudousxd/nestjs-diagnostics to v0.7.2 ([#151](https://github.com/DavideCarvalho/nestjs-agent/issues/151))
+
+- Updated dependencies []:
+  - @dudousxd/nestjs-agent-core@0.15.5
+
 ## 0.8.9
 
 ### Patch Changes

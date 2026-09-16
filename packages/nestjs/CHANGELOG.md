@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent
 
+## 1.0.6
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @dudousxd/nestjs-agent-core@0.15.5
+
 ## 1.0.5
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-evals
 
+## 0.2.3
+
+### Patch Changes
+
+- fix(deps): update dependency @dudousxd/nestjs-diagnostics to v0.7.2 ([#151](https://github.com/DavideCarvalho/nestjs-agent/issues/151))
+
 ## 0.2.2
 
 ### Patch Changes
