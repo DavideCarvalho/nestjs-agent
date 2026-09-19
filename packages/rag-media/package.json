@@ -56,7 +56,7 @@
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-rag": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
-    "@nestjs/common": "12.0.2",
+    "@nestjs/common": "12.0.3",
     "reflect-metadata": "0.2.2",
     "tsup": "8.3.5",
     "typescript": "5.9.3",
