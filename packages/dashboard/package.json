@@ -89,7 +89,7 @@
     "@types/react-dom": "19.2.7",
     "@types/supertest": "6.0.3",
     "@vitejs/plugin-react": "4.7.0",
-    "autoprefixer": "10.6.0",
+    "autoprefixer": "10.6.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "jsdom": "26.1.0",
