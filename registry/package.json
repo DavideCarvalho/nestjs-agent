@@ -20,7 +20,7 @@
     "jsdom": "26.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "tailwind-merge": "3.6.0",
+    "tailwind-merge": "3.7.0",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
   }
