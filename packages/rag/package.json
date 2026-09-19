@@ -57,7 +57,7 @@
     "pg": "8.23.0",
     "redis": "6.1.0",
     "testcontainers": "12.0.4",
-    "tsup": "8.3.5",
+    "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
   }
