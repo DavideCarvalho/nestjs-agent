@@ -116,14 +116,14 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/react": "4.0.17",
+    "@ai-sdk/react": "4.0.105",
     "@streamdown/code": "1.1.1",
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
     "@types/react": "19.2.18",
-    "ai": "7.0.16",
+    "ai": "7.0.102",
     "jsdom": "26.1.0",
     "katex": "0.16.45",
     "prism-react-renderer": "2.4.1",
