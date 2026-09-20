@@ -266,8 +266,8 @@ importers:
         specifier: 7.0.0
         version: 7.0.0
       tailwind-merge:
-        specifier: 3.6.0
-        version: 3.6.0
+        specifier: 3.7.0
+        version: 3.7.0
       tailwindcss:
         specifier: 3.4.19
         version: 3.4.19(tsx@4.19.2)(yaml@2.9.0)
@@ -786,8 +786,8 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
       tailwind-merge:
-        specifier: 3.6.0
-        version: 3.6.0
+        specifier: 3.7.0
+        version: 3.7.0
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -5089,6 +5089,9 @@ packages:
 
   tailwind-merge@3.6.0:
     resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
+
+  tailwind-merge@3.7.0:
+    resolution: {integrity: sha512-XPPUyAc+cvspz3lHTcR/QgPfW2A0lv/xQNIjX3HGhLR+Nq2lHaLq5MtTesHn8GUr3W3DguT2KT5x3NVgRtYwmA==}
 
   tailwindcss@3.4.19:
     resolution: {integrity: sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==}
@@ -10018,6 +10021,8 @@ snapshots:
   symbol-tree@3.2.4: {}
 
   tailwind-merge@3.6.0: {}
+
+  tailwind-merge@3.7.0: {}
 
   tailwindcss@3.4.19(tsx@4.19.2)(yaml@2.9.0):
     dependencies:
