@@ -58,7 +58,7 @@
     "@nestjs/core": "12.0.3",
     "@nestjs/testing": "12.0.3",
     "reflect-metadata": "0.2.2",
-    "tsup": "8.3.5",
+    "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9",
     "zod": "3.25.76"

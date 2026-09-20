@@ -54,7 +54,7 @@
     "@dudousxd/nestjs-authz": "0.6.7",
     "@nestjs/common": "12.0.3",
     "reflect-metadata": "0.2.2",
-    "tsup": "8.3.5",
+    "tsup": "8.5.1",
     "typescript": "5.9.3",
     "zod": "3.25.76"
   }
