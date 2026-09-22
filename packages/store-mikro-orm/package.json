@@ -53,8 +53,8 @@
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
-    "@mikro-orm/core": "7.2.0",
-    "@mikro-orm/sqlite": "7.2.0",
+    "@mikro-orm/core": "7.2.1",
+    "@mikro-orm/sqlite": "7.2.1",
     "@mikro-orm/nestjs": "7.1.0",
     "@nestjs/common": "12.0.3",
     "reflect-metadata": "0.2.2",
