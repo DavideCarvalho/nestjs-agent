@@ -48,7 +48,7 @@
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
-    "@testcontainers/redis": "12.0.4",
+    "@testcontainers/redis": "12.1.0",
     "ioredis": "5.11.1",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
