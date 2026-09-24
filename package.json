@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git"
   },
-  "packageManager": "pnpm@11.5.0",
+  "packageManager": "pnpm@11.27.1",
   "engines": {
     "node": ">=20"
   },
