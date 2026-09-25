@@ -58,28 +58,28 @@ importers:
         version: link:../../packages/testing
       '@dudousxd/nestjs-context':
         specifier: 0.2.1
-        version: 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@dudousxd/nestjs-durable':
         specifier: 0.26.0
-        version: 0.26.0(@dudousxd/durable-worker@0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.26.0(@dudousxd/durable-worker@0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@dudousxd/nestjs-durable-core':
         specifier: 0.45.0
         version: 0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-transport-event-emitter':
         specifier: 0.5.1
-        version: 0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3))
+        version: 0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4))
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -133,10 +133,10 @@ importers:
     devDependencies:
       '@dudousxd/nestjs-authz':
         specifier: 0.6.7
-        version: 0.6.7(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.6.7(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -154,7 +154,7 @@ importers:
     devDependencies:
       '@dudousxd/nestjs-codegen':
         specifier: 0.25.2
-        version: 0.25.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)
+        version: 0.25.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)
       tsup:
         specifier: 8.5.1
         version: 8.5.1(@swc/core@1.16.2)(jiti@1.21.7)(postcss@8.5.28)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.0)
@@ -166,7 +166,7 @@ importers:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@standard-schema/spec':
         specifier: 1.1.0
         version: 1.1.0
@@ -185,7 +185,7 @@ importers:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       react-is:
         specifier: 19.2.8
         version: 19.2.8
@@ -200,17 +200,17 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
       '@nestjs/testing':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(@nestjs/platform-express@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)
       '@swc/core':
         specifier: 1.16.2
         version: 1.16.2
@@ -307,7 +307,7 @@ importers:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
@@ -344,14 +344,14 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/testing':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(@nestjs/platform-express@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -387,17 +387,17 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
       '@nestjs/testing':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(@nestjs/platform-express@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)
       '@types/supertest':
         specifier: 6.0.3
         version: 6.0.3
@@ -443,31 +443,31 @@ importers:
         version: link:../testing
       '@dudousxd/nestjs-context':
         specifier: 0.2.1
-        version: 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@dudousxd/nestjs-durable':
         specifier: 0.34.0
-        version: 0.34.0(@dudousxd/durable-worker@0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)(zod@3.25.76)
+        version: 0.34.0(@dudousxd/durable-worker@0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-core':
         specifier: 0.52.0
         version: 0.52.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-transport-event-emitter':
         specifier: 0.5.1
-        version: 0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3))
+        version: 0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4))
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/event-emitter':
         specifier: 12.0.1
-        version: 12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+        version: 12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
       '@nestjs/platform-express':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
       '@nestjs/testing':
-        specifier: 12.0.3
-        version: 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(@nestjs/platform-express@12.0.3)
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)
       '@types/express':
         specifier: 5.0.6
         version: 5.0.6
@@ -500,7 +500,7 @@ importers:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@standard-schema/spec':
         specifier: 1.1.0
         version: 1.1.0
@@ -540,7 +540,7 @@ importers:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
@@ -552,8 +552,8 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -653,8 +653,8 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@types/better-sqlite3':
         specifier: 7.6.13
         version: 7.6.13
@@ -687,13 +687,13 @@ importers:
         version: 7.2.1
       '@mikro-orm/nestjs':
         specifier: 7.1.0
-        version: 7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@mikro-orm/sqlite':
         specifier: 7.2.1
         version: 7.2.1(@mikro-orm/core@7.2.1)
       '@nestjs/common':
-        specifier: 12.0.3
-        version: 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -711,11 +711,11 @@ importers:
         version: link:../core
       '@dudousxd/nestjs-diagnostics':
         specifier: 0.7.2
-        version: 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+        version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-telescope':
         specifier: 1.29.1
-        version: 1.29.1(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        version: 1.29.1(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       tsup:
         specifier: 8.5.1
         version: 8.5.1(@swc/core@1.16.2)(jiti@1.21.7)(postcss@8.5.28)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.0)
@@ -1865,8 +1865,8 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
-  '@nestjs/common@12.0.3':
-    resolution: {integrity: sha512-Fosz6lHc9OagZNcF0LTrVHyJS8W7mtuNFBOo9RRccGwyeICBd0hiutjAi9zxnzBcP45RkYXeNB+idA/52jZhBQ==}
+  '@nestjs/common@12.0.4':
+    resolution: {integrity: sha512-maEf5KhcQMCXQW9/SsLDDoFO0l73sbwBmiaCRrkqrFHyNG9ekN8CoYbzcvlboNKgiydWx8pogoFnuOEl8+7+tw==}
     peerDependencies:
       class-transformer: '>=0.4.1'
       class-validator: '>=0.13.2'
@@ -1878,8 +1878,8 @@ packages:
       class-validator:
         optional: true
 
-  '@nestjs/core@12.0.3':
-    resolution: {integrity: sha512-Ouv++gAXOL50S8K8n6AN19QGmw51rnIo6v7y9AqUYoaf0NcZlufTu5XTDeC2RtpMz8oXRr9nykBngRjflcoQKA==}
+  '@nestjs/core@12.0.4':
+    resolution: {integrity: sha512-3jd8RaYxYAs8OxjHdTOgxmS9vUm3I9JFnRrgBxdQAVbHjyRx/QYiGnuVCmuUBm4AOHPMij/I74xfg8En3Erm7A==}
     engines: {node: '>= 20'}
     peerDependencies:
       '@nestjs/common': ^12.0.0
@@ -1903,14 +1903,14 @@ packages:
       '@nestjs/common': ^11.0.0 || ^12.0.0
       '@nestjs/core': ^11.0.0 || ^12.0.0
 
-  '@nestjs/platform-express@12.0.3':
-    resolution: {integrity: sha512-q9ImjCMjbYYgqvRHHro6sAypNwhjspIAHad0RTL2ww5wYd9gwUGWMss7Q+ACCw5Sksu7Q8S/3rjSLhB+W6B6bg==}
+  '@nestjs/platform-express@12.0.4':
+    resolution: {integrity: sha512-oL6zHjeMeqwKoAlY1Y+bpCfFy6Yat6wfWnmcTgp7IE3A6TAftu6Vgu/eRi9VY5bErw4dMcYGtzvxvKP1QXr8JA==}
     peerDependencies:
       '@nestjs/common': ^12.0.0
       '@nestjs/core': ^12.0.0
 
-  '@nestjs/testing@12.0.3':
-    resolution: {integrity: sha512-TYDvBI8HvYeldNCmsuSaE4XqSs1Mg7IekSPlJf+zbrVt3+s5sqt4ySMUhbTs8JpMTFMyqCwtPTGVHIcFVuTBbQ==}
+  '@nestjs/testing@12.0.4':
+    resolution: {integrity: sha512-cL1vfg0VyEd1cHEge6gcppLsptYiCYRxjseuvelIX++ddgzeg9hIQQdg0sT7CJrBIJxI1dt6+7PW6NHbl3laYQ==}
     peerDependencies:
       '@nestjs/common': ^12.0.0
       '@nestjs/core': ^12.0.0
@@ -3649,8 +3649,8 @@ packages:
       picomatch:
         optional: true
 
-  file-type@22.1.0:
-    resolution: {integrity: sha512-fbvf9u6jnHWr1EP6V8R99E9iLMhNLXgZkUzWBiPpJ5/89UJ/Atuxjn5YXR+XaZWo2hc2/8mGfTez+NDAgOcpLA==}
+  file-type@22.1.1:
+    resolution: {integrity: sha512-sEB0oStmeLGtpmSAD88RDNuLsvhv4iC3u0lE25CUvfCULvj49xoQ3l3K525Vn+ZzsZ6DOLajQCV6RmhwwhqiJg==}
     engines: {node: '>=22'}
 
   file-uri-to-path@1.0.0:
@@ -6029,16 +6029,16 @@ snapshots:
     optionalDependencies:
       ioredis: 5.11.1
 
-  '@dudousxd/nestjs-authz@0.6.7(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-authz@0.6.7(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
-      '@dudousxd/nestjs-diagnostics': 0.7.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@dudousxd/nestjs-diagnostics': 0.7.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
     optionalDependencies:
-      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
 
-  '@dudousxd/nestjs-codegen@0.25.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)':
+  '@dudousxd/nestjs-codegen@0.25.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)':
     dependencies:
       cac: 6.7.14
       chokidar: 3.6.0
@@ -6046,27 +6046,27 @@ snapshots:
       ts-morph: 28.0.0
       typescript: 5.9.3
     optionalDependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       tsx: 4.23.15
 
-  '@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
     optionalDependencies:
-      '@dudousxd/nestjs-diagnostics': 0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-diagnostics': 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
 
-  '@dudousxd/nestjs-diagnostics@0.7.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-diagnostics@0.7.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     optionalDependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
 
-  '@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     optionalDependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
 
   '@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)':
@@ -6079,48 +6079,48 @@ snapshots:
       reflect-metadata: 0.2.2
       zod: 3.25.76
 
-  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3))':
+  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4))':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)
-      '@nestjs/event-emitter': 12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+      '@nestjs/event-emitter': 12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
 
-  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3))':
+  '@dudousxd/nestjs-durable-transport-event-emitter@0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4))':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.52.0(reflect-metadata@0.2.2)(zod@3.25.76)
-      '@nestjs/event-emitter': 12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+      '@nestjs/event-emitter': 12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
 
-  '@dudousxd/nestjs-durable@0.26.0(@dudousxd/durable-worker@0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-durable@0.26.0(@dudousxd/durable-worker@0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.45.0(reflect-metadata@0.2.2)(zod@3.25.76)
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
     optionalDependencies:
       '@dudousxd/durable-worker': 0.5.0(@dudousxd/nestjs-durable-core@0.45.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
-      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
 
-  '@dudousxd/nestjs-durable@0.34.0(@dudousxd/durable-worker@0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)(zod@3.25.76)':
+  '@dudousxd/nestjs-durable@0.34.0(@dudousxd/durable-worker@0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.52.0(reflect-metadata@0.2.2)(zod@3.25.76)
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
     optionalDependencies:
       '@dudousxd/durable-worker': 0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
-      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       zod: 3.25.76
 
-  '@dudousxd/nestjs-telescope@1.29.1(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@dudousxd/nestjs-telescope@1.29.1(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       better-sqlite3: 11.10.0
       reflect-metadata: 0.2.2
       rxjs: 7.8.2
       uuid: 11.1.1
       zod: 3.25.76
     optionalDependencies:
-      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2))(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true
@@ -6464,11 +6464,11 @@ snapshots:
 
   '@mikro-orm/core@7.2.1': {}
 
-  '@mikro-orm/nestjs@7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(reflect-metadata@0.2.2)':
+  '@mikro-orm/nestjs@7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
       '@mikro-orm/core': 7.2.1
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
 
   '@mikro-orm/sql@7.2.1(@mikro-orm/core@7.2.1)':
@@ -6505,10 +6505,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
       '@standard-schema/spec': 1.1.0
-      file-type: 22.1.0
+      file-type: 22.1.1
       iterare: 1.2.1
       load-esm: 1.0.3
       reflect-metadata: 0.2.2
@@ -6518,9 +6518,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@nestjs/core@12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@nestjs/core@12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       fast-safe-stringify: 2.1.1
       iterare: 1.2.1
       path-to-regexp: 8.4.2
@@ -6529,18 +6529,18 @@ snapshots:
       tslib: 2.8.1
       uid: 2.0.2
     optionalDependencies:
-      '@nestjs/platform-express': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+      '@nestjs/platform-express': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
 
-  '@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)':
+  '@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       eventemitter2: 6.4.9
 
-  '@nestjs/platform-express@12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)':
+  '@nestjs/platform-express@12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       cors: 2.8.6
       express: 5.2.1
       multer: 2.4.0
@@ -6549,13 +6549,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@nestjs/testing@12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)(@nestjs/platform-express@12.0.3)':
+  '@nestjs/testing@12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)':
     dependencies:
-      '@nestjs/common': 12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@nestjs/core': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.3)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       tslib: 2.8.1
     optionalDependencies:
-      '@nestjs/platform-express': 12.0.3(@nestjs/common@12.0.3(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.3)
+      '@nestjs/platform-express': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
 
   '@noble/hashes@1.8.0': {}
 
@@ -8220,7 +8220,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.4
 
-  file-type@22.1.0:
+  file-type@22.1.1:
     dependencies:
       '@tokenizer/inflate': 0.4.1
       strtok3: 10.3.5
