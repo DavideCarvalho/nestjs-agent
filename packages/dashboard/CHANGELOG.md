@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.15.3
+
+### Patch Changes
+
+- fix(deps): update react monorepo to v19.3.0 ([#172](https://github.com/DavideCarvalho/nestjs-agent/issues/172))
+
 ## 0.15.2
 
 ### Patch Changes
