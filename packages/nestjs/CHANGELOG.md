@@ -1,5 +1,16 @@
 # @dudousxd/nestjs-agent
 
+## 1.1.0
+
+### Minor Changes
+
+- [#188](https://github.com/DavideCarvalho/nestjs-agent/pull/188) [`8a4ec35`](https://github.com/DavideCarvalho/nestjs-agent/commit/8a4ec35a9da5b697d71955a0a8437c810221e208) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `@dudousxd/nestjs-agent/guardrails` re-exports `@dudousxd/nestjs-agent-core/guardrails`, so an app that depends only on this package reaches `createGuardrails` and the detectors.
+
+### Patch Changes
+
+- Updated dependencies [[`8a4ec35`](https://github.com/DavideCarvalho/nestjs-agent/commit/8a4ec35a9da5b697d71955a0a8437c810221e208)]:
+  - @dudousxd/nestjs-agent-core@0.16.0
+
 ## 1.0.6
 
 ### Patch Changes

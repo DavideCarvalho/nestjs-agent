@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.11.0
+
+### Minor Changes
+
+- [#187](https://github.com/DavideCarvalho/nestjs-agent/pull/187) [`505702e`](https://github.com/DavideCarvalho/nestjs-agent/commit/505702e5df0b769d6cd78f76696c1bd569c11e68) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - New `openAiEmbeddings` (an `EmbeddingProvider` over any OpenAI-compatible `/v1/embeddings` — OpenAI, gateways, TEI, Ollama, vLLM) and `HttpReranker` (a `Reranker` over Cohere/Jina/Voyage/TEI-style `/rerank`), both dependency-free and throwing `HttpModelError`. `@dudousxd/nestjs-agent-testing` adds `hashedEmbeddings(dimensions)` and a `tokens: 'unicode'` option on `FakeEmbeddingProvider`.
+
+- [#186](https://github.com/DavideCarvalho/nestjs-agent/pull/186) [`f4d1827`](https://github.com/DavideCarvalho/nestjs-agent/commit/f4d1827ac9445e73889c96fa0f6e87f0f2013406) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `PgVectorStore` takes a `pg` Pool, a Drizzle database or a `postgres.js` `sql` directly (`toPgClient`), upserts in batched multi-row statements, and gains opt-in `nullableEmbeddings`, mixed-dimension tables (`dimensions: [768, 1536]` with one partial HNSW index per width), pgvector ≥ 0.8 `iterativeScan`/`efSearch`, `schemaStatements()` and an overridable `whereConditions`. New `PgLexicalVectorStore` adds Postgres full-text `searchText`, so hybrid search works on Postgres.
+
 ## 0.10.3
 
 ### Patch Changes

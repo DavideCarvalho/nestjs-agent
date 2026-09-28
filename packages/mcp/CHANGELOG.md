@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp
 
+## 0.3.0
+
+### Minor Changes
+
+- [#188](https://github.com/DavideCarvalho/nestjs-agent/pull/188) [`8a4ec35`](https://github.com/DavideCarvalho/nestjs-agent/commit/8a4ec35a9da5b697d71955a0a8437c810221e208) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `McpServerConfig.screen` (and a module-wide `AgentMcpModuleOptions.screen`): inspect every listed tool definition before it is imported, and skip the ones it refuses — the seam for tool-poisoning checks such as `createGuardrails({ toolPoisoning: true }).screenTool`. A screen that throws skips the tool too.
+
 ## 0.2.0
 
 ### Minor Changes
