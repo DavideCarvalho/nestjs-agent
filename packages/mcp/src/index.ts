@@ -11,6 +11,9 @@ export type {
   McpLogger,
   McpServerConfig,
   McpStdioTransportConfig,
+  McpToolScreen,
+  McpToolScreenInput,
+  McpToolScreenVerdict,
   McpTransportConfig,
 } from './mcp-options.js';
 export { McpToolCallError, McpToolSource, type McpImportedTool } from './mcp-tool-source.js';

@@ -37,6 +37,73 @@ import type { ModelProvider, AgentStore, ToolSpec, RolesPolicy } from '@dudousxd
 - `settleAll(tasks)` / `SettledTask<T>` — the implementation behind the optional `AgentLoopHooks.parallel`, which is how a turn's `read` tool calls run concurrently. It invokes every task synchronously, in list order, before awaiting any of them (so a runner that takes checkpoint positions on the call keeps them in call order), and resolves only once all of them have settled (so a runner that unwinds a turn by throwing never abandons a sibling mid-dispatch). A runner that assigns positions anywhere else simply omits the hook and the loop stays sequential.
 - `runAgentLoop(deps, input, hooks)` — the loop; the NestJS package drives it from both runners
 
+## Guardrails — `@dudousxd/nestjs-agent-core/guardrails`
+
+PII, secret, prompt-injection and tool-poisoning detection, a rule engine with reversible redaction,
+and the adapter onto the processor seams above. A separate entry point with **no imports at all** —
+no NestJS, no agent loop, no Node-only API — so a process that never runs the loop (a gateway
+proxying raw OpenAI / Anthropic / MCP traffic) uses the same detectors and engine.
+
+```ts
+import { createGuardrails } from '@dudousxd/nestjs-agent-core/guardrails';
+
+const guardrails = createGuardrails({
+  pii: 'redact',                     // reversible: the model sees [EMAIL_1], the reader the address
+  secrets: 'block',
+  injection: { threshold: 0.6 },     // default action: block
+  toolPoisoning: true,               // for guardrails.screenTool (see the MCP package's `screen`)
+  rules: (ctx) => rulesForTenant(ctx.actor?.tenantRef), // more rules, resolved per scan
+  onEvent: (event) => audit.write(event),               // hits carry fingerprints, never values
+  fingerprint: (value) => hmac(value),
+});
+
+AgentModule.forRoot({
+  inputProcessors: [guardrails.input],
+  outputProcessors: [guardrails.output],
+  // …
+});
+```
+
+Where each stage runs, and what each action does there:
+
+| Stage | Seen by | `redact` | `block` / `approve` |
+|---|---|---|---|
+| `llm_request` — system, messages, earlier tool-call arguments | `guardrails.input`, every step | placeholders, restorable | the run fails: `ProcessorFailedError` whose `cause` is a `GuardrailBlockedError` |
+| `tool_result` — every tool result riding in the prompt | `guardrails.input`, every step, one result at a time (`match.tools` applies) | placeholders, restorable | the result is **withheld**: the model is told why and the turn goes on |
+| `llm_response` — each step's answer | `guardrails.output` | one-way placeholders; the thread's own placeholders are then restored | `reject` → `OutputRejectedError` |
+| `tool_args` — the calls a step asks for | `guardrails.output` (read-only there) and `guardrails.wrapTool` | only through `wrapTool` | `reject` the step, or `wrapTool` throws and the model reads the tool's failure |
+| `tool_description` | `guardrails.screenTool(tool)` | — | `{ allowed: false, reason }` |
+
+- **Streaming stays on.** The output processor declares `incremental` with a 256-character lookback
+  (`incremental: { lookbackChars }` widens it, `false` gates the whole answer). One-way placeholders
+  are numbered per pass, so a prefix and its extension agree, which is the promise `incremental`
+  makes.
+- **Placeholders live per thread** in a `VaultStore` (default `InMemoryVaultStore`, bounded). A run
+  resumed in another process finds no vault and its placeholders reach the reader unrestored — the
+  values still never reach the model. `Vault.toJSON` / `Vault.fromJSON` back a shared store, which
+  then holds the raw values.
+- **`wrapTool(name, handler)`** is the one place a tool's arguments can be rewritten: it restores the
+  thread's placeholders (the model only ever saw `[EMAIL_1]`, the tool needs the address) and runs
+  the `tool_args` rules on what the tool is about to receive. PII is deliberately not a `tool_args`
+  stage of the `pii` shorthand for that reason; secrets are.
+- **Re-sent history is not re-refused.** Content only in earlier turns is redacted one-way instead
+  of blocked, and each hit is reported once per turn — every step re-sends the prompt and an
+  incremental gate re-reads a growing answer.
+- **A rule** is `{ id, stages, detectors, action, match?: { sources?, tools? }, when?, options? }`.
+  `when(ctx)` carries anything scope-like (tenant, roles, model); a `{ kind: 'custom', name, detect }`
+  detector carries anything the built-ins do not (NER, a classifier, a moderation endpoint, an LLM
+  judge). A detector that throws follows the rule's `failMode` (`open` by default).
+
+Standalone, without the loop: `detectPii` (Luhn + card brands, CPF/CNPJ incl. the 2026 alphanumeric
+CNPJ, SSN, IBAN mod 97, phones, IPv4), `detectSecrets` (provider key formats, JWT, PEM, entropy-gated
+generic assignments), `scoreInjection` (EN / PT-BR / ES, chat-template spoofing, hidden Unicode tag
+characters, base64 payloads, markdown exfiltration), `scoreToolText` + `toolText`, `detectRegex`,
+`detectKeywords`, then `scan(rules, ctx, segments, vault)` to combine them. For provider wire formats:
+`requestSlots` / `responseSlots` / `toolResultSlots` (OpenAI chat, Anthropic Messages, MCP results —
+each a text plus a setter that writes back in place), `refuseResponse`, and `StreamGuard`, which
+redacts, restores and blocks an OpenAI or Anthropic SSE stream in windows that never cut through a
+finding or a placeholder.
+
 ## License
 
 MIT © Davide Carvalho

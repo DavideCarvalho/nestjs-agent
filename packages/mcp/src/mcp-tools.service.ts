@@ -62,7 +62,11 @@ export class McpToolsService implements OnApplicationBootstrap, OnApplicationShu
 
   async onApplicationBootstrap(): Promise<void> {
     for (const config of this.options.servers) {
-      this.sources.set(config.name, new McpToolSource(config, this.logger));
+      const screen = config.screen ?? this.options.screen;
+      this.sources.set(
+        config.name,
+        new McpToolSource(screen !== undefined ? { ...config, screen } : config, this.logger),
+      );
     }
     await this.refresh();
   }

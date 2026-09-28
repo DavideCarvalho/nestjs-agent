@@ -1,9 +1,11 @@
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
-import type { McpServerConfig } from './mcp-options.js';
+import type { McpServerConfig, McpToolScreen } from './mcp-options.js';
 
 export interface AgentMcpModuleOptions {
   /** The MCP servers to import tools from. Each is connected once at boot. */
   servers: McpServerConfig[];
+  /** Default {@link McpServerConfig.screen} for every server that does not set its own. */
+  screen?: McpToolScreen;
 }
 
 /**

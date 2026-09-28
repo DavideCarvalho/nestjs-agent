@@ -171,6 +171,25 @@ fix for a durable skew-protection crash-loop where a bare-imported module on the
 subscribed queues it should never have served. flip composes this the same way `APP_TYPE` composes
 its other modules: the worker container loads the `engine` surface, the API container loads `http`.
 
+### Guardrails
+
+`@dudousxd/nestjs-agent/guardrails` (a re-export of `@dudousxd/nestjs-agent-core/guardrails`) puts
+PII, secret, prompt-injection and tool-poisoning checks on the processor seams:
+
+```ts
+import { createGuardrails } from '@dudousxd/nestjs-agent/guardrails';
+
+const guardrails = createGuardrails({ pii: 'redact', secrets: 'block', injection: { threshold: 0.6 } });
+
+AgentModule.forRoot({
+  model, store, actorResolver,
+  inputProcessors: [guardrails.input],
+  outputProcessors: [guardrails.output],
+});
+```
+
+See the core package's README for the stages, the actions and the standalone API.
+
 See the [monorepo README](https://github.com/DavideCarvalho/aviary) for the full guide (durability,
 multi-agent, authz, governed SQL, the React frontend, diagnostics).
 
