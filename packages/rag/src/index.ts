@@ -18,10 +18,19 @@ export type { MetadataPatch } from './metadata-patch.js';
 export { applyMetadataPatch } from './metadata-patch.js';
 export { MemoryVectorStore } from './memory-vector-store.js';
 export {
+  PgLexicalVectorStore,
   PgVectorStore,
-  type PgClient,
+  type PgFullTextOptions,
   type PgVectorStoreOptions,
 } from './pg-vector-store.js';
+export {
+  toPgClient,
+  type DrizzleLike,
+  type NodePgQueryable,
+  type PgClient,
+  type PgClientSource,
+  type PostgresJsSql,
+} from './pg-client.js';
 export {
   RedisVectorStore,
   RedisVectorSchemaMismatchError,

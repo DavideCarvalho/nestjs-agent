@@ -2,10 +2,14 @@
 // upsert/ON CONFLICT, cosine `<=>` ranking, and jsonb metadata filtering the MemoryVectorStore can't.
 // Runs only under `pnpm test:db`.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { EmbeddingRetriever } from './embedding-retriever.js';
+import { HybridRetriever } from './hybrid-retriever.js';
+import { LexicalRetriever } from './lexical-retriever.js';
 import type { PgClient } from './pg-vector-store.js';
-import { PgVectorStore } from './pg-vector-store.js';
+import { PgLexicalVectorStore, PgVectorStore } from './pg-vector-store.js';
 import { UnsafeRemovalError } from './vector-store.js';
 
 let container: StartedPostgreSqlContainer;
@@ -283,5 +287,158 @@ describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
   it('refuses an empty filter object instead of truncating the table', async () => {
     await expect(enumStore.removeWhere({})).rejects.toBeInstanceOf(UnsafeRemovalError);
     expect(await enumStore.countChunks()).toBe(5);
+  });
+});
+
+describe('PgVectorStore constructed from a Drizzle database (real pgvector)', () => {
+  it('takes drizzle(pool) directly — no $client cast — and runs the iterative scan in a transaction', async () => {
+    const db = drizzle(pool);
+    const drizzleStore = new PgVectorStore(db, {
+      dimensions: 3,
+      table: 'drizzle_chunks',
+      iterativeScan: 'strict_order',
+      efSearch: 64,
+    });
+    await drizzleStore.ensureSchema();
+    // One tenant is 1 row in 60: without the iterative scan an HNSW probe with a selective filter
+    // can come back short. With it, the store keeps walking until topK rows pass.
+    await drizzleStore.upsert(
+      Array.from({ length: 60 }, (_, index) => ({
+        id: `d${index}`,
+        text: `row ${index}`,
+        embedding: [1, index / 60, 0],
+        metadata: { tenant: index % 20 === 0 ? 'rare' : 'common' },
+      })),
+    );
+
+    const hits = await drizzleStore.search([1, 0, 0], { topK: 3, filter: { tenant: 'rare' } });
+    expect(hits.map((hit) => hit.id)).toEqual(['d0', 'd20', 'd40']);
+    // The SET LOCAL stayed inside the search's transaction.
+    const [setting] = (await pool.query(`SELECT current_setting('hnsw.iterative_scan', true) AS v`))
+      .rows as { v: string | null }[];
+    expect(setting?.v ?? 'off').not.toBe('strict_order');
+  });
+});
+
+describe('PgVectorStore batched upsert + nullable, mixed-dimension embeddings (real pgvector)', () => {
+  let mixed: PgVectorStore;
+
+  beforeAll(async () => {
+    mixed = new PgVectorStore(pool, {
+      dimensions: [2, 3],
+      table: 'mixed_chunks',
+      nullableEmbeddings: true,
+      upsertBatchSize: 2,
+    });
+    await mixed.ensureSchema();
+  });
+
+  it('creates one partial HNSW index per listed width', async () => {
+    const { rows } = await pool.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'mixed_chunks' AND indexdef LIKE '%hnsw%' ORDER BY indexname`,
+    );
+    expect(rows.map((row) => row.indexname)).toEqual([
+      'mixed_chunks_embedding_2_idx',
+      'mixed_chunks_embedding_3_idx',
+    ]);
+    expect(rows[0]?.indexdef).toContain('WHERE (vector_dims(embedding) = 2)');
+  });
+
+  it('stores 2-wide, 3-wide and missing vectors side by side; search compares like with like', async () => {
+    await mixed.upsert([
+      { id: 'two-a', text: 'two a', embedding: [1, 0], metadata: { model: 'small' } },
+      { id: 'two-b', text: 'two b', embedding: [0, 1], metadata: { model: 'small' } },
+      { id: 'three-a', text: 'three a', embedding: [1, 0, 0], metadata: { model: 'large' } },
+      { id: 'pending', text: 'not embedded yet', embedding: [] },
+      { id: 'two-a', text: 'two a v2', embedding: [1, 0], metadata: { model: 'small' } },
+    ]);
+
+    expect(await mixed.countChunks()).toBe(4);
+    const two = await mixed.search([1, 0], { topK: 10 });
+    expect(two.map((hit) => hit.id)).toEqual(['two-a', 'two-b']);
+    expect(two[0]?.text).toBe('two a v2');
+    const three = await mixed.search([1, 0, 0], { topK: 10 });
+    expect(three.map((hit) => hit.id)).toEqual(['three-a']);
+    // A width with no index is still answered — exactly — and matches nothing here.
+    expect(await mixed.search([1, 0, 0, 0], { topK: 10 })).toEqual([]);
+  });
+
+  it('strips NUL bytes through the batched statement', async () => {
+    const NUL = String.fromCharCode(0);
+    await mixed.upsert([
+      { id: `nul${NUL}#0`, text: `a${NUL}b`, embedding: [1, 1], metadata: { k: `v${NUL}` } },
+    ]);
+    const [chunk] = await mixed.listChunks('nul');
+    expect(chunk).toMatchObject({ id: 'nul#0', text: 'ab', metadata: { k: 'v' } });
+  });
+});
+
+describe('PgLexicalVectorStore (real Postgres full-text search)', () => {
+  let lexical: PgLexicalVectorStore;
+
+  beforeAll(async () => {
+    lexical = new PgLexicalVectorStore(pool, {
+      dimensions: 3,
+      table: 'lexical_chunks',
+      nullableEmbeddings: true,
+    });
+    await lexical.ensureSchema();
+    await lexical.upsert([
+      {
+        id: 'warranty#0',
+        text: 'The solar panel warranty lasts twenty five years.',
+        embedding: [1, 0, 0],
+        metadata: { tenant: 't1' },
+      },
+      {
+        id: 'install#0',
+        text: 'Installation takes two days on a pitched roof.',
+        embedding: [],
+        metadata: { tenant: 't1' },
+      },
+      {
+        id: 'other#0',
+        text: 'Solar panel warranty for another tenant.',
+        embedding: [],
+        metadata: { tenant: 't2' },
+      },
+    ]);
+  });
+
+  it('builds a GIN index over the same expression it queries', async () => {
+    const { rows } = await pool.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE indexname = 'lexical_chunks_text_tsv_idx'`,
+    );
+    expect(rows[0]?.indexdef).toContain('USING gin (to_tsvector(');
+  });
+
+  it('finds chunks by words, filtered, including ones without an embedding', async () => {
+    const hits = await lexical.searchText('solar warranty', { topK: 5, filter: { tenant: 't1' } });
+    expect(hits.map((hit) => hit.id)).toEqual(['warranty#0']);
+    const pending = await lexical.searchText('pitched roof', { topK: 5 });
+    expect(pending.map((hit) => hit.id)).toEqual(['install#0']);
+    // The vector leg never returns the un-embedded chunk.
+    expect((await lexical.search([1, 0, 0], { topK: 5 })).map((hit) => hit.id)).toEqual([
+      'warranty#0',
+    ]);
+  });
+
+  it('falls back to any word for a long question that matches nothing as a whole', async () => {
+    const hits = await lexical.searchText('how many years does the warranty on my inverter last', {
+      topK: 5,
+      filter: { tenant: 't1' },
+    });
+    expect(hits.map((hit) => hit.id)).toContain('warranty#0');
+  });
+
+  it('fuses with the dense leg in a HybridRetriever', async () => {
+    const embedder = { embed: async (texts: string[]) => texts.map(() => [1, 0, 0]) };
+    const retriever = new HybridRetriever([
+      new EmbeddingRetriever(embedder, lexical),
+      new LexicalRetriever(lexical),
+    ]);
+    const hits = await retriever.retrieve('pitched roof installation', { topK: 3 });
+    expect(hits.map((hit) => hit.id)).toContain('install#0');
+    expect(hits[0]?.id).toBeDefined();
   });
 });

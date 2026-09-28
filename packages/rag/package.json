@@ -15,7 +15,7 @@
     "agent",
     "rag"
   ],
-  "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores",
+  "description": "Retrieval-Augmented Generation for nestjs-agent \u2014 chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -54,6 +54,7 @@
     "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@testcontainers/postgresql": "12.1.0",
     "@types/pg": "8.23.1",
+    "drizzle-orm": "0.45.3",
     "pg": "8.23.0",
     "redis": "6.2.1",
     "testcontainers": "12.1.0",
