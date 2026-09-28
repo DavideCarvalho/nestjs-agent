@@ -153,19 +153,60 @@ outlive a restart persists it from there.
 
 ## pgvector store
 
-`PgVectorStore` takes an injected `PgClient` — adapt your own `pg` / `postgres.js`:
+`PgVectorStore` takes a `pg` `Pool`, a Drizzle database (`drizzle(pool)` or `drizzle(sql)` — no
+`$client` cast), a `postgres.js` `sql`, or a hand-written `PgClient` (`{ query(sql, params) → rows }`).
+The package still pulls in no driver; `toPgClient` does the adapting and is exported if you need it.
 
 ```ts
 import { Pool } from 'pg';
 import { PgVectorStore } from '@dudousxd/nestjs-agent-rag';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const store = new PgVectorStore(
-  { query: (sql, params) => pool.query(sql, params).then((r) => r.rows) },
-  { dimensions: 1536 },
-);
+const store = new PgVectorStore(pool, { dimensions: 1536 }); // or new PgVectorStore(db) with Drizzle
 await store.ensureSchema(); // CREATE EXTENSION vector + table + HNSW cosine index
 ```
+
+`store.schemaStatements()` returns the same DDL as strings, for a migration instead of a boot-time
+side effect. Other options (all off by default, so existing tables behave exactly as before):
+
+- **`upsertBatchSize`** (default 100) — `upsert` writes multi-row `INSERT … ON CONFLICT` statements;
+  duplicate ids in one call collapse to the last occurrence. NUL bytes are stripped from every
+  text/jsonb binding (Postgres rejects them).
+- **`nullableEmbeddings: true`** — `embedding: []` is stored as `NULL`: index text now, embed later,
+  or keep full-text-only chunks. `search` skips them; the lexical leg below still finds them.
+- **`dimensions: [768, 1536]`** — mixed widths in one table (say, while migrating models). The column
+  becomes an untyped `vector` with one partial HNSW index per width
+  (`USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE vector_dims(embedding) = 768`), and
+  `search` only compares vectors as wide as the query. Put the model in the chunk metadata and filter
+  on it when two models share a width.
+- **`iterativeScan: 'strict_order' | 'relaxed_order'`**, **`efSearch`** — pgvector ≥ 0.8 keeps
+  walking the HNSW graph until `topK` rows pass a selective filter (one tenant of many), instead of
+  returning short. Applied with `SET LOCAL` in a transaction, so it needs a client that can run one
+  (Pool, Drizzle and postgres.js can; a hand-written `PgClient` can add `transaction`). Skipped on
+  an older pgvector.
+
+Every filtered statement goes through one protected method, `whereConditions(filter, params)`, so a
+subclass that maps its filter onto its own columns (a tenant id, an ACL) overrides just that.
+
+### Full-text search on Postgres
+
+`PgLexicalVectorStore` is the same store plus `searchText` — a `LexicalVectorStore`, so
+`LexicalRetriever` and `HybridRetriever` work on Postgres as they do on RediSearch:
+
+```ts
+import { PgLexicalVectorStore } from '@dudousxd/nestjs-agent-rag';
+
+const store = new PgLexicalVectorStore(db, {
+  dimensions: 1536,
+  fullText: { config: 'simple' }, // or { column: 'tsv' } for a tsvector column you maintain
+});
+```
+
+Ranking is `ts_rank_cd`; the query goes through `websearch_to_tsquery` (every word must appear), and
+when that finds nothing it retries with any word (`anyTermFallback`, default on) so a long question
+still matches. Without `column`, `ensureSchema`/`schemaStatements` add a GIN index over
+`to_tsvector(config, text)` — the exact expression the query uses. On a populated table create it
+`CONCURRENTLY` in a migration rather than at boot (see below).
 
 ## RediSearch store
 
@@ -354,14 +395,17 @@ const lexical = isLexicalVectorStore(store) ? new LexicalRetriever(store) : keyw
 | Store | Lexical | Why |
 | --- | --- | --- |
 | `RedisVectorStore` | ✅ | RediSearch indexes the chunk text as `TEXT`; BM25 is already there |
-| `PgVectorStore` | ❌ | the chunks table has no `tsvector`/GIN index, and adding one is a migration |
+| `PgLexicalVectorStore` | ✅ | Postgres full-text search over a GIN-indexed `tsvector` you opt into |
+| `PgVectorStore` | ❌ | the plain chunks table has no `tsvector`/GIN index; use the subclass above |
 | `MemoryVectorStore` | ❌ | single-process by definition — use `KeywordRetriever` |
 
-Postgres is a deliberate omission. Lexical search there needs new DDL (a GIN index), and `CREATE
-INDEX` in `ensureSchema` would take a write lock on an already-populated chunks table at boot; it also
-forces a text-search-configuration choice that must match between index and query or Postgres silently
-falls back to a sequential scan. That wants a migration you run and watch, not a side effect of a
-library upgrade. The interface is open, so it can be added later without changing anything else.
+On Postgres it is a separate class rather than a new method on `PgVectorStore`, deliberately.
+Lexical search there needs new DDL (a GIN index), and `CREATE INDEX` in `ensureSchema` would take a
+write lock on an already-populated chunks table at boot; it also forces a text-search-configuration
+choice that must match between index and query or Postgres silently falls back to a sequential scan.
+Had `PgVectorStore` simply grown `searchText`, every `isLexicalVectorStore(store)` check would have
+started using it against an unindexed table on upgrade. Constructing `PgLexicalVectorStore` is the
+opt-in; the index is a migration you run and watch (`schemaStatements()` prints it).
 
 ## API
 
@@ -376,7 +420,7 @@ library upgrade. The interface is open, so it can be added later without changin
 - `KeywordRetriever` — in-process BM25 over chunks you feed it; the single-process lexical half:
   `add(chunks)`, `remove(documentId)`, `clear()`, `size`.
 - `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` — RRF fusion of the two.
-- `MemoryVectorStore` / `PgVectorStore` / `RedisVectorStore` — `VectorStore` adapters:
+- `MemoryVectorStore` / `PgVectorStore` / `PgLexicalVectorStore` / `RedisVectorStore` — `VectorStore` adapters:
   `upsert(records)`, `search(embedding, opts)`, `remove(documentId)`,
   `updateMetadata(documentId, patch)`, `listDocuments(filter?)`,
   `listChunks(documentId, { limit?, offset? })`.
@@ -458,8 +502,8 @@ permanent `if (supported)` and an unreachable "and if it isn't?" branch.
 
 A method goes in an **optional capability interface** when some backend genuinely *cannot* provide it
 without infrastructure the consumer has to adopt. `LexicalVectorStore.searchText` is the only one
-today, and it earns it: RediSearch has BM25 natively, Postgres needs a `tsvector` column, a GIN index
-and a migration you run and watch, and `MemoryVectorStore` would have to implement BM25 itself.
+today, and it earns it: RediSearch has BM25 natively, Postgres needs a GIN-indexed `tsvector` and a
+migration you run and watch (hence the separate `PgLexicalVectorStore`), and `MemoryVectorStore` would have to implement BM25 itself.
 
 The test is whether a backend can do it at all — not whether adding it would inconvenience an
 implementer who has already shipped.
