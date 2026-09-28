@@ -7,6 +7,10 @@ const pkg = (name: string) =>
 
 /** Resolve workspace packages to their TS source so cross-package tests never hit a stale dist/. */
 export const alias: Record<string, string> = {
+  // Before the bare package name: an alias key also matches its own subpaths, first entry wins.
+  '@dudousxd/nestjs-agent-core/guardrails': fileURLToPath(
+    new URL('./packages/core/src/guardrails/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core': pkg('core'),
   '@dudousxd/nestjs-agent-testing': pkg('testing'),
   '@dudousxd/nestjs-agent-store-mikro-orm': pkg('store-mikro-orm'),

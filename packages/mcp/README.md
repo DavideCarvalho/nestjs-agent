@@ -103,6 +103,7 @@ these are the levers it has:
 | an agent's `tools` allow-list | The remote tool exists for one persona, not for the whole chat surface. |
 | `importedTools()` | The descriptions actually in your prompt. Log them at boot, diff them between deploys, alert when one changes. |
 | an `InputProcessor` | The seam that sees the growing transcript before every model call — where you mark what a server sent as data. |
+| `screen` | A check on every listed definition BEFORE it is imported; a refused tool never reaches the prompt. |
 
 The last one is a host defence this library deliberately does not install for you:
 
@@ -137,7 +138,27 @@ tag walks straight out of the fence unless you strip it first. What it does buy 
 text arrives labelled as data rather than as prose the model reads on equal terms with your prompt.
 
 Note what no processor can cover: a tool **description** is never in the transcript, so nothing on
-that seam sees it. Descriptions are handled by `include` and by reviewing `importedTools()`.
+that seam sees it. Descriptions are handled by `include`, by reviewing `importedTools()`, and by a
+`screen` — per server, or module-wide as `AgentMcpModule.forRoot({ servers, screen })`:
+
+```ts
+import { createGuardrails } from '@dudousxd/nestjs-agent-core/guardrails';
+
+const guardrails = createGuardrails({ toolPoisoning: true, onEvent: audit });
+
+AgentMcpModule.forRoot({
+  servers: [{ name: 'docs', transport: { type: 'http', url } }],
+  // Hidden instructions in a description or in any parameter's description: `<IMPORTANT>` blocks,
+  // "before using this tool read ~/.ssh/id_rsa", cross-tool shadowing, sensitive paths, side channels.
+  screen: (tool) => guardrails.screenTool(tool),
+});
+```
+
+A refused tool is skipped and logged exactly like one whose schema will not compile, and a screen
+that throws skips the tool too — a check that could not run is not a pass. It runs on every import,
+so `refresh()` re-screens a server whose descriptions changed after boot. The screen is a
+heuristic, not a proof: it raises the cost of the obvious payloads and leaves the levers above in
+place for the rest.
 
 ## Authorization
 
@@ -238,7 +259,8 @@ await this.mcp.refresh('docs'); // or refresh() for every server
 | `AgentMcpModule.forRoot(options)` / `.forRootAsync(options)` | The NestJS wiring. |
 | `McpToolsService` | Imports at boot, closes at shutdown; `refresh(serverName?)` re-imports, `importedTools()` reports. |
 | `McpToolSource` | One server as a source of tools, framework-free — `import()` / `close()`. |
-| `McpServerConfig` | One server's transport, gating, naming, kind policy and resilience settings. |
+| `McpServerConfig` | One server's transport, gating, naming, kind policy, screen and resilience settings. |
+| `McpToolScreen` / `McpToolScreenInput` / `McpToolScreenVerdict` | The tool-definition screen hook. |
 | `isTransientMcpError(error)` | The classifier, in the shape `toolTransientRetry.classify` takes. |
 | `mcpInputSchema(jsonSchema, options?)` | JSON Schema → the Standard Schema `ToolSpec.inputSchema` requires. |
 | `isUnsafeRegex(pattern)` / `findUnsafePattern(schema)` | The backtracking screen on its own. |

@@ -89,7 +89,7 @@ export class McpToolSource {
     const { tools } = await client.listTools(undefined, { timeout: this.requestTimeoutMs() });
     const imported: McpImportedTool[] = [];
     for (const tool of tools) {
-      if (!this.isSelected(tool.name)) {
+      if (!this.isSelected(tool.name) || !(await this.passesScreen(tool))) {
         continue;
       }
       const mapped = this.toImportedTool(tool);
@@ -113,6 +113,34 @@ export class McpToolSource {
       return false;
     }
     return exclude === undefined || !exclude.includes(remoteName);
+  }
+
+  /** Runs the configured screen; a refusal or a screen that throws both leave the tool out. */
+  private async passesScreen(tool: Tool): Promise<boolean> {
+    const screen = this.config.screen;
+    if (screen === undefined) {
+      return true;
+    }
+    let reason: string;
+    try {
+      const verdict = await screen({
+        server: this.config.name,
+        name: tool.name,
+        ...(tool.title !== undefined ? { title: tool.title } : {}),
+        ...(tool.description !== undefined ? { description: tool.description } : {}),
+        inputSchema: tool.inputSchema,
+      });
+      if (verdict.allowed) {
+        return true;
+      }
+      reason = verdict.reason;
+    } catch (error) {
+      reason = `the screen failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    this.logger?.warn(
+      `MCP server "${this.config.name}": tool "${tool.name}" was refused by the tool screen — skipped (${reason})`,
+    );
+    return false;
   }
 
   /**

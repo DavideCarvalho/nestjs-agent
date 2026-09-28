@@ -51,6 +51,16 @@
         "types": "./dist/sink-redis/index.d.cts",
         "default": "./dist/sink-redis/index.cjs"
       }
+    },
+    "./guardrails": {
+      "import": {
+        "types": "./dist/guardrails/index.d.ts",
+        "default": "./dist/guardrails/index.js"
+      },
+      "require": {
+        "types": "./dist/guardrails/index.d.cts",
+        "default": "./dist/guardrails/index.cjs"
+      }
     }
   },
   "files": [
