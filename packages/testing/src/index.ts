@@ -32,6 +32,10 @@ export {
   expectedMemoryRecord,
   type EveryMemoryField,
 } from './memory-fixture.js';
-export { FakeEmbeddingProvider, type FakeEmbeddingOptions } from './fake-embedding-provider.js';
+export {
+  FakeEmbeddingProvider,
+  hashedEmbeddings,
+  type FakeEmbeddingOptions,
+} from './fake-embedding-provider.js';
 export { FakeReranker } from './fake-reranker.js';
 export { EVERY_MESSAGE_FIELD, type EveryMessageField } from './message-fixture.js';

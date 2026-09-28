@@ -29,6 +29,34 @@ await ingestDocuments(
 const retriever = new EmbeddingRetriever(embedder, store);
 ```
 
+## Embedding models and rerankers over HTTP
+
+No SDK needed for the two HTTP contracts nearly every provider and self-hosted server speaks:
+
+```ts
+import { HttpReranker, RerankingRetriever, openAiEmbeddings } from '@dudousxd/nestjs-agent-rag';
+
+// Any OpenAI-compatible POST /v1/embeddings: OpenAI, a gateway, Ollama, TEI, vLLM, LocalAI…
+const embedder = openAiEmbeddings({
+  baseUrl: 'http://tei:8080/v1', // default https://api.openai.com/v1
+  model: 'BAAI/bge-m3',
+  apiKey: process.env.EMBEDDINGS_API_KEY, // optional
+  onUsage: (tokens) => meter.add(tokens), // optional cost accounting
+});
+
+// Cohere / Jina / Voyage / TEI-style POST /rerank
+const reranker = new HttpReranker({
+  url: 'https://api.cohere.com/v2/rerank',
+  model: 'rerank-v3.5',
+  apiKey: process.env.COHERE_API_KEY,
+});
+const precise = new RerankingRetriever(retriever, reranker, { fetchTopK: 30 });
+```
+
+Both throw an `HttpModelError` (with the HTTP `status` and the provider's message) on failure. For
+offline tests, `hashedEmbeddings(dimensions)` from `@dudousxd/nestjs-agent-testing` is a
+deterministic hashed bag-of-words embedder.
+
 ## Chunking record-shaped text
 
 The default chunker is structure-blind: it fills a `chunkSize` window, breaks at the latest
@@ -387,6 +415,10 @@ library upgrade. The interface is open, so it can be added later without changin
   agentic-retrieval tool. `telemetry` defaults to on; pass `false` to opt out.
 - `instrumentRetriever(retriever, { describe?, collection? })` — wrap any `Retriever` so each
   retrieval publishes on `aviary:rag:retrieval` (`RAG_RETRIEVAL_CHANNEL`).
+- `openAiEmbeddings({ model, baseUrl?, apiKey?, dimensions?, batchSize?, maxInputChars?, headers?,
+  timeoutMs?, onUsage?, fetch? })` — an `EmbeddingProvider` over any OpenAI-compatible `/embeddings`.
+- `HttpReranker({ url, model?, apiKey?, format?, headers?, timeoutMs?, fetch? })` — a `Reranker` over
+  a Cohere/Jina/Voyage/TEI-style `/rerank` endpoint.
 
 ## Collection maintenance
 
