@@ -79,3 +79,9 @@ export {
   type InstrumentRetrieverOptions,
   type RagRetrievalEvent,
 } from './retrieval-telemetry.js';
+export {
+  HttpModelError,
+  openAiEmbeddings,
+  type OpenAiEmbeddingsOptions,
+} from './openai-embeddings.js';
+export { HttpReranker, type HttpRerankerOptions } from './http-reranker.js';
