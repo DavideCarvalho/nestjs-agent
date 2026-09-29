@@ -1,5 +1,21 @@
 # @dudousxd/nestjs-agent
 
+## 1.2.0
+
+### Minor Changes
+
+- [#199](https://github.com/DavideCarvalho/nestjs-agent/pull/199) [`b6edbab`](https://github.com/DavideCarvalho/nestjs-agent/commit/b6edbab8897179a87dce50e6ac45f90b91f4b91f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tool presentation declared on the server, and a headless tool-activity model on the client.
+
+  - core: `ToolPresentation` (`label`, `running`/`done` templates over the call's input, `icon`, `detail`, `tone`, `confirm: { title, verb, detail? }`, `result` view over the output), `ToolResultView` (`metrics` / `table` / `log` / `note` / `elsewhere`), `ToolCatalogEntry`; `ToolSpec.presentation` (never shown to the model); `ToolRegistry.visibleSpecs` — whole specs behind the same gates as `definitionsFor`.
+  - nestjs: `@AiTool({ presentation })`; `GET /agent/tools?agent=` returns `ToolCatalogEntry[]` for the tools the caller can reach through that agent (default agent when omitted, `404` for an unknown one).
+  - react: `AgentClient.listTools`, `useToolCatalog({ client, agent? })` (one shared request per client + agent), `phraseFor` / `fillTemplate` / `readPath` / `toolCatalogFrom`, `resolveResultView` / `inferResultView`, `toolCallState` / `correctedCallIds` / `isActionCall` / `describeToolCall`, and `groupToolActivity` (group by label or any key, counts, worst status, nested-call counts or expansion, corrected-failure hiding). `useChatTranscript({ toolCatalog })` gives every tool call a `description` and every tool block an `activity` grouping.
+  - codegen: `GET /agent/tools` in the generated client; `StoredMessage` mirror gains `reasoning`, `reasoningMs`, `ui`.
+
+### Patch Changes
+
+- Updated dependencies [[`b6edbab`](https://github.com/DavideCarvalho/nestjs-agent/commit/b6edbab8897179a87dce50e6ac45f90b91f4b91f)]:
+  - @dudousxd/nestjs-agent-core@0.19.0
+
 ## 1.1.2
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-authz
 
+## 0.3.25
+
+### Patch Changes
+
+- Updated dependencies [[`b6edbab`](https://github.com/DavideCarvalho/nestjs-agent/commit/b6edbab8897179a87dce50e6ac45f90b91f4b91f)]:
+  - @dudousxd/nestjs-agent-core@0.19.0
+
 ## 0.3.24
 
 ### Patch Changes
