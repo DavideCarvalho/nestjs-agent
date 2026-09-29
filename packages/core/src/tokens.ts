@@ -27,6 +27,8 @@ export const AGENT_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:agent-registry'
 export const AGENT_ACTOR_RESOLVER = Symbol.for('@dudousxd/nestjs-agent:actor-resolver');
 /** The governance read-model (usage/spend/threads), consumed by the dashboard + telescope surfaces. */
 export const AGENT_GOVERNANCE_QUERIES = Symbol.for('@dudousxd/nestjs-agent:governance-queries');
+/** The `QuotaProvider` behind `GET <base>/quota` (and, when the host binds one, the send gate). */
+export const AGENT_QUOTA_PROVIDER = Symbol.for('@dudousxd/nestjs-agent:quota-provider');
 /** The `ModelCatalog` behind `GET <base>/models` and the model a send may name. Optional. */
 export const AGENT_MODEL_CATALOG = Symbol.for('@dudousxd/nestjs-agent:model-catalog');
 /** The pricing WRITE side (`AgentPricingStore`) — seeds/updates the per-model rates cost is priced against. */

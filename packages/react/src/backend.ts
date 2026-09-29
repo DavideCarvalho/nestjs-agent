@@ -4,6 +4,7 @@ import type {
   MessageFeedback,
   MessageFeedbackValue,
   ModelCatalogView,
+  QuotaReport,
   QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
@@ -114,6 +115,8 @@ export interface AgentBackend {
   listTools?(agent?: string): Promise<ToolCatalogEntry[]>;
   listSkills?(threadId?: string): Promise<SkillCatalogEntry[]>;
   getQuotaToday?(): Promise<QuotaView>;
+  /** `GET <base>/quota` — every budget window, and which one blocks sends, if any. */
+  getQuota?(): Promise<QuotaReport>;
   /** `GET <base>/models?agent=` — what a model picker offers. */
   listModels?(agent?: string): Promise<ModelCatalogView>;
   /** `GET <base>/agents` — what an agent picker offers. */

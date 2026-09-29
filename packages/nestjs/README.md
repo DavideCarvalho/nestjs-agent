@@ -179,6 +179,25 @@ provider's default; the id reaches the provider as `ModelTurnArgs.model` for eve
 A model the catalog does not list as available for that actor and agent is refused with `400` —
 when pinned and again on each turn. `staticModelCatalog(view)` wraps a fixed list.
 
+### Budgets: `GET /agent/quota`
+
+`GET /agent/quota` reports `{ windows: [{ period: 'day' | 'month', usedTokens, limitTokens?,
+usedUsd, limitUsd?, resetsAt? }], blocked? }` from a `QuotaProvider`. The default,
+`LedgerQuotaProvider`, reads the usage ledger (day, plus month when the store has `usageBetween`)
+and only reports. Configure it and it also gates sends — a `blocked` report refuses `POST
+/agent/chat` with `429 { code: 'quota_exceeded', period }` before the turn starts:
+
+```ts
+AgentModule.forRoot({
+  // ceilings on the default ledger provider
+  quotaLimits: { day: { tokens: 200_000 }, month: { usd: 20 } },
+  // …or your own budget, e.g. an AI-gateway spend cap:
+  // quotaProvider: { report: async ({ actor }) => myGatewayBudget(actor.id) },
+});
+```
+
+`GET /agent/quota/today` stays as it was.
+
 ### Who approves an action, and for how long
 
 Every `action` tool call waits on the person chatting by default. `approvalPolicy` changes that per

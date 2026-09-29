@@ -9,6 +9,7 @@ import type {
   ModelCatalog,
   ModelProvider,
   OutputProcessor,
+  QuotaProvider,
   QuotaStore,
   Retriever,
   RolesPolicy,
@@ -25,6 +26,7 @@ import type {
   Type,
 } from '@nestjs/common';
 import type { FunctionalTool } from './functional-tool.js';
+import type { QuotaLimits } from './ledger-quota-provider.js';
 
 /**
  * Which half of the module this process mounts — the split that lets an API pod and a WORKER pod
@@ -149,6 +151,17 @@ export interface AgentModuleOptions {
    * `ModelTurnArgs.model`. Omit → an empty catalog, and a request naming a model is refused.
    */
   models?: ModelCatalog;
+  /**
+   * The actor's budget across windows, for `GET <base>/quota` — and, once set, a gate: a send whose
+   * report comes back `blocked` is refused with `429` before the turn starts. Default: a
+   * {@link LedgerQuotaProvider} over the usage ledger (reporting only, unless `quotaLimits` is set).
+   */
+  quotaProvider?: QuotaProvider;
+  /**
+   * Ceilings for the default ledger provider's windows — `{ day?: { tokens?, usd? }, month?: {
+   * tokens?, usd? } }`. Setting it turns the send gate on. Ignored when `quotaProvider` is given.
+   */
+  quotaLimits?: QuotaLimits;
   /**
    * Daily per-actor token budget, enforced against the persisted usage ledger by the built-in
    * `LedgerQuotaStore`. A convenience over wiring a {@link QuotaStore} by hand — set this and quotas

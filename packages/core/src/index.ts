@@ -11,6 +11,7 @@ export * from './tool-presentation.js';
 export * from './spi/agent-store.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
+export * from './spi/quota-provider.js';
 export * from './spi/pricing-store.js';
 export * from './spi/retriever.js';
 export * from './spi/history-policy.js';

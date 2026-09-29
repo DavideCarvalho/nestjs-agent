@@ -592,6 +592,23 @@ override with `sendMessage(msg, { body: { model } })`; `chat.setThreadModel(id)`
 the thread (`null` unpins), so every later turn without its own runs on it. The server refuses a
 model its catalog does not offer as available.
 
+### Quota
+
+```tsx
+import { QuotaBlockedError, useQuota } from '@dudousxd/nestjs-agent-react';
+
+const quota = useQuota({ backend });                // GET <base>/quota
+const chat = useAgentChat({ backend, blocked: quota.blocked });
+
+<meter value={quota.month?.usedUsd} max={quota.month?.limitUsd} />
+{quota.blocked ? <p>{quota.blocked.reason}</p> : null}
+```
+
+`useQuota` returns every window (`day`, `month`, …) with its usage and ceilings, and `blocked` when
+one is exhausted; it re-reads after every run a chat on the same backend settles (`pollMs` to poll
+as well). With `blocked` passed in, `sendMessage`/`regenerate` reject with `QuotaBlockedError`
+instead of starting a turn the server would refuse with `429`.
+
 ### The transport, standalone
 
 `AgentChatTransport` is a plain AI SDK v7 `ChatTransport` — wire it straight into `useChat` for the SSE
