@@ -228,6 +228,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
           // turn produced this text gets the truthful answer; the run's own thread is still the
           // original, so a run-scoped read never picks the fork's rows up.
           runId: message.runId,
+          reasoning: message.reasoning,
+          reasoningMs: message.reasoningMs,
+          ui: message.ui,
           createdAt: message.createdAt,
         })),
       );
@@ -404,6 +407,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       usage: input.usage ?? null,
       agentName: input.agentName ?? null,
       runId: input.runId ?? null,
+      reasoning: input.reasoning ?? null,
+      reasoningMs: input.reasoningMs ?? null,
+      ui: input.ui ?? null,
       createdAt: now,
     };
     await this.db.insert(agentMessage).values(message);
@@ -571,6 +577,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       ...(message.usage != null ? { usage: message.usage } : {}),
       ...(message.agentName != null ? { agentName: message.agentName } : {}),
       ...(message.runId != null ? { runId: message.runId } : {}),
+      ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
+      ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
+      ...(message.ui != null ? { ui: message.ui } : {}),
     };
   }
 }

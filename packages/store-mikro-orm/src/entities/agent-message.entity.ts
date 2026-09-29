@@ -1,4 +1,5 @@
 import type {
+  AgentUiComponent,
   MessageAttachment,
   MessageRole,
   MessageUsage,
@@ -26,6 +27,11 @@ export class AgentMessage {
   agentName?: string | null;
   /** The run (turn) that produced this message; `null` for a pre-rollout row. */
   runId?: string | null;
+  /** The step's streamed thinking; `null` when the model produced none. */
+  reasoning?: string | null;
+  reasoningMs?: number | null;
+  /** Components pushed during the step (`ui` stream frames), replayed on reload. */
+  ui?: AgentUiComponent[] | null;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentMessageRepository;
 }
@@ -59,6 +65,9 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       usage: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
+      reasoning: { type: 'text', nullable: true, ...str },
+      reasoningMs: { type: 'integer', nullable: true, fieldName: 'reasoning_ms' },
+      ui: { type: 'json', nullable: true },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
     },
   });

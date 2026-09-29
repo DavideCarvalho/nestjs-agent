@@ -116,6 +116,9 @@ ALTER TABLE agent_thread ADD COLUMN default_agent TEXT;
 ALTER TABLE agent_message ADD COLUMN run_id TEXT;
 ALTER TABLE agent_message ADD COLUMN attachments TEXT;
 ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT;
+ALTER TABLE agent_message ADD COLUMN reasoning TEXT;
+ALTER TABLE agent_message ADD COLUMN reasoning_ms INTEGER;
+ALTER TABLE agent_message ADD COLUMN ui TEXT;
 CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
 ```
 

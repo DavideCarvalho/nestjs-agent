@@ -66,7 +66,17 @@ export type AgentStreamEvent =
    * `costUsd` (an estimate from the bound pricing store, or `null` when unpriced/unbound — never a
    * fabricated `0`) so a live client can render running cost without waiting for a thread re-fetch.
    */
-  | { kind: 'step-finish'; usage?: MessageUsage; costUsd?: number | null }
+  | {
+      kind: 'step-finish';
+      usage?: MessageUsage;
+      costUsd?: number | null;
+      /**
+       * How long the model spent thinking in this step, in ms — the same number persisted as
+       * `StoredMessage.reasoningMs`, so a live thread and a reloaded one read the same duration.
+       * Absent when the step had no reasoning.
+       */
+      reasoningMs?: number;
+    }
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
   /**

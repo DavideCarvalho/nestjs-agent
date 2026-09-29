@@ -385,6 +385,9 @@ export class InMemoryAgentStore implements AgentStore {
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
+      ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+      ...(input.reasoningMs !== undefined ? { reasoningMs: input.reasoningMs } : {}),
+      ...(input.ui !== undefined ? { ui: input.ui } : {}),
     };
     row.messages.push(message);
     row.updatedAt = message.createdAt;

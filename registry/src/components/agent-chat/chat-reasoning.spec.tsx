@@ -6,12 +6,17 @@ import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ChatReasoning } from './chat-reasoning';
 
-function message(state: 'streaming' | 'done'): UIMessage {
+function message(state: 'streaming' | 'done', reasoningMs?: number): UIMessage {
   return {
     id: 'a1',
     role: 'assistant',
     parts: [
-      { type: 'reasoning', text: 'four elements did the work', state },
+      {
+        type: 'reasoning',
+        text: 'four elements did the work',
+        state,
+        ...(reasoningMs !== undefined ? { providerMetadata: { agent: { reasoningMs } } } : {}),
+      },
       { type: 'text', text: 'here is the answer' },
     ],
   };
@@ -21,11 +26,16 @@ function message(state: 'streaming' | 'done'): UIMessage {
 function Harness({
   state,
   duration,
+  reasoningMs,
 }: {
   state: 'streaming' | 'done';
   duration?: ReactNode;
+  reasoningMs?: number;
 }) {
-  const item = useTranscriptItem({ message: message(state), isStreaming: state === 'streaming' });
+  const item = useTranscriptItem({
+    message: message(state, reasoningMs),
+    isStreaming: state === 'streaming',
+  });
   const block = item.blocks.find(
     (candidate): candidate is TranscriptReasoningBlock => candidate.kind === 'reasoning',
   );
@@ -68,5 +78,15 @@ describe('ChatReasoning', () => {
 
     render(<Harness state="done" duration="9s" />);
     expect(screen.getByText('9s')).toBeTruthy();
+  });
+
+  it('shows the duration the block carries when the host passes none', () => {
+    render(<Harness state="done" reasoningMs={4_200} />);
+    expect(screen.getByText('4s')).toBeTruthy();
+  });
+
+  it('hides the carried duration when the host passes null', () => {
+    render(<Harness state="done" reasoningMs={4_200} duration={null} />);
+    expect(screen.queryByText('4s')).toBeNull();
   });
 });

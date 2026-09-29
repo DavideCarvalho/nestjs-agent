@@ -417,6 +417,8 @@ const initialMessages = storedThreadToUiMessages(detail.messages);
 calls persists as "thinking…" + tool calls, then a separate final-answer row) into ONE `UIMessage` per
 conversational turn, matching how the live stream renders — and stamps `metadata.usage` on any turn it
 merged. For a single already-atomic row, `storedMessageToUiMessage` maps it 1:1 with no merging.
+Persisted reasoning comes back as a `reasoning` part before the text (with its duration), and
+persisted pushed components as `data-ui` parts, so a reloaded thread shows what the live one did.
 
 ### Attachments and the raw client
 
@@ -451,6 +453,19 @@ Reasoning frames arrive as `reasoning` parts on the message (the transport maps 
 `reasoning` frame to the AI SDK's `reasoning-start`/`reasoning-end` chunks). `MessageItem` renders
 each run behind a disclosure toggle — open while it streams, folded once the answer lands — with
 `renderReasoning` and `reasoningLabel` slots to override the body and the label.
+
+Thinking is timed and persisted: the backend reports each step's `reasoningMs` on `step-finish`, the
+transport stamps it on the reasoning part, and the stored message keeps it, so a reasoning block's
+`durationMs` reads the same live and after a reload. `useElapsed(running)` is the headless ticker
+for while it still streams, and `formatElapsed(ms)` the label:
+
+```tsx
+function ThoughtFor({ block }: { block: TranscriptReasoningBlock }) {
+  const elapsed = useElapsed(block.isStreaming);
+  const ms = block.isStreaming ? elapsed : block.durationMs;
+  return ms === null ? null : <span>Thought for {formatElapsed(ms)}</span>;
+}
+```
 
 `ChatInput` surfaces cancel next to send:
 

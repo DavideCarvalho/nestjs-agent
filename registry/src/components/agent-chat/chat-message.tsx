@@ -28,7 +28,7 @@ export interface ChatMessageProps {
   /** Render the prose. Pass a markdown renderer here; plain text is the default. */
   renderText?: (text: string, ctx: { isStreaming: boolean }) => ReactNode;
   reasoningLabel?: ReactNode;
-  /** A duration for a reasoning segment, when the host has one — the model carries no timing. */
+  /** Override the reasoning duration label. Omitted → derived from the block (see `ChatReasoning`). */
   reasoningDuration?: ReactNode;
   renderSourceIcon?: (source: TranscriptSource) => ReactNode;
   onSourceClick?: (source: TranscriptSource) => void;

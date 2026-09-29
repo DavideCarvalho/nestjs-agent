@@ -8,6 +8,7 @@ import {
   type ToolTransientRetrySetting,
   createFrameBuffer,
   invokeWithTransientRetry,
+  observeTurnFrames,
   publishAgentToolRetry,
   stampToolKinds,
   traceLlmTurn,
@@ -16,6 +17,7 @@ import {
   withMemoryTool,
   withSkillTool,
   withToolTimeout,
+  withTurnFrames,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
 import { Inject, Injectable } from '@nestjs/common';
@@ -126,13 +128,19 @@ export class AgentRunSteps {
     // Replay-safe by construction: a dispatched step's handler only runs on genuine dispatch (replay
     // resolves the step from its checkpoint without re-invoking a worker), which is exactly why core
     // exports the helper instead of wrapping the `hooks.dispatchLlm` CALL site itself.
-    const turn = await traceLlmTurn(input.runId, input.step, () =>
-      deps.model.runTurn({
-        system: input.system,
-        messages: input.messages,
-        tools,
-        sink: writer,
-      }),
+    // Reasoning and pushed UI are read off the frames here, where the model actually runs, so they
+    // ride this step's result into the journal — the same derivation core's inline branch makes.
+    const frames = observeTurnFrames(writer);
+    const turn = withTurnFrames(
+      await traceLlmTurn(input.runId, input.step, () =>
+        deps.model.runTurn({
+          system: input.system,
+          messages: input.messages,
+          tools,
+          sink: frames.writer,
+        }),
+      ),
+      frames.summary(),
     );
     // Stamp each call's kind HERE, from the registry that just built `tools` — this handler is the
     // process that offered the tool, and the kind rides the step's result into the journal from

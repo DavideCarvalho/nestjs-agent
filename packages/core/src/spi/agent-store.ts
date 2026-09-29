@@ -1,3 +1,4 @@
+import type { AgentUiComponent } from '../stream-events.js';
 import type {
   Actor,
   MessageAttachment,
@@ -37,6 +38,12 @@ export interface AppendMessageInput {
    * run) can omit it; the store persists it as `null` when absent.
    */
   runId?: string;
+  /** The step's streamed thinking. See {@link StoredMessage.reasoning}. */
+  reasoning?: string;
+  /** Time spent thinking in this step, in ms. See {@link StoredMessage.reasoningMs}. */
+  reasoningMs?: number;
+  /** Components pushed during this step. See {@link StoredMessage.ui}. */
+  ui?: AgentUiComponent[];
 }
 
 export interface RecordToolCallInput {

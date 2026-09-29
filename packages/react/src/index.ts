@@ -63,6 +63,12 @@ export {
   useComposerAutocomplete,
   type UseComposerAutocompleteOptions,
 } from './composer/index.js';
+export {
+  formatElapsed,
+  readReasoningMs,
+  useElapsed,
+  type UseElapsedOptions,
+} from './reasoning/timing.js';
 export { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 export {
   type AggregatedTurnUsage,

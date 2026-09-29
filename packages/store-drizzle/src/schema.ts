@@ -1,4 +1,5 @@
 import type {
+  AgentUiComponent,
   MemoryOrigin,
   MessageAttachment,
   MessageRole,
@@ -73,6 +74,11 @@ export const agentMessage = sqliteTable(
     usage: text('usage', { mode: 'json' }).$type<MessageUsage>(),
     agentName: text('agent_name'),
     runId: text('run_id'),
+    /** The step's streamed thinking; `null` when the model produced none. */
+    reasoning: text('reasoning'),
+    reasoningMs: integer('reasoning_ms'),
+    /** Components pushed during the step (`ui` stream frames), replayed on reload. */
+    ui: text('ui', { mode: 'json' }).$type<AgentUiComponent[]>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_message_thread_created_idx').on(table.threadId, table.createdAt)],

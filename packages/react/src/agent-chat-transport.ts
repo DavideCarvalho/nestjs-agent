@@ -1,5 +1,6 @@
 import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+import { reasoningDurationMetadata } from './reasoning/timing.js';
 
 /** JSON-safe metadata, as the SDK's `toolMetadata` requires (its `JSONObject` is not exported). */
 type ToolMetadata = { [key: string]: string };
@@ -261,6 +262,9 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     let stepIndex = 0;
     let textId: string | null = null;
     let reasoningId: string | null = null;
+    // When the open reasoning run started, for the duration stamped on its end when the backend
+    // does not report one (see `closeRuns`).
+    let reasoningStartedAt = 0;
     // Text/reasoning runs opened within the current step. A pushed UI component closes the open run
     // so prose after it lands AFTER it; the next run then needs an id of its own.
     let textSeq = 0;
@@ -302,19 +306,30 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         function ensureStep() {
           if (!stepOpen) openStep();
         }
-        function closeRuns() {
+        /**
+         * `reasoningMs` is the backend's own measurement (`step-finish.reasoningMs`) — the number the
+         * store persists, so a reloaded thread reads the same duration. Without one, the time this
+         * client watched the run stream, which is what the reader saw but reads ~0 on a replay.
+         */
+        function closeRuns(reasoningMs?: number) {
           if (textId !== null) {
             controller.enqueue({ type: 'text-end', id: textId });
             textId = null;
           }
           if (reasoningId !== null) {
-            controller.enqueue({ type: 'reasoning-end', id: reasoningId });
+            controller.enqueue({
+              type: 'reasoning-end',
+              id: reasoningId,
+              providerMetadata: reasoningDurationMetadata(
+                reasoningMs ?? Math.max(0, Date.now() - reasoningStartedAt),
+              ),
+            });
             reasoningId = null;
           }
         }
-        function closeStep() {
+        function closeStep(reasoningMs?: number) {
           if (!stepOpen) return;
-          closeRuns();
+          closeRuns(reasoningMs);
           controller.enqueue({ type: 'finish-step' });
           stepOpen = false;
         }
@@ -349,7 +364,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               openStep();
               break;
             case 'step-finish':
-              closeStep();
+              closeStep(event.reasoningMs);
               // `costUsd` rides the step boundary once the backend reports it (older backends omit
               // it entirely — `undefined`, never a crash). `null` means "priced provider/estimate
               // unavailable", distinct from a real $0 turn — surfaced verbatim as message metadata
@@ -377,6 +392,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 reasoningId =
                   reasoningSeq === 0 ? `rsn-${stepIndex}` : `rsn-${stepIndex}.${reasoningSeq}`;
                 reasoningSeq += 1;
+                reasoningStartedAt = Date.now();
                 controller.enqueue({ type: 'reasoning-start', id: reasoningId });
               }
               controller.enqueue({ type: 'reasoning-delta', id: reasoningId, delta: event.text });

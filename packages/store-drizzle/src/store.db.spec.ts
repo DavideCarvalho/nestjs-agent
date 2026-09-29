@@ -468,6 +468,22 @@ describe('ensureAgentSchema (drizzle)', () => {
     const [run] = await aged.select().from(agentRun).where(eq(agentRun.id, 'run-child'));
     expect(run?.parentRunId).toBe('run-parent');
 
+    const thought = await agedStore.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'answer',
+      reasoning: 'thinking',
+      reasoningMs: 1200,
+      ui: [{ id: 'u', component: 'stat', props: { value: 1 } }],
+    });
+    const [reloaded] = (await agedStore.getThread(thread.id))?.messages ?? [];
+    expect(reloaded).toMatchObject({
+      id: thought.id,
+      reasoning: 'thinking',
+      reasoningMs: 1200,
+      ui: [{ id: 'u', component: 'stat', props: { value: 1 } }],
+    });
+
     const indexes = await aged.all<{ name: string }>(sql.raw('PRAGMA index_list(agent_tool_call)'));
     expect(indexes.map((index) => index.name)).toContain('agent_tool_call_message_idx');
   });

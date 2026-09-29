@@ -1,9 +1,10 @@
-import type {
-  AgentLoopResult,
+import {
+  type AgentLoopResult,
   AgentRunInput,
-  ModelProvider,
-  ModelTurnArgs,
-  ModelTurnResult,
+  type ModelProvider,
+  type ModelTurnArgs,
+  type ModelTurnResult,
+  encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
 import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule } from '@dudousxd/nestjs-durable';
@@ -175,6 +176,41 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
       expect(turn.toolCalls).toEqual([
         { id: 'call-commit', name: 'commit', input: {}, kind: 'action' },
       ]);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('returns the reasoning and pushed UI its frames showed, so they ride the journaled result', async () => {
+    class ThinkingModel implements ModelProvider {
+      async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+        await args.sink.write(encodeStreamEvent({ kind: 'reasoning', text: 'weighing it' }));
+        await args.sink.write(
+          encodeStreamEvent({ kind: 'ui', id: 'u1', component: 'stat', props: { value: 1 } }),
+        );
+        return { text: 'done', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
+      }
+    }
+    const { moduleRef } = await buildApp({
+      shared: {
+        stateStore: new InMemoryStateStore(),
+        agentStore: new InMemoryAgentStore(),
+        model: new ThinkingModel(),
+      },
+    });
+    try {
+      const turn = await moduleRef.get(AgentRunSteps).llm({
+        system: 'dispatch test agent',
+        messages: [{ role: 'user', content: 'go' }],
+        actor: ACTOR,
+        runId: 'run-think',
+        step: 0,
+        sinkRunId: 'run-think',
+        childSink: false,
+      });
+      expect(turn.reasoning).toBe('weighing it');
+      expect(typeof turn.reasoningMs).toBe('number');
+      expect(turn.ui).toEqual([{ id: 'u1', component: 'stat', props: { value: 1 } }]);
     } finally {
       await moduleRef.close();
     }

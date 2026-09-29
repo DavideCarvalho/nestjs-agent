@@ -29,4 +29,7 @@ export const EVERY_MESSAGE_FIELD: EveryMessageField = {
   ],
   followUps: ['what changed last month?'],
   usage: { inputTokens: 12, outputTokens: 34 },
+  reasoning: 'The user wants last month, so filter on created_at.',
+  reasoningMs: 2_400,
+  ui: [{ id: 'ui-1', component: 'data-table', props: { rows: [{ total: 1 }] }, version: 2 }],
 };

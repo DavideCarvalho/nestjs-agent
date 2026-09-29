@@ -51,7 +51,7 @@ resume", not an error.
 | `kind` | Fields | Client effect (AI SDK v7 chunk) |
 |---|---|---|
 | `step-start` | — | `start-step` |
-| `step-finish` | `usage?: { inputTokens, outputTokens, … }`, `costUsd?: number \| null` | closes open text/reasoning, `finish-step`; `costUsd` → `message-metadata` `{ costUsd }` (`null` = unpriced, never a fabricated `0`) |
+| `step-finish` | `usage?: { inputTokens, outputTokens, … }`, `costUsd?: number \| null`, `reasoningMs?: number` | closes open text/reasoning, `finish-step`; `costUsd` → `message-metadata` `{ costUsd }` (`null` = unpriced, never a fabricated `0`); `reasoningMs` → the closing reasoning part's `providerMetadata.agent.reasoningMs` (without it the client stamps the time it watched the reasoning stream, which reads ~0 on a replay — send it) |
 | `text` | `text: string` (a delta) | `text-start` once per run of prose, then `text-delta` |
 | `reasoning` | `text: string` (a delta) | `reasoning-start` once, then `reasoning-delta` |
 | `tool-input-start` | `id`, `name`, `toolKind: 'read' \| 'action'`, `parentId?` | `tool-input-start` with `toolMetadata: { toolKind, parentId? }` |
@@ -109,6 +109,21 @@ is a key into the client's own registry (the library ships none); `props` must b
 `version` when `props` changes shape, so a client can still render components an older server
 persisted. Emitting the same `id` again (e.g. streaming rows into a table) updates it; it never
 duplicates it.
+
+## Persisted history
+
+`GET <base>/threads/:id` returns `StoredMessage`s, which the client turns back into the same parts
+(`storedThreadToUiMessages`). Besides `content`, `toolCalls`/`toolResults` and `attachments`, a
+message may carry, per step:
+
+| Field | Replayed as |
+|---|---|
+| `reasoning?: string` | a `reasoning` part, placed before the text |
+| `reasoningMs?: number` | that part's `providerMetadata.agent.reasoningMs` (the transcript's `durationMs`) |
+| `ui?: { id, component, props, version? }[]` | `data-ui` parts, first-seen order, last props per `id` |
+
+A runner serving these routes should persist the same values it streamed, so a reload shows what
+the live stream did.
 
 ## Example
 

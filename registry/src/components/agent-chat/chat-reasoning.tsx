@@ -1,7 +1,11 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import type { TranscriptReasoningBlock } from '@dudousxd/nestjs-agent-react';
+import {
+  type TranscriptReasoningBlock,
+  formatElapsed,
+  useElapsed,
+} from '@dudousxd/nestjs-agent-react';
 import type { ReactNode } from 'react';
 import { ChevronDownIcon, ClockIcon } from './icons';
 
@@ -10,8 +14,9 @@ export interface ChatReasoningProps {
   block: TranscriptReasoningBlock;
   label?: ReactNode;
   /**
-   * How long the thinking took. The transcript model carries no timing — neither the stream nor the
-   * persisted message records one — so a host that has a duration passes it; otherwise none shows.
+   * How long the thinking took. Omitted → derived: a ticking count while the block streams, then
+   * the duration the block carries (`block.durationMs`, the server's measurement, live or reloaded).
+   * Pass `null` to show none.
    */
   duration?: ReactNode;
   children?: ReactNode;
@@ -27,6 +32,10 @@ export function ChatReasoning({
   className,
 }: ChatReasoningProps) {
   const regionId = `${block.key}-body`;
+  const elapsed = useElapsed(block.isStreaming);
+  const derivedMs = block.isStreaming ? elapsed : block.durationMs;
+  const shownDuration =
+    duration !== undefined ? duration : derivedMs !== null ? formatElapsed(derivedMs) : null;
 
   return (
     <div
@@ -52,10 +61,10 @@ export function ChatReasoning({
           )}
         />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{label}</span>
-        {duration ? (
+        {shownDuration ? (
           <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular-nums">
             <ClockIcon className="size-3.5" />
-            {duration}
+            {shownDuration}
           </span>
         ) : null}
         <ChevronDownIcon
