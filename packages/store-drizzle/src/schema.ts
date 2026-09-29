@@ -110,6 +110,14 @@ export const agentToolCall = sqliteTable(
     executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
     /** The run (turn) this call belongs to, for a trace deep-link; null for a pre-rollout row. */
     runId: text('run_id'),
+    /** Who had to approve it (`requester` or a role); null for a call no policy put to anyone. */
+    approver: text('approver'),
+    /** When the approval request lapses; null → never. */
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    /** The approval covers later calls of this tool in this thread. */
+    remember: integer('remember', { mode: 'boolean' }),
+    /** The surface the decision came through (`web`, `slack`, `remembered`, …). */
+    decidedVia: text('decided_via'),
   },
   (table) => [index('agent_tool_call_message_idx').on(table.messageId)],
 );

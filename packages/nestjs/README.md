@@ -130,6 +130,36 @@ nobody is streaming (including one that has already finished). In-process caller
 authorized elsewhere use `AgentService.subscribe(runId)`; anything reachable from a request must go
 through `AgentService.subscribeAs(actor, runId)`.
 
+### Who approves an action, and for how long
+
+Every `action` tool call waits on the person chatting by default. `approvalPolicy` changes that per
+call:
+
+```ts
+AgentModule.forRoot({
+  // …
+  approvalPolicy: {
+    requirementFor: (tool, actor) =>
+      tool.name === 'issueRefund'
+        ? { required: true, approver: 'finance', ttlMs: 15 * 60_000 }
+        : { required: true, approver: 'requester' },
+    // Optional. Default: 'requester' = the thread's own actor, anything else = a role the decider holds.
+    // canDecide: (actor, { approver, requesterRef }) => gate.forUser(actor).allows('approve', approver),
+  },
+});
+```
+
+- `POST /agent/tool-call/approve` `{ toolCallId, remember?, via? }` and `…/reject` `{ toolCallId,
+  reason?, via? }` enforce the recorded approver (`403` otherwise) and refuse a request that has
+  lapsed (`410`). The decider is recorded as `executedByRef`, `via` as `decided_via` (`'web'` when
+  omitted; the console approvals port takes `decidedVia` too).
+- `remember: true` approves later calls of the same tool in the same thread without asking.
+- A `ttlMs` becomes the approval wait's timeout — `ctx.waitForSignal(…, { timeoutMs })` on the
+  durable runner, a timer inline. On expiry the call settles `expired`, the model is told nobody
+  approved it in time, and the stream carries `tool-output-denied` + `approval-settled`.
+- The tool-call row gains `approver`, `expires_at`, `remember` and `decided_via`; a reloaded thread
+  carries them as `StoredMessage.approvals`.
+
 ### A durable turn's model call and tools run in a worker
 
 Under `durable: true` the turn's model call and each of its tool executions are **dispatched steps**

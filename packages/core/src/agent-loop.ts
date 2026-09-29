@@ -70,6 +70,11 @@ import {
   withSkillTool,
 } from './skills.js';
 import type { AgentStore, ThreadTurnReader } from './spi/agent-store.js';
+import {
+  type ApprovalPolicy,
+  type ApprovalRequirement,
+  DefaultApprovalPolicy,
+} from './spi/approval-policy.js';
 import type {
   HistoryPolicy,
   HistoryPolicyContext,
@@ -119,6 +124,7 @@ import type {
   ToolDefinition,
   ToolKind,
   ToolResult,
+  ToolSpec,
   ToolStepCtx,
   ToolStepEnvelope,
 } from './types.js';
@@ -128,6 +134,11 @@ export interface AgentLoopDeps<TOutput = unknown> {
   store: AgentStore;
   registry: ToolRegistry;
   rolesPolicy: RolesPolicy;
+  /**
+   * Who has to approve an `action` call, and for how long the request stays open. Undefined →
+   * {@link DefaultApprovalPolicy}: the requester, with no expiry — the behaviour before the SPI.
+   */
+  approvalPolicy?: ApprovalPolicy;
   quota?: QuotaStore;
   /**
    * Fallback accounting label when the provider's turn result doesn't report a `modelId`.
@@ -398,8 +409,20 @@ export interface AgentLoopHooks {
   runId: string;
   /** A writer for this run's live token stream (data plane). */
   openSink(): SinkWriter | Promise<SinkWriter>;
-  /** HITL gate for an action tool. Inline resolves a pending promise; durable awaits a signal. */
-  awaitApproval(call: ToolCallRequest, ctx: AiToolCtx): Promise<Decision>;
+  /**
+   * HITL gate for an action tool. Inline resolves a pending promise; durable awaits a signal.
+   *
+   * `opts.timeoutMs` is the request's time to live, from the turn's `ApprovalPolicy`. When it
+   * elapses with no decision the runner resolves `{ approved: false, expired: true }` — it must not
+   * throw — and the loop settles the call `expired`. The value comes out of the call's
+   * `persist:toolcall` checkpoint, so it is the same on every replay; a durable runner hands it to
+   * its own timed wait (whose deadline the runtime journals), an inline one arms a timer.
+   */
+  awaitApproval(
+    call: ToolCallRequest,
+    ctx: AiToolCtx,
+    opts?: { timeoutMs?: number },
+  ): Promise<Decision>;
   /**
    * Park the run on a question set and resolve with what the human sent back. The SAME wait
    * `awaitApproval` is — the durable runner maps both to `ctx.waitForSignal` on
@@ -1564,7 +1587,36 @@ interface ClaimedToolCall {
   targetAgent?: string;
   /** For an `agent` call — whether the journal says this delegation runs detached. */
   detached?: boolean;
+  /**
+   * For an `action` call — how the journal says it is approved. Undefined for a call claimed before
+   * approval policies existed, which waits on the requester with no expiry, as it always did.
+   */
+  approval?: ClaimedApproval;
   ctx: AiToolCtx;
+}
+
+/**
+ * The approval branch an `action` call takes, settled inside its `persist:toolcall` checkpoint:
+ *  - `ask`        → park on a person (`approver`), for at most `ttlMs` when set;
+ *  - `auto`       → the policy did not require one: run straight away;
+ *  - `remembered` → an earlier decision in this thread approved this tool for good: run straight away.
+ */
+type ClaimedApproval =
+  | { mode: 'ask'; approver: string; ttlMs?: number; expiresAt?: string }
+  | { mode: 'auto' }
+  | { mode: 'remembered'; approver: string };
+
+/** What a decided action call records next to its outcome, and streams as `approval-settled`. */
+interface ApprovalMeta {
+  approver?: string;
+  decidedBy: string;
+  decidedVia?: string;
+  remember?: boolean;
+  /**
+   * Stream `approval-settled` with the outcome. False for a call claimed before approval policies
+   * existed: its decision is still recorded, but that run keeps writing the frames it always wrote.
+   */
+  streamed: boolean;
 }
 
 /** One invocation's result, already reduced to what the persist checkpoint writes. */
@@ -1609,23 +1661,50 @@ async function claimToolCall(
     // Both kinds that park the turn on a person. The store knows read/action only; a delegation is
     // neither approved nor rejected by a human, so it persists as a read.
     const awaitsHuman = kind === 'action' || kind === 'ask';
+    // Decided HERE, inside the checkpoint, and returned from it: the policy and the remembered set
+    // can both change while a run is parked, and the branch below (park or run) has to be the one
+    // the journal recorded. A run claimed before this existed reads `approval` back as undefined and
+    // waits on the requester, exactly as it did.
+    const approval = kind === 'action' ? await claimApproval(turn, call, spec) : undefined;
+    const parks = kind === 'ask' || approval?.mode === 'ask';
     await deps.store.recordToolCall({
       toolCallId: call.id,
       messageId,
       toolName: call.name,
       toolType: awaitsHuman ? 'action' : 'read',
       input: call.input,
-      status: awaitsHuman ? 'pending_approval' : 'auto_executed',
+      status: parks ? 'pending_approval' : 'auto_executed',
       runId: hooks.runId,
+      ...(approval !== undefined && approval.mode !== 'auto'
+        ? { approver: approval.approver }
+        : {}),
+      ...(approval?.mode === 'ask' && approval.expiresAt !== undefined
+        ? { expiresAt: approval.expiresAt }
+        : {}),
     });
+    if (approval?.mode === 'ask') {
+      // Streamed from inside the same checkpoint so a replay never repeats it. The call itself was
+      // announced by the model step that asked for it, so the frame can name it by id.
+      await turn.writer.write(
+        encodeStreamEvent({
+          kind: 'approval-requested',
+          id: call.id,
+          approver: approval.approver,
+          ...(approval.expiresAt !== undefined ? { expiresAt: approval.expiresAt } : {}),
+        }),
+      );
+    }
     return {
       kind,
       ...(spec?.targetAgent !== undefined ? { targetAgent: spec.targetAgent } : {}),
       // Only an `agent` spec ever carries this, and only when the author declared it — so a
       // deployment with no detached edge writes the same bytes here it always has.
       ...(spec?.detached === true ? { detached: true } : {}),
+      ...(approval !== undefined ? { approval } : {}),
     };
-  })) as { kind?: ToolKind; targetAgent?: string; detached?: boolean } | undefined;
+  })) as
+    | { kind?: ToolKind; targetAgent?: string; detached?: boolean; approval?: ClaimedApproval }
+    | undefined;
   const toolType: ToolKind = persisted?.kind ?? call.kind ?? 'read';
   return {
     call,
@@ -1635,7 +1714,51 @@ async function claimToolCall(
     toolType,
     ...(persisted?.targetAgent !== undefined ? { targetAgent: persisted.targetAgent } : {}),
     ...(persisted?.detached === true ? { detached: true } : {}),
+    ...(toolType === 'action' && persisted?.approval !== undefined
+      ? { approval: persisted.approval }
+      : {}),
     ctx: toolContext(deps, input, hooks),
+  };
+}
+
+/**
+ * How an `action` call gets approved: ask the turn's policy, then — when it wants a person — check
+ * whether someone in this thread already approved this tool for good. Runs INSIDE the call's
+ * `persist:toolcall` checkpoint; see {@link claimToolCall}.
+ */
+async function claimApproval(
+  turn: ToolTurnContext,
+  call: ToolCallRequest,
+  spec: ToolSpec | undefined,
+): Promise<ClaimedApproval> {
+  const { deps, input, hooks } = turn;
+  const policy = deps.approvalPolicy ?? new DefaultApprovalPolicy();
+  const requirement: ApprovalRequirement = await policy.requirementFor(
+    { name: call.name, kind: 'action', ...(spec !== undefined ? { spec } : {}) },
+    input.actor,
+    {
+      threadId: input.threadId,
+      runId: hooks.runId,
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    },
+  );
+  if (!requirement.required) {
+    return { mode: 'auto' };
+  }
+  const remembered = (await deps.store.rememberedApprovals?.(input.threadId)) ?? [];
+  if (remembered.includes(call.name)) {
+    return { mode: 'remembered', approver: requirement.approver };
+  }
+  const ttlMs =
+    requirement.ttlMs !== undefined && Number.isFinite(requirement.ttlMs) && requirement.ttlMs > 0
+      ? Math.floor(requirement.ttlMs)
+      : undefined;
+  return {
+    mode: 'ask',
+    approver: requirement.approver,
+    ...(ttlMs !== undefined
+      ? { ttlMs, expiresAt: new Date(Date.now() + ttlMs).toISOString() }
+      : {}),
   };
 }
 
@@ -1882,19 +2005,48 @@ async function recordToolOutcome(
   claimed: ClaimedToolCall,
   outcome: ToolOutcome,
   deciderRef: string,
+  meta?: ApprovalMeta,
 ): Promise<ToolResult> {
   const { deps, hooks } = turn;
   const { call } = claimed;
   const toolType = claimed.toolType === 'action' ? 'action' : 'read';
+  // What a decided call adds to its row: how it was decided. Written with the outcome rather than
+  // at a checkpoint of its own, so an approval adds no position to the turn.
+  const decided =
+    meta === undefined
+      ? {}
+      : {
+          executedByRef: meta.decidedBy,
+          ...(meta.decidedVia !== undefined ? { decidedVia: meta.decidedVia } : {}),
+          ...(meta.remember === true ? { remember: true } : {}),
+        };
+  const settle = async () => {
+    if (meta === undefined || !meta.streamed) {
+      return;
+    }
+    await turn.writer.write(
+      encodeStreamEvent({
+        kind: 'approval-settled',
+        id: call.id,
+        status: 'approved',
+        ...(meta.approver !== undefined ? { approver: meta.approver } : {}),
+        decidedBy: meta.decidedBy,
+        ...(meta.decidedVia !== undefined ? { decidedVia: meta.decidedVia } : {}),
+        ...(meta.remember === true ? { remember: true } : {}),
+      }),
+    );
+  };
   if (outcome.status === 'failed') {
-    await hooks.step(`persist:toolfail:${call.id}`, () =>
-      deps.store.updateToolCall({
+    await hooks.step(`persist:toolfail:${call.id}`, async () => {
+      await deps.store.updateToolCall({
         toolCallId: call.id,
         status: 'failed',
         error: outcome.error,
         executionMs: outcome.executionMs,
-      }),
-    );
+        ...decided,
+      });
+      await settle();
+    });
     publishAgentToolCall({
       runId: hooks.runId,
       toolName: call.name,
@@ -1904,15 +2056,17 @@ async function recordToolOutcome(
     });
     return { id: call.id, name: call.name, output: null, error: outcome.error };
   }
-  await hooks.step(`persist:toolexec:${call.id}`, () =>
-    deps.store.updateToolCall({
+  await hooks.step(`persist:toolexec:${call.id}`, async () => {
+    await deps.store.updateToolCall({
       toolCallId: call.id,
       status: 'executed',
       output: outcome.output,
       executionMs: outcome.executionMs,
       ...(toolType === 'action' ? { executedByRef: deciderRef } : {}),
-    }),
-  );
+      ...decided,
+    });
+    await settle();
+  });
   publishAgentToolCall({
     runId: hooks.runId,
     toolName: call.name,
@@ -2050,18 +2204,50 @@ async function runClaimedToolCall(
   // WHO settled an action tool: the Decision's ref (a console admin) when it carries one, else
   // the run's own actor (the chat flow). Stamped on both the executed and rejected persists.
   let deciderRef = input.actor.id;
-  if (toolType === 'action') {
-    const decision = await hooks.awaitApproval(call, ctx);
+  let meta: ApprovalMeta | undefined;
+  if (toolType === 'action' && claimed.approval?.mode === 'remembered') {
+    meta = {
+      approver: claimed.approval.approver,
+      decidedBy: input.actor.id,
+      decidedVia: 'remembered',
+      remember: true,
+      streamed: true,
+    };
+  } else if (toolType === 'action' && claimed.approval?.mode !== 'auto') {
+    const ttlMs = claimed.approval?.mode === 'ask' ? claimed.approval.ttlMs : undefined;
+    const decision =
+      ttlMs !== undefined
+        ? await hooks.awaitApproval(call, ctx, { timeoutMs: ttlMs })
+        : await hooks.awaitApproval(call, ctx);
     deciderRef = decision.executedByRef ?? input.actor.id;
+    // Only a call claimed under a policy streams how it settled — a run from before that keeps
+    // writing exactly the frames it always wrote.
+    const streamsSettlement = claimed.approval !== undefined;
+    if (decision.expired === true) {
+      return expireToolCall(turn, claimed);
+    }
     if (!decision.approved) {
-      await hooks.step(`persist:toolreject:${call.id}`, () =>
-        deps.store.updateToolCall({
+      await hooks.step(`persist:toolreject:${call.id}`, async () => {
+        await deps.store.updateToolCall({
           toolCallId: call.id,
           status: 'rejected',
           executedByRef: deciderRef,
           ...(decision.reason !== undefined ? { error: decision.reason } : {}),
-        }),
-      );
+          ...(decision.decidedVia !== undefined ? { decidedVia: decision.decidedVia } : {}),
+        });
+        if (streamsSettlement) {
+          await turn.writer.write(
+            encodeStreamEvent({
+              kind: 'approval-settled',
+              id: call.id,
+              status: 'rejected',
+              decidedBy: deciderRef,
+              ...(decision.decidedVia !== undefined ? { decidedVia: decision.decidedVia } : {}),
+              ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+            }),
+          );
+        }
+      });
       publishAgentToolCall({
         runId: hooks.runId,
         toolName: call.name,
@@ -2081,8 +2267,68 @@ async function runClaimedToolCall(
         error: refusalNarrative(decision.reason),
       };
     }
+    meta = {
+      decidedBy: deciderRef,
+      ...(decision.decidedVia !== undefined ? { decidedVia: decision.decidedVia } : {}),
+      ...(decision.remember === true ? { remember: true } : {}),
+      streamed: streamsSettlement,
+    };
   }
-  return recordToolOutcome(turn, claimed, await invokeClaimedTool(turn, claimed), deciderRef);
+  return recordToolOutcome(turn, claimed, await invokeClaimedTool(turn, claimed), deciderRef, meta);
+}
+
+/**
+ * The approval request lapsed with nobody deciding. Settled on the rejection's own checkpoint name
+ * — an expiry is a refusal as far as the sequence is concerned, and one fewer name to keep stable —
+ * but persisted as `expired`, streamed as `approval-settled { status: 'expired' }`, and put to the
+ * model as "nobody approved this in time" rather than as someone's "no".
+ */
+async function expireToolCall(
+  turn: ToolTurnContext,
+  claimed: ClaimedToolCall,
+): Promise<ToolResult> {
+  const { deps, hooks } = turn;
+  const { call } = claimed;
+  await hooks.step(`persist:toolreject:${call.id}`, async () => {
+    await deps.store.updateToolCall({
+      toolCallId: call.id,
+      status: 'expired',
+      error: APPROVAL_EXPIRED_REASON,
+    });
+    await turn.writer.write(
+      encodeStreamEvent({ kind: 'approval-settled', id: call.id, status: 'expired' }),
+    );
+  });
+  publishAgentToolCall({
+    runId: hooks.runId,
+    toolName: call.name,
+    toolType: 'action',
+    status: 'rejected',
+  });
+  return {
+    id: call.id,
+    name: call.name,
+    output: { rejected: true, expired: true, reason: APPROVAL_EXPIRED_REASON },
+    denied: true,
+    expired: true,
+    error: expiryNarrative(),
+  };
+}
+
+/** The reason an expired call is denied with — on the row, the stream frame and the result. */
+export const APPROVAL_EXPIRED_REASON = 'approval expired';
+
+/**
+ * How an expiry is put to the model. Nobody said no, so it must not read like a refusal — but it
+ * must stop the model from simply trying again, which would park the turn on the same unanswered
+ * request.
+ */
+function expiryNarrative(): string {
+  return (
+    'This action needed approval, and the approval request expired before anyone decided. ' +
+    'Nothing ran and nothing changed. Do not run it again on your own; tell the person it was not ' +
+    'approved in time and ask whether they still want it.'
+  );
 }
 
 /**

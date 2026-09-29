@@ -54,7 +54,11 @@ const statements: string[] = [
     error TEXT,
     created_at INTEGER NOT NULL,
     executed_at INTEGER,
-    run_id TEXT
+    run_id TEXT,
+    approver TEXT,
+    expires_at INTEGER,
+    remember INTEGER,
+    decided_via TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS agent_tool_call_message_idx
     ON agent_tool_call (message_id)`,
@@ -186,6 +190,26 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_message',
     column: 'ui',
     ddl: 'ALTER TABLE agent_message ADD COLUMN ui TEXT',
+  },
+  {
+    table: 'agent_tool_call',
+    column: 'approver',
+    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN approver TEXT',
+  },
+  {
+    table: 'agent_tool_call',
+    column: 'expires_at',
+    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER',
+  },
+  {
+    table: 'agent_tool_call',
+    column: 'remember',
+    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER',
+  },
+  {
+    table: 'agent_tool_call',
+    column: 'decided_via',
+    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT',
   },
 ];
 

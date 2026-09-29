@@ -14,13 +14,25 @@ const MAX_ANSWER_VALUE_LENGTH = 4096;
 /** A rejection reason is read back by the model as the tool's result, so it is prompt input. */
 const MAX_REJECT_REASON_LENGTH = 4096;
 
+/** A `via` is provenance, persisted on the call — bounded like any other stored label. */
+const MAX_VIA_LENGTH = 64;
+/** What an HTTP decision is recorded as having come through when the caller names nothing. */
+const DEFAULT_VIA = 'web';
+
 interface ApproveBody {
   toolCallId: unknown;
+  /** Approve later calls of the same tool in the same thread without asking. */
+  remember?: unknown;
+  /** The surface the decision came through. Defaults to `'web'`. */
+  via?: unknown;
 }
-interface RejectBody extends ApproveBody {
+interface RejectBody {
+  toolCallId: unknown;
   reason?: unknown;
+  via?: unknown;
 }
-interface AnswerBody extends ApproveBody {
+interface AnswerBody {
+  toolCallId: unknown;
   /**
    * questionId → chosen option values. Omit a question (or the whole object) to take the pre-picked
    * default the request was shown with — confirming is meant to be enough, so an empty body is a
@@ -45,6 +57,26 @@ function rejectReason(claimed: unknown): string | undefined {
   }
   if (claimed.length > MAX_REJECT_REASON_LENGTH) {
     throw new BadRequestException(`reason must be at most ${MAX_REJECT_REASON_LENGTH} characters`);
+  }
+  return claimed;
+}
+
+function remember(claimed: unknown): boolean {
+  if (claimed === undefined) {
+    return false;
+  }
+  if (typeof claimed !== 'boolean') {
+    throw new BadRequestException('remember must be a boolean');
+  }
+  return claimed;
+}
+
+function via(claimed: unknown): string {
+  if (claimed === undefined) {
+    return DEFAULT_VIA;
+  }
+  if (typeof claimed !== 'string' || claimed.length === 0 || claimed.length > MAX_VIA_LENGTH) {
+    throw new BadRequestException(`via must be a string of 1-${MAX_VIA_LENGTH} characters`);
   }
   return claimed;
 }
@@ -97,14 +129,19 @@ export class ToolCallController {
   @Post('approve')
   async approve(@Req() req: Request, @Body() body: ApproveBody): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.approve(actor, toolCallId(body.toolCallId));
+    await this.agent.approve(actor, toolCallId(body.toolCallId), {
+      remember: remember(body.remember),
+      via: via(body.via),
+    });
     return { ok: true };
   }
 
   @Post('reject')
   async reject(@Req() req: Request, @Body() body: RejectBody): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.reject(actor, toolCallId(body.toolCallId), rejectReason(body.reason));
+    await this.agent.reject(actor, toolCallId(body.toolCallId), rejectReason(body.reason), {
+      via: via(body.via),
+    });
     return { ok: true };
   }
 
@@ -122,7 +159,7 @@ export class ToolCallController {
 
   /** Decline to answer and let the agent proceed on the answers it pre-picked. */
   @Post('skip')
-  async skip(@Req() req: Request, @Body() body: ApproveBody): Promise<{ ok: boolean }> {
+  async skip(@Req() req: Request, @Body() body: { toolCallId: unknown }): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
     await this.agent.skip(actor, toolCallId(body.toolCallId));
     return { ok: true };

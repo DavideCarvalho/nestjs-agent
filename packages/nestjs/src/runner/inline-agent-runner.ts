@@ -152,6 +152,32 @@ export class InlineAgentRunner implements AgentRunner {
    * shape it is delivering — the loop asked for one and only ever gets what the caller sent. A
    * cancel settles the wait too, by rejecting it.
    */
+  /**
+   * {@link park} for an approval, bounded by the policy's time to live when it has one: the timer
+   * settles the wait as `expired` — the same Decision the durable runner builds from its signal
+   * timeout — and a decision that arrives first disarms it.
+   */
+  private parkApproval(runId: string, toolCallId: string, timeoutMs?: number): Promise<Decision> {
+    const waiting = this.park<Decision>(runId, toolCallId);
+    if (timeoutMs === undefined) {
+      return waiting;
+    }
+    const key = `${runId}:${toolCallId}`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lapse = new Promise<Decision>((resolve) => {
+      timer = setTimeout(() => {
+        const entry = this.pending.get(key);
+        if (entry !== undefined) {
+          this.pending.delete(key);
+          resolve({ approved: false, expired: true });
+        }
+      }, timeoutMs);
+      // A parked request must not keep the process alive on its own.
+      timer.unref?.();
+    });
+    return Promise.race([waiting, lapse]).finally(() => clearTimeout(timer));
+  }
+
   private park<T extends HumanReply>(runId: string, toolCallId: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       this.pending.set(`${runId}:${toolCallId}`, {
@@ -174,7 +200,7 @@ export class InlineAgentRunner implements AgentRunner {
     return {
       runId,
       openSink: () => deps.sink.open(runId),
-      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitApproval: (call, _ctx, opts) => this.parkApproval(runId, call.id, opts?.timeoutMs),
       awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
       parallel: settleAll,
@@ -234,7 +260,7 @@ export class InlineAgentRunner implements AgentRunner {
     const hooks: AgentLoopHooks = {
       runId,
       openSink: () => deps.sink.open(runId),
-      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitApproval: (call, _ctx, opts) => this.parkApproval(runId, call.id, opts?.timeoutMs),
       awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
       parallel: settleAll,
@@ -335,7 +361,7 @@ export class InlineAgentRunner implements AgentRunner {
       runId,
       // Forward into the top-level stream; the top-level run owns end/fail on that shared sink.
       openSink: async () => childSinkWriter(await deps.sink.open(sinkRunId)),
-      awaitApproval: (call) => this.park<Decision>(runId, call.id),
+      awaitApproval: (call, _ctx, opts) => this.parkApproval(runId, call.id, opts?.timeoutMs),
       awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
       parallel: settleAll,

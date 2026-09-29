@@ -139,6 +139,30 @@ describe('AgentChatTransport — generative UI, title, approval, nesting', () =>
     });
   });
 
+  it('forwards approval-settled as a data part keyed by the call', async () => {
+    const chunks = await chunksFor([
+      {
+        kind: 'approval-settled',
+        id: 'call-1',
+        status: 'approved',
+        decidedBy: 'op-1',
+        decidedVia: 'slack',
+        remember: true,
+      },
+    ]);
+    expect(chunks).toContainEqual({
+      type: 'data-approval-settled',
+      id: 'call-1',
+      data: {
+        id: 'call-1',
+        status: 'approved',
+        decidedBy: 'op-1',
+        decidedVia: 'slack',
+        remember: true,
+      },
+    });
+  });
+
   it('carries parentId in toolMetadata and keeps it when the input lands', async () => {
     const chunks = await chunksFor([
       { kind: 'step-start' },

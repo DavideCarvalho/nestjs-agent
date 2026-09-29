@@ -1,6 +1,7 @@
 export {
   type AnyToolUIPart,
   type ApprovalBlockOptions,
+  type ApproveOptions,
   type BuildBlocksOptions,
   buildTranscriptBlocks,
   type ChatStatus,
@@ -13,6 +14,7 @@ export {
   type RetrievedPassage,
   type TimestampInfo,
   type TranscriptApproval,
+  type TranscriptApprovalStatus,
   type TranscriptBlock,
   type TranscriptElicitationBlock,
   type TranscriptElicitationOutcome,

@@ -18,14 +18,17 @@ import {
   type PageContext,
   type QuotaStore,
   type QuotaView,
+  REQUESTER_APPROVER,
   type StagedAttachment,
   type ThreadDetail,
   type ThreadSummary,
   type UpdateThreadInput,
+  mayDecideApproval,
 } from '@dudousxd/nestjs-agent-core';
 import {
   BadRequestException,
   ForbiddenException,
+  GoneException,
   Inject,
   Injectable,
   NotFoundException,
@@ -177,16 +180,38 @@ export class AgentService {
     return this.subscribe(runId);
   }
 
-  async approve(actor: Actor, toolCallId: string): Promise<void> {
-    await this.assertOwnsToolCall(actor, toolCallId);
-    return this.signalToolCall(toolCallId, { approved: true });
+  /**
+   * Approve a parked action call as `actor`. Who may is the call's recorded approver's business
+   * (see {@link assertMayDecide}); `remember` approves later calls of the same tool in the same
+   * thread, and `via` names the surface the decision came through (`'web'`, `'slack'`, …) — both
+   * persisted with the call.
+   */
+  async approve(
+    actor: Actor,
+    toolCallId: string,
+    opts: { remember?: boolean; via?: string } = {},
+  ): Promise<void> {
+    await this.assertMayDecide(actor, toolCallId);
+    return this.signalToolCall(toolCallId, {
+      approved: true,
+      executedByRef: actor.id,
+      ...(opts.remember === true ? { remember: true } : {}),
+      ...(opts.via !== undefined ? { decidedVia: opts.via } : {}),
+    });
   }
 
-  async reject(actor: Actor, toolCallId: string, reason?: string): Promise<void> {
-    await this.assertOwnsToolCall(actor, toolCallId);
+  async reject(
+    actor: Actor,
+    toolCallId: string,
+    reason?: string,
+    opts: { via?: string } = {},
+  ): Promise<void> {
+    await this.assertMayDecide(actor, toolCallId);
     return this.signalToolCall(toolCallId, {
       approved: false,
+      executedByRef: actor.id,
       ...(reason !== undefined ? { reason } : {}),
+      ...(opts.via !== undefined ? { decidedVia: opts.via } : {}),
     });
   }
 
@@ -226,6 +251,7 @@ export class AgentService {
    * not the thread's own actor).
    */
   async signalToolCall(toolCallId: string, reply: HumanReply): Promise<void> {
+    await this.assertNotExpired(toolCallId);
     const runId = await this.resolveRunForToolCall(toolCallId);
     return this.runner.signal(runId, toolCallId, reply);
   }
@@ -489,6 +515,53 @@ export class AgentService {
     }
     if (owner !== actor.id) {
       throw new ForbiddenException('tool call belongs to another actor');
+    }
+  }
+
+  /**
+   * Authorization seam for approve/reject. The call's recorded approver decides who may settle it:
+   * the requester (the default, and every call recorded before approvers existed) is the thread's
+   * own actor — the ownership check this always was; any other approver goes through the policy's
+   * `canDecide`, which by default asks whether the actor holds that role.
+   */
+  private async assertMayDecide(actor: Actor, toolCallId: string): Promise<void> {
+    const approval = await this.store.toolCallApproval?.(toolCallId);
+    const approver = approval?.approver ?? REQUESTER_APPROVER;
+    if (approver === REQUESTER_APPROVER) {
+      return this.assertOwnsToolCall(actor, toolCallId);
+    }
+    const requesterRef = await this.store.ownerOfToolCall(toolCallId);
+    if (requesterRef === null) {
+      throw new NotFoundException(`tool call ${toolCallId} not found`);
+    }
+    const allowed = await mayDecideApproval(this.deps.forAgent().approvalPolicy, actor, {
+      toolCallId,
+      approver,
+      requesterRef,
+    });
+    if (!allowed) {
+      throw new ForbiddenException(`this approval is for ${approver}`);
+    }
+  }
+
+  /**
+   * Refuse a decision on a request that has already lapsed — recorded `expired`, or past its
+   * `expiresAt` with the run's own timer about to fire. Signalling it anyway would race the timeout:
+   * a durable runtime buffers a signal nobody is waiting on, and a late approval must not be what a
+   * later replay of the run reads back.
+   */
+  private async assertNotExpired(toolCallId: string): Promise<void> {
+    const approval = await this.store.toolCallApproval?.(toolCallId);
+    if (approval === null || approval === undefined) {
+      return;
+    }
+    const lapsed =
+      approval.status === 'expired' ||
+      (approval.status === 'pending_approval' &&
+        approval.expiresAt !== null &&
+        Date.parse(approval.expiresAt) <= Date.now());
+    if (lapsed) {
+      throw new GoneException(`the approval request for tool call ${toolCallId} has expired`);
     }
   }
 

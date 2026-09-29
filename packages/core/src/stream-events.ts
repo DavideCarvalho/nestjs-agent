@@ -59,6 +59,26 @@ export interface AgentApprovalRequest {
   reason?: string;
 }
 
+/**
+ * How an approval settled — the other half of {@link AgentApprovalRequest}, under the same `id`.
+ * Metadata again: the call's own outcome still arrives as `tool-output` (approved and ran),
+ * `tool-output-error` (approved and failed) or `tool-output-denied` (rejected or expired).
+ */
+export interface AgentApprovalSettlement {
+  id: string;
+  status: 'approved' | 'rejected' | 'expired';
+  /** Repeated from the request, for a call approved without one being streamed (a remembered approval). */
+  approver?: string;
+  /** Opaque ref of who decided. Absent on an expiry. */
+  decidedBy?: string;
+  /** The surface the decision came through: `'web'`, `'slack'`, `'remembered'`, … */
+  decidedVia?: string;
+  /** The approval also covers later calls of this tool in this thread. */
+  remember?: boolean;
+  /** What the person said when declining. */
+  reason?: string;
+}
+
 export type AgentStreamEvent =
   | { kind: 'step-start' }
   /**
@@ -127,6 +147,12 @@ export type AgentStreamEvent =
    * into the AI SDK's native `approval-requested` state.
    */
   | ({ kind: 'approval-requested' } & AgentApprovalRequest)
+  /**
+   * A parked action call was decided (or lapsed). Optional, like `approval-requested`: it adds WHO
+   * decided, THROUGH WHAT and whether the approval is REMEMBERED; the outcome itself rides the
+   * call's own output frame. See {@link AgentApprovalSettlement}.
+   */
+  | ({ kind: 'approval-settled' } & AgentApprovalSettlement)
   /**
    * Server-pushed generative UI, positioned in the message where it arrives. Not tied to a tool
    * call. See {@link AgentUiComponent}.

@@ -1,19 +1,22 @@
-import type {
-  AgentStore,
-  AppendMessageInput,
-  CreateThreadInput,
-  RecordRunStartInput,
-  RecordToolCallInput,
-  RecordUsageInput,
-  StoredMessage,
-  ThreadDetail,
-  ThreadSummary,
-  ThreadTurnPage,
-  ThreadTurnQuery,
-  ThreadTurnReader,
-  ToolResult,
-  UpdateThreadInput,
-  UpdateToolCallInput,
+import {
+  type AgentStore,
+  type AppendMessageInput,
+  type CreateThreadInput,
+  type RecordRunStartInput,
+  type RecordToolCallInput,
+  type RecordUsageInput,
+  type StoredMessage,
+  type ThreadDetail,
+  type ThreadSummary,
+  type ThreadTurnPage,
+  type ThreadTurnQuery,
+  type ThreadTurnReader,
+  type ToolCallApproval,
+  type ToolCallApprovalState,
+  type ToolResult,
+  type UpdateThreadInput,
+  type UpdateToolCallInput,
+  toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import {
@@ -90,9 +93,14 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       .where(eq(agentMessage.threadId, threadId))
       .orderBy(asc(agentMessage.createdAt), asc(agentMessage.id));
     const last = messages[messages.length - 1];
+    const approvals = await this.approvalsFor(messages.map((message) => message.id));
     return {
       ...this.toSummary(thread, last?.content),
-      messages: messages.map((message) => this.toStoredMessage(message)),
+      messages: messages.map((message) => {
+        const stored = this.toStoredMessage(message);
+        const onMessage = approvals.get(message.id);
+        return onMessage !== undefined ? { ...stored, approvals: onMessage } : stored;
+      }),
       ...(thread.activeStreamId != null ? { activeStreamId: thread.activeStreamId } : {}),
     };
   }
@@ -264,6 +272,72 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
       .where(eq(agentToolCall.id, toolCallId));
     return row?.runId ?? row?.activeStreamId ?? null;
+  }
+
+  /**
+   * The approval record of every call on `messageIds` that a policy put to a person, grouped by
+   * message. One query over the calls that carry an approver — a thread whose calls never asked
+   * anyone reads nothing back.
+   */
+  private async approvalsFor(messageIds: string[]): Promise<Map<string, ToolCallApproval[]>> {
+    const byMessage = new Map<string, ToolCallApproval[]>();
+    if (messageIds.length === 0) {
+      return byMessage;
+    }
+    const rows = await this.db
+      .select({
+        id: agentToolCall.id,
+        messageId: agentToolCall.messageId,
+        status: agentToolCall.status,
+        approver: agentToolCall.approver,
+        expiresAt: agentToolCall.expiresAt,
+        remember: agentToolCall.remember,
+        executedByRef: agentToolCall.executedByRef,
+        decidedVia: agentToolCall.decidedVia,
+        error: agentToolCall.error,
+      })
+      .from(agentToolCall)
+      .where(and(inArray(agentToolCall.messageId, messageIds), isNotNull(agentToolCall.approver)))
+      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id));
+    for (const row of rows) {
+      const approval = toolCallApprovalFromRow({ ...row, toolCallId: row.id });
+      if (approval === null) {
+        continue;
+      }
+      const list = byMessage.get(row.messageId) ?? [];
+      list.push(approval);
+      byMessage.set(row.messageId, list);
+    }
+    return byMessage;
+  }
+
+  /** Tools whose approval someone asked to remember in this thread. */
+  async rememberedApprovals(threadId: string): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ toolName: agentToolCall.toolName })
+      .from(agentToolCall)
+      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .where(and(eq(agentMessage.threadId, threadId), eq(agentToolCall.remember, true)));
+    return rows.map((row) => row.toolName);
+  }
+
+  async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
+    const [row] = await this.db
+      .select({
+        status: agentToolCall.status,
+        approver: agentToolCall.approver,
+        expiresAt: agentToolCall.expiresAt,
+      })
+      .from(agentToolCall)
+      .where(eq(agentToolCall.id, toolCallId));
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      status: row.status,
+      approver: row.approver,
+      expiresAt: row.expiresAt?.toISOString() ?? null,
+    };
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -457,6 +531,10 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       createdAt: new Date(),
       executedAt: null,
       runId: input.runId ?? null,
+      approver: input.approver ?? null,
+      expiresAt: input.expiresAt !== undefined ? new Date(input.expiresAt) : null,
+      remember: null,
+      decidedVia: null,
     });
   }
 
@@ -473,6 +551,12 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
     }
     if (input.executedByRef !== undefined) {
       updates.executedByRef = input.executedByRef;
+    }
+    if (input.remember !== undefined) {
+      updates.remember = input.remember;
+    }
+    if (input.decidedVia !== undefined) {
+      updates.decidedVia = input.decidedVia;
     }
     if (input.status === 'executed' || input.status === 'auto_executed') {
       updates.executedAt = new Date();

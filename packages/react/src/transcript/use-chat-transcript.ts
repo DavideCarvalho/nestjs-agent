@@ -3,6 +3,7 @@ import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import {
+  type ApproveOptions,
   type ChatStatus,
   type MessageUsageInfo,
   type SettleAction,
@@ -109,8 +110,11 @@ export interface TranscriptItemOptions {
   onAnswer?: (toolCallId: string, answers: Record<string, string[]>) => void | Promise<void>;
   /** Decline the question set and let the agent proceed on its own picks — `useAgentChat`'s `skip`. */
   onSkip?: (toolCallId: string) => void | Promise<void>;
-  /** Settle a tool call parked on a human — `useAgentChat`'s `approve` / `reject`. */
-  onApprove?: (toolCallId: string) => void | Promise<void>;
+  /**
+   * Settle a tool call parked on a human — `useAgentChat`'s `approve` / `reject`. `options.remember`
+   * is what `call.approve.run({ remember: true })` passed.
+   */
+  onApprove?: (toolCallId: string, options?: ApproveOptions) => void | Promise<void>;
   onReject?: (toolCallId: string) => void | Promise<void>;
 }
 
@@ -426,10 +430,12 @@ function useTranscriptItems({
   );
 
   const approve = useCallback(
-    (toolCallId: string) => {
+    (toolCallId: string, options?: ApproveOptions) => {
       const onApprove = latest.current.options.onApprove;
       if (onApprove) {
-        settle(toolCallId, 'approve', () => onApprove(toolCallId));
+        settle(toolCallId, 'approve', () =>
+          options === undefined ? onApprove(toolCallId) : onApprove(toolCallId, options),
+        );
       }
     },
     [settle],

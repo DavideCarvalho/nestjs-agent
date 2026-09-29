@@ -156,7 +156,23 @@ export class AgentRunWorkflow {
         input.sinkRunId !== undefined
           ? childSinkWriter(await deps.sink.open(sinkRunId))
           : deps.sink.open(ctx.runId),
-      awaitApproval: (call) => ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`),
+      // A policy's time to live becomes the signal wait's own timeout: the runtime journals the
+      // deadline on the first call (a position of its own, reached only for a call the journal says
+      // has a ttl) and wakes the run when it passes. The lapse comes back as a Decision rather than a
+      // throw, so the loop settles the call `expired` on its ordinary rejection checkpoint.
+      awaitApproval: (call, _toolCtx, opts) =>
+        opts?.timeoutMs === undefined
+          ? ctx.waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`)
+          : ctx
+              .waitForSignal<Decision>(`tool:${ctx.runId}:${call.id}`, {
+                timeoutMs: opts.timeoutMs,
+              })
+              .catch((error: unknown) => {
+                if (isSignalTimeout(error)) {
+                  return { approved: false, expired: true } satisfies Decision;
+                }
+                throw error;
+              }),
       // The same wait, on the same signal key, carrying a typed answer instead of a yes/no — so a
       // question set and an approval reach a parked run through one path, and the HTTP surface that
       // settles either one is the same `POST /agent/tool-call/*` family.
@@ -323,4 +339,12 @@ export class AgentRunWorkflow {
       throw error;
     }
   }
+}
+
+/**
+ * The runtime's `SignalTimeoutError`, recognized by NAME: the class differs by runtime (the engine
+ * in-process vs a thin worker), so `instanceof` against one import would miss the other's.
+ */
+function isSignalTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === 'SignalTimeoutError';
 }

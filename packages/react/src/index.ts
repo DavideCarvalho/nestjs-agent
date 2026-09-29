@@ -95,6 +95,12 @@ export {
   type UseToolCatalogOptions,
 } from './presentation/use-tool-catalog.js';
 export {
+  type ApprovalCountdown,
+  type UseApprovalCountdownOptions,
+  approvalCountdown,
+  useApprovalCountdown,
+} from './approvals/countdown.js';
+export {
   formatElapsed,
   readReasoningMs,
   useElapsed,
@@ -108,6 +114,7 @@ export {
 } from './stored-thread-to-ui-messages.js';
 export {
   type ApprovalBlockOptions,
+  type ApproveOptions,
   type BuildBlocksOptions,
   buildTranscriptBlocks,
   type ChatTranscript,
@@ -121,6 +128,7 @@ export {
   type TimestampInfo,
   type TranscriptActionState,
   type TranscriptApproval,
+  type TranscriptApprovalStatus,
   type TranscriptBlock,
   type TranscriptCopyState,
   type TranscriptEditState,

@@ -225,8 +225,11 @@ describe('the reason a rejection carries', () => {
     expect((await post(booted, 'reject', { toolCallId: 'call-1' })).status).toBe(201);
 
     expect(booted.signalled).toEqual([
-      { toolCallId: 'call-1', reply: { approved: false, reason: 'not now' } },
-      { toolCallId: 'call-1', reply: { approved: false } },
+      {
+        toolCallId: 'call-1',
+        reply: { approved: false, executedByRef: 'u1', reason: 'not now', decidedVia: 'web' },
+      },
+      { toolCallId: 'call-1', reply: { approved: false, executedByRef: 'u1', decidedVia: 'web' } },
     ]);
   });
 });
@@ -238,6 +241,42 @@ describe('the toolCallId a decision names', () => {
     for (const toolCallId of [undefined, '', 42, { $ne: null }]) {
       expect((await post(booted, 'approve', { toolCallId })).status).toBe(400);
     }
+    expect(booted.signalled).toEqual([]);
+  });
+});
+
+describe('an approval decision', () => {
+  it('carries who decided, whether to remember, and the surface it came through', async () => {
+    const booted = await boot();
+
+    expect(
+      (await post(booted, 'approve', { toolCallId: 'call-1', remember: true, via: 'slack' }))
+        .status,
+    ).toBe(201);
+    expect((await post(booted, 'reject', { toolCallId: 'call-1', reason: 'no' })).status).toBe(201);
+
+    expect(booted.signalled).toEqual([
+      {
+        toolCallId: 'call-1',
+        reply: { approved: true, executedByRef: 'u1', remember: true, decidedVia: 'slack' },
+      },
+      {
+        toolCallId: 'call-1',
+        reply: { approved: false, executedByRef: 'u1', reason: 'no', decidedVia: 'web' },
+      },
+    ]);
+  });
+
+  it('refuses a remember that is not a boolean and a via that is not a short string', async () => {
+    const booted = await boot();
+
+    expect((await post(booted, 'approve', { toolCallId: 'call-1', remember: 'yes' })).status).toBe(
+      400,
+    );
+    expect((await post(booted, 'approve', { toolCallId: 'call-1', via: 42 })).status).toBe(400);
+    expect(
+      (await post(booted, 'reject', { toolCallId: 'call-1', via: 'x'.repeat(65) })).status,
+    ).toBe(400);
     expect(booted.signalled).toEqual([]);
   });
 });
