@@ -464,7 +464,10 @@ opt-in; the index is a migration you run and watch (`schemaStatements()` prints 
 - `instrumentRetriever(retriever, { describe?, collection? })` — wrap any `Retriever` so each
   retrieval publishes on `aviary:rag:retrieval` (`RAG_RETRIEVAL_CHANNEL`).
 - `openAiEmbeddings({ model, baseUrl?, apiKey?, dimensions?, batchSize?, maxInputChars?, headers?,
-  timeoutMs?, onUsage?, fetch? })` — an `EmbeddingProvider` over any OpenAI-compatible `/embeddings`.
+  timeoutMs?, onUsage?, onWarn?, fetch? })` — an `EmbeddingProvider` over any OpenAI-compatible
+  `/embeddings`. A batch the server refuses as too large (413, or TEI's `batch size N > maximum
+  allowed batch size M`; see `isBatchTooLarge`) is split in halves and retried, and later requests to
+  that server and model use the size that worked; each split is reported through `onWarn`.
 - `HttpReranker({ url, model?, apiKey?, format?, headers?, timeoutMs?, fetch? })` — a `Reranker` over
   a Cohere/Jina/Voyage/TEI-style `/rerank` endpoint.
 
