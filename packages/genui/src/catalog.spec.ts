@@ -62,6 +62,27 @@ describe('defineComponent / defineCatalog', () => {
     );
   });
 
+  it('validates synchronously when the schema can', () => {
+    const catalog = defineCatalog([dealCard, badgeJson]);
+    expect(catalog.validateSync('DealCard', { name: 'Acme' })).toEqual({
+      ok: true,
+      value: { name: 'Acme', amount: 0 },
+    });
+    expect(catalog.validateSync('Pill', {})).toMatchObject({ ok: false });
+    expect(catalog.validateSync('Nope', {})).toMatchObject({ ok: false });
+    const asyncOnly = defineCatalog([
+      {
+        name: 'Later',
+        title: 'l',
+        description: 'l',
+        props: {
+          '~standard': { version: 1, vendor: 'x', validate: async (value: unknown) => ({ value }) },
+        },
+      },
+    ]);
+    expect(asyncOnly.validateSync('Later', {})).toBeUndefined();
+  });
+
   it('treats an unknown component as a validation failure', async () => {
     const catalog = defineCatalog([badgeJson]);
     await expect(catalog.validate('Nope', {})).resolves.toEqual({

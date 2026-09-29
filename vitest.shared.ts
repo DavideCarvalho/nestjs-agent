@@ -27,6 +27,12 @@ export const alias: Record<string, string> = {
     new URL('./packages/genui/src/builtins.ts', import.meta.url),
   ),
   '@dudousxd/nestjs-agent-genui': pkg('genui'),
+  '@dudousxd/nestjs-agent-react/genui/json-render': fileURLToPath(
+    new URL('./packages/react/src/genui/json-render.tsx', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent-react/genui': fileURLToPath(
+    new URL('./packages/react/src/genui/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-react': pkg('react'),
   '@dudousxd/nestjs-agent': pkg('nestjs'),
   // The registry ships shadcn-flavoured source, which reaches `cn` through the alias every shadcn

@@ -111,7 +111,7 @@ function Chat() {
 | On the instance | What it is |
 |---|---|
 | `items` | The mounted window, oldest first. Each item carries `blocks`, `text`, `usage`, `timestamp`, `isStreaming`, `isLastAssistant`, and its action machines. |
-| `items[i].blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'sources' \| 'elicitation' \| 'ui' }`. A `ui` block is a component the server pushed (`{ id, component, props, version }`) — look `component` up in your own registry. A `tools` block is a run of CONSECUTIVE tool parts — any other part between two calls (including a `step-start` marker) ends the run. A `reasoning` block carries `isOpen`/`toggle`, open while it streams. A `sources` block appears only under `sources: true`, an `elicitation` block only under `onAnswer` — see below. |
+| `items[i].blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'sources' \| 'elicitation' \| 'ui' }`. A `ui` block is a component the server pushed (`{ id, component, props, version, toolCallId }`) — draw it with `<GenerativeUI>` (below) or look `component` up in your own registry. A `tools` block is a run of CONSECUTIVE tool parts — any other part between two calls (including a `step-start` marker) ends the run. A `reasoning` block carries `isOpen`/`toggle`, open while it streams. A `sources` block appears only under `sources: true`, an `elicitation` block only under `onAnswer` — see below. |
 | `items[i].blocks[n]` (`tools`) | Also carries `calls`: the same parts, each with `{ toolCallId, name, toolKind, parentId, children, approval, isAwaitingApproval, approve, reject, error }`, and `roots`: the same calls as a tree (a call nested under another by the stream's `parentId` sits in its parent's `children`). `approval` is `{ approver, expiresAt, reason, status, remember, decidedBy, decidedVia, decisionReason }` when the runner said who has to decide, else `null` — `status` is `pending` / `approved` / `rejected` / `expired`. |
 | `items[i].copy` | `{ available, copied, copy() }` — `copied` flashes for `copyResetMs` (default 1500). |
 | `items[i].edit` | `{ available, isEditing, draft, canSave, start(), cancel(), setDraft(), save(), getTextareaProps() }`. The prop-getter focuses with the caret at the end, saves on Enter, cancels on Escape. |
@@ -347,6 +347,51 @@ type-ahead narrows the list it received; it never re-derives which skills apply.
 
 The shadcn `ChatComposer` wires all of this for you: pass `autocompleteSources` and it renders the
 menu (`ChatCommandPalette`, grown into the combobox's listbox) above the composer card.
+
+### Generative UI (`/genui`)
+
+`@dudousxd/nestjs-agent-react/genui` draws server-pushed components (`ui` frames, persisted `ui[]`)
+with YOUR renderers. Headless: it adds no element and no style — only what your registry renders.
+
+```tsx
+import { GenerativeUI, type GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
+import { catalog } from './catalog'; // optional: a @dudousxd/nestjs-agent-genui catalog
+
+const registry: GenuiRegistry = { DataTable: MyTable, Chart: MyChart, Card: MyCard, Text: MyText };
+
+<MessageItem
+  message={message}
+  renderUi={(block) => (
+    <GenerativeUI
+      part={block}
+      registry={registry}
+      catalog={catalog}
+      resolveComponent={(name, version) => loadTenantComponent(name, version)}
+      fallback={({ reason, item }) => <UnknownComponent name={item.component} reason={reason} />}
+      loading={<Skeleton />}
+    />
+  )}
+/>;
+```
+
+| Prop | |
+|---|---|
+| `part` | A transcript `ui` block, a `data-ui` message part, or a stored `{ id, component, props, version? }`. |
+| `registry` | Component name → your renderer. It receives the props spread (and `children` as a tree layout node). |
+| `catalog?` | Validate props before drawing (`catalog.validateSync` when it can, so no placeholder flashes). Components the catalog does not know render unvalidated. |
+| `resolveComponent?(name, version)` | For components the registry lacks, e.g. a tenant's own, at the exact version a message was rendered with. Sync or async, cached per resolver/name/version. |
+| `fallback?` | A node, or `({ reason: 'unknown' \| 'invalid' \| 'error', item, issues?, error? }) => node`. Default: nothing. |
+| `loading?`, `onError?` | While a resolver or async validation is pending; a renderer threw (each item has its own error boundary). |
+
+A `genui:tree` frame (tree mode) is drawn node by node through the same registry, catalog and
+fallbacks, each node in its own boundary; put a `genui:tree` entry in the registry to take over.
+`useGenerativeUI(part, options)` returns the state (`ready` with `Component`/`props`, `loading`,
+`problem`) for your own chrome; wrap it in `<GenerativeUIScope>` when it may draw a tree.
+
+**json-render** (optional peer `@json-render/react` >= 0.21):
+`@dudousxd/nestjs-agent-react/genui/json-render` renders tree frames through json-render's
+`Renderer` — `registry[GENUI_TREE_COMPONENT] = jsonRenderTree(toJsonRenderRegistry(registry))` —
+plus `JsonRenderTree` and `treeToJsonRenderSpec`.
 
 ### Designed components, as copy-in source
 

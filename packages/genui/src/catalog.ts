@@ -6,6 +6,7 @@ import {
   builtinJsonSchemaValidator,
   toJsonSchema,
   validateProps,
+  validatePropsSync,
 } from './schema.js';
 
 /**
@@ -75,6 +76,14 @@ export interface Catalog {
   modelComponents(): ComponentDefinition<any>[];
   /** Validate `props` for `component`. An unknown component is a validation failure, not a throw. */
   validate(component: string, props: unknown): Promise<GenuiValidation<Record<string, unknown>>>;
+  /**
+   * {@link validate} without waiting — `undefined` only when the component's Standard Schema
+   * validates asynchronously. An unknown component is a failure, as in `validate`.
+   */
+  validateSync(
+    component: string,
+    props: unknown,
+  ): GenuiValidation<Record<string, unknown>> | undefined;
   /** The component's props as JSON Schema, when it can be derived (see {@link toJsonSchema}). */
   jsonSchemaFor(component: string): JsonSchema | undefined;
   /** A new catalog with these components added (a later definition replaces an earlier one of the same name). */
@@ -121,6 +130,18 @@ function buildCatalog(
       }
       const result = await validateProps(definition.props, props, validator);
       return result as GenuiValidation<Record<string, unknown>>;
+    },
+    validateSync(component, props) {
+      const definition = byName.get(component);
+      if (definition === undefined) {
+        return {
+          ok: false,
+          issues: [{ path: [], message: `unknown component "${component}"` }],
+        };
+      }
+      return validatePropsSync(definition.props, props, validator) as
+        | GenuiValidation<Record<string, unknown>>
+        | undefined;
     },
     jsonSchemaFor(component) {
       const definition = byName.get(component);
