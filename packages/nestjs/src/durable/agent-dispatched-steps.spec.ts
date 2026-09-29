@@ -1,10 +1,12 @@
 import {
   type AgentLoopResult,
   AgentRunInput,
+  type AiToolCtx,
   type ModelProvider,
   type ModelTurnArgs,
   type ModelTurnResult,
   encodeStreamEvent,
+  unwrapToolStepOutput,
 } from '@dudousxd/nestjs-agent-core';
 import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule } from '@dudousxd/nestjs-durable';
@@ -35,6 +37,28 @@ const ACTOR = { id: 'u1', roles: ['ADMIN'] };
 class PeekTool {
   async execute(): Promise<{ seen: boolean }> {
     return { seen: true };
+  }
+}
+
+/** Pushes a component through `ctx.emitUi` from wherever the step is served. */
+@AiTool({ name: 'chart', kind: 'read', description: 'chart', input: z.object({}) })
+@Injectable()
+class ChartTool {
+  async execute(_input: unknown, ctx: AiToolCtx): Promise<{ id: string | undefined }> {
+    const pushed = await ctx.emitUi?.('Chart', { points: [1, 2, 3] }, { version: 1 });
+    return { id: pushed?.id };
+  }
+}
+
+class ChartModel implements ModelProvider {
+  async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+    const turnIndex = args.messages.filter((message) => message.role === 'assistant').length;
+    const text = turnIndex === 0 ? 'charting' : 'done';
+    return {
+      text,
+      toolCalls: turnIndex === 0 ? [{ id: 'call-chart', name: 'chart', input: {} }] : [],
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
   }
 }
 
@@ -116,7 +140,7 @@ async function buildApp(options?: {
       }),
       AgentDurableModule,
     ],
-    providers: [PeekTool, CommitTool, DefaultAgent],
+    providers: [PeekTool, CommitTool, ChartTool, DefaultAgent],
   });
   const moduleRef = await (options?.journalPredatingDispatch === true
     ? builder.overrideProvider(AgentRunWorkflow).useClass(InProcessJournalWorkflow)
@@ -211,6 +235,68 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
       expect(turn.reasoning).toBe('weighing it');
       expect(typeof turn.reasoningMs).toBe('number');
       expect(turn.ui).toEqual([{ id: 'u1', component: 'stat', props: { value: 1 } }]);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('persists what a dispatched tool pushed through ctx.emitUi on the assistant message', async () => {
+    const agentStore = new InMemoryAgentStore();
+    const { moduleRef } = await buildApp({
+      shared: { stateStore: new InMemoryStateStore(), agentStore, model: new ChartModel() },
+    });
+    try {
+      const { runId, threadId } = await moduleRef
+        .get(AgentService)
+        .chat({ actor: ACTOR, message: 'chart it' });
+      const result = await moduleRef
+        .get(WorkflowEngine)
+        .waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+      expect(result.status).toBe('completed');
+      const thread = await agentStore.getThread(threadId);
+      const first = thread?.messages.find((message) => message.role === 'assistant');
+      expect(first?.ui).toEqual([
+        {
+          id: 'call-chart:ui:0',
+          component: 'Chart',
+          props: { points: [1, 2, 3] },
+          version: 1,
+          toolCallId: 'call-chart',
+        },
+      ]);
+      expect(first?.toolResults?.[0]?.output).toEqual({ id: 'call-chart:ui:0' });
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('hands the pushes back with the output only when the envelope asks for them', async () => {
+    const { moduleRef } = await buildApp();
+    try {
+      const steps = moduleRef.get(AgentRunSteps);
+      const envelope = {
+        toolName: 'chart',
+        input: {},
+        ctx: { actor: ACTOR, threadId: 't1', runId: 'run-x', requestId: 'run-x' },
+        transientRetry: false as const,
+        toolCallId: 'call-x',
+        toolType: 'read' as const,
+        sinkRunId: 'run-x',
+        childSink: false,
+      };
+      expect(await steps.tool(envelope)).toEqual({ id: 'call-x:ui:0' });
+      expect(unwrapToolStepOutput(await steps.tool({ ...envelope, collectUi: true }))).toEqual({
+        output: { id: 'call-x:ui:0' },
+        ui: [
+          {
+            id: 'call-x:ui:0',
+            component: 'Chart',
+            props: { points: [1, 2, 3] },
+            version: 1,
+            toolCallId: 'call-x',
+          },
+        ],
+      });
     } finally {
       await moduleRef.close();
     }

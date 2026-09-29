@@ -87,8 +87,12 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
     });
   }
 
+  // A component a tool pushed (`toolCallId`) goes right after that call's tool part, where the live
+  // stream put it; the rest keep their place ahead of the calls.
+  const toolCallIds = new Set((message.toolCalls ?? []).map((call) => call.id));
+  const pushedByCall = new Map<string, UIMessage['parts']>();
   for (const component of message.ui ?? []) {
-    parts.push({
+    const part: UIMessage['parts'][number] = {
       type: 'data-ui',
       id: component.id,
       data: {
@@ -96,8 +100,16 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
         component: component.component,
         props: component.props,
         ...(component.version !== undefined ? { version: component.version } : {}),
+        ...(component.toolCallId !== undefined ? { toolCallId: component.toolCallId } : {}),
       },
-    });
+    };
+    if (component.toolCallId !== undefined && toolCallIds.has(component.toolCallId)) {
+      const list = pushedByCall.get(component.toolCallId) ?? [];
+      list.push(part);
+      pushedByCall.set(component.toolCallId, list);
+    } else {
+      parts.push(part);
+    }
   }
 
   for (const approval of message.approvals ?? []) {
@@ -155,6 +167,7 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
           : { state: 'output-available', input: call.input, output: result.output }
         : { state: 'input-available', input: call.input }),
     });
+    parts.push(...(pushedByCall.get(call.id) ?? []));
   }
 
   return { id: message.id, role: message.role, parts };

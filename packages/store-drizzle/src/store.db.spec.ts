@@ -272,6 +272,32 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
 });
 
 describe('DrizzleAgentStore — a turn a client reads back', () => {
+  it('replaces the components on a message with what the step pushed', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'charting',
+      ui: [{ id: 'm1', component: 'Banner', props: { text: 'hi' } }],
+    });
+    const ui = [
+      { id: 'm1', component: 'Banner', props: { text: 'hi' } },
+      {
+        id: 'c1:ui:0',
+        component: 'Chart',
+        props: { points: [1, 2] },
+        version: 2,
+        toolCallId: 'c1',
+      },
+    ];
+    await store.setMessageUi(message.id, ui);
+    await store.setMessageUi(message.id, ui);
+    const stored = (await store.getThread(thread.id))?.messages.find(
+      (candidate) => candidate.id === message.id,
+    );
+    expect(stored?.ui).toEqual(ui);
+  });
+
   it('pairs every tool call on a message with the result the turn settled it with', async () => {
     const thread = await store.createThread({ actor: { id: 'actor-1' } });
     const message = await store.appendMessage({

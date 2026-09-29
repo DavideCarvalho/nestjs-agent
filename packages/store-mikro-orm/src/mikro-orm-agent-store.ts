@@ -1,5 +1,6 @@
 import {
   type AgentStore,
+  type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
   type RecordRunStartInput,
@@ -573,6 +574,16 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     em.persist(message);
     await em.flush();
     return this.toStoredMessage(message);
+  }
+
+  async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
+    const em = this.em.fork();
+    const message = await em.findOne(AgentMessage, { id: messageId });
+    if (message === null) {
+      return;
+    }
+    message.ui = ui.length > 0 ? ui : null;
+    await em.flush();
   }
 
   async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {

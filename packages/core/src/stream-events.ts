@@ -38,6 +38,12 @@ export interface AgentUiComponent {
   props: Record<string, unknown>;
   /** Schema version of `props`, so a client can keep rendering components persisted by an older server. */
   version?: number;
+  /**
+   * The tool call that pushed the component (`ctx.emitUi`), when one did. Lets a client place it
+   * with that call — a reloaded message puts it right after the call's tool part, where the live
+   * stream showed it. Absent for a component pushed outside a tool.
+   */
+  toolCallId?: string;
 }
 
 /**

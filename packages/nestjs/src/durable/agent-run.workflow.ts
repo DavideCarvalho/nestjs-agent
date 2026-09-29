@@ -265,6 +265,9 @@ export class AgentRunWorkflow {
                 ...envelope,
                 toolCallId: call.id,
                 toolType: call.kind === 'action' ? 'action' : 'read',
+                // Where `ctx.emitUi` streams from the worker — the llm step's routing.
+                sinkRunId,
+                childSink: input.sinkRunId !== undefined,
               }),
           }
         : {}),

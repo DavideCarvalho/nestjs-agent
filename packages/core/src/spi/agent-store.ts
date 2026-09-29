@@ -261,6 +261,17 @@ export interface AgentStore {
    * fail to compile instead.
    */
   setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void>;
+  /**
+   * Replace the components persisted on an already-appended message (see {@link StoredMessage.ui}).
+   * The loop calls it once per step, after the step's tools ran, with every component the step
+   * showed — the model turn's own `ui` frames first, then what its tools pushed through
+   * `ctx.emitUi`, in call order, deduplicated by `id`. A full replacement, never an append, so a
+   * repeated call writes the same value.
+   *
+   * OPTIONAL: a store without it still streams tool-pushed components live; a reload then shows
+   * only the ones the model turn itself produced.
+   */
+  setMessageUi?(messageId: string, ui: AgentUiComponent[]): Promise<void>;
   truncateFrom(threadId: string, messageId: string): Promise<void>;
 
   recordToolCall(input: RecordToolCallInput): Promise<void>;
