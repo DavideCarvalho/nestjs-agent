@@ -87,6 +87,7 @@ export {
 } from './retrieval-telemetry.js';
 export {
   HttpModelError,
+  isBatchTooLarge,
   openAiEmbeddings,
   type OpenAiEmbeddingsOptions,
 } from './openai-embeddings.js';
