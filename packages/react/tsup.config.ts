@@ -25,11 +25,18 @@ const external = [
   'rehype-sanitize',
   'prism-react-renderer',
   'unist-util-visit',
+  '@json-render/react',
+  '@json-render/core',
 ];
 
 export default defineConfig([
   {
-    entry: { index: 'src/index.ts', markdown: 'src/markdown/index.ts' },
+    entry: {
+      index: 'src/index.ts',
+      markdown: 'src/markdown/index.ts',
+      genui: 'src/genui/index.ts',
+      'genui-json-render': 'src/genui/json-render.tsx',
+    },
     format: ['esm'],
     dts: true,
     clean: true,
@@ -39,7 +46,12 @@ export default defineConfig([
     external,
   },
   {
-    entry: { index: 'src/index.ts', markdown: 'src/markdown/index.ts' },
+    entry: {
+      index: 'src/index.ts',
+      markdown: 'src/markdown/index.ts',
+      genui: 'src/genui/index.ts',
+      'genui-json-render': 'src/genui/json-render.tsx',
+    },
     format: ['cjs'],
     dts: true,
     clean: false,

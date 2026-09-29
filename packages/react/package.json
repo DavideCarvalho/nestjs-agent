@@ -15,7 +15,7 @@
     "agent",
     "react"
   ],
-  "description": "nestjs-agent React adapter — useAgentChat hook, AgentChatTransport (AI SDK v7), REST client, and styling-agnostic chat UI",
+  "description": "nestjs-agent React adapter \u2014 useAgentChat hook, AgentChatTransport (AI SDK v7), REST client, and styling-agnostic chat UI",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -47,6 +47,26 @@
         "types": "./dist/markdown.d.cts",
         "default": "./dist/markdown.cjs"
       }
+    },
+    "./genui": {
+      "import": {
+        "types": "./dist/genui.d.ts",
+        "default": "./dist/genui.js"
+      },
+      "require": {
+        "types": "./dist/genui.d.cts",
+        "default": "./dist/genui.cjs"
+      }
+    },
+    "./genui/json-render": {
+      "import": {
+        "types": "./dist/genui-json-render.d.ts",
+        "default": "./dist/genui-json-render.js"
+      },
+      "require": {
+        "types": "./dist/genui-json-render.d.cts",
+        "default": "./dist/genui-json-render.cjs"
+      }
     }
   },
   "files": [
@@ -62,6 +82,7 @@
   },
   "peerDependencies": {
     "@ai-sdk/react": "^4.0.0",
+    "@json-render/react": ">=0.21.0 <1.0.0",
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
@@ -78,6 +99,9 @@
     "unist-util-visit": "^5.1.0"
   },
   "peerDependenciesMeta": {
+    "@json-render/react": {
+      "optional": true
+    },
     "@streamdown/code": {
       "optional": true
     },
@@ -117,6 +141,9 @@
   },
   "devDependencies": {
     "@ai-sdk/react": "4.0.17",
+    "@dudousxd/nestjs-agent-genui": "workspace:*",
+    "@json-render/core": "0.21.0",
+    "@json-render/react": "0.21.0",
     "@streamdown/code": "1.1.1",
     "@streamdown/math": "1.0.2",
     "@streamdown/mermaid": "1.0.2",

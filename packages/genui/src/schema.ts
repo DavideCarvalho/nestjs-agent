@@ -66,22 +66,48 @@ export async function validateProps(
   if (isStandardSchema(schema)) {
     const result = await schema['~standard'].validate(value);
     if (result.issues !== undefined) {
-      return {
-        ok: false,
-        issues: result.issues.map((issue) => ({
-          path: (issue.path ?? []).map((segment) =>
-            typeof segment === 'object' && segment !== null && 'key' in segment
-              ? (segment.key as string | number)
-              : (segment as string | number),
-          ),
-          message: issue.message,
-        })),
-      };
+      return { ok: false, issues: toGenuiIssues(result.issues) };
     }
     return { ok: true, value: result.value };
   }
   const issues = validator.validate(schema, value);
   return issues.length > 0 ? { ok: false, issues } : { ok: true, value };
+}
+
+/**
+ * {@link validateProps} without waiting: the verdict when it is available synchronously (always
+ * for JSON Schema, and for every Standard Schema whose `validate` does not return a promise — Zod,
+ * Valibot and ArkType all answer synchronously for synchronous schemas), `undefined` otherwise. What
+ * a renderer uses to decide on its first paint instead of flashing a placeholder.
+ */
+export function validatePropsSync(
+  schema: PropsSchema,
+  value: unknown,
+  validator: JsonSchemaValidator,
+): GenuiValidation | undefined {
+  if (!isStandardSchema(schema)) {
+    const issues = validator.validate(schema, value);
+    return issues.length > 0 ? { ok: false, issues } : { ok: true, value };
+  }
+  const result = schema['~standard'].validate(value);
+  if (result instanceof Promise) {
+    result.catch(() => undefined);
+    return undefined;
+  }
+  return result.issues !== undefined
+    ? { ok: false, issues: toGenuiIssues(result.issues) }
+    : { ok: true, value: result.value };
+}
+
+function toGenuiIssues(issues: readonly StandardSchemaV1.Issue[]): GenuiIssue[] {
+  return issues.map((issue) => ({
+    path: (issue.path ?? []).map((segment) =>
+      typeof segment === 'object' && segment !== null && 'key' in segment
+        ? (segment.key as string | number)
+        : (segment as string | number),
+    ),
+    message: issue.message,
+  }));
 }
 
 /** `a.b[0].c: message; …` — what a model is handed back when its props were refused. */

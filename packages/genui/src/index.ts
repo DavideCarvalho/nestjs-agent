@@ -21,6 +21,7 @@ export {
   type PropsSchema,
   toJsonSchema,
   validateProps,
+  validatePropsSync,
 } from './schema.js';
 export {
   type CatalogTextOptions,

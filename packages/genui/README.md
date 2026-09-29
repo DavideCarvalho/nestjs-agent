@@ -110,3 +110,10 @@ meant; everything else must match the catalog.
 `Stack`, `Card`, `Heading`, `Text`, `Badge`, `Link`, `Image` (`LAYOUT_COMPONENTS`; `Stack` and `Card`
 take children). Each has a JSON Schema and a Slack-friendly `fallbackText`. Render them however
 your app looks.
+
+## Rendering
+
+`@dudousxd/nestjs-agent-react/genui` draws pushed components with your own renderers:
+`<GenerativeUI part={block} registry={registry} catalog={catalog} />` validates against the catalog
+(`catalog.validateSync` first, so nothing flashes), renders `genui:tree` frames node by node, and
+hands unknown components, invalid props and renderer errors to your fallback.

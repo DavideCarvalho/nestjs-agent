@@ -607,6 +607,15 @@ importers:
       '@ai-sdk/react':
         specifier: 4.0.17
         version: 4.0.17(react@19.3.0)(zod@3.25.76)
+      '@dudousxd/nestjs-agent-genui':
+        specifier: workspace:*
+        version: link:../genui
+      '@json-render/core':
+        specifier: 0.21.0
+        version: 0.21.0(zod@3.25.76)
+      '@json-render/react':
+        specifier: 0.21.0
+        version: 0.21.0(react@19.3.0)(zod@3.25.76)
       '@streamdown/code':
         specifier: 1.1.1
         version: 1.1.1(react@19.3.0)
@@ -1839,6 +1848,16 @@ packages:
 
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
+
+  '@json-render/core@0.21.0':
+    resolution: {integrity: sha512-vysEbTjO1y8mEgAsp0tztRyaWCkNsBrG8MhAqbndGK3qmMXjMRdCNtk21+AQRNKdRelFGVAwBgtUNW8tfjQlsw==}
+    peerDependencies:
+      zod: ^4.0.0
+
+  '@json-render/react@0.21.0':
+    resolution: {integrity: sha512-z/fZg0L8fJe2dnnQjWkmMw409iBclSWcOqdjoBy8eLHeBr/7F7VipzkY1CfgA2Fa5uW+zxZ54OvWMtdDcsp/yg==}
+    peerDependencies:
+      react: ^19.2.3
 
   '@kwsites/file-exists@1.1.1':
     resolution: {integrity: sha512-m9/5YGR18lIwxSFDwfE3oA7bWuq9kdau6ugN4H2rJeyhFQZcG9AgSHkQtSD15a8WvTgfz9aikZMrKPHvbpqFiw==}
@@ -6464,6 +6483,17 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@js-sdsl/ordered-map@4.4.2': {}
+
+  '@json-render/core@0.21.0(zod@3.25.76)':
+    dependencies:
+      zod: 3.25.76
+
+  '@json-render/react@0.21.0(react@19.3.0)(zod@3.25.76)':
+    dependencies:
+      '@json-render/core': 0.21.0(zod@3.25.76)
+      react: 19.3.0
+    transitivePeerDependencies:
+      - zod
 
   '@kwsites/file-exists@1.1.1':
     dependencies:
