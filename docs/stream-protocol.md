@@ -196,6 +196,15 @@ is a key into the client's own registry (the library ships none); `props` must b
 persisted. Emitting the same `id` again (e.g. streaming rows into a table) updates it; it never
 duplicates it.
 
+Two conventions from `@dudousxd/nestjs-agent-genui` (a catalog is optional — the frame is the
+contract):
+
+- a **composed tree** travels as ONE frame, `component: "genui:tree"`, `props: { root }`, where each
+  node is `{ type, props, children? }` and `type` is a registry key (json-render's nested shape). A
+  client renders it node by node through the same registry, or converts it to a json-render flat
+  spec;
+- component names are letters and digits (`DataTable`), so `genui:tree` can never collide with one.
+
 ## Tool catalog
 
 `GET <base>/tools?agent=<name>` returns `{ name, kind, presentation? }[]` for the tools the caller can
