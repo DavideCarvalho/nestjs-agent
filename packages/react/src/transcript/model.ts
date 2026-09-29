@@ -11,6 +11,13 @@ import {
   isTextUIPart,
   isToolUIPart,
 } from 'ai';
+import type { ToolCatalog } from '../presentation/phrasing.js';
+import {
+  type ToolActivityGroup,
+  type ToolCallDescription,
+  describeToolCall,
+  groupToolActivity,
+} from '../presentation/tool-activity.js';
 import { readReasoningMs } from '../reasoning/timing.js';
 
 /** A tool UI part on a `UIMessage` — a static `tool-*` part or the `dynamic-tool` part. */
@@ -120,6 +127,11 @@ export interface TranscriptToolCall {
   /** Who has to decide, when the runner said so. See {@link TranscriptApproval}. */
   approval: TranscriptApproval | null;
   /**
+   * How to talk about this call without naming it — status, phrase, label, icon, approval prompt,
+   * resolved result — from the server's presentation when `toolCatalog` was given, generic otherwise.
+   */
+  description: ToolCallDescription;
+  /**
    * Parked on a person. An `action` tool's input lands and its output never follows on its own —
    * the loop waits for an approval between the two — so a settled-looking card that never settles
    * IS the pending approval.
@@ -147,6 +159,11 @@ export interface TranscriptToolBlock {
    * nested calls in `children`. Equal to `calls` when nothing is nested.
    */
   roots: TranscriptToolCall[];
+  /**
+   * The run folded into activity groups ("Database query ×3"), over `roots`, keyed by each tool's
+   * presentation label (else its name). For another grouping, call `groupToolActivity` yourself.
+   */
+  activity: ToolActivityGroup[];
 }
 
 /**
@@ -313,6 +330,8 @@ export interface BuildBlocksOptions {
   elicitation?: ElicitationBlockOptions;
   /** Wire approve/reject onto the calls parked on a human. Omitted → they are reported, not actionable. */
   approval?: ApprovalBlockOptions;
+  /** Server-declared tool presentations (`useToolCatalog`), for each call's `description`. */
+  toolCatalog?: ToolCatalog;
 }
 
 /**
@@ -344,14 +363,23 @@ export function buildTranscriptBlocks(
       return;
     }
     const calls = toolBuffer.map((part) =>
-      buildToolCall(part, options.approval, approvals.get(part.toolCallId) ?? null),
+      buildToolCall(
+        part,
+        options.approval,
+        approvals.get(part.toolCallId) ?? null,
+        options.toolCatalog,
+      ),
     );
+    const roots = nestToolCalls(calls);
     blocks.push({
       kind: 'tools',
       key: `${message.id}-tools-${toolCounter++}`,
       parts: toolBuffer,
       calls,
-      roots: nestToolCalls(calls),
+      roots,
+      activity: groupToolActivity(roots, {
+        ...(options.toolCatalog !== undefined ? { catalog: options.toolCatalog } : {}),
+      }),
     });
     toolBuffer = [];
   }
@@ -569,6 +597,7 @@ function buildToolCall(
   part: AnyToolUIPart,
   options: ApprovalBlockOptions | undefined,
   approval: TranscriptApproval | null,
+  catalog: ToolCatalog | undefined,
 ): TranscriptToolCall {
   const toolCallId = part.toolCallId;
   const awaiting = isAwaitingApproval(part);
@@ -583,6 +612,7 @@ function buildToolCall(
     parentId: toolParentId(part),
     children: [],
     approval,
+    description: describeToolCall(part, catalog),
     isAwaitingApproval: awaiting,
     approve: {
       available: awaiting && options?.canApprove === true,

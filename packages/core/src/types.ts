@@ -2,6 +2,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
 import type { AgentUiComponent } from './stream-events.js';
+import type { ToolPresentation } from './tool-presentation.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
@@ -55,6 +56,11 @@ export interface ToolSpec {
   name: string;
   kind: ToolKind;
   description: string;
+  /**
+   * How a person-facing surface talks about this tool (see {@link ToolPresentation}). Never shown
+   * to the model; served to clients by `GET <base>/tools`.
+   */
+  presentation?: ToolPresentation;
   /**
    * Input schema as a [Standard Schema](https://standardschema.dev) — validation-agnostic, so
    * Zod, Valibot, or ArkType all work. The loop validates input via `~standard.validate` before

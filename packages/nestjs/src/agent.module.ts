@@ -43,6 +43,7 @@ import { QuotaController } from './controller/quota.controller.js';
 import { SkillsController } from './controller/skills.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
 import { ToolCallController } from './controller/tool-call.controller.js';
+import { ToolsController } from './controller/tools.controller.js';
 import { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
@@ -195,6 +196,7 @@ const BASE_CONTROLLERS = [
   AgentsController,
   SkillsController,
   MemoriesController,
+  ToolsController,
 ];
 
 /** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import type { ToolPresentation } from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 export const AI_TOOL_METADATA = Symbol('nestjs-agent:ai-tool');
@@ -35,6 +36,22 @@ export interface AiToolOptions {
    * role-based policy, which uses `roles`.
    */
   ability?: string;
+  /**
+   * How a chat surface talks about this tool without naming it — sentence templates over the
+   * call's input, an icon key, the approval prompt's wording, and how its output reads. Never shown
+   * to the model. Served by `GET <base>/tools` to the actors who can reach the tool:
+   *
+   * ```ts
+   * @AiTool({
+   *   name: 'purgeCache', kind: 'action', description: '…', input,
+   *   presentation: {
+   *     label: 'Cache purge', running: 'Purging {key}', done: 'Purged {key}', icon: 'cache',
+   *     tone: 'destructive', confirm: { title: 'Purge {key}?', verb: 'Purge' },
+   *   },
+   * })
+   * ```
+   */
+  presentation?: ToolPresentation;
 }
 
 /**

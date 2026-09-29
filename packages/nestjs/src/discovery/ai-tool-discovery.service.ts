@@ -63,6 +63,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           ...(meta.roles !== undefined ? { roles: meta.roles } : {}),
           ...(meta.ability !== undefined ? { ability: meta.ability } : {}),
           ...(meta.enabled !== undefined ? { enabled: meta.enabled } : {}),
+          ...(meta.presentation !== undefined ? { presentation: meta.presentation } : {}),
         },
         {
           execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),

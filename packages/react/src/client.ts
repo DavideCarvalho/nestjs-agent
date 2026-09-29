@@ -4,6 +4,7 @@ import type {
   SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
+  ToolCatalogEntry,
 } from '@dudousxd/nestjs-agent-core';
 
 /**
@@ -76,6 +77,16 @@ export class AgentClient {
   listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
     const query = threadId === undefined ? '' : `?threadId=${encodeURIComponent(threadId)}`;
     return this.request<SkillCatalogEntry[]>('GET', `/agent/skills${query}`);
+  }
+
+  /**
+   * The tools this caller can reach through `agent` (the default agent when omitted), each with the
+   * server-declared `presentation` a chat narrates it by — the same list the model is offered.
+   * Prefer {@link useToolCatalog}, which fetches it once and shares it.
+   */
+  listTools(agent?: string): Promise<ToolCatalogEntry[]> {
+    const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
+    return this.request<ToolCatalogEntry[]>('GET', `/agent/tools${query}`);
   }
 
   getThread(id: string): Promise<ThreadDetail> {

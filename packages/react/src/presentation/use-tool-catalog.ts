@@ -1,0 +1,99 @@
+import type { ToolCatalogEntry } from '@dudousxd/nestjs-agent-core';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AgentClient } from '../client.js';
+import { type ToolCatalog, toolCatalogFrom } from './phrasing.js';
+
+export interface UseToolCatalogOptions {
+  /**
+   * The client to ask — `useAgentChat(...).client`, or one of your own. Must be STABLE across
+   * renders (the shared copy is keyed by it): a client constructed inline refetches every render.
+   */
+  client: AgentClient;
+  /** The agent whose tools to list. Omitted → the server's default agent. */
+  agent?: string;
+  /** `false` holds the request (e.g. until the user is signed in). Default `true`. */
+  enabled?: boolean;
+}
+
+export interface ToolCatalogState {
+  /** Tool name → presentation, for the tools that declared one. `{}` until loaded. */
+  catalog: ToolCatalog;
+  /** Everything `GET <base>/tools` returned, kinds included. */
+  entries: ToolCatalogEntry[];
+  isLoading: boolean;
+  error: Error | null;
+  /** Drop the shared copy and ask again. */
+  refresh: () => void;
+}
+
+/**
+ * One request per client + agent for the whole page: the catalog is a deployment-time constant, so
+ * every component that narrates a tool call can call this hook and share the answer instead of
+ * putting a request between a tool starting and the sentence that describes it. A failed request
+ * is not cached, so the next mount retries.
+ */
+const shared = new WeakMap<AgentClient, Map<string, Promise<ToolCatalogEntry[]>>>();
+
+function load(client: AgentClient, agent: string | undefined): Promise<ToolCatalogEntry[]> {
+  let byAgent = shared.get(client);
+  if (byAgent === undefined) {
+    byAgent = new Map();
+    shared.set(client, byAgent);
+  }
+  const key = agent ?? '';
+  const cached = byAgent.get(key);
+  if (cached !== undefined) return cached;
+  const request = client.listTools(agent).catch((error: unknown) => {
+    byAgent.delete(key);
+    throw error;
+  });
+  byAgent.set(key, request);
+  return request;
+}
+
+/**
+ * The server-declared presentation of the tools this actor can reach (`GET <base>/tools`), for
+ * `phraseFor`, `describeToolCall` and `groupToolActivity` — or pass `catalog` to
+ * `useChatTranscript({ toolCatalog })` and read the phrases off the transcript's calls.
+ */
+export function useToolCatalog(options: UseToolCatalogOptions): ToolCatalogState {
+  const { client, agent, enabled = true } = options;
+  const [entries, setEntries] = useState<ToolCatalogEntry[]>([]);
+  const [isLoading, setLoading] = useState(enabled);
+  const [error, setError] = useState<Error | null>(null);
+  const [generation, setGeneration] = useState(0);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `generation` is the refresh trigger
+  useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    load(client, agent).then(
+      (loaded) => {
+        if (cancelled) return;
+        setEntries(loaded);
+        setError(null);
+        setLoading(false);
+      },
+      (failure: unknown) => {
+        if (cancelled) return;
+        setError(failure instanceof Error ? failure : new Error(String(failure)));
+        setLoading(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, agent, enabled, generation]);
+
+  const refresh = useCallback(() => {
+    shared.get(client)?.delete(agent ?? '');
+    setGeneration((current) => current + 1);
+  }, [client, agent]);
+
+  const catalog = useMemo(() => toolCatalogFrom(entries), [entries]);
+  return { catalog, entries, isLoading, error, refresh };
+}

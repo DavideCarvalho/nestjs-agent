@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ToolCatalog } from '../presentation/phrasing.js';
 import {
   type ChatStatus,
   type MessageUsageInfo,
@@ -91,6 +92,11 @@ export interface TranscriptItemOptions {
    * run. Off by default, so a renderer already drawing tool cards keeps drawing them.
    */
   sources?: boolean;
+  /**
+   * Server-declared tool presentations (`useToolCatalog(...).catalog`). Given → each tool call's
+   * `description` and each tool block's `activity` speak in the tool's own words; omitted → generic.
+   */
+  toolCatalog?: ToolCatalog;
   /**
    * Settle a parked question set — wire to `useAgentChat`'s `answer`. Supplying it is what lifts a
    * question set out of the tool run into an `elicitation` block: without somewhere to send an
@@ -562,6 +568,7 @@ function useTranscriptItems({
         isReasoningOpen: (key, isStreamingRun) => openReasoning.get(key) ?? isStreamingRun,
         toggleReasoning: (key, open) => stableToggle(key)(open),
         ...(options.sources !== undefined ? { sources: options.sources } : {}),
+        ...(options.toolCatalog !== undefined ? { toolCatalog: options.toolCatalog } : {}),
         ...(options.onAnswer !== undefined
           ? {
               elicitation: {
