@@ -7,7 +7,12 @@ import type {
   TranscriptFile,
   TranscriptUiBlock,
 } from '../transcript/model.js';
-import { type TranscriptItem, useTranscriptItem } from '../transcript/use-chat-transcript.js';
+import {
+  type EditSubmitInput,
+  type MessageActionInput,
+  type TranscriptItem,
+  useTranscriptItem,
+} from '../transcript/use-chat-transcript.js';
 import { useAmbientRenderUi } from './ambient-ui.js';
 
 export type { AnyToolUIPart, MessageUsageInfo } from '../transcript/model.js';
@@ -86,12 +91,12 @@ export interface MessageItemProps extends MessageRenderSlots {
   isStreaming?: boolean;
   /** User bubble gets a pencil → inline textarea; submitting calls back with the new text. */
   editable?: boolean;
-  onEditSubmit?: (newText: string) => void | Promise<void>;
+  onEditSubmit?: (input: EditSubmitInput) => void | Promise<void>;
   /** Assistant bubble gets a "Regenerate" affordance. */
   regeneratable?: boolean;
-  onRegenerate?: () => void | Promise<void>;
+  onRegenerate?: (input: MessageActionInput) => void | Promise<void>;
   /** When provided, a "Fork" affordance calls back with this message's id. */
-  onFork?: (uiMessageId: string) => void | Promise<void>;
+  onFork?: (input: MessageActionInput) => void | Promise<void>;
   /** Server-aggregated usage for this assistant turn (cost + tokens line). */
   usage?: MessageUsageInfo | null;
   /** ISO timestamp of the persisted message; rendered as a relative-time line when set. */
@@ -128,10 +133,10 @@ export function MessageItem({
     message,
     isStreaming,
     ...(editable !== undefined ? { editable } : {}),
-    ...(onEditSubmit ? { onEditSubmit: (_id: string, next: string) => onEditSubmit(next) } : {}),
+    ...(onEditSubmit ? { onEditSubmit } : {}),
     ...(onFork ? { onFork } : {}),
     ...(regeneratable !== undefined ? { regeneratable } : {}),
-    ...(onRegenerate ? { onRegenerate: () => onRegenerate() } : {}),
+    ...(onRegenerate ? { onRegenerate } : {}),
     ...(usage != null ? { getUsage: () => usage } : {}),
     ...(createdAt != null ? { getCreatedAt: () => createdAt } : {}),
   });

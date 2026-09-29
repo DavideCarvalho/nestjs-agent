@@ -27,8 +27,8 @@ const READ = part({
 
 interface HarnessProps {
   parts?: UIMessage['parts'];
-  onApprove?: (toolCallId: string) => void | Promise<void>;
-  onReject?: (toolCallId: string) => void | Promise<void>;
+  onApprove?: (input: { toolCallId: string }) => void | Promise<void>;
+  onReject?: (input: { toolCallId: string }) => void | Promise<void>;
   renderToolPart?: Parameters<typeof ChatToolGroup>[0]['renderToolPart'];
 }
 
@@ -36,8 +36,8 @@ function Harness({ parts = [ACTION], onApprove, onReject, renderToolPart }: Harn
   const transcript = useChatTranscript({
     messages: [{ id: 'm1', role: 'assistant', parts }],
     status: 'streaming',
-    ...(onApprove ? { onApprove } : {}),
-    ...(onReject ? { onReject } : {}),
+    onApprove: onApprove ?? null,
+    onReject: onReject ?? null,
   });
   const block = transcript.items[0]?.blocks[0] as TranscriptToolBlock;
   return <ChatToolGroup block={block} renderToolPart={renderToolPart} />;
@@ -61,7 +61,7 @@ describe('ChatToolGroup', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
 
-    expect(onApprove).toHaveBeenCalledWith('call-2');
+    expect(onApprove).toHaveBeenCalledWith({ toolCallId: 'call-2' });
   });
 
   it('sends a rejection for it just the same', () => {
@@ -70,7 +70,7 @@ describe('ChatToolGroup', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
 
-    expect(onReject).toHaveBeenCalledWith('call-2');
+    expect(onReject).toHaveBeenCalledWith({ toolCallId: 'call-2' });
   });
 
   it('closes both doors once a decision is on its way, so the other cannot follow it', () => {

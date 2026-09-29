@@ -44,8 +44,8 @@ function thread(part = askPart()): UIMessage[] {
 
 interface HarnessProps {
   messages?: UIMessage[];
-  onAnswer?: (toolCallId: string, answers: Record<string, string[]>) => void;
-  onSkip?: (toolCallId: string) => void;
+  onAnswer?: (input: { toolCallId: string; answers?: Record<string, string[]> }) => void;
+  onSkip?: (input: { toolCallId: string }) => void;
   /** Render through the whole message instead of the block alone. */
   wholeMessage?: boolean;
 }
@@ -60,7 +60,7 @@ function Harness({
     messages,
     status: 'streaming',
     onAnswer,
-    ...(onSkip ? { onSkip } : {}),
+    onSkip: onSkip ?? null,
   });
   const item = transcript.items[0];
   if (!item) {
@@ -122,7 +122,10 @@ describe('ChatElicitation', () => {
     fireEvent.click(optionInput('This file'));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(onAnswer).toHaveBeenCalledWith('intake-run-1', { scope: ['file'] });
+    expect(onAnswer).toHaveBeenCalledWith({
+      toolCallId: 'intake-run-1',
+      answers: { scope: ['file'] },
+    });
   });
 
   it('confirms on Enter, the way the form reads', () => {
@@ -131,7 +134,7 @@ describe('ChatElicitation', () => {
 
     fireEvent.submit(container.querySelector('form') as HTMLFormElement);
 
-    expect(onAnswer).toHaveBeenCalledWith('intake-run-1', {});
+    expect(onAnswer).toHaveBeenCalledWith({ toolCallId: 'intake-run-1', answers: {} });
   });
 
   it('offers a skip only when the host wired one', () => {
@@ -142,7 +145,7 @@ describe('ChatElicitation', () => {
 
     render(<Harness onSkip={onSkip} />);
     fireEvent.click(screen.getByRole('button', { name: /Skip/ }));
-    expect(onSkip).toHaveBeenCalledWith('intake-run-1');
+    expect(onSkip).toHaveBeenCalledWith({ toolCallId: 'intake-run-1' });
   });
 
   it('goes read-only once the run settles it, and says what was chosen', () => {

@@ -4,7 +4,6 @@ import type {
   MessageFeedback,
   ModelCatalogView,
   QuotaReport,
-  QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
@@ -39,9 +38,6 @@ export class AgentHttpError extends Error {
     this.name = 'AgentHttpError';
   }
 }
-
-/** The quota-today read-model: usage, the configured limit (null → unlimited), and USD spend. */
-export type QuotaToday = QuotaView;
 
 export interface CancelResult {
   aborted: boolean;
@@ -215,10 +211,6 @@ export class AgentClient implements AgentBackend {
     );
   }
 
-  renameThread(id: string, title: string): Promise<OkResult> {
-    return this.updateThread(id, { title });
-  }
-
   /** General `PATCH <path>/threads/:threadId` — title and/or the thread's pinned default agent. */
   updateThread(id: string, patch: ThreadPatch): Promise<OkResult> {
     return this.request<OkResult>('PATCH', `/threads/${encodeURIComponent(id)}`, patch);
@@ -340,10 +332,6 @@ export class AgentClient implements AgentBackend {
   /** `GET <path>/quota` — the caller's budget windows and the one blocking sends, if any. */
   getQuota(): Promise<QuotaReport> {
     return this.request<QuotaReport>('GET', '/quota');
-  }
-
-  getQuotaToday(): Promise<QuotaToday> {
-    return this.request<QuotaToday>('GET', '/quota/today');
   }
 
   cancelStream(runId: string): Promise<CancelResult> {

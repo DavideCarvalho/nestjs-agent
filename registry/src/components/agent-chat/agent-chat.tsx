@@ -2,9 +2,15 @@
 
 import { cn } from '@/lib/utils';
 import {
+  type AnswerInput,
+  type ApproveInput,
   type AutocompleteSource,
   type ChatStatus,
+  type EditSubmitInput,
+  type MessageActionInput,
   type MessageUsageInfo,
+  type RejectInput,
+  type SkipInput,
   type TranscriptSource,
   useChatTranscript,
 } from '@dudousxd/nestjs-agent-react';
@@ -26,23 +32,23 @@ export interface AgentChatProps {
   /** Cancel the turn in flight — `chat.cancel`. Without it the composer offers no stop. */
   onStop?: () => void | Promise<void>;
   editable?: boolean;
-  onEditSubmit?: (messageId: string, text: string) => void | Promise<void>;
-  onFork?: (messageId: string) => void | Promise<void>;
+  onEditSubmit?: (input: EditSubmitInput) => void | Promise<void>;
+  onFork?: (input: MessageActionInput) => void | Promise<void>;
   regeneratable?: boolean;
-  onRegenerate?: (messageId: string) => void | Promise<void>;
+  onRegenerate?: (input: MessageActionInput) => void | Promise<void>;
   getUsage?: (message: UIMessage) => MessageUsageInfo | null;
   getCreatedAt?: (message: UIMessage) => string | null;
   followUps?: string[];
 
   /**
-   * Settle a parked question set — `chat.answer`. Supplying it is what puts the form on screen at
-   * all: an agent's intake and the model's own `ask` both park the run until someone answers.
+   * Settle a parked question set — `chat.answer`. Default: the enclosing `<AgentProvider>`'s backend,
+   * so the form works with nothing passed; `null` leaves question sets as plain tool calls.
    */
-  onAnswer?: (toolCallId: string, answers: Record<string, string[]>) => void | Promise<void>;
-  onSkip?: (toolCallId: string) => void | Promise<void>;
-  /** Settle a tool call parked on a human — `chat.approve` / `chat.reject`. */
-  onApprove?: (toolCallId: string) => void | Promise<void>;
-  onReject?: (toolCallId: string) => void | Promise<void>;
+  onAnswer?: ((input: AnswerInput) => void | Promise<void>) | null;
+  onSkip?: ((input: SkipInput) => void | Promise<void>) | null;
+  /** Settle a tool call parked on a human — `chat.approve` / `chat.reject`. Default: the backend's. */
+  onApprove?: ((input: ApproveInput) => void | Promise<void>) | null;
+  onReject?: ((input: RejectInput) => void | Promise<void>) | null;
 
   welcomeTitle?: ReactNode;
   welcomeDescription?: ReactNode;

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { UIMessage } from 'ai';
+import { type ReactNode, createElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentBackend } from '../backend.js';
+import { AgentProvider } from '../provider.js';
 import type { TranscriptElicitationBlock, TranscriptToolBlock } from './model.js';
 import { type UseChatTranscriptOptions, useChatTranscript } from './use-chat-transcript.js';
 
@@ -55,9 +58,30 @@ function questionSet(result: { current: ReturnType<typeof useChatTranscript> }) 
 }
 
 describe('useChatTranscript — settling a question set', () => {
-  it('keeps it a tool card until the host says where an answer goes', () => {
-    const { result } = transcript();
+  it('keeps it a tool card when the host opts out with onAnswer: null', () => {
+    const { result } = transcript({ onAnswer: null });
     expect(result.current.items.at(-1)?.blocks[0]?.kind).toBe('tools');
+  });
+
+  it('is a working form by default — answered through the in-scope backend', async () => {
+    const answerToolCall = vi.fn(async () => undefined);
+    const backend = { answerToolCall, skipToolCall: vi.fn() } as unknown as AgentBackend;
+    const { result } = renderHook(
+      () => useChatTranscript({ messages: parked(), status: 'ready' }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(AgentProvider, { backend }, children),
+      },
+    );
+    expect(questionSet(result).kind).toBe('elicitation');
+    act(() => questionSet(result).questions[0]?.options[0]?.select());
+    act(() => questionSet(result).answer.run());
+    await waitFor(() =>
+      expect(answerToolCall).toHaveBeenCalledWith({
+        toolCallId: 'intake-run-1',
+        answers: { scope: ['file'] },
+      }),
+    );
   });
 
   it('holds the picks so a chosen option survives the next render', () => {
@@ -79,7 +103,10 @@ describe('useChatTranscript — settling a question set', () => {
     act(() => questionSet(result).answer.run());
 
     await waitFor(() => expect(onAnswer).toHaveBeenCalledTimes(1));
-    expect(onAnswer).toHaveBeenCalledWith('intake-run-1', { scope: ['file'] });
+    expect(onAnswer).toHaveBeenCalledWith({
+      toolCallId: 'intake-run-1',
+      answers: { scope: ['file'] },
+    });
   });
 
   it("keeps one set's picks out of another set's submission", async () => {
@@ -107,7 +134,10 @@ describe('useChatTranscript — settling a question set', () => {
     act(() => setAt(2).answer.run());
 
     await waitFor(() => expect(onAnswer).toHaveBeenCalledTimes(1));
-    expect(onAnswer).toHaveBeenCalledWith('intake-run-1', { tests: ['unit', 'e2e'] });
+    expect(onAnswer).toHaveBeenCalledWith({
+      toolCallId: 'intake-run-1',
+      answers: { tests: ['unit', 'e2e'] },
+    });
   });
 
   it('submits nothing at all when the user just confirmed', async () => {
@@ -116,7 +146,9 @@ describe('useChatTranscript — settling a question set', () => {
 
     act(() => questionSet(result).answer.run());
 
-    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith('intake-run-1', {}));
+    await waitFor(() =>
+      expect(onAnswer).toHaveBeenCalledWith({ toolCallId: 'intake-run-1', answers: {} }),
+    );
   });
 
   it('reports the submission in flight', async () => {
@@ -153,7 +185,7 @@ describe('useChatTranscript — settling a question set', () => {
 
   it('clears a previous failure when the user tries again', async () => {
     const onAnswer = vi
-      .fn<(toolCallId: string, answers: Record<string, string[]>) => Promise<void>>()
+      .fn<(input: { toolCallId: string; answers?: Record<string, string[]> }) => Promise<void>>()
       .mockRejectedValueOnce(new Error('nope'))
       .mockResolvedValueOnce(undefined);
     const { result } = transcript({ onAnswer });
@@ -171,7 +203,7 @@ describe('useChatTranscript — settling a question set', () => {
 
     act(() => questionSet(result).skip.run());
 
-    await waitFor(() => expect(onSkip).toHaveBeenCalledWith('intake-run-1'));
+    await waitFor(() => expect(onSkip).toHaveBeenCalledWith({ toolCallId: 'intake-run-1' }));
     expect(onAnswer).not.toHaveBeenCalled();
   });
 });
@@ -203,14 +235,38 @@ describe('useChatTranscript — approving a parked tool call', () => {
   it('offers approve and reject on an action tool waiting for a person', async () => {
     const onApprove = vi.fn();
     const { result } = renderHook(() =>
-      useChatTranscript({ messages: pendingApproval(), status: 'streaming', onApprove }),
+      useChatTranscript({
+        messages: pendingApproval(),
+        status: 'streaming',
+        onApprove,
+        onReject: null,
+      }),
     );
 
     expect(call(result)?.isAwaitingApproval).toBe(true);
     expect(call(result)?.approve.available).toBe(true);
     expect(call(result)?.reject.available).toBe(false);
     act(() => call(result)?.approve.run());
-    await waitFor(() => expect(onApprove).toHaveBeenCalledWith('call-2'));
+    await waitFor(() => expect(onApprove).toHaveBeenCalledWith({ toolCallId: 'call-2' }));
+  });
+
+  it('approves through the in-scope backend when no handler is given', async () => {
+    const approveToolCall = vi.fn(async () => undefined);
+    const rejectToolCall = vi.fn(async () => undefined);
+    const backend = { approveToolCall, rejectToolCall } as unknown as AgentBackend;
+    const { result } = renderHook(
+      () => useChatTranscript({ messages: pendingApproval(), status: 'streaming' }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(AgentProvider, { backend }, children),
+      },
+    );
+    expect(call(result)?.approve.available).toBe(true);
+    expect(call(result)?.reject.available).toBe(true);
+    act(() => call(result)?.approve.run({ remember: true }));
+    await waitFor(() =>
+      expect(approveToolCall).toHaveBeenCalledWith({ toolCallId: 'call-2', remember: true }),
+    );
   });
 
   it('surfaces a refused decision on the call it belongs to', async () => {

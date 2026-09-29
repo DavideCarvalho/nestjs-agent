@@ -1,7 +1,10 @@
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AgentBackend } from '../backend.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
+import { useAgentBackend } from '../provider.js';
+import type { AgentMessageMetadata } from '../stored-thread-to-ui-messages.js';
 import {
   type ApproveOptions,
   type ChatStatus,
@@ -74,15 +77,53 @@ export interface TranscriptItem {
   regenerate: TranscriptActionState;
 }
 
+/** What an edit-and-resubmit sends. */
+export interface EditSubmitInput {
+  messageId: string;
+  text: string;
+}
+
+/** Names the message an action is about. */
+export interface MessageActionInput {
+  messageId: string;
+}
+
+/** Settling a parked question set. `answers` holds only the questions the user touched. */
+export interface AnswerInput {
+  toolCallId: string;
+  answers?: Record<string, string[]>;
+}
+
+/** Declining a parked question set. */
+export interface SkipInput {
+  toolCallId: string;
+}
+
+/** Approving a tool call parked on a human. */
+export interface ApproveInput extends ApproveOptions {
+  toolCallId: string;
+  /** The surface the decision came through; the server records `'web'` when omitted. */
+  via?: string;
+}
+
+/** Rejecting a tool call parked on a human. */
+export interface RejectInput {
+  toolCallId: string;
+  reason?: string;
+  via?: string;
+}
+
 export interface TranscriptItemOptions {
   /** User messages get an inline edit-and-resubmit machine. */
   editable?: boolean;
-  onEditSubmit?: (messageId: string, text: string) => void | Promise<void>;
-  onFork?: (messageId: string) => void | Promise<void>;
+  onEditSubmit?: (input: EditSubmitInput) => void | Promise<void>;
+  onFork?: (input: MessageActionInput) => void | Promise<void>;
   /** Only the LAST assistant message gets a regenerate machine. */
   regeneratable?: boolean;
-  onRegenerate?: (messageId: string) => void | Promise<void>;
+  onRegenerate?: (input: MessageActionInput) => void | Promise<void>;
+  /** Default: `metadata.usage` (replayed turns; see `AgentMessageMetadata`). */
   getUsage?: (message: UIMessage) => MessageUsageInfo | null;
+  /** Default: `metadata.createdAt` (replayed and streamed messages). */
   getCreatedAt?: (message: UIMessage) => string | null;
   /** How long `copy.copied` stays true. Default 1500ms. */
   copyResetMs?: number;
@@ -99,23 +140,24 @@ export interface TranscriptItemOptions {
    */
   toolCatalog?: ToolCatalog;
   /**
-   * Settle a parked question set — wire to `useAgentChat`'s `answer`. Supplying it is what lifts a
-   * question set out of the tool run into an `elicitation` block: without somewhere to send an
-   * answer, a form is a card the user cannot act on.
+   * Settle a parked question set. Default: the in-scope backend's `answerToolCall` (the enclosing
+   * `<AgentProvider>`'s), so a question set is an `elicitation` block the user can act on without
+   * any wiring. `null` turns question sets back into plain tool calls.
    *
    * `answers` holds ONLY the questions the user touched. An omitted one takes its own pre-picked
    * default server-side, which is what keeps "just confirmed" and "picked exactly what was
    * pre-picked" distinguishable in the settled row.
    */
-  onAnswer?: (toolCallId: string, answers: Record<string, string[]>) => void | Promise<void>;
-  /** Decline the question set and let the agent proceed on its own picks — `useAgentChat`'s `skip`. */
-  onSkip?: (toolCallId: string) => void | Promise<void>;
+  onAnswer?: ((input: AnswerInput) => void | Promise<void>) | null;
+  /** Decline the question set and let the agent proceed on its own picks. Default: the backend's. */
+  onSkip?: ((input: SkipInput) => void | Promise<void>) | null;
   /**
-   * Settle a tool call parked on a human — `useAgentChat`'s `approve` / `reject`. `options.remember`
-   * is what `call.approve.run({ remember: true })` passed.
+   * Settle a tool call parked on a human. Default: the in-scope backend's `approveToolCall` /
+   * `rejectToolCall`. `remember` is what `call.approve.run({ remember: true })` passed. `null`
+   * leaves the call without the affordance.
    */
-  onApprove?: (toolCallId: string, options?: ApproveOptions) => void | Promise<void>;
-  onReject?: (toolCallId: string) => void | Promise<void>;
+  onApprove?: ((input: ApproveInput) => void | Promise<void>) | null;
+  onReject?: ((input: RejectInput) => void | Promise<void>) | null;
 }
 
 export interface TranscriptWindow {
@@ -329,8 +371,10 @@ function useTranscriptItems({
   const [settling, setSettling] = useState<ReadonlyMap<string, SettleAction>>(() => new Map());
   const [settleErrors, setSettleErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
 
-  const latest = useRef({ options, drafts, picks, messages });
-  latest.current = { options, drafts, picks, messages };
+  const backend = useAgentBackend();
+  const handlers = settleHandlers(options, backend);
+  const latest = useRef({ options, handlers, drafts, picks, messages });
+  latest.current = { options, handlers, drafts, picks, messages };
 
   const copyTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(
@@ -413,12 +457,12 @@ function useTranscriptItems({
   const answer = useCallback(
     (toolCallId: string) => {
       const current = latest.current;
-      const onAnswer = current.options.onAnswer;
+      const onAnswer = current.handlers.onAnswer;
       if (!onAnswer) {
         return;
       }
       settle(toolCallId, 'answer', () =>
-        onAnswer(toolCallId, answersFor(current.picks, toolCallId)),
+        onAnswer({ toolCallId, answers: answersFor(current.picks, toolCallId) }),
       );
     },
     [settle],
@@ -426,9 +470,9 @@ function useTranscriptItems({
 
   const skip = useCallback(
     (toolCallId: string) => {
-      const onSkip = latest.current.options.onSkip;
+      const onSkip = latest.current.handlers.onSkip;
       if (onSkip) {
-        settle(toolCallId, 'skip', () => onSkip(toolCallId));
+        settle(toolCallId, 'skip', () => onSkip({ toolCallId }));
       }
     },
     [settle],
@@ -436,10 +480,10 @@ function useTranscriptItems({
 
   const approve = useCallback(
     (toolCallId: string, options?: ApproveOptions) => {
-      const onApprove = latest.current.options.onApprove;
+      const onApprove = latest.current.handlers.onApprove;
       if (onApprove) {
         settle(toolCallId, 'approve', () =>
-          options === undefined ? onApprove(toolCallId) : onApprove(toolCallId, options),
+          onApprove({ toolCallId, ...(options?.remember === true ? { remember: true } : {}) }),
         );
       }
     },
@@ -448,9 +492,9 @@ function useTranscriptItems({
 
   const reject = useCallback(
     (toolCallId: string) => {
-      const onReject = latest.current.options.onReject;
+      const onReject = latest.current.handlers.onReject;
       if (onReject) {
-        settle(toolCallId, 'reject', () => onReject(toolCallId));
+        settle(toolCallId, 'reject', () => onReject({ toolCallId }));
       }
     },
     [settle],
@@ -516,13 +560,13 @@ function useTranscriptItems({
           return;
         }
         created.cancelEdit();
-        void latest.current.options.onEditSubmit?.(id, next);
+        void latest.current.options.onEditSubmit?.({ messageId: id, text: next });
       },
       fork: () => {
-        void latest.current.options.onFork?.(id);
+        void latest.current.options.onFork?.({ messageId: id });
       },
       regenerate: () => {
-        void latest.current.options.onRegenerate?.(id);
+        void latest.current.options.onRegenerate?.({ messageId: id });
       },
       textareaRef: (element: HTMLTextAreaElement | null) => {
         if (!element) {
@@ -561,7 +605,7 @@ function useTranscriptItems({
     const draft = drafts.get(message.id);
     const isEditing = draft !== undefined;
     const text = extractMessageText(message.parts);
-    const usage = options.getUsage?.(message) ?? null;
+    const usage = (options.getUsage ?? usageFromMetadata)(message);
     const isUser = message.role === 'user';
     const isAssistant = message.role === 'assistant';
     const isLastAssistant = isAssistant && message.id === lastAssistantId;
@@ -580,13 +624,13 @@ function useTranscriptItems({
         toggleReasoning: (key, open) => stableToggle(key)(open),
         ...(options.sources !== undefined ? { sources: options.sources } : {}),
         ...(options.toolCatalog !== undefined ? { toolCatalog: options.toolCatalog } : {}),
-        ...(options.onAnswer !== undefined
+        ...(handlers.onAnswer !== undefined
           ? {
               elicitation: {
                 picked: (toolCallId, questionId) => picks.get(pickKey(toolCallId, questionId)),
                 pick,
                 canAnswer: true,
-                canSkip: options.onSkip !== undefined,
+                canSkip: handlers.onSkip !== undefined,
                 answer,
                 skip,
                 submitting: (toolCallId) => settling.get(toolCallId) ?? null,
@@ -594,11 +638,11 @@ function useTranscriptItems({
               },
             }
           : {}),
-        ...(options.onApprove !== undefined || options.onReject !== undefined
+        ...(handlers.onApprove !== undefined || handlers.onReject !== undefined
           ? {
               approval: {
-                canApprove: options.onApprove !== undefined,
-                canReject: options.onReject !== undefined,
+                canApprove: handlers.onApprove !== undefined,
+                canReject: handlers.onReject !== undefined,
                 approve,
                 reject,
                 submitting: (toolCallId) => settling.get(toolCallId) ?? null,
@@ -609,7 +653,7 @@ function useTranscriptItems({
       }),
       text,
       usage: usage ? describeUsage(usage) : null,
-      timestamp: describeTimestamp(options.getCreatedAt?.(message)),
+      timestamp: describeTimestamp((options.getCreatedAt ?? createdAtFromMetadata)(message)),
       copy: {
         available: text.length > 0,
         copied: copied.has(message.id),
@@ -657,6 +701,79 @@ interface ItemCallbacks {
   textareaRef: (element: HTMLTextAreaElement | null) => void;
   onTextareaChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onTextareaKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+}
+
+interface SettleHandlers {
+  onAnswer: ((input: AnswerInput) => void | Promise<void>) | undefined;
+  onSkip: ((input: SkipInput) => void | Promise<void>) | undefined;
+  onApprove: ((input: ApproveInput) => void | Promise<void>) | undefined;
+  onReject: ((input: RejectInput) => void | Promise<void>) | undefined;
+}
+
+/**
+ * The handler for each human decision: the caller's, else the backend's own call — so a parked
+ * approval or question set is never a card nobody can act on. `null` opts a decision out.
+ */
+function settleHandlers(options: TranscriptItemOptions, backend: AgentBackend): SettleHandlers {
+  const pick = <T>(own: T | null | undefined, fallback: T | undefined): T | undefined =>
+    own === null ? undefined : (own ?? fallback);
+  return {
+    onAnswer: pick(
+      options.onAnswer,
+      backend.answerToolCall
+        ? async (input) => {
+            await backend.answerToolCall?.(input);
+          }
+        : undefined,
+    ),
+    onSkip: pick(
+      options.onSkip,
+      backend.skipToolCall
+        ? async (input) => {
+            await backend.skipToolCall?.(input);
+          }
+        : undefined,
+    ),
+    onApprove: pick(
+      options.onApprove,
+      backend.approveToolCall
+        ? async (input) => {
+            await backend.approveToolCall?.(input);
+          }
+        : undefined,
+    ),
+    onReject: pick(
+      options.onReject,
+      backend.rejectToolCall
+        ? async (input) => {
+            await backend.rejectToolCall?.(input);
+          }
+        : undefined,
+    ),
+  };
+}
+
+function metadataOf(message: UIMessage): AgentMessageMetadata {
+  const metadata = message.metadata;
+  return metadata !== null && typeof metadata === 'object'
+    ? (metadata as AgentMessageMetadata)
+    : {};
+}
+
+/** The default `getUsage`: what the library stamps on `metadata.usage`. */
+function usageFromMetadata(message: UIMessage): MessageUsageInfo | null {
+  const usage = metadataOf(message).usage;
+  if (usage === undefined) return null;
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    costUsd: usage.costUsd ?? null,
+  };
+}
+
+/** The default `getCreatedAt`: what the library stamps on `metadata.createdAt`. */
+function createdAtFromMetadata(message: UIMessage): string | null {
+  return metadataOf(message).createdAt ?? null;
 }
 
 /** `|` never appears in either half: a tool-call id and a question id are both opaque tokens. */

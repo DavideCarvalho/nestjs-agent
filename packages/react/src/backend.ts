@@ -5,7 +5,6 @@ import type {
   MessageFeedbackValue,
   ModelCatalogView,
   QuotaReport,
-  QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
@@ -139,7 +138,6 @@ export interface AgentBackend {
   uploadAttachment?(file: File, options?: UploadAttachmentOptions): Promise<MessageAttachment>;
   listTools?(agent?: string): Promise<ToolCatalogEntry[]>;
   listSkills?(threadId?: string): Promise<SkillCatalogEntry[]>;
-  getQuotaToday?(): Promise<QuotaView>;
   /** `GET <base>/quota` — every budget window, and which one blocks sends, if any. */
   getQuota?(): Promise<QuotaReport>;
   /** `GET <base>/models?agent=` — what a model picker offers. */

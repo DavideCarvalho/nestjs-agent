@@ -222,7 +222,7 @@ describe('useChatTranscript — copy', () => {
 });
 
 describe('useChatTranscript — edit', () => {
-  const editable = (onEditSubmit: (messageId: string, text: string) => void) => ({
+  const editable = (onEditSubmit: (input: { messageId: string; text: string }) => void) => ({
     messages: [text('user', 'old text', 'u1')],
     status: 'ready' as const,
     editable: true,
@@ -258,7 +258,7 @@ describe('useChatTranscript — edit', () => {
     act(() => result.current.items[0]?.edit.setDraft('new text'));
     act(() => result.current.items[0]?.edit.save());
 
-    expect(onEditSubmit).toHaveBeenCalledWith('u1', 'new text');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'u1', text: 'new text' });
     expect(result.current.items[0]?.edit.isEditing).toBe(false);
   });
 
@@ -280,7 +280,7 @@ describe('useChatTranscript — edit', () => {
     act(() => result.current.items[0]?.edit.start());
     act(() => result.current.items[0]?.edit.setDraft('  padded  '));
     act(() => result.current.items[0]?.edit.save());
-    expect(onEditSubmit).toHaveBeenCalledWith('u1', 'padded');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'u1', text: 'padded' });
   });
 
   it('discards the draft on cancel', () => {
@@ -305,7 +305,7 @@ describe('useChatTranscript — edit', () => {
     const enter = { key: 'Enter', shiftKey: false, preventDefault: vi.fn() };
     act(() => props?.onKeyDown(enter as never));
     expect(enter.preventDefault).toHaveBeenCalled();
-    expect(onEditSubmit).toHaveBeenCalledWith('u1', 'old text');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'u1', text: 'old text' });
 
     act(() => result.current.items[0]?.edit.start());
     const escapeKey = { key: 'Escape', shiftKey: false, preventDefault: vi.fn() };
@@ -359,7 +359,7 @@ describe('useChatTranscript — edit', () => {
     act(() => result.current.items[1]?.edit.start());
     expect(result.current.items.map((item) => item.edit.isEditing)).toEqual([false, true]);
     act(() => result.current.items[1]?.edit.save());
-    expect(onEditSubmit).toHaveBeenCalledWith('u2', 'second');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'u2', text: 'second' });
   });
 });
 
@@ -373,7 +373,7 @@ describe('useChatTranscript — fork and regenerate', () => {
     });
     expect(result.current.items[0]?.fork.available).toBe(true);
     act(() => result.current.items[0]?.fork.run());
-    expect(onFork).toHaveBeenCalledWith('a1');
+    expect(onFork).toHaveBeenCalledWith({ messageId: 'a1' });
   });
 
   it('offers no fork without a handler', () => {
@@ -400,7 +400,7 @@ describe('useChatTranscript — fork and regenerate', () => {
       true,
     ]);
     act(() => result.current.items[2]?.regenerate.run());
-    expect(onRegenerate).toHaveBeenCalledWith('a2');
+    expect(onRegenerate).toHaveBeenCalledWith({ messageId: 'a2' });
   });
 
   it('withholds regenerate unless the host opted in', () => {

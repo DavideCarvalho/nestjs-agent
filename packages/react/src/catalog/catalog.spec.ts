@@ -115,9 +115,41 @@ describe('useAgentChat model selection', () => {
     expect(bodies[1]?.threadId).toBe('thr-1');
 
     await act(async () => {
-      await result.current.setThreadModel('sonnet');
+      await result.current.models.pinToThread('sonnet');
     });
     expect(api.updateThread).toHaveBeenCalledWith('thr-1', { model: 'sonnet' });
+  });
+
+  it('chat.models loads lazily, and select() picks the model the next turns run on', async () => {
+    const api = backend();
+    const { result } = renderHook(() => useAgentChat({ backend: api }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.listModels).not.toHaveBeenCalled();
+    expect(result.current.models.list).toEqual([]);
+    await waitFor(() => expect(result.current.models.list).toHaveLength(3));
+    expect(result.current.models.selected).toBe('fast');
+    act(() => result.current.models.select('sonnet'));
+    expect(result.current.models.selected).toBe('sonnet');
+    await act(async () => {
+      await result.current.sendMessage({ text: 'hi' });
+    });
+    const body = vi.mocked(api.openChatStream).mock.calls[0]?.[0].body;
+    expect(body?.model).toBe('sonnet');
+  });
+
+  it('a pin asked for before the first send lands on the thread that send creates', async () => {
+    const api = backend();
+    const { result } = renderHook(() => useAgentChat({ backend: api }));
+    await act(async () => {
+      await result.current.models.pinToThread('pro');
+    });
+    expect(api.updateThread).not.toHaveBeenCalled();
+    await act(async () => {
+      await result.current.sendMessage({ text: 'hi' });
+    });
+    await waitFor(() => expect(api.updateThread).toHaveBeenCalledWith('thr-1', { model: 'pro' }));
   });
 });
 

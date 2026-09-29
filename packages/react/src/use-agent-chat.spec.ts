@@ -233,15 +233,54 @@ describe('useAgentChat', () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/stream'))).toBe(false);
     });
 
-    it('never fetches the thread when resume is not set (default false)', async () => {
-      const fetchMock = vi.fn(async () => jsonResponse());
+    it('never fetches the thread with history and resume both off', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse());
 
       renderHook(() =>
-        useAgentChat({ threadId: 'thr-3', backend: new AgentClient({ fetch: fetchMock }) }),
+        useAgentChat({
+          threadId: 'thr-3',
+          history: false,
+          resume: false,
+          backend: new AgentClient({ fetch: fetchMock }),
+        }),
       );
 
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/threads/'))).toBe(false);
+    });
+
+    it('resumes by default — no option needed', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/agent/threads/thr-4')) {
+          return jsonResponse({
+            id: 'thr-4',
+            title: 't',
+            transient: false,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            messages: [],
+            activeRunId: 'run-4',
+          });
+        }
+        if (url.endsWith('/agent/chat/run-4/stream')) {
+          return sseResponse([
+            'event: meta\ndata: {"runId":"run-4","threadId":"thr-4"}\n\n',
+            'data: {"kind":"step-start"}\n\n',
+            'data: {"kind":"text","text":"resumed"}\n\n',
+            'data: {"kind":"step-finish"}\n\n',
+            'event: done\ndata: {}\n\n',
+          ]);
+        }
+        return jsonResponse();
+      });
+      const { result } = renderHook(() =>
+        useAgentChat({ threadId: 'thr-4', backend: new AgentClient({ fetch: fetchMock }) }),
+      );
+      await waitFor(() => expect(result.current.messages.at(-1)?.role).toBe('assistant'));
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).endsWith('/agent/chat/run-4/stream')),
+      ).toBe(true);
     });
   });
 

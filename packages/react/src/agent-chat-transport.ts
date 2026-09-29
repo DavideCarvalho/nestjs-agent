@@ -367,11 +367,14 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           started = true;
           // The run rides the message's metadata, so a later call about THIS message (feedback,
           // a resync) can find the rows the server persisted for it.
-          controller.enqueue(
-            streamRunId !== undefined
-              ? { type: 'start', messageMetadata: { runId: streamRunId } }
-              : { type: 'start' },
-          );
+          // `createdAt` so a live message has a timestamp the way a replayed one does.
+          controller.enqueue({
+            type: 'start',
+            messageMetadata: {
+              ...(streamRunId !== undefined ? { runId: streamRunId } : {}),
+              createdAt: new Date().toISOString(),
+            },
+          });
         }
         function openStep() {
           ensureStarted();

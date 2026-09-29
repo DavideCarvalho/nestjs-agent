@@ -2,6 +2,7 @@ import { DEFAULT_REFUSAL_REASON } from '@dudousxd/nestjs-agent-core';
 import type { StoredMessage, ToolResult } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { reasoningDurationMetadata } from './reasoning/timing.js';
+import type { AgentMessageMetadata } from './stored-thread-to-ui-messages.js';
 
 /**
  * Convert a persisted `StoredMessage` (the agent-lib's on-disk shape) into an AI SDK v7
@@ -172,10 +173,23 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
     parts.push(...(pushedByCall.get(call.id) ?? []));
   }
 
+  const metadata: AgentMessageMetadata = {
+    ...(message.feedback !== undefined ? { feedback: message.feedback } : {}),
+    ...(message.createdAt ? { createdAt: message.createdAt } : {}),
+    ...(message.usage !== undefined
+      ? {
+          usage: {
+            inputTokens: message.usage.inputTokens,
+            outputTokens: message.usage.outputTokens,
+            costUsd: message.usage.costUsd ?? null,
+          },
+        }
+      : {}),
+  };
   return {
     id: message.id,
     role: message.role,
     parts,
-    ...(message.feedback !== undefined ? { metadata: { feedback: message.feedback } } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }

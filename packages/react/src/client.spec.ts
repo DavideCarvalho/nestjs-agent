@@ -56,11 +56,11 @@ describe('AgentClient', () => {
       expect(JSON.parse(String(init.body))).toEqual({ defaultAgent: null });
     });
 
-    it('renameThread delegates to updateThread with just a title', async () => {
+    it('renames with a title-only patch', async () => {
       const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
       const client = new AgentClient({ fetch: fetchMock });
 
-      await client.renameThread('thr-1', 'New title');
+      await client.updateThread('thr-1', { title: 'New title' });
 
       const [url, init] = fetchCall(fetchMock);
       expect(url).toBe('/agent/threads/thr-1');
