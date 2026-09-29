@@ -450,39 +450,64 @@ describe('PgLexicalVectorStore.searchText', () => {
     expect(isLexicalVectorStore(new PgVectorStore(client))).toBe(false);
   });
 
-  it('ranks with ts_rank_cd over the configured expression, filter bindings after query + topK', async () => {
+  it('runs explicit search syntax as written first, filter bindings after query + topK', async () => {
     const { client, calls } = fakeClient();
     const store = new PgLexicalVectorStore(client, { table: 't', fullText: { config: 'english' } });
 
-    await store.searchText('solar panels', { topK: 4, filter: { tenant: 't1' } });
+    await store.searchText('"solar panels" -wind', { topK: 4, filter: { tenant: 't1' } });
 
     const sql = calls[0]?.sql ?? '';
     expect(sql).toContain(
       "to_tsvector('english'::regconfig, text) @@ websearch_to_tsquery('english', $1) AND metadata @> $3::jsonb",
     );
     expect(sql).toContain('ts_rank_cd(');
-    expect(calls[0]?.params).toEqual(['solar panels', 4, '{"tenant":"t1"}']);
+    expect(calls[0]?.params).toEqual(['"solar panels" -wind', 4, '{"tenant":"t1"}']);
+    // Nothing matched as written: the meaningful terms, ranked.
+    expect(calls).toHaveLength(2);
   });
 
-  it('falls back to any word when every word matches nothing', async () => {
+  it('searches a question by its meaningful terms, ranked by IDF, without its stop words', async () => {
     const { client, calls } = fakeClient();
     const store = new PgLexicalVectorStore(client, { fullText: { column: 'tsv' } });
 
-    await store.searchText("What's the solar-panel warranty?", { topK: 4 });
+    await store.searchText("What's the solar-panel warranty?", {
+      topK: 4,
+      filter: { tenant: 't1' },
+    });
 
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.sql).toContain("tsv @@ to_tsquery('simple', $1)");
-    expect(calls[1]?.params[0]).toBe("'what' | 'the' | 'solar' | 'panel' | 'warranty'");
+    expect(calls).toHaveLength(1);
+    const sql = calls[0]?.sql ?? '';
+    expect(sql).toContain("tsv @@ to_tsquery('simple', $1) AND metadata @> $4::jsonb");
+    expect(sql).toContain(
+      'ln(1 + ((SELECT count(*) FROM __cand) - count(*) + 0.5) / (count(*) + 0.5))',
+    );
+    expect(calls[0]?.params).toEqual([
+      "'solar' | 'panel' | 'warranty'",
+      4,
+      ['solar', 'panel', 'warranty'],
+      '{"tenant":"t1"}',
+    ]);
   });
 
-  it('does not fall back when disabled, nor for a single word', async () => {
+  it("drops only the stop words of the question's language, or none when disabled", async () => {
+    const { client, calls } = fakeClient();
+    await new PgLexicalVectorStore(client).searchText('Qual é o prazo de reembolso?', { topK: 4 });
+    expect(calls[0]?.params[2]).toEqual(['prazo', 'reembolso']);
+    await new PgLexicalVectorStore(client, { fullText: { stopWords: false } }).searchText(
+      'the warranty',
+      { topK: 4 },
+    );
+    expect(calls[1]?.params[2]).toEqual(['the', 'warranty']);
+  });
+
+  it('only matches every word as written when the fallback is disabled', async () => {
     const { client, calls } = fakeClient();
     await new PgLexicalVectorStore(client, { fullText: { anyTermFallback: false } }).searchText(
       'two words',
       { topK: 4 },
     );
-    await new PgLexicalVectorStore(client).searchText('oneword', { topK: 4 });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain('websearch_to_tsquery');
   });
 
   it('answers a deny filter or a blank query without a round-trip', async () => {

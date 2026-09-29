@@ -230,9 +230,13 @@ const store = new PgLexicalVectorStore(db, {
 });
 ```
 
-Ranking is `ts_rank_cd`; the query goes through `websearch_to_tsquery` (every word must appear), and
-when that finds nothing it retries with any word (`anyTermFallback`, default on) so a long question
-still matches. Without `column`, `ensureSchema`/`schemaStatements` add a GIN index over
+A question is searched by its meaningful terms: its stop words are dropped (English, Portuguese and
+Spanish lists by default, only the language(s) the question is written in; `stopWords` to change or
+`false` to keep every word), and rows holding any remaining term are ranked by the sum of the
+matched terms' IDF (BM25 without term frequencies), `ts_rank_cd` breaking ties, so three rare terms
+beat a row full of "the/of/which". Quoted phrases and `-word` go through `websearch_to_tsquery` as
+written first; `anyTermFallback: false` keeps only that (every word must appear). `keywordTerms()`
+is exported for other stores. Without `column`, `ensureSchema`/`schemaStatements` add a GIN index over
 `to_tsvector(config, text)` — the exact expression the query uses. On a populated table create it
 `CONCURRENTLY` in a migration rather than at boot (see below).
 
