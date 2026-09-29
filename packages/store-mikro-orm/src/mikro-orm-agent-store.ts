@@ -330,6 +330,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       updatedAt: now,
       ...(source.tenantRef != null ? { tenantRef: source.tenantRef } : {}),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
+      ...(source.model != null ? { model: source.model } : {}),
     });
     em.persist(fork);
     for (const message of kept) {
@@ -453,6 +454,10 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       thread.defaultAgent = patch.defaultAgent;
       touched = true;
     }
+    if (patch.model !== undefined) {
+      thread.model = patch.model;
+      touched = true;
+    }
     if (touched) {
       thread.updatedAt = new Date();
       await em.flush();
@@ -465,6 +470,17 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
    * message, every tool output) to hand it over. `null` when the thread is unknown, soft-deleted, or
    * has no default set.
    */
+  /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
+  async modelForThread(threadId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: threadId, deletedAt: null },
+      { fields: ['model'] },
+    );
+    return thread?.model ?? null;
+  }
+
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     const em = this.em.fork();
     const thread = await em.findOne(
@@ -764,6 +780,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
       defaultAgent: thread.defaultAgent ?? null,
+      ...(thread.model != null ? { model: thread.model } : {}),
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }

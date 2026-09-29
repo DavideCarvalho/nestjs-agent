@@ -5,6 +5,7 @@ import {
   AGENT_DURABLE_RUNNER,
   AGENT_MEMORY,
   AGENT_MODEL,
+  AGENT_MODEL_CATALOG,
   AGENT_OPTIONS,
   AGENT_PROMPT_CONTRIBUTORS,
   AGENT_QUOTA_STORE,
@@ -40,6 +41,7 @@ import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
 import { MemoriesController } from './controller/memories.controller.js';
 import { MessagesController } from './controller/messages.controller.js';
+import { ModelsController } from './controller/models.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { SkillsController } from './controller/skills.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
@@ -120,6 +122,11 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
           : undefined),
       inject: [AGENT_OPTIONS, AGENT_STORE],
     },
+    {
+      provide: AGENT_MODEL_CATALOG,
+      useFactory: (o: AgentModuleOptions) => o.models,
+      inject: [AGENT_OPTIONS],
+    },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
     // Populates the registry + contributors (onModuleInit) BEFORE AiToolDiscoveryService synthesizes
@@ -178,6 +185,7 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     AGENT_MODEL,
     ...(includeStore ? [AGENT_STORE] : []),
     AGENT_QUOTA_STORE,
+    AGENT_MODEL_CATALOG,
     AGENT_PROMPT_CONTRIBUTORS,
     AGENT_SKILLS,
     AGENT_MEMORY,
@@ -199,6 +207,7 @@ const BASE_CONTROLLERS = [
   MemoriesController,
   ToolsController,
   MessagesController,
+  ModelsController,
 ];
 
 /** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */

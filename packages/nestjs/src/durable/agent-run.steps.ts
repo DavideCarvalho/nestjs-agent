@@ -148,6 +148,7 @@ export class AgentRunSteps {
           messages: input.messages,
           tools,
           sink: frames.writer,
+          ...(input.model !== undefined ? { model: input.model } : {}),
         }),
       ),
       frames.summary(),

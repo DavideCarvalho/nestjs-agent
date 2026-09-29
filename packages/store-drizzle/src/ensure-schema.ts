@@ -16,6 +16,7 @@ const statements: string[] = [
     transient INTEGER NOT NULL DEFAULT 0,
     active_stream_id TEXT,
     default_agent TEXT,
+    model TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
@@ -196,6 +197,11 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_message',
     column: 'feedback',
     ddl: 'ALTER TABLE agent_message ADD COLUMN feedback TEXT',
+  },
+  {
+    table: 'agent_thread',
+    column: 'model',
+    ddl: 'ALTER TABLE agent_thread ADD COLUMN model TEXT',
   },
   {
     table: 'agent_tool_call',

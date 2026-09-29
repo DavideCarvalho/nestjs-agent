@@ -287,6 +287,7 @@ export class InMemoryAgentStore implements AgentStore {
       // Feedback rates a message in ITS thread; a fork starts unrated.
       messages: kept.map(({ feedback: _feedback, ...message }) => ({ ...message })),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
+      ...(source.model != null ? { model: source.model } : {}),
     };
     this.threads.set(id, row);
     return this.toSummary(row);
@@ -340,6 +341,9 @@ export class InMemoryAgentStore implements AgentStore {
     if (patch.defaultAgent !== undefined) {
       row.defaultAgent = patch.defaultAgent;
     }
+    if (patch.model !== undefined) {
+      row.model = patch.model;
+    }
     row.updatedAt = this.now();
   }
 
@@ -354,6 +358,11 @@ export class InMemoryAgentStore implements AgentStore {
    */
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     return this.threads.get(threadId)?.defaultAgent ?? null;
+  }
+
+  /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
+  async modelForThread(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.model ?? null;
   }
 
   /**
@@ -773,6 +782,7 @@ export class InMemoryAgentStore implements AgentStore {
       updatedAt: row.updatedAt,
       ...(last !== undefined ? { lastMessagePreview: last.content.slice(0, 120) } : {}),
       defaultAgent: row.defaultAgent ?? null,
+      ...(row.model != null ? { model: row.model } : {}),
     };
   }
 }

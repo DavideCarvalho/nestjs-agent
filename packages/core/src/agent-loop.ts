@@ -80,6 +80,7 @@ import type {
   HistoryPolicyContext,
   HistorySelection,
 } from './spi/history-policy.js';
+import { withSelectedModel } from './spi/model-catalog.js';
 import type {
   BufferedModelTurnResult,
   ModelProvider,
@@ -2489,10 +2490,20 @@ export interface AgentLoopResult<TOutput = unknown> {
  * hooks that make the same loop body either in-process or a replay-safe durable workflow.
  */
 export async function runAgentLoop<TOutput = unknown>(
-  deps: AgentLoopDeps<TOutput>,
+  boundDeps: AgentLoopDeps<TOutput>,
   input: AgentRunInput,
   hooks: AgentLoopHooks,
 ): Promise<AgentLoopResult<TOutput>> {
+  // A turn with a selected model runs EVERY call it makes on it — the answer, a structured-output
+  // pass, the follow-ups — and labels its usage with it when the provider reports no model id.
+  const deps: AgentLoopDeps<TOutput> =
+    input.model === undefined
+      ? boundDeps
+      : {
+          ...boundDeps,
+          model: withSelectedModel(boundDeps.model, input.model),
+          modelId: input.model,
+        };
   const maxSteps = deps.maxSteps ?? 8;
   let system = await resolveSystemPrompt(deps, input);
   const inputProcessors = deps.inputProcessors ?? [];
@@ -2782,6 +2793,7 @@ export async function runAgentLoop<TOutput = unknown>(
         messages: prompt.messages,
         actor: input.actor,
         ...(gated ? { bufferOutput: true } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
       });
     } else {
       const tools = withMemoryTool({

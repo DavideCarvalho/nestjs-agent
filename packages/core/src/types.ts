@@ -370,6 +370,12 @@ export interface AgentRunInput {
    * "regenerate" button. `userText` is ignored when set.
    */
   regenerate?: boolean;
+  /**
+   * The model this turn runs on — a catalog id the service already checked (a per-send pick, else
+   * the thread's pinned model). Handed to the provider as `ModelTurnArgs.model`, and the usage
+   * label when the provider reports none. Omitted → the provider's default.
+   */
+  model?: string;
 }
 
 /**
@@ -464,6 +470,12 @@ export interface ThreadSummary {
    * read-model normalizes this to `null` when absent, so a client can always do `?? null`.
    */
   activeRunId?: string | null;
+  /**
+   * The model pinned on this thread (`PATCH /threads/:id { model }`) — every turn without its own
+   * `model` runs on it. `null` → the provider's default. Undefined for a store that does not persist
+   * it; the REST read-model normalizes that to `null`.
+   */
+  model?: string | null;
 }
 
 export interface StoredMessage {
@@ -575,6 +587,8 @@ export interface LlmStepEnvelope {
    * interpose on, so the instruction has to ride the envelope. Absent → stream live, as before.
    */
   bufferOutput?: boolean;
+  /** The turn's selected model ({@link AgentRunInput.model}), for the worker's provider call. */
+  model?: string;
 }
 
 /**

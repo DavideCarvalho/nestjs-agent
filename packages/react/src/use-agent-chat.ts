@@ -43,6 +43,12 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
   client?: B;
   /** Named agent to run each turn. */
   agent?: string;
+  /**
+   * Catalog model to run each turn on (see `useModels`), sent as the body's `model`. Read at every
+   * send, so a picker can change it between turns. Omitted → the thread's pinned model, else the
+   * server default. A single send can still override it with `sendMessage(msg, { body: { model } })`.
+   */
+  model?: string;
   /** Thread this chat is bound to. Omitted → backend creates one on send. */
   threadId?: string;
   /** Persisted history to seed `useChat` with (consumed on mount only). */
@@ -263,6 +269,7 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
         const threadId = current.threadId ?? createdThreadId.current;
         return {
           ...(threadId !== undefined ? { threadId } : {}),
+          ...(current.model !== undefined ? { model: current.model } : {}),
           ...(pageContext ? { pageContext } : {}),
           ...(regenerate ? { regenerate: true } : {}),
         };
@@ -609,6 +616,22 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
     refresh: refreshBackground,
   };
 
+  /**
+   * Pin `model` on this chat's thread (`null` unpins it) — every later turn without its own `model`
+   * runs on it. Throws when the chat has no thread yet (nothing sent, no `threadId`).
+   */
+  const setThreadModel = useCallback(
+    async (model: string | null): Promise<void> => {
+      const threadId = latest.current.threadId ?? createdThreadId.current;
+      if (threadId === undefined) {
+        throw new Error('setThreadModel: this chat has no thread yet');
+      }
+      await client.updateThread(threadId, { model });
+      notifyThreads(client, { type: 'changed' });
+    },
+    [client],
+  );
+
   const getThreadId = useCallback(
     (): string | undefined => latest.current.threadId ?? createdThreadId.current,
     [],
@@ -635,6 +658,7 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
      * on the first send. A getter, because the created id is learned mid-stream.
      */
     getThreadId,
+    setThreadModel,
     /** The backend this chat talks to — pass it to `useThreads`, `useMessageFeedback`, … */
     backend: client,
     /** Same object as {@link backend}; kept for callers that read it under its old name. */

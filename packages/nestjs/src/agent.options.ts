@@ -6,6 +6,7 @@ import type {
   HistoryPolicy,
   InputProcessor,
   MemoryProvider,
+  ModelCatalog,
   ModelProvider,
   OutputProcessor,
   QuotaStore,
@@ -142,6 +143,12 @@ export interface AgentModuleOptions {
    * `quotaLimitTokens` instead, which binds the built-in ledger-backed store.
    */
   quota?: QuotaStore;
+  /**
+   * Which models a caller may pick — `GET <base>/models`, a send's `model`, a thread's pinned model
+   * (`PATCH <base>/threads/:id { model }`). The picked id reaches the {@link ModelProvider} as
+   * `ModelTurnArgs.model`. Omit → an empty catalog, and a request naming a model is refused.
+   */
+  models?: ModelCatalog;
   /**
    * Daily per-actor token budget, enforced against the persisted usage ledger by the built-in
    * `LedgerQuotaStore`. A convenience over wiring a {@link QuotaStore} by hand — set this and quotas

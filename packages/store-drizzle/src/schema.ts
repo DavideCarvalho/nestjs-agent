@@ -47,6 +47,8 @@ export const agentThread = sqliteTable(
     activeStreamId: text('active_stream_id'),
     /** The agent a new turn on this thread defaults to when the caller names none. */
     defaultAgent: text('default_agent'),
+    /** The model every turn on this thread runs on unless the send names one; `null` → default. */
+    model: text('model'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),

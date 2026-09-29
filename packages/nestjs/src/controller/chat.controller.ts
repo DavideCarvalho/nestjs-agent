@@ -41,6 +41,8 @@ interface ChatBody {
   regenerate?: boolean;
   /** Start a new thread transient (hidden from history until promoted). Ignored with `threadId`. */
   transient?: boolean;
+  /** Run this turn on a catalog model (see `GET models`) instead of the thread's pinned one. */
+  model?: string;
 }
 
 /**
@@ -92,6 +94,7 @@ export class ChatController {
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
       ...(body.transient === true ? { transient: true } : {}),
+      ...(typeof body.model === 'string' && body.model.length > 0 ? { model: body.model } : {}),
     });
     // The run was just started for this actor, so no ownership read is needed — and one would race
     // the run itself, which clears the thread's active stream (what ownership is derived from) the

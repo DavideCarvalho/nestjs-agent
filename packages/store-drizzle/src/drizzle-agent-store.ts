@@ -73,6 +73,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       transient: input.transient ?? false,
       activeStreamId: null,
       defaultAgent: null,
+      model: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -216,6 +217,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       transient: false,
       activeStreamId: null,
       defaultAgent: source.defaultAgent,
+      model: source.model,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -393,6 +395,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
     if (patch.defaultAgent !== undefined) {
       updates.defaultAgent = patch.defaultAgent;
     }
+    if (patch.model !== undefined) {
+      updates.model = patch.model;
+    }
     if (Object.keys(updates).length === 0) {
       return;
     }
@@ -405,6 +410,15 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
    * agent answers the next turn, and {@link getThread} would materialize the whole transcript to
    * hand it over. `null` when the thread is unknown, soft-deleted, or has no default set.
    */
+  /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
+  async modelForThread(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ model: agentThread.model })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+    return thread?.model ?? null;
+  }
+
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
       .select({ defaultAgent: agentThread.defaultAgent })
@@ -675,6 +689,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       createdAt: thread.createdAt.toISOString(),
       updatedAt: thread.updatedAt.toISOString(),
       defaultAgent: thread.defaultAgent,
+      ...(thread.model != null ? { model: thread.model } : {}),
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }

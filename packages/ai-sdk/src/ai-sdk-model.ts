@@ -50,6 +50,13 @@ export type AiSdkModelOptions = CallSettings & {
    * the guard with a plain fetch is the host's legitimate call.
    */
   experimental_download?: Experimental_DownloadFunction;
+  /**
+   * Turn the model a caller picked (`ModelTurnArgs.model` — a `ModelCatalog` id the server already
+   * checked) into the `LanguageModel` to call, e.g. `(id) => openai(id)` or a registry lookup.
+   * Omitted → a string `model` (an AI Gateway id) is replaced by the picked id verbatim, and a
+   * provider instance ignores the pick.
+   */
+  resolveModel?: (id: string) => LanguageModel;
 };
 
 /**
@@ -60,11 +67,17 @@ export type AiSdkModelOptions = CallSettings & {
  * loop to run as its own (replay-safe) steps.
  */
 export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): ModelProvider {
+  const { resolveModel, ...settings } = opts ?? {};
+  const modelFor = (picked: string | undefined): LanguageModel => {
+    if (picked === undefined) return model;
+    if (resolveModel !== undefined) return resolveModel(picked);
+    return typeof model === 'string' ? picked : model;
+  };
   return {
     async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
       const result = streamText({
-        ...opts,
-        model,
+        ...settings,
+        model: modelFor(args.model),
         instructions: args.system,
         messages: mapMessages(args.messages),
         tools: mapTools(args.tools),

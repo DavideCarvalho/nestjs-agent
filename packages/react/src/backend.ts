@@ -1,7 +1,9 @@
 import type {
+  AgentCatalogEntry,
   MessageAttachment,
   MessageFeedback,
   MessageFeedbackValue,
+  ModelCatalogView,
   QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
@@ -17,11 +19,13 @@ import type {
 export interface ThreadPatch {
   title?: string;
   defaultAgent?: string | null;
+  /** Pin a catalog model on the thread; `null` unpins it. */
+  model?: string | null;
 }
 
 /** Starting a turn: the body `POST <base>/chat` takes (see docs/stream-protocol.md). */
 export interface ChatStreamRequest {
-  /** `{ message, threadId?, agent?, attachments?, pageContext?, regenerate?, … }`. */
+  /** `{ message, threadId?, agent?, model?, attachments?, pageContext?, regenerate?, … }`. */
   body: Record<string, unknown>;
   /** Per-request headers the AI SDK was handed for this send. */
   headers?: Record<string, string>;
@@ -110,6 +114,10 @@ export interface AgentBackend {
   listTools?(agent?: string): Promise<ToolCatalogEntry[]>;
   listSkills?(threadId?: string): Promise<SkillCatalogEntry[]>;
   getQuotaToday?(): Promise<QuotaView>;
+  /** `GET <base>/models?agent=` — what a model picker offers. */
+  listModels?(agent?: string): Promise<ModelCatalogView>;
+  /** `GET <base>/agents` — what an agent picker offers. */
+  listAgents?(): Promise<AgentCatalogEntry[]>;
   setMessageFeedback?(
     messageId: string,
     input: MessageFeedbackInput,

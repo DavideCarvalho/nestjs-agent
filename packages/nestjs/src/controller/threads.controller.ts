@@ -7,6 +7,8 @@ interface UpdateThreadBody {
   title?: string;
   /** `null` clears the thread's default agent. Omitted → left untouched. */
   defaultAgent?: string | null;
+  /** `null` unpins the thread's model. Omitted → left untouched. Must be offered by the catalog. */
+  model?: string | null;
 }
 
 @Controller('threads')
@@ -56,6 +58,7 @@ export class ThreadsController {
     await this.agent.updateThread(actor, id, {
       ...(body.title !== undefined ? { title: body.title } : {}),
       ...('defaultAgent' in body ? { defaultAgent: body.defaultAgent ?? null } : {}),
+      ...('model' in body ? { model: body.model ?? null } : {}),
     });
     return { ok: true };
   }

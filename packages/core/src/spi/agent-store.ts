@@ -96,6 +96,8 @@ export interface UpdateThreadInput {
   title?: string;
   /** `null` clears the thread's default agent (falls back to the module default). */
   defaultAgent?: string | null;
+  /** `null` unpins the thread's model (turns run on the provider default). */
+  model?: string | null;
 }
 
 export interface RecordUsageInput {
