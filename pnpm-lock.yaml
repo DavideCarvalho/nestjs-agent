@@ -456,6 +456,15 @@ importers:
       '@dudousxd/nestjs-durable-transport-event-emitter':
         specifier: 0.5.1
         version: 0.5.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/event-emitter@12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4))
+      '@dudousxd/nestjs-media':
+        specifier: 0.9.3
+        version: 0.9.3(@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-media-core':
+        specifier: 0.9.1
+        version: 0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-media-testing':
+        specifier: 0.6.0
+        version: 0.6.0(@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(vitest@2.1.9(@types/node@22.20.4)(jsdom@26.1.0))
       '@nestjs/common':
         specifier: 12.0.4
         version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -582,6 +591,9 @@ importers:
       '@ai-sdk/react':
         specifier: 4.0.17
         version: 4.0.17(react@19.3.0)(zod@3.25.76)
+      '@dudousxd/nestjs-media-client':
+        specifier: 0.3.0
+        version: 0.3.0
       '@json-render/core':
         specifier: 0.21.0
         version: 0.21.0(zod@3.25.76)
@@ -1281,6 +1293,27 @@ packages:
         optional: true
       zod:
         optional: true
+
+  '@dudousxd/nestjs-media-client@0.3.0':
+    resolution: {integrity: sha512-8KikFJAaVyoQ1f5wEnmxRltvMCfhmH+n3cL4sRJ37By+BX8BD1m/fd6ywTSkpCAgcq3/OXHz+VA10PtskU+okQ==}
+    engines: {node: '>=20.3.0'}
+
+  '@dudousxd/nestjs-media-core@0.9.1':
+    resolution: {integrity: sha512-Cc1lxWutKLNT/b/3O+W6AxrN8SpUa7hSsG0AJBOhZXXLjMzHyu3YbOSAe3zXKEOzjCCKs5/+GjlLTnQOVIbySA==}
+
+  '@dudousxd/nestjs-media-testing@0.6.0':
+    resolution: {integrity: sha512-DyasrHkzPjk1ssQreT2XuI0EIgL8a+kYRBDdAWAdiwcTf/BS8SgyseMESUoWFq+CKT4w8QB0w5FTeMsYV7ihkg==}
+    peerDependencies:
+      '@dudousxd/nestjs-media-core': '>=0.8.0 <1.0.0'
+      vitest: ^2.0.0
+
+  '@dudousxd/nestjs-media@0.9.3':
+    resolution: {integrity: sha512-+2BTauLZPdFNvSbEiy4Qc1TIqZGe85ayvhQMPOjl232UNDKS/Hwa729IcnNTUdAiT6z42+sFm5xHUrjd0i+7rQ==}
+    peerDependencies:
+      '@dudousxd/nestjs-media-core': '>=0.8.0 <1.0.0'
+      '@nestjs/common': ^10.0.0 || ^11.0.0 || ^12.0.0
+      '@nestjs/core': ^10.0.0 || ^11.0.0 || ^12.0.0
+      reflect-metadata: ^0.2.0
 
   '@dudousxd/nestjs-telescope@1.29.1':
     resolution: {integrity: sha512-faWXz2C8Xb3oKHS9yyzAJWHOKDZrnyb0y5qt8mJW0bgxD0XfKPnnNuLQOaHqSxNOFLBPDiSFh8czrXZ1YGqs+g==}
@@ -6131,6 +6164,28 @@ snapshots:
       '@dudousxd/durable-worker': 0.7.1(@dudousxd/nestjs-durable-core@0.52.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
       '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       zod: 3.25.76
+
+  '@dudousxd/nestjs-media-client@0.3.0': {}
+
+  '@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
+    dependencies:
+      '@dudousxd/nestjs-diagnostics': 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+    transitivePeerDependencies:
+      - '@nestjs/common'
+      - '@nestjs/core'
+      - reflect-metadata
+
+  '@dudousxd/nestjs-media-testing@0.6.0(@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(vitest@2.1.9(@types/node@22.20.4)(jsdom@26.1.0))':
+    dependencies:
+      '@dudousxd/nestjs-media-core': 0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      vitest: 2.1.9(@types/node@22.20.4)(jsdom@26.1.0)
+
+  '@dudousxd/nestjs-media@0.9.3(@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
+    dependencies:
+      '@dudousxd/nestjs-media-core': 0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      reflect-metadata: 0.2.2
 
   '@dudousxd/nestjs-telescope@1.29.1(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:

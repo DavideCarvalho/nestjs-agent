@@ -27,6 +27,7 @@ const external = [
   'unist-util-visit',
   '@json-render/react',
   '@json-render/core',
+  '@dudousxd/nestjs-media-client',
 ];
 
 export default defineConfig([
@@ -36,6 +37,7 @@ export default defineConfig([
       markdown: 'src/markdown/index.ts',
       genui: 'src/genui/index.ts',
       'genui-json-render': 'src/genui/json-render.tsx',
+      media: 'src/media/index.ts',
     },
     format: ['esm'],
     dts: true,
@@ -51,6 +53,7 @@ export default defineConfig([
       markdown: 'src/markdown/index.ts',
       genui: 'src/genui/index.ts',
       'genui-json-render': 'src/genui/json-render.tsx',
+      media: 'src/media/index.ts',
     },
     format: ['cjs'],
     dts: true,

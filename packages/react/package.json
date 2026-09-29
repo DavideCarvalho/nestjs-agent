@@ -67,6 +67,16 @@
         "types": "./dist/genui-json-render.d.cts",
         "default": "./dist/genui-json-render.cjs"
       }
+    },
+    "./media": {
+      "import": {
+        "types": "./dist/media.d.ts",
+        "default": "./dist/media.js"
+      },
+      "require": {
+        "types": "./dist/media.d.cts",
+        "default": "./dist/media.cjs"
+      }
     }
   },
   "files": [
@@ -82,6 +92,7 @@
   },
   "peerDependencies": {
     "@ai-sdk/react": "^4.0.0",
+    "@dudousxd/nestjs-media-client": ">=0.3.0",
     "@json-render/react": ">=0.21.0 <1.0.0",
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
@@ -99,6 +110,9 @@
     "unist-util-visit": "^5.1.0"
   },
   "peerDependenciesMeta": {
+    "@dudousxd/nestjs-media-client": {
+      "optional": true
+    },
     "@json-render/react": {
       "optional": true
     },
@@ -141,6 +155,7 @@
   },
   "devDependencies": {
     "@ai-sdk/react": "4.0.17",
+    "@dudousxd/nestjs-media-client": "0.3.0",
     "@json-render/core": "0.21.0",
     "@json-render/react": "0.21.0",
     "@streamdown/code": "1.1.1",

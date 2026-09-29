@@ -71,6 +71,16 @@
         "types": "./dist/genui/index.d.cts",
         "default": "./dist/genui/index.cjs"
       }
+    },
+    "./media": {
+      "import": {
+        "types": "./dist/media/index.d.ts",
+        "default": "./dist/media/index.js"
+      },
+      "require": {
+        "types": "./dist/media/index.d.cts",
+        "default": "./dist/media/index.cjs"
+      }
     }
   },
   "files": [
@@ -89,6 +99,7 @@
   "peerDependencies": {
     "@dudousxd/nestjs-durable": ">=0.34.0",
     "@dudousxd/nestjs-durable-core": ">=0.52.0",
+    "@dudousxd/nestjs-media": ">=0.9.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/platform-express": "^10.0.0 || ^11.0.0 || ^12.0.0",
@@ -102,6 +113,9 @@
     "@dudousxd/nestjs-durable-core": {
       "optional": true
     },
+    "@dudousxd/nestjs-media": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     }
@@ -113,6 +127,9 @@
     "@dudousxd/nestjs-durable": "0.34.0",
     "@dudousxd/nestjs-durable-core": "0.52.0",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
+    "@dudousxd/nestjs-media": "0.9.3",
+    "@dudousxd/nestjs-media-core": "0.9.1",
+    "@dudousxd/nestjs-media-testing": "0.6.0",
     "@nestjs/common": "12.0.4",
     "@nestjs/core": "12.0.4",
     "@nestjs/event-emitter": "12.0.1",
