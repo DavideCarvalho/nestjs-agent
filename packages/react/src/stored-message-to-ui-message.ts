@@ -17,6 +17,10 @@ import { reasoningDurationMetadata } from './reasoning/timing.js';
  *                            thumbnails on a reloaded thread.
  *   - each `ui` component  → a `data-ui` part keyed by the component id — the same part a live
  *                            `ui` stream frame becomes.
+ *   - each `approval`      → a `data-approval-requested` part keyed by the call id (who decides,
+ *                            until when) and, once decided, a `data-approval-settled` one — the
+ *                            same parts the live `approval-requested`/`approval-settled` frames
+ *                            become, so the transcript folds both into `call.approval` either way.
  *   - each `toolCall`      → a `tool-<name>` part, pairing its `toolResult` (matched by id):
  *       - a result found   → `output-available` state, carrying `output`.
  *       - no result found  → `input-available` state (the call never finished, e.g. the run was
@@ -94,6 +98,32 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
         ...(component.version !== undefined ? { version: component.version } : {}),
       },
     });
+  }
+
+  for (const approval of message.approvals ?? []) {
+    parts.push({
+      type: 'data-approval-requested',
+      id: approval.toolCallId,
+      data: {
+        id: approval.toolCallId,
+        approver: approval.approver,
+        ...(approval.expiresAt !== undefined ? { expiresAt: approval.expiresAt } : {}),
+      },
+    });
+    if (approval.status !== 'pending') {
+      parts.push({
+        type: 'data-approval-settled',
+        id: approval.toolCallId,
+        data: {
+          id: approval.toolCallId,
+          status: approval.status,
+          ...(approval.decidedBy !== undefined ? { decidedBy: approval.decidedBy } : {}),
+          ...(approval.decidedVia !== undefined ? { decidedVia: approval.decidedVia } : {}),
+          ...(approval.remember === true ? { remember: true } : {}),
+          ...(approval.reason !== undefined ? { reason: approval.reason } : {}),
+        },
+      });
+    }
   }
 
   for (const call of message.toolCalls ?? []) {

@@ -2,6 +2,7 @@ import type {
   AgentIntake,
   AgentPricingStore,
   AgentStore,
+  ApprovalPolicy,
   HistoryPolicy,
   InputProcessor,
   MemoryConfig,
@@ -26,6 +27,8 @@ export interface AgentDeps {
   store: AgentStore;
   registry: ToolRegistry;
   rolesPolicy: RolesPolicy;
+  /** Who approves an action call, and for how long (from `forRoot({ approvalPolicy })`). Undefined → the requester, no expiry. */
+  approvalPolicy?: ApprovalPolicy;
   quota?: QuotaStore;
   sink: TokenStreamSink;
   /** Fallback accounting label; the provider's turn result overrides it when set. */

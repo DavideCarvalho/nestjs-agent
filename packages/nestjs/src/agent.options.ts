@@ -2,6 +2,7 @@ import type {
   ActorResolver,
   AgentHistoryWindow,
   AgentStore,
+  ApprovalPolicy,
   HistoryPolicy,
   InputProcessor,
   MemoryProvider,
@@ -149,6 +150,13 @@ export interface AgentModuleOptions {
   quotaLimitTokens?: number;
   /** Tool authorization gate. Defaults to role-in-`defaultRoles`. */
   rolesPolicy?: RolesPolicy;
+  /**
+   * Who has to approve an `action` tool call, and how long the request stays open. Defaults to the
+   * requester (the thread's own actor) with no expiry. A requirement naming another approver (a
+   * role) is enforced by `POST tool-call/approve|reject` through `canDecide` — by default, the
+   * deciding actor must hold that role. See `ApprovalPolicy`.
+   */
+  approvalPolicy?: ApprovalPolicy;
   /** Default roles a tool requires when its `roles` is omitted. Defaults to `['ADMIN']`. */
   defaultRoles?: string[];
   /**

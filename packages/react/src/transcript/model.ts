@@ -98,16 +98,40 @@ export interface TranscriptSettleState {
   run: () => void;
 }
 
+/** How an approval stands. */
+export type TranscriptApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
 /**
- * Who has to settle a parked call, and until when — from the stream's `approval-requested` frame.
+ * Who has to settle a parked call, until when, and — once it settled — how. From the stream's
+ * `approval-requested` / `approval-settled` frames, or the same parts a reloaded thread carries.
  * `null` on a call whose runner never said (the call can still be awaiting approval).
  */
 export interface TranscriptApproval {
   /** Open vocabulary the host defines: `'requester'`, `'admin'`, a role… */
   approver: string;
-  /** ISO-8601; `null` when the request never lapses. */
+  /** ISO-8601; `null` when the request never lapses. Pair with `useApprovalCountdown`. */
   expiresAt: string | null;
+  /** Why the call needs a person, when the runner said. */
   reason: string | null;
+  /**
+   * `pending` until a settlement arrives; then what it said. Falls back to the call's own state
+   * (denied → `rejected`, an output → `approved`) for a runner that streams no settlement.
+   */
+  status: TranscriptApprovalStatus;
+  /** The approval also covers later calls of this tool in this thread. */
+  remember: boolean;
+  /** Opaque ref of who decided; `null` while pending, on an expiry, or when the runner did not say. */
+  decidedBy: string | null;
+  /** The surface the decision came through (`'web'`, `'slack'`, `'remembered'`, …). */
+  decidedVia: string | null;
+  /** What the person said when declining. */
+  decisionReason: string | null;
+}
+
+/** What an approval can carry beyond yes. */
+export interface ApproveOptions {
+  /** Approve later calls of the same tool in the same thread without asking again. */
+  remember?: boolean;
 }
 
 /** One call in a tool run, with whatever human decision it is parked on. */
@@ -137,7 +161,8 @@ export interface TranscriptToolCall {
    * IS the pending approval.
    */
   isAwaitingApproval: boolean;
-  approve: TranscriptSettleState;
+  /** `run({ remember: true })` approves this tool for the rest of the thread. */
+  approve: TranscriptSettleState & { run: (options?: ApproveOptions) => void };
   reject: TranscriptSettleState;
   /** A failed decision — the call is still parked, so the affordance stays live. */
   error: string | null;
@@ -307,7 +332,7 @@ export interface ElicitationBlockOptions {
 export interface ApprovalBlockOptions {
   canApprove: boolean;
   canReject: boolean;
-  approve: (toolCallId: string) => void;
+  approve: (toolCallId: string, options?: ApproveOptions) => void;
   reject: (toolCallId: string) => void;
   /** Which decision this call is sending, or `null` for none. */
   submitting: (toolCallId: string) => SettleAction | null;
@@ -366,7 +391,7 @@ export function buildTranscriptBlocks(
       buildToolCall(
         part,
         options.approval,
-        approvals.get(part.toolCallId) ?? null,
+        approvalOf(approvals.get(part.toolCallId), part),
         options.toolCatalog,
       ),
     );
@@ -449,7 +474,7 @@ export function buildTranscriptBlocks(
       fileBuffer.push(part);
       continue;
     }
-    if (part.type === APPROVAL_PART) {
+    if (part.type === APPROVAL_PART || part.type === SETTLED_PART) {
       continue;
     }
     flushAll();
@@ -617,7 +642,12 @@ function buildToolCall(
     approve: {
       available: awaiting && options?.canApprove === true,
       isSubmitting: sending === 'approve',
-      run: () => options?.approve(toolCallId),
+      // Read by field, not passed through: `onClick={call.approve.run}` hands this a click event,
+      // and a host's handler must not receive that as its options.
+      run: (approveOptions?: ApproveOptions) =>
+        approveOptions?.remember === true
+          ? options?.approve(toolCallId, { remember: true })
+          : options?.approve(toolCallId),
     },
     reject: {
       available: awaiting && options?.canReject === true,
@@ -785,25 +815,106 @@ function buildElicitationBlock(
 
 const UI_PART = 'data-ui';
 const APPROVAL_PART = 'data-approval-requested';
+const SETTLED_PART = 'data-approval-settled';
 
-/** The approval metadata on a message, by call id. The latest frame for a call wins. */
-function readApprovals(parts: UIMessage['parts']): Map<string, TranscriptApproval> {
-  const out = new Map<string, TranscriptApproval>();
+/** What the approval parts of a message say about one call, before its own state is consulted. */
+interface ApprovalParts {
+  approver: string | null;
+  expiresAt: string | null;
+  reason: string | null;
+  status: Exclude<TranscriptApprovalStatus, 'pending'> | null;
+  remember: boolean;
+  decidedBy: string | null;
+  decidedVia: string | null;
+  decisionReason: string | null;
+}
+
+const SETTLED_STATUSES: readonly string[] = ['approved', 'rejected', 'expired'];
+
+/** The approval metadata on a message, by call id. The latest frame of each kind for a call wins. */
+function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
+  const out = new Map<string, ApprovalParts>();
+  const entry = (id: string): ApprovalParts => {
+    let found = out.get(id);
+    if (found === undefined) {
+      found = {
+        approver: null,
+        expiresAt: null,
+        reason: null,
+        status: null,
+        remember: false,
+        decidedBy: null,
+        decidedVia: null,
+        decisionReason: null,
+      };
+      out.set(id, found);
+    }
+    return found;
+  };
   for (const part of parts) {
-    if (part.type !== APPROVAL_PART) {
+    if (part.type !== APPROVAL_PART && part.type !== SETTLED_PART) {
       continue;
     }
     const data = (part as DataUIPart<Record<string, unknown>>).data;
-    if (!isRecord(data) || typeof data.id !== 'string' || typeof data.approver !== 'string') {
+    if (!isRecord(data) || typeof data.id !== 'string') {
       continue;
     }
-    out.set(data.id, {
-      approver: data.approver,
-      expiresAt: typeof data.expiresAt === 'string' ? data.expiresAt : null,
-      reason: typeof data.reason === 'string' ? data.reason : null,
-    });
+    const approval = entry(data.id);
+    if (part.type === APPROVAL_PART) {
+      if (typeof data.approver !== 'string') {
+        continue;
+      }
+      approval.approver = data.approver;
+      approval.expiresAt = typeof data.expiresAt === 'string' ? data.expiresAt : null;
+      approval.reason = typeof data.reason === 'string' ? data.reason : null;
+      continue;
+    }
+    if (typeof data.status !== 'string' || !SETTLED_STATUSES.includes(data.status)) {
+      continue;
+    }
+    approval.status = data.status as ApprovalParts['status'];
+    if (approval.approver === null && typeof data.approver === 'string') {
+      approval.approver = data.approver;
+    }
+    approval.remember = data.remember === true;
+    approval.decidedBy = typeof data.decidedBy === 'string' ? data.decidedBy : null;
+    approval.decidedVia = typeof data.decidedVia === 'string' ? data.decidedVia : null;
+    approval.decisionReason = typeof data.reason === 'string' ? data.reason : null;
   }
   return out;
+}
+
+/**
+ * One call's approval: its parts, with the status completed from the call's own state when no
+ * settlement was streamed. `null` when nothing on the message says who decides.
+ */
+function approvalOf(
+  parts: ApprovalParts | undefined,
+  call: AnyToolUIPart,
+): TranscriptApproval | null {
+  if (parts === undefined || parts.approver === null) {
+    return null;
+  }
+  return {
+    approver: parts.approver,
+    expiresAt: parts.expiresAt,
+    reason: parts.reason,
+    status: parts.status ?? statusFromPart(call),
+    remember: parts.remember,
+    decidedBy: parts.decidedBy,
+    decidedVia: parts.decidedVia,
+    decisionReason: parts.decisionReason,
+  };
+}
+
+function statusFromPart(call: AnyToolUIPart): TranscriptApprovalStatus {
+  if (call.state === 'output-denied') {
+    return 'rejected';
+  }
+  if (call.state === 'output-available' || call.state === 'output-error') {
+    return 'approved';
+  }
+  return 'pending';
 }
 
 /** A pushed component, or `null` when the part does not carry one this model can address. */

@@ -37,7 +37,7 @@ resume", not an error.
 3. Fields are only ever added, and added fields are optional. Absent optional fields are omitted,
    not `null`.
 4. Tool calls are addressed by `id`, unique within the run. Every frame about a call (`tool-input-*`,
-   `tool-output*`, `approval-requested`, `elicitation`) uses the same `id`, and the call MUST be
+   `tool-output*`, `approval-requested`, `approval-settled`, `elicitation`) uses the same `id`, and the call MUST be
    announced (`tool-input-start` or `tool-input-available`) before its outcome or approval frame —
    the AI SDK drops the whole message when a call is settled before it exists. The React transport
    guards the approval case, but not the outcome case.
@@ -62,6 +62,7 @@ resume", not an error.
 | `tool-output-denied` | `id`, `reason?` | `tool-output-denied` — a person said no; nothing ran |
 | `elicitation` | `id`, `request: { preamble?, questions[] }` | opens an `ask` tool call carrying the questions (see *Asking the user*) |
 | `approval-requested` | `id`, `approver: string`, `expiresAt?: string`, `reason?: string` | `data-approval-requested` part (id = call id) + native `tool-approval-request` (`approvalId` = call id); the tool part moves to `state: 'approval-requested'` |
+| `approval-settled` | `id`, `status: 'approved' \| 'rejected' \| 'expired'`, `approver?`, `decidedBy?`, `decidedVia?`, `remember?: boolean`, `reason?` | `data-approval-settled` part (id = call id); folded into the call's `approval` by the transcript. The call's own state still moves on its output frame |
 | `ui` | `id`, `component: string`, `props: object`, `version?: number` | `data-ui` part (id = component id); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
 | `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
 | `cancelled` | — | transient `data-cancelled`. Send it as the last frame before `done` when someone stopped the run, so a reader can tell a truncated answer from a complete one |
@@ -80,13 +81,44 @@ or without `approval-requested`. The frame adds who may decide and until when:
 - A client that checked `part.state === 'input-available'` to find pending calls must also accept
   `'approval-requested'` once a runner sends this frame; `TranscriptToolCall.isAwaitingApproval`
   already covers both.
-- The decision is still sent with `POST <base>/tool-call/approve` `{ toolCallId }` /
-  `POST <base>/tool-call/reject` `{ toolCallId, reason? }`. The approval id IS the tool call id.
+- The decision is sent with `POST <base>/tool-call/approve` `{ toolCallId, remember?, via? }` /
+  `POST <base>/tool-call/reject` `{ toolCallId, reason?, via? }`. The approval id IS the tool call
+  id. `remember: true` approves later calls of the same tool in the same thread without asking;
+  `via` names the surface the decision came through (the lib records `'web'` when omitted). A
+  server answers `403` to a caller who is not the approver and `410` once the request lapsed.
 
 The stream stays open while the run waits (a client that dropped reconnects through
-`GET <base>/chat/:runId/stream`). After the decision, continue on that stream with the outcome:
-`tool-output` when it ran, `tool-output-denied` when it was declined, `tool-output-error` when it
-failed or lapsed.
+`GET <base>/chat/:runId/stream`). After the decision, continue on that stream with
+`approval-settled` (optional, recommended) and the outcome: `tool-output` when it ran,
+`tool-output-denied` when it was declined or lapsed, `tool-output-error` when it failed.
+
+### How an approval settles
+
+`approval-settled` says who decided and how; it never carries the outcome itself.
+
+| `status` | Send it when | Then |
+|---|---|---|
+| `approved` | a person approved (`decidedBy`, `decidedVia`, `remember`), or a remembered approval covered the call (`decidedVia: 'remembered'`, `remember: true`, plus `approver` since no request was streamed) | `tool-output` or `tool-output-error` |
+| `rejected` | a person declined (`decidedBy`, `decidedVia`, `reason`) | `tool-output-denied` with the same `reason` |
+| `expired` | `expiresAt` passed with nobody deciding | `tool-output-denied` with `reason: "approval expired"` |
+
+The transcript model reads both approval frames into `TranscriptToolCall.approval`:
+`{ approver, expiresAt, reason, status, remember, decidedBy, decidedVia, decisionReason }`. `status`
+is `pending` until a settlement arrives; a runner that never sends one still gets `rejected` /
+`approved` from the call's own state. `useApprovalCountdown(call.approval?.expiresAt)` gives the
+time left, ticking, for a headless countdown.
+
+In this library the approver, the time to live and the "no approval needed" answer come from the
+`ApprovalPolicy` SPI (`AgentModule.forRoot({ approvalPolicy })`); a role approver is enforced on the
+approve/reject routes by the policy's `canDecide` (default: the decider holds that role). An expiry
+is settled by the runner itself — the durable runner hands the time to live to the signal wait's
+own timeout — and the model is told the approval expired, not that someone said no.
+
+**A runner that is not this library's loop** (e.g. one translating another agent's permission
+prompts) maps its own approval model onto these frames: its "who may decide" onto `approver`, its
+deadline onto `expiresAt`, its outcome record (who, which channel, "always allow") onto
+`approval-settled`. It enforces approvers and expiry on its own approve/reject routes, since those
+are the only way a decision reaches it.
 
 ### Nested calls
 
@@ -131,6 +163,7 @@ message may carry, per step:
 | `reasoning?: string` | a `reasoning` part, placed before the text |
 | `reasoningMs?: number` | that part's `providerMetadata.agent.reasoningMs` (the transcript's `durationMs`) |
 | `ui?: { id, component, props, version? }[]` | `data-ui` parts, first-seen order, last props per `id` |
+| `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
 
 A runner serving these routes should persist the same values it streamed, so a reload shows what
 the live stream did.
@@ -163,7 +196,9 @@ data: {"kind":"tool-input-available","id":"c2","name":"refund","input":{"id":104
 
 data: {"kind":"approval-requested","id":"c2","approver":"admin","expiresAt":"2026-10-01T12:00:00.000Z","reason":"Refunds need an admin"}
 
-    … the stream stays open while the run waits; an admin POSTs /tool-call/approve {"toolCallId":"c2"} …
+    … the stream stays open while the run waits; an admin POSTs /tool-call/approve {"toolCallId":"c2","via":"slack"} …
+
+data: {"kind":"approval-settled","id":"c2","status":"approved","decidedBy":"admin-7","decidedVia":"slack"}
 
 data: {"kind":"tool-output","id":"c2","output":{"refunded":true}}
 

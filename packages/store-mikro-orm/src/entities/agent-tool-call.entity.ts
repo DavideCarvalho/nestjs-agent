@@ -18,6 +18,14 @@ export class AgentToolCall {
   executedAt?: Date | null;
   /** The run (turn) this call belongs to, for a trace deep-link; `null` for a pre-rollout row. */
   runId?: string | null;
+  /** Who had to approve it (`requester` or a role); `null` for a call no policy put to anyone. */
+  approver?: string | null;
+  /** When the approval request lapses; `null` → never. */
+  expiresAt?: Date | null;
+  /** The approval covers later calls of this tool in this thread. */
+  remember?: boolean | null;
+  /** The surface the decision came through (`web`, `slack`, `remembered`, …). */
+  decidedVia?: string | null;
   declare [EntityRepositoryType]?: AgentToolCallRepository;
 }
 
@@ -51,6 +59,10 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
       createdAt: { type: 'datetime', fieldName: 'created_at' },
       executedAt: { type: 'datetime', nullable: true, fieldName: 'executed_at' },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
+      approver: { type: 'string', nullable: true, ...str },
+      expiresAt: { type: 'datetime', nullable: true, fieldName: 'expires_at' },
+      remember: { type: 'boolean', nullable: true },
+      decidedVia: { type: 'string', nullable: true, fieldName: 'decided_via', ...str },
     },
   });
 }

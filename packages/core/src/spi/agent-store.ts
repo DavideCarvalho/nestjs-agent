@@ -59,6 +59,14 @@ export interface RecordToolCallInput {
    * synthetic tool calls) can omit it; the store persists it as `null` when absent.
    */
   runId?: string;
+  /**
+   * Who has to approve this call (`'requester'` or a role), from the turn's `ApprovalPolicy`. Set on
+   * an action call that was put to a person — or approved by a remembered decision — and never
+   * otherwise; persisted as `null` when absent.
+   */
+  approver?: string;
+  /** ISO-8601 instant the approval request lapses. Absent → it never does. */
+  expiresAt?: string;
 }
 
 export interface UpdateToolCallInput {
@@ -68,6 +76,18 @@ export interface UpdateToolCallInput {
   error?: string;
   executionMs?: number;
   executedByRef?: string;
+  /** The approval asked for later calls of this tool in this thread to run without asking. */
+  remember?: boolean;
+  /** The surface the decision came through. See {@link import('../types.js').Decision.decidedVia}. */
+  decidedVia?: string;
+}
+
+/** What the approve/reject routes need to know about a call before they signal a decision on it. */
+export interface ToolCallApprovalState {
+  status: ToolCallStatus;
+  /** `null` for a call no policy put to anyone (an `ask`, or a row written before approvers existed). */
+  approver: string | null;
+  expiresAt: string | null;
 }
 
 /** Patch applied by {@link AgentStore.updateThread}. An omitted key leaves that field untouched. */
@@ -245,6 +265,19 @@ export interface AgentStore {
 
   recordToolCall(input: RecordToolCallInput): Promise<void>;
   updateToolCall(input: UpdateToolCallInput): Promise<void>;
+  /**
+   * OPTIONAL: the names of the tools whose approval someone asked to REMEMBER in this thread — an
+   * approved call persisted with `remember: true`. The loop approves a later call of one of them
+   * without asking, inside that call's own `persist:toolcall` checkpoint. Absent → nothing is ever
+   * remembered, and every call asks.
+   */
+  rememberedApprovals?(threadId: string): Promise<string[]>;
+  /**
+   * OPTIONAL: a call's approval state, or `null` when the call is unknown. Read by the approve/reject
+   * routes to enforce the recorded approver and refuse a decision on a request that already
+   * expired. Absent → every call is treated as the requester's, with no expiry (the old behaviour).
+   */
+  toolCallApproval?(toolCallId: string): Promise<ToolCallApprovalState | null>;
 
   /**
    * OPTIONAL: of `mediaIds`, the ones a message that still exists — in a thread owned by

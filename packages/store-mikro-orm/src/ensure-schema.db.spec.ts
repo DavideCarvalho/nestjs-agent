@@ -52,6 +52,24 @@ const MESSAGE_BEFORE_REASONING_WAS_RECORDED = `create table agent_message (
   constraint agent_message_thread_id_foreign foreign key (thread_id) references agent_thread (id) on delete cascade
 )`;
 
+/** `agent_tool_call` as it stood before approvals recorded who, until when and how. */
+const TOOL_CALL_BEFORE_APPROVALS_WERE_RECORDED = `create table agent_tool_call (
+  id text not null primary key,
+  message_id text not null,
+  tool_name text not null,
+  tool_type text not null,
+  input json null,
+  output json null,
+  status text not null,
+  executed_by_ref text null,
+  execution_ms integer null,
+  error text null,
+  created_at datetime not null,
+  executed_at datetime null,
+  run_id text null,
+  constraint agent_tool_call_message_id_foreign foreign key (message_id) references agent_message (id) on delete cascade
+)`;
+
 /** A host table the store does not own, missing a column its entity declares. */
 class HostNote {
   id!: string;
@@ -232,6 +250,72 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
         reasoningMs: 900,
         ui: [{ id: 'u', component: 'stat', props: {} }],
       });
+    } finally {
+      await instance.close(true);
+    }
+  });
+
+  it('adds the approval columns to an existing agent_tool_call and round-trips them', async () => {
+    const instance = await orm();
+    try {
+      const connection = instance.em.getConnection();
+      for (const sql of await agentSchemaSql(instance, { ifNotExists: false })) {
+        await connection.execute(sql);
+      }
+      await connection.execute('drop table agent_tool_call');
+      await connection.execute(TOOL_CALL_BEFORE_APPROVALS_WERE_RECORDED);
+
+      await ensureAgentSchema(instance);
+
+      expect(await columnsOf(instance, 'agent_tool_call')).toEqual(
+        expect.arrayContaining(['approver', 'expires_at', 'remember', 'decided_via']),
+      );
+      const store = new MikroOrmAgentStore(instance.em);
+      const thread = await store.createThread({ actor: { id: 'a1' } });
+      const other = await store.createThread({ actor: { id: 'a1' } });
+      const message = await store.appendMessage({
+        threadId: thread.id,
+        role: 'assistant',
+        content: 'purging',
+        toolCalls: [{ id: 'c1', name: 'purge', input: {} }],
+      });
+      await store.recordToolCall({
+        toolCallId: 'c1',
+        messageId: message.id,
+        toolName: 'purge',
+        toolType: 'action',
+        input: {},
+        status: 'pending_approval',
+        approver: 'ops',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      });
+      expect(await store.toolCallApproval('c1')).toEqual({
+        status: 'pending_approval',
+        approver: 'ops',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      });
+      expect(await store.rememberedApprovals(thread.id)).toEqual([]);
+
+      await store.updateToolCall({
+        toolCallId: 'c1',
+        status: 'executed',
+        executedByRef: 'op-1',
+        remember: true,
+        decidedVia: 'slack',
+      });
+      expect((await store.getThread(thread.id))?.messages[0]?.approvals).toEqual([
+        {
+          toolCallId: 'c1',
+          approver: 'ops',
+          status: 'approved',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+          remember: true,
+          decidedBy: 'op-1',
+          decidedVia: 'slack',
+        },
+      ]);
+      expect(await store.rememberedApprovals(thread.id)).toEqual(['purge']);
+      expect(await store.rememberedApprovals(other.id)).toEqual([]);
     } finally {
       await instance.close(true);
     }

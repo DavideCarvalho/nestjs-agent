@@ -156,11 +156,15 @@ export class AgentClient {
     return this.request<CancelResult>('POST', `/agent/chat/${encodeURIComponent(runId)}/cancel`);
   }
 
-  approveToolCall(input: { toolCallId: string }): Promise<void> {
+  /**
+   * `remember` approves later calls of the same tool in the same thread; `via` names the surface
+   * the decision came through (the server records `'web'` when omitted).
+   */
+  approveToolCall(input: { toolCallId: string; remember?: boolean; via?: string }): Promise<void> {
     return this.request<void>('POST', '/agent/tool-call/approve', input);
   }
 
-  rejectToolCall(input: { toolCallId: string; reason?: string }): Promise<void> {
+  rejectToolCall(input: { toolCallId: string; reason?: string; via?: string }): Promise<void> {
     return this.request<void>('POST', '/agent/tool-call/reject', input);
   }
 

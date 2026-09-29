@@ -88,6 +88,8 @@ const ASK_TOOL_NAME = 'ask';
  *  - `ui`                 → `data-ui` part, `id` = the component id (a repeat id updates it in place)
  *  - `approval-requested` → `data-approval-requested` part keyed by the call id, plus the SDK's
  *                           native `tool-approval-request` (the part moves to `approval-requested`)
+ *  - `approval-settled`   → `data-approval-settled` part keyed by the call id (who decided, through
+ *                           what, remembered or not); the outcome still rides the call's own output
  *  - `title`, `cancelled` → transient `data-title` / `data-cancelled` (never stored on the message)
  *  - any other kind       → `data-<kind>` part carrying the frame minus `kind`, keyed by its `id`
  *                           when it has one — forwarded, never dropped
@@ -497,6 +499,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                   toolCallId: event.id,
                 });
               }
+              break;
+            case 'approval-settled':
+              ensureStep();
+              // Metadata about a call, like the request: the transcript folds it into that call's
+              // `approval`. The call's own state moves on its output frame, not on this one.
+              forwardAsData(event, false);
               break;
             case 'ui':
               ensureStep();

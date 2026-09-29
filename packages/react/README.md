@@ -112,7 +112,7 @@ function Chat() {
 |---|---|
 | `items` | The mounted window, oldest first. Each item carries `blocks`, `text`, `usage`, `timestamp`, `isStreaming`, `isLastAssistant`, and its action machines. |
 | `items[i].blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'sources' \| 'elicitation' \| 'ui' }`. A `ui` block is a component the server pushed (`{ id, component, props, version }`) — look `component` up in your own registry. A `tools` block is a run of CONSECUTIVE tool parts — any other part between two calls (including a `step-start` marker) ends the run. A `reasoning` block carries `isOpen`/`toggle`, open while it streams. A `sources` block appears only under `sources: true`, an `elicitation` block only under `onAnswer` — see below. |
-| `items[i].blocks[n]` (`tools`) | Also carries `calls`: the same parts, each with `{ toolCallId, name, toolKind, parentId, children, approval, isAwaitingApproval, approve, reject, error }`, and `roots`: the same calls as a tree (a call nested under another by the stream's `parentId` sits in its parent's `children`). `approval` is `{ approver, expiresAt, reason }` when the runner said who has to decide, else `null`. |
+| `items[i].blocks[n]` (`tools`) | Also carries `calls`: the same parts, each with `{ toolCallId, name, toolKind, parentId, children, approval, isAwaitingApproval, approve, reject, error }`, and `roots`: the same calls as a tree (a call nested under another by the stream's `parentId` sits in its parent's `children`). `approval` is `{ approver, expiresAt, reason, status, remember, decidedBy, decidedVia, decisionReason }` when the runner said who has to decide, else `null` — `status` is `pending` / `approved` / `rejected` / `expired`. |
 | `items[i].copy` | `{ available, copied, copy() }` — `copied` flashes for `copyResetMs` (default 1500). |
 | `items[i].edit` | `{ available, isEditing, draft, canSave, start(), cancel(), setDraft(), save(), getTextareaProps() }`. The prop-getter focuses with the caret at the end, saves on Enter, cancels on Escape. |
 | `items[i].fork` / `.regenerate` | `{ available, run() }`. Regenerate is offered on the last assistant message only. |
@@ -223,7 +223,20 @@ An `action` tool's input lands and its output never follows on its own — the l
 between the two — so a call stuck at `input-available` IS the pending approval. A question set parks
 the same way and is deliberately excluded: approving one settles nothing.
 
-A refused settlement (403 "not your thread", a network failure) lands on `block.error` /
+`call.approve.run({ remember: true })` approves this tool for the rest of the thread (the server
+stops asking); `call.approval` says who has to decide and, once settled, who did and through what.
+For a request with an expiry, `useApprovalCountdown(call.approval?.expiresAt)` ticks the time left
+(`{ remainingMs, isExpired }`, headless — pair it with `formatElapsed`):
+
+```tsx
+function ApprovalDeadline({ expiresAt }: { expiresAt: string | null }) {
+  const { remainingMs, isExpired } = useApprovalCountdown(expiresAt);
+  if (remainingMs === null) return null;
+  return <span>{isExpired ? 'Expired' : `${formatElapsed(remainingMs)} left`}</span>;
+}
+```
+
+A refused settlement (403 "not your thread" or "not your approval", 410 "expired", a network failure) lands on `block.error` /
 `call.error` with the affordance still live, rather than escaping as an unhandled rejection. Render
 it — a button that silently does nothing is indistinguishable from a broken one.
 
@@ -420,6 +433,7 @@ data parts, which `useChat`'s `onData` (and `useAgentChat({ onData })`) sees as 
 |---|---|
 | `ui` | a `data-ui` part keyed by the component id (a repeat id updates it in place) |
 | `approval-requested` | a `data-approval-requested` part keyed by the call id, plus the SDK's native approval request — the tool part moves to `state: 'approval-requested'` |
+| `approval-settled` | a `data-approval-settled` part keyed by the call id — who decided, through what, remembered or not; folded into `call.approval` |
 | `title` / `cancelled` | transient `data-title` / `data-cancelled` (never stored on the message); `useAgentChat({ onTitle })` |
 | a kind this version does not know | a `data-<kind>` part — forwarded, never dropped |
 

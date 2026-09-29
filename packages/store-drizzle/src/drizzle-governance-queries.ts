@@ -68,6 +68,7 @@ const TOOL_CALL_STATUSES: readonly string[] = [
   'executed',
   'rejected',
   'failed',
+  'expired',
 ];
 function isToolCallStatus(value: string): value is ToolCallStatus {
   return TOOL_CALL_STATUSES.includes(value);

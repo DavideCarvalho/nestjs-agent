@@ -484,6 +484,23 @@ describe('ensureAgentSchema (drizzle)', () => {
       ui: [{ id: 'u', component: 'stat', props: { value: 1 } }],
     });
 
+    // The approval columns land on an existing agent_tool_call too.
+    await agedStore.recordToolCall({
+      toolCallId: 'aged-call',
+      messageId: thought.id,
+      toolName: 'purge',
+      toolType: 'action',
+      input: {},
+      status: 'pending_approval',
+      approver: 'ops',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+    expect(await agedStore.toolCallApproval('aged-call')).toEqual({
+      status: 'pending_approval',
+      approver: 'ops',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+
     const indexes = await aged.all<{ name: string }>(sql.raw('PRAGMA index_list(agent_tool_call)'));
     expect(indexes.map((index) => index.name)).toContain('agent_tool_call_message_idx');
   });
@@ -753,5 +770,73 @@ describe('DrizzleAgentStore — a recorded run round-trips every field it was st
 
     const [row] = await db.select().from(agentRun).where(eq(agentRun.id, 'run-root'));
     expect(row?.parentRunId).toBeNull();
+  });
+});
+
+describe('DrizzleAgentStore approvals', () => {
+  it('persists who approves, until when, how it was decided, and what to remember', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'purging',
+      toolCalls: [{ id: 'c1', name: 'purge', input: {} }],
+    });
+    await store.recordToolCall({
+      toolCallId: 'c1',
+      messageId: message.id,
+      toolName: 'purge',
+      toolType: 'action',
+      input: {},
+      status: 'pending_approval',
+      approver: 'ops',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+    await store.recordToolCall({
+      toolCallId: 'c2',
+      messageId: message.id,
+      toolName: 'lookup',
+      toolType: 'read',
+      input: {},
+      status: 'auto_executed',
+    });
+
+    expect(await store.toolCallApproval('c1')).toEqual({
+      status: 'pending_approval',
+      approver: 'ops',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    });
+    expect(await store.toolCallApproval('missing')).toBeNull();
+    expect((await store.getThread(thread.id))?.messages[0]?.approvals).toEqual([
+      {
+        toolCallId: 'c1',
+        approver: 'ops',
+        status: 'pending',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+      },
+    ]);
+    expect(await store.rememberedApprovals(thread.id)).toEqual([]);
+
+    await store.updateToolCall({
+      toolCallId: 'c1',
+      status: 'executed',
+      executedByRef: 'op-1',
+      remember: true,
+      decidedVia: 'slack',
+    });
+    expect((await store.getThread(thread.id))?.messages[0]?.approvals).toEqual([
+      {
+        toolCallId: 'c1',
+        approver: 'ops',
+        status: 'approved',
+        expiresAt: '2030-01-01T00:00:00.000Z',
+        remember: true,
+        decidedBy: 'op-1',
+        decidedVia: 'slack',
+      },
+    ]);
+    expect(await store.rememberedApprovals(thread.id)).toEqual(['purge']);
+    const other = await store.createThread({ actor: { id: 'actor-1' } });
+    expect(await store.rememberedApprovals(other.id)).toEqual([]);
   });
 });

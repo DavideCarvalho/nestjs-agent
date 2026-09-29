@@ -1,17 +1,20 @@
-import type {
-  AgentStore,
-  AppendMessageInput,
-  CreateThreadInput,
-  RecordRunStartInput,
-  RecordToolCallInput,
-  RecordUsageInput,
-  StoredMessage,
-  ThreadDetail,
-  ThreadSummary,
-  ToolCallStatus,
-  ToolResult,
-  UpdateThreadInput,
-  UpdateToolCallInput,
+import {
+  type AgentStore,
+  type AppendMessageInput,
+  type CreateThreadInput,
+  type RecordRunStartInput,
+  type RecordToolCallInput,
+  type RecordUsageInput,
+  type StoredMessage,
+  type ThreadDetail,
+  type ThreadSummary,
+  type ToolCallApproval,
+  type ToolCallApprovalState,
+  type ToolCallStatus,
+  type ToolResult,
+  type UpdateThreadInput,
+  type UpdateToolCallInput,
+  toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 
 interface ThreadRow extends ThreadSummary {
@@ -34,6 +37,11 @@ interface ToolCallRow {
   createdAt: string;
   /** The run this call belongs to; `undefined` when the caller didn't supply one. */
   runId?: string;
+  executedByRef?: string;
+  approver?: string;
+  expiresAt?: string;
+  remember?: boolean;
+  decidedVia?: string;
 }
 
 interface UsageRow {
@@ -191,8 +199,54 @@ export class InMemoryAgentStore implements AgentStore {
     }
     return {
       ...this.toSummary(row),
-      messages: row.messages,
+      messages: row.messages.map((message) => this.withApprovals(message)),
       ...(row.activeStreamId !== undefined ? { activeStreamId: row.activeStreamId } : {}),
+    };
+  }
+
+  /** A message with the approval record of every call on it that was put to a person. */
+  private withApprovals(message: StoredMessage): StoredMessage {
+    const approvals: ToolCallApproval[] = [];
+    for (const call of this.toolCalls.values()) {
+      if (call.messageId !== message.id) {
+        continue;
+      }
+      const approval = toolCallApprovalFromRow({
+        toolCallId: call.toolCallId,
+        status: call.status,
+        approver: call.approver,
+        expiresAt: call.expiresAt,
+        remember: call.remember,
+        executedByRef: call.executedByRef,
+        decidedVia: call.decidedVia,
+        error: call.error,
+      });
+      if (approval !== null) {
+        approvals.push(approval);
+      }
+    }
+    return approvals.length > 0 ? { ...message, approvals } : message;
+  }
+
+  async rememberedApprovals(threadId: string): Promise<string[]> {
+    const names = new Set<string>();
+    for (const call of this.toolCalls.values()) {
+      if (call.threadId === threadId && call.remember === true) {
+        names.add(call.toolName);
+      }
+    }
+    return [...names];
+  }
+
+  async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
+    const call = this.toolCalls.get(toolCallId);
+    if (call === undefined) {
+      return null;
+    }
+    return {
+      status: call.status,
+      approver: call.approver ?? null,
+      expiresAt: call.expiresAt ?? null,
     };
   }
 
@@ -452,6 +506,8 @@ export class InMemoryAgentStore implements AgentStore {
       status: input.status,
       createdAt: this.now(),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
+      ...(input.approver !== undefined ? { approver: input.approver } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     });
   }
 
@@ -469,6 +525,15 @@ export class InMemoryAgentStore implements AgentStore {
     }
     if (input.executionMs !== undefined) {
       row.executionMs = input.executionMs;
+    }
+    if (input.executedByRef !== undefined) {
+      row.executedByRef = input.executedByRef;
+    }
+    if (input.remember !== undefined) {
+      row.remember = input.remember;
+    }
+    if (input.decidedVia !== undefined) {
+      row.decidedVia = input.decidedVia;
     }
   }
 
@@ -640,6 +705,11 @@ export class InMemoryAgentStore implements AgentStore {
     output?: unknown;
     error?: string;
     runId?: string;
+    executedByRef?: string;
+    approver?: string;
+    expiresAt?: string;
+    remember?: boolean;
+    decidedVia?: string;
   }[] {
     return [...this.toolCalls.values()].map((row) => ({
       toolCallId: row.toolCallId,
@@ -650,6 +720,11 @@ export class InMemoryAgentStore implements AgentStore {
       ...(row.output !== undefined ? { output: row.output } : {}),
       ...(row.error !== undefined ? { error: row.error } : {}),
       ...(row.runId !== undefined ? { runId: row.runId } : {}),
+      ...(row.executedByRef !== undefined ? { executedByRef: row.executedByRef } : {}),
+      ...(row.approver !== undefined ? { approver: row.approver } : {}),
+      ...(row.expiresAt !== undefined ? { expiresAt: row.expiresAt } : {}),
+      ...(row.remember !== undefined ? { remember: row.remember } : {}),
+      ...(row.decidedVia !== undefined ? { decidedVia: row.decidedVia } : {}),
     }));
   }
 

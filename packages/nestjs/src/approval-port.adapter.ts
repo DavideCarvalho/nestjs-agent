@@ -19,21 +19,27 @@ import { AgentService } from './agent.service.js';
 export class AgentApprovalPortAdapter implements AgentApprovalPort {
   constructor(private readonly agent: AgentService) {}
 
-  async approve(toolCallId: string, opts?: { executedByRef?: string }): Promise<void> {
+  async approve(
+    toolCallId: string,
+    opts?: { executedByRef?: string; remember?: boolean; decidedVia?: string },
+  ): Promise<void> {
     await this.agent.signalToolCall(toolCallId, {
       approved: true,
       ...(opts?.executedByRef !== undefined ? { executedByRef: opts.executedByRef } : {}),
+      ...(opts?.remember === true ? { remember: true } : {}),
+      ...(opts?.decidedVia !== undefined ? { decidedVia: opts.decidedVia } : {}),
     });
   }
 
   async reject(
     toolCallId: string,
-    opts?: { executedByRef?: string; reason?: string },
+    opts?: { executedByRef?: string; reason?: string; decidedVia?: string },
   ): Promise<void> {
     await this.agent.signalToolCall(toolCallId, {
       approved: false,
       ...(opts?.executedByRef !== undefined ? { executedByRef: opts.executedByRef } : {}),
       ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+      ...(opts?.decidedVia !== undefined ? { decidedVia: opts.decidedVia } : {}),
     });
   }
 }

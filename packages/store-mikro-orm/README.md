@@ -40,6 +40,18 @@ alter table agent_message add column reasoning_ms integer null;
 alter table agent_message add column ui json null;
 ```
 
+Upgrading from a release before approval policies: `agent_tool_call` gained four nullable columns —
+`approver` (varchar), `expires_at` (datetime), `remember` (boolean) and `decided_via` (varchar).
+`ensureAgentSchema` adds them on boot; `migration:create` picks them up from the entity diff, or by
+hand (adjust the types to your dialect):
+
+```sql
+alter table agent_tool_call add column approver varchar(255) null;
+alter table agent_tool_call add column expires_at datetime null;
+alter table agent_tool_call add column remember boolean null;
+alter table agent_tool_call add column decided_via varchar(255) null;
+```
+
 ## The read a turn makes
 
 The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's

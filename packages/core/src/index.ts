@@ -21,6 +21,7 @@ export * from './spi/governance-queries.js';
 export * from './spi/actor-directory.js';
 export * from './spi/attachment-staging.js';
 export * from './spi/approval-port.js';
+export * from './spi/approval-policy.js';
 export * from './governance/compute.js';
 export * from './tool-filters.js';
 export * from './history.js';
@@ -59,6 +60,7 @@ export {
   settleAll,
   withAskTool,
   stampToolKinds,
+  APPROVAL_EXPIRED_REASON,
   DEFAULT_REFUSAL_REASON,
   type ToolKindDeps,
   traceLlmTurn,

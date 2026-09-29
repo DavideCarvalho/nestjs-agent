@@ -126,6 +126,9 @@ export class AgentDepsFactory {
       store: this.store,
       sink: this.sink,
       rolesPolicy: this.rolesPolicy,
+      ...(this.options.approvalPolicy !== undefined
+        ? { approvalPolicy: this.options.approvalPolicy }
+        : {}),
       registry: this.registry,
       promptContributors: this.promptContributors,
       systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',

@@ -1,19 +1,22 @@
-import type {
-  AgentStore,
-  AppendMessageInput,
-  CreateThreadInput,
-  RecordRunStartInput,
-  RecordToolCallInput,
-  RecordUsageInput,
-  StoredMessage,
-  ThreadDetail,
-  ThreadSummary,
-  ThreadTurnPage,
-  ThreadTurnQuery,
-  ThreadTurnReader,
-  ToolResult,
-  UpdateThreadInput,
-  UpdateToolCallInput,
+import {
+  type AgentStore,
+  type AppendMessageInput,
+  type CreateThreadInput,
+  type RecordRunStartInput,
+  type RecordToolCallInput,
+  type RecordUsageInput,
+  type StoredMessage,
+  type ThreadDetail,
+  type ThreadSummary,
+  type ThreadTurnPage,
+  type ThreadTurnQuery,
+  type ThreadTurnReader,
+  type ToolCallApproval,
+  type ToolCallApprovalState,
+  type ToolResult,
+  type UpdateThreadInput,
+  type UpdateToolCallInput,
+  toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import { type EntityManager, raw } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
@@ -94,12 +97,18 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     // NEXT turn throw MissingToolResultsError at the provider, and the rows are the only other
     // place an output survives.
     const resultsByMessage = await this.loadToolResults(em, messages);
+    const approvals = await this.loadApprovals(
+      em,
+      messages.map((message) => message.id),
+    );
     const last = messages[messages.length - 1];
     return {
       ...this.toSummary(thread, last?.content),
-      messages: messages.map((message) =>
-        this.toStoredMessage(message, resultsByMessage.get(message.id)),
-      ),
+      messages: messages.map((message) => {
+        const stored = this.toStoredMessage(message, resultsByMessage.get(message.id));
+        const onMessage = approvals.get(message.id);
+        return onMessage !== undefined ? { ...stored, approvals: onMessage } : stored;
+      }),
       ...(thread.activeStreamId != null ? { activeStreamId: thread.activeStreamId } : {}),
     };
   }
@@ -198,6 +207,68 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       byMessage.set(messageId, list);
     }
     return byMessage;
+  }
+
+  /**
+   * The approval record of every call on `messageIds` that a policy put to a person, grouped by
+   * message. Only calls carrying an approver are read.
+   */
+  private async loadApprovals(
+    em: EntityManager,
+    messageIds: string[],
+  ): Promise<Map<string, ToolCallApproval[]>> {
+    const byMessage = new Map<string, ToolCallApproval[]>();
+    if (messageIds.length === 0) {
+      return byMessage;
+    }
+    const calls = await em.find(
+      AgentToolCall,
+      { message: { $in: messageIds }, approver: { $ne: null } },
+      { orderBy: { createdAt: 'asc', id: 'asc' } },
+    );
+    for (const call of calls) {
+      const approval = toolCallApprovalFromRow({
+        toolCallId: call.id,
+        status: call.status,
+        approver: call.approver,
+        expiresAt: call.expiresAt,
+        remember: call.remember,
+        executedByRef: call.executedByRef,
+        decidedVia: call.decidedVia,
+        error: call.error,
+      });
+      if (approval === null) {
+        continue;
+      }
+      const list = byMessage.get(call.message.id) ?? [];
+      list.push(approval);
+      byMessage.set(call.message.id, list);
+    }
+    return byMessage;
+  }
+
+  /** Tools whose approval someone asked to remember in this thread. */
+  async rememberedApprovals(threadId: string): Promise<string[]> {
+    const em = this.em.fork();
+    const calls = await em.find(
+      AgentToolCall,
+      { message: { thread: threadId }, remember: true },
+      { fields: ['toolName'] },
+    );
+    return [...new Set(calls.map((call) => call.toolName))];
+  }
+
+  async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
+    const em = this.em.fork();
+    const call = await em.findOne(AgentToolCall, { id: toolCallId });
+    if (call === null) {
+      return null;
+    }
+    return {
+      status: call.status,
+      approver: call.approver ?? null,
+      expiresAt: call.expiresAt?.toISOString() ?? null,
+    };
   }
 
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
@@ -539,6 +610,8 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       status: input.status,
       createdAt: new Date(),
       runId: input.runId ?? null,
+      approver: input.approver ?? null,
+      expiresAt: input.expiresAt !== undefined ? new Date(input.expiresAt) : null,
     });
     em.persist(toolCall);
     await em.flush();
@@ -562,6 +635,12 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     }
     if (input.executedByRef !== undefined) {
       toolCall.executedByRef = input.executedByRef;
+    }
+    if (input.remember !== undefined) {
+      toolCall.remember = input.remember;
+    }
+    if (input.decidedVia !== undefined) {
+      toolCall.decidedVia = input.decidedVia;
     }
     if (input.status === 'executed' || input.status === 'auto_executed') {
       toolCall.executedAt = new Date();
