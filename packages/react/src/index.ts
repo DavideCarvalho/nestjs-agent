@@ -95,6 +95,15 @@ export {
   type UseToolCatalogOptions,
 } from './presentation/use-tool-catalog.js';
 export {
+  type CoercibleQuestion,
+  type ElicitationInput,
+  type ElicitationInputType,
+  type RawAnswer,
+  coerceAnswer,
+  validateAnswer,
+  validateAnswerValue,
+} from './elicitation/answers.js';
+export {
   type ApprovalCountdown,
   type UseApprovalCountdownOptions,
   approvalCountdown,

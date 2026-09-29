@@ -31,7 +31,7 @@ interface Booted {
 }
 
 /** A thread owned by `u1` with one parked question set, and a runner that records what it is sent. */
-async function boot(): Promise<Booted> {
+async function boot(questions: unknown[] = []): Promise<Booted> {
   const store = new InMemoryAgentStore();
   const thread = await store.createThread({ actor: { id: 'u1', roles: ['ADMIN'] } });
   const message = await store.appendMessage({
@@ -45,7 +45,7 @@ async function boot(): Promise<Booted> {
     messageId: message.id,
     toolName: 'ask',
     toolType: 'action',
-    input: { questions: [] },
+    input: { questions },
     status: 'pending_approval',
     runId: 'run-a',
   });
@@ -278,5 +278,63 @@ describe('an approval decision', () => {
       (await post(booted, 'reject', { toolCallId: 'call-1', via: 'x'.repeat(65) })).status,
     ).toBe(400);
     expect(booted.signalled).toEqual([]);
+  });
+});
+
+describe('answers checked against the questions they answer', () => {
+  const questions = [
+    { id: 'seats', prompt: 'Seats?', input: { type: 'number', min: 1, max: 9, required: true } },
+    { id: 'when', prompt: 'When?', input: { type: 'date' } },
+    {
+      id: 'plan',
+      prompt: 'Plan?',
+      options: [
+        { value: 'a', label: 'A' },
+        { value: 'b', label: 'B' },
+      ],
+      defaults: ['a'],
+    },
+  ];
+
+  it('refuses a value a typed question rejects, naming the question and the rule', async () => {
+    const booted = await boot(questions);
+
+    const res = await post(booted, 'answer', { toolCallId: 'call-1', answers: { seats: ['12'] } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('answers["seats"] must be at most 9');
+    expect(booted.signalled).toEqual([]);
+  });
+
+  it('refuses a required question left without an answer or a default, and an off-list pick', async () => {
+    const booted = await boot(questions);
+
+    expect((await post(booted, 'answer', { toolCallId: 'call-1', answers: {} })).status).toBe(400);
+    expect(
+      (
+        await post(booted, 'answer', {
+          toolCallId: 'call-1',
+          answers: { seats: ['2'], plan: ['z'] },
+        })
+      ).status,
+    ).toBe(400);
+    expect(booted.signalled).toEqual([]);
+  });
+
+  it('delivers answers every question accepts', async () => {
+    const booted = await boot(questions);
+
+    const res = await post(booted, 'answer', {
+      toolCallId: 'call-1',
+      answers: { seats: ['3'], when: ['2026-10-01'] },
+    });
+
+    expect(res.status).toBe(201);
+    expect(booted.signalled).toEqual([
+      {
+        toolCallId: 'call-1',
+        reply: { answers: { seats: ['3'], when: ['2026-10-01'] }, answeredByRef: 'u1' },
+      },
+    ]);
   });
 });

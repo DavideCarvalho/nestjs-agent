@@ -321,6 +321,14 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
     return rows.map((row) => row.toolName);
   }
 
+  async toolCallInput(toolCallId: string): Promise<unknown> {
+    const [row] = await this.db
+      .select({ input: agentToolCall.input })
+      .from(agentToolCall)
+      .where(eq(agentToolCall.id, toolCallId));
+    return row?.input ?? null;
+  }
+
   async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
     const [row] = await this.db
       .select({

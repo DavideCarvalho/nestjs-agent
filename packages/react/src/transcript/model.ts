@@ -1,4 +1,9 @@
 import {
+  type ElicitationInput,
+  readElicitationInput,
+  validateElicitationAnswer,
+} from '@dudousxd/nestjs-agent-core';
+import {
   type DataUIPart,
   type DynamicToolUIPart,
   type FileUIPart,
@@ -11,6 +16,7 @@ import {
   isTextUIPart,
   isToolUIPart,
 } from 'ai';
+import { type RawAnswer, coerceAnswer } from '../elicitation/answers.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import {
   type ToolActivityGroup,
@@ -223,6 +229,14 @@ export interface TranscriptQuestionOption {
 export interface TranscriptQuestion {
   id: string;
   prompt: string;
+  /** A line of help under the prompt; `null` when the request gave none. */
+  description: string | null;
+  /**
+   * How the answer is typed — `{ type, placeholder?, required?, min?, max?, pattern? }` — or `null`
+   * for a plain pick from `options`. Render the control from `input.type`; `select` still picks
+   * from `options`.
+   */
+  input: ElicitationInput | null;
   multiple: boolean;
   /** 1-based. The request carries every question up front, so "Question 1 of N" is honest. */
   position: number;
@@ -234,6 +248,20 @@ export interface TranscriptQuestion {
    * first is recorded as `defaulted` rather than as a choice the user made.
    */
   isPristine: boolean;
+  /** The first selected value, or `''` — what a single text/number/date field shows. */
+  value: string;
+  /**
+   * Set a typed answer from whatever the control produced (a string, a number, a checkbox's
+   * boolean, a `Date`, a list); coerced to the question's canonical strings with `coerceAnswer`.
+   * `null`/`''` clears it. Does nothing once the set settled.
+   */
+  setValue: (raw: RawAnswer) => void;
+  /**
+   * Why the current selection would be refused (the server's own rules — `validateAnswer`), or
+   * `null`. A pristine required question with no default reads `requires an answer`; show it once
+   * the user tried to submit, or right away — the model does not decide that for you.
+   */
+  error: string | null;
 }
 
 /** How a question set settled, once it did. */
@@ -262,6 +290,8 @@ export interface TranscriptElicitationBlock {
   questionCount: number;
   /** Still waiting on a human. */
   isPending: boolean;
+  /** Every question's current selection is acceptable (no question has an `error`). */
+  isValid: boolean;
   outcome: TranscriptElicitationOutcome | null;
   /** A failed submission — the run is still parked, so the form stays live. */
   error: string | null;
@@ -662,7 +692,10 @@ function buildToolCall(
 interface ElicitationQuestionData {
   id: string;
   prompt: string;
+  description: string | null;
+  input: ElicitationInput | null;
   multiple: boolean;
+  allowFreeText: boolean;
   defaults: string[];
   options: { value: string; label: string; hotkey: string | null }[];
 }
@@ -685,14 +718,18 @@ function readElicitationRequest(
     if (
       !isRecord(candidate) ||
       typeof candidate.id !== 'string' ||
-      typeof candidate.prompt !== 'string' ||
-      !Array.isArray(candidate.options) ||
-      candidate.options.length === 0
+      typeof candidate.prompt !== 'string'
     ) {
       return null;
     }
+    // A typed question may carry no options; anything else is a pick and must offer some.
+    const input = readElicitationInput(candidate.input) ?? null;
+    const rawOptions = Array.isArray(candidate.options) ? candidate.options : [];
+    if (rawOptions.length === 0 && (input === null || input.type === 'select')) {
+      return null;
+    }
     const options: ElicitationQuestionData['options'] = [];
-    for (const option of candidate.options) {
+    for (const option of rawOptions) {
       if (
         !isRecord(option) ||
         typeof option.value !== 'string' ||
@@ -709,7 +746,10 @@ function readElicitationRequest(
     questions.push({
       id: candidate.id,
       prompt: candidate.prompt,
+      description: typeof candidate.description === 'string' ? candidate.description : null,
+      input,
       multiple: candidate.multiple === true,
+      allowFreeText: candidate.allowFreeText === true,
       defaults: Array.isArray(candidate.defaults)
         ? candidate.defaults.filter((value): value is string => typeof value === 'string')
         : [],
@@ -757,12 +797,35 @@ function buildElicitationBlock(
     const picked = isPending ? options.picked(toolCallId, question.id) : undefined;
     const selected = picked ?? outcome?.answers[question.id] ?? question.defaults;
     const pick = (values: string[]) => options.pick(toolCallId, question.id, values);
+    // The same rules the answer route applies, over the same question shape core reads.
+    const error = isPending
+      ? validateElicitationAnswer(
+          {
+            id: question.id,
+            prompt: question.prompt,
+            options: question.options.map(({ value, label }) => ({ value, label })),
+            ...(question.input !== null ? { input: question.input } : {}),
+            ...(question.multiple ? { multiple: true } : {}),
+            ...(question.allowFreeText ? { allowFreeText: true } : {}),
+          },
+          selected,
+        )
+      : null;
     return {
       id: question.id,
       prompt: question.prompt,
+      description: question.description,
+      input: question.input,
       multiple: question.multiple,
       position: index + 1,
       selected,
+      value: selected[0] ?? '',
+      error,
+      setValue: (raw: RawAnswer) => {
+        if (isPending) {
+          pick(coerceAnswer(question, raw));
+        }
+      },
       isPristine: isPending
         ? picked === undefined
         : (outcome?.defaulted.includes(question.id) ?? true),
@@ -798,6 +861,7 @@ function buildElicitationBlock(
     questions,
     questionCount: questions.length,
     isPending,
+    isValid: questions.every((question) => question.error === null),
     outcome,
     error: options.errorOf(toolCallId),
     answer: {

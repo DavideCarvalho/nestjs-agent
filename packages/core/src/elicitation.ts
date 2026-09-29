@@ -9,6 +9,14 @@
  */
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import {
+  ELICITATION_INPUT_TYPES,
+  type ElicitationInput,
+  isTypedQuestion,
+  questionOptions,
+  readElicitationInput,
+  validateElicitationValue,
+} from './elicitation-input.js';
 import type { Decision, ToolDefinition } from './types.js';
 
 /** One choice a question offers. */
@@ -29,7 +37,19 @@ export interface ElicitationQuestion {
   /** Unique within its request; the key answers come back under. */
   id: string;
   prompt: string;
-  options: ElicitationOption[];
+  /** A line of help under the prompt. */
+  description?: string;
+  /**
+   * The choices. Required unless {@link input} asks for a typed value — then optional, and a UI may
+   * offer them as suggestions. An `input` of type `select` still picks from these.
+   */
+  options?: ElicitationOption[];
+  /**
+   * Ask for a typed value (a number, a date, a sentence…) instead of — or, for `select`, on top of —
+   * a pick from `options`. The answer is still a `string[]`, in the type's canonical form; see
+   * `elicitation-input.ts`.
+   */
+  input?: ElicitationInput;
   /** More than one option may be chosen. Omit → single choice. */
   multiple?: boolean;
   /**
@@ -84,10 +104,6 @@ export interface ElicitationOutcome {
   skipped: boolean;
   /** Question ids filled from the request's `defaults` rather than by the human. */
   defaulted: string[];
-}
-
-function optionValues(question: ElicitationQuestion): Set<string> {
-  return new Set(question.options.map((option) => option.value));
 }
 
 /**
@@ -147,9 +163,12 @@ export function resolveElicitation(
       defaulted.push(question.id);
       continue;
     }
-    const allowed = optionValues(question);
-    const valid =
-      question.allowFreeText === true ? submitted : submitted.filter((value) => allowed.has(value));
+    // What cannot be settled is dropped, never guessed at: a value off the offered options, or one a
+    // typed question's own rules refuse. The HTTP surface refuses both before they are signalled; this
+    // is the same rule applied where the loop settles, so a reply from anywhere reads the same.
+    const valid = submitted.filter(
+      (value) => value !== '' && validateElicitationValue(question, value) === null,
+    );
     answers[question.id] = question.multiple === true ? valid : valid.slice(0, 1);
   }
   return { answers, skipped: reply.skipped === true, defaulted };
@@ -185,7 +204,7 @@ export function renderElicitationAnswers(
   const lines = request.questions.map((question) => {
     const chosen = outcome.answers[question.id] ?? [];
     const labels = chosen.map(
-      (value) => question.options.find((option) => option.value === value)?.label ?? value,
+      (value) => questionOptions(question).find((option) => option.value === value)?.label ?? value,
     );
     return `${question.prompt} → ${labels.length > 0 ? labels.join(', ') : '(no answer)'}`;
   });
@@ -254,16 +273,58 @@ function parseQuestion(
     issues.push(issue([...path, 'prompt'], 'must be a non-empty string'));
     return undefined;
   }
-  if (!Array.isArray(candidate.options) || candidate.options.length === 0) {
+  let input: ElicitationInput | undefined;
+  if (candidate.input !== undefined) {
+    input = readElicitationInput(candidate.input);
+    if (input === undefined) {
+      issues.push(
+        issue([...path, 'input', 'type'], `must be one of ${ELICITATION_INPUT_TYPES.join(', ')}`),
+      );
+      return undefined;
+    }
+  }
+  const described =
+    typeof candidate.description === 'string' && candidate.description.length > 0
+      ? { description: candidate.description }
+      : {};
+  const typed = input !== undefined && input.type !== 'select';
+  if (!typed && (!Array.isArray(candidate.options) || candidate.options.length === 0)) {
     issues.push(issue([...path, 'options'], 'must be a non-empty array'));
     return undefined;
   }
   const options: ElicitationOption[] = [];
-  for (const [index, rawOption] of candidate.options.entries()) {
+  for (const [index, rawOption] of (Array.isArray(candidate.options)
+    ? candidate.options
+    : []
+  ).entries()) {
     const option = parseOption(rawOption, [...path, 'options', index], issues);
     if (option !== undefined) {
       options.push(option);
     }
+  }
+  if (typed) {
+    // A typed question pre-picks when it can (a sensible date, a default count) but need not: there
+    // is no honest default for "what is your email". What it does pre-pick has to be an answer its
+    // own rules accept, or confirming would submit something the form would refuse.
+    const question: ElicitationQuestion = {
+      id: candidate.id,
+      prompt: candidate.prompt,
+      ...described,
+      ...(options.length > 0 ? { options } : {}),
+      input: input as ElicitationInput,
+      ...(candidate.multiple === true ? { multiple: true } : {}),
+    };
+    const offered = Array.isArray(candidate.defaults)
+      ? candidate.defaults.filter((value): value is string => typeof value === 'string')
+      : [];
+    const defaults = offered.filter((value) => validateElicitationValue(question, value) === null);
+    if (offered.length > 0 && defaults.length === 0) {
+      issues.push(
+        issue([...path, 'defaults'], `must be valid ${(input as ElicitationInput).type} values`),
+      );
+      return undefined;
+    }
+    return defaults.length > 0 ? { ...question, defaults } : question;
   }
   // The one rule that carries the design: a question with no pre-picked answer is a question the
   // user has to stop and think about, and this surface exists to avoid that.
@@ -289,7 +350,9 @@ function parseQuestion(
   return {
     id: candidate.id,
     prompt: candidate.prompt,
+    ...described,
     options,
+    ...(input !== undefined ? { input } : {}),
     defaults,
     ...(candidate.multiple === true ? { multiple: true } : {}),
     ...(candidate.allowFreeText === true ? { allowFreeText: true } : {}),
@@ -312,13 +375,35 @@ const ASK_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'prompt', 'options', 'defaults'],
+        required: ['id', 'prompt'],
         properties: {
           id: {
             type: 'string',
             description: 'Unique within this call; answers come back under it.',
           },
           prompt: { type: 'string' },
+          description: { type: 'string', description: 'A line of help under the prompt.' },
+          input: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['type'],
+            description:
+              'Ask for a typed value instead of offering options. Omit for a pick from options. Answers come back as strings: numbers as decimals, booleans as "true"/"false", dates as YYYY-MM-DD.',
+            properties: {
+              type: { type: 'string', enum: [...ELICITATION_INPUT_TYPES] },
+              placeholder: { type: 'string' },
+              required: { type: 'boolean' },
+              min: {
+                type: ['number', 'string'],
+                description: 'number: minimum; text: minimum length; date: earliest YYYY-MM-DD.',
+              },
+              max: {
+                type: ['number', 'string'],
+                description: 'number: maximum; text: maximum length; date: latest YYYY-MM-DD.',
+              },
+              pattern: { type: 'string', description: 'A regex the whole value must match.' },
+            },
+          },
           multiple: { type: 'boolean', description: 'Allow more than one option to be chosen.' },
           allowFreeText: {
             type: 'boolean',
@@ -329,7 +414,7 @@ const ASK_JSON_SCHEMA = {
             minItems: 1,
             items: { type: 'string' },
             description:
-              'REQUIRED. The option values you would pick yourself, so the user can confirm rather than decide.',
+              'REQUIRED for a pick from options: the option values you would pick yourself, so the user can confirm rather than decide. For a typed input, the value you would enter, when there is a sensible one.',
           },
           options: {
             type: 'array',

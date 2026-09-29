@@ -120,6 +120,60 @@ deadline onto `expiresAt`, its outcome record (who, which channel, "always allow
 `approval-settled`. It enforces approvers and expiry on its own approve/reject routes, since those
 are the only way a decision reaches it.
 
+### Asking the user
+
+`elicitation` parks the run on a question set; it is answered with
+`POST <base>/tool-call/answer { toolCallId, answers?: Record<questionId, string[]> }` (an omitted
+question takes its `defaults`) or declined with `POST <base>/tool-call/skip { toolCallId }`. The
+matching `tool-output` carries the settled answers.
+
+A question is either a pick from `options` or a typed value:
+
+```ts
+{
+  id: string;
+  prompt: string;
+  description?: string;                   // help under the prompt
+  options?: { value, label, hotkey? }[];  // required unless `input` asks for a typed value
+  multiple?: boolean;
+  defaults?: string[];                    // pre-picked; required for a pick, optional when typed
+  allowFreeText?: boolean;
+  input?: {
+    type: 'text' | 'textarea' | 'number' | 'boolean' | 'date' | 'email' | 'url' | 'select';
+    placeholder?: string;
+    required?: boolean;
+    min?: number | string;                // number: min · text: min length · date: earliest YYYY-MM-DD
+    max?: number | string;
+    pattern?: string;                     // regex the whole value must match
+  };
+}
+```
+
+Answers stay `string[]` whatever the type, in one canonical form: numbers as decimals (`"42"`),
+booleans as `"true"`/`"false"`, dates as `YYYY-MM-DD`, everything else as typed. The answer route
+answers `400` (`answers["<id>"] <reason>`) for a value a question's rules refuse or a `required`
+question left without an answer or default. React's `coerceAnswer`/`validateAnswer` apply the same
+rules client-side.
+
+**Mapping another runner's forms.** A runner that is not this library's loop emits its own form
+prompts as an `elicitation` frame and converts the answers back. For example, an OpenCode `question`
+tool field `{ key, type, title, description, required, options }` maps as:
+
+| OpenCode field | `ElicitationQuestion` |
+|---|---|
+| `key` | `id` |
+| `title` (fall back to `key`) | `prompt` |
+| `description` | `description` |
+| `options: [{ value, label }]` | `options` (plus `input: { type: 'select' }`, and `defaults` when there is a sensible pick) |
+| `type: 'string'` | `input: { type: 'text' }` — or `textarea` / `email` / `url` / `date` when the runner knows more |
+| `type: 'number' \| 'integer'` | `input: { type: 'number' }` (plus `min`/`max` when the runner has bounds) |
+| `type: 'boolean'` | `input: { type: 'boolean' }` |
+| `required: true` | `input.required: true` |
+
+and each answer back with the inverse of the canonical form — `Number(v[0])`, `v[0] === 'true'`,
+the string itself — before handing it to the runner that asked. Enforce the same rules on its own
+answer route: the transcript model reports them, but only the server can refuse them.
+
 ### Nested calls
 
 `parentId` places a call under another call on the same stream — the inner calls of a code-mode
