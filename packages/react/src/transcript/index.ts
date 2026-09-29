@@ -12,6 +12,7 @@ export {
   type MessageUsageInfo,
   type RetrievedPassage,
   type TimestampInfo,
+  type TranscriptApproval,
   type TranscriptBlock,
   type TranscriptElicitationBlock,
   type TranscriptElicitationOutcome,
@@ -27,6 +28,7 @@ export {
   type TranscriptTextBlock,
   type TranscriptToolBlock,
   type TranscriptToolCall,
+  type TranscriptUiBlock,
   type UsageSummary,
 } from './model.js';
 export {

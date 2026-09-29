@@ -1,9 +1,11 @@
 import {
+  type DataUIPart,
   type DynamicToolUIPart,
   type FileUIPart,
   type ToolUIPart,
   type UIMessage,
   getToolName,
+  isDataUIPart,
   isFileUIPart,
   isReasoningUIPart,
   isTextUIPart,
@@ -82,11 +84,34 @@ export interface TranscriptSettleState {
   run: () => void;
 }
 
+/**
+ * Who has to settle a parked call, and until when — from the stream's `approval-requested` frame.
+ * `null` on a call whose runner never said (the call can still be awaiting approval).
+ */
+export interface TranscriptApproval {
+  /** Open vocabulary the host defines: `'requester'`, `'admin'`, a role… */
+  approver: string;
+  /** ISO-8601; `null` when the request never lapses. */
+  expiresAt: string | null;
+  reason: string | null;
+}
+
 /** One call in a tool run, with whatever human decision it is parked on. */
 export interface TranscriptToolCall {
   part: AnyToolUIPart;
   toolCallId: string;
   name: string;
+  /** `read` / `action` as the stream classified the call; `null` when the backend did not say. */
+  toolKind: string | null;
+  /** The call this one ran inside (a code-mode `execute`, a delegated agent); `null` for a top-level call. */
+  parentId: string | null;
+  /**
+   * Calls nested under this one within the same block, in stream order. Always empty for a call
+   * nothing names as its parent.
+   */
+  children: TranscriptToolCall[];
+  /** Who has to decide, when the runner said so. See {@link TranscriptApproval}. */
+  approval: TranscriptApproval | null;
   /**
    * Parked on a person. An `action` tool's input lands and its output never follows on its own —
    * the loop waits for an approval between the two — so a settled-looking card that never settles
@@ -110,6 +135,26 @@ export interface TranscriptToolBlock {
   parts: AnyToolUIPart[];
   /** The same calls, each with its human-decision state. Same order as `parts`. */
   calls: TranscriptToolCall[];
+  /**
+   * The same calls as a tree: every call whose parent is NOT in this block, each carrying its
+   * nested calls in `children`. Equal to `calls` when nothing is nested.
+   */
+  roots: TranscriptToolCall[];
+}
+
+/**
+ * A component the server pushed into the message (the stream's `ui` frame, or a persisted
+ * `data-ui` part). Rendered by looking `component` up in the host's own registry.
+ */
+export interface TranscriptUiBlock {
+  kind: 'ui';
+  key: string;
+  /** The component's identity within the message. */
+  id: string;
+  component: string;
+  props: Record<string, unknown>;
+  /** Schema version of `props`; `null` when the server did not stamp one. */
+  version: number | null;
 }
 
 /** One choice a question offers, with its live selection state. */
@@ -217,7 +262,8 @@ export type TranscriptBlock =
   | TranscriptReasoningBlock
   | TranscriptToolBlock
   | TranscriptSourcesBlock
-  | TranscriptElicitationBlock;
+  | TranscriptElicitationBlock
+  | TranscriptUiBlock;
 
 /** Where a question set's selection state is held, and where its settlement is sent. */
 export interface ElicitationBlockOptions {
@@ -264,9 +310,11 @@ export interface BuildBlocksOptions {
 
 /**
  * Walk a message's parts into renderable blocks, buffering consecutive tool parts into one run and
- * consecutive files into one strip. Parts this library has no model for (`data-*`) are dropped
- * rather than guessed at, but they still terminate a tool run — their position in the transcript is
- * meaningful even when their content is not modelled here.
+ * consecutive files into one strip. A `data-ui` part becomes a `ui` block. A
+ * `data-approval-requested` part is metadata about a call — it is folded into that call's
+ * `approval` and takes no position of its own. Other `data-*` parts are dropped rather than guessed
+ * at, but they still terminate a tool run — their position in the transcript is meaningful even
+ * when their content is not modelled here.
  */
 export function buildTranscriptBlocks(
   message: UIMessage,
@@ -282,16 +330,21 @@ export function buildTranscriptBlocks(
   let reasoningCounter = 0;
   let sourcesCounter = 0;
   let elicitationCounter = 0;
+  const approvals = readApprovals(message.parts ?? []);
 
   function flushTools() {
     if (toolBuffer.length === 0) {
       return;
     }
+    const calls = toolBuffer.map((part) =>
+      buildToolCall(part, options.approval, approvals.get(part.toolCallId) ?? null),
+    );
     blocks.push({
       kind: 'tools',
       key: `${message.id}-tools-${toolCounter++}`,
       parts: toolBuffer,
-      calls: toolBuffer.map((part) => buildToolCall(part, options.approval)),
+      calls,
+      roots: nestToolCalls(calls),
     });
     toolBuffer = [];
   }
@@ -361,7 +414,17 @@ export function buildTranscriptBlocks(
       fileBuffer.push(part);
       continue;
     }
+    if (part.type === APPROVAL_PART) {
+      continue;
+    }
     flushAll();
+    if (isDataUIPart(part)) {
+      const ui = part.type === UI_PART ? readUiComponent(part) : null;
+      if (ui !== null) {
+        blocks.push({ kind: 'ui', key: `${message.id}-ui-${ui.id}`, ...ui });
+      }
+      continue;
+    }
     if (isTextUIPart(part)) {
       blocks.push({
         kind: 'text',
@@ -452,7 +515,53 @@ function isAwaitingApproval(part: AnyToolUIPart): boolean {
   return toolKind(part) === 'action' && readElicitationRequest(part) === null;
 }
 
-function buildToolCall(part: AnyToolUIPart, options?: ApprovalBlockOptions): TranscriptToolCall {
+function toolParentId(part: AnyToolUIPart): string | null {
+  const metadata = (part as { toolMetadata?: unknown }).toolMetadata;
+  return isRecord(metadata) && typeof metadata.parentId === 'string' ? metadata.parentId : null;
+}
+
+/**
+ * Arrange a block's calls into a tree by `parentId`. A call whose parent is not in the block (or
+ * that names itself, or would close a cycle) stays a root, so nothing a runner sends is ever lost
+ * from the tree — at worst it is shown flat.
+ */
+function nestToolCalls(calls: TranscriptToolCall[]): TranscriptToolCall[] {
+  const byId = new Map(calls.map((call) => [call.toolCallId, call]));
+  const roots: TranscriptToolCall[] = [];
+  for (const call of calls) {
+    const parent = call.parentId !== null ? byId.get(call.parentId) : undefined;
+    if (parent === undefined || isAncestor(call, parent, byId)) {
+      roots.push(call);
+      continue;
+    }
+    parent.children.push(call);
+  }
+  return roots;
+}
+
+/** True when `candidate` is `call` itself or sits under it — attaching would close a cycle. */
+function isAncestor(
+  call: TranscriptToolCall,
+  candidate: TranscriptToolCall,
+  byId: Map<string, TranscriptToolCall>,
+): boolean {
+  const seen = new Set<string>();
+  let current: TranscriptToolCall | undefined = candidate;
+  while (current !== undefined && !seen.has(current.toolCallId)) {
+    if (current.toolCallId === call.toolCallId) {
+      return true;
+    }
+    seen.add(current.toolCallId);
+    current = current.parentId !== null ? byId.get(current.parentId) : undefined;
+  }
+  return false;
+}
+
+function buildToolCall(
+  part: AnyToolUIPart,
+  options: ApprovalBlockOptions | undefined,
+  approval: TranscriptApproval | null,
+): TranscriptToolCall {
   const toolCallId = part.toolCallId;
   const awaiting = isAwaitingApproval(part);
   // Per decision, not per call: the two are never in flight together, and a surface that read one
@@ -462,6 +571,10 @@ function buildToolCall(part: AnyToolUIPart, options?: ApprovalBlockOptions): Tra
     part,
     toolCallId,
     name: getToolName(part),
+    toolKind: toolKind(part) ?? null,
+    parentId: toolParentId(part),
+    children: [],
+    approval,
     isAwaitingApproval: awaiting,
     approve: {
       available: awaiting && options?.canApprove === true,
@@ -629,6 +742,49 @@ function buildElicitationBlock(
       isSubmitting: sending === 'skip',
       run: () => options.skip(toolCallId),
     },
+  };
+}
+
+const UI_PART = 'data-ui';
+const APPROVAL_PART = 'data-approval-requested';
+
+/** The approval metadata on a message, by call id. The latest frame for a call wins. */
+function readApprovals(parts: UIMessage['parts']): Map<string, TranscriptApproval> {
+  const out = new Map<string, TranscriptApproval>();
+  for (const part of parts) {
+    if (part.type !== APPROVAL_PART) {
+      continue;
+    }
+    const data = (part as DataUIPart<Record<string, unknown>>).data;
+    if (!isRecord(data) || typeof data.id !== 'string' || typeof data.approver !== 'string') {
+      continue;
+    }
+    out.set(data.id, {
+      approver: data.approver,
+      expiresAt: typeof data.expiresAt === 'string' ? data.expiresAt : null,
+      reason: typeof data.reason === 'string' ? data.reason : null,
+    });
+  }
+  return out;
+}
+
+/** A pushed component, or `null` when the part does not carry one this model can address. */
+function readUiComponent(
+  part: DataUIPart<Record<string, unknown>>,
+): Omit<TranscriptUiBlock, 'kind' | 'key'> | null {
+  const data = part.data;
+  if (!isRecord(data) || typeof data.component !== 'string') {
+    return null;
+  }
+  const id = typeof data.id === 'string' ? data.id : part.id;
+  if (id === undefined) {
+    return null;
+  }
+  return {
+    id,
+    component: data.component,
+    props: isRecord(data.props) ? data.props : {},
+    version: typeof data.version === 'number' ? data.version : null,
   };
 }
 

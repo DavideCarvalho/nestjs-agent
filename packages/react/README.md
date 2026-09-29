@@ -111,8 +111,8 @@ function Chat() {
 | On the instance | What it is |
 |---|---|
 | `items` | The mounted window, oldest first. Each item carries `blocks`, `text`, `usage`, `timestamp`, `isStreaming`, `isLastAssistant`, and its action machines. |
-| `items[i].blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'sources' \| 'elicitation' }`. A `tools` block is a run of CONSECUTIVE tool parts — any other part between two calls (including a `step-start` marker) ends the run. A `reasoning` block carries `isOpen`/`toggle`, open while it streams. A `sources` block appears only under `sources: true`, an `elicitation` block only under `onAnswer` — see below. |
-| `items[i].blocks[n]` (`tools`) | Also carries `calls`: the same parts, each with `{ toolCallId, name, isAwaitingApproval, approve, reject, error }`. |
+| `items[i].blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'sources' \| 'elicitation' \| 'ui' }`. A `ui` block is a component the server pushed (`{ id, component, props, version }`) — look `component` up in your own registry. A `tools` block is a run of CONSECUTIVE tool parts — any other part between two calls (including a `step-start` marker) ends the run. A `reasoning` block carries `isOpen`/`toggle`, open while it streams. A `sources` block appears only under `sources: true`, an `elicitation` block only under `onAnswer` — see below. |
+| `items[i].blocks[n]` (`tools`) | Also carries `calls`: the same parts, each with `{ toolCallId, name, toolKind, parentId, children, approval, isAwaitingApproval, approve, reject, error }`, and `roots`: the same calls as a tree (a call nested under another by the stream's `parentId` sits in its parent's `children`). `approval` is `{ approver, expiresAt, reason }` when the runner said who has to decide, else `null`. |
 | `items[i].copy` | `{ available, copied, copy() }` — `copied` flashes for `copyResetMs` (default 1500). |
 | `items[i].edit` | `{ available, isEditing, draft, canSave, start(), cancel(), setDraft(), save(), getTextareaProps() }`. The prop-getter focuses with the caret at the end, saves on Enter, cancels on Escape. |
 | `items[i].fork` / `.regenerate` | `{ available, run() }`. Regenerate is offered on the last assistant message only. |
@@ -324,6 +324,10 @@ function CustomChat({ threadId }: { threadId?: string }) {
     onRunSettled: ({ status }) => {
       if (status === 'completed') refetchThreadList();
     },
+    // The server named (or renamed) the thread mid-stream — update the header now.
+    onTitle: (title) => setHeaderTitle(title),
+    // Every data part as it arrives: pushed `data-ui` components, `data-approval-requested`, …
+    onData: (part) => analytics.track(part.type),
   });
 
   return (
@@ -380,6 +384,20 @@ const transport = new AgentChatTransport({
 });
 const chat = useChat({ transport });
 ```
+
+Beyond text, reasoning and tool calls, the transport maps the rest of the stream vocabulary to AI SDK
+data parts, which `useChat`'s `onData` (and `useAgentChat({ onData })`) sees as they arrive:
+
+| Stream frame | Becomes |
+|---|---|
+| `ui` | a `data-ui` part keyed by the component id (a repeat id updates it in place) |
+| `approval-requested` | a `data-approval-requested` part keyed by the call id, plus the SDK's native approval request — the tool part moves to `state: 'approval-requested'` |
+| `title` / `cancelled` | transient `data-title` / `data-cancelled` (never stored on the message); `useAgentChat({ onTitle })` |
+| a kind this version does not know | a `data-<kind>` part — forwarded, never dropped |
+
+`parentId` on a tool frame rides the part's `toolMetadata` next to `toolKind`. The full wire
+contract — for a backend that serves these routes without this library's loop — is
+[docs/stream-protocol.md](../../docs/stream-protocol.md).
 
 ### Loading persisted history
 

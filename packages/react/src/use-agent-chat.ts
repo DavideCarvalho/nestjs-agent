@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react';
 import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
-import type { UIMessage } from 'ai';
+import type { DataUIPart, UIDataTypes, UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
@@ -72,6 +72,18 @@ export interface UseAgentChatOptions {
    * error, not why it stopped.
    */
   onRunSettled?: (outcome: { runId: string; status: 'completed' | 'failed' }) => void;
+  /**
+   * Every data part the stream delivers, as it arrives — including transient ones that are never
+   * stored on a message (`data-title`, `data-cancelled`). Pushed components arrive as `data-ui`,
+   * approval metadata as `data-approval-requested`, and a frame kind this version does not map as
+   * `data-<kind>`. See `AgentChatTransport` for the full mapping.
+   */
+  onData?: (part: DataUIPart<UIDataTypes>) => void;
+  /**
+   * The server set or changed the thread's title while a turn streamed. Lets a header/sidebar
+   * update the moment the title exists instead of refetching after the run settles.
+   */
+  onTitle?: (title: string) => void;
   /**
    * Track DETACHED sub-agents this conversation started: which are still working, and their answers
    * as they land (see {@link ChatBackground}). Default `false`.
@@ -240,6 +252,13 @@ export function useAgentChat(options: UseAgentChatOptions) {
     resume: options.resumeRunId !== undefined || autoResume,
     ...(options.threadId !== undefined ? { id: options.threadId } : {}),
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
+    onData: (part) => {
+      latest.current.onData?.(part);
+      if (part.type === 'data-title') {
+        const title = (part.data as { title?: unknown } | null)?.title;
+        if (typeof title === 'string') latest.current.onTitle?.(title);
+      }
+    },
     onFinish: ({ isError }) => {
       latest.current.onFinish?.();
       // A turn that just ended may have started a delegation, and its receipt is only in the store.

@@ -6,6 +6,7 @@ import type {
   TranscriptItem,
   TranscriptSource,
   TranscriptSourcesBlock,
+  TranscriptUiBlock,
 } from '@dudousxd/nestjs-agent-react';
 import type { ReactNode } from 'react';
 import { ChatElicitation } from './chat-elicitation';
@@ -35,6 +36,8 @@ export interface ChatMessageProps {
   sourceChips?: boolean;
   /** Draw a tool call yourself — a rendered result, a diff, a map. Falls back to the tool card. */
   renderToolPart?: RenderToolPartFn;
+  /** Draw a component the server pushed (a `ui` stream frame) from your own registry. Omitted → not drawn. */
+  renderUi?: (block: TranscriptUiBlock) => ReactNode;
   className?: string;
 }
 
@@ -47,6 +50,7 @@ export function ChatMessage({
   onSourceClick,
   sourceChips = false,
   renderToolPart,
+  renderUi,
   className,
 }: ChatMessageProps) {
   if (item.edit.isEditing) {
@@ -110,6 +114,13 @@ export function ChatMessage({
           }
           if (block.kind === 'files') {
             return <ChatFiles key={block.key} block={block} />;
+          }
+          if (block.kind === 'ui') {
+            return renderUi ? (
+              <div key={block.key} data-slot="ui" data-component={block.component}>
+                {renderUi(block)}
+              </div>
+            ) : null;
           }
           return <ChatToolGroup key={block.key} block={block} renderToolPart={renderToolPart} />;
         })}

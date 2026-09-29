@@ -1,6 +1,9 @@
 import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 
+/** JSON-safe metadata, as the SDK's `toolMetadata` requires (its `JSONObject` is not exported). */
+type ToolMetadata = { [key: string]: string };
+
 /** Identity surfaced by the backend's `meta` SSE frame / response headers. */
 export interface AgentStreamMeta {
   runId: string;
@@ -79,6 +82,15 @@ const ASK_TOOL_NAME = 'ask';
  * message, and are rendered as native model content parts. Optimistic display of
  * the user's own attachment thumbnails is the consumer's concern (it stages the
  * upload), the same way history rendering reads `StoredMessage.attachments`.
+ *
+ * Frames beyond text/reasoning/tools become AI SDK data parts (seen by `useChat`'s `onData`):
+ *  - `ui`                 → `data-ui` part, `id` = the component id (a repeat id updates it in place)
+ *  - `approval-requested` → `data-approval-requested` part keyed by the call id, plus the SDK's
+ *                           native `tool-approval-request` (the part moves to `approval-requested`)
+ *  - `title`, `cancelled` → transient `data-title` / `data-cancelled` (never stored on the message)
+ *  - any other kind       → `data-<kind>` part carrying the frame minus `kind`, keyed by its `id`
+ *                           when it has one — forwarded, never dropped
+ * `parentId` on a tool frame rides the part's `toolMetadata` next to `toolKind`.
  */
 export class AgentChatTransport implements ChatTransport<UIMessage> {
   private currentRunId: string | undefined;
@@ -231,7 +243,8 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
    * Parse the backend's SSE byte stream and re-emit it as a valid v7 UI-message chunk stream.
    * Recognized frames:
    *  - `event: meta`  `data: {"runId","threadId"}`   → records identity
-   *  - `data: <AgentStreamEvent JSON>`                → mapped to UI chunks (text / reasoning / tool)
+   *  - `data: <AgentStreamEvent JSON>`                → mapped to UI chunks (text / reasoning / tool /
+   *                                                     `data-*`; see {@link AgentChatTransport} docs)
    *  - `event: done`  `data: {}`                      → terminates
    *  - `event: error` `data: {code,message}`          → error chunk
    *
@@ -248,11 +261,19 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     let stepIndex = 0;
     let textId: string | null = null;
     let reasoningId: string | null = null;
+    // Text/reasoning runs opened within the current step. A pushed UI component closes the open run
+    // so prose after it lands AFTER it; the next run then needs an id of its own.
+    let textSeq = 0;
+    let reasoningSeq = 0;
     // Tool calls this STREAM has already announced. The AI SDK settles a tool part by looking it
     // up by call id and throws — dropping the whole message — when there is none, so an outcome
     // must never be the first a client hears of a call. Per stream, not per transport: a resumed
     // run replays its buffered frames from the beginning.
     const announced = new Set<string>();
+    // What each call's tool part carries as `toolMetadata`. The SDK REPLACES a part's metadata with
+    // whatever the latest chunk carries, so a `parentId` learnt from `tool-input-start` would be
+    // wiped by the `tool-input-available` that follows unless every chunk restates the merge.
+    const toolMetadata = new Map<string, ToolMetadata>();
     const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
     // Every way out of the read loop below passes through here: the attempt is over the moment its
     // chunk stream terminates, and a latch left set would refuse every later turn.
@@ -274,13 +295,14 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           stepIndex += 1;
           textId = null;
           reasoningId = null;
+          textSeq = 0;
+          reasoningSeq = 0;
           controller.enqueue({ type: 'start-step' });
         }
         function ensureStep() {
           if (!stepOpen) openStep();
         }
-        function closeStep() {
-          if (!stepOpen) return;
+        function closeRuns() {
           if (textId !== null) {
             controller.enqueue({ type: 'text-end', id: textId });
             textId = null;
@@ -289,8 +311,37 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
             controller.enqueue({ type: 'reasoning-end', id: reasoningId });
             reasoningId = null;
           }
+        }
+        function closeStep() {
+          if (!stepOpen) return;
+          closeRuns();
           controller.enqueue({ type: 'finish-step' });
           stepOpen = false;
+        }
+        /** Merge what this frame says about a call into what earlier frames said, and return it. */
+        function metadataFor(
+          id: string,
+          toolKind: string | undefined,
+          parentId: string | undefined,
+        ): ToolMetadata | undefined {
+          const merged: ToolMetadata = { ...toolMetadata.get(id) };
+          if (toolKind !== undefined) merged.toolKind = toolKind;
+          // A call's parent is fixed by the first frame that names one.
+          if (parentId !== undefined && merged.parentId === undefined) merged.parentId = parentId;
+          if (Object.keys(merged).length === 0) return undefined;
+          toolMetadata.set(id, merged);
+          return merged;
+        }
+        /** Forward a frame this transport has no dedicated mapping for as an AI SDK data part. */
+        function forwardAsData(event: { kind: string }, transient: boolean) {
+          ensureStarted();
+          const { kind, ...data } = event as { kind: string } & Record<string, unknown>;
+          controller.enqueue({
+            type: `data-${kind}`,
+            ...(typeof data.id === 'string' ? { id: data.id } : {}),
+            data,
+            ...(transient ? { transient: true } : {}),
+          });
         }
         function emit(event: AgentStreamEvent) {
           switch (event.kind) {
@@ -314,7 +365,8 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
             case 'text':
               ensureStep();
               if (textId === null) {
-                textId = `txt-${stepIndex}`;
+                textId = textSeq === 0 ? `txt-${stepIndex}` : `txt-${stepIndex}.${textSeq}`;
+                textSeq += 1;
                 controller.enqueue({ type: 'text-start', id: textId });
               }
               controller.enqueue({ type: 'text-delta', id: textId, delta: event.text });
@@ -322,26 +374,29 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
             case 'reasoning':
               ensureStep();
               if (reasoningId === null) {
-                reasoningId = `rsn-${stepIndex}`;
+                reasoningId =
+                  reasoningSeq === 0 ? `rsn-${stepIndex}` : `rsn-${stepIndex}.${reasoningSeq}`;
+                reasoningSeq += 1;
                 controller.enqueue({ type: 'reasoning-start', id: reasoningId });
               }
               controller.enqueue({ type: 'reasoning-delta', id: reasoningId, delta: event.text });
               break;
-            case 'tool-input-start':
+            case 'tool-input-start': {
               ensureStep();
               announced.add(event.id);
+              // `toolKind` is absent on older backends — omitted (not `undefined`-valued) so
+              // `toolMetadata` itself is only present when there's something to say, letting a
+              // UI gate approval affordances on `kind === 'action'` without hardcoding tool names.
+              // `parentId` nests the call under another one (see `TranscriptToolCall.children`).
+              const metadata = metadataFor(event.id, event.toolKind, event.parentId);
               controller.enqueue({
                 type: 'tool-input-start',
                 toolCallId: event.id,
                 toolName: event.name,
-                // `toolKind` is absent on older backends — omitted (not `undefined`-valued) so
-                // `toolMetadata` itself is only present when there's something to say, letting a
-                // UI gate approval affordances on `kind === 'action'` without hardcoding tool names.
-                ...(event.toolKind !== undefined
-                  ? { toolMetadata: { toolKind: event.toolKind } }
-                  : {}),
+                ...(metadata !== undefined ? { toolMetadata: metadata } : {}),
               });
               break;
+            }
             case 'tool-input-delta':
               ensureStep();
               controller.enqueue({
@@ -350,19 +405,19 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 inputTextDelta: event.delta,
               });
               break;
-            case 'tool-input-available':
+            case 'tool-input-available': {
               ensureStep();
               announced.add(event.id);
+              const metadata = metadataFor(event.id, event.toolKind, event.parentId);
               controller.enqueue({
                 type: 'tool-input-available',
                 toolCallId: event.id,
                 toolName: event.name,
                 input: event.input,
-                ...(event.toolKind !== undefined
-                  ? { toolMetadata: { toolKind: event.toolKind } }
-                  : {}),
+                ...(metadata !== undefined ? { toolMetadata: metadata } : {}),
               });
               break;
+            }
             case 'elicitation':
               ensureStep();
               // An authored intake asks before the turn's first model call, so nothing announced
@@ -409,7 +464,51 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               // persisted call, not this chunk — the SDK's shape carries no room for it.
               controller.enqueue({ type: 'tool-output-denied', toolCallId: event.id });
               break;
+            case 'approval-requested':
+              ensureStep();
+              // Who decides and until when rides a `data-approval-requested` part keyed by the call
+              // id — the SDK's approval chunk has no room for it, and restating the call's input
+              // chunk to widen its metadata would fire a consumer's `onToolCall` a second time.
+              forwardAsData(event, false);
+              // The SDK settles an approval against a part it already holds and throws — dropping
+              // the whole message — when there is none, so only a call this stream announced moves
+              // into the native state. The approval id IS the call id: the lib settles approvals
+              // by tool-call id, so a second identifier would only have to be mapped back.
+              if (announced.has(event.id)) {
+                controller.enqueue({
+                  type: 'tool-approval-request',
+                  approvalId: event.id,
+                  toolCallId: event.id,
+                });
+              }
+              break;
+            case 'ui':
+              ensureStep();
+              // Positioned content: close the open prose so text written after the component
+              // renders after it instead of growing the paragraph above it.
+              closeRuns();
+              controller.enqueue({
+                type: 'data-ui',
+                id: event.id,
+                data: {
+                  id: event.id,
+                  component: event.component,
+                  props: event.props,
+                  ...(event.version !== undefined ? { version: event.version } : {}),
+                },
+              });
+              break;
+            case 'title':
+            case 'cancelled':
+              // Thread- and run-level facts, not message content: seen by `onData`, never stored
+              // as a part of the message.
+              forwardAsData(event, true);
+              break;
             default:
+              // A kind this version does not know (a newer server, a runner that is not this
+              // library's loop). Forwarded rather than dropped, so a host can render it from
+              // `message.parts` / `onData` without waiting for a release that maps it.
+              forwardAsData(event as { kind: string }, false);
               break;
           }
         }

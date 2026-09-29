@@ -10,9 +10,54 @@
  *
  * Keeping this vocabulary neutral (not AI-SDK `UIMessageChunk`) means core never depends on `ai`:
  * the adapter owns model-parts → event, the transport owns event → UI-chunk.
+ *
+ * The vocabulary is also a CONTRACT for runners that are not this library's loop: anything that
+ * writes these frames (one JSON object per SSE `data:` line) gets the React transport, transcript
+ * model and hooks for free. Two rules keep it evolvable:
+ *  - every frame is a JSON object with a string `kind`; a reader MUST tolerate kinds it does not
+ *    know (the React transport forwards them as `data-<kind>` parts rather than dropping them);
+ *  - fields are only ever added, and new fields are optional.
  */
 import type { ElicitationRequest } from './elicitation.js';
 import type { MessageUsage } from './types.js';
+
+/**
+ * A component the server pushed into the conversation: generative UI that is NOT a tool call's
+ * rendering. It is addressed by `component` (a key in the client's own component registry), never
+ * by a tool name, so a runner can emit one from anywhere — a tool body, a post-processing step, a
+ * sandboxed agent that renders through its own protocol.
+ *
+ * `id` is the component's identity within the message: a second frame with the same `id` REPLACES
+ * the first (streaming props into a chart, flipping a card from "loading" to "ready"), it never
+ * adds a second component.
+ */
+export interface AgentUiComponent {
+  id: string;
+  /** Registry key the client resolves to its own renderer, e.g. `data-table`. */
+  component: string;
+  props: Record<string, unknown>;
+  /** Schema version of `props`, so a client can keep rendering components persisted by an older server. */
+  version?: number;
+}
+
+/**
+ * Who has to settle an action tool call, and until when. Metadata only: the call itself is still
+ * settled through the tool-call approve/reject routes, by its `toolCallId`.
+ */
+export interface AgentApprovalRequest {
+  /** The tool call awaiting the decision — the `id` of a call already announced on this stream. */
+  id: string;
+  /**
+   * Who may decide. Open vocabulary the host defines — `'requester'` (the person chatting),
+   * `'admin'`, a role name, a team. A client uses it to say "waiting on an admin" instead of
+   * offering buttons the viewer cannot use.
+   */
+  approver: string;
+  /** ISO-8601 instant after which the request lapses. Absent → it never expires. */
+  expiresAt?: string;
+  /** Why this call needs a person, in words for that person. */
+  reason?: string;
+}
 
 export type AgentStreamEvent =
   | { kind: 'step-start' }
@@ -24,8 +69,20 @@ export type AgentStreamEvent =
   | { kind: 'step-finish'; usage?: MessageUsage; costUsd?: number | null }
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
-  /** `toolKind` collapses `ToolKind`'s `'agent'` into `'read'` — delegation tools auto-execute like a read tool. */
-  | { kind: 'tool-input-start'; id: string; name: string; toolKind: 'read' | 'action' }
+  /**
+   * `toolKind` collapses `ToolKind`'s `'agent'` into `'read'` — delegation tools auto-execute like a read tool.
+   *
+   * `parentId` nests this call under another call on the same stream: the inner calls a code-mode
+   * `execute` makes, the tools a delegated sub-agent runs. The parent must be announced first. A
+   * call's parent is fixed by its first frame that names one; later frames may omit it.
+   */
+  | {
+      kind: 'tool-input-start';
+      id: string;
+      name: string;
+      toolKind: 'read' | 'action';
+      parentId?: string;
+    }
   | { kind: 'tool-input-delta'; id: string; delta: string }
   | {
       kind: 'tool-input-available';
@@ -33,6 +90,8 @@ export type AgentStreamEvent =
       name: string;
       input: unknown;
       toolKind: 'read' | 'action';
+      /** Same as on `tool-input-start`, for a runner that announces a call without streaming its input. */
+      parentId?: string;
     }
   | { kind: 'tool-output'; id: string; output: unknown }
   | { kind: 'tool-output-error'; id: string; error: string }
@@ -51,6 +110,24 @@ export type AgentStreamEvent =
    * The matching `tool-output` frame, under the same `id`, carries the settled answers.
    */
   | { kind: 'elicitation'; id: string; request: ElicitationRequest }
+  /**
+   * An action tool call (already announced by `tool-input-start`/`tool-input-available` under the
+   * same `id`) is parked on a person. Optional: a client still treats an `action` call stuck at
+   * its input as pending — this frame adds WHO has to decide and UNTIL WHEN, and moves the call
+   * into the AI SDK's native `approval-requested` state.
+   */
+  | ({ kind: 'approval-requested' } & AgentApprovalRequest)
+  /**
+   * Server-pushed generative UI, positioned in the message where it arrives. Not tied to a tool
+   * call. See {@link AgentUiComponent}.
+   */
+  | ({ kind: 'ui' } & AgentUiComponent)
+  /**
+   * The thread's title was set or changed while this run streamed (typically derived from the
+   * first exchange). Thread-level, not message content: a client updates its header/sidebar and
+   * does not render it in the transcript.
+   */
+  | { kind: 'title'; title: string }
   /**
    * Someone stopped this run. The stream's LAST frame, written by the runner that settled the
    * cancel, immediately before a normal `end()` — never a `fail()`, because a cancel is not an
