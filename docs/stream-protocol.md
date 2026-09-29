@@ -301,7 +301,7 @@ client throws `AgentHttpError` carrying `status`.
 | `DELETE <base>/threads/:id/from/:messageId` | — | `{ ok: true }` |
 | `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
 | `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx` |
-| `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, contentType, name, … }`) |
+| `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |
 | `GET <base>/tools?agent=` | — | see *Tool catalog* |
 | `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
 | `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null }` |
@@ -314,6 +314,14 @@ server's default. Serve the catalog from whatever decides what a caller may use 
 provider health) and refuse anything else with `400` — the client only ever sends ids the catalog
 listed, but a server must not trust that. `useModels` renders the catalog, `useAgentChat({ model })`
 sends the pick, `chat.setThreadModel(id)` pins it.
+
+**Attachments.** The client uploads each file on its own (`POST <base>/attachments`, multipart
+`file`), then names the uploads by id on the send: `POST <base>/chat { message, attachments:
+[{ mediaId }] }`. Only the id is trusted — the server resolves the url the model fetches from its
+own storage. `GET <base>/threads/:id` returns them on the user message as `attachments: [{ mediaId,
+url, contentType, name }]` (the `url` fresh enough to display), replayed as `file` parts carrying
+`providerMetadata.agent.mediaId`. `useAttachments` stages, validates and uploads; `messageFiles`
+reads them back off a message.
 
 **Quota.** `GET <base>/quota` reports every budget window the server enforces; `blocked` names the
 exhausted one. A server that enforces it answers `POST <base>/chat` with `429` and

@@ -198,6 +198,15 @@ export class AgentClient implements AgentBackend {
     file: File,
     options: UploadAttachmentOptions = {},
   ): Promise<MessageAttachment> {
+    // `fetch` cannot observe an upload's progress; XHR can. Only when someone is listening, and
+    // never when a `fetch` was injected (tests, non-browser runtimes).
+    if (
+      options.onProgress !== undefined &&
+      this.options.fetch === undefined &&
+      typeof XMLHttpRequest !== 'undefined'
+    ) {
+      return this.uploadWithProgress(file, options);
+    }
     const formData = new FormData();
     formData.append('file', file);
     const response = await this.fetchImpl()(`${this.baseUrl()}/agent/attachments`, {
@@ -210,7 +219,54 @@ export class AgentClient implements AgentBackend {
       ...this.credentials(),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
-    return this.handleResponse<MessageAttachment>(response, 'POST', '/agent/attachments');
+    const attachment = await this.handleResponse<MessageAttachment>(
+      response,
+      'POST',
+      '/agent/attachments',
+    );
+    options.onProgress?.(1);
+    return attachment;
+  }
+
+  private async uploadWithProgress(
+    file: File,
+    { signal, onProgress }: UploadAttachmentOptions,
+  ): Promise<MessageAttachment> {
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      ...(await this.resolveHeaders()),
+    };
+    const url = `${this.baseUrl()}/agent/attachments`;
+    return new Promise<MessageAttachment>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+      // Same-origin requests carry cookies regardless; this is the cross-origin opt-in.
+      xhr.withCredentials = this.options.credentials === 'include';
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new AgentHttpError(xhr.status, 'POST', '/agent/attachments', xhr.statusText));
+          return;
+        }
+        onProgress?.(1);
+        resolve(JSON.parse(xhr.responseText) as MessageAttachment);
+      };
+      xhr.onerror = () => reject(new TypeError('Network error while uploading the attachment'));
+      xhr.onabort = () => reject(new DOMException('The upload was aborted', 'AbortError'));
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          reject(new DOMException('The upload was aborted', 'AbortError'));
+          return;
+        }
+        signal.addEventListener('abort', () => xhr.abort(), { once: true });
+      }
+      const formData = new FormData();
+      formData.append('file', file);
+      xhr.send(formData);
+    });
   }
 
   promoteThread(id: string): Promise<OkResult> {
