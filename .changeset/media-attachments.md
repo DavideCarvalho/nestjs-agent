@@ -10,7 +10,7 @@ a media record owned by the actor; resolve → presigned/public/inline url; list
 authorization; `remove` for sweeps; opt-in `indexForRag`), plus resumable upload routes that open an
 owned tus session on nestjs-media's own tus endpoint (`POST/DELETE <path>/attachments/uploads`,
 `POST …/:mediaId/complete`). `@dudousxd/nestjs-agent-react/media` adds `createMediaUpload` (a
-resumable `upload` for `useAttachments` with progress and abort, on `@dudousxd/nestjs-media-client`)
+resumable `upload` for `useAttachments` with progress and abort, on `@dudousxd/nestjs-media-client`),
 `mediaAttachments()` — one line, `useAgentChat({ attachments: mediaAttachments() })` — and
 `withMediaUploads(backend)` for other backends. Root react entry: `AgentClientOptions.attachments` /
 `useAgentChat({ attachments })` take an `AttachmentUploadStrategy`, so any upload (media or your own)
