@@ -12,6 +12,7 @@ export {
   AgentService,
   type ChatParams,
   type ThreadDefaultAgentReader,
+  type ThreadModelReader,
 } from './agent.service.js';
 export {
   AttachmentsController,
@@ -53,6 +54,7 @@ export {
 } from './discovery/skill-discovery.service.js';
 export { SkillsController } from './controller/skills.controller.js';
 export { MessagesController } from './controller/messages.controller.js';
+export { ModelsController } from './controller/models.controller.js';
 export { ToolsController } from './controller/tools.controller.js';
 export { MemoriesController } from './controller/memories.controller.js';
 export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';

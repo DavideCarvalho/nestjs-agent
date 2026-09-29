@@ -40,8 +40,14 @@ const MESSAGE_FEEDBACK = "{ value: 'up' | 'down'; comment?: string; updatedAt: s
 const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; reasoning?: string; reasoningMs?: number; ui?: ${UI_COMPONENT}[]; feedback?: ${MESSAGE_FEEDBACK}; createdAt: string }`;
 const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
-  'createdAt: string; updatedAt: string; lastMessagePreview?: string }';
+  'createdAt: string; updatedAt: string; lastMessagePreview?: string; ' +
+  'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null }';
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
+/** `GET /agent/models` — mirrors `ModelCatalogView` in core/src/spi/model-catalog.ts. */
+const MODEL_CATALOG_VIEW =
+  '{ default: string | null; providers: { id: string; label: string; models: { id: string; ' +
+  'label: string; description?: string; badges?: string[]; available: boolean; ' +
+  'unavailableReason?: string; contextWindow?: number }[] }[] }';
 /** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
 const AGENT_CATALOG_ENTRY = '{ name: string; description: string; isDefault?: boolean }';
 
@@ -83,6 +89,13 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       body: null,
       response: `${AGENT_CATALOG_ENTRY}[]`,
     }),
+    route(
+      'GET',
+      `${root}/models`,
+      `${ns}.models.list`,
+      { query: '{ agent?: string }', body: null, response: MODEL_CATALOG_VIEW },
+      [{ name: 'agent', source: 'query' }],
+    ),
     route('GET', `${root}/threads`, `${ns}.threads.list`, {
       query: null,
       body: null,
@@ -116,7 +129,11 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       'PATCH',
       `${root}/threads/:id`,
       `${ns}.threads.rename`,
-      { query: null, body: '{ title: string }', response: '{ ok: boolean }' },
+      {
+        query: null,
+        body: '{ title?: string; defaultAgent?: string | null; model?: string | null }',
+        response: '{ ok: boolean }',
+      },
       [{ name: 'id', source: 'path' }],
     ),
     route(
@@ -231,7 +248,7 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
  * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
  * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, skills, tools, memories, staged
- * attachments, message feedback, quota, cancel) into your generated `api.ts` — so they're available as a typed client
+ * attachments, message feedback, model catalog, quota, cancel) into your generated `api.ts` — so they're available as a typed client
  * / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static

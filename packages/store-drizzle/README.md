@@ -120,6 +120,7 @@ ALTER TABLE agent_message ADD COLUMN reasoning TEXT;
 ALTER TABLE agent_message ADD COLUMN reasoning_ms INTEGER;
 ALTER TABLE agent_message ADD COLUMN ui TEXT;
 ALTER TABLE agent_message ADD COLUMN feedback TEXT;
+ALTER TABLE agent_thread ADD COLUMN model TEXT;
 ALTER TABLE agent_tool_call ADD COLUMN approver TEXT;
 ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER;
 ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER;

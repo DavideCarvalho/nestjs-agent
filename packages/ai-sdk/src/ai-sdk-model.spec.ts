@@ -375,4 +375,48 @@ describe('aiSdkModel — structured output', () => {
     expect(result).not.toHaveProperty('object');
     expect(result.text).toBe('Hello');
   });
+
+  describe('the model a caller picked', () => {
+    beforeEach(() => {
+      streamTextMock.mockReset();
+      streamTextMock.mockImplementation(() => fakeStreamResult());
+    });
+
+    const turn = (model?: string) => ({
+      system: '',
+      messages: [],
+      tools: [],
+      sink: createSink(),
+      ...(model !== undefined ? { model } : {}),
+    });
+
+    it('swaps a gateway id for the picked one, and keeps it when nothing was picked', async () => {
+      const provider = aiSdkModel('openai/gpt-4o');
+      await provider.runTurn(turn('anthropic/claude-fast'));
+      await provider.runTurn(turn());
+      expect(streamTextMock.mock.calls.map(([call]) => call.model)).toEqual([
+        'anthropic/claude-fast',
+        'openai/gpt-4o',
+      ]);
+    });
+
+    it('resolves the pick through resolveModel, and keeps that option off the SDK call', async () => {
+      const resolved = { modelId: 'resolved' } as unknown as Parameters<typeof aiSdkModel>[0];
+      const provider = aiSdkModel('openai/gpt-4o', {
+        temperature: 0.2,
+        resolveModel: (id) => (id === 'fast' ? resolved : 'openai/gpt-4o'),
+      });
+      await provider.runTurn(turn('fast'));
+      const call = streamTextMock.mock.calls[0]?.[0];
+      expect(call.model).toBe(resolved);
+      expect(call.temperature).toBe(0.2);
+      expect(call).not.toHaveProperty('resolveModel');
+    });
+
+    it('ignores a pick when bound to a provider instance and given no resolver', async () => {
+      const instance = { modelId: 'instance' } as unknown as Parameters<typeof aiSdkModel>[0];
+      await aiSdkModel(instance).runTurn(turn('fast'));
+      expect(streamTextMock.mock.calls[0]?.[0].model).toBe(instance);
+    });
+  });
 });

@@ -144,6 +144,41 @@ one of the caller's threads (`null` clears it) and answers `{ feedback }`; `GET 
 returns it on the message. It needs a store with `threadOfMessage` + `setMessageFeedback` (both
 bundled stores and `InMemoryAgentStore` have them) — `501` otherwise.
 
+### Letting callers pick a model
+
+```ts
+AgentModule.forRoot({
+  model: aiSdkModel('openai/gpt-4o-mini', { resolveModel: (id) => gateway(id) }),
+  models: {
+    list: ({ actor }) => ({
+      default: 'openai/gpt-4o-mini',
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          models: [
+            { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini', badges: ['fast'], available: true },
+            {
+              id: 'openai/o3',
+              label: 'o3',
+              badges: ['reasoning'],
+              available: actor.roles?.includes('PRO') === true,
+              unavailableReason: 'Pro plan',
+            },
+          ],
+        },
+      ],
+    }),
+  },
+});
+```
+
+`GET /agent/models?agent=` answers the catalog for the caller (empty without one). A turn runs on
+the send's `model`, else the thread's pinned one (`PATCH /agent/threads/:id { model }`), else the
+provider's default; the id reaches the provider as `ModelTurnArgs.model` for every call of the turn.
+A model the catalog does not list as available for that actor and agent is refused with `400` —
+when pinned and again on each turn. `staticModelCatalog(view)` wraps a fixed list.
+
 ### Who approves an action, and for how long
 
 Every `action` tool call waits on the person chatting by default. `approvalPolicy` changes that per

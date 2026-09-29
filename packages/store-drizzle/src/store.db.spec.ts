@@ -372,6 +372,7 @@ describe('DrizzleAgentStore — a thread patch a client reads back', () => {
   const EVERY_PATCH_FIELD: Required<UpdateThreadInput> = {
     title: 'Renamed',
     defaultAgent: 'researcher',
+    model: 'gpt-fast',
   };
 
   it('returns every patched field from getThread', async () => {
@@ -400,6 +401,23 @@ describe('DrizzleAgentStore — a thread patch a client reads back', () => {
     expect((await store.getThread(thread.id))?.defaultAgent).toBeNull();
 
     await expect(store.updateThread('missing', { title: 'x' })).resolves.toBeUndefined();
+  });
+
+  it('pins, reads, clears and forks the thread model', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-model' } });
+    expect(await store.modelForThread(thread.id)).toBeNull();
+    expect((await store.getThread(thread.id))?.model).toBeUndefined();
+
+    await store.updateThread(thread.id, { model: 'gpt-fast' });
+    expect(await store.modelForThread(thread.id)).toBe('gpt-fast');
+    expect((await store.listThreads('actor-model'))[0]?.model).toBe('gpt-fast');
+    const answer = await store.appendMessage({ threadId: thread.id, role: 'user', content: 'q' });
+    const fork = await store.forkThread(thread.id, answer.id);
+    expect(fork.model).toBe('gpt-fast');
+
+    await store.updateThread(thread.id, { model: null });
+    expect(await store.modelForThread(thread.id)).toBeNull();
+    expect(await store.modelForThread('missing')).toBeNull();
   });
 
   it('reads the default agent without materializing the thread', async () => {

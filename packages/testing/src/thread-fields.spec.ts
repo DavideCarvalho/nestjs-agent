@@ -15,6 +15,7 @@ import { InMemoryAgentStore } from './in-memory-store.js';
 const EVERY_PATCH_FIELD: Required<UpdateThreadInput> = {
   title: 'Renamed',
   defaultAgent: 'researcher',
+  model: 'gpt-fast',
 };
 
 describe('InMemoryAgentStore — a thread patch round-trips every field it was given', () => {

@@ -1,6 +1,8 @@
 import type {
+  AgentCatalogEntry,
   MessageAttachment,
   MessageFeedback,
+  ModelCatalogView,
   QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
@@ -219,6 +221,17 @@ export class AgentClient implements AgentBackend {
       'DELETE',
       `/agent/threads/${encodeURIComponent(threadId)}/from/${encodeURIComponent(messageId)}`,
     );
+  }
+
+  /** `GET /agent/models?agent=` — the models this caller may pick, grouped by provider. */
+  listModels(agent?: string): Promise<ModelCatalogView> {
+    const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
+    return this.request<ModelCatalogView>('GET', `/agent/models${query}`);
+  }
+
+  /** `GET /agent/agents` — the registered agents, the default one flagged. */
+  listAgents(): Promise<AgentCatalogEntry[]> {
+    return this.request<AgentCatalogEntry[]>('GET', '/agent/agents');
   }
 
   getQuotaToday(): Promise<QuotaToday> {

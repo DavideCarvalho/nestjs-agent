@@ -15,6 +15,13 @@ export {
   type ResumeStreamRequest,
   type UploadAttachmentOptions,
 } from './backend.js';
+export { type AgentsState, useAgents, type UseAgentsOptions } from './catalog/use-agents.js';
+export {
+  type ModelOption,
+  type ModelsState,
+  useModels,
+  type UseModelsOptions,
+} from './catalog/use-models.js';
 export {
   type MessageFeedbackState,
   useMessageFeedback,

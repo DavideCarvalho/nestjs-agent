@@ -18,6 +18,12 @@ export interface ModelTurnArgs {
    * the reply against the same schema either way, so ignoring it costs reliability, not safety.
    */
   outputSchema?: StandardSchemaV1;
+  /**
+   * The model the caller picked for this turn — a {@link import('./model-catalog.js').ModelCatalogEntry}
+   * id the server already checked against the catalog (a per-send `model`, else the thread's pinned
+   * one). Absent → the provider's own default. A provider serving a single model may ignore it.
+   */
+  model?: string;
 }
 
 /** The outcome of ONE assistant turn. The loop — not the model — drives tool execution. */

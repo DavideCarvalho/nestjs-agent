@@ -56,6 +56,18 @@ the result the agent loop needs:
   governance estimates from tokens.
 - **Model id** — the response's `modelId` is recorded with the turn for cost accounting.
 
+## The model a caller picked
+
+With a `ModelCatalog` bound (`AgentModule.forRoot({ models })`), a turn may carry a picked model id
+as `ModelTurnArgs.model`. `resolveModel` turns it into the `LanguageModel` to call:
+
+```ts
+aiSdkModel(openai('gpt-4o-mini'), { resolveModel: (id) => openai(id) });
+```
+
+Without `resolveModel`, a string model (an AI Gateway id such as `'openai/gpt-4o-mini'`) is replaced
+by the picked id, and a provider instance ignores the pick.
+
 ## License
 
 MIT © Davide Carvalho

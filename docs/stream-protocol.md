@@ -289,12 +289,12 @@ client throws `AgentHttpError` carrying `status`.
 
 | Route | Body / query | Answers |
 |---|---|---|
-| `POST <base>/chat` | `{ message, threadId?, agent?, attachments?: { mediaId }[], pageContext?, regenerate?, transient? }` | the SSE stream above |
+| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?, transient? }` | the SSE stream above; `400` for a `model` the catalog does not offer as available |
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
-| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId? }`) |
+| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model? }`) |
 | `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`) |
-| `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null }` | `{ ok: true }` |
+| `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins) |
 | `DELETE <base>/threads/:id` | — | `{ ok: true }` |
 | `POST <base>/threads/:id/fork-from/:messageId` | — | `ThreadSummary` of the fork |
 | `POST <base>/threads/:id/promote` | — | `{ ok: true }` |
@@ -304,7 +304,15 @@ client throws `AgentHttpError` carrying `status`.
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, contentType, name, … }`) |
 | `GET <base>/tools?agent=` | — | see *Tool catalog* |
 | `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
+| `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null }` |
+| `GET <base>/agents` | — | `{ name, description, isDefault? }[]` |
 | `GET <base>/quota/today` | — | `{ usedTokens, limitTokens: number \| null, withinLimit, costUsd }` |
+
+**Models.** A turn's model is the send's `model`, else the thread's pinned `model`, else the
+server's default. Serve the catalog from whatever decides what a caller may use (plan, budget,
+provider health) and refuse anything else with `400` — the client only ever sends ids the catalog
+listed, but a server must not trust that. `useModels` renders the catalog, `useAgentChat({ model })`
+sends the pick, `chat.setThreadModel(id)` pins it.
 
 **Cookie sessions and CSRF.** Nothing here assumes bearer tokens. A backend on a cookie session
 answers these routes like any other same-site request and checks its CSRF header on the mutating

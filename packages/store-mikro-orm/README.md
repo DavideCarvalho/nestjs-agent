@@ -44,6 +44,9 @@ Upgrading from a release before message feedback: `agent_message` gained a nulla
 (json) column. `ensureAgentSchema` adds it on boot; `migration:create` picks it up from the entity
 diff, or by hand: `alter table agent_message add column feedback json null;`
 
+Upgrading from a release before per-thread models: `agent_thread` gained a nullable `model`
+(varchar) column, added the same ways: `alter table agent_thread add column model varchar(255) null;`
+
 Upgrading from a release before approval policies: `agent_tool_call` gained four nullable columns —
 `approver` (varchar), `expires_at` (datetime), `remember` (boolean) and `decided_via` (varchar).
 `ensureAgentSchema` adds them on boot; `migration:create` picks them up from the entity diff, or by

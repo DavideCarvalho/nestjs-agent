@@ -563,6 +563,35 @@ and patches a streamed title in place; `rename`/`remove` are optimistic and roll
 through `POST <base>/messages/:id/feedback`, and maps a message streamed in this session to the row
 its run persisted (the live message carries `metadata.runId`).
 
+### Picking a model and an agent
+
+```tsx
+import { useAgents, useModels } from '@dudousxd/nestjs-agent-react';
+
+const [model, setModel] = useState<string | undefined>();
+const chat = useAgentChat({ backend, model }); // sent as the body's `model` on every turn
+const { providers, find, defaultModel } = useModels({ backend: chat.backend, agent: 'support' });
+const { agents } = useAgents({ backend: chat.backend });
+
+<select value={model ?? defaultModel ?? ''} onChange={(e) => setModel(e.target.value)}>
+  {providers.map((p) => (
+    <optgroup key={p.id} label={p.label}>
+      {p.models.map((m) => (
+        <option key={m.id} value={m.id} disabled={!m.available}>
+          {m.label} {m.badges?.join(' · ')} {m.available ? '' : `(${m.unavailableReason ?? 'unavailable'})`}
+        </option>
+      ))}
+    </optgroup>
+  ))}
+</select>
+```
+
+`useModels` reads `GET <base>/models?agent=` (models grouped by provider, with badges and
+availability; `models` is the same list flattened, `find(id)` looks one up). A single send can
+override with `sendMessage(msg, { body: { model } })`; `chat.setThreadModel(id)` pins a model on
+the thread (`null` unpins), so every later turn without its own runs on it. The server refuses a
+model its catalog does not offer as available.
+
 ### The transport, standalone
 
 `AgentChatTransport` is a plain AI SDK v7 `ChatTransport` — wire it straight into `useChat` for the SSE

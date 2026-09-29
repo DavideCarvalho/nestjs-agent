@@ -1,6 +1,7 @@
 import {
   AGENT_ATTACHMENT_STAGING,
   AGENT_DEPS_FACTORY,
+  AGENT_MODEL_CATALOG,
   AGENT_QUOTA_STORE,
   AGENT_RUNNER,
   AGENT_STORE,
@@ -17,6 +18,8 @@ import {
   type MessageAttachment,
   type MessageFeedback,
   type MessageFeedbackValue,
+  type ModelCatalog,
+  type ModelCatalogView,
   type PageContext,
   type QuotaStore,
   type QuotaView,
@@ -25,6 +28,7 @@ import {
   type ThreadDetail,
   type ThreadSummary,
   type UpdateThreadInput,
+  findCatalogModel,
   mayDecideApproval,
   readElicitationQuestions,
   validateElicitationAnswer,
@@ -57,6 +61,11 @@ export interface ChatParams {
   /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
   regenerate?: boolean;
   /**
+   * Run this turn on a catalog model instead of the thread's pinned one (or the provider default).
+   * Refused (400) unless the bound `ModelCatalog` lists it as available to this actor and agent.
+   */
+  model?: string;
+  /**
    * When creating a thread (no `threadId`), start it transient — a scratch conversation hidden from
    * the thread list until the caller promotes it. Ignored when `threadId` is set.
    */
@@ -74,6 +83,11 @@ export interface ThreadDefaultAgentReader {
   defaultAgentForThread(threadId: string): Promise<string | null>;
 }
 
+/** Like {@link ThreadDefaultAgentReader}, for the thread's pinned model. */
+export interface ThreadModelReader {
+  modelForThread(threadId: string): Promise<string | null>;
+}
+
 /** The orchestration facade the controllers call. */
 @Injectable()
 export class AgentService {
@@ -85,13 +99,73 @@ export class AgentService {
     @Optional()
     @Inject(AGENT_ATTACHMENT_STAGING)
     private readonly staging?: AttachmentStagingStore,
+    @Optional()
+    @Inject(AGENT_MODEL_CATALOG)
+    private readonly models?: ModelCatalog,
   ) {}
+
+  /**
+   * The models `actor` may pick for `agent` (`GET <base>/models`). An empty catalog when none is
+   * bound, so a picker simply has nothing to offer.
+   */
+  async listModels(actor: Actor, agent?: string): Promise<ModelCatalogView> {
+    if (this.models === undefined) {
+      return { providers: [], default: null };
+    }
+    return this.models.list({ actor, ...(agent !== undefined ? { agent } : {}) });
+  }
+
+  /**
+   * `model` if the catalog offers it to this actor and agent right now, else a 400 naming why. The
+   * one gate every model choice passes — a send's own, and a thread's pinned one at the moment it is
+   * pinned and again at every turn that runs on it (availability can change in between).
+   */
+  private async assertModelAllowed(actor: Actor, agent: string, model: string): Promise<string> {
+    if (this.models === undefined) {
+      throw new BadRequestException(
+        `model "${model}" cannot be selected: no ModelCatalog is configured (AgentModule.forRoot({ models }))`,
+      );
+    }
+    const entry = findCatalogModel(await this.models.list({ actor, agent }), model);
+    if (entry === undefined) {
+      throw new BadRequestException(`model "${model}" is not offered`);
+    }
+    if (!entry.available) {
+      throw new BadRequestException(
+        `model "${model}" is not available${entry.unavailableReason ? `: ${entry.unavailableReason}` : ''}`,
+      );
+    }
+    return entry.id;
+  }
+
+  /** The model a turn runs on: the send's own, else the thread's pinned one, else none. */
+  private async resolveModel(
+    actor: Actor,
+    agent: string,
+    requested: string | undefined,
+    threadId: string | undefined,
+  ): Promise<string | undefined> {
+    const model = requested ?? (threadId !== undefined ? await this.threadModel(threadId) : null);
+    if (model === null || model === undefined) {
+      return undefined;
+    }
+    return this.assertModelAllowed(actor, agent, model);
+  }
+
+  private async threadModel(threadId: string): Promise<string | null> {
+    const projecting = this.store as Partial<ThreadModelReader>;
+    if (typeof projecting.modelForThread === 'function') {
+      return projecting.modelForThread(threadId);
+    }
+    return (await this.store.getThread(threadId))?.model ?? null;
+  }
 
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
     // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
     const agentName = await this.resolveAgentName(params.agentName, params.threadId);
+    const model = await this.resolveModel(params.actor, agentName, params.model, params.threadId);
     // Before the thread exists, so a turn that names an attachment it may not have leaves nothing
     // behind.
     const attachments = await this.resolveAttachments(params.actor, params.attachments ?? []);
@@ -120,6 +194,7 @@ export class AgentService {
       ...(params.regenerate === true ? { regenerate: true } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
+      ...(model !== undefined ? { model } : {}),
     };
 
     const { runId } = await this.runner.start(input);
@@ -301,7 +376,7 @@ export class AgentService {
   async updateThread(actor: Actor, threadId: string, patch: UpdateThreadInput): Promise<void> {
     const title = patch.title !== undefined ? this.validateTitle(patch.title) : undefined;
     await this.assertOwnsThread(actor, threadId);
-    if (patch.defaultAgent === undefined) {
+    if (patch.defaultAgent === undefined && patch.model === undefined) {
       if (title !== undefined) {
         await this.store.setTitle(threadId, title);
       }
@@ -309,13 +384,24 @@ export class AgentService {
     }
     if (this.store.updateThread === undefined) {
       throw new NotImplementedException(
-        "Setting a thread's defaultAgent requires an AgentStore that implements updateThread(); " +
-          'the bound store does not support it.',
+        "Setting a thread's defaultAgent or model requires an AgentStore that implements " +
+          'updateThread(); the bound store does not support it.',
       );
     }
+    // Pinned against the agent the thread's next turn will run as — the one the patch sets, else
+    // the thread's own default, else the module's.
+    const model =
+      patch.model === undefined || patch.model === null
+        ? patch.model
+        : await this.assertModelAllowed(
+            actor,
+            patch.defaultAgent ?? (await this.resolveAgentName(undefined, threadId)),
+            patch.model,
+          );
     await this.store.updateThread(threadId, {
       ...(title !== undefined ? { title } : {}),
-      defaultAgent: patch.defaultAgent,
+      ...(patch.defaultAgent !== undefined ? { defaultAgent: patch.defaultAgent } : {}),
+      ...(model !== undefined ? { model } : {}),
     });
   }
 
@@ -369,6 +455,7 @@ export class AgentService {
     return {
       ...thread,
       defaultAgent: thread.defaultAgent ?? null,
+      model: thread.model ?? null,
       activeRunId: (await this.store.activeRunForThread?.(thread.id)) ?? null,
     };
   }
