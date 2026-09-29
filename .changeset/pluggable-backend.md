@@ -5,6 +5,7 @@
 '@dudousxd/nestjs-agent-store-drizzle': minor
 '@dudousxd/nestjs-agent-store-mikro-orm': minor
 '@dudousxd/nestjs-agent-testing': minor
+'@dudousxd/nestjs-agent-codegen': minor
 ---
 
 Pluggable chat backend, resumable streams, message feedback and a thread-list hook.
@@ -15,3 +16,4 @@ Pluggable chat backend, resumable streams, message feedback and a thread-list ho
 - nestjs: every event frame carries an SSE `id:` (1-based, stable across attaches); `GET chat/:runId/stream` honours `?after=` and `Last-Event-ID`. New `POST messages/:id/feedback` (`MessagesController`, `AgentService.setMessageFeedback`).
 - core: `StoredMessage.feedback`, `MessageFeedback`; optional `AgentStore.threadOfMessage` / `setMessageFeedback`.
 - store-drizzle / store-mikro-orm: `agent_message.feedback` (json, nullable; added by `ensureAgentSchema`, not copied on fork). testing: `InMemoryAgentStore` implements both.
+- codegen: `POST /agent/messages/:id/feedback` as `agent.messages.feedback`; `feedback` on stored messages.

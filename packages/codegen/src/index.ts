@@ -35,7 +35,9 @@ const USAGE =
 /** A server-pushed component — mirrors `AgentUiComponent` in core/src/stream-events.ts. */
 const UI_COMPONENT =
   '{ id: string; component: string; props: Record<string, unknown>; version?: number }';
-const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; reasoning?: string; reasoningMs?: number; ui?: ${UI_COMPONENT}[]; createdAt: string }`;
+/** `StoredMessage.feedback` / `POST /agent/messages/:id/feedback` — mirrors `MessageFeedback` in core/src/types.ts. */
+const MESSAGE_FEEDBACK = "{ value: 'up' | 'down'; comment?: string; updatedAt: string }";
+const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; reasoning?: string; reasoningMs?: number; ui?: ${UI_COMPONENT}[]; feedback?: ${MESSAGE_FEEDBACK}; createdAt: string }`;
 const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string }';
@@ -199,6 +201,17 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       body: null,
       response: `${STAGED_ATTACHMENT}[]`,
     }),
+    route(
+      'POST',
+      `${root}/messages/:id/feedback`,
+      `${ns}.messages.feedback`,
+      {
+        query: null,
+        body: "{ value: 'up' | 'down' | null; comment?: string }",
+        response: `{ feedback: ${MESSAGE_FEEDBACK} | null }`,
+      },
+      [{ name: 'id', source: 'path' }],
+    ),
     route('GET', `${root}/quota/today`, `${ns}.quota`, {
       query: null,
       body: null,
@@ -218,7 +231,7 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
  * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
  * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, skills, tools, memories, staged
- * attachments, quota, cancel) into your generated `api.ts` — so they're available as a typed client
+ * attachments, message feedback, quota, cancel) into your generated `api.ts` — so they're available as a typed client
  * / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static
