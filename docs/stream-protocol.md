@@ -63,7 +63,7 @@ resume", not an error.
 | `elicitation` | `id`, `request: { preamble?, questions[] }` | opens an `ask` tool call carrying the questions (see *Asking the user*) |
 | `approval-requested` | `id`, `approver: string`, `expiresAt?: string`, `reason?: string` | `data-approval-requested` part (id = call id) + native `tool-approval-request` (`approvalId` = call id); the tool part moves to `state: 'approval-requested'` |
 | `approval-settled` | `id`, `status: 'approved' \| 'rejected' \| 'expired'`, `approver?`, `decidedBy?`, `decidedVia?`, `remember?: boolean`, `reason?` | `data-approval-settled` part (id = call id); folded into the call's `approval` by the transcript. The call's own state still moves on its output frame |
-| `ui` | `id`, `component: string`, `props: object`, `version?: number` | `data-ui` part (id = component id); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
+| `ui` | `id`, `component: string`, `props: object`, `version?: number`, `toolCallId?: string` | `data-ui` part (id = component id, data carries `toolCallId`); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
 | `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
 | `cancelled` | — | transient `data-cancelled`. Send it as the last frame before `done` when someone stopped the run, so a reader can tell a truncated answer from a complete one |
 | *anything else* | any | `data-<kind>` part carrying the frame minus `kind`, keyed by `id` when the frame has a string `id` |
@@ -196,6 +196,28 @@ is a key into the client's own registry (the library ships none); `props` must b
 persisted. Emitting the same `id` again (e.g. streaming rows into a table) updates it; it never
 duplicates it.
 
+`toolCallId` names the tool call that pushed the component, when one did. Send it between that
+call's announcement and its outcome frame; a reloaded message places the component right after the
+call's tool part, which is where the live stream showed it.
+
+**In this library** a tool pushes with `ctx.emitUi(component, props, { id?, version? })`. The frame
+streams immediately (inline, durable in-process, and from the worker serving a dispatched tool step),
+`id` defaults to `<toolCallId>:ui:<n>`, and the components ride the tool step's journaled result, so
+a durable replay neither re-streams nor re-persists them. Once the step's tools have settled, the
+loop persists every component of the step on the assistant message (`AgentStore.setMessageUi`): the
+model turn's own frames first, then the tools' pushes in call order.
+
+**A runner that is not this library's loop** (a sandboxed agent, an OpenCode runner) does the same
+with its own tools:
+
+1. write a `ui` frame with a stable `id` — derive it from the call (`<callId>:ui:<n>`) so a retried
+   or replayed call replaces what it pushed instead of adding a copy — and `toolCallId`;
+2. write it after the call is announced and before its outcome;
+3. persist it in the assistant message's `ui` list (first-seen order, last props per `id`, the
+   `toolCallId` kept) so `GET <base>/threads/:id` returns what the stream showed;
+4. if the runner replays work, make the persisted list a function of the replayed results (replace
+   the list, never append), so a replay writes the same value.
+
 Two conventions from `@dudousxd/nestjs-agent-genui` (a catalog is optional — the frame is the
 contract):
 
@@ -225,7 +247,7 @@ message may carry, per step:
 |---|---|
 | `reasoning?: string` | a `reasoning` part, placed before the text |
 | `reasoningMs?: number` | that part's `providerMetadata.agent.reasoningMs` (the transcript's `durationMs`) |
-| `ui?: { id, component, props, version? }[]` | `data-ui` parts, first-seen order, last props per `id` |
+| `ui?: { id, component, props, version?, toolCallId? }[]` | `data-ui` parts, first-seen order, last props per `id`; one with a `toolCallId` goes right after that call's tool part |
 | `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
 
 A runner serving these routes should persist the same values it streamed, so a reload shows what

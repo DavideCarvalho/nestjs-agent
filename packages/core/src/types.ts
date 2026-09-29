@@ -83,6 +83,17 @@ export interface ToolSpec {
    * reads the branch back rather than re-deciding it against a registry that may have changed.
    */
   detached?: boolean;
+  /**
+   * The turn ends once a call to this tool SUCCEEDS: the loop finishes the step (results persisted
+   * and streamed) and makes no further model call. For a tool whose effect IS the answer — pushing
+   * a composed UI, handing off — where a model call narrating it would only repeat it. A failed or
+   * refused call does not end the turn, so the model can correct it.
+   *
+   * Settled into the call's `persist:toolcall` checkpoint (like `targetAgent`), so a replay takes
+   * the same branch. Ending early skips what a final step would do: follow-ups and the
+   * `outputSchema` formatting pass.
+   */
+  terminal?: boolean;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
@@ -579,4 +590,10 @@ export interface ToolStepEnvelope {
    * `AgentRunSteps.tool`) instead of trying to serialize a function.
    */
   transientRetry: ToolTransientRetryNumbers | false;
+  /**
+   * The dispatching loop reads the components the tool pushed (`ctx.emitUi`) off the step's result.
+   * A handler that sees it returns {@link wrapToolStepOutput}'s envelope when the tool pushed any —
+   * and ONLY then, so a loop that predates this (and never sets it) always gets the bare output.
+   */
+  collectUi?: boolean;
 }

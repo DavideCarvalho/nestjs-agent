@@ -210,6 +210,8 @@ export interface TranscriptUiBlock {
   props: Record<string, unknown>;
   /** Schema version of `props`; `null` when the server did not stamp one. */
   version: number | null;
+  /** The tool call that pushed it (`ctx.emitUi`); `null` for a component pushed outside a tool. */
+  toolCallId: string | null;
 }
 
 /** One choice a question offers, with its live selection state. */
@@ -998,6 +1000,7 @@ function readUiComponent(
     component: data.component,
     props: isRecord(data.props) ? data.props : {},
     version: typeof data.version === 'number' ? data.version : null,
+    toolCallId: typeof data.toolCallId === 'string' ? data.toolCallId : null,
   };
 }
 

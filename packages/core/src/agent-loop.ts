@@ -98,7 +98,11 @@ import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
-import { type AgentStreamEvent, encodeStreamEvent } from './stream-events.js';
+import {
+  type AgentStreamEvent,
+  type AgentUiComponent,
+  encodeStreamEvent,
+} from './stream-events.js';
 import {
   DEFAULT_STRUCTURED_OUTPUT_INSTRUCTION,
   StructuredOutputError,
@@ -108,6 +112,7 @@ import {
 import type { ToolRegistry } from './tool-registry.js';
 import { invokeWithTransientRetry, resolveToolTransientRetryNumbers } from './tool-retry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
+import { createUiCollector, mergeUi, unwrapToolStepOutput, wrapToolStepOutput } from './tool-ui.js';
 import { observeTurnFrames, withTurnFrames } from './turn-frames.js';
 import type {
   AgentRunInput,
@@ -1565,6 +1570,13 @@ interface ToolTurnContext {
   /** The run's live stream — an `ask` posts its question set here while the turn parks. */
   writer: SinkWriter;
   /**
+   * What each call pushed through `ctx.emitUi`, by call id, read off the tool steps' results. The
+   * step persists them onto the message in call order once every tool has settled.
+   */
+  toolUi: Map<string, AgentUiComponent[]>;
+  /** Set when a `terminal` tool succeeded: the turn ends after this step. */
+  halt: { terminal: boolean };
+  /**
    * What `skills:catalog` recorded this turn, or undefined where skills are not configured. A
    * `skill` call is served against THIS, never against a fresh provider read — see {@link loadSkill}.
    */
@@ -1587,6 +1599,8 @@ interface ClaimedToolCall {
   targetAgent?: string;
   /** For an `agent` call — whether the journal says this delegation runs detached. */
   detached?: boolean;
+  /** The journal says a successful call ends the turn (`ToolSpec.terminal`). */
+  terminal?: boolean;
   /**
    * For an `action` call — how the journal says it is approved. Undefined for a call claimed before
    * approval policies existed, which waits on the requester with no expiry, as it always did.
@@ -1700,10 +1714,19 @@ async function claimToolCall(
       // Only an `agent` spec ever carries this, and only when the author declared it — so a
       // deployment with no detached edge writes the same bytes here it always has.
       ...(spec?.detached === true ? { detached: true } : {}),
+      // Same for `terminal`: absent unless declared, so a deployment with no terminal tool writes
+      // the bytes it always has, and a replay reads the branch back instead of re-deciding it.
+      ...(spec?.terminal === true ? { terminal: true } : {}),
       ...(approval !== undefined ? { approval } : {}),
     };
   })) as
-    | { kind?: ToolKind; targetAgent?: string; detached?: boolean; approval?: ClaimedApproval }
+    | {
+        kind?: ToolKind;
+        targetAgent?: string;
+        detached?: boolean;
+        terminal?: boolean;
+        approval?: ClaimedApproval;
+      }
     | undefined;
   const toolType: ToolKind = persisted?.kind ?? call.kind ?? 'read';
   return {
@@ -1714,6 +1737,7 @@ async function claimToolCall(
     toolType,
     ...(persisted?.targetAgent !== undefined ? { targetAgent: persisted.targetAgent } : {}),
     ...(persisted?.detached === true ? { detached: true } : {}),
+    ...(persisted?.terminal === true ? { terminal: true } : {}),
     ...(toolType === 'action' && persisted?.approval !== undefined
       ? { approval: persisted.approval }
       : {}),
@@ -1930,7 +1954,7 @@ async function invokeClaimedTool(
     if (claimed.toolType === 'memory') {
       return await rememberIntoTurn(turn, claimed, startedAt);
     }
-    let output: unknown;
+    let raw: unknown;
     if (hooks.dispatchTool) {
       const stepCtx: ToolStepCtx = {
         actor: input.actor,
@@ -1948,18 +1972,33 @@ async function invokeClaimedTool(
         // Numeric-only: the handler applies withToolTimeout AND its own local `classify` — see
         // ToolStepEnvelope.transientRetry.
         transientRetry: resolveToolTransientRetryNumbers(deps.toolTransientRetry),
+        // The handler hands back what the tool pushed through `ctx.emitUi` with its output.
+        collectUi: true,
       };
       // The handler applies withToolTimeout (and the retry loop) itself — no loop-side wrap for
       // a dispatched call.
-      output = await hooks.dispatchTool(resolvedCall, envelope);
+      raw = await hooks.dispatchTool(resolvedCall, envelope);
     } else {
-      const invocation = hooks.step(`tool:${call.id}`, () =>
-        traceToolExecution(
+      const invocation = hooks.step(`tool:${call.id}`, async () => {
+        // Pushed components stream as they happen and ride this step's RESULT into the journal
+        // (see `wrapToolStepOutput`), so a replay neither re-streams nor re-persists them.
+        const ui = createUiCollector(call.id, (event) =>
+          turn.writer.write(encodeStreamEvent(event)),
+        );
+        const output = await traceToolExecution(
           hooks.runId,
           { toolCallId: call.id, toolName: call.name, toolType },
           () =>
             invokeWithTransientRetry(
-              () => deps.registry.invoke(call.name, call.input, ctx, deps.rolesPolicy),
+              () => {
+                ui.restart();
+                return deps.registry.invoke(
+                  call.name,
+                  call.input,
+                  { ...ctx, emitUi: ui.emit },
+                  deps.rolesPolicy,
+                );
+              },
               deps.toolTransientRetry ?? {},
               {
                 ...(hooks.isControlFlowError !== undefined
@@ -1975,12 +2014,20 @@ async function invokeClaimedTool(
                 },
               },
             ),
-        ),
-      );
-      output =
+        );
+        return wrapToolStepOutput(output, ui.components());
+      });
+      raw =
         deps.toolTimeoutMs !== undefined
           ? await withToolTimeout(invocation, deps.toolTimeoutMs, call.name)
           : await invocation;
+    }
+    const { output, ui } = unwrapToolStepOutput(raw);
+    if (ui.length > 0) {
+      turn.toolUi.set(call.id, ui);
+    }
+    if (claimed.terminal === true) {
+      turn.halt.terminal = true;
     }
     return { status: 'executed', output, executionMs: Date.now() - startedAt };
   } catch (error) {
@@ -3081,6 +3128,8 @@ export async function runAgentLoop<TOutput = unknown>(
       hooks,
       messageId: assistant.id,
       writer,
+      toolUi: new Map(),
+      halt: { terminal: false },
       ...(skillOffer !== undefined ? { skills: skillOffer } : {}),
       ...(memoryDigest !== undefined ? { memory: memoryDigest } : {}),
     };
@@ -3146,6 +3195,12 @@ export async function runAgentLoop<TOutput = unknown>(
       // and a position inserted between two recorded ones is refused on resume. Every value in
       // `settledResults` comes from a checkpoint above, so a replay writes the same list anyway.
       await deps.store.setMessageToolResults(assistant.id, settledResults);
+      // What the tools pushed joins what the model turn streamed, on the same message, in call
+      // order. Every list here was read off a checkpoint above, so a replay writes the same value.
+      const toolUi = toolCallsWithKind.flatMap((call) => turnCalls.toolUi.get(call.id) ?? []);
+      if (toolUi.length > 0) {
+        await deps.store.setMessageUi?.(assistant.id, mergeUi(turn.ui, toolUi));
+      }
       for (const result of results) {
         await writer.write(encodeStreamEvent(outputFrame(result)));
       }
@@ -3161,6 +3216,12 @@ export async function runAgentLoop<TOutput = unknown>(
         }),
       );
     });
+
+    // A `terminal` tool succeeded: its effect is the answer, so no model call narrates it. Read off
+    // the calls' `persist:toolcall` checkpoints and their outcomes, so a replay ends here too.
+    if (turnCalls.halt.terminal) {
+      break;
+    }
   }
 
   if (history.title === '' || history.title === 'New chat') {

@@ -23,6 +23,38 @@ describe('storedMessageToUiMessage', () => {
     });
   });
 
+  it('places a component a tool pushed right after that call, the others ahead of the calls', () => {
+    const ui = storedMessageToUiMessage(
+      message({
+        content: 'Here',
+        toolCalls: [
+          { id: 'c1', name: 'chart', input: {}, kind: 'read' },
+          { id: 'c2', name: 'lookup', input: {}, kind: 'read' },
+        ],
+        toolResults: [
+          { id: 'c1', name: 'chart', output: { id: 'c1:ui:0' } },
+          { id: 'c2', name: 'lookup', output: {} },
+        ],
+        ui: [
+          { id: 'm1', component: 'Banner', props: {} },
+          { id: 'c1:ui:0', component: 'Chart', props: { n: 1 }, toolCallId: 'c1' },
+          { id: 'orphan', component: 'Note', props: {}, toolCallId: 'gone' },
+        ],
+      }),
+    );
+    expect(ui.parts.map((part) => ('id' in part ? `${part.type}:${part.id}` : part.type))).toEqual([
+      'text',
+      'data-ui:m1',
+      'data-ui:orphan',
+      'tool-chart',
+      'data-ui:c1:ui:0',
+      'tool-lookup',
+    ]);
+    expect(ui.parts[4]).toMatchObject({
+      data: { id: 'c1:ui:0', component: 'Chart', props: { n: 1 }, toolCallId: 'c1' },
+    });
+  });
+
   it('skips the text part when content is empty', () => {
     const ui = storedMessageToUiMessage(message({ content: '' }));
     expect(ui.parts).toEqual([]);

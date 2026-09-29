@@ -58,6 +58,21 @@ describe('AgentChatTransport — generative UI, title, approval, nesting', () =>
     });
   });
 
+  it('carries the pushing tool call on the data-ui part', async () => {
+    const chunks = await chunksFor([
+      { kind: 'step-start' },
+      { kind: 'tool-input-available', id: 'c1', name: 'chart', input: {}, toolKind: 'read' },
+      { kind: 'ui', id: 'c1:ui:0', component: 'Chart', props: {}, toolCallId: 'c1' },
+      { kind: 'tool-output', id: 'c1', output: {} },
+      { kind: 'step-finish' },
+    ]);
+    expect(chunks).toContainEqual({
+      type: 'data-ui',
+      id: 'c1:ui:0',
+      data: { id: 'c1:ui:0', component: 'Chart', props: {}, toolCallId: 'c1' },
+    });
+  });
+
   it('closes the open prose at a ui frame so later text lands after the component', async () => {
     const chunks = await chunksFor([
       { kind: 'step-start' },

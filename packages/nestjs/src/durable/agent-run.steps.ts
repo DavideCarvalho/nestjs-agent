@@ -7,6 +7,8 @@ import {
   type ToolStepEnvelope,
   type ToolTransientRetrySetting,
   createFrameBuffer,
+  createUiCollector,
+  encodeStreamEvent,
   invokeWithTransientRetry,
   observeTurnFrames,
   publishAgentToolRetry,
@@ -18,6 +20,7 @@ import {
   withSkillTool,
   withToolTimeout,
   withTurnFrames,
+  wrapToolStepOutput,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
 import { Inject, Injectable } from '@nestjs/common';
@@ -57,6 +60,13 @@ export interface DispatchedLlmInput extends LlmStepEnvelope {
 export interface DispatchedToolInput extends ToolStepEnvelope {
   toolCallId: string;
   toolType: 'read' | 'action';
+  /**
+   * Where a component the tool pushes (`ctx.emitUi`) streams live — the same routing as
+   * {@link DispatchedLlmInput}. Absent on a task enqueued by a workflow that predates it: the
+   * components are then still collected and persisted, just not streamed.
+   */
+  sinkRunId?: string;
+  childSink?: boolean;
 }
 
 /**
@@ -176,9 +186,25 @@ export class AgentRunSteps {
         `tool "${input.toolName}" is an action tool but was dispatched without approval: the dispatching process resolved its kind against a registry that does not have it`,
       );
     }
+    // `ctx.emitUi` streams each push to the run's sink as it happens (opened on the first push, and
+    // never ended — the workflow owns the stream) and collects it for the step's RESULT, which is
+    // how the pushes reach the message: the dispatching loop persists them from its own checkpoint.
+    const sinkRunId = input.sinkRunId;
+    let opened: Promise<SinkWriter> | undefined;
+    const ui = createUiCollector(
+      input.toolCallId,
+      sinkRunId === undefined
+        ? undefined
+        : async (event) => {
+            opened ??= Promise.resolve(deps.sink.open(sinkRunId)).then((writer) =>
+              input.childSink === true ? childSinkWriter(writer) : writer,
+            );
+            await (await opened).write(encodeStreamEvent(event));
+          },
+    );
     // AgentDeps carries no `host` today (AgentDepsFactory never populates one), so the rebuilt ctx
-    // is exactly `input.ctx` — no narrower than what the non-dispatched path already threads through.
-    const ctx: AiToolCtx = { ...input.ctx };
+    // is exactly `input.ctx` plus `emitUi` — no narrower than what the non-dispatched path threads.
+    const ctx: AiToolCtx = { ...input.ctx, emitUi: ui.emit };
     // The envelope carries the numeric half (attempts/backoffMs) the dispatching loop already
     // resolved — the SAME policy as the non-dispatched path. `classify` isn't wire-safe, so it's
     // resolved from THIS worker's own local module options instead (same DI re-resolution as
@@ -196,12 +222,14 @@ export class AgentRunSteps {
     // Span-wrapped HERE like `llm` above (same replay-safety-by-construction reasoning) — the
     // timeout AND the retry loop sit INSIDE the span so every attempt (and a timed-out attempt)
     // surfaces under the span's error phase.
-    return traceToolExecution(
+    const output = await traceToolExecution(
       input.ctx.runId,
       { toolCallId: input.toolCallId, toolName: input.toolName, toolType: input.toolType },
       () =>
         invokeWithTransientRetry(
           () => {
+            // A retry is a new attempt of the same call: its pushes reuse the failed attempt's ids.
+            ui.restart();
             const invocation = deps.registry.invoke(
               input.toolName,
               input.input,
@@ -225,5 +253,8 @@ export class AgentRunSteps {
           },
         ),
     );
+    // Wrapped only when the dispatching loop asked for it (`collectUi`) AND something was pushed, so
+    // a loop that predates this always reads the bare output it expects.
+    return input.collectUi === true ? wrapToolStepOutput(output, ui.components()) : output;
   }
 }

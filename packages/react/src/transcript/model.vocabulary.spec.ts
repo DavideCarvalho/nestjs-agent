@@ -56,7 +56,22 @@ describe('buildTranscriptBlocks — pushed UI', () => {
       component: 'data-table',
       props: { rows: [1] },
       version: 2,
+      toolCallId: null,
     });
+  });
+
+  it('names the tool call that pushed a component', () => {
+    const blocks = buildTranscriptBlocks(
+      message([
+        {
+          type: 'data-ui',
+          id: 'c1:ui:0',
+          data: { id: 'c1:ui:0', component: 'Chart', props: {}, toolCallId: 'c1' },
+        },
+      ]),
+      openAll,
+    );
+    expect(blocks[0]).toMatchObject({ kind: 'ui', id: 'c1:ui:0', toolCallId: 'c1' });
   });
 
   it('drops a data-ui part that names no component', () => {

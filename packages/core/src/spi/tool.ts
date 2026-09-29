@@ -15,6 +15,26 @@ export interface AiToolCtx {
   pageContext?: PageContext;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
+  /**
+   * Push a component into the assistant message: streamed live as a `ui` frame and persisted on
+   * the message, so a reload shows it where the live stream did. Resolves to the component's id.
+   *
+   * `id` defaults to `<toolCallId>:ui:<n>` (the n-th push without an `id` in this invocation), so a retried or
+   * re-executed call REPLACES what it pushed before instead of adding a second copy; pass your own
+   * `id` to update one component across pushes (streaming rows into a table). `props` must be
+   * JSON; it is snapshotted when pushed.
+   *
+   * Replay-safe under the durable runner: the pushed components ride the tool step's journaled
+   * result, so a replay neither streams nor persists them again. Present whenever the agent loop
+   * runs the tool (inline, durable, dispatched); absent on surfaces with no conversation to push
+   * into (the MCP server), hence optional — call it as `ctx.emitUi?.(…)` in a tool that is also
+   * served there.
+   */
+  emitUi?(
+    component: string,
+    props: Record<string, unknown>,
+    options?: { id?: string; version?: number },
+  ): Promise<{ id: string }>;
 }
 
 /** A tool implementation. `I` is the parsed (Zod-validated) input. */

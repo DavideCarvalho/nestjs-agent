@@ -1,5 +1,6 @@
 import {
   type AgentStore,
+  type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
   type RecordRunStartInput,
@@ -457,6 +458,18 @@ export class InMemoryAgentStore implements AgentStore {
       const message = row.messages.find((candidate) => candidate.id === messageId);
       if (message !== undefined) {
         message.toolResults = results;
+        return;
+      }
+    }
+  }
+
+  async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
+    for (const row of this.threads.values()) {
+      const index = row.messages.findIndex((candidate) => candidate.id === messageId);
+      const message = row.messages[index];
+      if (message !== undefined) {
+        const { ui: _previous, ...rest } = message;
+        row.messages[index] = ui.length > 0 ? { ...rest, ui } : rest;
         return;
       }
     }

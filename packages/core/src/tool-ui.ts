@@ -1,0 +1,115 @@
+import type { AiToolCtx } from './spi/tool.js';
+import { type AgentStreamEvent, type AgentUiComponent } from './stream-events.js';
+
+/**
+ * Components a tool pushes through `ctx.emitUi` have to survive a durable replay without being
+ * streamed or persisted twice. They do it by riding the tool step's RESULT: the step that ran the
+ * tool (`tool:<callId>` in-process, or the dispatched `AgentRunSteps.tool`) returns its output
+ * wrapped together with the components, the runtime journals that, and a replay reads both back
+ * without running anything. The loop then persists them once, from the step that already persists
+ * the step's tool results.
+ *
+ * The wrapper is used ONLY when a tool pushed something, so every other tool journals exactly the
+ * bytes it always did, and a run recorded before this existed replays unchanged.
+ */
+const TOOL_STEP_UI = '@@nestjs-agent/tool-step-ui';
+
+interface ToolStepOutputWithUi {
+  [TOOL_STEP_UI]: 1;
+  output: unknown;
+  ui: AgentUiComponent[];
+}
+
+/** The tool step's journaled result: the bare output, or the output plus the components it pushed. */
+export function wrapToolStepOutput(output: unknown, ui: readonly AgentUiComponent[]): unknown {
+  if (ui.length === 0) {
+    return output;
+  }
+  const wrapped: ToolStepOutputWithUi = { [TOOL_STEP_UI]: 1, output, ui: [...ui] };
+  return wrapped;
+}
+
+/** Read a tool step's result back — either shape. */
+export function unwrapToolStepOutput(raw: unknown): { output: unknown; ui: AgentUiComponent[] } {
+  if (
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as Partial<ToolStepOutputWithUi>)[TOOL_STEP_UI] === 1
+  ) {
+    const wrapped = raw as ToolStepOutputWithUi;
+    return { output: wrapped.output, ui: Array.isArray(wrapped.ui) ? wrapped.ui : [] };
+  }
+  return { output: raw, ui: [] };
+}
+
+export type EmitUi = NonNullable<AiToolCtx['emitUi']>;
+
+/** Collects what one tool invocation pushes, streaming each push as it happens. */
+export interface UiCollector {
+  emit: EmitUi;
+  /** Everything pushed so far: first-seen order, last props per id. */
+  components(): AgentUiComponent[];
+  /**
+   * A new ATTEMPT of the same call (a transient retry): numbering restarts, so the retry's pushes
+   * reuse — and replace — the ids the failed attempt used.
+   */
+  restart(): void;
+}
+
+/**
+ * `write` streams one frame; omit it where there is no live stream (the component is still
+ * collected and persisted).
+ */
+export function createUiCollector(
+  toolCallId: string,
+  write?: (event: AgentStreamEvent) => void | Promise<void>,
+): UiCollector {
+  const pushed = new Map<string, AgentUiComponent>();
+  let next = 0;
+  const emit: EmitUi = async (component, props, options = {}) => {
+    if (typeof component !== 'string' || component.length === 0) {
+      throw new Error('emitUi: component must be a non-empty string');
+    }
+    if (typeof props !== 'object' || props === null || Array.isArray(props)) {
+      throw new Error('emitUi: props must be a JSON object');
+    }
+    let id = options.id;
+    if (id === undefined) {
+      id = `${toolCallId}:ui:${next}`;
+      next += 1;
+    }
+    const entry: AgentUiComponent = {
+      id,
+      component,
+      // Snapshot: the frame and the persisted value are what the tool pushed at THIS moment, not
+      // whatever the object it handed over looks like when the step settles.
+      props: JSON.parse(JSON.stringify(props)) as Record<string, unknown>,
+      ...(options.version !== undefined ? { version: options.version } : {}),
+      toolCallId,
+    };
+    // Delete-then-set would move it; a repeat id keeps its first position, like the client's part.
+    pushed.set(id, entry);
+    await write?.({ kind: 'ui', ...entry });
+    return { id };
+  };
+  return {
+    emit,
+    components: () => [...pushed.values()],
+    restart: () => {
+      next = 0;
+    },
+  };
+}
+
+/** Merge component lists: first-seen order, the last props for each id. */
+export function mergeUi(
+  ...lists: readonly (readonly AgentUiComponent[] | undefined)[]
+): AgentUiComponent[] {
+  const merged = new Map<string, AgentUiComponent>();
+  for (const list of lists) {
+    for (const component of list ?? []) {
+      merged.set(component.id, component);
+    }
+  }
+  return [...merged.values()];
+}

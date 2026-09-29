@@ -1,5 +1,6 @@
 import {
   type AgentStore,
+  type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
   type RecordRunStartInput,
@@ -506,6 +507,13 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
     await this.db
       .update(agentMessage)
       .set({ toolResults: results })
+      .where(eq(agentMessage.id, messageId));
+  }
+
+  async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
+    await this.db
+      .update(agentMessage)
+      .set({ ui: ui.length > 0 ? ui : null })
       .where(eq(agentMessage.id, messageId));
   }
 

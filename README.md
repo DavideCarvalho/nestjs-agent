@@ -104,6 +104,11 @@ export class GetWeatherTool implements ToolHandler<{ city: string }> {
 }
 ```
 
+A tool can also push a component into the answer — `await ctx.emitUi('WeatherCard', { tempC: 21 })`
+streams a `ui` frame and persists it on the assistant message (replay-safe under the durable runner);
+`@AiTool({ terminal: true })` ends the turn once the call succeeds. `@dudousxd/nestjs-agent-genui`
+builds such tools from a component catalog.
+
 The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 
 | Method & path | Purpose |

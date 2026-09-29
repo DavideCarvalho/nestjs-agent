@@ -334,6 +334,9 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
+      '@dudousxd/nestjs-agent-testing':
+        specifier: workspace:*
+        version: link:../testing
       ajv:
         specifier: 8.20.0
         version: 8.20.0

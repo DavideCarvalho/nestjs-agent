@@ -519,6 +519,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                   component: event.component,
                   props: event.props,
                   ...(event.version !== undefined ? { version: event.version } : {}),
+                  ...(event.toolCallId !== undefined ? { toolCallId: event.toolCallId } : {}),
                 },
               });
               break;

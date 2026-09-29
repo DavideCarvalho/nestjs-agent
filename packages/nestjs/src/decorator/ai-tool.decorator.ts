@@ -52,6 +52,11 @@ export interface AiToolOptions {
    * ```
    */
   presentation?: ToolPresentation;
+  /**
+   * The turn ends once a call to this tool succeeds — no model call afterwards to narrate what the
+   * tool already showed (a composed UI answer, a hand-off). See `ToolSpec.terminal`.
+   */
+  terminal?: boolean;
 }
 
 /**
