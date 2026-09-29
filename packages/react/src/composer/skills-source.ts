@@ -11,8 +11,8 @@ export interface SkillSuggestionData {
 }
 
 export interface SkillsSourceOptions {
-  /** Any backend with `listSkills` — `useAgentChat(...).backend`. */
-  client: Pick<AgentBackend, 'listSkills'>;
+  /** Any backend with `listSkills` — `useAgentBackend()`, or `useAgentChat().backend`. */
+  backend: Pick<AgentBackend, 'listSkills'>;
   /**
    * Read at query time, not captured once: a threadless chat learns its id only when the backend
    * creates one on the first send, and a skill may be scoped to a conversation.
@@ -51,12 +51,12 @@ export function createSkillsSource(options: SkillsSourceOptions): AutocompleteSo
       if (cached) {
         return cached;
       }
-      const listSkills = options.client.listSkills;
+      const listSkills = options.backend.listSkills;
       if (listSkills === undefined) {
         return Promise.reject(new AgentBackendUnsupportedError('listSkills'));
       }
       const pending = listSkills
-        .call(options.client, threadId)
+        .call(options.backend, threadId)
         .then((entries) => entries.map(toItem))
         .catch((error: unknown) => {
           byThread.delete(key);

@@ -19,10 +19,7 @@ pnpm add @dudousxd/nestjs-agent-react @ai-sdk/react ai react
 import { useAgentChat, MessageList, ChatInput } from '@dudousxd/nestjs-agent-react';
 
 function Chat() {
-  const chat = useAgentChat({
-    baseUrl: '/agent',
-    getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-role': me.roles.join(',') }),
-  });
+  const chat = useAgentChat(); // same-origin, `/agent` — no provider needed
   return (
     <>
       <MessageList
@@ -36,6 +33,31 @@ function Chat() {
   );
 }
 ```
+
+### Configure the connection once: `<AgentProvider>`
+
+Every hook (`useAgentChat`, `useThreads`, `useModels`, `useAgents`, `useQuota`, `useToolCatalog`,
+`useMessageFeedback`, `useAttachments`) talks to the enclosing provider's backend unless handed a
+`backend` of its own. Without a provider they share one same-origin client on `/agent`.
+
+```tsx
+import { AgentProvider } from '@dudousxd/nestjs-agent-react';
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
+
+<AgentProvider
+  baseUrl="https://api.example.com" // origin only; default '' (same origin)
+  path="api/agent"                  // AgentModule's `path` + global prefix; default 'agent'
+  credentials="include"
+  getHeaders={() => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') })}
+  attachments={{ upload: mediaAttachments() }} // optional
+  genui={{ registry, catalog }}                // optional — same props as <GenuiProvider>
+>
+  <App />
+</AgentProvider>
+```
+
+`<AgentProvider backend={myBackend}>` takes any `AgentBackend` instead of the connection props.
+`useAgentBackend()` returns the backend in scope, for your own calls.
 
 ## Bring your own UI
 
@@ -58,7 +80,7 @@ tool grouping, the edit machine, or the copy flash, and it never imports `Messag
 import { useAgentChat, useChatTranscript } from '@dudousxd/nestjs-agent-react';
 
 function Chat() {
-  const chat = useAgentChat({ baseUrl: '/agent' });
+  const chat = useAgentChat();
   const transcript = useChatTranscript({
     messages: chat.messages,
     status: chat.status,
@@ -134,8 +156,8 @@ catalog to the transcript and every tool call carries a `description`, and every
 `activity` grouping:
 
 ```tsx
-const chat = useAgentChat({ baseUrl: '/agent' });
-const { catalog } = useToolCatalog({ client: chat.client });
+const chat = useAgentChat();
+const { catalog } = useToolCatalog(); // the provider's backend; `{ backend, agent }` to override
 const transcript = useChatTranscript({ messages: chat.messages, status: chat.status, toolCatalog: catalog });
 
 // in a `tools` block:
@@ -330,11 +352,11 @@ the model, so a `/` menu and the agent's own reach cannot drift apart:
 ```tsx
 import { createSkillsSource, useAgentChat } from '@dudousxd/nestjs-agent-react';
 
-const chat = useAgentChat({ baseUrl: '/agent', onThreadCreated: setThreadId });
+const chat = useAgentChat({ onThreadCreated: setThreadId });
 // Identity-stable so the list is read once per thread, not once per keystroke.
 const sources = useMemo(
-  () => [createSkillsSource({ client: chat.client, getThreadId: () => threadId })],
-  [chat.client],
+  () => [createSkillsSource({ backend: chat.backend, getThreadId: () => threadId })],
+  [chat.backend],
 );
 ```
 
@@ -420,14 +442,12 @@ import { isTextUIPart, isToolUIPart } from 'ai';
 
 function CustomChat({ threadId }: { threadId?: string }) {
   const chat = useAgentChat({
-    baseUrl: '/agent',
     // Omit the key entirely when absent — `UseAgentChatOptions` is built with
     // `exactOptionalPropertyTypes`, so an explicit `threadId: undefined` doesn't type-check.
     ...(threadId !== undefined ? { threadId } : {}),
     agent: 'support',
     // Reattach to a turn still streaming when the page loaded — survives a refresh.
     resume: true,
-    getHeaders: () => ({ 'x-actor-id': currentUser.id }),
     onThreadCreated: (newThreadId) => router.replace(`/chat/${newThreadId}`),
     // Fires once per run when the SERVER is done writing (title + terminal state persisted) —
     // the right signal to refetch a thread list/sidebar; `onFinish` only means "a turn rendered".
@@ -517,7 +537,8 @@ const backend: AgentBackend = {
   setMessageFeedback: (id, input) => api.messages.feedback(id, input),
 };
 
-const chat = useAgentChat({ backend }); // chat.backend === backend, typed as yours
+<AgentProvider backend={backend}>…</AgentProvider>; // every hook below uses it
+const chat = useAgentChat({ backend }); // or per hook — chat.backend === backend, typed as yours
 ```
 
 Calling a hook method whose optional backend member is missing throws
@@ -528,15 +549,17 @@ attachments?, pageContext?, regenerate? }`; the SSE it returns and the REST shap
 **Cookie session + CSRF with the default client.** `credentials` and `getHeaders` are all it takes —
 `getHeaders` runs per request, so a rotated token is picked up:
 
-```ts
+```tsx
 const readCookie = (name: string) =>
   decodeURIComponent(document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))?.[1] ?? '');
 
-useAgentChat({
-  baseUrl: '/api',
-  credentials: 'include', // 'same-origin' (the fetch default) is enough when the API is same-origin
-  getHeaders: () => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') }),
-});
+<AgentProvider
+  path="api/agent"
+  credentials="include" // 'same-origin' (the fetch default) is enough when the API is same-origin
+  getHeaders={() => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') })}
+>
+  <App />
+</AgentProvider>;
 ```
 
 ### Reconnecting a dropped stream
@@ -554,8 +577,8 @@ the last failed attempt the turn ends with an error.
 ```tsx
 import { useMessageFeedback, useThreads } from '@dudousxd/nestjs-agent-react';
 
-const { threads, isLoading, rename, remove, refresh } = useThreads({ backend: chat.backend });
-const feedback = useMessageFeedback({ backend: chat.backend, threadId: chat.getThreadId });
+const { threads, isLoading, rename, remove, refresh } = useThreads();
+const feedback = useMessageFeedback({ threadId: chat.getThreadId });
 
 <button aria-pressed={feedback.feedbackOf(message)?.value === 'up'}
         onClick={() => feedback.toggle(message, 'up')}>Helpful</button>
@@ -573,9 +596,9 @@ its run persisted (the live message carries `metadata.runId`).
 import { useAgents, useModels } from '@dudousxd/nestjs-agent-react';
 
 const [model, setModel] = useState<string | undefined>();
-const chat = useAgentChat({ backend, model }); // sent as the body's `model` on every turn
-const { providers, find, defaultModel } = useModels({ backend: chat.backend, agent: 'support' });
-const { agents } = useAgents({ backend: chat.backend });
+const chat = useAgentChat({ model }); // sent as the body's `model` on every turn
+const { providers, find, defaultModel } = useModels({ agent: 'support' });
+const { agents } = useAgents();
 
 <select value={model ?? defaultModel ?? ''} onChange={(e) => setModel(e.target.value)}>
   {providers.map((p) => (
@@ -601,8 +624,8 @@ model its catalog does not offer as available.
 ```tsx
 import { QuotaBlockedError, useQuota } from '@dudousxd/nestjs-agent-react';
 
-const quota = useQuota({ backend });                // GET <base>/quota
-const chat = useAgentChat({ backend, blocked: quota.blocked });
+const quota = useQuota();                           // GET <base>/quota
+const chat = useAgentChat({ blocked: quota.blocked });
 
 <meter value={quota.month?.usedUsd} max={quota.month?.limitUsd} />
 {quota.blocked ? <p>{quota.blocked.reason}</p> : null}
@@ -623,7 +646,7 @@ import { useChat } from '@ai-sdk/react';
 import { AgentChatTransport } from '@dudousxd/nestjs-agent-react';
 
 const transport = new AgentChatTransport({
-  baseUrl: '/agent',
+  path: 'agent', // the default
   getHeaders: () => ({ 'x-actor-id': currentUser.id }),
   onMeta: ({ runId, threadId }) => console.log('turn started', runId, threadId),
 });
@@ -653,7 +676,7 @@ before it can seed `useChat`'s `initialMessages`:
 ```ts
 import { storedThreadToUiMessages } from '@dudousxd/nestjs-agent-react';
 
-const detail = await chat.client.getThread(threadId);
+const detail = await chat.backend.getThread(threadId);
 const initialMessages = storedThreadToUiMessages(detail.messages);
 // Feed into useAgentChat({ threadId, initialMessages, ... }) on the mount that owns this thread —
 // `initialMessages` is only read once, on mount.
@@ -676,7 +699,7 @@ paste.
 import { messageFiles, useAttachments } from '@dudousxd/nestjs-agent-react';
 
 const files = useAttachments({
-  backend: chat.backend, // or `upload: (file, { signal, onProgress }) => myUpload(file)`
+  // uploads through the provider's backend; or `upload: (file, { signal, onProgress }) => myUpload(file)`
   accept: 'image/*,.pdf',
   maxBytes: 20 * 1024 * 1024,
   maxFiles: 5,
@@ -713,25 +736,25 @@ flight. `messageFiles(message)` reads the files back off any message — live or
 
 With `AgentMediaAttachmentsModule` on the server (`@dudousxd/nestjs-agent/media`), one option turns
 it on — uploads go in chunks through nestjs-media's tus endpoint, with progress, abort (`remove`)
-and retry, on the chat client's own connection (base url, headers, credentials):
+and retry, on the client's own connection (origin, path, headers, credentials):
 
 ```tsx
 import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
 
-const chat = useAgentChat({ attachments: mediaAttachments() });
-const files = useAttachments({ backend: chat.backend });
+<AgentProvider attachments={{ upload: mediaAttachments() }}>…</AgentProvider>;
+const files = useAttachments(); // uploads resumably
 ```
 
 Headless; `@dudousxd/nestjs-media-client` is an optional peer only this subpath uses. Extending it:
 
-- `mediaAttachments({ path: '/api/agent', chunkSize, retries })` — a prefixed API, tuning.
-- `new AgentClient({ …connection, attachments: mediaAttachments() })` — your own client instance.
-- `withMediaUploads(backend, connection)` — any other `AgentBackend`; `createMediaUpload(connection)`
-  — a bare `upload` for `useAttachments({ upload })`.
+- `mediaAttachments({ chunkSize, retries })` — tuning (the path comes from the client's `path`).
+- `new AgentClient({ …connection, attachments: { upload: mediaAttachments() } })` — your own client.
+- `createMediaUpload(connection)` — a bare `upload` for `useAttachments({ upload })`, or the
+  `uploadAttachment` member of your own `AgentBackend`.
 - Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …); an aborted or failed
   upload is discarded on the server.
 
-Your own storage instead: `useAgentChat({ attachments: (file, { signal, onProgress }, connection) => … })`
+Your own storage instead: `<AgentProvider attachments={{ upload: (file, { signal, onProgress }, connection) => … }}>`
 (an `AttachmentUploadStrategy`), or `useAttachments({ upload })`, resolving to a
 `{ mediaId, url, contentType, name }` your server's `AGENT_ATTACHMENT_STAGING` recognises.
 

@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useChatTranscript } from './transcript/use-chat-transcript.js';
 import { type UseAgentChatOptions, useAgentChat } from './use-agent-chat.js';
 
@@ -60,7 +61,7 @@ describe('transcript identity', () => {
       {
         threadId: 'thr-1',
         resumeRunId: 'run-1',
-        fetch: fetchMock as unknown as typeof fetch,
+        backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
       },
       true,
     );
@@ -79,7 +80,7 @@ describe('transcript identity', () => {
     const { result } = renderTranscript({
       threadId: 'thr-1',
       resumeRunId: 'run-1',
-      fetch: fetchMock as unknown as typeof fetch,
+      backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
     });
 
     await act(async () => {
@@ -100,7 +101,7 @@ describe('transcript identity', () => {
     const fetchMock = streamingFetch();
     const { result } = renderTranscript({
       threadId: 'thr-1',
-      fetch: fetchMock as unknown as typeof fetch,
+      backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
     });
 
     await act(async () => {
@@ -119,7 +120,7 @@ describe('transcript identity', () => {
     const fetchMock = streamingFetch();
     const { result } = renderTranscript({
       threadId: 'thr-1',
-      fetch: fetchMock as unknown as typeof fetch,
+      backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
     });
 
     await act(async () => {

@@ -1,11 +1,12 @@
 import type { ModelCatalogEntry, ModelCatalogView } from '@dudousxd/nestjs-agent-core';
 import { useMemo } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
 import { useResource } from './use-resource.js';
 
 export interface UseModelsOptions {
-  /** `useAgentChat(...).backend`, or your own. Must implement `listModels`. */
-  backend: AgentBackend;
+  /** Default: the enclosing `<AgentProvider>`'s. Must implement `listModels`. */
+  backend?: AgentBackend;
   /** The agent to list models for; omitted → the default agent. */
   agent?: string;
   /** `false` holds the request. Default `true`. */
@@ -38,8 +39,9 @@ export interface ModelsState {
  * as `useAgentChat({ model })`, `sendMessage(msg, { body: { model } })`, or pin it on the thread
  * with `chat.setThreadModel(id)`.
  */
-export function useModels(options: UseModelsOptions): ModelsState {
-  const { backend, agent, enabled = true } = options;
+export function useModels(options: UseModelsOptions = {}): ModelsState {
+  const { agent, enabled = true } = options;
+  const backend = useAgentBackend(options.backend);
   const { data, isLoading, error, refresh } = useResource<ModelCatalogView>(
     () => requireBackendMethod(backend, 'listModels')(agent),
     `${agent ?? ''}`,

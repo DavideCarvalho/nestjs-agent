@@ -72,8 +72,10 @@ export interface UploadAttachmentOptions {
 
 /** How {@link AgentClient} reaches the server — handed to an {@link AttachmentUploadStrategy}. */
 export interface AgentConnection {
-  /** Origin + base path, trailing slash removed (`''` for same-origin). */
+  /** The server's origin, trailing slash removed (`''` for same-origin). */
   baseUrl: string;
+  /** The agent's route prefix, normalized to a leading slash (`'/agent'`), or `''`. */
+  path: string;
   /** The client's static + per-request headers, resolved now (auth, CSRF). */
   headers: () => Promise<Record<string, string>>;
   credentials?: RequestCredentials;
@@ -81,7 +83,7 @@ export interface AgentConnection {
 }
 
 /**
- * Replaces {@link AgentClient}'s own `uploadAttachment` (`POST <base>/agent/attachments`) — e.g.
+ * Replaces {@link AgentClient}'s own `uploadAttachment` (`POST <path>/attachments`) — e.g.
  * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media`, or your own storage. Gets the
  * client's connection so it needs no configuration of its own. Resolve with the attachment your
  * server's `AGENT_ATTACHMENT_STAGING` recognises by `mediaId`.
@@ -97,7 +99,8 @@ export type AttachmentUploadStrategy = (
  * hooks) and whatever serves the agent. {@link AgentClient} is the default implementation, over the
  * library's own REST routes with `fetch`. An app with its own client — a generated one, a different
  * auth scheme (cookie session + CSRF header), a backend that is not this library at all but speaks
- * docs/stream-protocol.md — implements this instead and passes it as `useAgentChat({ backend })`.
+ * docs/stream-protocol.md — implements this instead and passes it as `<AgentProvider backend>` (or
+ * per hook, `useAgentChat({ backend })`).
  *
  * The streaming, thread and cancel members are required: without them there is no chat. The rest
  * are optional; a hook that needs one the backend does not have throws

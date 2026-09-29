@@ -1,16 +1,10 @@
 import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { streamChunks } from '@dudousxd/nestjs-media-client';
-import type {
-  AgentBackend,
-  AttachmentUploadStrategy,
-  UploadAttachmentOptions,
-} from '../backend.js';
-import type { AgentClientOptions } from '../client.js';
+import type { AttachmentUploadStrategy, UploadAttachmentOptions } from '../backend.js';
+import { type AgentClientOptions, normalizeAgentPath } from '../client.js';
 
 /** Tuning for {@link mediaAttachments}; every field optional. */
 export interface MediaAttachmentsOptions {
-  /** The agent's route prefix (`AgentModule`'s `path`, global prefix included). Default `/agent`. */
-  path?: string;
   /** Bytes per tus `PATCH`. Default 5 MiB. */
   chunkSize?: number;
   /** Attempts per chunk before the upload fails. Default 3. */
@@ -20,19 +14,19 @@ export interface MediaAttachmentsOptions {
 /**
  * Resumable attachment uploads through `@dudousxd/nestjs-media`, in one line:
  *
- * ```ts
- * const chat = useAgentChat({ attachments: mediaAttachments() });
- * const files = useAttachments({ backend: chat.backend });
+ * ```tsx
+ * <AgentProvider attachments={{ upload: mediaAttachments() }}>
  * ```
  *
- * Reuses the chat client's own connection (base url, headers, credentials), so it needs no
- * configuration. Also takes `new AgentClient({ attachments: mediaAttachments() })`.
+ * Reuses the client's own connection (origin, path, headers, credentials), so it needs no
+ * configuration. Also takes `new AgentClient({ attachments: { upload: mediaAttachments() } })`.
  */
 export function mediaAttachments(options: MediaAttachmentsOptions = {}): AttachmentUploadStrategy {
   return (file, uploadOptions, connection) =>
     createMediaUpload({
       ...options,
       baseUrl: connection.baseUrl,
+      path: connection.path,
       getHeaders: connection.headers,
       fetch: connection.fetch,
       ...(connection.credentials !== undefined ? { credentials: connection.credentials } : {}),
@@ -45,8 +39,6 @@ export function mediaAttachments(options: MediaAttachmentsOptions = {}): Attachm
  * carry the same cookies / CSRF header / bearer token as the rest of the chat.
  */
 export interface MediaUploadOptions extends AgentClientOptions {
-  /** The agent's route prefix (`AgentModule`'s `path`, global prefix included). Default `/agent`. */
-  path?: string;
   /** Bytes per tus `PATCH`. Default 5 MiB (nestjs-media-client's default). */
   chunkSize?: number;
   /** Attempts per chunk before the upload fails. Default 3. */
@@ -96,7 +88,7 @@ interface BeginResponse {
  */
 export function createMediaUpload(options: MediaUploadOptions = {}): AttachmentUpload {
   const origin = (options.baseUrl ?? '').replace(/\/$/, '');
-  const base = `${origin}${(options.path ?? '/agent').replace(/\/$/, '')}/attachments/uploads`;
+  const base = `${origin}${normalizeAgentPath(options.path)}/attachments/uploads`;
   const baseFetch = (): typeof fetch => options.fetch ?? fetch;
   // Every request — the agent's and media's tus PATCHes — rides the same credentials mode.
   const fetchWithCredentials: typeof fetch = (input, init) =>
@@ -168,29 +160,4 @@ export function createMediaUpload(options: MediaUploadOptions = {}): AttachmentU
       signal?.removeEventListener('abort', onAbort);
     }
   };
-}
-
-/**
- * Plug media uploads in once: the same backend, with `uploadAttachment` replaced by
- * {@link createMediaUpload}. Hand the result to `useAgentChat({ backend })` and
- * `useAttachments({ backend })` and every composer uploads resumably — no per-composer wiring.
- *
- * ```ts
- * const backend = withMediaUploads(new AgentClient(connection), connection);
- * ```
- *
- * Every other member is the original backend's, still bound to it.
- */
-export function withMediaUploads<B extends AgentBackend>(
-  backend: B,
-  options: MediaUploadOptions = {},
-): B {
-  const upload = createMediaUpload(options);
-  return new Proxy(backend, {
-    get(target, property) {
-      if (property === 'uploadAttachment') return upload;
-      const value: unknown = Reflect.get(target, property, target);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
 }

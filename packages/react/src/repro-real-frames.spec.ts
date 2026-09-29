@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 // EXACT frames captured off the live SSE wire (process 28354, port 3002) for
@@ -47,7 +48,10 @@ describe('repro real frames', () => {
     });
 
     const { result } = renderHook(() =>
-      useAgentChat({ threadId: 'thr-x', fetch: fetchMock as unknown as typeof fetch }),
+      useAgentChat({
+        threadId: 'thr-x',
+        backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
+      }),
     );
 
     await act(async () => {

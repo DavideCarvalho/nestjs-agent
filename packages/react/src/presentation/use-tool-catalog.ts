@@ -1,17 +1,18 @@
 import type { ToolCatalogEntry } from '@dudousxd/nestjs-agent-core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type AgentBackend, AgentBackendUnsupportedError } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
+import { type ToolCatalog, toolCatalogFrom } from './phrasing.js';
 
 /** What the catalog needs of a backend. */
 type ToolsBackend = Pick<AgentBackend, 'listTools'>;
-import { type ToolCatalog, toolCatalogFrom } from './phrasing.js';
 
 export interface UseToolCatalogOptions {
   /**
-   * The client to ask — `useAgentChat(...).client`, or one of your own. Must be STABLE across
-   * renders (the shared copy is keyed by it): a client constructed inline refetches every render.
+   * The backend to ask. Default: the enclosing `<AgentProvider>`'s. Must be STABLE across renders
+   * (the shared copy is keyed by it): a backend constructed inline refetches every render.
    */
-  client: ToolsBackend;
+  backend?: ToolsBackend;
   /** The agent whose tools to list. Omitted → the server's default agent. */
   agent?: string;
   /** `false` holds the request (e.g. until the user is signed in). Default `true`. */
@@ -30,7 +31,7 @@ export interface ToolCatalogState {
 }
 
 /**
- * One request per client + agent for the whole page: the catalog is a deployment-time constant, so
+ * One request per backend + agent for the whole page: the catalog is a deployment-time constant, so
  * every component that narrates a tool call can call this hook and share the answer instead of
  * putting a request between a tool starting and the sentence that describes it. A failed request
  * is not cached, so the next mount retries.
@@ -62,8 +63,9 @@ function load(client: ToolsBackend, agent: string | undefined): Promise<ToolCata
  * `phraseFor`, `describeToolCall` and `groupToolActivity` — or pass `catalog` to
  * `useChatTranscript({ toolCatalog })` and read the phrases off the transcript's calls.
  */
-export function useToolCatalog(options: UseToolCatalogOptions): ToolCatalogState {
-  const { client, agent, enabled = true } = options;
+export function useToolCatalog(options: UseToolCatalogOptions = {}): ToolCatalogState {
+  const { agent, enabled = true } = options;
+  const client = useAgentBackend(options.backend as AgentBackend | undefined);
   const [entries, setEntries] = useState<ToolCatalogEntry[]>([]);
   const [isLoading, setLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);

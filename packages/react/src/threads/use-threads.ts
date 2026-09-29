@@ -1,15 +1,16 @@
 import type { ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentBackend } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
 import { notifyThreads, onThreadsEvent } from './threads-events.js';
 
 export interface UseThreadsOptions {
   /**
-   * The backend to list — `useAgentChat(...).backend`, or your own. Must be STABLE across renders:
+   * The backend to list. Default: the enclosing `<AgentProvider>`'s. Must be STABLE across renders:
    * the list refreshes itself when a chat on the SAME backend creates a thread, settles a run or
    * streams a title.
    */
-  backend: AgentBackend;
+  backend?: AgentBackend;
   /** `false` holds the first request (e.g. until the user is signed in). Default `true`. */
   enabled?: boolean;
 }
@@ -32,8 +33,9 @@ export interface ThreadsState {
  * backend reports thread creation and settled runs (refetch) and streamed titles (patched in
  * place). Headless — it renders nothing.
  */
-export function useThreads(options: UseThreadsOptions): ThreadsState {
-  const { backend, enabled = true } = options;
+export function useThreads(options: UseThreadsOptions = {}): ThreadsState {
+  const { enabled = true } = options;
+  const backend = useAgentBackend(options.backend);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [isLoading, setIsLoading] = useState(enabled);
   const [error, setError] = useState<Error | null>(null);

@@ -30,7 +30,7 @@ const NO_SIGNAL = new AbortController().signal;
 describe('createSkillsSource', () => {
   it('reads the scope-resolved catalog and keeps each skill’s provenance', async () => {
     const { client, fetchMock } = clientReturning();
-    const source = createSkillsSource({ client });
+    const source = createSkillsSource({ backend: client });
 
     const items = await source.getItems('', NO_SIGNAL);
 
@@ -67,7 +67,7 @@ describe('createSkillsSource', () => {
         scope: 'global',
       },
     ]);
-    const source = createSkillsSource({ client });
+    const source = createSkillsSource({ backend: client });
 
     const items = await source.getItems('', NO_SIGNAL);
 
@@ -76,7 +76,7 @@ describe('createSkillsSource', () => {
 
   it('is a command trigger: the first character of the line, and nowhere else', () => {
     const { client } = clientReturning();
-    const sources = [createSkillsSource({ client })];
+    const sources = [createSkillsSource({ backend: client })];
 
     expect(findActiveTrigger('/dep', 4, sources)).toMatchObject({ query: 'dep' });
     expect(findActiveTrigger('src/foo', 7, sources)).toBeNull();
@@ -86,7 +86,7 @@ describe('createSkillsSource', () => {
 
   it('reads once per thread and lets the local filter do the narrowing', async () => {
     const { client, fetchMock } = clientReturning();
-    const source = createSkillsSource({ client });
+    const source = createSkillsSource({ backend: client });
 
     await source.getItems('d', NO_SIGNAL);
     await source.getItems('de', NO_SIGNAL);
@@ -98,7 +98,7 @@ describe('createSkillsSource', () => {
   it('reads the thread id at query time, so a thread created mid-chat is picked up', async () => {
     const { client, fetchMock } = clientReturning();
     const chat: { threadId?: string } = {};
-    const source = createSkillsSource({ client, getThreadId: () => chat.threadId });
+    const source = createSkillsSource({ backend: client, getThreadId: () => chat.threadId });
 
     await source.getItems('', NO_SIGNAL);
     chat.threadId = 'thr-1';
@@ -120,7 +120,7 @@ describe('createSkillsSource', () => {
         }),
       );
     const client = new AgentClient({ fetch: fetchMock });
-    const source = createSkillsSource({ client });
+    const source = createSkillsSource({ backend: client });
 
     await expect(source.getItems('', NO_SIGNAL)).rejects.toThrow('offline');
     await expect(source.getItems('', NO_SIGNAL)).resolves.toHaveLength(2);

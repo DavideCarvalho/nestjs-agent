@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 function jsonResponse(status = 200): Response {
@@ -18,7 +19,9 @@ describe('useAgentChat — settling a question set', () => {
       return jsonResponse();
     });
 
-    const { result } = renderHook(() => useAgentChat({ threadId: 'thr-1', fetch: fetchMock }));
+    const { result } = renderHook(() =>
+      useAgentChat({ threadId: 'thr-1', backend: new AgentClient({ fetch: fetchMock }) }),
+    );
 
     await act(async () => {
       await result.current.answer({ toolCallId: 'intake-run-1', answers: { scope: ['file'] } });
@@ -41,7 +44,9 @@ describe('useAgentChat — settling a question set', () => {
 
   it('lets a refusal reach the caller rather than resolving as if it worked', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(403));
-    const { result } = renderHook(() => useAgentChat({ threadId: 'thr-1', fetch: fetchMock }));
+    const { result } = renderHook(() =>
+      useAgentChat({ threadId: 'thr-1', backend: new AgentClient({ fetch: fetchMock }) }),
+    );
 
     await expect(result.current.answer({ toolCallId: 'not-mine' })).rejects.toMatchObject({
       status: 403,

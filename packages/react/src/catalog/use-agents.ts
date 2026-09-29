@@ -1,11 +1,12 @@
 import type { AgentCatalogEntry } from '@dudousxd/nestjs-agent-core';
 import { useMemo } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
 import { useResource } from './use-resource.js';
 
 export interface UseAgentsOptions {
-  /** `useAgentChat(...).backend`, or your own. Must implement `listAgents`. */
-  backend: AgentBackend;
+  /** Default: the enclosing `<AgentProvider>`'s. Must implement `listAgents`. */
+  backend?: AgentBackend;
   /** `false` holds the request. Default `true`. */
   enabled?: boolean;
 }
@@ -24,8 +25,9 @@ export interface AgentsState {
  * The registered agents (`GET <base>/agents`) — the data behind an agent picker. Send the pick as
  * `useAgentChat({ agent })`, or pin it on a thread with `PATCH <base>/threads/:id { defaultAgent }`.
  */
-export function useAgents(options: UseAgentsOptions): AgentsState {
-  const { backend, enabled = true } = options;
+export function useAgents(options: UseAgentsOptions = {}): AgentsState {
+  const { enabled = true } = options;
+  const backend = useAgentBackend(options.backend);
   const { data, isLoading, error, refresh } = useResource<AgentCatalogEntry[]>(
     () => requireBackendMethod(backend, 'listAgents')(),
     '',

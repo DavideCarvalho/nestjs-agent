@@ -2,6 +2,7 @@ import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentBackend, UploadAttachmentOptions } from '../backend.js';
 import { AgentBackendUnsupportedError } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
 import { acceptsFile, dragHasFiles, filesFromClipboard } from './files.js';
 
 /** Where one staged file stands. `rejected` never uploaded (validation); `error` can be retried. */
@@ -34,7 +35,7 @@ export interface UseAttachmentsOptions {
    * answered; honour `signal` so `remove` can cancel; call `onProgress(0..1)` if you can.
    */
   upload?: (file: File, options: UploadAttachmentOptions) => Promise<MessageAttachment>;
-  /** Used for the default `upload`. One of `upload` / `backend` is required. */
+  /** Used for the default `upload`. Default: the enclosing `<AgentProvider>`'s. */
   backend?: AgentBackend;
   /** `<input accept>` grammar: `'image/*,.pdf'` or `['image/*', 'application/pdf']`. */
   accept?: string | readonly string[];
@@ -113,9 +114,10 @@ let sequence = 0;
  * files.clear();
  * ```
  */
-export function useAttachments(options: UseAttachmentsOptions): AttachmentsState {
-  const latest = useRef(options);
-  latest.current = options;
+export function useAttachments(options: UseAttachmentsOptions = {}): AttachmentsState {
+  const backend = useAgentBackend(options.backend);
+  const latest = useRef({ ...options, backend });
+  latest.current = { ...options, backend };
   const [items, setItems] = useState<StagedAttachment[]>([]);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -131,7 +133,7 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsState
       const { upload, backend } = latest.current;
       const run =
         upload ??
-        (backend?.uploadAttachment !== undefined
+        (backend.uploadAttachment !== undefined
           ? backend.uploadAttachment.bind(backend)
           : undefined);
       if (run === undefined) {

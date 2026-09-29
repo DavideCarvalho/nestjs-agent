@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 function sseResponse(frames: string[]): Response {
@@ -44,7 +45,7 @@ describe('useAgentChat', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-1',
-        fetch: fetchMock,
+        backend: new AgentClient({ fetch: fetchMock }),
       }),
     );
 
@@ -85,7 +86,7 @@ describe('useAgentChat', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-9',
-        fetch: fetchMock,
+        backend: new AgentClient({ fetch: fetchMock }),
       }),
     );
 
@@ -119,7 +120,7 @@ describe('useAgentChat', () => {
     // No threadId option → a "new chat". The backend mints `srv-thread` and reports it via `meta`.
     const { result } = renderHook(() =>
       useAgentChat({
-        fetch: fetchMock,
+        backend: new AgentClient({ fetch: fetchMock }),
         onThreadCreated: (id) => created.push(id),
       }),
     );
@@ -174,7 +175,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-1',
           resume: true,
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
         }),
       );
 
@@ -219,7 +220,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-2',
           resume: true,
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
         }),
       );
 
@@ -235,7 +236,9 @@ describe('useAgentChat', () => {
     it('never fetches the thread when resume is not set (default false)', async () => {
       const fetchMock = vi.fn(async () => jsonResponse());
 
-      renderHook(() => useAgentChat({ threadId: 'thr-3', fetch: fetchMock }));
+      renderHook(() =>
+        useAgentChat({ threadId: 'thr-3', backend: new AgentClient({ fetch: fetchMock }) }),
+      );
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(fetchMock).not.toHaveBeenCalled();
@@ -260,7 +263,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-1',
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -289,7 +292,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-2',
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -318,7 +321,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-3',
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -360,7 +363,7 @@ describe('useAgentChat', () => {
         useAgentChat({
           threadId: 'thr-4',
           resume: true,
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );
@@ -381,7 +384,7 @@ describe('useAgentChat', () => {
       const { result } = renderHook(() =>
         useAgentChat({
           threadId: 'thr-5',
-          fetch: fetchMock,
+          backend: new AgentClient({ fetch: fetchMock }),
           onRunSettled: (outcome) => settled.push(outcome),
         }),
       );

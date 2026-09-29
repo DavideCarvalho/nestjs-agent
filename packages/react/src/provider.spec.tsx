@@ -1,0 +1,164 @@
+// @vitest-environment jsdom
+import { render, renderHook, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import type { AgentBackend } from './backend.js';
+import { useAgents } from './catalog/use-agents.js';
+import { useModels } from './catalog/use-models.js';
+import { AgentClient } from './client.js';
+import { useAmbientRenderUi } from './components/ambient-ui.js';
+import { useMessageFeedback } from './feedback/use-message-feedback.js';
+import { useGenuiProvider } from './genui/generative-ui.js';
+import { useToolCatalog } from './presentation/use-tool-catalog.js';
+import { AgentProvider, useAgentBackend } from './provider.js';
+import { useQuota } from './quota/use-quota.js';
+import { useThreads } from './threads/use-threads.js';
+import { useAgentChat } from './use-agent-chat.js';
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function fakeBackend(): AgentBackend {
+  return {
+    openChatStream: vi.fn(),
+    resumeChatStream: async () => null,
+    cancelStream: async () => ({}),
+    listThreads: vi.fn(async () => [
+      { id: 't1', title: 'One', createdAt: '', updatedAt: '' } as never,
+    ]),
+    getThread: vi.fn(),
+    updateThread: vi.fn(),
+    deleteThread: vi.fn(),
+    listModels: vi.fn(async () => ({ default: 'fast', providers: [] })),
+    listAgents: vi.fn(async () => [{ name: 'default', description: '', isDefault: true }]),
+    getQuota: vi.fn(async () => ({ windows: [] })),
+    listTools: vi.fn(async () => []),
+  };
+}
+
+describe('AgentProvider', () => {
+  it('builds one AgentClient from the connection props and hands it to every hook', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json([]));
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AgentProvider
+        baseUrl="https://api.example.com/"
+        path="/api/agent/"
+        credentials="include"
+        getHeaders={() => ({ 'x-csrf': 'tok' })}
+        fetch={fetchMock as unknown as typeof fetch}
+      >
+        {children}
+      </AgentProvider>
+    );
+    const { result } = renderHook(
+      () => ({ chat: useAgentChat(), threads: useThreads(), backend: useAgentBackend() }),
+      { wrapper },
+    );
+    expect(result.current.backend).toBeInstanceOf(AgentClient);
+    expect(result.current.chat.backend).toBe(result.current.backend);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.com/api/agent/threads');
+    expect(init.credentials).toBe('include');
+    expect((init.headers as Record<string, string>)['x-csrf']).toBe('tok');
+  });
+
+  it('passes a custom backend through, and every hook falls back to it', async () => {
+    const backend = fakeBackend();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AgentProvider backend={backend}>{children}</AgentProvider>
+    );
+    const { result } = renderHook(
+      () => ({
+        chat: useAgentChat(),
+        threads: useThreads(),
+        models: useModels(),
+        agents: useAgents(),
+        quota: useQuota(),
+        tools: useToolCatalog(),
+        feedback: useMessageFeedback(),
+      }),
+      { wrapper },
+    );
+    expect(result.current.chat.backend).toBe(backend);
+    await waitFor(() => expect(result.current.threads.threads).toHaveLength(1));
+    await waitFor(() => expect(result.current.models.defaultModel).toBe('fast'));
+    await waitFor(() => expect(result.current.agents.defaultAgent).toBe('default'));
+    expect(backend.getQuota).toHaveBeenCalled();
+    expect(backend.listTools).toHaveBeenCalled();
+  });
+
+  it('an explicit backend on a hook wins over the context', async () => {
+    const context = fakeBackend();
+    const own = fakeBackend();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AgentProvider backend={context}>{children}</AgentProvider>
+    );
+    renderHook(() => useThreads({ backend: own }), { wrapper });
+    await waitFor(() => expect(own.listThreads).toHaveBeenCalled());
+    expect(context.listThreads).not.toHaveBeenCalled();
+  });
+
+  it('attachments.upload replaces how the built-in client uploads', async () => {
+    const upload = vi.fn(async () => ({
+      mediaId: 'm1',
+      url: 'u',
+      contentType: 'image/png',
+      name: 'a.png',
+    }));
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AgentProvider path="x" attachments={{ upload }}>
+        {children}
+      </AgentProvider>
+    );
+    const { result } = renderHook(() => useAgentBackend(), { wrapper });
+    const file = new File(['x'], 'a.png', { type: 'image/png' });
+    await result.current.uploadAttachment?.(file);
+    expect(upload).toHaveBeenCalledTimes(1);
+    const connection = (upload.mock.calls[0] as unknown[])[2] as { baseUrl: string; path: string };
+    expect(connection.path).toBe('/x');
+    expect(connection.baseUrl).toBe('');
+  });
+
+  it('genui sets the generative UI provider up in the same element', () => {
+    const registry = { Card: () => null };
+    let seen: unknown = null;
+    let ambient: unknown = null;
+    function Probe() {
+      seen = useGenuiProvider();
+      ambient = useAmbientRenderUi();
+      return null;
+    }
+    render(
+      <AgentProvider genui={{ registry }}>
+        <Probe />
+      </AgentProvider>,
+    );
+    expect((seen as { registry: unknown }).registry).toBe(registry);
+    expect(typeof ambient).toBe('function');
+  });
+});
+
+describe('without a provider', () => {
+  it('every hook shares one same-origin client on `/agent`', async () => {
+    const fetchMock = vi.fn(async () => json([]));
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const { result } = renderHook(() => ({
+        chat: useAgentChat(),
+        backend: useAgentBackend(),
+        threads: useThreads(),
+      }));
+      expect(result.current.chat.backend).toBe(result.current.backend);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/agent/threads');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
