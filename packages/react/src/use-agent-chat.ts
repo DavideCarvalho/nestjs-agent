@@ -9,7 +9,11 @@ import {
   type ReconnectOptions,
   type StreamConnectionState,
 } from './agent-chat-transport.js';
-import { type AgentBackend, requireBackendMethod } from './backend.js';
+import {
+  type AgentBackend,
+  type AttachmentUploadStrategy,
+  requireBackendMethod,
+} from './backend.js';
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 import { AgentClient, type QuotaToday } from './client.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
@@ -40,6 +44,12 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
+  /**
+   * How the built-in client uploads attachments (ignored when a backend is given) — e.g.
+   * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media`. Pass `chat.backend` to
+   * `useAttachments` and every composer uses it.
+   */
+  attachments?: AttachmentUploadStrategy;
   /** Reuse an existing client instead of constructing one. Prefer {@link backend}. */
   client?: B;
   /** Named agent to run each turn. */
@@ -209,6 +219,7 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
       ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      ...(options.attachments !== undefined ? { attachments: options.attachments } : {}),
       getHeaders: async () => mergeHeaders(latest.current),
     }) as unknown as B;
   }, []);

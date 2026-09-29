@@ -161,32 +161,32 @@ A ready `AGENT_ATTACHMENT_STAGING` backed by [`@dudousxd/nestjs-media`](https://
 with resumable (tus) uploads. `@dudousxd/nestjs-media` is an **optional** peer: only this subpath
 imports it, and nothing on the root entry needs it.
 
-```ts
-import { AgentModule } from '@dudousxd/nestjs-agent';
-import { AgentMediaAttachmentsModule } from '@dudousxd/nestjs-agent/media';
-import { MediaModule } from '@dudousxd/nestjs-media';
+Minimal — next to a `MediaModule` that has `store`, `uploadSessions` and `tus`:
 
+```ts
 @Module({
   imports: [
-    MediaModule.forRoot({
-      default: 's3',
-      disks: { s3: new S3Driver({ bucket: 'uploads' /* … */ }) },
-      store: new DrizzleMediaStore(db), // chat attachments are media records
-      uploadSessions: new RedisUploadSessionStore(redis), // resumable uploads
-      tus: { disk: 's3' }, // mounts PATCH /media/uploads/:id
-      guards: [SessionGuard], // the tus routes are open unless you guard them
-    }),
+    MediaModule.forRoot({ /* disks, store, uploadSessions, tus */ }),
     AgentModule.forRoot({ /* … */ }),
-    AgentMediaAttachmentsModule.forRoot({
-      maxBytes: 20 * 1024 * 1024,
-      allowedContentTypes: ['image/png', 'image/jpeg', 'application/pdf'],
-      visibility: 'private', // presigned urls for the model provider (default)
-    }),
+    AgentMediaAttachmentsModule.forRoot(), // ← the whole integration
   ],
 })
-export class AppModule {}
-// main.ts — tus PATCH bodies must arrive as Buffers (nestjs-media's own requirement):
+// main.ts — nestjs-media's own requirement for tus PATCH bodies:
 app.useBodyParser('raw', { type: 'application/offset+octet-stream' });
+```
+
+Everything is overridable when you need it:
+
+```ts
+AgentMediaAttachmentsModule.forRoot({
+  maxBytes: 50 * 1024 * 1024,
+  allowedContentTypes: ['image/png', 'image/jpeg', 'application/pdf'],
+  collection: 'chat-files',
+  canAccess: ({ allowed, actor }) => allowed || actor.roles?.includes('support') === true,
+  resolveUrl: (record) => signMyProxyUrl(record.id), // instead of presign / public / inline
+  indexForRag: true, // see below
+  guards: [SessionGuard],
+});
 ```
 
 Each attachment is a media record (`ownerType: 'agent-actor'`, `ownerId: actor.id`, collection

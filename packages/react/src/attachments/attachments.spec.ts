@@ -322,3 +322,43 @@ describe('AgentClient.uploadAttachment progress', () => {
     expect(progress).toEqual([1]);
   });
 });
+
+describe('AgentClient attachments strategy', () => {
+  it('routes uploadAttachment through a custom strategy, handing it the connection', async () => {
+    const seen: unknown[] = [];
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const client = new AgentClient({
+      baseUrl: 'https://api.test/',
+      fetch: fetchImpl,
+      credentials: 'include',
+      headers: { a: '1' },
+      getHeaders: () => ({ b: '2' }),
+      attachments: async (uploaded, options, connection) => {
+        seen.push({
+          name: uploaded.name,
+          hasSignal: options.signal !== undefined,
+          baseUrl: connection.baseUrl,
+          credentials: connection.credentials,
+          headers: await connection.headers(),
+          fetch: connection.fetch,
+        });
+        return stored(uploaded.name);
+      },
+    });
+    const controller = new AbortController();
+    expect(
+      await client.uploadAttachment(file('x.png', 'image/png'), { signal: controller.signal }),
+    ).toEqual(stored('x.png'));
+    expect(seen).toEqual([
+      {
+        name: 'x.png',
+        hasSignal: true,
+        baseUrl: 'https://api.test',
+        credentials: 'include',
+        headers: { a: '1', b: '2' },
+        fetch: fetchImpl,
+      },
+    ]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});

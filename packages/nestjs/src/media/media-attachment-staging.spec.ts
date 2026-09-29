@@ -340,3 +340,35 @@ describe('MediaAttachmentStaging — RAG announcement', () => {
     });
   });
 });
+
+describe('MediaAttachmentStaging — custom access rule', () => {
+  it('canAccess replaces the default owner check (e.g. a shared team space)', async () => {
+    const { staging } = setup({
+      canAccess: ({ record, actor }) => record.ownerId === actor.id || actor.tenantRef === 'team',
+    });
+    const { mediaId } = await staging.stage({
+      data: PNG,
+      filename: 'cat.png',
+      contentType: 'image/png',
+      sizeBytes: PNG.byteLength,
+      actor: ALICE,
+    });
+    expect(
+      await staging.resolve({ mediaId, actor: { id: 'carol', tenantRef: 'team' } }),
+    ).not.toBeNull();
+    expect(await staging.resolve({ mediaId, actor: BOB })).toBeNull();
+  });
+
+  it('canAccess is handed the default verdict so it can extend rather than rewrite it', async () => {
+    const { staging } = setup({ canAccess: ({ allowed }) => allowed });
+    const { mediaId } = await staging.stage({
+      data: PNG,
+      filename: 'cat.png',
+      contentType: 'image/png',
+      sizeBytes: PNG.byteLength,
+      actor: ALICE,
+    });
+    expect(await staging.resolve({ mediaId, actor: ALICE })).not.toBeNull();
+    expect(await staging.resolve({ mediaId, actor: BOB })).toBeNull();
+  });
+});

@@ -330,6 +330,12 @@ export class MediaAttachmentStaging implements AttachmentStagingStore {
   }
 
   private async canUse(record: MediaRecord, actor: Actor): Promise<boolean> {
+    const allowed = await this.defaultAccess(record, actor);
+    const custom = this.options.canAccess;
+    return custom === undefined ? allowed : (await custom({ record, actor, allowed })) === true;
+  }
+
+  private async defaultAccess(record: MediaRecord, actor: Actor): Promise<boolean> {
     if (record.ownerId === actor.id) return true;
     const referenced = this.deps.agentStore?.referencedMediaIds?.bind(this.deps.agentStore);
     if (referenced === undefined) return false;

@@ -169,3 +169,14 @@ describe('AgentMediaAttachmentsModule (e2e)', () => {
     ]);
   });
 });
+
+describe('AgentMediaAttachmentsModule defaults', () => {
+  it('boots with forRoot() and no options at all', async () => {
+    const built = await boot();
+    const res = await request(built.app.getHttpServer())
+      .post('/agent/attachments/uploads')
+      .set('x-actor-id', 'alice')
+      .send({ filename: 'a.png', contentType: 'image/png', size: 3 });
+    expect(res.status).toBe(201);
+  });
+});

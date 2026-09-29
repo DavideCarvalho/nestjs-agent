@@ -1,3 +1,4 @@
+import type { Actor } from '@dudousxd/nestjs-agent-core';
 import type { MediaRecord, StorageDriver } from '@dudousxd/nestjs-media';
 import type {
   CanActivate,
@@ -23,6 +24,14 @@ export const DEFAULT_AGENT_MEDIA_TUS_BASE_PATH = '/media/uploads';
 export interface ResolveMediaUrlContext {
   /** The storage driver the record's bytes live on. */
   disk: StorageDriver;
+}
+
+/** What {@link AgentMediaAttachmentsOptions.canAccess} decides on. */
+export interface MediaAttachmentAccessInput {
+  record: MediaRecord;
+  actor: Actor;
+  /** The default verdict: the actor owns the record, or a message in their own thread carries it. */
+  allowed: boolean;
 }
 
 export interface AgentMediaAttachmentsOptions {
@@ -54,6 +63,13 @@ export interface AgentMediaAttachmentsOptions {
    * SECURITY: the url is fetched server-side by the model provider — build it from the record only.
    */
   resolveUrl?: (record: MediaRecord, context: ResolveMediaUrlContext) => string | Promise<string>;
+  /**
+   * Who may send (resolve) a record in a chat turn. Default: `allowed` — the owner, or anyone whose
+   * own thread already carries it. Return `allowed || …` to widen that (a shared team space),
+   * `allowed && …` to narrow it. Only `resolve` consults this; completing and discarding an upload
+   * stay the uploader's.
+   */
+  canAccess?: (input: MediaAttachmentAccessInput) => boolean | Promise<boolean>;
   /**
    * The public path of `MediaModule`'s tus endpoint (its `tus.basePath`, global prefix included) —
    * used to build the `location` a client streams the bytes to. Default `'/media/uploads'`.

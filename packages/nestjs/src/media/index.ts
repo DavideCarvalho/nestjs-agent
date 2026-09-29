@@ -14,6 +14,7 @@ export {
   DEFAULT_AGENT_MEDIA_OWNER_TYPE,
   DEFAULT_AGENT_MEDIA_TUS_BASE_PATH,
   DEFAULT_AGENT_MEDIA_URL_TTL_SECONDS,
+  type MediaAttachmentAccessInput,
   type ResolveMediaUrlContext,
 } from './media-attachments.options.js';
 export { AgentMediaUploadsController } from './media-uploads.controller.js';

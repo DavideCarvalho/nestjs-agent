@@ -1,7 +1,43 @@
 import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { streamChunks } from '@dudousxd/nestjs-media-client';
-import type { AgentBackend, UploadAttachmentOptions } from '../backend.js';
+import type {
+  AgentBackend,
+  AttachmentUploadStrategy,
+  UploadAttachmentOptions,
+} from '../backend.js';
 import type { AgentClientOptions } from '../client.js';
+
+/** Tuning for {@link mediaAttachments}; every field optional. */
+export interface MediaAttachmentsOptions {
+  /** The agent's route prefix (`AgentModule`'s `path`, global prefix included). Default `/agent`. */
+  path?: string;
+  /** Bytes per tus `PATCH`. Default 5 MiB. */
+  chunkSize?: number;
+  /** Attempts per chunk before the upload fails. Default 3. */
+  retries?: number;
+}
+
+/**
+ * Resumable attachment uploads through `@dudousxd/nestjs-media`, in one line:
+ *
+ * ```ts
+ * const chat = useAgentChat({ attachments: mediaAttachments() });
+ * const files = useAttachments({ backend: chat.backend });
+ * ```
+ *
+ * Reuses the chat client's own connection (base url, headers, credentials), so it needs no
+ * configuration. Also takes `new AgentClient({ attachments: mediaAttachments() })`.
+ */
+export function mediaAttachments(options: MediaAttachmentsOptions = {}): AttachmentUploadStrategy {
+  return (file, uploadOptions, connection) =>
+    createMediaUpload({
+      ...options,
+      baseUrl: connection.baseUrl,
+      getHeaders: connection.headers,
+      fetch: connection.fetch,
+      ...(connection.credentials !== undefined ? { credentials: connection.credentials } : {}),
+    })(file, uploadOptions);
+}
 
 /**
  * Where and how {@link createMediaUpload} talks to the server. The connection fields are

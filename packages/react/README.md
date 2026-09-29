@@ -711,30 +711,29 @@ flight. `messageFiles(message)` reads the files back off any message — live or
 
 #### Resumable uploads on nestjs-media (`@dudousxd/nestjs-agent-react/media`)
 
-With `AgentMediaAttachmentsModule` on the server (`@dudousxd/nestjs-agent/media`), plug tus uploads
-in once — every `useAttachments({ backend })` then uploads in chunks through nestjs-media, with
-progress, abort (`remove`) and retry. Headless; `@dudousxd/nestjs-media-client` is an optional peer
-only this subpath uses.
+With `AgentMediaAttachmentsModule` on the server (`@dudousxd/nestjs-agent/media`), one option turns
+it on — uploads go in chunks through nestjs-media's tus endpoint, with progress, abort (`remove`)
+and retry, on the chat client's own connection (base url, headers, credentials):
 
-```ts
-import { AgentClient } from '@dudousxd/nestjs-agent-react';
-import { withMediaUploads } from '@dudousxd/nestjs-agent-react/media';
+```tsx
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
 
-const connection = { baseUrl: '', getHeaders: () => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') }) };
-export const backend = withMediaUploads(new AgentClient(connection), connection);
-
-// anywhere: useAgentChat({ backend }), useAttachments({ backend, accept: 'image/*,.pdf' })
+const chat = useAgentChat({ attachments: mediaAttachments() });
+const files = useAttachments({ backend: chat.backend });
 ```
 
-`createMediaUpload(options)` is the same thing as a bare `upload` function for
-`useAttachments({ upload })`. Options: the `AgentClient` connection fields (`baseUrl`, `headers`,
-`getHeaders`, `credentials`, `fetch`), plus `path` (the agent prefix, default `/agent`), `chunkSize`
-(default 5 MiB) and `retries` (per chunk, default 3). An aborted or failed upload is discarded on the
-server. Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …).
+Headless; `@dudousxd/nestjs-media-client` is an optional peer only this subpath uses. Extending it:
 
-Your own storage instead: pass `useAttachments({ upload: (file, { signal, onProgress }) => … })`
-resolving to a `{ mediaId, url, contentType, name }` your server's `AGENT_ATTACHMENT_STAGING`
-recognises, or implement `uploadAttachment` on your own `AgentBackend`.
+- `mediaAttachments({ path: '/api/agent', chunkSize, retries })` — a prefixed API, tuning.
+- `new AgentClient({ …connection, attachments: mediaAttachments() })` — your own client instance.
+- `withMediaUploads(backend, connection)` — any other `AgentBackend`; `createMediaUpload(connection)`
+  — a bare `upload` for `useAttachments({ upload })`.
+- Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …); an aborted or failed
+  upload is discarded on the server.
+
+Your own storage instead: `useAgentChat({ attachments: (file, { signal, onProgress }, connection) => … })`
+(an `AttachmentUploadStrategy`), or `useAttachments({ upload })`, resolving to a
+`{ mediaId, url, contentType, name }` your server's `AGENT_ATTACHMENT_STAGING` recognises.
 
 The rest of `AgentClient` works outside `useAgentChat` too — e.g. a standalone approvals inbox:
 

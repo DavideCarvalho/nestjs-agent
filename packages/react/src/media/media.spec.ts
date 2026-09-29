@@ -2,7 +2,12 @@ import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentBackend } from '../backend.js';
 import { AgentClient } from '../client.js';
-import { MediaUploadError, createMediaUpload, withMediaUploads } from './index.js';
+import {
+  MediaUploadError,
+  createMediaUpload,
+  mediaAttachments,
+  withMediaUploads,
+} from './index.js';
 
 interface Call {
   url: string;
@@ -152,5 +157,35 @@ describe('MediaUploadError', () => {
     const upload = createMediaUpload({ fetch: fetchImpl as unknown as typeof fetch });
     await expect(upload(pdf(), {})).rejects.toBeInstanceOf(MediaUploadError);
     await expect(upload(pdf(), {})).rejects.toMatchObject({ status: 413 });
+  });
+});
+
+describe('mediaAttachments — the one-line default', () => {
+  it('plugs into AgentClient and reuses its connection (baseUrl, headers, credentials, fetch)', async () => {
+    const server = fakeServer();
+    const client = new AgentClient({
+      baseUrl: 'https://api.test',
+      fetch: server.fetchImpl,
+      credentials: 'include',
+      headers: { 'X-Static': 's' },
+      getHeaders: () => ({ 'X-XSRF-TOKEN': 'csrf' }),
+      attachments: mediaAttachments({ chunkSize: 4 }),
+    });
+    const progress: number[] = [];
+    expect(await client.uploadAttachment(pdf(), { onProgress: (f) => progress.push(f) })).toEqual(
+      READY,
+    );
+    expect(server.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      'POST https://api.test/agent/attachments/uploads',
+      'PATCH https://api.test/media/uploads/u1',
+      'PATCH https://api.test/media/uploads/u1',
+      'PATCH https://api.test/media/uploads/u1',
+      'POST https://api.test/agent/attachments/uploads/m1/complete',
+    ]);
+    for (const call of server.calls) {
+      expect(call.credentials).toBe('include');
+      expect(call.headers).toMatchObject({ 'X-Static': 's', 'X-XSRF-TOKEN': 'csrf' });
+    }
+    expect(progress.at(-1)).toBe(1);
   });
 });
