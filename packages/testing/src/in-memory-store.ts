@@ -238,6 +238,10 @@ export class InMemoryAgentStore implements AgentStore {
     return [...names];
   }
 
+  async toolCallInput(toolCallId: string): Promise<unknown> {
+    return this.toolCalls.get(toolCallId)?.input ?? null;
+  }
+
   async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
     const call = this.toolCalls.get(toolCallId);
     if (call === undefined) {

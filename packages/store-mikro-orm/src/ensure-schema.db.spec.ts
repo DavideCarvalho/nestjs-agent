@@ -289,6 +289,8 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
         approver: 'ops',
         expiresAt: '2030-01-01T00:00:00.000Z',
       });
+      expect(await store.toolCallInput('c1')).toEqual({});
+      expect(await store.toolCallInput('missing')).toBeNull();
       expect(await store.toolCallApproval('c1')).toEqual({
         status: 'pending_approval',
         approver: 'ops',

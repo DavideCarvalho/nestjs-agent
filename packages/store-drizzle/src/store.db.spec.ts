@@ -801,6 +801,8 @@ describe('DrizzleAgentStore approvals', () => {
       status: 'auto_executed',
     });
 
+    expect(await store.toolCallInput('c1')).toEqual({});
+    expect(await store.toolCallInput('missing')).toBeNull();
     expect(await store.toolCallApproval('c1')).toEqual({
       status: 'pending_approval',
       approver: 'ops',

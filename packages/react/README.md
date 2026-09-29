@@ -186,10 +186,30 @@ const transcript = useChatTranscript({
 });
 
 // block.kind === 'elicitation' →
-// { toolCallId, preamble, questionCount, isPending, outcome, error,
-//   questions: [{ id, prompt, position, multiple, selected, isPristine,
+// { toolCallId, preamble, questionCount, isPending, isValid, outcome, error,
+//   questions: [{ id, prompt, description, input, position, multiple, selected, value, error,
+//                 isPristine, setValue(raw),
 //                 options: [{ value, label, hotkey, isSelected, isDefault, select() }] }],
 //   answer: { available, isSubmitting, run() }, skip: { … } }
+```
+
+**Typed questions.** A question with `input` asks for a value instead of a pick — `input.type` is
+`text` · `textarea` · `number` · `boolean` · `date` · `email` · `url` · `select` (a pick from
+`options` again), with optional `placeholder`, `required`, `min`, `max` and `pattern`. `options` may
+be empty for one. Render the control from `input.type` and hand whatever it produces to
+`question.setValue(raw)`: it is coerced with `coerceAnswer` to the canonical strings the wire
+carries (numbers as decimals, booleans as `"true"`/`"false"`, dates as `YYYY-MM-DD`). `question.error`
+is the server's own verdict on the current selection (`validateAnswer`), and `block.isValid` is all
+of them — the answer route answers `400` with the same message for anything it would refuse.
+
+```tsx
+{q.input?.type === 'number' ? (
+  <input type="number" value={q.value} placeholder={q.input.placeholder}
+         min={q.input.min} max={q.input.max} onChange={(e) => q.setValue(e.target.value)} />
+) : q.input?.type === 'boolean' ? (
+  <input type="checkbox" checked={q.value === 'true'} onChange={(e) => q.setValue(e.target.checked)} />
+) : null}
+{q.error && !q.isPristine ? <small role="alert">{q.error}</small> : null}
 ```
 
 Every option the agent pre-picked comes back as `isDefault` and starts `isSelected`, so confirming

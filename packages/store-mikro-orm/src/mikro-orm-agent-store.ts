@@ -258,6 +258,12 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     return [...new Set(calls.map((call) => call.toolName))];
   }
 
+  async toolCallInput(toolCallId: string): Promise<unknown> {
+    const em = this.em.fork();
+    const call = await em.findOne(AgentToolCall, { id: toolCallId }, { fields: ['input'] });
+    return call?.input ?? null;
+  }
+
   async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
     const em = this.em.fork();
     const call = await em.findOne(AgentToolCall, { id: toolCallId });
