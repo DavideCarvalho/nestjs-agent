@@ -27,6 +27,8 @@ export {
 export {
   type AgentBackend,
   AgentBackendUnsupportedError,
+  type AgentConnection,
+  type AttachmentUploadStrategy,
   type ChatStreamRequest,
   type ChatStreamResponse,
   type MessageFeedbackInput,

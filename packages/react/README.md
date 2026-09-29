@@ -709,6 +709,32 @@ An item is `uploading`, `ready`, `error` (retry with `files.retry(id)`) or `reje
 flight. `messageFiles(message)` reads the files back off any message — live or replayed — with a
 `kind` (`image`, `pdf`, `text`, …), the extension and, for replayed ones, the stored `mediaId`.
 
+#### Resumable uploads on nestjs-media (`@dudousxd/nestjs-agent-react/media`)
+
+With `AgentMediaAttachmentsModule` on the server (`@dudousxd/nestjs-agent/media`), one option turns
+it on — uploads go in chunks through nestjs-media's tus endpoint, with progress, abort (`remove`)
+and retry, on the chat client's own connection (base url, headers, credentials):
+
+```tsx
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
+
+const chat = useAgentChat({ attachments: mediaAttachments() });
+const files = useAttachments({ backend: chat.backend });
+```
+
+Headless; `@dudousxd/nestjs-media-client` is an optional peer only this subpath uses. Extending it:
+
+- `mediaAttachments({ path: '/api/agent', chunkSize, retries })` — a prefixed API, tuning.
+- `new AgentClient({ …connection, attachments: mediaAttachments() })` — your own client instance.
+- `withMediaUploads(backend, connection)` — any other `AgentBackend`; `createMediaUpload(connection)`
+  — a bare `upload` for `useAttachments({ upload })`.
+- Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …); an aborted or failed
+  upload is discarded on the server.
+
+Your own storage instead: `useAgentChat({ attachments: (file, { signal, onProgress }, connection) => … })`
+(an `AttachmentUploadStrategy`), or `useAttachments({ upload })`, resolving to a
+`{ mediaId, url, contentType, name }` your server's `AGENT_ATTACHMENT_STAGING` recognises.
+
 The rest of `AgentClient` works outside `useAgentChat` too — e.g. a standalone approvals inbox:
 
 ```ts

@@ -35,9 +35,15 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-react/genui': fileURLToPath(
     new URL('./packages/react/src/genui/index.ts', import.meta.url),
   ),
+  '@dudousxd/nestjs-agent-react/media': fileURLToPath(
+    new URL('./packages/react/src/media/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-react': pkg('react'),
   '@dudousxd/nestjs-agent/genui': fileURLToPath(
     new URL('./packages/nestjs/src/genui/index.ts', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent/media': fileURLToPath(
+    new URL('./packages/nestjs/src/media/index.ts', import.meta.url),
   ),
   '@dudousxd/nestjs-agent': pkg('nestjs'),
   // The registry ships shadcn-flavoured source, which reaches `cn` through the alias every shadcn

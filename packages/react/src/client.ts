@@ -12,6 +12,8 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import type {
   AgentBackend,
+  AgentConnection,
+  AttachmentUploadStrategy,
   ChatStreamRequest,
   ChatStreamResponse,
   MessageFeedbackInput,
@@ -67,6 +69,12 @@ export interface AgentClientOptions {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
+  /**
+   * How `uploadAttachment` uploads. Omitted → `POST <base>/agent/attachments` (multipart). Pass
+   * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media` for resumable uploads through
+   * nestjs-media, or your own {@link AttachmentUploadStrategy}.
+   */
+  attachments?: AttachmentUploadStrategy;
 }
 
 const HEADER_RUN_ID = 'x-agent-run-id';
@@ -198,6 +206,9 @@ export class AgentClient implements AgentBackend {
     file: File,
     options: UploadAttachmentOptions = {},
   ): Promise<MessageAttachment> {
+    if (this.options.attachments !== undefined) {
+      return this.options.attachments(file, options, this.connection());
+    }
     // `fetch` cannot observe an upload's progress; XHR can. Only when someone is listening, and
     // never when a `fetch` was injected (tests, non-browser runtimes).
     if (
@@ -340,6 +351,16 @@ export class AgentClient implements AgentBackend {
 
   private fetchImpl(): typeof fetch {
     return this.options.fetch ?? globalThis.fetch;
+  }
+
+  /** This client's connection, for an {@link AttachmentUploadStrategy}. */
+  private connection(): AgentConnection {
+    return {
+      baseUrl: this.baseUrl(),
+      headers: () => this.resolveHeaders(),
+      fetch: this.fetchImpl(),
+      ...this.credentials(),
+    };
   }
 
   private baseUrl(): string {

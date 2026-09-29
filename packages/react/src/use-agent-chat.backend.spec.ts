@@ -293,3 +293,20 @@ describe('useMessageFeedback', () => {
     expect(result.current.error?.message).toBe('403');
   });
 });
+
+describe('useAgentChat({ attachments })', () => {
+  it('builds its client with the upload strategy, so chat.backend uploads through it', async () => {
+    const strategy = vi.fn(async (uploaded: File) => ({
+      mediaId: 'm1',
+      url: '',
+      contentType: uploaded.type,
+      name: uploaded.name,
+    }));
+    const { result } = renderHook(() => useAgentChat({ attachments: strategy }));
+    const attachment = await result.current.backend.uploadAttachment?.(
+      new File(['x'], 'a.png', { type: 'image/png' }),
+    );
+    expect(attachment).toMatchObject({ mediaId: 'm1', name: 'a.png' });
+    expect(strategy).toHaveBeenCalledTimes(1);
+  });
+});

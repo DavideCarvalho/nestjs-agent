@@ -70,6 +70,28 @@ export interface UploadAttachmentOptions {
   onProgress?: (fraction: number) => void;
 }
 
+/** How {@link AgentClient} reaches the server — handed to an {@link AttachmentUploadStrategy}. */
+export interface AgentConnection {
+  /** Origin + base path, trailing slash removed (`''` for same-origin). */
+  baseUrl: string;
+  /** The client's static + per-request headers, resolved now (auth, CSRF). */
+  headers: () => Promise<Record<string, string>>;
+  credentials?: RequestCredentials;
+  fetch: typeof fetch;
+}
+
+/**
+ * Replaces {@link AgentClient}'s own `uploadAttachment` (`POST <base>/agent/attachments`) — e.g.
+ * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media`, or your own storage. Gets the
+ * client's connection so it needs no configuration of its own. Resolve with the attachment your
+ * server's `AGENT_ATTACHMENT_STAGING` recognises by `mediaId`.
+ */
+export type AttachmentUploadStrategy = (
+  file: File,
+  options: UploadAttachmentOptions,
+  connection: AgentConnection,
+) => Promise<MessageAttachment>;
+
 /**
  * Everything the React layer asks of a server — the seam between `useAgentChat` (and the other
  * hooks) and whatever serves the agent. {@link AgentClient} is the default implementation, over the
