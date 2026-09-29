@@ -1,5 +1,22 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.22.0
+
+### Minor Changes
+
+- [#207](https://github.com/DavideCarvalho/nestjs-agent/pull/207) [`13b50e2`](https://github.com/DavideCarvalho/nestjs-agent/commit/13b50e24461194aec197e96b82bbee1afc4570c8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `ctx.emitUi(component, props, { id?, version? })`: a tool pushes a generative-UI component. It
+  streams live as a `ui` frame (inline, durable, and from the worker serving a dispatched tool step)
+  and is persisted on the assistant message through the new optional `AgentStore.setMessageUi`
+  (implemented by the Drizzle, MikroORM and in-memory stores), once per step. The pushes ride the tool
+  step's journaled result, so a durable replay neither re-streams nor re-persists them; a tool that
+  pushes nothing journals exactly what it did before. `ui` frames and persisted components gain an
+  optional `toolCallId`, and a reloaded message places such a component right after its call's tool
+  part (React: `TranscriptUiBlock.toolCallId`). `ToolSpec.terminal` / `@AiTool({ terminal: true })`
+  ends the turn after a successful call, settled in the call's `persist:toolcall` checkpoint.
+
+  `@dudousxd/nestjs-agent-genui` requires core >= 0.22, where its tools push through `ctx.emitUi` and
+  `terminal` takes effect.
+
 ## 0.21.0
 
 ### Minor Changes
