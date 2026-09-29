@@ -1,5 +1,16 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.18.0
+
+### Minor Changes
+
+- [#216](https://github.com/DavideCarvalho/nestjs-agent/pull/216) [`8b0ee4b`](https://github.com/DavideCarvalho/nestjs-agent/commit/8b0ee4bd642152af702a6a1b28f37f3db8381af7) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Headless attachments.
+
+  - `useAttachments({ upload | backend, accept, maxBytes, maxFiles })`: staged items with `status` (`uploading` / `ready` / `error` / `rejected`), `progress`, `error` and image `previewUrl`; `add` (from an input, a paste or a drop), `remove` (cancels the upload), `retry`, `clear`; `isUploading`; `attachments` / `refs` to send; and markup-free `inputProps`, `dropZoneProps` + `isDragging`, `onPaste`.
+  - `AgentClient.uploadAttachment(file, { signal, onProgress })` reports upload progress (XHR when no `fetch` was injected) and can be cancelled.
+  - `messageFiles(message)` — the files on a message with `kind` (`image` / `pdf` / `text` / `audio` / `video` / `other`), `extension` and, for replayed ones, the stored `mediaId`. Plus `acceptsFile`, `fileKind`, `filesFromClipboard`, `dragHasFiles`.
+  - Replayed attachment file parts carry `providerMetadata.agent.mediaId`.
+
 ## 0.17.0
 
 ### Minor Changes
