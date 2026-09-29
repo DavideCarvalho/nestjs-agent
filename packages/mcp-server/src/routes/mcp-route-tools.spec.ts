@@ -1,4 +1,4 @@
-import { type Actor, ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import { type Actor, ToolRegistry, createNoopEmitUi } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { McpRouteRef } from './mcp-route-dispatcher.js';
@@ -135,6 +135,7 @@ describe('buildRouteTool', () => {
       threadId: 't',
       runId: 'r',
       requestId: 'q',
+      emitUi: createNoopEmitUi(),
     });
     expect(dispatch).toHaveBeenCalledWith(args, ACTOR);
   });
@@ -148,7 +149,10 @@ describe('buildRouteTool', () => {
       dispatch,
     });
     await expect(
-      handler.execute({ id: '42' }, { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q' }),
+      handler.execute(
+        { id: '42' },
+        { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q', emitUi: createNoopEmitUi() },
+      ),
     ).rejects.toThrow(/its schema did not produce/);
     expect(dispatch).not.toHaveBeenCalled();
   });

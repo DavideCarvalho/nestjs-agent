@@ -45,7 +45,7 @@ class PeekTool {
 @Injectable()
 class ChartTool {
   async execute(_input: unknown, ctx: AiToolCtx): Promise<{ id: string | undefined }> {
-    const pushed = await ctx.emitUi?.('Chart', { points: [1, 2, 3] }, { version: 1 });
+    const pushed = await ctx.emitUi('Chart', { points: [1, 2, 3] }, { version: 1 });
     return { id: pushed?.id };
   }
 }

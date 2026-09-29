@@ -113,6 +113,10 @@ export class AgentRunSteps {
             input.actor,
             deps.rolesPolicy,
             deps.toolAllowList,
+            {
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            },
           ),
           ask: deps.ask,
         }),

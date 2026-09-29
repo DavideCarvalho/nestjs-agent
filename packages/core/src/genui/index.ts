@@ -1,3 +1,10 @@
+/**
+ * `@dudousxd/nestjs-agent-core/genui` — the generative-UI catalog: component definitions (Standard
+ * Schema or JSON Schema props), validation, model-facing catalog text, plain-text fallbacks and the
+ * tools that push `ui` frames. Isomorphic: this entry imports nothing server-only, so the same
+ * catalog file serves the NestJS app and the browser. Builtin definitions live at
+ * `@dudousxd/nestjs-agent-core/genui/builtins`.
+ */
 export {
   type Catalog,
   type CatalogOptions,
@@ -33,11 +40,15 @@ export {
   treeToText,
 } from './text.js';
 export {
+  GENUI_SHOW_TOOL,
+  type GenuiCatalogScope,
   type GenuiTool,
   type GenuiToolOutput,
   type GenuiToolsOptions,
   genuiTools,
   jsonStandardSchema,
+  type ResolveGenuiCatalog,
+  showToolJsonSchema,
 } from './tools.js';
 export {
   type FlatSpec,

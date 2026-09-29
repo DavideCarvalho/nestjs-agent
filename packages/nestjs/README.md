@@ -70,6 +70,39 @@ tools THIS actor can reach through that agent (the default agent when omitted; `
 one), built by `ToolRegistry.visibleSpecs`, the same gates the model is offered tools through. The
 React package's `useToolCatalog` reads it. The model never sees `presentation`.
 
+### Generative UI
+
+A tool pushes a component into the answer with `ctx.emitUi(component, props)` — always present; a
+no-op where there is no conversation (MCP). To let the MODEL compose UI from a catalog, import
+`AgentGenuiModule` from `@dudousxd/nestjs-agent/genui` next to `AgentModule`:
+
+```ts
+// catalog.ts — isomorphic: the React app imports this same file
+import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, DealCard]);
+
+// app.module.ts
+AgentGenuiModule.forRoot({ catalog, mode: 'tree', terminal: true });
+```
+
+It registers the tools (`ui__show_<component>` per component by default, one `ui__render` in `tree`
+mode, plus a generic `ui__show` taking `{ component, props }` with `showTool: true`), validating
+every call against the catalog. Options: `mode`, `terminal`, `treeToolName`, `treeInstructions`,
+`treeLimits`, `namePrefix`, `showTool`, `showInstructions`, `roles`, `presentation`.
+`forRootAsync({ imports, inject, useFactory })` builds them from config. The catalog is injectable
+(`@InjectGenuiCatalog()`, token `GENUI_CATALOG`) and replaceable in a test with
+`overrideProvider(GENUI_CATALOG)` — the tools are built from the injected one.
+
+**Per-request catalogs.** Pass `resolver` (a class, resolved with DI, or an instance) extending
+`GenuiCatalogResolver` — `resolve({ actor, threadId, tenant, agentName }) → Catalog | Promise<Catalog>`
+(`tenant` is `actor.tenantRef`). It is consulted when a call is validated and when a turn's tool list
+is described to the model (the core's `ToolHandler.describe`), so tenant-defined, versioned
+components work without rebuilding tools at boot: the tree tool's and the show tool's descriptions
+and schemas list the tenant's components for that turn, and a pushed component carries the resolved
+definition's `version`. A tenant's own components are reached through the tree tool or
+`showTool: true` — no boot-time tool can name them. Cache inside `resolve` if it costs a round trip.
+
 ### Message attachments
 
 A chat turn attaches a file by **`mediaId` only**:

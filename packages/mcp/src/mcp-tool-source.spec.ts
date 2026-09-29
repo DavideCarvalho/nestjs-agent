@@ -1,4 +1,4 @@
-import type { AiToolCtx } from '@dudousxd/nestjs-agent-core';
+import { type AiToolCtx, createNoopEmitUi } from '@dudousxd/nestjs-agent-core';
 import { createGuardrails } from '@dudousxd/nestjs-agent-core/guardrails';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -21,6 +21,7 @@ const CTX: AiToolCtx = {
   threadId: 't-1',
   runId: 'r-1',
   requestId: 'r-1',
+  emitUi: createNoopEmitUi(),
 };
 
 const weatherTool: Tool = {

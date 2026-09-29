@@ -5,11 +5,17 @@
  * visibility machinery); otherwise `<GenerativeUI>` renders trees natively.
  *
  * ```tsx
- * const registry = { ...myComponents, [GENUI_TREE_COMPONENT]: jsonRenderTree(myJsonRenderRegistry) };
+ * import { GenuiProvider } from '@dudousxd/nestjs-agent-react/genui/json-render';
+ *
+ * <GenuiProvider registry={registry} catalog={catalog} jsonRender>…</GenuiProvider>
  * ```
  */
 import { type ComponentRegistry, JSONUIProvider, Renderer } from '@json-render/react';
 import { type ReactNode, useMemo } from 'react';
+import {
+  GenuiProvider as BaseGenuiProvider,
+  type GenuiProviderProps as BaseGenuiProviderProps,
+} from './generative-ui.js';
 import type { GenerativeUIElement, GenuiRegistry, GenuiRenderer } from './types.js';
 
 /** A json-render flat spec: `{ root, elements: { [id]: { type, props, children } } }`. */
@@ -72,4 +78,29 @@ export function jsonRenderTree(registry: ComponentRegistry): GenuiRenderer<{
   return function JsonRenderTreeFrame({ root }: { root?: GenerativeUIElement }) {
     return <JsonRenderTree registry={registry} {...(root !== undefined ? { root } : {})} />;
   };
+}
+
+export interface GenuiProviderProps extends BaseGenuiProviderProps {
+  /**
+   * Draw composed tree frames through json-render: pass your json-render registry, or `true` to
+   * derive one from `registry` ({@link toJsonRenderRegistry}). Omitted → trees render natively.
+   * An explicit `treeRenderer` wins over it.
+   */
+  jsonRender?: ComponentRegistry | true;
+}
+
+/** `GenuiProvider` from `/genui`, plus the {@link GenuiProviderProps.jsonRender} option. */
+export function GenuiProvider({ jsonRender, treeRenderer, registry, ...rest }: GenuiProviderProps) {
+  const derived = useMemo(() => {
+    if (jsonRender === undefined) return undefined;
+    return jsonRenderTree(jsonRender === true ? toJsonRenderRegistry(registry ?? {}) : jsonRender);
+  }, [jsonRender, registry]);
+  const tree = treeRenderer ?? derived;
+  return (
+    <BaseGenuiProvider
+      {...rest}
+      {...(registry !== undefined ? { registry } : {})}
+      {...(tree !== undefined ? { treeRenderer: tree } : {})}
+    />
+  );
 }

@@ -14,7 +14,8 @@
     "nestjs",
     "agent",
     "core",
-    "guardrails"
+    "guardrails",
+    "generative-ui"
   ],
   "description": "nestjs-agent core — agent loop, tool registry, governance SPIs",
   "license": "MIT",
@@ -43,6 +44,26 @@
         "types": "./dist/guardrails/index.d.cts",
         "default": "./dist/guardrails/index.cjs"
       }
+    },
+    "./genui": {
+      "import": {
+        "types": "./dist/genui/index.d.ts",
+        "default": "./dist/genui/index.js"
+      },
+      "require": {
+        "types": "./dist/genui/index.d.cts",
+        "default": "./dist/genui/index.cjs"
+      }
+    },
+    "./genui/builtins": {
+      "import": {
+        "types": "./dist/genui/builtins.d.ts",
+        "default": "./dist/genui/builtins.js"
+      },
+      "require": {
+        "types": "./dist/genui/builtins.d.cts",
+        "default": "./dist/genui/builtins.cjs"
+      }
     }
   },
   "files": [
@@ -58,6 +79,7 @@
     "@standard-schema/spec": "1.1.0"
   },
   "devDependencies": {
+    "ajv": "8.20.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "zod": "3.25.76"

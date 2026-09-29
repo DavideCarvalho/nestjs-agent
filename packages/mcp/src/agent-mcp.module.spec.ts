@@ -7,6 +7,7 @@ import {
   type RolesPolicy,
   ToolForbiddenError,
   type ToolRegistry,
+  createNoopEmitUi,
 } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -32,6 +33,7 @@ const CTX = (actor: Actor): AiToolCtx => ({
   threadId: 't-1',
   runId: 'r-1',
   requestId: 'r-1',
+  emitUi: createNoopEmitUi(),
 });
 
 const weatherTool: Tool = {

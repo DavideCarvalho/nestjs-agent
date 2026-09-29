@@ -1,4 +1,4 @@
-import type { AiToolCtx } from '@dudousxd/nestjs-agent-core';
+import { type AiToolCtx, createNoopEmitUi } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it } from 'vitest';
 import { type QueryRunner, createExecuteSqlTool } from './execute-sql.tool.js';
 import { GroupTableAccessPolicy } from './table-access.js';
@@ -21,6 +21,7 @@ function ctx(
     threadId: 'thread-1',
     runId: 'run-1',
     requestId: 'req-1',
+    emitUi: createNoopEmitUi(),
     actor: {
       id: 'actor-1',
       roles: roles ?? ['ANALYST'],

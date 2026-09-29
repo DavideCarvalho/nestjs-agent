@@ -2,7 +2,12 @@
 // deterministic fake LLM (keywordTreeLlm) and wrappers that count, fail or stall calls.
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { AiToolCtx, Passage, Retriever } from '@dudousxd/nestjs-agent-core';
+import {
+  type AiToolCtx,
+  type Passage,
+  type Retriever,
+  createNoopEmitUi,
+} from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider } from '@dudousxd/nestjs-agent-testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildDocumentTree } from './build.js';
@@ -71,6 +76,7 @@ const ctx = (tenantRef: string): AiToolCtx => ({
   threadId: 't',
   runId: 'r',
   requestId: 'q',
+  emitUi: createNoopEmitUi(),
 });
 
 describe('detectHeadings', () => {

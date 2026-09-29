@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 
-/** The `ui` frame component a composed tree is pushed under (`@dudousxd/nestjs-agent-genui`'s `GENUI_TREE_COMPONENT`). */
+/** The `ui` frame component a composed tree is pushed under (`GENUI_TREE_COMPONENT` of `@dudousxd/nestjs-agent-core/genui`). */
 export const GENUI_TREE_COMPONENT = 'genui:tree';
 
 /** One pushed component, normalized from whatever carried it (a transcript block, a `data-ui` part, a stored entry). */
@@ -48,9 +48,9 @@ type ValidationLike =
   | { ok: false; issues: GenuiIssueLike[] };
 
 /**
- * What the renderer needs from a catalog to validate props before drawing them. A
- * `@dudousxd/nestjs-agent-genui` `Catalog` satisfies it; declared structurally so this subpath does
- * not depend on that package.
+ * What the renderer needs from a catalog to validate props before drawing them. A `Catalog` from
+ * `@dudousxd/nestjs-agent-core/genui` satisfies it; declared structurally so any catalog-shaped
+ * object does too.
  */
 export interface GenuiCatalogLike {
   has(name: string): boolean;
@@ -63,6 +63,12 @@ export interface GenerativeUIOptions {
   /** Validate props against it before rendering. Components the catalog does not know render unvalidated. */
   catalog?: GenuiCatalogLike;
   resolveComponent?: ResolveComponent;
+  /**
+   * Draws a composed tree frame (`genui:tree`) whole — e.g. through json-render (see the
+   * `/genui/json-render` subpath's `GenuiProvider`). Omitted → trees render node by node through
+   * `registry`.
+   */
+  treeRenderer?: GenuiRenderer<{ root?: GenerativeUIElement }>;
 }
 
 /** Why an item did not render. */

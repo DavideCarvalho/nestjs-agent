@@ -1,3 +1,8 @@
+export {
+  type AmbientRenderUi,
+  AmbientRenderUiContext,
+  useAmbientRenderUi,
+} from './ambient-ui.js';
 export { ChatInput, type ChatInputProps } from './chat-input.js';
 export {
   type AnyToolUIPart,

@@ -1,5 +1,10 @@
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
-import type { Passage, RetrieveOptions, Retriever } from '@dudousxd/nestjs-agent-core';
+import {
+  type Passage,
+  type RetrieveOptions,
+  type Retriever,
+  createNoopEmitUi,
+} from '@dudousxd/nestjs-agent-core';
 import { FakeEmbeddingProvider, FakeReranker } from '@dudousxd/nestjs-agent-testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EmbeddingRetriever } from './embedding-retriever.js';
@@ -272,7 +277,13 @@ describe('retrieval descriptors', () => {
   });
 });
 
-const TOOL_CTX = { actor: { id: 'u1' }, threadId: 't', runId: 'r', requestId: 'r' };
+const TOOL_CTX = {
+  actor: { id: 'u1' },
+  threadId: 't',
+  runId: 'r',
+  requestId: 'r',
+  emitUi: createNoopEmitUi(),
+};
 
 describe('createRetrievalTool telemetry', () => {
   it('instruments the retrieval it wraps by default', async () => {

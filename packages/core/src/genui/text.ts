@@ -59,17 +59,17 @@ export interface CatalogTextOptions {
   /**
    * `per-component`: each component is its own tool (`ui__show_<snake>`), named in the text.
    * `tree`: one tool takes a nested `{ type, props, children }` tree; the text explains the format.
-   * Default `tree`.
+   * `show`: one tool takes `{ component, props }` (the generic show tool). Default `tree`.
    */
-  mode?: 'per-component' | 'tree';
+  mode?: 'per-component' | 'tree' | 'show';
   /** Tool-name prefix for `per-component`. Default `ui__show_`. */
   namePrefix?: string;
 }
 
 /**
  * The catalog described for a model: one entry per model-facing component with its description and
- * a compact TypeScript-like signature of its props. What a tree-mode tool puts in its description,
- * and what a host can add to a system prompt.
+ * a compact TypeScript-like signature of its props. What a tree-mode (or show) tool puts in its
+ * description, and what a host can add to a system prompt.
  */
 export function catalogToModelText(catalog: Catalog, options: CatalogTextOptions = {}): string {
   const mode = options.mode ?? 'tree';
@@ -80,6 +80,8 @@ export function catalogToModelText(catalog: Catalog, options: CatalogTextOptions
       'Only components marked "takes children" accept children; `children` is a literal JSON array, never a string.',
       'Components:',
     );
+  } else if (mode === 'show') {
+    lines.push('Pass { "component": <name>, "props": { … } } with one of these components:');
   } else {
     lines.push('Components you can show (one tool each):');
   }

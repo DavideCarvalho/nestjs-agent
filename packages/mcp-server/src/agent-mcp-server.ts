@@ -64,6 +64,19 @@ function toolContext(input: {
     threadId: `mcp:${session}`,
     runId: `mcp:${session}:${String(requestId)}`,
     requestId: `mcp:${session}:${String(requestId)}`,
+    // No conversation to push into: a tool's `ctx.emitUi` is accepted and dropped. Written out
+    // rather than taken from core so this package keeps working against the older cores it allows.
+    emitUi: noopEmitUi(`mcp:${session}:${String(requestId)}`),
+  };
+}
+
+function noopEmitUi(scope: string): AiToolCtx['emitUi'] {
+  let next = 0;
+  return async (_component, _props, options = {}) => {
+    if (options.id !== undefined) return { id: options.id };
+    const id = `${scope}:ui:${next}`;
+    next += 1;
+    return { id };
   };
 }
 

@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
-import { defineCatalog } from '@dudousxd/nestjs-agent-genui';
-import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-genui/builtins';
+import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
+import type { UIMessage } from 'ai';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GenerativeUI, GenuiTree, useGenerativeUI } from './generative-ui.js';
-import { jsonRenderTree, toJsonRenderRegistry, treeToJsonRenderSpec } from './json-render.js';
+import { MessageItem } from '../components/message-item.js';
+import { GenerativeUI, GenuiProvider, GenuiTree, useGenerativeUI } from './generative-ui.js';
+import {
+  GenuiProvider as JsonRenderGenuiProvider,
+  jsonRenderTree,
+  toJsonRenderRegistry,
+  treeToJsonRenderSpec,
+} from './json-render.js';
 import { GENUI_TREE_COMPONENT, type GenuiRegistry } from './types.js';
 
 afterEach(cleanup);
@@ -229,5 +236,114 @@ describe('json-render adapter', () => {
       />,
     );
     expect(screen.getByTestId('card').textContent).toBe('inside');
+  });
+
+  it('jsonRender: true derives the json-render registry from the provider registry', () => {
+    render(
+      <JsonRenderGenuiProvider registry={registry} jsonRender>
+        <GenerativeUI part={block(GENUI_TREE_COMPONENT, { root })} />
+      </JsonRenderGenuiProvider>,
+    );
+    expect(screen.getByTestId('card').textContent).toBe('inside');
+  });
+
+  it('jsonRender takes a json-render registry of its own', () => {
+    const own = toJsonRenderRegistry({
+      Card: ({ children }: { children?: ReactNode }) => (
+        <article data-testid="own">{children}</article>
+      ),
+      Text: ({ text }: { text: string }) => <b>{text}</b>,
+    });
+    render(
+      <JsonRenderGenuiProvider registry={registry} jsonRender={own}>
+        <GenerativeUI part={block(GENUI_TREE_COMPONENT, { root })} />
+      </JsonRenderGenuiProvider>,
+    );
+    expect(screen.getByTestId('own').textContent).toBe('inside');
+  });
+});
+
+describe('<GenuiProvider>', () => {
+  it('supplies registry, catalog and fallback to every <GenerativeUI> below it', () => {
+    render(
+      <GenuiProvider
+        registry={registry}
+        catalog={catalog}
+        fallback={(problem) => <i>{`${problem.reason}:${problem.item.component}`}</i>}
+      >
+        <GenerativeUI part={block('Callout', { text: 'ok' })} />
+        <GenerativeUI part={block('Callout', { tone: 'loud' })} />
+        <GenerativeUI part={block('Mystery', {})} />
+      </GenuiProvider>,
+    );
+    expect(screen.getByTestId('callout').textContent).toBe('ok');
+    expect(screen.getByText('invalid:Callout')).toBeTruthy();
+    expect(screen.getByText('unknown:Mystery')).toBeTruthy();
+  });
+
+  it("lets a <GenerativeUI>'s own props win", () => {
+    render(
+      <GenuiProvider registry={registry} fallback={<i>provider fallback</i>}>
+        <GenerativeUI
+          part={block('Callout', { text: 'mine' })}
+          registry={{ Callout: ({ text }: { text: string }) => <em>{`own ${text}`}</em> }}
+        />
+        <GenerativeUI part={block('Mystery', {})} fallback={<i>own fallback</i>} />
+      </GenuiProvider>,
+    );
+    expect(screen.getByText('own mine')).toBeTruthy();
+    expect(screen.getByText('own fallback')).toBeTruthy();
+    expect(screen.queryByText('provider fallback')).toBeNull();
+  });
+
+  it('renders trees through a treeRenderer instead of node by node', () => {
+    render(
+      <GenuiProvider registry={registry} treeRenderer={() => <i>whole tree</i>}>
+        <GenerativeUI
+          part={block(GENUI_TREE_COMPONENT, { root: { type: 'Text', props: { text: 'x' } } })}
+        />
+      </GenuiProvider>,
+    );
+    expect(screen.getByText('whole tree')).toBeTruthy();
+  });
+
+  it('makes MessageItem draw pushed components with no renderUi', () => {
+    const message: UIMessage = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'Before' },
+        {
+          type: 'data-ui',
+          id: 'ui-1',
+          data: { id: 'ui-1', component: 'Callout', props: { text: 'pushed' } },
+        },
+      ],
+    };
+    const { container } = render(
+      <GenuiProvider registry={registry} catalog={catalog}>
+        <MessageItem message={message} />
+      </GenuiProvider>,
+    );
+    expect(screen.getByTestId('callout').textContent).toBe('pushed');
+    expect(container.querySelector('[data-slot="ui"]')?.getAttribute('data-component')).toBe(
+      'Callout',
+    );
+    cleanup();
+    // An explicit renderUi still wins.
+    render(
+      <GenuiProvider registry={registry}>
+        <MessageItem message={message} renderUi={(ui) => <b>{`custom ${ui.component}`}</b>} />
+      </GenuiProvider>,
+    );
+    expect(screen.getByText('custom Callout')).toBeTruthy();
+  });
+
+  it('useGenerativeUI reads the provider when given no options', () => {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <GenuiProvider registry={registry}>{children}</GenuiProvider>
+    );
+    const { result } = renderHook(() => useGenerativeUI(block('Text', { text: 'x' })), { wrapper });
+    expect(result.current?.status).toBe('ready');
   });
 });
