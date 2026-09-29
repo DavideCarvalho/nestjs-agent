@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.12.0
+
+### Minor Changes
+
+- [#187](https://github.com/DavideCarvalho/nestjs-agent/pull/187) [`505702e`](https://github.com/DavideCarvalho/nestjs-agent/commit/505702e5df0b769d6cd78f76696c1bd569c11e68) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - New `openAiEmbeddings` (an `EmbeddingProvider` over any OpenAI-compatible `/v1/embeddings` — OpenAI, gateways, TEI, Ollama, vLLM) and `HttpReranker` (a `Reranker` over Cohere/Jina/Voyage/TEI-style `/rerank`), both dependency-free and throwing `HttpModelError`. `@dudousxd/nestjs-agent-testing` adds `hashedEmbeddings(dimensions)` and a `tokens: 'unicode'` option on `FakeEmbeddingProvider`.
+
 ## 0.11.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-rag",
-  "version": "0.10.3",
+  "version": "0.11.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
@@ -15,7 +15,7 @@
     "agent",
     "rag"
   ],
-  "description": "Retrieval-Augmented Generation for nestjs-agent \u2014 chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores",
+  "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
