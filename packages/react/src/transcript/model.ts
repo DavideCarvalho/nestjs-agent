@@ -11,6 +11,7 @@ import {
   isTextUIPart,
   isToolUIPart,
 } from 'ai';
+import { readReasoningMs } from '../reasoning/timing.js';
 
 /** A tool UI part on a `UIMessage` — a static `tool-*` part or the `dynamic-tool` part. */
 export type AnyToolUIPart = ToolUIPart | DynamicToolUIPart;
@@ -64,6 +65,12 @@ export interface TranscriptReasoningBlock {
   key: string;
   text: string;
   isStreaming: boolean;
+  /**
+   * How long the model thought, in ms — the backend's measurement once the run closed (live) or as
+   * persisted (reloaded). `null` while it still streams, or when nothing was recorded: pair it with
+   * `useElapsed(block.isStreaming)` for a ticking label (`block.durationMs ?? elapsed`).
+   */
+  durationMs: number | null;
   isOpen: boolean;
   toggle: (open?: boolean) => void;
 }
@@ -442,6 +449,7 @@ export function buildTranscriptBlocks(
         key,
         text: part.text,
         isStreaming,
+        durationMs: readReasoningMs(part),
         isOpen: options.isReasoningOpen(key, isStreaming),
         toggle: (open?: boolean) => options.toggleReasoning(key, open),
       });

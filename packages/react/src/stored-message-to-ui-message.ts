@@ -1,16 +1,22 @@
 import { DEFAULT_REFUSAL_REASON } from '@dudousxd/nestjs-agent-core';
 import type { StoredMessage, ToolResult } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
+import { reasoningDurationMetadata } from './reasoning/timing.js';
 
 /**
  * Convert a persisted `StoredMessage` (the agent-lib's on-disk shape) into an AI SDK v7
  * `UIMessage` so a loaded thread can seed `useChat`'s `initialMessages` / `messages`.
  *
  * The lib stores a message as flat `content` text plus `toolCalls`/`toolResults` arrays; the SDK
- * renders from `parts`. This maps:
+ * renders from `parts`. This maps, in this order:
+ *   - `reasoning`          → a `reasoning` part (state `done`) BEFORE the text, as it streamed; its
+ *                            `reasoningMs` rides `providerMetadata.agent.reasoningMs`, where the
+ *                            live transport stamps it too.
  *   - `content`            → a single `text` part (skipped when empty).
  *   - each `attachment`    → a `file` part (image/PDF) so the user bubble re-renders its
  *                            thumbnails on a reloaded thread.
+ *   - each `ui` component  → a `data-ui` part keyed by the component id — the same part a live
+ *                            `ui` stream frame becomes.
  *   - each `toolCall`      → a `tool-<name>` part, pairing its `toolResult` (matched by id):
  *       - a result found   → `output-available` state, carrying `output`.
  *       - no result found  → `input-available` state (the call never finished, e.g. the run was
@@ -53,6 +59,17 @@ function refusalReason(result: ToolResult): string | undefined {
 export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
   const parts: UIMessage['parts'] = [];
 
+  if (message.reasoning) {
+    parts.push({
+      type: 'reasoning',
+      text: message.reasoning,
+      state: 'done',
+      ...(message.reasoningMs !== undefined
+        ? { providerMetadata: reasoningDurationMetadata(message.reasoningMs) }
+        : {}),
+    });
+  }
+
   if (message.content) {
     parts.push({ type: 'text', text: message.content });
   }
@@ -63,6 +80,19 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
       mediaType: attachment.contentType,
       filename: attachment.name,
       url: attachment.url,
+    });
+  }
+
+  for (const component of message.ui ?? []) {
+    parts.push({
+      type: 'data-ui',
+      id: component.id,
+      data: {
+        id: component.id,
+        component: component.component,
+        props: component.props,
+        ...(component.version !== undefined ? { version: component.version } : {}),
+      },
     });
   }
 

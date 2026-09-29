@@ -29,6 +29,17 @@ export class AppModule {}
 The package ships the entities (`EntitySchema`) and `MikroOrmAgentStore`. Run your normal MikroORM
 migrations to create the tables, or use the exported schema helper for a quick start.
 
+Upgrading from a release before reasoning was persisted: `agent_message` gained three nullable
+columns — `reasoning` (text), `reasoning_ms` (integer) and `ui` (json). `ensureAgentSchema` adds them
+on boot; on your own migrations, `migration:create` picks them up from the entity diff, or write them
+by hand:
+
+```sql
+alter table agent_message add column reasoning text null;
+alter table agent_message add column reasoning_ms integer null;
+alter table agent_message add column ui json null;
+```
+
 ## The read a turn makes
 
 The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's

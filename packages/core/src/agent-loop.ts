@@ -103,6 +103,7 @@ import {
 import type { ToolRegistry } from './tool-registry.js';
 import { invokeWithTransientRetry, resolveToolTransientRetryNumbers } from './tool-retry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
+import { observeTurnFrames, withTurnFrames } from './turn-frames.js';
 import type {
   AgentRunInput,
   Decision,
@@ -2519,17 +2520,23 @@ export async function runAgentLoop<TOutput = unknown>(
               })
             : undefined;
         const buffer = gateMode === 'whole' ? createFrameBuffer() : undefined;
+        // Reasoning and pushed UI are read off the frames INSIDE the checkpoint, so they are
+        // journaled with the turn and a replay persists the same thinking instead of none.
+        const frames = observeTurnFrames(incremental?.writer ?? buffer?.writer ?? writer);
         // Stamped from THIS process's registry, which is the one that built `tools` above — and
         // stamped inside the checkpoint, so the kinds are journaled with the calls they describe
         // rather than re-derived by whatever process replays this turn.
         const result = stampToolKinds(
-          await traceLlmTurn(hooks.runId, i, () =>
-            deps.model.runTurn({
-              system: prompt.system,
-              messages: prompt.messages,
-              tools,
-              sink: incremental?.writer ?? buffer?.writer ?? writer,
-            }),
+          withTurnFrames(
+            await traceLlmTurn(hooks.runId, i, () =>
+              deps.model.runTurn({
+                system: prompt.system,
+                messages: prompt.messages,
+                tools,
+                sink: frames.writer,
+              }),
+            ),
+            frames.summary(),
           ),
           deps,
         );
@@ -2746,6 +2753,9 @@ export async function runAgentLoop<TOutput = unknown>(
         runId: hooks.runId,
         usage: { ...turn.usage, costUsd },
         ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(turn.reasoning !== undefined ? { reasoning: turn.reasoning } : {}),
+        ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+        ...(turn.ui !== undefined && turn.ui.length > 0 ? { ui: turn.ui } : {}),
         ...(messageCalls.length > 0 ? { toolCalls: messageCalls } : {}),
         ...(syntheticResults.length > 0 ? { toolResults: syntheticResults } : {}),
         ...(followUps !== undefined ? { followUps } : {}),
@@ -2799,7 +2809,14 @@ export async function runAgentLoop<TOutput = unknown>(
 
     if (isFinalTurn) {
       await hooks.step(`stream:step-finish:${i}`, async () => {
-        await writer.write(encodeStreamEvent({ kind: 'step-finish', usage: turn.usage, costUsd }));
+        await writer.write(
+          encodeStreamEvent({
+            kind: 'step-finish',
+            usage: turn.usage,
+            costUsd,
+            ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+          }),
+        );
       });
       break;
     }
@@ -2889,7 +2906,14 @@ export async function runAgentLoop<TOutput = unknown>(
     });
 
     await hooks.step(`stream:step-finish:${i}`, async () => {
-      await writer.write(encodeStreamEvent({ kind: 'step-finish', usage: turn.usage, costUsd }));
+      await writer.write(
+        encodeStreamEvent({
+          kind: 'step-finish',
+          usage: turn.usage,
+          costUsd,
+          ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+        }),
+      );
     });
   }
 

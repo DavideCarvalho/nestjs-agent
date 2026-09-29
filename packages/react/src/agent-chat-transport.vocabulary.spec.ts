@@ -174,4 +174,29 @@ describe('AgentChatTransport — generative UI, title, approval, nesting', () =>
     const chunks = await chunksFor([{ kind: 'cancelled' }]);
     expect(chunks).toContainEqual({ type: 'data-cancelled', data: {}, transient: true });
   });
+
+  it("stamps the backend's thinking time on the reasoning part's end", async () => {
+    const chunks = await chunksFor([
+      { kind: 'step-start' },
+      { kind: 'reasoning', text: 'hmm' },
+      { kind: 'step-finish', reasoningMs: 4_200 },
+    ]);
+    expect(chunks).toContainEqual({
+      type: 'reasoning-end',
+      id: 'rsn-1',
+      providerMetadata: { agent: { reasoningMs: 4_200 } },
+    });
+  });
+
+  it('falls back to the time it watched the reasoning stream when the backend reports none', async () => {
+    const chunks = await chunksFor([
+      { kind: 'step-start' },
+      { kind: 'reasoning', text: 'hmm' },
+      { kind: 'step-finish' },
+    ]);
+    const end = chunks.find((chunk) => chunk.type === 'reasoning-end') as {
+      providerMetadata?: { agent?: { reasoningMs?: unknown } };
+    };
+    expect(typeof end.providerMetadata?.agent?.reasoningMs).toBe('number');
+  });
 });

@@ -35,6 +35,23 @@ const RUN_BEFORE_PARENT_WAS_RECORDED = `create table agent_run (
   constraint agent_run_thread_id_foreign foreign key (thread_id) references agent_thread (id) on delete cascade
 )`;
 
+/** `agent_message` as it stood before reasoning and pushed UI were persisted. */
+const MESSAGE_BEFORE_REASONING_WAS_RECORDED = `create table agent_message (
+  id text not null primary key,
+  thread_id text not null,
+  role text not null,
+  content text not null,
+  tool_calls json null,
+  tool_results json null,
+  attachments json null,
+  follow_ups json null,
+  usage json null,
+  agent_name text null,
+  run_id text null,
+  created_at datetime not null,
+  constraint agent_message_thread_id_foreign foreign key (thread_id) references agent_thread (id) on delete cascade
+)`;
+
 /** A host table the store does not own, missing a column its entity declares. */
 class HostNote {
   id!: string;
@@ -173,6 +190,48 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
       expect(await columnsOf(instance, 'agent_run')).toContain('parent_run_id');
       const rows: { id: string }[] = await connection.execute('select id from agent_run');
       expect(rows.map((row) => row.id)).toEqual(['r1']);
+    } finally {
+      await instance.close(true);
+    }
+  });
+
+  it('adds the reasoning and ui columns to an existing agent_message and keeps its rows', async () => {
+    const instance = await orm();
+    try {
+      const connection = instance.em.getConnection();
+      for (const sql of await agentSchemaSql(instance, { ifNotExists: false })) {
+        await connection.execute(sql);
+      }
+      await connection.execute('drop table agent_message');
+      await connection.execute(MESSAGE_BEFORE_REASONING_WAS_RECORDED);
+      await connection.execute(
+        "insert into agent_thread (id, actor_ref, title, transient, created_at, updated_at) values ('t1', 'a1', 'Chat', 0, '2026-01-01', '2026-01-01')",
+      );
+      await connection.execute(
+        "insert into agent_message (id, thread_id, role, content, created_at) values ('m1', 't1', 'user', 'old row', '2026-01-01')",
+      );
+
+      await ensureAgentSchema(instance);
+
+      expect(await columnsOf(instance, 'agent_message')).toEqual(
+        expect.arrayContaining(['reasoning', 'reasoning_ms', 'ui']),
+      );
+      const store = new MikroOrmAgentStore(instance.em);
+      await store.appendMessage({
+        threadId: 't1',
+        role: 'assistant',
+        content: 'new row',
+        reasoning: 'thinking',
+        reasoningMs: 900,
+        ui: [{ id: 'u', component: 'stat', props: {} }],
+      });
+      const messages = (await store.getThread('t1'))?.messages ?? [];
+      expect(messages.map((message) => message.content).sort()).toEqual(['new row', 'old row']);
+      expect(messages.find((message) => message.content === 'new row')).toMatchObject({
+        reasoning: 'thinking',
+        reasoningMs: 900,
+        ui: [{ id: 'u', component: 'stat', props: {} }],
+      });
     } finally {
       await instance.close(true);
     }

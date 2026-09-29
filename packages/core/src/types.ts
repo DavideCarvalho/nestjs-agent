@@ -1,6 +1,7 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
+import type { AgentUiComponent } from './stream-events.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
@@ -440,6 +441,19 @@ export interface StoredMessage {
   usage?: MessageUsage;
   /** The run (turn) that produced this message; absent on a row written before this was recorded. */
   runId?: string;
+  /**
+   * The model's thinking for this step, as it streamed (`reasoning` frames), so a reloaded thread
+   * shows it where the live one did. Absent when the model produced none, or on a row written
+   * before this was recorded.
+   */
+  reasoning?: string;
+  /** How long the model spent thinking in this step, in ms — what a "Thought for 4s" label reads. */
+  reasoningMs?: number;
+  /**
+   * Components the server pushed into this step (`ui` frames), in first-seen order with the last
+   * props for each `id` — a reloaded thread replays them as `data-ui` parts.
+   */
+  ui?: AgentUiComponent[];
   createdAt: string;
 }
 

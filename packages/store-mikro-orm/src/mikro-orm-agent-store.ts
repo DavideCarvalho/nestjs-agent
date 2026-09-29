@@ -271,6 +271,9 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
           // turn produced this text gets the truthful answer; the run's own thread is still the
           // original, so a run-scoped read never picks the fork's rows up.
           ...(message.runId != null ? { runId: message.runId } : {}),
+          ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
+          ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
+          ...(message.ui != null ? { ui: message.ui } : {}),
         }),
       );
     }
@@ -485,6 +488,9 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
+      ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+      ...(input.reasoningMs !== undefined ? { reasoningMs: input.reasoningMs } : {}),
+      ...(input.ui !== undefined ? { ui: input.ui } : {}),
     });
     thread.updatedAt = now;
     em.persist(message);
@@ -667,6 +673,9 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
       ...(message.runId != null ? { runId: message.runId } : {}),
+      ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
+      ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
+      ...(message.ui != null ? { ui: message.ui } : {}),
     };
   }
 }
