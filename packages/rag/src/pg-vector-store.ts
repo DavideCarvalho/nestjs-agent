@@ -112,7 +112,7 @@ const NUL_BYTE = String.fromCharCode(0);
  * `Object.fromEntries` rather than assignment into a fresh `{}`, so a metadata key literally named
  * `__proto__` becomes an ordinary own property instead of silently repointing the result's prototype.
  */
-function stripNulBytes<T>(value: T): T {
+export function stripNulBytes<T>(value: T): T {
   if (typeof value === 'string') {
     return (value.includes(NUL_BYTE) ? value.split(NUL_BYTE).join('') : value) as unknown as T;
   }
@@ -720,7 +720,10 @@ function toPassage(row: PgRow): Passage {
  * the scalar/array values end up as query bindings, and a caller-supplied filter is exactly as
  * capable of carrying a NUL byte as the text it is filtering.
  */
-function buildWhere(filter: Record<string, unknown> | undefined, params: unknown[]): string[] {
+export function buildWhere(
+  filter: Record<string, unknown> | undefined,
+  params: unknown[],
+): string[] {
   if (filter === undefined || Object.keys(filter).length === 0) {
     return [];
   }

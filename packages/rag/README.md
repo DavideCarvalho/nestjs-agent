@@ -439,6 +439,90 @@ Had `PgVectorStore` simply grown `searchText`, every `isLexicalVectorStore(store
 started using it against an unindexed table on upgrade. Constructing `PgLexicalVectorStore` is the
 opt-in; the index is a migration you run and watch (`schemaStatements()` prints it).
 
+## Tree navigation retrieval (PageIndex-style)
+
+Chunk search ranks passages; on a **long structured document** (a regulation, an RFP, a contract, a
+10-K, a manual) it usually finds the right document and then loses the right page among hundreds of
+look-alike clause or financial-statement chunks. Tree navigation ("vectorless", reasoning-based, the
+method of [PageIndex](https://github.com/VectifyAI/PageIndex)) builds a table of contents per long
+document at ingestion — sections with page ranges and summaries — and at query time an LLM reads that
+outline and walks to the sections that answer, returning their text with the path it took.
+
+Measured on Flippy (149 questions, same answering model): on long GovCon regulations it beat hybrid
+dense+lexical search by **+24 points**, on FinanceBench 10-Ks by **+30**, and gave nothing on short
+wiki notes — at seconds of latency and LLM spend per query instead of 0.3 s. Hence the recommended
+shape: **hybrid first, tree navigation only inside the top long documents**.
+
+```ts
+import {
+  PgDocumentTreeStore, TreeNavigationRetriever, TwoStageRetriever, HybridRetriever,
+  createNavigateDocumentTool, createRetrievalTool, indexDocumentTree, openAiChatTreeLlm,
+} from '@dudousxd/nestjs-agent-rag';
+
+const trees = new PgDocumentTreeStore(db); // pg Pool, Drizzle db, postgres.js sql — like PgVectorStore
+await trees.ensureSchema();                // or copy trees.schemaStatements() into a migration
+const llm = openAiChatTreeLlm({ model: 'gpt-4.1-mini', apiKey }); // or treeLlmFromModelProvider(provider)
+
+// At upload, next to chunk + embed: only long documents get a tree (default ≥ 20 pages or ≥ 60k chars).
+await indexDocumentTree(
+  { pages, title: file.name },              // or { sections: [{ title, level, text, page }] }, + outline
+  { store: trees, documentId: file.id, llm, metadata: { tenant }, source: file.name },
+);
+
+const navigator = new TreeNavigationRetriever({ store: trees, llm });
+// Hybrid picks documents; long ones among the top 3 get navigated (at most 2), short ones keep chunks.
+const retriever = new TwoStageRetriever(hybrid, navigator, { navigateDocuments: 2 });
+// …or let the agent decide: search first, then open a long document.
+providers: [
+  provideAgentTool(createRetrievalTool(hybrid)),
+  provideAgentTool(createNavigateDocumentTool(navigator, { filter: (ctx) => ({ tenant: ctx.actor.tenantRef }) })),
+];
+```
+
+**Building a tree** (`buildDocumentTree` / `indexDocumentTree`) takes the cheapest structure that works
+and never loops:
+
+1. the document's own `outline` (PDF bookmarks), when you pass one;
+2. section titles/levels (`sections` input) or headings found in the text — markdown headers and the
+   keyword/numbered headings of regulations and filings (`PART 52`, `Subpart 19.8`, `Item 7.`,
+   `52.236–5 Material and Workmanship.`), with running page headers and table-of-contents listings
+   dropped;
+3. only when there is no usable structure, the LLM proposes the sections window by window — and only
+   if the whole document fits `maxStructureCalls`;
+4. otherwise, or on any failure, page groups (`Pages 21–25: <first line>`), grouped again when wide.
+
+Summaries go top-down (top levels matter most for navigation) until the **hard per-document budget**
+runs out (`budget: { maxCalls, maxInputTokens, maxOutputTokens, timeoutMs, callTimeoutMs }`, default 60
+calls / 400k input tokens / 5 min); the rest summarize themselves with their opening text. Every call
+is checked against the budget before it is made and nothing is retried, so a document the LLM cannot
+structure costs a bounded amount and still gets a usable tree (`tree.stats` records calls, tokens and
+`fallbackReason`). Builds are deterministic for a deterministic model and fingerprinted: re-indexing an
+unchanged document costs one store read and no LLM call, a changed one re-summarizes only the sections
+whose text changed (`reusedSummaries`), and `cachedTreeLlm(llm, cache)` makes repeated prompts free.
+
+**Navigating** (`TreeNavigationRetriever`): a tree whose outline fits `singlePassMaxChars` (default
+40k chars) is navigated in one call that sees the whole outline; a larger one is walked level by level
+(a beam of `beamWidth` nodes, at most `maxSteps` levels), the model choosing to `expand` or `read` each
+candidate. Each navigation has its own hard budget (default 6 calls / 60k input tokens / 60 s); running
+out returns what was chosen so far. `navigate()` / `search()` return the audit trail with the passages
+— every step's candidates, choices and stated reasoning, and each node's path — and every passage
+carries `documentId`, `nodeId`, `title`, `pageStart`/`pageEnd` and `path` in its metadata. As a plain
+`Retriever` it navigates every tree passing `filter` (the LLM picks `maxDocuments` of them from their
+descriptions when there are more).
+
+**Access control.** `DocumentTreeStore` filters (`get`, `getMany`, `list`) have exactly the vector
+stores' semantics — scalar equality, array match-any, empty-array deny — and the navigator, the
+two-stage retriever and the tool pass the caller's filter to every tree read.
+
+**LLM.** `TreeLlm` is one prompt in, one text reply out: `openAiChatTreeLlm` (any OpenAI-compatible
+`/chat/completions`; pass `body: { enable_thinking: false }` or similar to keep a reasoning model from
+spending the reply budget on thoughts), `treeLlmFromModelProvider` (the agent's `ModelProvider`), or
+your own function. Each request also carries its `task` as data, which is what `keywordTreeLlm()` — a
+deterministic, model-free stand-in for tests — answers from.
+
+PageIndex (© 2025 Vectify AI, MIT) is the method and the prompts' origin; this is an independent
+TypeScript implementation. See [NOTICE](./NOTICE).
+
 ## API
 
 - `chunkText(text, { chunkSize?, overlap?, separator? })` — overlapping, boundary-aware chunks;
@@ -468,6 +552,20 @@ opt-in; the index is a migration you run and watch (`schemaStatements()` prints 
   `/embeddings`. A batch the server refuses as too large (413, or TEI's `batch size N > maximum
   allowed batch size M`; see `isBatchTooLarge`) is split in halves and retried, and later requests to
   that server and model use the size that worked; each split is reported through `onWarn`.
+- `buildDocumentTree(input, { documentId, llm?, maxDepth?, budget?, summaries?, describe?,
+  detectHeadings?, llmStructure?, maxStructureCalls?, groupSize?, maxLeafUnits?, previous?, metadata?,
+  source? })` — a document's navigation tree (`{ tree, units, unchanged }`). `indexDocumentTree(input,
+  { store, minUnits?, minChars?, …build options })` builds, stores and skips short/unchanged documents.
+- `DocumentTreeStore` (SPI), `MemoryDocumentTreeStore`, `PgDocumentTreeStore(client, { table?,
+  unitsTable? })` with `schemaStatements()` / `ensureSchema()`.
+- `TreeNavigationRetriever({ store, llm, singlePassMaxChars?, beamWidth?, maxSteps?, maxNodes?, budget?,
+  maxPassageChars?, maxContextChars?, maxDocuments?, concurrency? })` — `retrieve`, `search` (with the
+  trail), `navigate(query, documentIds, { filter?, budget? })`.
+- `TwoStageRetriever(firstStage, navigator, { fetchTopK?, considerDocuments?, navigateDocuments?,
+  budget?, keepFirstStageChunks?, documentIdOf?, onNavigation? })`.
+- `createNavigateDocumentTool(navigator, { name?, description?, filter?, budget? })` — the
+  `navigate_document({ documentId, question })` tool.
+- `openAiChatTreeLlm`, `treeLlmFromModelProvider`, `cachedTreeLlm`, `keywordTreeLlm` — `TreeLlm`s.
 - `HttpReranker({ url, model?, apiKey?, format?, headers?, timeoutMs?, fetch? })` — a `Reranker` over
   a Cohere/Jina/Voyage/TEI-style `/rerank` endpoint.
 
