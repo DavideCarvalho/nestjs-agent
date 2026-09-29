@@ -18,6 +18,12 @@ export type { MetadataPatch } from './metadata-patch.js';
 export { applyMetadataPatch } from './metadata-patch.js';
 export { MemoryVectorStore } from './memory-vector-store.js';
 export {
+  DEFAULT_STOP_WORDS,
+  anyTermTsquery,
+  hasSearchSyntax,
+  keywordTerms,
+} from './lexical-query.js';
+export {
   PgLexicalVectorStore,
   PgVectorStore,
   type PgFullTextOptions,

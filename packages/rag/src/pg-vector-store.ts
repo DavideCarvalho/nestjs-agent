@@ -1,5 +1,11 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing } from './filter.js';
+import {
+  DEFAULT_STOP_WORDS,
+  anyTermTsquery,
+  hasSearchSyntax,
+  keywordTerms,
+} from './lexical-query.js';
 import { type MetadataPatch, isEmptyMetadataPatch, splitMetadataPatch } from './metadata-patch.js';
 import { type PgClient, type PgClientSource, toPgClient } from './pg-client.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
@@ -33,11 +39,22 @@ export interface PgFullTextOptions {
    */
   column?: string;
   /**
-   * When the question matches nothing as a whole (`websearch_to_tsquery`: every word must appear),
-   * retry with any word (`w1 | w2 | …`, at most 24 distinct words) so a long natural-language
-   * question still finds the chunks sharing its rare terms. Default `true`.
+   * Search natural-language questions by their meaningful terms (default `true`): the question's
+   * stop words are dropped (see {@link PgFullTextOptions.stopWords}) and rows holding any remaining
+   * term (at most 24) are ranked by the sum of the matched terms' IDF among those rows (BM25
+   * without term frequencies), `ts_rank_cd` breaking ties; a question with explicit search syntax
+   * (a quoted phrase, `-word`) is first tried as written. `false`: only `websearch_to_tsquery` on
+   * the query as written (every word must appear).
    */
   anyTermFallback?: boolean;
+  /**
+   * Stop word lists dropped from questions, by language; only the list(s) with the most words in
+   * the question apply, so a word that is a stop word in another language stays a term. Default
+   * {@link DEFAULT_STOP_WORDS} (English, Portuguese, Spanish: Postgres' Snowball lists). `false`
+   * keeps every word. With a language `config` (`english`) Postgres drops that language's stop
+   * words as well.
+   */
+  stopWords?: Readonly<Record<string, ReadonlySet<string>>> | false;
 }
 
 export interface PgVectorStoreOptions {
@@ -537,9 +554,10 @@ export class PgVectorStore implements VectorStore {
  * `LexicalRetriever` and `HybridRetriever` work on Postgres exactly as on RediSearch — the dense leg
  * over pgvector, the lexical leg over a `tsvector`, both on the same rows and ids.
  *
- * Ranking is `ts_rank_cd` (cover density). The query is parsed with `websearch_to_tsquery` (quoted
- * phrases, `-exclusions`, `or`), which requires every word; when that matches nothing it retries
- * with any word (see {@link PgFullTextOptions.anyTermFallback}).
+ * A question is searched by its meaningful terms: its stop words dropped, rows holding any remaining
+ * term ranked by IDF-weighted coverage, `ts_rank_cd` (cover density) breaking ties (see
+ * {@link PgFullTextOptions.anyTermFallback}); explicit syntax (quoted phrases, `-exclusions`) goes
+ * through `websearch_to_tsquery` first.
  *
  * The `tsvector` is either a column you own ({@link PgFullTextOptions.column}) or the expression
  * `to_tsvector(config, text)`, for which {@link PgVectorStore.schemaStatements} adds a GIN
@@ -550,6 +568,7 @@ export class PgLexicalVectorStore extends PgVectorStore implements LexicalVector
   private readonly tsConfig: string;
   private readonly tsColumn: string | undefined;
   private readonly anyTermFallback: boolean;
+  private readonly stopWords: Readonly<Record<string, ReadonlySet<string>>>;
 
   constructor(
     client: PgClientSource,
@@ -567,6 +586,8 @@ export class PgLexicalVectorStore extends PgVectorStore implements LexicalVector
     this.tsConfig = config;
     this.tsColumn = column;
     this.anyTermFallback = options.fullText?.anyTermFallback ?? true;
+    const stopWords = options.fullText?.stopWords;
+    this.stopWords = stopWords === false ? {} : (stopWords ?? DEFAULT_STOP_WORDS);
   }
 
   override schemaStatements(): string[] {
@@ -584,31 +605,19 @@ export class PgLexicalVectorStore extends PgVectorStore implements LexicalVector
     if (filterMatchesNothing(options.filter) || query.trim() === '') {
       return [];
     }
-    const all = await this.runTextSearch(
-      `websearch_to_tsquery('${this.tsConfig}', $1)`,
-      query,
-      options,
-    );
-    if (all.length > 0 || !this.anyTermFallback) {
-      return all;
+    if (!this.anyTermFallback || hasSearchSyntax(query)) {
+      const strict = await this.runTextSearch(query, options);
+      if (strict.length > 0 || !this.anyTermFallback) {
+        return strict;
+      }
     }
-    const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? [])].slice(0, 24);
-    if (terms.length < 2) {
-      return all;
-    }
-    // Terms are letters/digits only, so quoting each one is enough to make it a literal lexeme.
-    return this.runTextSearch(
-      `to_tsquery('${this.tsConfig}', $1)`,
-      terms.map((term) => `'${term}'`).join(' | '),
-      options,
-    );
+    const terms = keywordTerms(query, 24, this.stopWords);
+    return terms.length === 0 ? [] : this.runRankedTermSearch(terms, options);
   }
 
-  private async runTextSearch(
-    tsquery: string,
-    query: string,
-    options: VectorSearchOptions,
-  ): Promise<Passage[]> {
+  /** `websearch_to_tsquery` on the query as written: every word, quoted phrases, `-exclusions`. */
+  private async runTextSearch(query: string, options: VectorSearchOptions): Promise<Passage[]> {
+    const tsquery = `websearch_to_tsquery('${this.tsConfig}', $1)`;
     // $1 = query, $2 = topK; metadata-filter params start at $3.
     const params: unknown[] = [query, options.topK];
     const conditions = [
@@ -620,6 +629,52 @@ export class PgLexicalVectorStore extends PgVectorStore implements LexicalVector
        FROM ${this.table}
        WHERE ${conditions.join(' AND ')}
        ORDER BY score DESC, id
+       LIMIT $2`,
+      params,
+    );
+    return rows.map(toPassage);
+  }
+
+  /**
+   * Rows holding any of `terms`, ranked by the sum of the matched terms' IDF among those rows,
+   * `ln(1 + (N - df + 0.5) / (df + 0.5))`, then `ts_rank_cd`. Each (row, term) match is evaluated
+   * once, and `ts_rank_cd` only for the rows ranked within `topK` (ties included): a question full
+   * of common words can match most of the table.
+   */
+  private async runRankedTermSearch(
+    terms: string[],
+    options: VectorSearchOptions,
+  ): Promise<Passage[]> {
+    const any = `to_tsquery('${this.tsConfig}', $1)`;
+    // $1 = any-term tsquery, $2 = topK, $3 = terms; metadata-filter params start at $4.
+    // Terms are letters/digits only, so quoting each one is enough to make it a literal lexeme.
+    const params: unknown[] = [anyTermTsquery(terms), options.topK, terms];
+    const conditions = [
+      `${this.tsvector()} @@ ${any}`,
+      ...this.whereConditions(options.filter, params),
+    ];
+    const rows = await this.client.query<PgRow>(
+      `WITH __terms AS (
+         SELECT DISTINCT to_tsquery('${this.tsConfig}', quote_literal(t)) AS q
+         FROM unnest($3::text[]) AS t
+       ), __cand AS MATERIALIZED (
+         SELECT id, text, source, metadata, ${this.tsvector()} AS __tsv
+         FROM ${this.table}
+         WHERE ${conditions.join(' AND ')}
+       ), __hits AS MATERIALIZED (
+         SELECT __cand.id AS __id, __terms.q FROM __cand JOIN __terms ON __cand.__tsv @@ __terms.q
+       ), __idf AS (
+         SELECT q, ln(1 + ((SELECT count(*) FROM __cand) - count(*) + 0.5) / (count(*) + 0.5)) AS w
+         FROM __hits GROUP BY q
+       ), __scored AS (
+         SELECT __hits.__id, sum(__idf.w) AS s, rank() OVER (ORDER BY sum(__idf.w) DESC) AS r
+         FROM __hits JOIN __idf USING (q) GROUP BY __hits.__id
+       )
+       SELECT __cand.id, __cand.text, __cand.source, __cand.metadata,
+              __scored.s + ts_rank_cd(__cand.__tsv, ${any}, 32) AS score
+       FROM __scored JOIN __cand ON __cand.id = __scored.__id
+       WHERE __scored.r <= $2
+       ORDER BY __scored.s DESC, ts_rank_cd(__cand.__tsv, ${any}, 32) DESC, __cand.id
        LIMIT $2`,
       params,
     );

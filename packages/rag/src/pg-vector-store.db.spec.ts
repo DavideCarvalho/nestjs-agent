@@ -431,6 +431,38 @@ describe('PgLexicalVectorStore (real Postgres full-text search)', () => {
     expect(hits.map((hit) => hit.id)).toContain('warranty#0');
   });
 
+  it("ranks the question's rare terms above its stop words", async () => {
+    await lexical.upsert([
+      {
+        id: 'noise#0',
+        text: 'The claims of the staff are in the office of the company, which is at the end of the road, and the time of the day is on the board.',
+        embedding: [],
+        metadata: { tenant: 't3' },
+      },
+      {
+        id: 'gearbox#0',
+        text: 'Warranty claims for turbine gearboxes go to the Denver depot.',
+        embedding: [],
+        metadata: { tenant: 't3' },
+      },
+      {
+        id: 'expense#0',
+        text: 'Expense claims are due by the 5th; claims without receipts are refused.',
+        embedding: [],
+        metadata: { tenant: 't3' },
+      },
+    ]);
+    const ids = async (query: string) =>
+      (await lexical.searchText(query, { topK: 5, filter: { tenant: 't3' } })).map((hit) => hit.id);
+    // No row has every word; "the/of/which" used to rank the noise row first.
+    expect((await ids('Which depot handles the warranty claims of the gearboxes?'))[0]).toBe(
+      'gearbox#0',
+    );
+    // "claims" is in three rows, "gearboxes" in one: the rare term decides.
+    expect((await ids('claims gearboxes'))[0]).toBe('gearbox#0');
+    expect(await ids('"expense claims" -gearboxes')).toEqual(['expense#0']);
+  });
+
   it('fuses with the dense leg in a HybridRetriever', async () => {
     const embedder = { embed: async (texts: string[]) => texts.map(() => [1, 0, 0]) };
     const retriever = new HybridRetriever([
