@@ -10,6 +10,7 @@ import {
   type RenderTextFn,
   type RenderToolGroupFn,
   type RenderToolPartFn,
+  type RenderUiFn,
 } from './message-item.js';
 
 export type { ChatStatus } from '../transcript/model.js';
@@ -36,6 +37,8 @@ export interface MessageListProps {
   renderReasoning?: RenderReasoningFn;
   /** Draw a message's files yourself. Omitted → images inline, everything else a link. */
   renderFiles?: RenderFilesFn;
+  /** Draw a server-pushed component (a `ui` stream frame). Omitted → not drawn. */
+  renderUi?: RenderUiFn;
   reasoningLabel?: React.ReactNode;
   /** Extra content for one message's action row — e.g. a badge naming which agent answered. */
   getMeta?: (message: UIMessage) => React.ReactNode;
@@ -80,6 +83,7 @@ export function MessageList({
   renderText,
   renderReasoning,
   renderFiles,
+  renderUi,
   reasoningLabel,
   getMeta,
   onFork,
@@ -120,6 +124,7 @@ export function MessageList({
     ...(renderText ? { renderText } : {}),
     ...(renderReasoning ? { renderReasoning } : {}),
     ...(renderFiles ? { renderFiles } : {}),
+    ...(renderUi ? { renderUi } : {}),
     ...(reasoningLabel !== undefined ? { reasoningLabel } : {}),
     ...(classNames?.message ? { classNames: classNames.message } : {}),
   };

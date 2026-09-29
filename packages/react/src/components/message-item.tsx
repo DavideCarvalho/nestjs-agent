@@ -5,6 +5,7 @@ import type {
   MessageUsageInfo,
   TranscriptBlock,
   TranscriptFile,
+  TranscriptUiBlock,
 } from '../transcript/model.js';
 import { type TranscriptItem, useTranscriptItem } from '../transcript/use-chat-transcript.js';
 
@@ -21,6 +22,13 @@ export type RenderTextFn = (text: string, ctx: { isStreaming: boolean }) => Reac
 
 /** Render a run of files — attachments on a user turn, or files the model produced. */
 export type RenderFilesFn = (files: TranscriptFile[]) => React.ReactNode;
+
+/**
+ * Render a component the server pushed into the message — look `block.component` up in your own
+ * registry. Omitted → pushed components are not drawn (there is no sensible default for an app's
+ * own component).
+ */
+export type RenderUiFn = (block: TranscriptUiBlock) => React.ReactNode;
 
 /** Render the body of a reasoning run; the disclosure toggle around it stays this component's. */
 export type RenderReasoningFn = (
@@ -56,6 +64,8 @@ interface MessageRenderSlots {
   renderReasoning?: RenderReasoningFn;
   /** Draw files yourself — a gallery, a viewer. Omitted → images inline, everything else a link. */
   renderFiles?: RenderFilesFn;
+  /** Draw a server-pushed component (a `ui` stream frame). Omitted → not drawn. */
+  renderUi?: RenderUiFn;
   /**
    * Extra content for the action row, after the built-in affordances and before usage — a badge
    * naming which agent answered, a status pill. Rendered for every message that has an action row.
@@ -218,6 +228,14 @@ function renderBlocks(item: TranscriptItem, slots: MessageRenderSlots): React.Re
     }
     if (block.kind === 'tools') {
       nodes.push(...renderToolBlock(item, block, slots));
+      continue;
+    }
+    if (block.kind === 'ui' && slots.renderUi) {
+      nodes.push(
+        <div key={block.key} data-slot="ui" data-component={block.component}>
+          {slots.renderUi(block)}
+        </div>,
+      );
     }
   }
   return nodes;
