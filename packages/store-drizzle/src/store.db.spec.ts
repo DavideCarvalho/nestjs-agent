@@ -324,6 +324,45 @@ describe('DrizzleAgentStore — a turn a client reads back', () => {
   });
 });
 
+describe('DrizzleAgentStore — feedback on a message', () => {
+  it('sets, replaces and clears a rating, resolves the message thread, and leaves forks unrated', async () => {
+    const thread = await store.createThread({ actor: { id: 'rater' } });
+    const answer = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'answer',
+    });
+    expect(await store.threadOfMessage(answer.id)).toBe(thread.id);
+    expect(await store.threadOfMessage('missing')).toBeNull();
+
+    await store.setMessageFeedback(answer.id, {
+      value: 'down',
+      comment: 'wrong total',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+    expect((await store.getThread(thread.id))?.messages[0]?.feedback).toEqual({
+      value: 'down',
+      comment: 'wrong total',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+
+    await store.setMessageFeedback(answer.id, {
+      value: 'up',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    });
+    expect((await store.getThread(thread.id))?.messages[0]?.feedback).toEqual({
+      value: 'up',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    });
+
+    const fork = await store.forkThread(thread.id, answer.id);
+    expect((await store.getThread(fork.id))?.messages[0]?.feedback).toBeUndefined();
+
+    await store.setMessageFeedback(answer.id, null);
+    expect((await store.getThread(thread.id))?.messages[0]).not.toHaveProperty('feedback');
+  });
+});
+
 describe('DrizzleAgentStore — a thread patch a client reads back', () => {
   /**
    * Typed `Required<UpdateThreadInput>` so a new field on the patch fails to COMPILE here until this
@@ -509,6 +548,11 @@ describe('ensureAgentSchema (drizzle)', () => {
       reasoningMs: 1200,
       ui: [{ id: 'u', component: 'stat', props: { value: 1 } }],
     });
+    await agedStore.setMessageFeedback(thought.id, {
+      value: 'up',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+    expect((await agedStore.getThread(thread.id))?.messages[0]?.feedback?.value).toBe('up');
 
     // The approval columns land on an existing agent_tool_call too.
     await agedStore.recordToolCall({

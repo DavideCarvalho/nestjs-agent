@@ -2,12 +2,33 @@ import { useChat } from '@ai-sdk/react';
 import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import type { DataUIPart, UIDataTypes, UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AgentChatTransport, type AgentStreamMeta } from './agent-chat-transport.js';
+import {
+  AgentChatTransport,
+  type AgentStreamMeta,
+  type ReconnectOptions,
+  type StreamConnectionState,
+} from './agent-chat-transport.js';
+import { type AgentBackend, requireBackendMethod } from './backend.js';
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 import { AgentClient, type QuotaToday } from './client.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
+import { storedThreadToUiMessages } from './stored-thread-to-ui-messages.js';
+import { notifyThreads } from './threads/threads-events.js';
+import type { ChatStatus } from './transcript/model.js';
 
-export interface UseAgentChatOptions {
+export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
+  /**
+   * What the chat talks to — see {@link AgentBackend}. Omitted → an {@link AgentClient} over this
+   * library's REST routes, built from `baseUrl`, `headers`, `getHeaders`, `credentials` and `fetch`
+   * (which are ignored when a backend is given). Must be stable across renders.
+   */
+  backend?: B;
+  /**
+   * Retry a stream that dropped mid-run from its last frame (`GET <base>/chat/:runId/stream?after=`),
+   * with exponential backoff. `status` reads `'reconnecting'` meanwhile. Default on; `false` turns
+   * it off.
+   */
+  reconnect?: ReconnectOptions | false;
   /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
   baseUrl?: string;
   /** Static headers merged into every request. */
@@ -18,8 +39,8 @@ export interface UseAgentChatOptions {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
-  /** Reuse an existing client instead of constructing one. */
-  client?: AgentClient;
+  /** Reuse an existing client instead of constructing one. Prefer {@link backend}. */
+  client?: B;
   /** Named agent to run each turn. */
   agent?: string;
   /** Thread this chat is bound to. Omitted → backend creates one on send. */
@@ -127,7 +148,9 @@ interface AddToolResultArgs {
  * fork, quota, cancel, and HITL approve/reject — all driven through
  * `AgentClient`. Mirrors flip's `useAdminChat`, generalized.
  */
-export function useAgentChat(options: UseAgentChatOptions) {
+export function useAgentChat<B extends AgentBackend = AgentClient>(
+  options: UseAgentChatOptions<B>,
+) {
   const latest = useRef(options);
   latest.current = options;
 
@@ -166,15 +189,21 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   // Identity-stable: per-render config is read through `latest`.
   // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
-  const client = useMemo(() => {
+  const client = useMemo((): B => {
+    if (options.backend) return options.backend;
     if (options.client) return options.client;
     return new AgentClient({
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
       ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
       ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       getHeaders: async () => mergeHeaders(latest.current),
-    });
+    }) as unknown as B;
   }, []);
+
+  // Where the live stream stands — `reconnecting` while the transport retries a dropped one.
+  const [connection, setConnection] = useState<StreamConnectionState>({ status: 'live' });
+  // The run ended while the stream was away: what streamed is incomplete, the thread is not.
+  const resyncAfterSettle = useRef(false);
 
   // Auto-resume: on (re)mount with `resume: true` and a `threadId`, read the thread and, if it
   // carries a live `activeRunId`, attach to it — the same GET-stream reconnect `resumeRunId`
@@ -213,14 +242,17 @@ export function useAgentChat(options: UseAgentChatOptions) {
       ) {
         createdThreadId.current = meta.threadId;
         latest.current.onThreadCreated?.(meta.threadId);
+        notifyThreads(client, { type: 'changed' });
       }
     }
     return new AgentChatTransport({
-      ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-      ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
-      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      backend: client,
+      ...(options.reconnect !== undefined ? { reconnect: options.reconnect } : {}),
+      onConnectionChange: (state) => {
+        if (state.status === 'gone') resyncAfterSettle.current = true;
+        setConnection(state.status === 'gone' ? { status: 'live' } : state);
+      },
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
-      getHeaders: async () => mergeHeaders(latest.current),
       getBody: () => {
         const current = latest.current;
         const pageContext = current.getPageContext?.() ?? null;
@@ -256,7 +288,11 @@ export function useAgentChat(options: UseAgentChatOptions) {
       latest.current.onData?.(part);
       if (part.type === 'data-title') {
         const title = (part.data as { title?: unknown } | null)?.title;
-        if (typeof title === 'string') latest.current.onTitle?.(title);
+        if (typeof title === 'string') {
+          latest.current.onTitle?.(title);
+          const threadId = latest.current.threadId ?? createdThreadId.current;
+          if (threadId !== undefined) notifyThreads(client, { type: 'title', threadId, title });
+        }
       }
     },
     onFinish: ({ isError }) => {
@@ -274,12 +310,30 @@ export function useAgentChat(options: UseAgentChatOptions) {
           runId: settledRunId,
           status: isError ? 'failed' : 'completed',
         });
+        notifyThreads(client, { type: 'changed' });
+      }
+      setConnection({ status: 'live' });
+      if (resyncAfterSettle.current) {
+        resyncAfterSettle.current = false;
+        void resyncFromThread();
       }
     },
   });
 
   const chatRef = useRef(chat);
   chatRef.current = chat;
+
+  /** Replace the transcript with the persisted thread — after a run finished while we were away. */
+  async function resyncFromThread(): Promise<void> {
+    const threadId = latest.current.threadId ?? createdThreadId.current;
+    if (threadId === undefined) return;
+    try {
+      const thread = await client.getThread(threadId);
+      chatRef.current.setMessages(storedThreadToUiMessages(thread.messages));
+    } catch {
+      /* best-effort: the partial answer stays until the next load */
+    }
+  }
 
   /**
    * One turn in flight per chat. The SDK commits its single in-flight response BEFORE it reaches
@@ -410,13 +464,13 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   const forkThread = useCallback(
     (threadId: string, messageId: string): Promise<ThreadSummary> =>
-      client.forkFromMessage(threadId, messageId),
+      requireBackendMethod(client, 'forkFromMessage')(threadId, messageId),
     [client],
   );
 
   const renameThread = useCallback(
     async (id: string, title: string): Promise<void> => {
-      await client.renameThread(id, title);
+      await client.updateThread(id, { title });
       setThreads((current) =>
         current.map((thread) => (thread.id === id ? { ...thread, title } : thread)),
       );
@@ -427,7 +481,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
   // A promoted thread was transient — invisible to `listThreads` — so refetch to bring it into view.
   const promoteThread = useCallback(
     async (id: string): Promise<void> => {
-      await client.promoteThread(id);
+      await requireBackendMethod(client, 'promoteThread')(id);
       await loadThreads();
     },
     [client, loadThreads],
@@ -435,12 +489,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   const truncateFromMessage = useCallback(
     (threadId: string, messageId: string): Promise<void> =>
-      client.truncateFromMessage(threadId, messageId).then(() => undefined),
+      requireBackendMethod(client, 'truncateFromMessage')(threadId, messageId).then(
+        () => undefined,
+      ),
     [client],
   );
 
   const loadQuota = useCallback(async (): Promise<QuotaToday> => {
-    const today = await client.getQuotaToday();
+    const today = await requireBackendMethod(client, 'getQuotaToday')();
     setQuota(today);
     return today;
   }, [client]);
@@ -473,7 +529,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
       remember?: boolean;
       via?: string;
     }): Promise<void> => {
-      await client.approveToolCall({
+      await requireBackendMethod(
+        client,
+        'approveToolCall',
+      )({
         toolCallId,
         ...(remember === true ? { remember: true } : {}),
         ...(via !== undefined ? { via } : {}),
@@ -492,7 +551,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
       reason?: string;
       via?: string;
     }): Promise<void> => {
-      await client.rejectToolCall({
+      await requireBackendMethod(
+        client,
+        'rejectToolCall',
+      )({
         toolCallId,
         ...(reason !== undefined ? { reason } : {}),
         ...(via !== undefined ? { via } : {}),
@@ -512,7 +574,10 @@ export function useAgentChat(options: UseAgentChatOptions) {
       toolCallId: string;
       answers?: Record<string, string[]>;
     }): Promise<void> => {
-      await client.answerToolCall({
+      await requireBackendMethod(
+        client,
+        'answerToolCall',
+      )({
         toolCallId,
         ...(answers !== undefined ? { answers } : {}),
       });
@@ -522,7 +587,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
 
   const skip = useCallback(
     async ({ toolCallId }: { toolCallId: string }): Promise<void> => {
-      await client.skipToolCall({ toolCallId });
+      await requireBackendMethod(client, 'skipToolCall')({ toolCallId });
     },
     [client],
   );
@@ -544,8 +609,20 @@ export function useAgentChat(options: UseAgentChatOptions) {
     refresh: refreshBackground,
   };
 
+  const getThreadId = useCallback(
+    (): string | undefined => latest.current.threadId ?? createdThreadId.current,
+    [],
+  );
+
+  // A dropped stream the transport is retrying reads as its own status; every other moment is the
+  // SDK's. `reconnecting` is still a busy status to the transcript model (see `ChatStatus`).
+  const status: ChatStatus = connection.status === 'reconnecting' ? 'reconnecting' : chat.status;
+
   return {
     ...chat,
+    status,
+    /** Where the live stream stands — see {@link StreamConnectionState}. */
+    connection,
     sendMessage,
     addToolResult,
     /** Sub-agents this conversation started and did not wait for. */
@@ -553,6 +630,14 @@ export function useAgentChat(options: UseAgentChatOptions) {
     runId,
     /** The `resume`-fetched thread's active run id, or `null` once resolved with none. */
     activeRunId,
+    /**
+     * The thread this chat is on right now: the `threadId` option, else the one the backend created
+     * on the first send. A getter, because the created id is learned mid-stream.
+     */
+    getThreadId,
+    /** The backend this chat talks to — pass it to `useThreads`, `useMessageFeedback`, … */
+    backend: client,
+    /** Same object as {@link backend}; kept for callers that read it under its old name. */
     client,
     threads,
     loadThreads,
@@ -573,7 +658,9 @@ export function useAgentChat(options: UseAgentChatOptions) {
   };
 }
 
-async function mergeHeaders(options: UseAgentChatOptions): Promise<Record<string, string>> {
+async function mergeHeaders<B extends AgentBackend>(
+  options: UseAgentChatOptions<B>,
+): Promise<Record<string, string>> {
   const dynamic = (await options.getHeaders?.()) ?? {};
   return { ...options.headers, ...dynamic };
 }

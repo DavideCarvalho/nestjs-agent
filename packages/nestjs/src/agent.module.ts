@@ -39,6 +39,7 @@ import { AgentsController } from './controller/agents.controller.js';
 import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
 import { MemoriesController } from './controller/memories.controller.js';
+import { MessagesController } from './controller/messages.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { SkillsController } from './controller/skills.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
@@ -197,6 +198,7 @@ const BASE_CONTROLLERS = [
   SkillsController,
   MemoriesController,
   ToolsController,
+  MessagesController,
 ];
 
 /** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */

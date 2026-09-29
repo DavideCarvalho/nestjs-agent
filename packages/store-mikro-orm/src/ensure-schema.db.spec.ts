@@ -232,7 +232,7 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
       await ensureAgentSchema(instance);
 
       expect(await columnsOf(instance, 'agent_message')).toEqual(
-        expect.arrayContaining(['reasoning', 'reasoning_ms', 'ui']),
+        expect.arrayContaining(['reasoning', 'reasoning_ms', 'ui', 'feedback']),
       );
       const store = new MikroOrmAgentStore(instance.em);
       await store.appendMessage({

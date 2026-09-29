@@ -3,6 +3,7 @@ import {
   type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
+  type MessageFeedback,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -283,7 +284,8 @@ export class InMemoryAgentStore implements AgentStore {
       transient: false,
       createdAt: ts,
       updatedAt: ts,
-      messages: kept.map((message) => ({ ...message })),
+      // Feedback rates a message in ITS thread; a fork starts unrated.
+      messages: kept.map(({ feedback: _feedback, ...message }) => ({ ...message })),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
     };
     this.threads.set(id, row);
@@ -470,6 +472,22 @@ export class InMemoryAgentStore implements AgentStore {
       if (message !== undefined) {
         const { ui: _previous, ...rest } = message;
         row.messages[index] = ui.length > 0 ? { ...rest, ui } : rest;
+        return;
+      }
+    }
+  }
+
+  async threadOfMessage(messageId: string): Promise<string | null> {
+    return this.threadIdForMessage(messageId) ?? null;
+  }
+
+  async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
+    for (const row of this.threads.values()) {
+      const index = row.messages.findIndex((candidate) => candidate.id === messageId);
+      const message = row.messages[index];
+      if (message !== undefined) {
+        const { feedback: _previous, ...rest } = message;
+        row.messages[index] = feedback !== null ? { ...rest, feedback } : rest;
         return;
       }
     }

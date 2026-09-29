@@ -37,6 +37,7 @@ const statements: string[] = [
     reasoning TEXT,
     reasoning_ms INTEGER,
     ui TEXT,
+    feedback TEXT,
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS agent_message_thread_created_idx
@@ -190,6 +191,11 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_message',
     column: 'ui',
     ddl: 'ALTER TABLE agent_message ADD COLUMN ui TEXT',
+  },
+  {
+    table: 'agent_message',
+    column: 'feedback',
+    ddl: 'ALTER TABLE agent_message ADD COLUMN feedback TEXT',
   },
   {
     table: 'agent_tool_call',

@@ -468,11 +468,100 @@ disables itself while busy never noticed; a double-submitted one, and StrictMode
 effect, did.
 
 `chat` is the AI SDK v7 `useChat` return value (`messages`, `status`, `sendMessage`, `stop`, …) spread
-together with the extras: `runId`/`activeRunId`, `client` (the raw `AgentClient`), thread list/CRUD
+together with the extras: `runId`/`activeRunId`, `connection`, `getThreadId`, `backend` (the `AgentBackend`; also
+under its old name `client`), thread list/CRUD
 (`threads`, `loadThreads`, `loadThread`, `deleteThread`, `forkThread`, `renameThread`, `promoteThread`,
 `truncateFromMessage`), `quota`/`loadQuota`, `cancel`, HITL `approve`/`reject` and `answer`/`skip`, and `regenerate`.
 `MyToolCard`'s `part` prop above types as the exported `AnyToolUIPart` (`ToolUIPart | DynamicToolUIPart`
 — `MessageItem` uses the same union for its own `renderToolPart` callback).
+
+### Your own backend (`AgentBackend`)
+
+Everything the hooks ask of a server goes through one interface, `AgentBackend`: start a turn
+(`openChatStream`), attach to a streaming run (`resumeChatStream`), cancel, list/get/update/delete
+threads — required — plus optional fork/promote/truncate, approve/reject/answer/skip, upload, tools,
+skills, quota and message feedback. `AgentClient` (fetch over this library's routes) is the default.
+An app with its own client, auth scheme or server implements the interface and passes it in:
+
+```ts
+import type { AgentBackend } from '@dudousxd/nestjs-agent-react';
+
+const backend: AgentBackend = {
+  async openChatStream({ body, headers, signal }) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', ...csrfHeader(), ...headers },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`chat failed: ${res.status}`);
+    return { body: res.body }; // SSE bytes in docs/stream-protocol.md framing
+  },
+  async resumeChatStream({ runId, after, signal }) {
+    const res = await fetch(`/api/chat/${runId}/stream${after ? `?after=${after}` : ''}`, {
+      credentials: 'include',
+      signal,
+    });
+    return res.status === 404 ? null : { body: res.body! };
+  },
+  cancelStream: (runId) => api.chat.cancel(runId),
+  listThreads: () => api.threads.list(),
+  getThread: (id) => api.threads.get(id),
+  updateThread: (id, patch) => api.threads.update(id, patch),
+  deleteThread: (id) => api.threads.remove(id),
+  setMessageFeedback: (id, input) => api.messages.feedback(id, input),
+};
+
+const chat = useAgentChat({ backend }); // chat.backend === backend, typed as yours
+```
+
+Calling a hook method whose optional backend member is missing throws
+`AgentBackendUnsupportedError`. The body a backend receives is `{ message, threadId?, agent?,
+attachments?, pageContext?, regenerate? }`; the SSE it returns and the REST shapes are in
+[docs/stream-protocol.md](../../docs/stream-protocol.md).
+
+**Cookie session + CSRF with the default client.** `credentials` and `getHeaders` are all it takes —
+`getHeaders` runs per request, so a rotated token is picked up:
+
+```ts
+const readCookie = (name: string) =>
+  decodeURIComponent(document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))?.[1] ?? '');
+
+useAgentChat({
+  baseUrl: '/api',
+  credentials: 'include', // 'same-origin' (the fetch default) is enough when the API is same-origin
+  getHeaders: () => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') }),
+});
+```
+
+### Reconnecting a dropped stream
+
+A server that numbers its frames (SSE `id:`, as this library's does) can be resumed: when the
+connection drops mid-run, the transport re-attaches with `GET <base>/chat/:runId/stream?after=<last
+id>`, backing off 0.5s, 1s, 2s… (`reconnect: { maxAttempts, baseDelayMs, maxDelayMs }`, or `false`).
+Meanwhile `chat.status` is `'reconnecting'` (a busy status to `useChatTranscript`) and
+`chat.connection` says which attempt it is on. If the run ended while the client was away (the
+resume answers 404), the hook reloads the thread so the full answer replaces the partial one. After
+the last failed attempt the turn ends with an error.
+
+### Thread list and message feedback
+
+```tsx
+import { useMessageFeedback, useThreads } from '@dudousxd/nestjs-agent-react';
+
+const { threads, isLoading, rename, remove, refresh } = useThreads({ backend: chat.backend });
+const feedback = useMessageFeedback({ backend: chat.backend, threadId: chat.getThreadId });
+
+<button aria-pressed={feedback.feedbackOf(message)?.value === 'up'}
+        onClick={() => feedback.toggle(message, 'up')}>Helpful</button>
+```
+
+`useThreads` refreshes itself when a chat on the same backend creates a thread or settles a run,
+and patches a streamed title in place; `rename`/`remove` are optimistic and roll back on failure.
+`useMessageFeedback` reads a replayed message's rating from `message.metadata.feedback`, rates
+through `POST <base>/messages/:id/feedback`, and maps a message streamed in this session to the row
+its run persisted (the live message carries `metadata.runId`).
 
 ### The transport, standalone
 

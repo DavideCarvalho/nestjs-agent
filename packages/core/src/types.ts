@@ -500,7 +500,23 @@ export interface StoredMessage {
    * for one, or on a store that does not record approvals.
    */
   approvals?: ToolCallApproval[];
+  /**
+   * The thread owner's rating of this message (`POST <base>/messages/:id/feedback`). Absent when
+   * nobody rated it, or on a store that does not record feedback.
+   */
+  feedback?: MessageFeedback;
   createdAt: string;
+}
+
+/** A thumbs-up/down on one message, with an optional free-text comment. */
+export type MessageFeedbackValue = 'up' | 'down';
+
+/** What {@link StoredMessage.feedback} holds. Not copied when a thread is forked. */
+export interface MessageFeedback {
+  value: MessageFeedbackValue;
+  comment?: string;
+  /** ISO-8601 instant the rating was last set. */
+  updatedAt: string;
 }
 
 /**

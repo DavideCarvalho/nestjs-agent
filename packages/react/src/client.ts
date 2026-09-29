@@ -1,11 +1,23 @@
 import type {
   MessageAttachment,
+  MessageFeedback,
   QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
   ThreadSummary,
   ToolCatalogEntry,
 } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentBackend,
+  ChatStreamRequest,
+  ChatStreamResponse,
+  MessageFeedbackInput,
+  ResumeStreamRequest,
+  ThreadPatch,
+  UploadAttachmentOptions,
+} from './backend.js';
+
+export type { ThreadPatch } from './backend.js';
 
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
@@ -34,35 +46,96 @@ export interface OkResult {
   ok: boolean;
 }
 
-/**
- * Partial update accepted by `PATCH /agent/threads/:threadId`. `defaultAgent: null` clears a
- * previously-set default back to the module's own default; omitting it leaves the thread's
- * current default untouched.
- */
-export interface ThreadPatch {
-  title?: string;
-  defaultAgent?: string | null;
-}
-
 export interface AgentClientOptions {
   /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
   baseUrl?: string;
   /** Static headers merged into every request. */
   headers?: Record<string, string>;
-  /** Resolved per request — for short-lived bearer tokens. */
+  /**
+   * Resolved per request — for short-lived bearer tokens, or a CSRF header read from a cookie
+   * (`{ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') }`), which has to be read at request time because
+   * the server may rotate it.
+   */
   getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
-  /** Forwarded to fetch so cookie auth works. */
+  /**
+   * Forwarded to fetch so cookie auth works. Same-origin requests send cookies by default; set
+   * `'include'` when the API lives on another origin (and have it answer with credentialed CORS).
+   */
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
 }
 
+const HEADER_RUN_ID = 'x-agent-run-id';
+const HEADER_THREAD_ID = 'x-agent-thread-id';
+
 /**
- * Framework-agnostic REST client for the nestjs-agent endpoints. Used by
- * `useAgentChat`, but standalone-usable (vanilla fetch, no React).
+ * Framework-agnostic REST client for the nestjs-agent endpoints — the default {@link AgentBackend}.
+ * Used by `useAgentChat`, but standalone-usable (vanilla fetch, no React).
  */
-export class AgentClient {
+export class AgentClient implements AgentBackend {
   constructor(private readonly options: AgentClientOptions = {}) {}
+
+  /** `POST /agent/chat` → the turn's SSE stream. Throws {@link AgentHttpError} on a non-2xx. */
+  async openChatStream(request: ChatStreamRequest): Promise<ChatStreamResponse> {
+    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        ...(await this.resolveHeaders()),
+        ...request.headers,
+      },
+      body: JSON.stringify(request.body),
+      ...this.credentials(),
+      ...(request.signal !== undefined ? { signal: request.signal } : {}),
+    });
+    if (!response.ok || !response.body) {
+      throw new AgentHttpError(response.status, 'POST', '/agent/chat', response.statusText);
+    }
+    return streamResponse(response);
+  }
+
+  /**
+   * `GET /agent/chat/:runId/stream[?after=<seq>]` → the run's SSE stream, or `null` when nothing is
+   * streaming under that id (404).
+   */
+  async resumeChatStream(request: ResumeStreamRequest): Promise<ChatStreamResponse | null> {
+    const path = `/agent/chat/${encodeURIComponent(request.runId)}/stream`;
+    const query = request.after !== undefined && request.after > 0 ? `?after=${request.after}` : '';
+    const response = await this.fetchImpl()(`${this.baseUrl()}${path}${query}`, {
+      method: 'GET',
+      headers: {
+        accept: 'text/event-stream',
+        ...(await this.resolveHeaders()),
+        ...request.headers,
+      },
+      ...this.credentials(),
+      ...(request.signal !== undefined ? { signal: request.signal } : {}),
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok || !response.body) {
+      throw new AgentHttpError(response.status, 'GET', path, response.statusText);
+    }
+    return streamResponse(response);
+  }
+
+  /**
+   * Rate a message (`'up'`/`'down'`, optional comment) or clear its rating (`value: null`). Answers
+   * the stored rating.
+   */
+  setMessageFeedback(
+    messageId: string,
+    input: MessageFeedbackInput,
+  ): Promise<{ feedback: MessageFeedback | null }> {
+    return this.request<{ feedback: MessageFeedback | null }>(
+      'POST',
+      `/agent/messages/${encodeURIComponent(messageId)}/feedback`,
+      input,
+    );
+  }
 
   listThreads(): Promise<ThreadSummary[]> {
     return this.request<ThreadSummary[]>('GET', '/agent/threads');
@@ -118,21 +191,21 @@ export class AgentClient {
    * mirrors the backend's `POST /agent/attachments`. The returned {@link MessageAttachment} is
    * what a caller then rides on `sendMessage({ text }, { body: { attachments: [...] } })`.
    */
-  async uploadAttachment(file: File): Promise<MessageAttachment> {
-    const fetchImpl = this.options.fetch ?? globalThis.fetch;
-    const baseUrl = (this.options.baseUrl ?? '').replace(/\/$/, '');
-    const dynamic = (await this.options.getHeaders?.()) ?? {};
+  async uploadAttachment(
+    file: File,
+    options: UploadAttachmentOptions = {},
+  ): Promise<MessageAttachment> {
     const formData = new FormData();
     formData.append('file', file);
-    const response = await fetchImpl(`${baseUrl}/agent/attachments`, {
+    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/attachments`, {
       method: 'POST',
       headers: {
         accept: 'application/json',
-        ...this.options.headers,
-        ...dynamic,
+        ...(await this.resolveHeaders()),
       },
       body: formData,
-      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
+      ...this.credentials(),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return this.handleResponse<MessageAttachment>(response, 'POST', '/agent/attachments');
   }
@@ -190,20 +263,33 @@ export class AgentClient {
     return this.request<void>('POST', '/agent/tool-call/skip', input);
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const fetchImpl = this.options.fetch ?? globalThis.fetch;
-    const baseUrl = (this.options.baseUrl ?? '').replace(/\/$/, '');
+  private fetchImpl(): typeof fetch {
+    return this.options.fetch ?? globalThis.fetch;
+  }
+
+  private baseUrl(): string {
+    return (this.options.baseUrl ?? '').replace(/\/$/, '');
+  }
+
+  private async resolveHeaders(): Promise<Record<string, string>> {
     const dynamic = (await this.options.getHeaders?.()) ?? {};
-    const response = await fetchImpl(`${baseUrl}${path}`, {
+    return { ...this.options.headers, ...dynamic };
+  }
+
+  private credentials(): { credentials?: RequestCredentials } {
+    return this.options.credentials !== undefined ? { credentials: this.options.credentials } : {};
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const response = await this.fetchImpl()(`${this.baseUrl()}${path}`, {
       method,
       headers: {
         accept: 'application/json',
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        ...this.options.headers,
-        ...dynamic,
+        ...(await this.resolveHeaders()),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      ...(this.options.credentials !== undefined ? { credentials: this.options.credentials } : {}),
+      ...this.credentials(),
     });
     return this.handleResponse<T>(response, method, path);
   }
@@ -217,4 +303,15 @@ export class AgentClient {
     if (!text) return undefined as T;
     return JSON.parse(text) as T;
   }
+}
+
+function streamResponse(response: Response): ChatStreamResponse {
+  const body = response.body as ReadableStream<Uint8Array>;
+  const runId = response.headers?.get(HEADER_RUN_ID) ?? undefined;
+  const threadId = response.headers?.get(HEADER_THREAD_ID) ?? undefined;
+  return {
+    body,
+    ...(runId ? { runId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
 }

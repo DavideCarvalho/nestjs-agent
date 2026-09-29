@@ -15,6 +15,8 @@ import {
   type HumanReply,
   type ListStagedAttachmentsInput,
   type MessageAttachment,
+  type MessageFeedback,
+  type MessageFeedbackValue,
   type PageContext,
   type QuotaStore,
   type QuotaView,
@@ -393,6 +395,49 @@ export class AgentService {
   async truncateThreadFrom(actor: Actor, threadId: string, messageId: string): Promise<void> {
     await this.assertOwnsThread(actor, threadId);
     return this.store.truncateFrom(threadId, messageId);
+  }
+
+  /**
+   * Rate a message in one of `actor`'s threads: `'up'`/`'down'` with an optional comment, or `null`
+   * to clear the rating. Answers `404` for an unknown message, `403` for another actor's, and `501`
+   * on a store without `threadOfMessage` + `setMessageFeedback`.
+   */
+  async setMessageFeedback(
+    actor: Actor,
+    messageId: string,
+    input: { value: MessageFeedbackValue | null; comment?: string },
+  ): Promise<MessageFeedback | null> {
+    if (input.value !== null && input.value !== 'up' && input.value !== 'down') {
+      throw new BadRequestException("value must be 'up', 'down' or null");
+    }
+    if (input.comment !== undefined && typeof input.comment !== 'string') {
+      throw new BadRequestException('comment must be a string');
+    }
+    const comment = input.comment?.trim();
+    if (comment !== undefined && comment.length > 2000) {
+      throw new BadRequestException('comment must be at most 2000 characters');
+    }
+    if (this.store.threadOfMessage === undefined || this.store.setMessageFeedback === undefined) {
+      throw new NotImplementedException(
+        'Message feedback requires an AgentStore that implements threadOfMessage() and ' +
+          'setMessageFeedback(); the bound store does not support it.',
+      );
+    }
+    const threadId = await this.store.threadOfMessage(messageId);
+    if (threadId === null) {
+      throw new NotFoundException(`message ${messageId} not found`);
+    }
+    await this.assertOwnsThread(actor, threadId);
+    const feedback: MessageFeedback | null =
+      input.value === null
+        ? null
+        : {
+            value: input.value,
+            ...(comment !== undefined && comment.length > 0 ? { comment } : {}),
+            updatedAt: new Date().toISOString(),
+          };
+    await this.store.setMessageFeedback(messageId, feedback);
+    return feedback;
   }
 
   /**

@@ -29,7 +29,11 @@ import { readReasoningMs } from '../reasoning/timing.js';
 /** A tool UI part on a `UIMessage` — a static `tool-*` part or the `dynamic-tool` part. */
 export type AnyToolUIPart = ToolUIPart | DynamicToolUIPart;
 
-export type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
+/**
+ * The AI SDK's chat status, plus `reconnecting`: a turn is in flight and its stream dropped, and the
+ * transport is re-attaching (`useAgentChat`). A busy status, like `streaming`.
+ */
+export type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'reconnecting' | 'error';
 
 /** Server-aggregated usage for an assistant turn. */
 export interface MessageUsageInfo {

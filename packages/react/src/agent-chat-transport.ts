@@ -1,5 +1,7 @@
 import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+import type { AgentBackend, ChatStreamResponse } from './backend.js';
+import { AgentClient } from './client.js';
 import { reasoningDurationMetadata } from './reasoning/timing.js';
 
 /** JSON-safe metadata, as the SDK's `toolMetadata` requires (its `JSONObject` is not exported). */
@@ -11,7 +13,39 @@ export interface AgentStreamMeta {
   threadId: string;
 }
 
+/**
+ * How the transport retries a stream that dropped mid-run. It reconnects only to a server that
+ * numbers its frames (SSE `id:`) — without a cursor a reconnect would replay the run into the
+ * message it is already writing.
+ */
+export interface ReconnectOptions {
+  /** Attempts before giving up with an error chunk. Default 6. */
+  maxAttempts?: number;
+  /** Delay before the first attempt, doubled each attempt. Default 500 ms. */
+  baseDelayMs?: number;
+  /** Cap on the delay between attempts. Default 8000 ms. */
+  maxDelayMs?: number;
+}
+
+/** Where a live stream stands. `reconnecting` → it dropped and the transport is retrying. */
+export type StreamConnectionState =
+  | { status: 'live' }
+  | { status: 'reconnecting'; runId: string; attempt: number; after: number }
+  /** The run ended while the client was away (the resume answered 404): reload the thread. */
+  | { status: 'gone'; runId: string }
+  /** Every attempt failed; the stream ended with an error chunk. */
+  | { status: 'failed'; runId: string };
+
 export interface AgentChatTransportOptions {
+  /**
+   * What the transport talks to. Default: an {@link AgentClient} built from `baseUrl`, `headers`,
+   * `getHeaders`, `credentials` and `fetch` below — which are ignored when a backend is given.
+   */
+  backend?: AgentBackend;
+  /** Retry a dropped stream from its last frame. Default on; `false` turns it off. */
+  reconnect?: ReconnectOptions | false;
+  /** Fires as a stream drops, reconnects, or gives up. */
+  onConnectionChange?: (state: StreamConnectionState) => void;
   /**
    * Origin + base path the agent endpoints hang off, e.g.
    * `https://api.example.com`. Endpoints are appended as
@@ -56,8 +90,11 @@ export interface AgentChatTransportOptions {
   fetch?: typeof fetch;
 }
 
-const HEADER_RUN_ID = 'x-agent-run-id';
-const HEADER_THREAD_ID = 'x-agent-thread-id';
+const DEFAULT_RECONNECT: Required<ReconnectOptions> = {
+  maxAttempts: 6,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+};
 
 /**
  * The tool name BOTH elicitation surfaces persist their question set under (core's
@@ -108,7 +145,19 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
    */
   private attemptLive = false;
 
-  constructor(private readonly options: AgentChatTransportOptions = {}) {}
+  private readonly backend: AgentBackend;
+
+  constructor(private readonly options: AgentChatTransportOptions = {}) {
+    this.backend =
+      options.backend ??
+      new AgentClient({
+        ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+        ...(options.headers !== undefined ? { headers: options.headers } : {}),
+        ...(options.getHeaders !== undefined ? { getHeaders: options.getHeaders } : {}),
+        ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
+        ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
+      });
+  }
 
   /** Run id of the most recent stream — HITL approve/reject target this. */
   get runId(): string | undefined {
@@ -144,24 +193,17 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         ...((options.body as Record<string, unknown> | undefined) ?? {}),
         message,
       };
-      const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          ...(await this.resolveHeaders(options.headers)),
-        },
-        body: JSON.stringify(body),
-        ...(this.options.credentials !== undefined
-          ? { credentials: this.options.credentials }
-          : {}),
+      const headers = headerRecord(options.headers);
+      const response = await this.backend.openChatStream({
+        body,
+        ...(headers !== undefined ? { headers } : {}),
         ...(options.abortSignal ? { signal: options.abortSignal } : {}),
       });
-      if (!response.ok || !response.body) {
-        throw new Error(`Agent chat request failed: ${response.status} ${response.statusText}`);
-      }
-      this.captureHeaderMeta(response.headers);
-      return this.toChunkStream(response.body);
+      this.captureHeaderMeta(response);
+      return this.toChunkStream(response, {
+        ...(headers !== undefined ? { headers } : {}),
+        ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+      });
     } catch (error) {
       this.attemptLive = false;
       throw error;
@@ -184,56 +226,35 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     if (runId === undefined) return null;
     this.attemptLive = true;
     try {
-      const response = await this.fetchImpl()(
-        `${this.baseUrl()}/agent/chat/${encodeURIComponent(runId)}/stream`,
-        {
-          method: 'GET',
-          headers: {
-            accept: 'text/event-stream',
-            ...(await this.resolveHeaders(options.headers)),
-          },
-          ...(this.options.credentials !== undefined
-            ? { credentials: this.options.credentials }
-            : {}),
-        },
-      );
-      if (response.status === 404) {
+      const headers = headerRecord(options.headers);
+      const response = await this.backend.resumeChatStream({
+        runId,
+        ...(headers !== undefined ? { headers } : {}),
+      });
+      if (response === null) {
         this.attemptLive = false;
         return null;
       }
-      if (!response.ok || !response.body) {
-        throw new Error(`Agent stream reconnect failed: ${response.status} ${response.statusText}`);
-      }
-      this.captureHeaderMeta(response.headers);
-      return this.toChunkStream(response.body);
+      this.captureHeaderMeta(response);
+      return this.toChunkStream(response, {
+        runId,
+        ...(headers !== undefined ? { headers } : {}),
+      });
     } catch (error) {
       this.attemptLive = false;
       throw error;
     }
   }
 
-  private fetchImpl(): typeof fetch {
-    return this.options.fetch ?? globalThis.fetch;
+  private captureHeaderMeta(response: ChatStreamResponse): void {
+    if (response.runId) this.currentRunId = response.runId;
+    if (response.threadId) this.currentThreadId = response.threadId;
   }
 
-  private baseUrl(): string {
-    return (this.options.baseUrl ?? '').replace(/\/$/, '');
-  }
-
-  private async resolveHeaders(
-    perRequest: Record<string, string> | Headers | undefined,
-  ): Promise<Record<string, string>> {
-    const dynamic = (await this.options.getHeaders?.()) ?? {};
-    const extra =
-      perRequest instanceof Headers ? Object.fromEntries(perRequest.entries()) : (perRequest ?? {});
-    return { ...this.options.headers, ...dynamic, ...extra };
-  }
-
-  private captureHeaderMeta(headers: Headers): void {
-    const runId = headers.get(HEADER_RUN_ID);
-    const threadId = headers.get(HEADER_THREAD_ID);
-    if (runId) this.currentRunId = runId;
-    if (threadId) this.currentThreadId = threadId;
+  private reconnectPolicy(): Required<ReconnectOptions> | null {
+    const configured = this.options.reconnect;
+    if (configured === false) return null;
+    return { ...DEFAULT_RECONNECT, ...configured };
   }
 
   private recordMeta(meta: AgentStreamMeta): void {
@@ -255,10 +276,60 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
    * call plus its tool execution; text and reasoning open lazily and close at the step boundary, so
    * tool-call cards (input streaming → output) render live between the prose.
    */
-  private toChunkStream(source: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
-    const reader = source.getReader();
-    const decoder = new TextDecoder();
+  private toChunkStream(
+    source: ChatStreamResponse,
+    context: { runId?: string; headers?: Record<string, string>; signal?: AbortSignal },
+  ): ReadableStream<UIMessageChunk> {
+    let reader = source.body.getReader();
+    let decoder = new TextDecoder();
     let buffer = '';
+    // Resuming a dropped stream: the run it belongs to, and the sequence number (SSE `id:`) of the
+    // last frame this stream has taken in. Only a server that numbers its frames can be resumed.
+    let streamRunId = source.runId ?? context.runId;
+    let lastSeq: number | undefined;
+    let cancelled = false;
+    const backend = this.backend;
+    const policy = this.reconnectPolicy();
+    const notify = (state: StreamConnectionState) => this.options.onConnectionChange?.(state);
+    const aborted = () => cancelled || context.signal?.aborted === true;
+    const canResume = () =>
+      policy !== null && lastSeq !== undefined && streamRunId !== undefined && !aborted();
+    /**
+     * Re-attach after a drop: `GET …/stream?after=<lastSeq>`, backing off between attempts. The
+     * chunk state (open step, text run, announced calls) is kept, so the resumed frames continue
+     * the message instead of starting another.
+     */
+    const resume = async (): Promise<'resumed' | 'gone' | 'failed' | 'aborted'> => {
+      const runId = streamRunId as string;
+      const after = lastSeq ?? 0;
+      const { maxAttempts, baseDelayMs, maxDelayMs } = policy as Required<ReconnectOptions>;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        notify({ status: 'reconnecting', runId, attempt, after });
+        await delay(Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1)), context.signal);
+        if (aborted()) return 'aborted';
+        try {
+          const next = await backend.resumeChatStream({
+            runId,
+            after,
+            ...(context.headers !== undefined ? { headers: context.headers } : {}),
+            ...(context.signal !== undefined ? { signal: context.signal } : {}),
+          });
+          if (next === null) {
+            notify({ status: 'gone', runId });
+            return 'gone';
+          }
+          reader = next.body.getReader();
+          decoder = new TextDecoder();
+          buffer = '';
+          notify({ status: 'live' });
+          return 'resumed';
+        } catch {
+          if (aborted()) return 'aborted';
+        }
+      }
+      notify({ status: 'failed', runId });
+      return 'failed';
+    };
     let started = false;
     let stepOpen = false;
     let stepIndex = 0;
@@ -280,7 +351,10 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     // whatever the latest chunk carries, so a `parentId` learnt from `tool-input-start` would be
     // wiped by the `tool-input-available` that follows unless every chunk restates the merge.
     const toolMetadata = new Map<string, ToolMetadata>();
-    const record = (meta: AgentStreamMeta) => this.recordMeta(meta);
+    const record = (meta: AgentStreamMeta) => {
+      streamRunId = meta.runId;
+      this.recordMeta(meta);
+    };
     // Every way out of the read loop below passes through here: the attempt is over the moment its
     // chunk stream terminates, and a latch left set would refuse every later turn.
     const endAttempt = () => {
@@ -292,7 +366,13 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         function ensureStarted() {
           if (started) return;
           started = true;
-          controller.enqueue({ type: 'start' });
+          // The run rides the message's metadata, so a later call about THIS message (feedback,
+          // a resync) can find the rows the server persisted for it.
+          controller.enqueue(
+            streamRunId !== undefined
+              ? { type: 'start', messageMetadata: { runId: streamRunId } }
+              : { type: 'start' },
+          );
         }
         function openStep() {
           ensureStarted();
@@ -544,28 +624,64 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
           controller.close();
           endAttempt();
         }
+        function fail(errorText: string, start = true) {
+          if (start) ensureStarted();
+          controller.enqueue({ type: 'error', errorText });
+          controller.close();
+          endAttempt();
+        }
+        /** The stream dropped (or ended without `done`): resume it, or report how it ended. */
+        async function recover(error: unknown): Promise<boolean> {
+          if (!canResume()) {
+            if (error === undefined) {
+              finish();
+            } else {
+              fail(error instanceof Error ? error.message : 'Agent stream error', false);
+            }
+            return false;
+          }
+          const outcome = await resume();
+          if (outcome === 'resumed') return true;
+          if (outcome === 'failed') {
+            fail('Lost the connection to the agent stream');
+          } else {
+            // Gone: the run ended while we were away — what we have is all this stream will get,
+            // and the persisted thread holds the rest. Aborted: the user stopped the turn.
+            finish();
+          }
+          return false;
+        }
         try {
           while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              finish();
+            let result: ReadableStreamReadResult<Uint8Array>;
+            try {
+              result = await reader.read();
+            } catch (error) {
+              if (await recover(error)) continue;
               return;
             }
-            buffer += decoder.decode(value, { stream: true });
+            if (result.done) {
+              if (await recover(undefined)) continue;
+              return;
+            }
+            buffer += decoder.decode(result.value, { stream: true });
             let separator = buffer.indexOf('\n\n');
             while (separator !== -1) {
               const rawEvent = buffer.slice(0, separator);
               buffer = buffer.slice(separator + 2);
+              separator = buffer.indexOf('\n\n');
               const frame = parseSseFrame(rawEvent);
+              if (frame.id !== undefined) {
+                // Already taken in before a reconnect — a server that ignored `after` resends it.
+                if (lastSeq !== undefined && frame.id <= lastSeq) continue;
+                lastSeq = frame.id;
+              }
               if (frame.event === 'done') {
                 finish();
                 return;
               }
               if (frame.event === 'error') {
-                ensureStarted();
-                controller.enqueue({ type: 'error', errorText: parseErrorText(frame.data) });
-                controller.close();
-                endAttempt();
+                fail(parseErrorText(frame.data));
                 return;
               }
               if (frame.event === 'meta') {
@@ -575,19 +691,14 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 const event = parseEvent(frame.data);
                 if (event) emit(event);
               }
-              separator = buffer.indexOf('\n\n');
             }
           }
         } catch (error) {
-          controller.enqueue({
-            type: 'error',
-            errorText: error instanceof Error ? error.message : 'Agent stream error',
-          });
-          controller.close();
-          endAttempt();
+          fail(error instanceof Error ? error.message : 'Agent stream error', false);
         }
       },
       cancel() {
+        cancelled = true;
         void reader.cancel();
         endAttempt();
       },
@@ -598,15 +709,21 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
 interface SseFrame {
   event: string | undefined;
   data: string | undefined;
+  /** The frame's sequence number (SSE `id:`), when the server numbers its frames. */
+  id: number | undefined;
 }
 
 /** Split one `event:`/`data:` SSE block into its fields. */
 function parseSseFrame(raw: string): SseFrame {
   let event: string | undefined;
+  let id: number | undefined;
   const dataLines: string[] = [];
   for (const line of raw.split('\n')) {
     if (line.startsWith('event:')) {
       event = line.slice('event:'.length).trim();
+    } else if (line.startsWith('id:')) {
+      const parsed = Number(line.slice('id:'.length).trim());
+      if (Number.isSafeInteger(parsed) && parsed > 0) id = parsed;
     } else if (line.startsWith('data:')) {
       dataLines.push(line.slice('data:'.length).trimStart());
     }
@@ -614,6 +731,7 @@ function parseSseFrame(raw: string): SseFrame {
   return {
     event,
     data: dataLines.length > 0 ? dataLines.join('\n') : undefined,
+    id,
   };
 }
 
@@ -676,4 +794,26 @@ function extractText(message: UIMessage): string {
     if (part.type === 'text') text += part.text;
   }
   return text;
+}
+
+/** Per-request headers as the AI SDK hands them over, as a plain record (or nothing). */
+function headerRecord(
+  headers: Record<string, string> | Headers | undefined,
+): Record<string, string> | undefined {
+  if (headers === undefined) return undefined;
+  return headers instanceof Headers ? Object.fromEntries(headers.entries()) : headers;
+}
+
+/** Wait `ms`, resolving early when `signal` aborts. */
+function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }

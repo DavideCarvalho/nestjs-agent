@@ -3,6 +3,7 @@ import {
   type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
+  type MessageFeedback,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -493,6 +494,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       reasoning: input.reasoning ?? null,
       reasoningMs: input.reasoningMs ?? null,
       ui: input.ui ?? null,
+      feedback: null,
       createdAt: now,
     };
     await this.db.insert(agentMessage).values(message);
@@ -515,6 +517,19 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       .update(agentMessage)
       .set({ ui: ui.length > 0 ? ui : null })
       .where(eq(agentMessage.id, messageId));
+  }
+
+  async threadOfMessage(messageId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ threadId: agentMessage.threadId })
+      .from(agentMessage)
+      .where(eq(agentMessage.id, messageId))
+      .limit(1);
+    return row?.threadId ?? null;
+  }
+
+  async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
+    await this.db.update(agentMessage).set({ feedback }).where(eq(agentMessage.id, messageId));
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
@@ -680,6 +695,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
       ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
       ...(message.ui != null ? { ui: message.ui } : {}),
+      ...(message.feedback != null ? { feedback: message.feedback } : {}),
     };
   }
 }

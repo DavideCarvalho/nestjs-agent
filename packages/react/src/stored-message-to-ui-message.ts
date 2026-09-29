@@ -170,5 +170,10 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
     parts.push(...(pushedByCall.get(call.id) ?? []));
   }
 
-  return { id: message.id, role: message.role, parts };
+  return {
+    id: message.id,
+    role: message.role,
+    parts,
+    ...(message.feedback !== undefined ? { metadata: { feedback: message.feedback } } : {}),
+  };
 }

@@ -3,6 +3,7 @@ import {
   type AgentUiComponent,
   type AppendMessageInput,
   type CreateThreadInput,
+  type MessageFeedback,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -586,6 +587,22 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     await em.flush();
   }
 
+  async threadOfMessage(messageId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const message = await em.findOne(AgentMessage, { id: messageId }, { fields: ['thread'] });
+    return message?.thread.id ?? null;
+  }
+
+  async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
+    const em = this.em.fork();
+    const message = await em.findOne(AgentMessage, { id: messageId });
+    if (message === null) {
+      return;
+    }
+    message.feedback = feedback;
+    await em.flush();
+  }
+
   async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
     const em = this.em.fork();
     const message = await em.findOne(AgentMessage, { id: messageId });
@@ -772,6 +789,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
       ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
       ...(message.ui != null ? { ui: message.ui } : {}),
+      ...(message.feedback != null ? { feedback: message.feedback } : {}),
     };
   }
 }

@@ -2,6 +2,7 @@ import type {
   AgentUiComponent,
   MemoryOrigin,
   MessageAttachment,
+  MessageFeedback,
   MessageRole,
   MessageUsage,
   ToolCallRequest,
@@ -79,6 +80,8 @@ export const agentMessage = sqliteTable(
     reasoningMs: integer('reasoning_ms'),
     /** Components pushed during the step (`ui` stream frames), replayed on reload. */
     ui: text('ui', { mode: 'json' }).$type<AgentUiComponent[]>(),
+    /** The thread owner's thumbs-up/down (+ comment); `null` when unrated. Not copied on fork. */
+    feedback: text('feedback', { mode: 'json' }).$type<MessageFeedback>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_message_thread_created_idx').on(table.threadId, table.createdAt)],

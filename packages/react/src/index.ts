@@ -2,7 +2,30 @@ export {
   AgentChatTransport,
   type AgentChatTransportOptions,
   type AgentStreamMeta,
+  type ReconnectOptions,
+  type StreamConnectionState,
 } from './agent-chat-transport.js';
+export {
+  type AgentBackend,
+  AgentBackendUnsupportedError,
+  type ChatStreamRequest,
+  type ChatStreamResponse,
+  type MessageFeedbackInput,
+  requireBackendMethod,
+  type ResumeStreamRequest,
+  type UploadAttachmentOptions,
+} from './backend.js';
+export {
+  type MessageFeedbackState,
+  useMessageFeedback,
+  type UseMessageFeedbackOptions,
+} from './feedback/use-message-feedback.js';
+export {
+  notifyThreads,
+  onThreadsEvent,
+  type ThreadsEvent,
+} from './threads/threads-events.js';
+export { type ThreadsState, useThreads, type UseThreadsOptions } from './threads/use-threads.js';
 export { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 export {
   AgentClient,
@@ -118,6 +141,7 @@ export {
 export { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 export {
   type AggregatedTurnUsage,
+  type AgentMessageMetadata,
   type StoredTurnMetadata,
   storedThreadToUiMessages,
 } from './stored-thread-to-ui-messages.js';
