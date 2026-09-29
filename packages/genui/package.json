@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-genui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
@@ -16,7 +16,7 @@
     "generative-ui",
     "genui"
   ],
-  "description": "nestjs-agent generative UI \u2014 an isomorphic component catalog (Standard Schema or JSON Schema props), validation, model-facing catalog text, plain-text fallbacks and tool factories that push `ui` frames. Headless: no visual components.",
+  "description": "nestjs-agent generative UI — an isomorphic component catalog (Standard Schema or JSON Schema props), validation, model-facing catalog text, plain-text fallbacks and tool factories that push `ui` frames. Headless: no visual components.",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
