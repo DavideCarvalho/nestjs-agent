@@ -581,6 +581,11 @@ export interface LlmStepEnvelope {
   /** The turn's actor — the handler re-derives tool definitions from it (definitionsFor). */
   actor: Actor;
   /**
+   * The turn's thread — with {@link actor}, what a tool's per-turn `describe` is scoped on. Optional
+   * so an envelope from a loop that predates it still parses.
+   */
+  threadId?: string;
+  /**
    * Hold this call's stream frames rather than writing them to the run's sink, and return them on
    * the result. Set by the loop when an output processor has to see the whole answer before the
    * subscriber does — the dispatched handler streams to a worker-side sink the loop cannot

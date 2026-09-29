@@ -243,7 +243,7 @@ with its own tools:
 4. if the runner replays work, make the persisted list a function of the replayed results (replace
    the list, never append), so a replay writes the same value.
 
-Two conventions from `@dudousxd/nestjs-agent-genui` (a catalog is optional — the frame is the
+Two conventions from `@dudousxd/nestjs-agent-core/genui` (a catalog is optional — the frame is the
 contract):
 
 - a **composed tree** travels as ONE frame, `component: "genui:tree"`, `props: { root }`, where each

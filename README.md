@@ -34,8 +34,8 @@ Extracted and generalized from the flip-nestjs admin assistant.
 
 | Package | What it is |
 |---|---|
-| `@dudousxd/nestjs-agent-core` | Framework-agnostic SPIs, tool registry, the agent loop, personas, and the `aviary:agent:*` diagnostics channel |
-| `@dudousxd/nestjs-agent` | The NestJS module: `@AiTool` + discovery, `/agent/*` SSE controllers, inline + durable runners, multi-agent `forFeature` |
+| `@dudousxd/nestjs-agent-core` | Framework-agnostic SPIs, tool registry, the agent loop, personas, and the `aviary:agent:*` diagnostics channel; `/genui` (the isomorphic generative-UI catalog) |
+| `@dudousxd/nestjs-agent` | The NestJS module: `@AiTool` + discovery, `/agent/*` SSE controllers, inline + durable runners, multi-agent `forFeature`; `/genui` (`AgentGenuiModule`: generative-UI tools from a catalog, per-request catalogs) |
 | `@dudousxd/nestjs-agent-store-mikro-orm` | MikroORM persistence (threads, messages, tool calls, usage, pricing) |
 | `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres) |
 | `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
@@ -43,7 +43,6 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
 | `@dudousxd/nestjs-agent-mcp-server` | MCP server — expose this deployment's tools to an external Model Context Protocol client, under the same registry and roles policy a turn runs through |
 | `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + `useChatTranscript` (the headless transcript model) + styling-agnostic chat components; optional `/markdown` and `/genui` (headless generative-UI renderer) subpaths |
-| `@dudousxd/nestjs-agent-genui` | Headless generative-UI catalog: component definitions (Standard Schema or JSON Schema props), validation, model-facing catalog text, plain-text fallbacks and tools that push `ui` frames; optional builtin definitions |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |
 | `@dudousxd/nestjs-agent-dashboard` | A standalone, mountable AI-gateway governance console (bundled React SPA + NestJS module) — no Telescope required |
@@ -106,8 +105,11 @@ export class GetWeatherTool implements ToolHandler<{ city: string }> {
 
 A tool can also push a component into the answer — `await ctx.emitUi('WeatherCard', { tempC: 21 })`
 streams a `ui` frame and persists it on the assistant message (replay-safe under the durable runner);
-`@AiTool({ terminal: true })` ends the turn once the call succeeds. `@dudousxd/nestjs-agent-genui`
-builds such tools from a component catalog.
+`@AiTool({ terminal: true })` ends the turn once the call succeeds. `ctx.emitUi` is always there — on
+a surface with no conversation (MCP) it is a no-op. For a model that composes UI itself, declare a
+component catalog (`@dudousxd/nestjs-agent-core/genui`, isomorphic — the browser imports the same
+file) and add `AgentGenuiModule.forRoot({ catalog })` from `@dudousxd/nestjs-agent/genui`; on the
+client, `<GenuiProvider>` from `@dudousxd/nestjs-agent-react/genui` draws every pushed component.
 
 The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 

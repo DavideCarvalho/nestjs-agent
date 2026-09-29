@@ -1,6 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { RolesPolicy } from './spi/roles-policy.js';
-import type { AiToolCtx, ToolHandler } from './spi/tool.js';
+import type { AiToolCtx, ToolDescribeScope, ToolHandler } from './spi/tool.js';
 import {
   canActorUseTool,
   filterToolsByAllowList,
@@ -9,6 +9,7 @@ import {
   filterToolsByRole,
   isToolEnabled,
 } from './tool-filters.js';
+import { createNoopEmitUi } from './tool-ui.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
 
 /** Thrown when an actor invokes a tool their role is not allowed. */
@@ -115,13 +116,22 @@ export class ToolRegistry {
     actor: Actor,
     policy: RolesPolicy,
     allowedTools?: string[],
+    scope: Omit<ToolDescribeScope, 'actor'> = {},
   ): Promise<ToolDefinition[]> {
-    return (await this.visibleSpecs(actor, policy, allowedTools)).map((spec) => ({
-      name: spec.name,
-      kind: spec.kind,
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-    }));
+    const visible = await this.visibleEntries(actor, policy, allowedTools);
+    return Promise.all(
+      visible.map(async ({ spec, handler }) => {
+        // After every gate: a tool this actor cannot reach is never asked to describe itself.
+        const override =
+          handler.describe === undefined ? undefined : await handler.describe({ actor, ...scope });
+        return {
+          name: spec.name,
+          kind: spec.kind,
+          description: override?.description ?? spec.description,
+          inputSchema: override?.inputSchema ?? spec.inputSchema,
+        };
+      }),
+    );
   }
 
   /**
@@ -134,6 +144,14 @@ export class ToolRegistry {
     policy: RolesPolicy,
     allowedTools?: string[],
   ): Promise<ToolSpec[]> {
+    return (await this.visibleEntries(actor, policy, allowedTools)).map(({ spec }) => spec);
+  }
+
+  private async visibleEntries(
+    actor: Actor,
+    policy: RolesPolicy,
+    allowedTools?: string[],
+  ): Promise<Entry[]> {
     const pinnedNames = new Set(
       filterToolsByAllowList(this.allSpecs(), allowedTools).map((spec) => spec.name),
     );
@@ -149,8 +167,7 @@ export class ToolRegistry {
       ).map((spec) => spec.name),
     );
     const roleScoped = live.filter((entry) => allowedByRole.has(entry.spec.name));
-    const actorScoped = await filterToolsByCanUse(roleScoped, actor);
-    return actorScoped.map(({ spec }) => spec);
+    return filterToolsByCanUse(roleScoped, actor);
   }
 
   /**
@@ -181,7 +198,11 @@ export class ToolRegistry {
     if (validation.issues !== undefined) {
       throw new ToolInputInvalidError(name, validation.issues);
     }
-    return entry.handler.execute(validation.value, ctx);
+    // `emitUi` is part of the context's contract; a caller without a conversation (a test, a script,
+    // a JavaScript host) gets the no-op rather than a tool that crashes calling it.
+    const withEmit: AiToolCtx =
+      typeof ctx.emitUi === 'function' ? ctx : { ...ctx, emitUi: createNoopEmitUi(ctx.requestId) };
+    return entry.handler.execute(validation.value, withEmit);
   }
 }
 

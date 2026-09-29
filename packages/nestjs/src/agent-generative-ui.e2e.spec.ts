@@ -40,7 +40,7 @@ class DefaultAgent {}
 @Injectable()
 class ShowChartTool {
   async execute(_input: unknown, ctx: AiToolCtx): Promise<{ shown: string | undefined }> {
-    const pushed = await ctx.emitUi?.('Chart', { points: [3, 1, 2] });
+    const pushed = await ctx.emitUi('Chart', { points: [3, 1, 2] });
     return { shown: pushed?.id };
   }
 }

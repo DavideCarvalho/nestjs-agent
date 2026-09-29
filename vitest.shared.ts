@@ -11,6 +11,12 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-core/guardrails': fileURLToPath(
     new URL('./packages/core/src/guardrails/index.ts', import.meta.url),
   ),
+  '@dudousxd/nestjs-agent-core/genui/builtins': fileURLToPath(
+    new URL('./packages/core/src/genui/builtins.ts', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent-core/genui': fileURLToPath(
+    new URL('./packages/core/src/genui/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core': pkg('core'),
   '@dudousxd/nestjs-agent-testing': pkg('testing'),
   '@dudousxd/nestjs-agent-store-mikro-orm': pkg('store-mikro-orm'),
@@ -23,10 +29,6 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-client': pkg('client'),
   '@dudousxd/nestjs-agent-codegen': pkg('codegen'),
   '@dudousxd/nestjs-agent-mcp': pkg('mcp'),
-  '@dudousxd/nestjs-agent-genui/builtins': fileURLToPath(
-    new URL('./packages/genui/src/builtins.ts', import.meta.url),
-  ),
-  '@dudousxd/nestjs-agent-genui': pkg('genui'),
   '@dudousxd/nestjs-agent-react/genui/json-render': fileURLToPath(
     new URL('./packages/react/src/genui/json-render.tsx', import.meta.url),
   ),
@@ -34,6 +36,9 @@ export const alias: Record<string, string> = {
     new URL('./packages/react/src/genui/index.ts', import.meta.url),
   ),
   '@dudousxd/nestjs-agent-react': pkg('react'),
+  '@dudousxd/nestjs-agent/genui': fileURLToPath(
+    new URL('./packages/nestjs/src/genui/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent': pkg('nestjs'),
   // The registry ships shadcn-flavoured source, which reaches `cn` through the alias every shadcn
   // project already has. Nothing under packages/ uses an `@/` specifier, so this resolves only

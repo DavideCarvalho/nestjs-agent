@@ -191,9 +191,7 @@ describe('ctx.emitUi', () => {
       {
         chart: {
           execute: async (_input, ctx) => {
-            const { id } = (await ctx.emitUi?.('Chart', { points: [1, 2] }, { version: 2 })) ?? {
-              id: 'none',
-            };
+            const { id } = await ctx.emitUi('Chart', { points: [1, 2] }, { version: 2 });
             return { shown: id };
           },
         },
@@ -233,9 +231,9 @@ describe('ctx.emitUi', () => {
       {
         table: {
           execute: async (_input, ctx) => {
-            await ctx.emitUi?.('Table', { rows: [1] }, { id: 'rows' });
-            await ctx.emitUi?.('Note', { text: 'loading' });
-            await ctx.emitUi?.('Table', { rows: [1, 2] }, { id: 'rows' });
+            await ctx.emitUi('Table', { rows: [1] }, { id: 'rows' });
+            await ctx.emitUi('Note', { text: 'loading' });
+            await ctx.emitUi('Table', { rows: [1, 2] }, { id: 'rows' });
             return 'ok';
           },
         },
@@ -253,8 +251,8 @@ describe('ctx.emitUi', () => {
   it('keeps the model turn’s own components first, then the tools’ in call order', async () => {
     const h = await harness(
       {
-        a: { execute: async (_input, ctx) => (await ctx.emitUi?.('A', {}))?.id },
-        b: { execute: async (_input, ctx) => (await ctx.emitUi?.('B', {}))?.id },
+        a: { execute: async (_input, ctx) => (await ctx.emitUi('A', {}))?.id },
+        b: { execute: async (_input, ctx) => (await ctx.emitUi('B', {}))?.id },
       },
       [
         { id: 'c1', name: 'a' },
@@ -274,7 +272,7 @@ describe('ctx.emitUi', () => {
         chart: {
           execute: async (_input, ctx) => {
             executions += 1;
-            await ctx.emitUi?.('Chart', { n: executions });
+            await ctx.emitUi('Chart', { n: executions });
             return 'ok';
           },
         },
@@ -316,7 +314,7 @@ describe('ctx.emitUi', () => {
 
   it('persists what a DISPATCHED tool pushed, read off the step result', async () => {
     const h = await harness(
-      { chart: { execute: async (_input, ctx) => (await ctx.emitUi?.('Chart', { x: 1 }))?.id } },
+      { chart: { execute: async (_input, ctx) => (await ctx.emitUi('Chart', { x: 1 }))?.id } },
       [{ id: 'c1', name: 'chart' }],
     );
     await run(h, { dispatched: true });

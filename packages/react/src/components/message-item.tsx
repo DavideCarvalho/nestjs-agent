@@ -8,6 +8,7 @@ import type {
   TranscriptUiBlock,
 } from '../transcript/model.js';
 import { type TranscriptItem, useTranscriptItem } from '../transcript/use-chat-transcript.js';
+import { useAmbientRenderUi } from './ambient-ui.js';
 
 export type { AnyToolUIPart, MessageUsageInfo } from '../transcript/model.js';
 export { formatRelativeTime } from '../transcript/model.js';
@@ -25,8 +26,8 @@ export type RenderFilesFn = (files: TranscriptFile[]) => React.ReactNode;
 
 /**
  * Render a component the server pushed into the message — look `block.component` up in your own
- * registry. Omitted → pushed components are not drawn (there is no sensible default for an app's
- * own component).
+ * registry. Omitted → drawn by the enclosing `<GenuiProvider>` (`/genui`) if there is one, else not
+ * drawn (there is no sensible default for an app's own component).
  */
 export type RenderUiFn = (block: TranscriptUiBlock) => React.ReactNode;
 
@@ -64,7 +65,10 @@ interface MessageRenderSlots {
   renderReasoning?: RenderReasoningFn;
   /** Draw files yourself — a gallery, a viewer. Omitted → images inline, everything else a link. */
   renderFiles?: RenderFilesFn;
-  /** Draw a server-pushed component (a `ui` stream frame). Omitted → not drawn. */
+  /**
+   * Draw a server-pushed component (a `ui` stream frame). Omitted → the enclosing `<GenuiProvider>`
+   * draws it; without one, not drawn.
+   */
   renderUi?: RenderUiFn;
   /**
    * Extra content for the action row, after the built-in affordances and before usage — a badge
@@ -135,7 +139,13 @@ export function MessageItem({
 }
 
 /** The default markup for one modelled message — what `MessageItem` renders once it has an item. */
-export function MessageItemView({ item, ...slots }: MessageItemViewProps) {
+export function MessageItemView({ item, ...given }: MessageItemViewProps) {
+  // Inside a `<GenuiProvider>`, pushed components draw without a `renderUi` of their own.
+  const ambientRenderUi = useAmbientRenderUi();
+  const slots: MessageRenderSlots =
+    given.renderUi === undefined && ambientRenderUi !== null
+      ? { ...given, renderUi: ambientRenderUi }
+      : given;
   const { classNames } = slots;
   const actionRow = (
     <div className={classNames?.actions} data-actions-for={item.role}>

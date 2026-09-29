@@ -54,3 +54,19 @@ export function provideAgentTool(
   }
   return { provide, useValue: brand(factoryOrTool) };
 }
+
+/**
+ * Registers a LIST of functional tools from one factory — for a producer whose tool count is only
+ * known once its dependencies resolve (a catalog loaded from config, one tool per entry). The
+ * factory's result is branded element by element; `AiToolDiscoveryService` registers each.
+ */
+export function provideAgentTools(
+  factory: (...deps: never[]) => readonly FunctionalTool[] | Promise<readonly FunctionalTool[]>,
+  inject?: FactoryProvider['inject'],
+): Provider {
+  return {
+    provide: Symbol('nestjs-agent:functional-tool-list'),
+    useFactory: async (...deps: never[]) => (await factory(...deps)).map(brand),
+    inject: inject ?? [],
+  };
+}

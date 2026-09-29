@@ -1,5 +1,10 @@
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
-import { AGENT_TOOL_REGISTRY, type Actor, type ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import {
+  AGENT_TOOL_REGISTRY,
+  type Actor,
+  type ToolRegistry,
+  createNoopEmitUi,
+} from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import {
   All,
@@ -230,7 +235,7 @@ describe('the principal a dispatched call presents', () => {
     const result = await routeTools.invoke(
       'internal_read',
       {},
-      { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q' },
+      { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q', emitUi: createNoopEmitUi() },
       { can: () => true },
     );
     expect(result).toEqual({ caller: ACTOR });
@@ -246,7 +251,7 @@ describe('the principal a dispatched call presents', () => {
       routeTools.invoke(
         'internal_read',
         {},
-        { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q' },
+        { actor: ACTOR, threadId: 't', runId: 'r', requestId: 'q', emitUi: createNoopEmitUi() },
         { can: () => true },
       ),
     ).rejects.toThrow(/no service token \(HTTP 403\)/);

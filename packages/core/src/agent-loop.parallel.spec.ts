@@ -9,6 +9,7 @@ import {
   type ModelTurnArgs,
   type ModelTurnResult,
   ToolRegistry,
+  createNoopEmitUi,
   runAgentLoop,
   settleAll,
 } from './index.js';
@@ -187,7 +188,12 @@ async function pass(options: PassOptions): Promise<PassResult> {
       ? {
           dispatchTool: (call, envelope) =>
             journal.at(DISPATCH_NAME, () =>
-              registry.invoke(call.name, envelope.input, envelope.ctx, deps.rolesPolicy),
+              registry.invoke(
+                call.name,
+                envelope.input,
+                { ...envelope.ctx, emitUi: createNoopEmitUi() },
+                deps.rolesPolicy,
+              ),
             ),
         }
       : {}),

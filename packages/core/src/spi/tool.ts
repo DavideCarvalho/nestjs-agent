@@ -1,3 +1,4 @@
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { Actor, PageContext } from '../types.js';
 
 /**
@@ -25,12 +26,13 @@ export interface AiToolCtx {
    * JSON; it is snapshotted when pushed.
    *
    * Replay-safe under the durable runner: the pushed components ride the tool step's journaled
-   * result, so a replay neither streams nor persists them again. Present whenever the agent loop
-   * runs the tool (inline, durable, dispatched); absent on surfaces with no conversation to push
-   * into (the MCP server), hence optional — call it as `ctx.emitUi?.(…)` in a tool that is also
-   * served there.
+   * result, so a replay neither streams nor persists them again.
+   *
+   * Always present. On a surface with no conversation to push into (the MCP server, a direct
+   * `registry.invoke` without one) it is a no-op that still resolves to an id, so a tool calls
+   * `ctx.emitUi(…)` unconditionally.
    */
-  emitUi?(
+  emitUi(
     component: string,
     props: Record<string, unknown>,
     options?: { id?: string; version?: number },
@@ -67,4 +69,32 @@ export interface ToolHandler<I = unknown> {
    * when the turn's tool list is built (a denied actor is never shown it) and again on invoke.
    */
   canUse?(actor: Actor): boolean | Promise<boolean>;
+  /**
+   * What the model is told about this tool for THIS turn — a description and/or input schema that
+   * depend on who is asking (a per-tenant component catalog, a per-plan list of options). Called
+   * when the turn's tool list is built, after every gate has passed; whatever it returns replaces
+   * the registered spec's `description` / `inputSchema` in the definition the model sees. Omit, or
+   * return `undefined`, to use the registered spec as is.
+   *
+   * It shapes what the model is SHOWN only: the registry still validates a call against the
+   * registered `inputSchema`, so a tool whose accepted input varies per turn registers a permissive
+   * schema and validates in `execute`.
+   */
+  describe?(
+    scope: ToolDescribeScope,
+  ): ToolDescription | undefined | Promise<ToolDescription | undefined>;
+}
+
+/** Who a turn's tool list is being built for — what {@link ToolHandler.describe} can vary on. */
+export interface ToolDescribeScope {
+  actor: Actor;
+  /** Absent where the list is built outside a conversation (the MCP server's `tools/list`). */
+  threadId?: string;
+  agentName?: string;
+}
+
+/** A per-turn override of a tool's model-facing definition ({@link ToolHandler.describe}). */
+export interface ToolDescription {
+  description?: string;
+  inputSchema?: StandardSchemaV1;
 }

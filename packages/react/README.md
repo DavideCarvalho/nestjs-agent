@@ -352,46 +352,50 @@ menu (`ChatCommandPalette`, grown into the combobox's listbox) above the compose
 
 `@dudousxd/nestjs-agent-react/genui` draws server-pushed components (`ui` frames, persisted `ui[]`)
 with YOUR renderers. Headless: it adds no element and no style — only what your registry renders.
+Set it up once, at the root; `MessageItem` / `MessageList` then draw every pushed component with no
+`renderUi` of their own:
 
 ```tsx
-import { GenerativeUI, type GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
-import { catalog } from './catalog'; // optional: a @dudousxd/nestjs-agent-genui catalog
+import { GenuiProvider, type GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
+import { catalog } from './catalog'; // optional: the same file the server uses (@dudousxd/nestjs-agent-core/genui)
 
 const registry: GenuiRegistry = { DataTable: MyTable, Chart: MyChart, Card: MyCard, Text: MyText };
 
-<MessageItem
-  message={message}
-  renderUi={(block) => (
-    <GenerativeUI
-      part={block}
-      registry={registry}
-      catalog={catalog}
-      resolveComponent={(name, version) => loadTenantComponent(name, version)}
-      fallback={({ reason, item }) => <UnknownComponent name={item.component} reason={reason} />}
-      loading={<Skeleton />}
-    />
-  )}
-/>;
+<GenuiProvider
+  registry={registry}
+  catalog={catalog}
+  resolveComponent={(name, version) => loadTenantComponent(name, version)}
+  fallback={({ reason, item }) => <UnknownComponent name={item.component} reason={reason} />}
+  loading={<Skeleton />}
+>
+  <App />
+</GenuiProvider>;
 ```
 
 | Prop | |
 |---|---|
-| `part` | A transcript `ui` block, a `data-ui` message part, or a stored `{ id, component, props, version? }`. |
 | `registry` | Component name → your renderer. It receives the props spread (and `children` as a tree layout node). |
 | `catalog?` | Validate props before drawing (`catalog.validateSync` when it can, so no placeholder flashes). Components the catalog does not know render unvalidated. |
 | `resolveComponent?(name, version)` | For components the registry lacks, e.g. a tenant's own, at the exact version a message was rendered with. Sync or async, cached per resolver/name/version. |
 | `fallback?` | A node, or `({ reason: 'unknown' \| 'invalid' \| 'error', item, issues?, error? }) => node`. Default: nothing. |
 | `loading?`, `onError?` | While a resolver or async validation is pending; a renderer threw (each item has its own error boundary). |
+| `treeRenderer?` | Draws a whole `genui:tree` frame (e.g. json-render, below). Default: node by node through `registry`. |
+
+`<GenerativeUI part={block} />` draws one component (a transcript `ui` block, a `data-ui` message
+part, or a stored `{ id, component, props, version? }`) with the provider's settings; any of the
+props above passed to it win over the provider's. An explicit `renderUi` on `MessageItem` still
+wins too, and `useAmbientRenderUi()` (main entry) hands a custom transcript the provider's renderer.
 
 A `genui:tree` frame (tree mode) is drawn node by node through the same registry, catalog and
-fallbacks, each node in its own boundary; put a `genui:tree` entry in the registry to take over.
-`useGenerativeUI(part, options)` returns the state (`ready` with `Component`/`props`, `loading`,
-`problem`) for your own chrome; wrap it in `<GenerativeUIScope>` when it may draw a tree.
+fallbacks, each node in its own boundary. `useGenerativeUI(part, options?)` returns the state
+(`ready` with `Component`/`props`, `loading`, `problem`) for your own chrome, defaulting to the
+provider's settings; wrap it in `<GenerativeUIScope>` when it may draw a tree.
 
-**json-render** (optional peer `@json-render/react` >= 0.21):
-`@dudousxd/nestjs-agent-react/genui/json-render` renders tree frames through json-render's
-`Renderer` — `registry[GENUI_TREE_COMPONENT] = jsonRenderTree(toJsonRenderRegistry(registry))` —
-plus `JsonRenderTree` and `treeToJsonRenderSpec`.
+**json-render** (optional peer `@json-render/react` >= 0.21): import `GenuiProvider` from
+`@dudousxd/nestjs-agent-react/genui/json-render` instead — the same provider plus
+`jsonRender={myJsonRenderRegistry}` (or `jsonRender` alone, to derive one from `registry`), which
+draws tree frames through json-render's `Renderer`. `JsonRenderTree`, `jsonRenderTree`,
+`toJsonRenderRegistry` and `treeToJsonRenderSpec` are exported for hand wiring.
 
 ### Designed components, as copy-in source
 

@@ -113,7 +113,13 @@ import {
 import type { ToolRegistry } from './tool-registry.js';
 import { invokeWithTransientRetry, resolveToolTransientRetryNumbers } from './tool-retry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
-import { createUiCollector, mergeUi, unwrapToolStepOutput, wrapToolStepOutput } from './tool-ui.js';
+import {
+  createNoopEmitUi,
+  createUiCollector,
+  mergeUi,
+  unwrapToolStepOutput,
+  wrapToolStepOutput,
+} from './tool-ui.js';
 import { observeTurnFrames, withTurnFrames } from './turn-frames.js';
 import type {
   AgentRunInput,
@@ -1298,6 +1304,9 @@ function toolContext(deps: AgentLoopDeps, input: AgentRunInput, hooks: AgentLoop
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
     ...(deps.host !== undefined ? { host: deps.host } : {}),
+    // Replaced per tool call by the call's own collector (see the tool step); this one only serves
+    // what runs outside a call — the elicitation wait.
+    emitUi: createNoopEmitUi(hooks.runId),
   };
 }
 
@@ -2792,6 +2801,7 @@ export async function runAgentLoop<TOutput = unknown>(
         system: prompt.system,
         messages: prompt.messages,
         actor: input.actor,
+        threadId: input.threadId,
         ...(gated ? { bufferOutput: true } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
       });
@@ -2803,6 +2813,10 @@ export async function runAgentLoop<TOutput = unknown>(
               input.actor,
               deps.rolesPolicy,
               deps.toolAllowList,
+              {
+                threadId: input.threadId,
+                ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+              },
             ),
             ask: deps.ask,
           }),

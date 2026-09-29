@@ -4,8 +4,12 @@ export {
   type GenerativeUIProps,
   GenerativeUIScope,
   type GenerativeUIScopeProps,
+  GenuiProvider,
+  type GenuiProviderProps,
+  type GenuiProviderValue,
   GenuiTree,
   useGenerativeUI,
+  useGenuiProvider,
 } from './generative-ui.js';
 export {
   GENUI_TREE_COMPONENT,

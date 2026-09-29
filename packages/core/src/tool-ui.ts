@@ -42,7 +42,24 @@ export function unwrapToolStepOutput(raw: unknown): { output: unknown; ui: Agent
   return { output: raw, ui: [] };
 }
 
-export type EmitUi = NonNullable<AiToolCtx['emitUi']>;
+export type EmitUi = AiToolCtx['emitUi'];
+
+/**
+ * `ctx.emitUi` where there is no conversation to push into (the MCP server, a direct
+ * `registry.invoke`): nothing is streamed or persisted, but the call resolves to an id — the one it
+ * was given, else `<scope>:ui:<n>` — so a tool never has to test for the capability.
+ */
+export function createNoopEmitUi(scope = 'noop'): EmitUi {
+  let next = 0;
+  return async (_component, _props, options = {}) => {
+    if (options.id !== undefined) {
+      return { id: options.id };
+    }
+    const id = `${scope}:ui:${next}`;
+    next += 1;
+    return { id };
+  };
+}
 
 /** Collects what one tool invocation pushes, streaming each push as it happens. */
 export interface UiCollector {

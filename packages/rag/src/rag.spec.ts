@@ -1,3 +1,4 @@
+import { createNoopEmitUi } from '@dudousxd/nestjs-agent-core';
 import { FakeEmbeddingProvider } from '@dudousxd/nestjs-agent-testing';
 import { describe, expect, it } from 'vitest';
 import { chunkText } from './chunk.js';
@@ -467,6 +468,7 @@ describe('createRetrievalTool', () => {
         threadId: 't',
         runId: 'r',
         requestId: 'r',
+        emitUi: createNoopEmitUi(),
       },
     );
     expect(result).toMatchObject({ passages: [{ source: 'fox' }] });
@@ -484,6 +486,7 @@ describe('createRetrievalTool', () => {
           threadId: 't',
           runId: 'r',
           requestId: 'r',
+          emitUi: createNoopEmitUi(),
         },
       ),
     ).rejects.toThrow(/query/);

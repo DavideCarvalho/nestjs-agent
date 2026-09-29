@@ -4,6 +4,7 @@ import {
   AGENT_TOOL_REGISTRY,
   type Actor,
   type AgentRegistry,
+  type ToolDescribeScope,
   type ToolHandler,
   type ToolRegistry,
   normalizeDelegation,
@@ -34,6 +35,21 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     for (const wrapper of this.discovery.getProviders()) {
       const instance = wrapper.instance;
       if (instance === null || instance === undefined || typeof instance !== 'object') {
+        continue;
+      }
+      // `provideAgentTools` resolves to a list; only an all-branded one is ours.
+      if (
+        Array.isArray(instance) &&
+        instance.length > 0 &&
+        instance.every(
+          (each) => typeof each === 'object' && each !== null && isBrandedFunctionalTool(each),
+        )
+      ) {
+        for (const tool of instance as FunctionalTool[]) {
+          if (this.registerFunctionalTool(tool)) {
+            functional += 1;
+          }
+        }
         continue;
       }
       // Functional tools registered via `provideAgentTool` resolve to a branded { spec, handler }.
@@ -76,6 +92,12 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
             : {}),
           ...(typeof handler.canUse === 'function'
             ? { canUse: (actor: Actor) => (instance as Required<ToolHandler>).canUse(actor) }
+            : {}),
+          ...(typeof handler.describe === 'function'
+            ? {
+                describe: (scope: ToolDescribeScope) =>
+                  (instance as Required<ToolHandler>).describe(scope),
+              }
             : {}),
         },
       );

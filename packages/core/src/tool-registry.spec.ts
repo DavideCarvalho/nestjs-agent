@@ -13,6 +13,7 @@ import {
   ToolNotFoundError,
   ToolRegistry,
   type ToolSpec,
+  createNoopEmitUi,
   filterToolsByAllowList,
 } from './index.js';
 
@@ -40,6 +41,7 @@ function ctxFor(actor: Actor): AiToolCtx {
     threadId: 't1',
     runId: 'r1',
     requestId: 'r1',
+    emitUi: createNoopEmitUi(),
   };
 }
 

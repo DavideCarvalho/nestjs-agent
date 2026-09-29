@@ -60,6 +60,7 @@ export { MemoriesController } from './controller/memories.controller.js';
 export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';
 export {
   provideAgentTool,
+  provideAgentTools,
   AGENT_TOOL_BRAND,
   type FunctionalTool,
 } from './functional-tool.js';

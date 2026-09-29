@@ -1,11 +1,14 @@
 import {
   Component,
+  type Context,
   type ErrorInfo,
   type ReactNode,
   createContext,
+  useCallback,
   useContext,
   useMemo,
 } from 'react';
+import { AmbientRenderUiContext, sharedContext } from '../components/ambient-ui.js';
 import type { TranscriptUiBlock } from '../transcript/model.js';
 import type {
   GenerativeUIElement,
@@ -13,6 +16,7 @@ import type {
   GenerativeUIOptions,
   GenerativeUIProblem,
   GenerativeUIState,
+  GenuiRegistry,
   GenuiRenderer,
 } from './types.js';
 import {
@@ -127,8 +131,8 @@ function TreeNode({ node, id }: { node: GenerativeUIElement; id: string }) {
 
 /**
  * Renders a `genui:tree` frame's `{ root }` node by node through the same registry, catalog and
- * resolver as top-level components. Used automatically for tree frames unless the registry
- * overrides `genui:tree` (e.g. with the json-render adapter).
+ * resolver as top-level components. Used automatically for tree frames unless a `treeRenderer`
+ * (e.g. the json-render one) or a registry entry for `genui:tree` takes over.
  */
 export function GenuiTree({ root }: { root?: GenerativeUIElement }) {
   if (root === undefined || root === null || typeof root.type !== 'string') return null;
@@ -171,20 +175,108 @@ export function GenerativeUIScope({
   return <TreeScopeContext.Provider value={scope}>{children}</TreeScopeContext.Provider>;
 }
 
-/** The headless half of {@link GenerativeUI}: what to draw for one pushed component, or `null` when `part` is not one. */
-export function useGenerativeUI(
-  part: unknown,
-  options: GenerativeUIOptions,
-): GenerativeUIState | null {
-  return useGenerativeUIState(part, options, GenuiTree as GenuiRenderer);
+/** What `<GenuiProvider>` hands every `<GenerativeUI>` / `useGenerativeUI` below it. */
+export interface GenuiProviderValue extends Partial<GenerativeUIOptions> {
+  fallback?: GenerativeUIFallback;
+  loading?: ReactNode;
+  onError?: (error: unknown, item: GenerativeUIItem) => void;
 }
 
-export interface GenerativeUIProps extends GenerativeUIOptions {
+// Shared by key: `/genui` and `/genui/json-render` are separate bundles, and a provider from one
+// must reach a `<GenerativeUI>` from the other.
+const GenuiContext: Context<GenuiProviderValue | null> = sharedContext<GenuiProviderValue>(
+  '@dudousxd/nestjs-agent-react:genui-provider',
+);
+
+/** The enclosing `<GenuiProvider>`'s settings, or `null` outside one. */
+export function useGenuiProvider(): GenuiProviderValue | null {
+  return useContext(GenuiContext);
+}
+
+export interface GenuiProviderProps extends GenuiProviderValue {
+  children?: ReactNode;
+}
+
+/**
+ * Set generative UI up once, at the app root: the registry of your renderers, the catalog to
+ * validate against, a resolver for components the registry lacks, and what to draw when one does
+ * not render. Every `<GenerativeUI>` below reads it (its own props still win), and `MessageItem` /
+ * `MessageList` draw pushed components with it — no `renderUi` per message.
+ *
+ * ```tsx
+ * <GenuiProvider registry={registry} catalog={catalog} fallback={({ item }) => <Unknown name={item.component} />}>
+ *   <App />
+ * </GenuiProvider>
+ * ```
+ */
+export function GenuiProvider({
+  registry,
+  catalog,
+  resolveComponent,
+  treeRenderer,
+  fallback,
+  loading,
+  onError,
+  children,
+}: GenuiProviderProps) {
+  const value = useMemo<GenuiProviderValue>(
+    () => ({
+      ...(registry !== undefined ? { registry } : {}),
+      ...(catalog !== undefined ? { catalog } : {}),
+      ...(resolveComponent !== undefined ? { resolveComponent } : {}),
+      ...(treeRenderer !== undefined ? { treeRenderer } : {}),
+      ...(fallback !== undefined ? { fallback } : {}),
+      ...(loading !== undefined ? { loading } : {}),
+      ...(onError !== undefined ? { onError } : {}),
+    }),
+    [registry, catalog, resolveComponent, treeRenderer, fallback, loading, onError],
+  );
+  const renderUi = useCallback((block: TranscriptUiBlock) => <GenerativeUI part={block} />, []);
+  return (
+    <GenuiContext.Provider value={value}>
+      <AmbientRenderUiContext.Provider value={renderUi}>{children}</AmbientRenderUiContext.Provider>
+    </GenuiContext.Provider>
+  );
+}
+
+const NO_REGISTRY: GenuiRegistry = {};
+
+/** Provider settings overlaid with explicit ones (explicit wins), memoized on their parts. */
+function useMergedOptions(own: Partial<GenerativeUIOptions>): GenerativeUIOptions {
+  const provided = useContext(GenuiContext);
+  const registry = own.registry ?? provided?.registry ?? NO_REGISTRY;
+  const catalog = own.catalog ?? provided?.catalog;
+  const resolveComponent = own.resolveComponent ?? provided?.resolveComponent;
+  const treeRenderer = own.treeRenderer ?? provided?.treeRenderer;
+  return useMemo(
+    () => ({
+      registry,
+      ...(catalog !== undefined ? { catalog } : {}),
+      ...(resolveComponent !== undefined ? { resolveComponent } : {}),
+      ...(treeRenderer !== undefined ? { treeRenderer } : {}),
+    }),
+    [registry, catalog, resolveComponent, treeRenderer],
+  );
+}
+
+/**
+ * The headless half of {@link GenerativeUI}: what to draw for one pushed component, or `null` when
+ * `part` is not one. Options default to the enclosing `<GenuiProvider>`'s.
+ */
+export function useGenerativeUI(
+  part: unknown,
+  options: Partial<GenerativeUIOptions> = {},
+): GenerativeUIState | null {
+  const merged = useMergedOptions(options);
+  return useGenerativeUIState(part, merged, merged.treeRenderer ?? (GenuiTree as GenuiRenderer));
+}
+
+export interface GenerativeUIProps extends Partial<GenerativeUIOptions> {
   /** A transcript `ui` block, a `data-ui` message part, or a stored `{ id, component, props, version? }`. */
   part: TranscriptUiBlock | GenerativeUIItem | unknown;
-  /** Drawn for an unknown component, invalid props, or a renderer that threw. Default: nothing. */
+  /** Drawn for an unknown component, invalid props, or a renderer that threw. Default: the provider's, else nothing. */
   fallback?: GenerativeUIFallback;
-  /** Drawn while a resolver or an async validation is pending. Default: nothing. */
+  /** Drawn while a resolver or an async validation is pending. Default: the provider's, else nothing. */
   loading?: ReactNode;
   /** A renderer threw (the item shows `fallback`). */
   onError?: (error: unknown, item: GenerativeUIItem) => void;
@@ -193,12 +285,10 @@ export interface GenerativeUIProps extends GenerativeUIOptions {
 /**
  * Draws one server-pushed component with the app's own renderer. Headless: it adds no element and
  * no style of its own — only what the registry's component renders (and whatever `fallback` /
- * `loading` you pass).
+ * `loading` you pass). Everything but `part` defaults to the enclosing `<GenuiProvider>`.
  *
  * ```tsx
- * <MessageItem message={m} renderUi={(block) => (
- *   <GenerativeUI part={block} registry={registry} catalog={catalog} fallback={({ item }) => <Unknown name={item.component} />} />
- * )} />
+ * <GenerativeUI part={block} />
  * ```
  */
 export function GenerativeUI({
@@ -206,19 +296,26 @@ export function GenerativeUI({
   registry,
   catalog,
   resolveComponent,
-  fallback,
-  loading = null,
-  onError,
+  treeRenderer,
+  fallback: ownFallback,
+  loading: ownLoading,
+  onError: ownOnError,
 }: GenerativeUIProps) {
-  const options = useMemo<GenerativeUIOptions>(
-    () => ({
-      registry,
-      ...(catalog !== undefined ? { catalog } : {}),
-      ...(resolveComponent !== undefined ? { resolveComponent } : {}),
-    }),
-    [registry, catalog, resolveComponent],
+  const provided = useContext(GenuiContext);
+  const fallback = ownFallback ?? provided?.fallback;
+  const loading = ownLoading ?? provided?.loading ?? null;
+  const onError = ownOnError ?? provided?.onError;
+  const options = useMergedOptions({
+    ...(registry !== undefined ? { registry } : {}),
+    ...(catalog !== undefined ? { catalog } : {}),
+    ...(resolveComponent !== undefined ? { resolveComponent } : {}),
+    ...(treeRenderer !== undefined ? { treeRenderer } : {}),
+  });
+  const state = useGenerativeUIState(
+    part,
+    options,
+    options.treeRenderer ?? (GenuiTree as GenuiRenderer),
   );
-  const state = useGenerativeUI(part, options);
   if (state === null) return null;
   if (state.status === 'loading') return loading;
   if (state.status === 'problem') {
