@@ -662,15 +662,52 @@ merged. For a single already-atomic row, `storedMessageToUiMessage` maps it 1:1 
 Persisted reasoning comes back as a `reasoning` part before the text (with its duration), and
 persisted pushed components as `data-ui` parts, so a reloaded thread shows what the live one did.
 
-### Attachments and the raw client
+### Attachments
 
-`uploadAttachment` and the rest of `AgentClient` work outside `useAgentChat` too — e.g. from a
-file-picker or a standalone approvals-inbox screen:
+`useAttachments` is the composer's file tray without the tray: validation, one upload per file
+with progress and cancel, retry, image previews, and the handlers for a file input, a drop zone and
+paste.
+
+```tsx
+import { messageFiles, useAttachments } from '@dudousxd/nestjs-agent-react';
+
+const files = useAttachments({
+  backend: chat.backend, // or `upload: (file, { signal, onProgress }) => myUpload(file)`
+  accept: 'image/*,.pdf',
+  maxBytes: 20 * 1024 * 1024,
+  maxFiles: 5,
+});
+
+<div {...files.dropZoneProps} data-dragging={files.isDragging}>
+  <textarea onPaste={files.onPaste} />
+  <input {...files.inputProps} hidden ref={pickerRef} />
+  {files.items.map((item) => (
+    <span key={item.id} data-status={item.status}>
+      {item.previewUrl ? <img src={item.previewUrl} alt="" /> : item.name}
+      {item.status === 'uploading' ? ` ${Math.round(item.progress * 100)}%` : null}
+      {item.error}
+      <button onClick={() => files.remove(item.id)}>Remove</button>
+    </span>
+  ))}
+</div>
+
+<button
+  disabled={files.isUploading}
+  onClick={async () => {
+    await chat.sendMessage({ text }, { body: { attachments: files.refs } });
+    files.clear();
+  }}
+/>
+```
+
+An item is `uploading`, `ready`, `error` (retry with `files.retry(id)`) or `rejected` (failed
+`accept`/`maxBytes`/`maxFiles` and never uploaded; `error` says why). `remove` cancels an upload in
+flight. `messageFiles(message)` reads the files back off any message — live or replayed — with a
+`kind` (`image`, `pdf`, `text`, …), the extension and, for replayed ones, the stored `mediaId`.
+
+The rest of `AgentClient` works outside `useAgentChat` too — e.g. a standalone approvals inbox:
 
 ```ts
-const attachment = await chat.client.uploadAttachment(file); // → MessageAttachment
-await chat.sendMessage({ text: 'what is in this?' }, { body: { attachments: [attachment] } });
-
 // Human-in-the-loop, callable from any component — not just the chat screen that raised it:
 await chat.approve({ toolCallId });
 await chat.reject({ toolCallId, reason: 'not now' });

@@ -84,6 +84,8 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
       mediaType: attachment.contentType,
       filename: attachment.name,
       url: attachment.url,
+      // The stored id rides along, so a replayed file can be referenced again (`messageFiles`).
+      providerMetadata: { agent: { mediaId: attachment.mediaId } },
     });
   }
 

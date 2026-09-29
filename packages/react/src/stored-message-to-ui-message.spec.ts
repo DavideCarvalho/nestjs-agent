@@ -134,8 +134,20 @@ describe('storedMessageToUiMessage', () => {
 
     expect(ui.parts).toEqual([
       { type: 'text', text: 'check this out' },
-      { type: 'file', mediaType: 'image/png', filename: 'a.png', url: 'https://cdn/a.png' },
-      { type: 'file', mediaType: 'application/pdf', filename: 'b.pdf', url: 'https://cdn/b.pdf' },
+      {
+        type: 'file',
+        mediaType: 'image/png',
+        filename: 'a.png',
+        url: 'https://cdn/a.png',
+        providerMetadata: { agent: { mediaId: 'm1' } },
+      },
+      {
+        type: 'file',
+        mediaType: 'application/pdf',
+        filename: 'b.pdf',
+        url: 'https://cdn/b.pdf',
+        providerMetadata: { agent: { mediaId: 'm2' } },
+      },
     ]);
   });
 

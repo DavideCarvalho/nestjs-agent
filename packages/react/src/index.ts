@@ -6,6 +6,25 @@ export {
   type StreamConnectionState,
 } from './agent-chat-transport.js';
 export {
+  acceptsFile,
+  dragHasFiles,
+  fileKind,
+  filesFromClipboard,
+  type MessageFile,
+  type MessageFileKind,
+  messageFiles,
+} from './attachments/files.js';
+export {
+  type AttachmentRejection,
+  type AttachmentsState,
+  type ClipboardLikeEvent,
+  type DragLikeEvent,
+  type StagedAttachment,
+  type StagedAttachmentStatus,
+  useAttachments,
+  type UseAttachmentsOptions,
+} from './attachments/use-attachments.js';
+export {
   type AgentBackend,
   AgentBackendUnsupportedError,
   type ChatStreamRequest,
