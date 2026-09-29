@@ -187,7 +187,8 @@ export function useChatTranscript(options: UseChatTranscriptOptions): ChatTransc
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount);
   const [stopRequested, setStopRequested] = useState(false);
 
-  const isStreaming = status === 'streaming';
+  // A reconnecting stream is still the turn in flight, and its message is still being written.
+  const isStreaming = status === 'streaming' || status === 'reconnecting';
   const isBusy = status === 'submitted' || isStreaming;
   const isEmpty = messages.length === 0;
 
@@ -212,7 +213,11 @@ export function useChatTranscript(options: UseChatTranscriptOptions): ChatTransc
 
   const stop = useCallback(() => {
     const current = latest.current;
-    if (current.status !== 'submitted' && current.status !== 'streaming') {
+    if (
+      current.status !== 'submitted' &&
+      current.status !== 'streaming' &&
+      current.status !== 'reconnecting'
+    ) {
       return;
     }
     setStopRequested(true);

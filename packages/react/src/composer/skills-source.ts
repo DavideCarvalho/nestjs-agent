@@ -1,5 +1,5 @@
 import type { SkillCatalogEntry } from '@dudousxd/nestjs-agent-core';
-import type { AgentClient } from '../client.js';
+import { type AgentBackend, AgentBackendUnsupportedError } from '../backend.js';
 import type { AutocompleteItem, AutocompleteSource } from './model.js';
 
 /** What each item carries on `data`, so a renderer can show where a skill came from. */
@@ -11,7 +11,8 @@ export interface SkillSuggestionData {
 }
 
 export interface SkillsSourceOptions {
-  client: AgentClient;
+  /** Any backend with `listSkills` — `useAgentChat(...).backend`. */
+  client: Pick<AgentBackend, 'listSkills'>;
   /**
    * Read at query time, not captured once: a threadless chat learns its id only when the backend
    * creates one on the first send, and a skill may be scoped to a conversation.
@@ -50,8 +51,12 @@ export function createSkillsSource(options: SkillsSourceOptions): AutocompleteSo
       if (cached) {
         return cached;
       }
-      const pending = options.client
-        .listSkills(threadId)
+      const listSkills = options.client.listSkills;
+      if (listSkills === undefined) {
+        return Promise.reject(new AgentBackendUnsupportedError('listSkills'));
+      }
+      const pending = listSkills
+        .call(options.client, threadId)
         .then((entries) => entries.map(toItem))
         .catch((error: unknown) => {
           byThread.delete(key);

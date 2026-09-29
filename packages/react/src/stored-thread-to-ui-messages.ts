@@ -1,4 +1,4 @@
-import type { StoredMessage } from '@dudousxd/nestjs-agent-core';
+import type { MessageFeedback, StoredMessage } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 
@@ -23,6 +23,17 @@ export interface AggregatedTurnUsage {
 /** Metadata the grouped `UIMessage` carries on `.metadata.usage` — see {@link AggregatedTurnUsage}. */
 export interface StoredTurnMetadata {
   usage: AggregatedTurnUsage;
+}
+
+/**
+ * Everything a message's `metadata` may carry from this library: `usage` on a merged replayed turn,
+ * `feedback` on a replayed message that was rated (a merged turn is rated through its last row,
+ * whose id it carries), `runId` on a live-streamed one, `costUsd` from the stream's step ends.
+ */
+export interface AgentMessageMetadata extends Partial<StoredTurnMetadata> {
+  feedback?: MessageFeedback;
+  runId?: string;
+  costUsd?: number | null;
 }
 
 /**
@@ -108,12 +119,18 @@ function mergeTurn(rows: StoredMessage[]): UIMessage {
 
   const parts: UIMessage['parts'] = rows.flatMap((row) => storedMessageToUiMessage(row).parts);
   const usage = sumUsage(rows);
+  // A turn is rated through its last row — the id this message carries.
+  const feedback = lastRow.feedback;
+  const metadata: AgentMessageMetadata = {
+    ...(usage !== undefined ? { usage } : {}),
+    ...(feedback !== undefined ? { feedback } : {}),
+  };
 
   return {
     id: lastRow.id,
     role: lastRow.role,
     parts,
-    ...(usage !== undefined ? { metadata: { usage } satisfies StoredTurnMetadata } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }
 

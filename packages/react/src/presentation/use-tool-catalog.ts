@@ -1,6 +1,9 @@
 import type { ToolCatalogEntry } from '@dudousxd/nestjs-agent-core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AgentClient } from '../client.js';
+import { type AgentBackend, AgentBackendUnsupportedError } from '../backend.js';
+
+/** What the catalog needs of a backend. */
+type ToolsBackend = Pick<AgentBackend, 'listTools'>;
 import { type ToolCatalog, toolCatalogFrom } from './phrasing.js';
 
 export interface UseToolCatalogOptions {
@@ -8,7 +11,7 @@ export interface UseToolCatalogOptions {
    * The client to ask — `useAgentChat(...).client`, or one of your own. Must be STABLE across
    * renders (the shared copy is keyed by it): a client constructed inline refetches every render.
    */
-  client: AgentClient;
+  client: ToolsBackend;
   /** The agent whose tools to list. Omitted → the server's default agent. */
   agent?: string;
   /** `false` holds the request (e.g. until the user is signed in). Default `true`. */
@@ -32,9 +35,9 @@ export interface ToolCatalogState {
  * putting a request between a tool starting and the sentence that describes it. A failed request
  * is not cached, so the next mount retries.
  */
-const shared = new WeakMap<AgentClient, Map<string, Promise<ToolCatalogEntry[]>>>();
+const shared = new WeakMap<ToolsBackend, Map<string, Promise<ToolCatalogEntry[]>>>();
 
-function load(client: AgentClient, agent: string | undefined): Promise<ToolCatalogEntry[]> {
+function load(client: ToolsBackend, agent: string | undefined): Promise<ToolCatalogEntry[]> {
   let byAgent = shared.get(client);
   if (byAgent === undefined) {
     byAgent = new Map();
@@ -43,6 +46,9 @@ function load(client: AgentClient, agent: string | undefined): Promise<ToolCatal
   const key = agent ?? '';
   const cached = byAgent.get(key);
   if (cached !== undefined) return cached;
+  if (client.listTools === undefined) {
+    return Promise.reject(new AgentBackendUnsupportedError('listTools'));
+  }
   const request = client.listTools(agent).catch((error: unknown) => {
     byAgent.delete(key);
     throw error;

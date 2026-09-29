@@ -1,6 +1,7 @@
 import type {
   AgentUiComponent,
   MessageAttachment,
+  MessageFeedback,
   MessageRole,
   MessageUsage,
   ToolCallRequest,
@@ -32,6 +33,8 @@ export class AgentMessage {
   reasoningMs?: number | null;
   /** Components pushed during the step (`ui` stream frames), replayed on reload. */
   ui?: AgentUiComponent[] | null;
+  /** The thread owner's thumbs-up/down (+ comment); `null` when unrated. Not copied on fork. */
+  feedback?: MessageFeedback | null;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentMessageRepository;
 }
@@ -68,6 +71,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       reasoning: { type: 'text', nullable: true, ...str },
       reasoningMs: { type: 'integer', nullable: true, fieldName: 'reasoning_ms' },
       ui: { type: 'json', nullable: true },
+      feedback: { type: 'json', nullable: true },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
     },
   });

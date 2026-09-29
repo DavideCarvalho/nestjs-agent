@@ -52,6 +52,7 @@ export {
   type DeclaredSkill,
 } from './discovery/skill-discovery.service.js';
 export { SkillsController } from './controller/skills.controller.js';
+export { MessagesController } from './controller/messages.controller.js';
 export { ToolsController } from './controller/tools.controller.js';
 export { MemoriesController } from './controller/memories.controller.js';
 export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';

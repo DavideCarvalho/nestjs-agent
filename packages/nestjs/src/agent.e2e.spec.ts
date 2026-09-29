@@ -399,6 +399,38 @@ describe('AgentModule (inline)', () => {
     expect(await built.service.getThread({ id: 'owner' }, threadId)).not.toBeNull();
   });
 
+  it('rates a message for its thread owner only, and clears the rating on null', async () => {
+    const built = await buildApp(() => ({ text: 'hi' }));
+    app = built.app;
+    const { runId, threadId } = await built.service.chat({ actor: { id: 'owner' }, message: 'hi' });
+    await collect(built.service.subscribe(runId));
+    const thread = await built.service.getThread({ id: 'owner' }, threadId);
+    const answer = thread?.messages.find((message) => message.role === 'assistant');
+    expect(answer).toBeDefined();
+    const server = app.getHttpServer();
+    const rate = (actor: string, messageId: string, body: object) =>
+      request(server)
+        .post(`/agent/messages/${messageId}/feedback`)
+        .set('x-actor-id', actor)
+        .send(body);
+
+    const rated = await rate('owner', answer?.id ?? '', { value: 'down', comment: ' too vague ' });
+    expect(rated.status).toBe(200);
+    expect(rated.body.feedback).toMatchObject({ value: 'down', comment: 'too vague' });
+    const reread = await built.service.getThread({ id: 'owner' }, threadId);
+    expect(reread?.messages.find((m) => m.id === answer?.id)?.feedback?.value).toBe('down');
+
+    expect((await rate('intruder', answer?.id ?? '', { value: 'up' })).status).toBe(403);
+    expect((await rate('owner', 'no-such-message', { value: 'up' })).status).toBe(404);
+    expect((await rate('owner', answer?.id ?? '', { value: 'meh' })).status).toBe(400);
+
+    const cleared = await rate('owner', answer?.id ?? '', { value: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).toEqual({ feedback: null });
+    const after = await built.service.getThread({ id: 'owner' }, threadId);
+    expect(after?.messages.find((m) => m.id === answer?.id)?.feedback).toBeUndefined();
+  });
+
   it('HTTP: GET /threads/:id of another actor is 403', async () => {
     const built = await buildApp(() => ({ text: 'hi' }));
     app = built.app;

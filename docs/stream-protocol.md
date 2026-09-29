@@ -23,11 +23,36 @@ Frames are separated by a blank line (`\n\n`). Four shapes:
 | `event: done` + `data: {}` | The run ended normally (including a cancel — see `cancelled`). |
 | `event: error` + `data: {"code": string, "message": string}` | The run failed. `message` is shown to the user. Codes this library uses: `quota_exceeded`, `output_rejected`, `structured_output_invalid`, `run_failed`. |
 
-A stream that closes without `done` is treated as finished. Multi-line `data:` is joined with `\n`.
+Multi-line `data:` is joined with `\n`.
 
 `GET <base>/chat/:runId/stream` replays the run's buffered frames from the beginning and then tails
 it. Answer `404` when nothing is streaming under that id — the client reads that as "nothing to
 resume", not an error.
+
+### Sequence numbers and reconnecting
+
+Number every event frame with an SSE `id:` line — its 1-based position in the run:
+
+```text
+id: 7
+data: {"kind":"text","text":"…"}
+```
+
+- The number is a property of the frame, not of the connection: the same frame carries the same id
+  on the `POST` that started the run and on every later `GET …/stream`. (This library derives it
+  from the run's buffered stream, which every sink replays from its first chunk in write order.)
+- `meta`, `done` and `error` carry no id. Send `meta` again on every attach.
+- `GET <base>/chat/:runId/stream?after=<n>` sends only the frames numbered above `n` (still preceded
+  by `meta`). Honour the standard `Last-Event-ID` request header the same way; `after` wins when
+  both are present.
+
+The client uses this to survive a dropped connection: when a numbered stream errors or closes
+without `done`, it re-attaches with `?after=<last id it saw>` (exponential backoff; `status:
+'reconnecting'` meanwhile) and continues the same message. It also drops any frame numbered at or
+below its cursor, so a server that ignores `after` still resumes correctly, only less cheaply.
+A `404` on that re-attach means the run ended while the client was away; `useAgentChat` then
+reloads the thread. A stream **without** ids is never resumed: one that closes without `done` is
+treated as finished, as before.
 
 ## Event rules
 
@@ -250,10 +275,48 @@ message may carry, per step:
 | `ui?: { id, component, props, version?, toolCallId? }[]` | `data-ui` parts, first-seen order, last props per `id`; one with a `toolCallId` goes right after that call's tool part |
 | `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
 
+| `feedback?: { value: 'up' \| 'down', comment?, updatedAt }` | `message.metadata.feedback` (on a merged turn, the last row's) — what `useMessageFeedback` shows |
+
 A runner serving these routes should persist the same values it streamed, so a reload shows what
 the live stream did.
 
+## The REST surface
+
+Everything `AgentClient` (the default `AgentBackend` of `@dudousxd/nestjs-agent-react`) calls, so a
+backend that is not this library can serve the same routes and keep the React layer unchanged.
+`<base>` is wherever you mount them (`/agent` in this library). Errors are plain HTTP statuses; the
+client throws `AgentHttpError` carrying `status`.
+
+| Route | Body / query | Answers |
+|---|---|---|
+| `POST <base>/chat` | `{ message, threadId?, agent?, attachments?: { mediaId }[], pageContext?, regenerate?, transient? }` | the SSE stream above |
+| `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
+| `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
+| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId? }`) |
+| `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`) |
+| `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null }` | `{ ok: true }` |
+| `DELETE <base>/threads/:id` | — | `{ ok: true }` |
+| `POST <base>/threads/:id/fork-from/:messageId` | — | `ThreadSummary` of the fork |
+| `POST <base>/threads/:id/promote` | — | `{ ok: true }` |
+| `DELETE <base>/threads/:id/from/:messageId` | — | `{ ok: true }` |
+| `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
+| `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx` |
+| `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, contentType, name, … }`) |
+| `GET <base>/tools?agent=` | — | see *Tool catalog* |
+| `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
+| `GET <base>/quota/today` | — | `{ usedTokens, limitTokens: number \| null, withinLimit, costUsd }` |
+
+**Cookie sessions and CSRF.** Nothing here assumes bearer tokens. A backend on a cookie session
+answers these routes like any other same-site request and checks its CSRF header on the mutating
+ones (every `POST`/`PATCH`/`DELETE` above, including `POST <base>/chat`). The React client sends the
+header through `getHeaders`, read per request (e.g. `X-XSRF-TOKEN` from the `XSRF-TOKEN` cookie),
+with `credentials: 'include'` when the API is on another origin — or implement `AgentBackend` over
+your own client and apply whatever your app already does.
+
 ## Example
+
+`id:` lines are left out for brevity — a server that numbers its frames puts `id: 1`, `id: 2`, …
+above each `data:` frame (not above `meta`/`done`).
 
 ```text
 event: meta

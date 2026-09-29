@@ -130,6 +130,20 @@ nobody is streaming (including one that has already finished). In-process caller
 authorized elsewhere use `AgentService.subscribe(runId)`; anything reachable from a request must go
 through `AgentService.subscribeAs(actor, runId)`.
 
+### Resuming a dropped stream
+
+Every event frame of `POST /agent/chat` and `GET /agent/chat/:runId/stream` carries an SSE `id:` —
+its 1-based position in the run, the same on every attach. `GET …/stream?after=<n>` (or the
+`Last-Event-ID` header) skips what a reconnecting client already has; the React transport uses it to
+continue a message after a network drop. See docs/stream-protocol.md.
+
+### Message feedback
+
+`POST /agent/messages/:id/feedback` `{ value: 'up' | 'down' | null, comment? }` rates a message in
+one of the caller's threads (`null` clears it) and answers `{ feedback }`; `GET /agent/threads/:id`
+returns it on the message. It needs a store with `threadOfMessage` + `setMessageFeedback` (both
+bundled stores and `InMemoryAgentStore` have them) — `501` otherwise.
+
 ### Who approves an action, and for how long
 
 Every `action` tool call waits on the person chatting by default. `approvalPolicy` changes that per
