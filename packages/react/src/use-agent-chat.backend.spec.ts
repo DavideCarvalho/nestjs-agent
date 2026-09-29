@@ -2,9 +2,11 @@
 import type { StoredMessage, ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { UIMessage } from 'ai';
+import { type ReactNode, createElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentBackend, ChatStreamResponse, ResumeStreamRequest } from './backend.js';
 import { useMessageFeedback } from './feedback/use-message-feedback.js';
+import { AgentProvider } from './provider.js';
 import { storedThreadToUiMessages } from './stored-thread-to-ui-messages.js';
 import { useThreads } from './threads/use-threads.js';
 import { useAgentChat } from './use-agent-chat.js';
@@ -294,7 +296,7 @@ describe('useMessageFeedback', () => {
   });
 });
 
-describe('useAgentChat({ attachments })', () => {
+describe('AgentProvider attachments', () => {
   it('builds its client with the upload strategy, so chat.backend uploads through it', async () => {
     const strategy = vi.fn(async (uploaded: File) => ({
       mediaId: 'm1',
@@ -302,7 +304,10 @@ describe('useAgentChat({ attachments })', () => {
       contentType: uploaded.type,
       name: uploaded.name,
     }));
-    const { result } = renderHook(() => useAgentChat({ attachments: strategy }));
+    const { result } = renderHook(() => useAgentChat(), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(AgentProvider, { attachments: { upload: strategy } }, children),
+    });
     const attachment = await result.current.backend.uploadAttachment?.(
       new File(['x'], 'a.png', { type: 'image/png' }),
     );

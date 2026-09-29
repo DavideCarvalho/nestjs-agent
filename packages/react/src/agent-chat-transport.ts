@@ -46,12 +46,10 @@ export interface AgentChatTransportOptions {
   reconnect?: ReconnectOptions | false;
   /** Fires as a stream drops, reconnects, or gives up. */
   onConnectionChange?: (state: StreamConnectionState) => void;
-  /**
-   * Origin + base path the agent endpoints hang off, e.g.
-   * `https://api.example.com`. Endpoints are appended as
-   * `${baseUrl}/agent/chat` etc. Defaults to `''` (same origin).
-   */
+  /** The server's origin, e.g. `https://api.example.com`. Defaults to `''` (same origin). */
   baseUrl?: string;
+  /** The agent's route prefix (`AgentModule`'s `path`, global prefix included). Default `'agent'`. */
+  path?: string;
   /** Static headers merged into every request (e.g. a tenant ref). */
   headers?: Record<string, string>;
   /**
@@ -152,6 +150,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       options.backend ??
       new AgentClient({
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+        ...(options.path !== undefined ? { path: options.path } : {}),
         ...(options.headers !== undefined ? { headers: options.headers } : {}),
         ...(options.getHeaders !== undefined ? { getHeaders: options.getHeaders } : {}),
         ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),

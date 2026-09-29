@@ -2,7 +2,7 @@
 import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { UploadAttachmentOptions } from '../backend.js';
+import type { AgentBackend, UploadAttachmentOptions } from '../backend.js';
 import { AgentClient } from '../client.js';
 import { storedMessageToUiMessage } from '../stored-message-to-ui-message.js';
 import { acceptsFile, dragHasFiles, fileKind, filesFromClipboard, messageFiles } from './files.js';
@@ -118,17 +118,14 @@ describe('useAttachments', () => {
     const uploadAttachment = vi.fn(async (f: File) => stored(f.name));
     const { result } = renderHook(() =>
       useAttachments({
-        backend: { uploadAttachment } as unknown as Parameters<
-          typeof useAttachments
-        >[0]['backend'] &
-          object,
+        backend: { uploadAttachment } as unknown as AgentBackend,
       }),
     );
     act(() => result.current.add([file('a.png', 'image/png')]));
     await waitFor(() => expect(result.current.items[0]?.status).toBe('ready'));
     expect(uploadAttachment).toHaveBeenCalledTimes(1);
 
-    const without = renderHook(() => useAttachments({}));
+    const without = renderHook(() => useAttachments({ backend: {} as AgentBackend }));
     act(() => without.result.current.add([file('a.png', 'image/png')]));
     expect(without.result.current.items[0]?.status).toBe('error');
   });
@@ -333,16 +330,20 @@ describe('AgentClient attachments strategy', () => {
       credentials: 'include',
       headers: { a: '1' },
       getHeaders: () => ({ b: '2' }),
-      attachments: async (uploaded, options, connection) => {
-        seen.push({
-          name: uploaded.name,
-          hasSignal: options.signal !== undefined,
-          baseUrl: connection.baseUrl,
-          credentials: connection.credentials,
-          headers: await connection.headers(),
-          fetch: connection.fetch,
-        });
-        return stored(uploaded.name);
+      path: 'api/agent',
+      attachments: {
+        upload: async (uploaded, options, connection) => {
+          seen.push({
+            name: uploaded.name,
+            hasSignal: options.signal !== undefined,
+            baseUrl: connection.baseUrl,
+            path: connection.path,
+            credentials: connection.credentials,
+            headers: await connection.headers(),
+            fetch: connection.fetch,
+          });
+          return stored(uploaded.name);
+        },
       },
     });
     const controller = new AbortController();
@@ -354,6 +355,7 @@ describe('AgentClient attachments strategy', () => {
         name: 'x.png',
         hasSignal: true,
         baseUrl: 'https://api.test',
+        path: '/api/agent',
         credentials: 'include',
         headers: { a: '1', b: '2' },
         fetch: fetchImpl,

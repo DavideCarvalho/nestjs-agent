@@ -13,6 +13,24 @@ function fetchCall(mock: Mock<typeof fetch>, index = 0): [string | Request | URL
 }
 
 describe('AgentClient', () => {
+  describe('path', () => {
+    it.each([
+      [undefined, 'https://api.example.com/agent/threads'],
+      ['api/agent', 'https://api.example.com/api/agent/threads'],
+      ['/api/agent/', 'https://api.example.com/api/agent/threads'],
+      ['', 'https://api.example.com/threads'],
+    ])('path %j hangs every route off %s', async (path, expected) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse([]));
+      const client = new AgentClient({
+        baseUrl: 'https://api.example.com/',
+        fetch: fetchMock,
+        ...(path !== undefined ? { path } : {}),
+      });
+      await client.listThreads();
+      expect(fetchCall(fetchMock)[0]).toBe(expected);
+    });
+  });
+
   describe('updateThread', () => {
     it('PATCHes the thread with the given patch', async () => {
       const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));

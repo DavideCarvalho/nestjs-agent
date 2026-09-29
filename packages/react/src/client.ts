@@ -52,8 +52,16 @@ export interface OkResult {
 }
 
 export interface AgentClientOptions {
-  /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
+  /**
+   * The server's origin, e.g. `https://api.example.com`. Defaults to `''` (same origin). The
+   * agent's route prefix is {@link AgentClientOptions.path}, not part of this.
+   */
   baseUrl?: string;
+  /**
+   * The agent's route prefix — `AgentModule`'s `path`, with any global prefix in front
+   * (`'api/agent'`). Leading/trailing slashes are optional. Defaults to `'agent'`.
+   */
+  path?: string;
   /** Static headers merged into every request. */
   headers?: Record<string, string>;
   /**
@@ -69,12 +77,21 @@ export interface AgentClientOptions {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
-  /**
-   * How `uploadAttachment` uploads. Omitted → `POST <base>/agent/attachments` (multipart). Pass
-   * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media` for resumable uploads through
-   * nestjs-media, or your own {@link AttachmentUploadStrategy}.
-   */
-  attachments?: AttachmentUploadStrategy;
+  /** Attachment uploads. */
+  attachments?: {
+    /**
+     * How `uploadAttachment` uploads. Omitted → `POST <path>/attachments` (multipart). Pass
+     * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media` for resumable uploads through
+     * nestjs-media, or your own {@link AttachmentUploadStrategy}.
+     */
+    upload?: AttachmentUploadStrategy;
+  };
+}
+
+/** `'/api/agent'` from `'api/agent'`, `'/api/agent/'`, …; `''` for an empty path. */
+export function normalizeAgentPath(path: string | undefined): string {
+  const trimmed = (path ?? 'agent').replace(/^\/+|\/+$/g, '');
+  return trimmed === '' ? '' : `/${trimmed}`;
 }
 
 const HEADER_RUN_ID = 'x-agent-run-id';
@@ -87,9 +104,9 @@ const HEADER_THREAD_ID = 'x-agent-thread-id';
 export class AgentClient implements AgentBackend {
   constructor(private readonly options: AgentClientOptions = {}) {}
 
-  /** `POST /agent/chat` → the turn's SSE stream. Throws {@link AgentHttpError} on a non-2xx. */
+  /** `POST <path>/chat` → the turn's SSE stream. Throws {@link AgentHttpError} on a non-2xx. */
   async openChatStream(request: ChatStreamRequest): Promise<ChatStreamResponse> {
-    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/chat`, {
+    const response = await this.fetchImpl()(`${this.root()}/chat`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -102,19 +119,24 @@ export class AgentClient implements AgentBackend {
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     });
     if (!response.ok || !response.body) {
-      throw new AgentHttpError(response.status, 'POST', '/agent/chat', response.statusText);
+      throw new AgentHttpError(
+        response.status,
+        'POST',
+        `${this.agentPath()}/chat`,
+        response.statusText,
+      );
     }
     return streamResponse(response);
   }
 
   /**
-   * `GET /agent/chat/:runId/stream[?after=<seq>]` → the run's SSE stream, or `null` when nothing is
+   * `GET <path>/chat/:runId/stream[?after=<seq>]` → the run's SSE stream, or `null` when nothing is
    * streaming under that id (404).
    */
   async resumeChatStream(request: ResumeStreamRequest): Promise<ChatStreamResponse | null> {
-    const path = `/agent/chat/${encodeURIComponent(request.runId)}/stream`;
+    const path = `/chat/${encodeURIComponent(request.runId)}/stream`;
     const query = request.after !== undefined && request.after > 0 ? `?after=${request.after}` : '';
-    const response = await this.fetchImpl()(`${this.baseUrl()}${path}${query}`, {
+    const response = await this.fetchImpl()(`${this.root()}${path}${query}`, {
       method: 'GET',
       headers: {
         accept: 'text/event-stream',
@@ -128,7 +150,12 @@ export class AgentClient implements AgentBackend {
       return null;
     }
     if (!response.ok || !response.body) {
-      throw new AgentHttpError(response.status, 'GET', path, response.statusText);
+      throw new AgentHttpError(
+        response.status,
+        'GET',
+        `${this.agentPath()}${path}`,
+        response.statusText,
+      );
     }
     return streamResponse(response);
   }
@@ -143,13 +170,13 @@ export class AgentClient implements AgentBackend {
   ): Promise<{ feedback: MessageFeedback | null }> {
     return this.request<{ feedback: MessageFeedback | null }>(
       'POST',
-      `/agent/messages/${encodeURIComponent(messageId)}/feedback`,
+      `/messages/${encodeURIComponent(messageId)}/feedback`,
       input,
     );
   }
 
   listThreads(): Promise<ThreadSummary[]> {
-    return this.request<ThreadSummary[]>('GET', '/agent/threads');
+    return this.request<ThreadSummary[]>('GET', '/threads');
   }
 
   /**
@@ -160,7 +187,7 @@ export class AgentClient implements AgentBackend {
    */
   listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
     const query = threadId === undefined ? '' : `?threadId=${encodeURIComponent(threadId)}`;
-    return this.request<SkillCatalogEntry[]>('GET', `/agent/skills${query}`);
+    return this.request<SkillCatalogEntry[]>('GET', `/skills${query}`);
   }
 
   /**
@@ -170,21 +197,21 @@ export class AgentClient implements AgentBackend {
    */
   listTools(agent?: string): Promise<ToolCatalogEntry[]> {
     const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
-    return this.request<ToolCatalogEntry[]>('GET', `/agent/tools${query}`);
+    return this.request<ToolCatalogEntry[]>('GET', `/tools${query}`);
   }
 
   getThread(id: string): Promise<ThreadDetail> {
-    return this.request<ThreadDetail>('GET', `/agent/threads/${encodeURIComponent(id)}`);
+    return this.request<ThreadDetail>('GET', `/threads/${encodeURIComponent(id)}`);
   }
 
   deleteThread(id: string): Promise<void> {
-    return this.request<void>('DELETE', `/agent/threads/${encodeURIComponent(id)}`);
+    return this.request<void>('DELETE', `/threads/${encodeURIComponent(id)}`);
   }
 
   forkFromMessage(threadId: string, messageId: string): Promise<ThreadSummary> {
     return this.request<ThreadSummary>(
       'POST',
-      `/agent/threads/${encodeURIComponent(threadId)}/fork-from/${encodeURIComponent(messageId)}`,
+      `/threads/${encodeURIComponent(threadId)}/fork-from/${encodeURIComponent(messageId)}`,
     );
   }
 
@@ -192,22 +219,23 @@ export class AgentClient implements AgentBackend {
     return this.updateThread(id, { title });
   }
 
-  /** General `PATCH /agent/threads/:threadId` — title and/or the thread's pinned default agent. */
+  /** General `PATCH <path>/threads/:threadId` — title and/or the thread's pinned default agent. */
   updateThread(id: string, patch: ThreadPatch): Promise<OkResult> {
-    return this.request<OkResult>('PATCH', `/agent/threads/${encodeURIComponent(id)}`, patch);
+    return this.request<OkResult>('PATCH', `/threads/${encodeURIComponent(id)}`, patch);
   }
 
   /**
    * Uploads a file (image/PDF) for a vision-capable model turn. Multipart, field name `file` —
-   * mirrors the backend's `POST /agent/attachments`. The returned {@link MessageAttachment} is
+   * mirrors the backend's `POST <path>/attachments`. The returned {@link MessageAttachment} is
    * what a caller then rides on `sendMessage({ text }, { body: { attachments: [...] } })`.
    */
   async uploadAttachment(
     file: File,
     options: UploadAttachmentOptions = {},
   ): Promise<MessageAttachment> {
-    if (this.options.attachments !== undefined) {
-      return this.options.attachments(file, options, this.connection());
+    const upload = this.options.attachments?.upload;
+    if (upload !== undefined) {
+      return upload(file, options, this.connection());
     }
     // `fetch` cannot observe an upload's progress; XHR can. Only when someone is listening, and
     // never when a `fetch` was injected (tests, non-browser runtimes).
@@ -220,7 +248,7 @@ export class AgentClient implements AgentBackend {
     }
     const formData = new FormData();
     formData.append('file', file);
-    const response = await this.fetchImpl()(`${this.baseUrl()}/agent/attachments`, {
+    const response = await this.fetchImpl()(`${this.root()}/attachments`, {
       method: 'POST',
       headers: {
         accept: 'application/json',
@@ -233,7 +261,7 @@ export class AgentClient implements AgentBackend {
     const attachment = await this.handleResponse<MessageAttachment>(
       response,
       'POST',
-      '/agent/attachments',
+      `${this.agentPath()}/attachments`,
     );
     options.onProgress?.(1);
     return attachment;
@@ -247,7 +275,7 @@ export class AgentClient implements AgentBackend {
       accept: 'application/json',
       ...(await this.resolveHeaders()),
     };
-    const url = `${this.baseUrl()}/agent/attachments`;
+    const url = `${this.root()}/attachments`;
     return new Promise<MessageAttachment>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
@@ -259,7 +287,14 @@ export class AgentClient implements AgentBackend {
       };
       xhr.onload = () => {
         if (xhr.status < 200 || xhr.status >= 300) {
-          reject(new AgentHttpError(xhr.status, 'POST', '/agent/attachments', xhr.statusText));
+          reject(
+            new AgentHttpError(
+              xhr.status,
+              'POST',
+              `${this.agentPath()}/attachments`,
+              xhr.statusText,
+            ),
+          );
           return;
         }
         onProgress?.(1);
@@ -281,38 +316,38 @@ export class AgentClient implements AgentBackend {
   }
 
   promoteThread(id: string): Promise<OkResult> {
-    return this.request<OkResult>('POST', `/agent/threads/${encodeURIComponent(id)}/promote`);
+    return this.request<OkResult>('POST', `/threads/${encodeURIComponent(id)}/promote`);
   }
 
   truncateFromMessage(threadId: string, messageId: string): Promise<OkResult> {
     return this.request<OkResult>(
       'DELETE',
-      `/agent/threads/${encodeURIComponent(threadId)}/from/${encodeURIComponent(messageId)}`,
+      `/threads/${encodeURIComponent(threadId)}/from/${encodeURIComponent(messageId)}`,
     );
   }
 
-  /** `GET /agent/models?agent=` — the models this caller may pick, grouped by provider. */
+  /** `GET <path>/models?agent=` — the models this caller may pick, grouped by provider. */
   listModels(agent?: string): Promise<ModelCatalogView> {
     const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
-    return this.request<ModelCatalogView>('GET', `/agent/models${query}`);
+    return this.request<ModelCatalogView>('GET', `/models${query}`);
   }
 
-  /** `GET /agent/agents` — the registered agents, the default one flagged. */
+  /** `GET <path>/agents` — the registered agents, the default one flagged. */
   listAgents(): Promise<AgentCatalogEntry[]> {
-    return this.request<AgentCatalogEntry[]>('GET', '/agent/agents');
+    return this.request<AgentCatalogEntry[]>('GET', '/agents');
   }
 
-  /** `GET /agent/quota` — the caller's budget windows and the one blocking sends, if any. */
+  /** `GET <path>/quota` — the caller's budget windows and the one blocking sends, if any. */
   getQuota(): Promise<QuotaReport> {
-    return this.request<QuotaReport>('GET', '/agent/quota');
+    return this.request<QuotaReport>('GET', '/quota');
   }
 
   getQuotaToday(): Promise<QuotaToday> {
-    return this.request<QuotaToday>('GET', '/agent/quota/today');
+    return this.request<QuotaToday>('GET', '/quota/today');
   }
 
   cancelStream(runId: string): Promise<CancelResult> {
-    return this.request<CancelResult>('POST', `/agent/chat/${encodeURIComponent(runId)}/cancel`);
+    return this.request<CancelResult>('POST', `/chat/${encodeURIComponent(runId)}/cancel`);
   }
 
   /**
@@ -320,11 +355,11 @@ export class AgentClient implements AgentBackend {
    * the decision came through (the server records `'web'` when omitted).
    */
   approveToolCall(input: { toolCallId: string; remember?: boolean; via?: string }): Promise<void> {
-    return this.request<void>('POST', '/agent/tool-call/approve', input);
+    return this.request<void>('POST', '/tool-call/approve', input);
   }
 
   rejectToolCall(input: { toolCallId: string; reason?: string; via?: string }): Promise<void> {
-    return this.request<void>('POST', '/agent/tool-call/reject', input);
+    return this.request<void>('POST', '/tool-call/reject', input);
   }
 
   /**
@@ -337,7 +372,7 @@ export class AgentClient implements AgentBackend {
     toolCallId: string;
     answers?: Record<string, string[]>;
   }): Promise<void> {
-    return this.request<void>('POST', '/agent/tool-call/answer', input);
+    return this.request<void>('POST', '/tool-call/answer', input);
   }
 
   /**
@@ -346,7 +381,7 @@ export class AgentClient implements AgentBackend {
    * evidence the user chose them.
    */
   skipToolCall(input: { toolCallId: string }): Promise<void> {
-    return this.request<void>('POST', '/agent/tool-call/skip', input);
+    return this.request<void>('POST', '/tool-call/skip', input);
   }
 
   private fetchImpl(): typeof fetch {
@@ -357,6 +392,7 @@ export class AgentClient implements AgentBackend {
   private connection(): AgentConnection {
     return {
       baseUrl: this.baseUrl(),
+      path: this.agentPath(),
       headers: () => this.resolveHeaders(),
       fetch: this.fetchImpl(),
       ...this.credentials(),
@@ -364,7 +400,16 @@ export class AgentClient implements AgentBackend {
   }
 
   private baseUrl(): string {
-    return (this.options.baseUrl ?? '').replace(/\/$/, '');
+    return (this.options.baseUrl ?? '').replace(/\/+$/, '');
+  }
+
+  private agentPath(): string {
+    return normalizeAgentPath(this.options.path);
+  }
+
+  /** Origin + agent path: what every route hangs off. */
+  private root(): string {
+    return `${this.baseUrl()}${this.agentPath()}`;
   }
 
   private async resolveHeaders(): Promise<Record<string, string>> {
@@ -376,7 +421,8 @@ export class AgentClient implements AgentBackend {
     return this.options.credentials !== undefined ? { credentials: this.options.credentials } : {};
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, route: string, body?: unknown): Promise<T> {
+    const path = `${this.agentPath()}${route}`;
     const response = await this.fetchImpl()(`${this.baseUrl()}${path}`, {
       method,
       headers: {

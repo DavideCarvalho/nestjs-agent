@@ -9,23 +9,19 @@ import {
   type ReconnectOptions,
   type StreamConnectionState,
 } from './agent-chat-transport.js';
-import {
-  type AgentBackend,
-  type AttachmentUploadStrategy,
-  requireBackendMethod,
-} from './backend.js';
+import { type AgentBackend, requireBackendMethod } from './backend.js';
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
-import { AgentClient, type QuotaToday } from './client.js';
+import type { QuotaToday } from './client.js';
+import { useAgentBackend } from './provider.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 import { storedThreadToUiMessages } from './stored-thread-to-ui-messages.js';
 import { notifyThreads } from './threads/threads-events.js';
 import type { ChatStatus } from './transcript/model.js';
 
-export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
+export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
   /**
-   * What the chat talks to — see {@link AgentBackend}. Omitted → an {@link AgentClient} over this
-   * library's REST routes, built from `baseUrl`, `headers`, `getHeaders`, `credentials` and `fetch`
-   * (which are ignored when a backend is given). Must be stable across renders.
+   * What the chat talks to — see {@link AgentBackend}. Omitted → the enclosing `<AgentProvider>`'s,
+   * else a same-origin client on `/agent`. Must be stable across renders.
    */
   backend?: B;
   /**
@@ -34,24 +30,6 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
    * it off.
    */
   reconnect?: ReconnectOptions | false;
-  /** Origin + base path, e.g. `https://api.example.com`. Defaults to `''`. */
-  baseUrl?: string;
-  /** Static headers merged into every request. */
-  headers?: Record<string, string>;
-  /** Resolved per request — for short-lived bearer tokens. */
-  getHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
-  /** Forwarded to fetch so cookie auth/impersonation works. */
-  credentials?: RequestCredentials;
-  /** Injectable for tests / non-browser runtimes. */
-  fetch?: typeof fetch;
-  /**
-   * How the built-in client uploads attachments (ignored when a backend is given) — e.g.
-   * `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media`. Pass `chat.backend` to
-   * `useAttachments` and every composer uses it.
-   */
-  attachments?: AttachmentUploadStrategy;
-  /** Reuse an existing client instead of constructing one. Prefer {@link backend}. */
-  client?: B;
   /** Named agent to run each turn. */
   agent?: string;
   /**
@@ -171,8 +149,8 @@ interface AddToolResultArgs {
  * fork, quota, cancel, and HITL approve/reject — all driven through
  * `AgentClient`. Mirrors flip's `useAdminChat`, generalized.
  */
-export function useAgentChat<B extends AgentBackend = AgentClient>(
-  options: UseAgentChatOptions<B>,
+export function useAgentChat<B extends AgentBackend = AgentBackend>(
+  options: UseAgentChatOptions<B> = {},
 ) {
   const latest = useRef(options);
   latest.current = options;
@@ -210,19 +188,9 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
   // spawning a new one per message. Reset per mount; an explicit `threadId` option always wins.
   const createdThreadId = useRef<string | undefined>(undefined);
 
-  // Identity-stable: per-render config is read through `latest`.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: stable by design
-  const client = useMemo((): B => {
-    if (options.backend) return options.backend;
-    if (options.client) return options.client;
-    return new AgentClient({
-      ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
-      ...(options.credentials !== undefined ? { credentials: options.credentials } : {}),
-      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
-      ...(options.attachments !== undefined ? { attachments: options.attachments } : {}),
-      getHeaders: async () => mergeHeaders(latest.current),
-    }) as unknown as B;
-  }, []);
+  // Identity-stable: the first backend this chat mounted with is the one it keeps.
+  const resolved = useAgentBackend<B>(options.backend);
+  const client = useRef(resolved).current;
 
   // Where the live stream stands — `reconnecting` while the transport retries a dropped one.
   const [connection, setConnection] = useState<StreamConnectionState>({ status: 'live' });
@@ -681,10 +649,8 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
      */
     getThreadId,
     setThreadModel,
-    /** The backend this chat talks to — pass it to `useThreads`, `useMessageFeedback`, … */
+    /** The backend this chat talks to — the same one every other hook under the provider uses. */
     backend: client,
-    /** Same object as {@link backend}; kept for callers that read it under its old name. */
-    client,
     threads,
     loadThreads,
     loadThread,
@@ -710,11 +676,4 @@ export class QuotaBlockedError extends Error {
     super(block.reason ?? `The ${block.period === 'day' ? 'daily' : 'monthly'} quota is used up`);
     this.name = 'QuotaBlockedError';
   }
-}
-
-async function mergeHeaders<B extends AgentBackend>(
-  options: UseAgentChatOptions<B>,
-): Promise<Record<string, string>> {
-  const dynamic = (await options.getHeaders?.()) ?? {};
-  return { ...options.headers, ...dynamic };
 }

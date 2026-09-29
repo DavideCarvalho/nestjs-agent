@@ -2,11 +2,12 @@ import type { MessageFeedback, MessageFeedbackValue } from '@dudousxd/nestjs-age
 import type { UIMessage } from 'ai';
 import { useCallback, useRef, useState } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
+import { useAgentBackend } from '../provider.js';
 import type { AgentMessageMetadata } from '../stored-thread-to-ui-messages.js';
 
 export interface UseMessageFeedbackOptions {
-  /** `useAgentChat(...).backend`, or your own. Must implement `setMessageFeedback`. */
-  backend: AgentBackend;
+  /** Default: the enclosing `<AgentProvider>`'s. Must implement `setMessageFeedback`. */
+  backend?: AgentBackend;
   /**
    * The thread the messages belong to — `useAgentChat(...).getThreadId`, or an id. Needed to rate a
    * message streamed in this session: its id is the client's own, so the persisted row it became is
@@ -35,9 +36,10 @@ type Local = { feedback: MessageFeedback | null };
  * Headless: it holds the state and the calls, the host draws the buttons. A rating shows at once
  * and rolls back if the server refuses it.
  */
-export function useMessageFeedback(options: UseMessageFeedbackOptions): MessageFeedbackState {
-  const latest = useRef(options);
-  latest.current = options;
+export function useMessageFeedback(options: UseMessageFeedbackOptions = {}): MessageFeedbackState {
+  const backend = useAgentBackend(options.backend);
+  const latest = useRef({ ...options, backend });
+  latest.current = { ...options, backend };
   const [local, setLocal] = useState<ReadonlyMap<string, Local>>(new Map());
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<Error | null>(null);

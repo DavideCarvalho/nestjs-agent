@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 // An authored intake asks BEFORE the turn's first model call, so the run's very first frames are
@@ -39,7 +40,10 @@ describe('repro intake frames', () => {
     });
 
     const { result } = renderHook(() =>
-      useAgentChat({ threadId: 'thr-i', fetch: fetchMock as unknown as typeof fetch }),
+      useAgentChat({
+        threadId: 'thr-i',
+        backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
+      }),
     );
 
     await act(async () => {

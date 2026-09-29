@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 const receipt = {
@@ -55,7 +56,7 @@ describe('useAgentChat background runs', () => {
         threadId: 'thr-1',
         background: true,
         backgroundPollMs: 10,
-        fetch: fetchMock as unknown as typeof fetch,
+        backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
       }),
     );
 
@@ -93,7 +94,7 @@ describe('useAgentChat background runs', () => {
         threadId: 'thr-1',
         background: true,
         backgroundPollMs: 5,
-        fetch: fetchMock as unknown as typeof fetch,
+        backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
       }),
     );
 

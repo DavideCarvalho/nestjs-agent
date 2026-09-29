@@ -1,13 +1,7 @@
 import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentBackend } from '../backend.js';
 import { AgentClient } from '../client.js';
-import {
-  MediaUploadError,
-  createMediaUpload,
-  mediaAttachments,
-  withMediaUploads,
-} from './index.js';
+import { MediaUploadError, createMediaUpload, mediaAttachments } from './index.js';
 
 interface Call {
   url: string;
@@ -135,22 +129,6 @@ describe('createMediaUpload', () => {
   });
 });
 
-describe('withMediaUploads', () => {
-  it('swaps only uploadAttachment, keeping every other member bound to the original backend', async () => {
-    const server = fakeServer();
-    const client = new AgentClient({ fetch: server.fetchImpl });
-    const backend: AgentBackend = withMediaUploads(client, { fetch: server.fetchImpl });
-
-    expect(await backend.uploadAttachment?.(pdf())).toEqual(READY);
-    expect(server.calls[0]?.url).toBe('/agent/attachments/uploads');
-
-    // An inherited method still reaches the client's own state through `this`.
-    const listed = await backend.listThreads().catch((error: Error) => error);
-    expect(server.calls.at(-1)?.url).toBe('/agent/threads');
-    expect(listed).toBeInstanceOf(Error);
-  });
-});
-
 describe('MediaUploadError', () => {
   it('carries the status of a refused request', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 413 }));
@@ -161,7 +139,7 @@ describe('MediaUploadError', () => {
 });
 
 describe('mediaAttachments — the one-line default', () => {
-  it('plugs into AgentClient and reuses its connection (baseUrl, headers, credentials, fetch)', async () => {
+  it('plugs into AgentClient and reuses its connection (baseUrl, path, headers, credentials, fetch)', async () => {
     const server = fakeServer();
     const client = new AgentClient({
       baseUrl: 'https://api.test',
@@ -169,18 +147,19 @@ describe('mediaAttachments — the one-line default', () => {
       credentials: 'include',
       headers: { 'X-Static': 's' },
       getHeaders: () => ({ 'X-XSRF-TOKEN': 'csrf' }),
-      attachments: mediaAttachments({ chunkSize: 4 }),
+      path: 'api/agent',
+      attachments: { upload: mediaAttachments({ chunkSize: 4 }) },
     });
     const progress: number[] = [];
     expect(await client.uploadAttachment(pdf(), { onProgress: (f) => progress.push(f) })).toEqual(
       READY,
     );
     expect(server.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
-      'POST https://api.test/agent/attachments/uploads',
+      'POST https://api.test/api/agent/attachments/uploads',
       'PATCH https://api.test/media/uploads/u1',
       'PATCH https://api.test/media/uploads/u1',
       'PATCH https://api.test/media/uploads/u1',
-      'POST https://api.test/agent/attachments/uploads/m1/complete',
+      'POST https://api.test/api/agent/attachments/uploads/m1/complete',
     ]);
     for (const call of server.calls) {
       expect(call.credentials).toBe('include');

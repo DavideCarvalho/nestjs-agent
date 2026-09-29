@@ -2,11 +2,12 @@ import type { QuotaBlock, QuotaReport, QuotaWindow } from '@dudousxd/nestjs-agen
 import { useEffect, useMemo } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
 import { useResource } from '../catalog/use-resource.js';
+import { useAgentBackend } from '../provider.js';
 import { onThreadsEvent } from '../threads/threads-events.js';
 
 export interface UseQuotaOptions {
-  /** `useAgentChat(...).backend`, or your own. Must implement `getQuota`. */
-  backend: AgentBackend;
+  /** Default: the enclosing `<AgentProvider>`'s. Must implement `getQuota`. */
+  backend?: AgentBackend;
   /** `false` holds the request. Default `true`. */
   enabled?: boolean;
   /** Re-read every `pollMs` ms as well. Default: only on mount, after runs, and on `refresh`. */
@@ -32,8 +33,9 @@ export interface QuotaState {
  * one — if any — blocks sends. Re-read after every run a chat on the same backend settles, so a
  * meter moves with the conversation. Headless: draw the meter yourself.
  */
-export function useQuota(options: UseQuotaOptions): QuotaState {
-  const { backend, enabled = true, pollMs } = options;
+export function useQuota(options: UseQuotaOptions = {}): QuotaState {
+  const { enabled = true, pollMs } = options;
+  const backend = useAgentBackend(options.backend);
   const { data, isLoading, error, refresh } = useResource<QuotaReport>(
     () => requireBackendMethod(backend, 'getQuota')(),
     '',

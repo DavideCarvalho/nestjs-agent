@@ -23,8 +23,8 @@ describe('useToolCatalog', () => {
       async () => new Response(JSON.stringify(entries), { status: 200 }),
     );
     const client = clientWith(fetchMock);
-    const first = renderHook(() => useToolCatalog({ client, agent: 'support' }));
-    const second = renderHook(() => useToolCatalog({ client, agent: 'support' }));
+    const first = renderHook(() => useToolCatalog({ backend: client, agent: 'support' }));
+    const second = renderHook(() => useToolCatalog({ backend: client, agent: 'support' }));
 
     await waitFor(() => expect(first.result.current.isLoading).toBe(false));
     await waitFor(() => expect(second.result.current.isLoading).toBe(false));
@@ -44,7 +44,7 @@ describe('useToolCatalog', () => {
         : new Response(JSON.stringify(entries), { status: 200 });
     });
     const client = clientWith(fetchMock);
-    const { result } = renderHook(() => useToolCatalog({ client }));
+    const { result } = renderHook(() => useToolCatalog({ backend: client }));
 
     await waitFor(() => expect(result.current.error).not.toBeNull());
     result.current.refresh();
@@ -55,7 +55,7 @@ describe('useToolCatalog', () => {
   it('holds the request while disabled', () => {
     const fetchMock = vi.fn<typeof fetch>();
     const { result } = renderHook(() =>
-      useToolCatalog({ client: clientWith(fetchMock), enabled: false }),
+      useToolCatalog({ backend: clientWith(fetchMock), enabled: false }),
     );
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.current.isLoading).toBe(false);

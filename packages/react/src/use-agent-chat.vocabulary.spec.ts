@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { AgentClient } from './client.js';
 import { useAgentChat } from './use-agent-chat.js';
 
 function sseResponse(events: unknown[]): Response {
@@ -42,7 +43,12 @@ describe('useAgentChat — pushed UI, title, approval metadata (through the real
     const onTitle = vi.fn();
 
     const { result } = renderHook(() =>
-      useAgentChat({ threadId: 'thr-1', fetch: fetchMock, onData, onTitle }),
+      useAgentChat({
+        threadId: 'thr-1',
+        backend: new AgentClient({ fetch: fetchMock }),
+        onData,
+        onTitle,
+      }),
     );
     await act(async () => {
       await result.current.sendMessage({ text: 'email them' });
