@@ -41,6 +41,35 @@ The module mounts SSE + REST endpoints under `/agent` (`POST /agent/chat`, tool-
 threads, quota). Add `durable: true` + `AgentDurableModule` for the durable runner;
 `AgentModule.forFeature([…])` for multi-agent orchestration.
 
+### How a chat talks about a tool
+
+A tool's name is an identifier, not copy. Declare how a person-facing surface narrates it beside its
+input schema, so whoever renames an input field is the one who re-words the sentence that mentions
+it:
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action',
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+  presentation: {
+    label: 'Cache purge',
+    running: 'Purging {key}',          // templates over the call's INPUT
+    done: 'Purged {key}',
+    icon: 'cache',                     // a key into the client's own glyph map
+    tone: 'destructive',
+    confirm: { title: 'Purge {key}?', verb: 'Purge' },
+    result: { kind: 'metrics', fields: [{ path: 'evicted', label: 'Evicted' }] }, // over the OUTPUT
+  },
+})
+```
+
+`GET /agent/tools?agent=<name>` returns `ToolCatalogEntry[]` — `{ name, kind, presentation? }` for the
+tools THIS actor can reach through that agent (the default agent when omitted; `404` for an unknown
+one), built by `ToolRegistry.visibleSpecs`, the same gates the model is offered tools through. The
+React package's `useToolCatalog` reads it. The model never sees `presentation`.
+
 ### Message attachments
 
 A chat turn attaches a file by **`mediaId` only**:

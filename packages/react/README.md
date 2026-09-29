@@ -126,6 +126,34 @@ function Chat() {
 itself. `MessageItemView({ item })` is the default markup for one modelled item — drive the model
 yourself and still render the shipped bubble.
 
+### Talking about tool calls
+
+Tools declare how they are spoken about on the server (`@AiTool({ presentation })`, served by
+`GET /agent/tools`). `useToolCatalog` fetches that once per client + agent and shares it; hand the
+catalog to the transcript and every tool call carries a `description`, and every tool block an
+`activity` grouping:
+
+```tsx
+const chat = useAgentChat({ baseUrl: '/agent' });
+const { catalog } = useToolCatalog({ client: chat.client });
+const transcript = useChatTranscript({ messages: chat.messages, status: chat.status, toolCatalog: catalog });
+
+// in a `tools` block:
+block.activity.map((group) => (
+  <li key={group.key} data-state={group.status}>
+    <MyGlyph name={group.icon} /> {group.phrase} {group.count > 1 ? `×${group.count}` : null}
+  </li>
+));
+```
+
+| Helper | What it gives you |
+|---|---|
+| `call.description` / `describeToolCall(part, catalog)` | `{ status, phrase, label, icon, tone, detail, confirm, result, error }` — `status` is `running` / `awaiting-approval` / `done` / `failed` / `denied`; `confirm` is the approval prompt filled from the input; `result` the output read through the declared view (`metrics` readings, `table` rows as text, `log` lines, `note` text). |
+| `groupToolActivity(block.roots, { catalog, keyOf?, expandNested?, hideCorrected? })` | Calls folded by key ("Database query ×3"), worst status first, latest phrase, `innerCount` of nested calls. `expandNested` replaces a parent (a code-mode `execute`) with the calls it made; `keyOf` groups by anything else (e.g. `github:search`). |
+| `phraseFor` / `fillTemplate` / `readPath` | The template engine: `{dotted.path}` over the input; an empty slot collapses with its leading space; an undescribed tool reads `Working` / `Done`, never its name. |
+| `resolveResultView` / `inferResultView` | A tool output through a view, as plain data — never a serialized payload. |
+| `toolCallState` / `correctedCallIds` / `isActionCall` | Per-call status, and which failures the model later corrected. |
+
 ### Where the answer came from
 
 RAG persists its retrieval as an auto-executed tool call whose output is `{ passages }` — inject

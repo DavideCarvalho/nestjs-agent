@@ -64,6 +64,37 @@ export {
   type UseComposerAutocompleteOptions,
 } from './composer/index.js';
 export {
+  fillTemplate,
+  phraseFor,
+  readPath,
+  type ToolCatalog,
+  toolCatalogFrom,
+} from './presentation/phrasing.js';
+export {
+  inferResultView,
+  type ResolvedReading,
+  type ResolvedResultView,
+  resolveResultView,
+} from './presentation/result-view.js';
+export {
+  correctedCallIds,
+  type DescribeToolCallOptions,
+  describeToolCall,
+  type GroupToolActivityOptions,
+  groupToolActivity,
+  isActionCall,
+  type ToolActivityGroup,
+  type ToolCallDescription,
+  type ToolCallState,
+  type ToolCallStatus,
+  toolCallState,
+} from './presentation/tool-activity.js';
+export {
+  type ToolCatalogState,
+  useToolCatalog,
+  type UseToolCatalogOptions,
+} from './presentation/use-tool-catalog.js';
+export {
   formatElapsed,
   readReasoningMs,
   useElapsed,

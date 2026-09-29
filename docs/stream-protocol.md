@@ -110,6 +110,16 @@ is a key into the client's own registry (the library ships none); `props` must b
 persisted. Emitting the same `id` again (e.g. streaming rows into a table) updates it; it never
 duplicates it.
 
+## Tool catalog
+
+`GET <base>/tools?agent=<name>` returns `{ name, kind, presentation? }[]` for the tools the caller can
+reach — what `useToolCatalog` reads to narrate calls by the tool's declared words instead of its
+name. `presentation` is `{ label, running, done, icon?, detail?, tone?, confirm?: { title, verb,
+detail? }, result? }` (`running`/`done`/`confirm` are `{dotted.path}` templates over the call's input;
+`result` is a view over its output — see `ToolPresentation` in `packages/core/src/tool-presentation.ts`).
+A runner that serves these routes can answer it from its own tool list; a tool with no entry is
+narrated generically.
+
 ## Persisted history
 
 `GET <base>/threads/:id` returns `StoredMessage`s, which the client turns back into the same parts

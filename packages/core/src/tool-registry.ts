@@ -116,6 +116,24 @@ export class ToolRegistry {
     policy: RolesPolicy,
     allowedTools?: string[],
   ): Promise<ToolDefinition[]> {
+    return (await this.visibleSpecs(actor, policy, allowedTools)).map((spec) => ({
+      name: spec.name,
+      kind: spec.kind,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+    }));
+  }
+
+  /**
+   * The specs {@link definitionsFor} offers the model, whole — the same four gates (allow-list,
+   * enabled, role, `canUse`) in the same order. For a surface that lists what an actor can reach
+   * (`GET <base>/tools`), which must never disagree with what the model is actually shown.
+   */
+  async visibleSpecs(
+    actor: Actor,
+    policy: RolesPolicy,
+    allowedTools?: string[],
+  ): Promise<ToolSpec[]> {
     const pinnedNames = new Set(
       filterToolsByAllowList(this.allSpecs(), allowedTools).map((spec) => spec.name),
     );
@@ -132,12 +150,7 @@ export class ToolRegistry {
     );
     const roleScoped = live.filter((entry) => allowedByRole.has(entry.spec.name));
     const actorScoped = await filterToolsByCanUse(roleScoped, actor);
-    return actorScoped.map(({ spec }) => ({
-      name: spec.name,
-      kind: spec.kind,
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-    }));
+    return actorScoped.map(({ spec }) => spec);
   }
 
   /**
