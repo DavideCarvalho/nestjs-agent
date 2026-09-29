@@ -14,6 +14,8 @@ export type RetrieverKind =
   | 'hybrid'
   | 'filtered'
   | 'reranking'
+  | 'tree-navigation'
+  | 'two-stage'
   | 'unknown';
 
 /** Which backend held the chunks. Omitted entirely for a retriever that holds its own (keyword). */

@@ -92,3 +92,4 @@ export {
   type OpenAiEmbeddingsOptions,
 } from './openai-embeddings.js';
 export { HttpReranker, type HttpRerankerOptions } from './http-reranker.js';
+export * from './tree/index.js';
