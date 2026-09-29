@@ -65,6 +65,11 @@ export {
 } from './functional-tool.js';
 export { InlineAgentRunner } from './runner/inline-agent-runner.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
+export {
+  LedgerQuotaProvider,
+  type QuotaLimits,
+  type QuotaWindowLimits,
+} from './ledger-quota-provider.js';
 export { LedgerQuotaStore } from './ledger-quota-store.js';
 export { type AgentDeps, utcDay } from './agent-deps.js';
 export { AgentDepsFactory, delegateToolName } from './agent-deps.factory.js';

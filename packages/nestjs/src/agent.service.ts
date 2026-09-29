@@ -2,6 +2,8 @@ import {
   AGENT_ATTACHMENT_STAGING,
   AGENT_DEPS_FACTORY,
   AGENT_MODEL_CATALOG,
+  AGENT_OPTIONS,
+  AGENT_QUOTA_PROVIDER,
   AGENT_QUOTA_STORE,
   AGENT_RUNNER,
   AGENT_STORE,
@@ -21,6 +23,8 @@ import {
   type ModelCatalog,
   type ModelCatalogView,
   type PageContext,
+  type QuotaProvider,
+  type QuotaReport,
   type QuotaStore,
   type QuotaView,
   REQUESTER_APPROVER,
@@ -37,6 +41,8 @@ import {
   BadRequestException,
   ForbiddenException,
   GoneException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   NotFoundException,
@@ -45,6 +51,7 @@ import {
 } from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
+import type { AgentModuleOptions } from './agent.options.js';
 
 export interface ChatParams {
   actor: Actor;
@@ -102,7 +109,62 @@ export class AgentService {
     @Optional()
     @Inject(AGENT_MODEL_CATALOG)
     private readonly models?: ModelCatalog,
+    @Optional()
+    @Inject(AGENT_QUOTA_PROVIDER)
+    private readonly quotaProvider?: QuotaProvider,
+    @Optional()
+    @Inject(AGENT_OPTIONS)
+    private readonly options?: Pick<AgentModuleOptions, 'quotaProvider' | 'quotaLimits'>,
   ) {}
+
+  /**
+   * The actor's budget across windows (`GET <base>/quota`) — the bound {@link QuotaProvider}'s
+   * report. Without one (a service built outside the module), a day window from the ledger.
+   */
+  async quotaReport(actor: Actor): Promise<QuotaReport> {
+    if (this.quotaProvider !== undefined) {
+      return this.quotaProvider.report({ actor });
+    }
+    const today = await this.quotaToday(actor.id);
+    return {
+      windows: [
+        {
+          period: 'day',
+          usedTokens: today.usedTokens,
+          ...(today.limitTokens !== null ? { limitTokens: today.limitTokens } : {}),
+          usedUsd: today.costUsd,
+        },
+      ],
+      ...(today.withinLimit ? {} : { blocked: { period: 'day' as const } }),
+    };
+  }
+
+  /**
+   * Refuse a turn the actor's budget no longer covers — only when the host configured one
+   * (`quotaProvider` or `quotaLimits`): the default report is informational, and the daily token
+   * quota the loop enforces keeps working as it always has.
+   */
+  private async assertWithinQuota(actor: Actor): Promise<void> {
+    const gated =
+      this.options?.quotaProvider !== undefined || this.options?.quotaLimits !== undefined;
+    if (!gated || this.quotaProvider === undefined) {
+      return;
+    }
+    const { blocked } = await this.quotaProvider.report({ actor });
+    if (blocked !== undefined) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          code: 'quota_exceeded',
+          period: blocked.period,
+          message:
+            blocked.reason ??
+            `The ${blocked.period === 'day' ? 'daily' : 'monthly'} quota is used up`,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
 
   /**
    * The models `actor` may pick for `agent` (`GET <base>/models`). An empty catalog when none is
@@ -164,6 +226,7 @@ export class AgentService {
     // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
+    await this.assertWithinQuota(params.actor);
     const agentName = await this.resolveAgentName(params.agentName, params.threadId);
     const model = await this.resolveModel(params.actor, agentName, params.model, params.threadId);
     // Before the thread exists, so a turn that names an attachment it may not have leaves nothing

@@ -43,6 +43,10 @@ const THREAD_SUMMARY =
   'createdAt: string; updatedAt: string; lastMessagePreview?: string; ' +
   'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null }';
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
+/** `GET /agent/quota` — mirrors `QuotaReport` in core/src/spi/quota-provider.ts. */
+const QUOTA_REPORT =
+  "{ windows: { period: 'day' | 'month'; usedTokens: number; limitTokens?: number; usedUsd: number; " +
+  "limitUsd?: number; resetsAt?: string }[]; blocked?: { period: 'day' | 'month'; reason?: string } }";
 /** `GET /agent/models` — mirrors `ModelCatalogView` in core/src/spi/model-catalog.ts. */
 const MODEL_CATALOG_VIEW =
   '{ default: string | null; providers: { id: string; label: string; models: { id: string; ' +
@@ -229,10 +233,16 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       },
       [{ name: 'id', source: 'path' }],
     ),
+    route('GET', `${root}/quota`, `${ns}.quota.report`, {
+      query: null,
+      body: null,
+      response: QUOTA_REPORT,
+    }),
     route('GET', `${root}/quota/today`, `${ns}.quota`, {
       query: null,
       body: null,
-      response: '{ usedTokens: number }',
+      response:
+        '{ usedTokens: number; limitTokens: number | null; withinLimit: boolean; costUsd: number }',
     }),
     route(
       'POST',

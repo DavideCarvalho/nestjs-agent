@@ -760,9 +760,17 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
     actorRef: string,
     day: string,
   ): Promise<{ usedTokens: number; costUsd: number }> {
+    return this.usageBetween(actorRef, day, day);
+  }
+
+  async usageBetween(
+    actorRef: string,
+    fromDay: string,
+    toDay: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
     const em = this.em.fork();
-    const start = new Date(`${day}T00:00:00.000Z`);
-    const end = new Date(`${day}T23:59:59.999Z`);
+    const start = new Date(`${fromDay}T00:00:00.000Z`);
+    const end = new Date(`${toDay}T23:59:59.999Z`);
     const rows = await em.find(AgentTokenUsage, {
       actorRef,
       createdAt: { $gte: start, $lte: end },

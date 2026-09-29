@@ -664,8 +664,16 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
     actorRef: string,
     day: string,
   ): Promise<{ usedTokens: number; costUsd: number }> {
-    const start = new Date(`${day}T00:00:00.000Z`);
-    const end = new Date(`${day}T23:59:59.999Z`);
+    return this.usageBetween(actorRef, day, day);
+  }
+
+  async usageBetween(
+    actorRef: string,
+    fromDay: string,
+    toDay: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
+    const start = new Date(`${fromDay}T00:00:00.000Z`);
+    const end = new Date(`${toDay}T23:59:59.999Z`);
     const rows = await this.db
       .select()
       .from(agentTokenUsage)

@@ -22,6 +22,7 @@ export {
   useModels,
   type UseModelsOptions,
 } from './catalog/use-models.js';
+export { type QuotaState, useQuota, type UseQuotaOptions } from './quota/use-quota.js';
 export {
   type MessageFeedbackState,
   useMessageFeedback,
@@ -200,6 +201,7 @@ export {
 } from './transcript/index.js';
 export {
   type ChatBackground,
+  QuotaBlockedError,
   useAgentChat,
   type UseAgentChatOptions,
 } from './use-agent-chat.js';

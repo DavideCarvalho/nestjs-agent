@@ -605,7 +605,17 @@ export class InMemoryAgentStore implements AgentStore {
     actorRef: string,
     day: string,
   ): Promise<{ usedTokens: number; costUsd: number }> {
-    const rows = this.usage.filter((row) => row.actorRef === actorRef && row.day === day);
+    return this.usageBetween(actorRef, day, day);
+  }
+
+  async usageBetween(
+    actorRef: string,
+    fromDay: string,
+    toDay: string,
+  ): Promise<{ usedTokens: number; costUsd: number }> {
+    const rows = this.usage.filter(
+      (row) => row.actorRef === actorRef && row.day >= fromDay && row.day <= toDay,
+    );
     const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
     const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
     return { usedTokens, costUsd };

@@ -163,6 +163,11 @@ describe('MikroOrmAgentStore (sqlite)', () => {
     });
     const quota = await store.quotaToday('actor-1', today);
     expect(quota.usedTokens).toBe(42);
+    // the same ledger over a range: a month that holds today counts it, one that ends before does not
+    expect((await store.usageBetween('actor-1', `${today.slice(0, 8)}01`, today)).usedTokens).toBe(
+      42,
+    );
+    expect((await store.usageBetween('actor-1', '2000-01-01', '2000-01-31')).usedTokens).toBe(0);
     // costUsd sums only the rows that reported a cost (the first recordUsage had none)
     expect(quota.costUsd).toBeCloseTo(0.0125);
     const otherQuota = await store.quotaToday('actor-2', today);

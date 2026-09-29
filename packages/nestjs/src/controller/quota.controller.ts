@@ -10,6 +10,16 @@ export class QuotaController {
     @Inject(AGENT_ACTOR_RESOLVER) private readonly actorResolver: ActorResolver,
   ) {}
 
+  /**
+   * The caller's budget across windows — `{ windows: [{ period, usedTokens, limitTokens?, usedUsd,
+   * limitUsd?, resetsAt? }], blocked?: { period, reason? } }` — from the bound `QuotaProvider`.
+   */
+  @Get()
+  async report(@Req() req: Request) {
+    const actor = await this.actorResolver.resolve(req);
+    return this.agent.quotaReport(actor);
+  }
+
   @Get('today')
   async today(@Req() req: Request) {
     const actor = await this.actorResolver.resolve(req);

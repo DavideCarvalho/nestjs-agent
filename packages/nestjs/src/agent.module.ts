@@ -8,6 +8,7 @@ import {
   AGENT_MODEL_CATALOG,
   AGENT_OPTIONS,
   AGENT_PROMPT_CONTRIBUTORS,
+  AGENT_QUOTA_PROVIDER,
   AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
@@ -21,6 +22,7 @@ import {
   type AgentRunner,
   type AgentStore,
   DefaultRolesPolicy,
+  type QuotaStore,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -51,6 +53,7 @@ import { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
+import { LedgerQuotaProvider } from './ledger-quota-provider.js';
 import { LedgerQuotaStore } from './ledger-quota-store.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
@@ -123,6 +126,12 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
       inject: [AGENT_OPTIONS, AGENT_STORE],
     },
     {
+      provide: AGENT_QUOTA_PROVIDER,
+      useFactory: (o: AgentModuleOptions, store: AgentStore, quota: QuotaStore | undefined) =>
+        o.quotaProvider ?? new LedgerQuotaProvider(store, quota, o.quotaLimits),
+      inject: [AGENT_OPTIONS, AGENT_STORE, AGENT_QUOTA_STORE],
+    },
+    {
       provide: AGENT_MODEL_CATALOG,
       useFactory: (o: AgentModuleOptions) => o.models,
       inject: [AGENT_OPTIONS],
@@ -186,6 +195,7 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     ...(includeStore ? [AGENT_STORE] : []),
     AGENT_QUOTA_STORE,
     AGENT_MODEL_CATALOG,
+    AGENT_QUOTA_PROVIDER,
     AGENT_PROMPT_CONTRIBUTORS,
     AGENT_SKILLS,
     AGENT_MEMORY,

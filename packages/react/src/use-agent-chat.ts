@@ -1,5 +1,6 @@
 import { useChat } from '@ai-sdk/react';
 import type { ThreadDetail, ThreadSummary } from '@dudousxd/nestjs-agent-core';
+import type { QuotaBlock } from '@dudousxd/nestjs-agent-core';
 import type { DataUIPart, UIDataTypes, UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -43,6 +44,12 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentClient> {
   client?: B;
   /** Named agent to run each turn. */
   agent?: string;
+  /**
+   * The quota window blocking sends — `useQuota(...).blocked`. While set, `sendMessage` and
+   * `regenerate` refuse with {@link QuotaBlockedError} instead of starting a turn the server would
+   * refuse anyway.
+   */
+  blocked?: QuotaBlock | null;
   /**
    * Catalog model to run each turn on (see `useModels`), sent as the body's `model`. Read at every
    * send, so a picker can change it between turns. Omitted → the thread's pinned model, else the
@@ -363,6 +370,8 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
   type SdkSendMessage = typeof chat.sendMessage;
   const sendMessage = useCallback<SdkSendMessage>(
     async (...args: Parameters<SdkSendMessage>) => {
+      const blocked = latest.current.blocked;
+      if (blocked != null) throw new QuotaBlockedError(blocked);
       if (isTurnInFlight()) return;
       turnInFlight.current = true;
       try {
@@ -602,6 +611,8 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
   // Re-run the last exchange: flag the next request as a regenerate (so the backend truncates and
   // re-answers instead of appending) and let the SDK re-issue it, dropping the last assistant turn.
   const regenerate = useCallback((): void => {
+    const blocked = latest.current.blocked;
+    if (blocked != null) throw new QuotaBlockedError(blocked);
     if (isTurnInFlight()) return;
     regenerateNext.current = true;
     turnInFlight.current = true;
@@ -680,6 +691,14 @@ export function useAgentChat<B extends AgentBackend = AgentClient>(
     skip,
     regenerate,
   };
+}
+
+/** A send refused on the client because a quota window is exhausted (`useAgentChat({ blocked })`). */
+export class QuotaBlockedError extends Error {
+  constructor(readonly block: QuotaBlock) {
+    super(block.reason ?? `The ${block.period === 'day' ? 'daily' : 'monthly'} quota is used up`);
+    this.name = 'QuotaBlockedError';
+  }
 }
 
 async function mergeHeaders<B extends AgentBackend>(

@@ -3,6 +3,7 @@ import type {
   MessageAttachment,
   MessageFeedback,
   ModelCatalogView,
+  QuotaReport,
   QuotaView,
   SkillCatalogEntry,
   ThreadDetail,
@@ -232,6 +233,11 @@ export class AgentClient implements AgentBackend {
   /** `GET /agent/agents` — the registered agents, the default one flagged. */
   listAgents(): Promise<AgentCatalogEntry[]> {
     return this.request<AgentCatalogEntry[]>('GET', '/agent/agents');
+  }
+
+  /** `GET /agent/quota` — the caller's budget windows and the one blocking sends, if any. */
+  getQuota(): Promise<QuotaReport> {
+    return this.request<QuotaReport>('GET', '/agent/quota');
   }
 
   getQuotaToday(): Promise<QuotaToday> {

@@ -343,4 +343,14 @@ export interface AgentStore {
    * quota enforcement (via {@link QuotaStore}) and the quota-today view.
    */
   quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number; costUsd: number }>;
+  /**
+   * OPTIONAL: the actor's spend over the UTC days `fromDay`..`toDay` (`YYYY-MM-DD`, inclusive) —
+   * {@link quotaToday} over a range. Feeds the monthly window of `GET <base>/quota`; absent → that
+   * window is left out.
+   */
+  usageBetween?(
+    actorRef: string,
+    fromDay: string,
+    toDay: string,
+  ): Promise<{ usedTokens: number; costUsd: number }>;
 }
