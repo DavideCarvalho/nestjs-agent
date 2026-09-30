@@ -5,6 +5,7 @@ import {
   type AgentLoopResult,
   type AgentRunInput,
   type AgentStore,
+  type AgentStreamEvent,
   type Decision,
   type ElicitationReply,
   type LlmStepEnvelope,
@@ -13,8 +14,10 @@ import {
   type ToolCallRequest,
   type ToolStepEnvelope,
   agentFailureCode,
+  encodeStreamEvent,
   isReplayIntegrityError,
   publishAgentRunFailed,
+  releaseThreadRun,
   runAgentLoop,
   settleAll,
   settleUnsettledDelegation,
@@ -28,6 +31,11 @@ import {
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
+import {
+  ChatQueueService,
+  type QueuePlan,
+  type QueueSettleOutcome,
+} from '../queue/chat-queue.service.js';
 import { AgentRunSteps } from './agent-run.steps.js';
 
 /**
@@ -63,7 +71,75 @@ export class AgentRunWorkflow {
     // not vary between two pods of the same deployment; only the ANSWER may degrade, and the answer
     // is journaled.
     @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
+    // The thread's message queue. Provided by `AgentModule` on every surface, so whether a turn
+    // writes the queue checkpoints depends on the bound STORE (the same on every pod of a
+    // deployment), never on which pod replays it.
+    @Optional() private readonly queue?: ChatQueueService,
   ) {}
+
+  /**
+   * Move the thread past this settling turn — to the next queued message, started here as a
+   * fire-and-forget `ctx.startChild` under the message's own id, or to a paused/empty queue — and
+   * answer the `queue` frame to write before the turn's terminal.
+   *
+   * Journaled: the decision (which message, claimed and popped) is one `localStep`, so a replay
+   * reads it back instead of popping a second message, and the start is the runtime's own
+   * replay-safe spawn. Gated by `ctx.patched`, so a run recorded before the queue existed replays
+   * against the history it has. A no-op for a sub-agent's run and on a store without a queue.
+   */
+  private async advanceQueue(
+    ctx: WorkflowCtx,
+    input: AgentRunInput,
+    outcome: QueueSettleOutcome,
+    error?: string,
+  ): Promise<AgentStreamEvent | undefined> {
+    const queue = this.queue;
+    if (
+      queue === undefined ||
+      !queue.supported ||
+      input.sinkRunId !== undefined ||
+      input.deliverTo !== undefined
+    ) {
+      return undefined;
+    }
+    if (!(await ctx.patched('agent:chat-queue'))) {
+      return undefined;
+    }
+    const plan = await ctx.localStep(`queue:${outcome}`, async (): Promise<QueuePlan> => {
+      try {
+        // A Stop that arrived too late to interrupt anything still pauses the queue behind it.
+        const settled =
+          outcome === 'completed' && (await this.isCancelled(ctx.runId)) ? 'cancelled' : outcome;
+        return await queue.plan({
+          threadId: input.threadId,
+          runId: ctx.runId,
+          outcome: settled,
+          ...(error !== undefined ? { error } : {}),
+        });
+      } catch {
+        // Not worth failing a settling turn over: the queue is picked up by the next send or
+        // resume on the thread.
+        return {};
+      }
+    });
+    const next = plan.next;
+    if (next === undefined) {
+      return plan.frame;
+    }
+    try {
+      await ctx.startChild(AgentRunWorkflow, next.input, next.runId);
+      return plan.frame;
+    } catch (failure) {
+      if (isWorkflowControlFlowSignal(failure)) {
+        throw failure;
+      }
+      const reason = failure instanceof Error ? failure.message : String(failure);
+      return ctx.localStep('queue:restore', async () => {
+        await queue.restore(input.threadId, next, 'start_failed', reason);
+        return queue.pausedFrame(input.threadId);
+      });
+    }
+  }
 
   /**
    * Has someone asked this run to stop? Read from the runtime's own run status, which is where
@@ -152,10 +228,25 @@ export class AgentRunWorkflow {
     const hooks: AgentLoopHooks = {
       runId: ctx.runId,
       // A child forwards into the top-level sink but must not end/fail it (the top-level run owns it).
-      openSink: async () =>
-        input.sinkRunId !== undefined
-          ? childSinkWriter(await deps.sink.open(sinkRunId))
-          : deps.sink.open(ctx.runId),
+      // A thread's own turn hands the thread to its queue just before the loop ends the stream, so
+      // the reader learns what runs next from the `queue` frame, before the end.
+      openSink: async () => {
+        if (input.sinkRunId !== undefined) {
+          return childSinkWriter(await deps.sink.open(sinkRunId));
+        }
+        const writer = await deps.sink.open(ctx.runId);
+        return {
+          write: (chunk) => writer.write(chunk),
+          fail: (failure) => writer.fail(failure),
+          end: async () => {
+            const frame = await this.advanceQueue(ctx, input, 'completed');
+            if (frame !== undefined) {
+              await writer.write(encodeStreamEvent(frame));
+            }
+            await writer.end();
+          },
+        };
+      },
       // A policy's time to live becomes the signal wait's own timeout: the runtime journals the
       // deadline on the first call (a position of its own, reached only for a call the journal says
       // has a ttl) and wakes the run when it passes. The lapse comes back as a Decision rather than a
@@ -277,7 +368,9 @@ export class AgentRunWorkflow {
       // Genuine completion (not a suspend) — clear so `activeRunForThread` no longer reports this
       // run. `input.threadId` is whichever thread this run's own `activate`/the top-level `chat()`
       // call marked active, so this is correct for both a top-level run and a sub-agent's subthread.
-      await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      await ctx.localStep('deactivate', () =>
+        releaseThreadRun(this.store, input.threadId, ctx.runId),
+      );
       return result;
     } catch (error) {
       // A suspend / continue-as-new is control flow, not a failure — let the engine handle it. The
@@ -299,7 +392,9 @@ export class AgentRunWorkflow {
       // Nothing is published as a failure, and the error is rethrown so the runtime records the run
       // `cancelled` rather than completed.
       if (error instanceof RunCancelledError) {
-        await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+        await ctx.localStep('deactivate', () =>
+          releaseThreadRun(this.store, input.threadId, ctx.runId),
+        );
         await this.settleDetachedParent(ctx, input, { status: 'cancelled' });
         throw error;
       }
@@ -333,11 +428,18 @@ export class AgentRunWorkflow {
             errorMessage: message,
           }) ?? Promise.resolve(),
       );
-      await ctx.localStep('deactivate', () => this.store.setActiveStream(input.threadId, null));
+      // The queue behind a failed turn pauses — its next message would likely fail the same way.
+      const queueFrame = await this.advanceQueue(ctx, input, 'failed', message);
+      await ctx.localStep('deactivate', () =>
+        releaseThreadRun(this.store, input.threadId, ctx.runId),
+      );
       await this.settleDetachedParent(ctx, input, { status: 'failed', error: message });
       // Reuse the run's own sink resolution: a top-level run fails the watched stream; a child run's
       // writer no-ops fail, deferring the surfaced error to the ancestor whose run also unwinds.
       const writer = await hooks.openSink();
+      if (queueFrame !== undefined) {
+        await writer.write(encodeStreamEvent(queueFrame));
+      }
       await writer.fail({ code, message });
       throw error;
     }

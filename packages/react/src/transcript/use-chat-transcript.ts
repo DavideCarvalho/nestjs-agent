@@ -1,9 +1,11 @@
+import type { QueuePause } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentBackend } from '../backend.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import { useAgentBackend } from '../provider.js';
+import type { QueuedChatMessage } from '../queue/model.js';
 import type { AgentMessageMetadata } from '../stored-thread-to-ui-messages.js';
 import {
   type ApproveOptions,
@@ -12,6 +14,7 @@ import {
   type SettleAction,
   type TimestampInfo,
   type TranscriptBlock,
+  type TranscriptFile,
   type UsageSummary,
   buildTranscriptBlocks,
   describeTimestamp,
@@ -200,6 +203,38 @@ export interface UseChatTranscriptOptions extends TranscriptItemOptions {
   /** Suggested follow-ups. The model only decides WHETHER they belong on screen. */
   followUps?: string[] | null;
   stickToBottomThreshold?: number;
+  /**
+   * Messages waiting in the thread's queue — `chat.queue` (`useAgentChat` wires it). They render
+   * after the transcript as {@link ChatTranscript.queued}: pending user messages, not yet sent.
+   */
+  queue?: {
+    items: QueuedChatMessage[];
+    paused: QueuePause | null;
+    remove?: (id: string) => void | Promise<void>;
+  } | null;
+}
+
+/**
+ * A message waiting in the thread's queue, as the transcript shows it: a user message that has not
+ * been sent to the model yet. Render it after {@link ChatTranscript.items}, dimmed or tagged.
+ */
+export interface TranscriptQueuedItem {
+  id: string;
+  role: 'user';
+  text: string;
+  files: TranscriptFile[];
+  /**
+   * `'sending'` — on its way to the server. `'queued'` — waiting for the running turn.
+   * `'paused'` — waiting, but the queue is paused (see {@link ChatTranscript.queuePaused}).
+   */
+  state: 'sending' | 'queued' | 'paused';
+  /** 0-based place in the queue. */
+  position: number;
+  /** Runs next. */
+  isNext: boolean;
+  /** Queued by an interrupt — it runs as soon as the cancelled turn settles. */
+  interrupt: boolean;
+  remove: TranscriptActionState;
 }
 
 export interface ChatTranscript {
@@ -218,6 +253,10 @@ export interface ChatTranscript {
   window: TranscriptWindow;
   scroll: StickToBottom;
   stop: TranscriptStopState;
+  /** Messages waiting in the thread's queue, in run order — render after `items`. */
+  queued: TranscriptQueuedItem[];
+  /** Why the queue is not draining, or `null`. */
+  queuePaused: QueuePause | null;
 }
 
 /**
@@ -295,6 +334,7 @@ export function useChatTranscript(options: UseChatTranscriptOptions): ChatTransc
   });
 
   const showTypingIndicator = isBusy && lastMessage?.role !== 'assistant';
+  const queued = useQueuedItems(options.queue ?? null, options.readOnly === true);
 
   return {
     items,
@@ -324,7 +364,55 @@ export function useChatTranscript(options: UseChatTranscriptOptions): ChatTransc
       isStopping: stopRequested,
       stop,
     },
+    queued,
+    queuePaused: options.queue?.paused ?? null,
   };
+}
+
+/** The queue as transcript items. `remove` is cached per id, like every other item action. */
+function useQueuedItems(
+  queue: UseChatTranscriptOptions['queue'],
+  readOnly: boolean,
+): TranscriptQueuedItem[] {
+  const latestQueue = useRef(queue);
+  latestQueue.current = queue;
+  const removers = useRef(new Map<string, () => void>());
+  const removerFor = useCallback((id: string) => {
+    let remover = removers.current.get(id);
+    if (remover === undefined) {
+      remover = () => {
+        void latestQueue.current?.remove?.(id);
+      };
+      removers.current.set(id, remover);
+    }
+    return remover;
+  }, []);
+  if (queue === null || queue === undefined) {
+    return [];
+  }
+  return queue.items.map((message, position) => {
+    const state: TranscriptQueuedItem['state'] =
+      message.state === 'sending' ? 'sending' : queue.paused !== null ? 'paused' : 'queued';
+    return {
+      id: message.id,
+      role: 'user',
+      text: message.text,
+      files: message.attachments.map((attachment) => ({
+        url: attachment.url,
+        mediaType: attachment.contentType,
+        filename: attachment.name,
+        isImage: attachment.contentType.startsWith('image/'),
+      })),
+      state,
+      position,
+      isNext: position === 0,
+      interrupt: message.interrupt,
+      remove: {
+        available: !readOnly && state !== 'sending' && queue.remove !== undefined,
+        run: removerFor(message.id),
+      },
+    };
+  });
 }
 
 export interface UseTranscriptItemOptions extends TranscriptItemOptions {

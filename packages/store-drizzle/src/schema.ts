@@ -1,10 +1,13 @@
 import type {
+  Actor,
   AgentUiComponent,
   MemoryOrigin,
   MessageAttachment,
   MessageFeedback,
   MessageRole,
   MessageUsage,
+  PageContext,
+  QueuePause,
   ToolCallRequest,
   ToolCallStatus,
   ToolKind,
@@ -49,6 +52,8 @@ export const agentThread = sqliteTable(
     defaultAgent: text('default_agent'),
     /** The model every turn on this thread runs on unless the send names one; `null` → default. */
     model: text('model'),
+    /** Why the thread's message queue stopped draining; `null` → it drains. */
+    queuePause: text('queue_pause', { mode: 'json' }).$type<QueuePause>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
     deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
@@ -125,6 +130,34 @@ export const agentToolCall = sqliteTable(
     decidedVia: text('decided_via'),
   },
   (table) => [index('agent_tool_call_message_idx').on(table.messageId)],
+);
+
+/**
+ * A message sent while a turn was running on its thread, waiting to run after it — see the core
+ * `ChatQueueStore`. Not part of the transcript: the turn it starts appends it as its user message,
+ * and the row is deleted as it starts. `position` orders a thread's queue (head first); it is
+ * rewritten on a move, and only ever compared within one thread. `threadId` cascades on delete.
+ */
+export const agentQueuedMessage = sqliteTable(
+  'agent_queued_message',
+  {
+    id: text('id').primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => agentThread.id, { onDelete: 'cascade' }),
+    /** Who queued it — the turn it starts runs as this actor. */
+    actor: text('actor', { mode: 'json' }).$type<Actor>().notNull(),
+    content: text('content').notNull(),
+    attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),
+    agentName: text('agent_name'),
+    model: text('model'),
+    pageContext: text('page_context', { mode: 'json' }).$type<PageContext>(),
+    interrupt: integer('interrupt', { mode: 'boolean' }).notNull().default(false),
+    position: integer('position').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('agent_queued_message_thread_position_idx').on(table.threadId, table.position)],
 );
 
 /** A token-usage ledger row, summed per actor per day by `quotaToday`. */
@@ -298,6 +331,7 @@ export const ragIngestionLog = sqliteTable(
 export const agentSchema = {
   agentThread,
   agentMessage,
+  agentQueuedMessage,
   agentToolCall,
   agentTokenUsage,
   agentModelPricing,
@@ -322,6 +356,8 @@ export type AgentDrizzleDb = BaseSQLiteDatabase<
 export type AgentThreadRow = typeof agentThread.$inferSelect;
 /** A persisted message row as Drizzle selects it. */
 export type AgentMessageRow = typeof agentMessage.$inferSelect;
+/** A persisted queued message row as Drizzle selects it. */
+export type AgentQueuedMessageRow = typeof agentQueuedMessage.$inferSelect;
 /** A persisted run row as Drizzle selects it. */
 export type AgentRunRow = typeof agentRun.$inferSelect;
 /** A persisted memory row as Drizzle selects it. */

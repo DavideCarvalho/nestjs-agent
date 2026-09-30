@@ -2,8 +2,13 @@ import {
   type AgentStore,
   type AgentUiComponent,
   type AppendMessageInput,
+  type ChatQueueStore,
   type CreateThreadInput,
+  type EnqueueMessageInput,
   type MessageFeedback,
+  type QueuePause,
+  type QueuedMessage,
+  type QueuedMessagePatch,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -20,13 +25,29 @@ import {
   type UpdateToolCallInput,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  max,
+  min,
+  or,
+  sql,
+} from 'drizzle-orm';
 import {
   type AgentDrizzleDb,
   type AgentMessageRow,
+  type AgentQueuedMessageRow,
   type AgentRunRow,
   type AgentThreadRow,
   agentMessage,
+  agentQueuedMessage,
   agentRun,
   agentThread,
   agentTokenUsage,
@@ -60,7 +81,7 @@ type TurnMessageRow = { [K in keyof typeof TURN_MESSAGE_COLUMNS]: AgentMessageRo
  * owns the connection). Behaviour mirrors {@link import('@dudousxd/nestjs-agent-store-mikro-orm')}
  * exactly (fork/truncate/quota/active-stream/soft-delete semantics) so the two are interchangeable.
  */
-export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
+export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueueStore {
   constructor(private readonly db: AgentDrizzleDb) {}
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
@@ -74,6 +95,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       activeStreamId: null,
       defaultAgent: null,
       model: null,
+      queuePause: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -218,6 +240,8 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       activeStreamId: null,
       defaultAgent: source.defaultAgent,
       model: source.model,
+      // A fork is a new conversation: nothing is waiting on it, and nothing is paused.
+      queuePause: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -372,6 +396,156 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       .update(agentThread)
       .set({ transient: false, updatedAt: new Date() })
       .where(and(eq(agentThread.id, threadId), eq(agentThread.transient, true)));
+  }
+
+  /** The run streaming the thread, or `null` — a projection of the one column. */
+  async activeRunForThread(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ activeStreamId: agentThread.activeStreamId })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+    return thread?.activeStreamId ?? null;
+  }
+
+  /**
+   * One conditional UPDATE, so of two racing claims exactly one changes the row: set the holder to
+   * `runId` only when there is none, it is already `runId`, or it is `replacing`.
+   */
+  async claimActiveStream(
+    threadId: string,
+    runId: string,
+    options: { replacing?: string } = {},
+  ): Promise<boolean> {
+    const holders = [
+      isNull(agentThread.activeStreamId),
+      eq(agentThread.activeStreamId, runId),
+      ...(options.replacing !== undefined
+        ? [eq(agentThread.activeStreamId, options.replacing)]
+        : []),
+    ];
+    const claimed = await this.db
+      .update(agentThread)
+      .set({ activeStreamId: runId })
+      .where(and(eq(agentThread.id, threadId), or(...holders)))
+      .returning({ id: agentThread.id });
+    return claimed.length > 0;
+  }
+
+  async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
+    const released = await this.db
+      .update(agentThread)
+      .set({ activeStreamId: null })
+      .where(and(eq(agentThread.id, threadId), eq(agentThread.activeStreamId, runId)))
+      .returning({ id: agentThread.id });
+    return released.length > 0;
+  }
+
+  async enqueueMessage(input: EnqueueMessageInput): Promise<QueuedMessage> {
+    const now = new Date();
+    const [edge] = await this.db
+      .select({
+        first: min(agentQueuedMessage.position),
+        last: max(agentQueuedMessage.position),
+      })
+      .from(agentQueuedMessage)
+      .where(eq(agentQueuedMessage.threadId, input.threadId));
+    const position = input.at === 'head' ? (edge?.first ?? 1) - 1 : (edge?.last ?? -1) + 1;
+    const row: AgentQueuedMessageRow = {
+      id: crypto.randomUUID(),
+      threadId: input.threadId,
+      actor: input.actor,
+      content: input.content,
+      attachments:
+        input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
+      agentName: input.agentName ?? null,
+      model: input.model ?? null,
+      pageContext: input.pageContext ?? null,
+      interrupt: input.interrupt === true,
+      position,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.db.insert(agentQueuedMessage).values(row);
+    return toQueuedMessage(row);
+  }
+
+  async listQueue(threadId: string): Promise<QueuedMessage[]> {
+    const rows = await this.db
+      .select()
+      .from(agentQueuedMessage)
+      .where(eq(agentQueuedMessage.threadId, threadId))
+      .orderBy(asc(agentQueuedMessage.position), asc(agentQueuedMessage.createdAt));
+    return rows.map(toQueuedMessage);
+  }
+
+  async getQueuedMessage(id: string): Promise<QueuedMessage | null> {
+    const [row] = await this.db
+      .select()
+      .from(agentQueuedMessage)
+      .where(eq(agentQueuedMessage.id, id));
+    return row === undefined ? null : toQueuedMessage(row);
+  }
+
+  async updateQueuedMessage(id: string, patch: QueuedMessagePatch): Promise<QueuedMessage | null> {
+    const updates: Partial<AgentQueuedMessageRow> = { updatedAt: new Date() };
+    if (patch.content !== undefined) {
+      updates.content = patch.content;
+    }
+    if (patch.attachments !== undefined) {
+      updates.attachments =
+        patch.attachments === null || patch.attachments.length === 0 ? null : patch.attachments;
+    }
+    await this.db.update(agentQueuedMessage).set(updates).where(eq(agentQueuedMessage.id, id));
+    return this.getQueuedMessage(id);
+  }
+
+  /** Rewrites the thread's positions as 0..n-1 in the new order — a queue is a handful of rows. */
+  async moveQueuedMessage(id: string, index: number): Promise<boolean> {
+    const moving = await this.getQueuedMessage(id);
+    if (moving === null) {
+      return false;
+    }
+    const order = (await this.listQueue(moving.threadId)).filter((message) => message.id !== id);
+    const target = Math.max(0, Math.min(order.length, Math.trunc(index)));
+    order.splice(target, 0, moving);
+    for (const [position, message] of order.entries()) {
+      await this.db
+        .update(agentQueuedMessage)
+        .set({ position })
+        .where(eq(agentQueuedMessage.id, message.id));
+    }
+    return true;
+  }
+
+  async removeQueuedMessage(id: string): Promise<boolean> {
+    const removed = await this.db
+      .delete(agentQueuedMessage)
+      .where(eq(agentQueuedMessage.id, id))
+      .returning({ id: agentQueuedMessage.id });
+    return removed.length > 0;
+  }
+
+  async clearQueue(threadId: string): Promise<number> {
+    const removed = await this.db
+      .delete(agentQueuedMessage)
+      .where(eq(agentQueuedMessage.threadId, threadId))
+      .returning({ id: agentQueuedMessage.id });
+    return removed.length;
+  }
+
+  async queuePause(threadId: string): Promise<QueuePause | null> {
+    const [thread] = await this.db
+      .select({ queuePause: agentThread.queuePause })
+      .from(agentThread)
+      .where(eq(agentThread.id, threadId));
+    return thread?.queuePause ?? null;
+  }
+
+  async setQueuePause(threadId: string, pause: QueuePause | null): Promise<void> {
+    await this.db
+      .update(agentThread)
+      .set({ queuePause: pause })
+      .where(eq(agentThread.id, threadId));
   }
 
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
@@ -721,4 +895,22 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
       ...(message.feedback != null ? { feedback: message.feedback } : {}),
     };
   }
+}
+
+function toQueuedMessage(row: AgentQueuedMessageRow): QueuedMessage {
+  return {
+    id: row.id,
+    threadId: row.threadId,
+    actor: row.actor,
+    content: row.content,
+    ...(row.attachments !== null && row.attachments.length > 0
+      ? { attachments: row.attachments }
+      : {}),
+    ...(row.agentName !== null ? { agentName: row.agentName } : {}),
+    ...(row.model !== null ? { model: row.model } : {}),
+    ...(row.pageContext !== null ? { pageContext: row.pageContext } : {}),
+    ...(row.interrupt ? { interrupt: true } : {}),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }

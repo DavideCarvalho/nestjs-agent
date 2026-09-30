@@ -48,6 +48,7 @@ import { ConfigController } from './controller/config.controller.js';
 import { MemoriesController } from './controller/memories.controller.js';
 import { MessagesController } from './controller/messages.controller.js';
 import { ModelsController } from './controller/models.controller.js';
+import { QueueController } from './controller/queue.controller.js';
 import { QuotaController } from './controller/quota.controller.js';
 import { SkillsController } from './controller/skills.controller.js';
 import { ThreadsController } from './controller/threads.controller.js';
@@ -58,6 +59,7 @@ import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { ChatQueueService } from './queue/chat-queue.service.js';
 import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
@@ -216,6 +218,9 @@ function sharedProviders(durable: boolean): Provider[] {
     AgentDiscoveryService,
     AiToolDiscoveryService,
     SkillDiscoveryService,
+    // The thread message queue — every surface, since both runners and the durable workflow settle
+    // into it, and the chat routes enqueue into it.
+    ChatQueueService,
     InlineAgentRunner,
     AgentService,
     // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
@@ -269,6 +274,7 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
     AGENT_DEPS_FACTORY,
     AgentDepsFactory,
     AgentService,
+    ChatQueueService,
     InlineAgentRunner,
     AGENT_APPROVAL_PORT,
   ];
@@ -276,6 +282,7 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
 
 const BASE_CONTROLLERS = [
   ChatController,
+  QueueController,
   ThreadsController,
   ToolCallController,
   QuotaController,

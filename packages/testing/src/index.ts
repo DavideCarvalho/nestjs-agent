@@ -39,3 +39,8 @@ export {
 } from './fake-embedding-provider.js';
 export { FakeReranker } from './fake-reranker.js';
 export { EVERY_MESSAGE_FIELD, type EveryMessageField } from './message-fixture.js';
+export {
+  CHAT_QUEUE_STORE_CONTRACT,
+  type ChatQueueContractCase,
+  type ChatQueueContractSubject,
+} from './chat-queue-store-contract.js';

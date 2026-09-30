@@ -17,6 +17,7 @@ const statements: string[] = [
     active_stream_id TEXT,
     default_agent TEXT,
     model TEXT,
+    queue_pause TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
@@ -43,6 +44,22 @@ const statements: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS agent_message_thread_created_idx
     ON agent_message (thread_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS agent_queued_message (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
+    actor TEXT NOT NULL,
+    content TEXT NOT NULL,
+    attachments TEXT,
+    agent_name TEXT,
+    model TEXT,
+    page_context TEXT,
+    interrupt INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS agent_queued_message_thread_position_idx
+    ON agent_queued_message (thread_id, position)`,
   `CREATE TABLE IF NOT EXISTS agent_tool_call (
     id TEXT PRIMARY KEY NOT NULL,
     message_id TEXT NOT NULL REFERENCES agent_message(id) ON DELETE CASCADE,
@@ -217,6 +234,11 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_tool_call',
     column: 'remember',
     ddl: 'ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER',
+  },
+  {
+    table: 'agent_thread',
+    column: 'queue_pause',
+    ddl: 'ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT',
   },
   {
     table: 'agent_tool_call',

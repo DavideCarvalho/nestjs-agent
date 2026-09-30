@@ -32,6 +32,8 @@ export {
   type ChatStreamRequest,
   type ChatStreamResponse,
   type MessageFeedbackInput,
+  type QueuedMessageUpdate,
+  type QueuedSendResult,
   requireBackendMethod,
   type ResumeStreamRequest,
   type UploadAttachmentOptions,
@@ -217,6 +219,7 @@ export {
   type TranscriptElicitationOutcome,
   type TranscriptItem,
   type TranscriptItemOptions,
+  type TranscriptQueuedItem,
   type TranscriptQuestion,
   type TranscriptQuestionOption,
   type TranscriptReasoningBlock,
@@ -237,6 +240,14 @@ export {
   useTranscriptItem,
   type UseTranscriptItemOptions,
 } from './transcript/index.js';
+export type { ChatQueue, QueuedChatMessage, WhileRunning } from './queue/model.js';
+// The queue's wire shapes, so a renderer needs no second import for them.
+export type {
+  ChatQueueState,
+  QueuePause,
+  QueuePauseReason,
+  QueuedMessageView,
+} from '@dudousxd/nestjs-agent-core';
 export {
   type ChatBackground,
   QuotaBlockedError,

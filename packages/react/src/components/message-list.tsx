@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import type React from 'react';
+import type { ChatQueue } from '../queue/model.js';
 import type { ChatStatus, MessageUsageInfo } from '../transcript/model.js';
 import {
   type EditSubmitInput,
@@ -28,6 +29,14 @@ export interface MessageListClassNames {
   errorRetry?: string;
   followUps?: string;
   followUpChip?: string;
+  /** The block of waiting (queued) messages after the transcript. */
+  queue?: string;
+  /** One waiting message; it also carries `data-state="sending|queued|paused"`. */
+  queuedItem?: string;
+  queuedRemove?: string;
+  /** The "queue paused" line and its resume button. */
+  queuePaused?: string;
+  queueResume?: string;
   message?: MessageItemClassNames;
 }
 
@@ -72,6 +81,11 @@ export interface MessageListProps {
   /** Last turn's error — paired with `onRetry`, renders a retry banner. */
   error?: Error | null;
   onRetry?: () => void | Promise<void>;
+  /**
+   * `chat.queue` — messages sent while a turn was running, drawn after the transcript as pending
+   * user messages (with a remove button), and a resume button while the queue is paused.
+   */
+  queue?: ChatQueue;
   classNames?: MessageListClassNames;
 }
 
@@ -109,6 +123,7 @@ export function MessageList({
   onFollowUpClick,
   error,
   onRetry,
+  queue,
   classNames,
 }: MessageListProps) {
   const transcript = useChatTranscript({
@@ -123,9 +138,12 @@ export function MessageList({
     ...(getUsage ? { getUsage } : {}),
     ...(getCreatedAt ? { getCreatedAt } : {}),
     ...(followUps !== undefined ? { followUps } : {}),
+    ...(queue !== undefined
+      ? { queue: { items: queue.items, paused: queue.paused, remove: queue.remove } }
+      : {}),
   });
 
-  if (transcript.showEmptyState) {
+  if (transcript.showEmptyState && transcript.queued.length === 0) {
     return <div className={classNames?.empty}>{emptyState}</div>;
   }
 
@@ -159,6 +177,36 @@ export function MessageList({
           {...(getMeta ? { meta: getMeta(item.message) } : {})}
         />
       ))}
+      {transcript.queued.length > 0 ? (
+        <div className={classNames?.queue}>
+          {transcript.queued.map((item) => (
+            <div key={item.id} className={classNames?.queuedItem} data-state={item.state}>
+              <span>{item.text}</span>
+              {item.remove.available ? (
+                <button
+                  type="button"
+                  className={classNames?.queuedRemove}
+                  onClick={item.remove.run}
+                >
+                  Remove
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {transcript.queuePaused !== null && queue !== undefined ? (
+            <div className={classNames?.queuePaused}>
+              <span>Queue paused</span>
+              <button
+                type="button"
+                className={classNames?.queueResume}
+                onClick={() => void queue.resume()}
+              >
+                Resume
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {transcript.showTypingIndicator ? (
         <div className={classNames?.typing}>{typingIndicator ?? 'Thinking…'}</div>
       ) : null}

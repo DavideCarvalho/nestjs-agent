@@ -19,6 +19,7 @@
  *  - fields are only ever added, and new fields are optional.
  */
 import type { ElicitationRequest } from './elicitation.js';
+import type { ChatQueueState } from './spi/chat-queue.js';
 import type { MessageUsage } from './types.js';
 
 /**
@@ -187,7 +188,16 @@ export type AgentStreamEvent =
    * difference is the whole point: without it a reader cannot tell a truncated answer from a
    * complete one. Consumers that predate the frame ignore it and see the `end()` they always saw.
    */
-  | { kind: 'cancelled' };
+  | { kind: 'cancelled' }
+  /**
+   * The thread's message queue changed — a snapshot of the whole queue, never a delta, so a client
+   * that missed one frame is corrected by the next. Written into the stream of the run that is
+   * holding the thread: when someone queues, edits, reorders or removes a waiting message, and, just
+   * before this run's own terminal frame, with what happens next — `started` names the queued
+   * message that became the next turn and that turn's run id (attach to it with
+   * `GET <base>/chat/:runId/stream`), `queue.paused` says why nothing starts.
+   */
+  | { kind: 'queue'; queue: ChatQueueState; started?: { messageId: string; runId: string } };
 
 const encoder = new TextEncoder();
 

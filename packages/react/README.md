@@ -37,7 +37,8 @@ handlers passed. On top of the AI SDK chat it returns:
 | On `chat` | What it is |
 |---|---|
 | `transcript` | `useChatTranscript` already bound to the chat — approve/reject/answer/skip, stop, fork, regenerate, the tool catalog, and timestamps/usage read from message metadata. Override any of it with `useAgentChat({ transcript: { … } })`. |
-| `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both; `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'`. |
+| `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both — while a turn runs it QUEUES it (see *Typing ahead*); `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'` (`'busy'` only with `whileRunning: 'block'`). |
+| `queue` | `{ items, paused, isSupported, add(text, { attachments?, mode? }), remove(id), edit(id, text), move(id, index), clear(), resume(), error }` — messages sent mid-turn, waiting server-side for the running turn to settle. |
 | `models` | `{ list, providers, selected, pinned, locked, select(id), pinToThread(id) }` — loaded the first time `list` is read. |
 | `quota` / `blocked` | `useQuota`'s state, and the window blocking sends (the `blocked` option overrides it). |
 | `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — the same object shape the transcript's handlers take. |
@@ -579,6 +580,42 @@ const readCookie = (name: string) =>
   <App />
 </AgentProvider>;
 ```
+
+### Typing ahead: the message queue
+
+Send while a turn is still answering and the message waits in the thread's queue — server-side, so
+it survives a reload or a closed tab — and runs the moment the turn settles. Nothing to wire:
+`composer.submit()` and `sendMessage` queue on their own mid-turn, and the chat attaches to the
+queued turn when it starts.
+
+```tsx
+const chat = useAgentChat({ threadId });
+// …render chat.transcript.items, then what is waiting:
+{chat.transcript.queued.map((item) => (
+  <div key={item.id} data-state={item.state /* 'sending' | 'queued' | 'paused' */}>
+    {item.text}
+    {item.remove.available && <button onClick={item.remove.run}>Remove</button>}
+  </div>
+))}
+{chat.queue.paused && (
+  <button onClick={() => chat.queue.resume()}>
+    Paused ({chat.queue.paused.reason}) — resume
+  </button>
+)}
+```
+
+- `useAgentChat({ whileRunning })`: `'queue'` (default), `'interrupt'` (cancel the running turn and
+  run this next), or `'block'` (refuse, `composer.blockedBy === 'busy'` — the old behaviour, also
+  what a backend without `enqueueMessage` gets).
+- `chat.queue.edit(id, text)`, `move(id, index)`, `remove(id)`, `clear()` change what is waiting;
+  `add(text, { attachments, mode })` queues from your own code.
+- The queue pauses behind a failed turn (`run_failed`), a Stop (`cancelled`) or an exhausted quota
+  (`quota_exceeded`); `chat.queue.paused` says which, `resume()` lifts it. A queue left waiting with
+  nothing running is started when the thread loads.
+- A send that the server queued anyway (another tab was mid-turn) moves into `chat.queue` instead of
+  showing as a sent message.
+
+The wire contract (for a backend of your own) is *Message queue* in docs/stream-protocol.md.
 
 ### Reconnecting a dropped stream
 

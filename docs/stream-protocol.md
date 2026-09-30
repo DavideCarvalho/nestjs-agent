@@ -128,6 +128,7 @@ original stream.
 | `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
 | `message-metadata` | `metadata: object` | `message-metadata` — merged into the message's `metadata`. Host-defined facts (the model that answered, the turn's duration, the error it ended with); persist the same values as `StoredMessage.metadata`. This library's loop never sends it |
 | `cancelled` | — | transient `data-cancelled`. Send it as the last frame before `done` when someone stopped the run, so a reader can tell a truncated answer from a complete one |
+| `queue` | `queue: { items: QueuedMessageView[], paused: QueuePause \| null }`, `started?: { messageId, runId }` | transient `data-queue`. A snapshot of the thread's message queue (see *Message queue*): sent when it changes while this run holds the thread, and — with `started` — just before this run's terminal when the thread passes to the next queued message. `useAgentChat` keeps `chat.queue` from it and attaches to `started.runId` |
 | *anything else* | any | `data-<kind>` part carrying the frame minus `kind`, keyed by `id` when the frame has a string `id` |
 
 ### Tool kinds and approvals
@@ -338,6 +339,130 @@ message may carry, per step:
 A runner serving these routes should persist the same values it streamed, so a reload shows what
 the live stream did.
 
+## Message queue
+
+A person can keep typing while a turn is running. A message sent then is **queued on the thread,
+server-side** — it survives a reload, a closed tab, another device — and runs as soon as the turn
+ahead of it settles, exactly as if it had been sent then. Nothing about a queued message is in the
+transcript until it runs: the turn it starts appends it as its user message.
+
+### Sending
+
+`POST <base>/chat` takes `mode`:
+
+| `mode` | Thread idle | Thread busy (a turn is running) |
+|---|---|---|
+| `'auto'` (default) | starts the turn, streams it | queues it at the tail → `202` |
+| `'queue'` | queues it, and starts it at once → `202` with `runId` | queues it at the tail → `202` |
+| `'interrupt'` (or `interrupt: true`) | starts the turn, streams it | queues it at the **head**, cancels the running turn → `202` with `interrupting` |
+
+`'queue'` always answers `202`, so a client that asked for a queued send handles one shape. The
+`202` body:
+
+```json
+{
+  "queued": true,
+  "threadId": "thr_1",
+  "messageId": "q_7",
+  "position": 0,
+  "queue": { "items": [{ "id": "q_7", "content": "and in EUR?", "createdAt": "…", "updatedAt": "…" }], "paused": null },
+  "runId": "q_7",
+  "interrupting": "run_1"
+}
+```
+
+`position` is 0-based (`0` → runs next). `runId` is present only when the message started straight
+away; `interrupting` only for an interrupt. **A queued message's run id is its own `messageId`** —
+a client can name the run before it starts.
+
+Everything a send carries (`agent`, `model`, `attachments`, `pageContext`) is resolved and checked
+when it is queued (`400`/`403`/`429` then, not later), and stored with the message; the actor is the
+one who queued it. `regenerate` is refused with `409 { code: 'run_active' }` while a turn runs — it
+rewinds the thread under the running turn.
+
+A `QueuedMessageView` is `{ id, content, attachments?: MessageAttachment[], agentName?, model?,
+interrupt?: true, createdAt, updatedAt }`. A `QueuePause` is `{ reason: 'run_failed' | 'cancelled' |
+'quota_exceeded' | 'start_failed', message?, at }`.
+
+### Draining
+
+When the turn holding the thread settles, the server — **before** writing that turn's terminal
+frame — decides what follows and moves the thread there:
+
+| The turn… | The queue |
+|---|---|
+| completed | the head starts |
+| failed | pauses (`run_failed`, `message` = the failure) — the next message would likely fail the same way, and the person should see the error before more of their messages are spent |
+| was cancelled (Stop) | pauses (`cancelled`) — Stop means stop. A Stop that lands after the turn's last model call already answered still pauses |
+| was cancelled by an interrupt | the interrupt's message (the head) starts |
+
+The head's actor is checked against the quota as it starts; an exhausted budget pauses the queue
+(`quota_exceeded`) instead of starting it. A paused queue keeps every message and starts nothing
+until `POST <base>/threads/:id/queue/resume` (which starts the head when nothing is running). A
+plain send on an idle thread still runs at once while the queue is paused — the pause holds the
+queue, not the thread.
+
+The decision is announced in the settling turn's stream as its last frame before the terminal:
+
+```text
+data: {"kind":"queue","queue":{"items":[],"paused":null},"started":{"messageId":"q_7","runId":"q_7"}}
+
+event: done
+data: {}
+```
+
+A client that sees `started` shows the queued message as a user message and attaches to the new
+run with `GET <base>/chat/q_7/stream` (a `404` there means it already finished — re-read the
+thread). Without `started`, `queue.paused` says why nothing runs. Every change to the queue while a
+turn holds the thread (a message queued, edited, moved, removed) is also written into that turn's
+stream as a `queue` frame, so every tab watching the thread stays in step. Each frame is a whole
+snapshot, never a delta: a client that missed one is corrected by the next.
+
+### Admission — one turn per thread
+
+The queue only works if exactly one turn holds a thread at a time, across processes. The thread's
+active run (the `activeRunId` a thread read reports) is the admission lock, and every write to it is
+a **compare-and-set**:
+
+- *claim* — set it to a run id only when it is empty, already that id, or held by the run that is
+  handing over. Of two racing claims exactly one wins; the loser queues.
+- *release* — clear it only when the settling run still holds it, so a run that handed the thread on
+  can never clear its successor.
+
+A drain claims the thread **for the head's id** (handing over from the settling run), deletes the
+head (a conditional delete — if it is already gone, the claim is given back and the next head is
+tried), then starts the run under that id. Because the run id is the message id, a retried drain is
+idempotent: the claim succeeds again for the same id, and a start under an id that already exists is
+a no-op. After releasing an empty queue the drain reads it once more, and a send that queues behind
+a busy thread tries to start the head after enqueueing — so a message queued in the instant between
+a drain's read and its release is never stranded. A holder that is no longer running (a process
+that crashed mid-turn) is replaced by the next send or resume rather than queued behind for ever;
+a server that cannot tell whether a holder is alive must assume it is.
+
+### For a backend that is not this library
+
+To serve the queue to the React client (`chat.queue`, `whileRunning`), a backend implements:
+
+1. `POST <base>/chat` with `mode` as above, answering `202` + the body above when it queues.
+2. Per-thread FIFO storage of queued messages, surviving restarts: text, resolved attachments,
+   agent, model, page context, the actor, an `interrupt` flag, an order.
+3. A per-thread pause (`QueuePause | null`).
+4. The drain on every settle of a thread's own turn (not a sub-agent's), before the terminal frame,
+   with the policy table above, using compare-and-set admission.
+5. The `queue` frame — on every change while a turn holds the thread, and with `started` on a
+   handoff.
+6. The five queue routes (`GET`/`DELETE threads/:id/queue`, `POST threads/:id/queue/resume`,
+   `PATCH`/`DELETE queue/:messageId`), ownership-gated like the thread routes.
+7. `queue` on `GET <base>/threads/:id`.
+
+A backend that serves none of it keeps working: the client's `whileRunning` falls back to `'block'`
+when the backend has no `enqueueMessage`, and a server that answers every send with a stream is a
+server that never queues. A backend that runs its own agent process (a sandboxed runner) can hold
+the queue in its own storage and drive the drain from wherever it learns the turn ended — the
+contract is the wire, not this library's classes. This library's stores implement it through
+`ChatQueueStore` (core), checked by `CHAT_QUEUE_STORE_CONTRACT` (`@dudousxd/nestjs-agent-testing`),
+which a store of your own can run too.
+
 ## The REST surface
 
 Everything `AgentClient` (the default `AgentBackend` of `@dudousxd/nestjs-agent-react`) calls, so a
@@ -356,16 +481,21 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 
 | Route | Body / query | Answers |
 |---|---|---|
-| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient? }` | the SSE stream above; `400` for a `model` the catalog does not offer as available. `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* |
+| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient?, mode?: 'auto' \| 'queue' \| 'interrupt' }` | the SSE stream above — or `202 { queued: true, … }` JSON when the message waits in the thread's queue (see *Message queue*); `400` for a `model` the catalog does not offer as available. `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* (`409 run_active` while a turn runs) |
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
 | `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model? }`) |
-| `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`); `activeRunId` is the run streaming right now, the one to resume |
+| `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`, and `queue?: ChatQueueState` when the server queues); `activeRunId` is the run streaming right now, the one to resume |
 | `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins) |
 | `DELETE <base>/threads/:id` | — | `{ ok: true }` |
 | `POST <base>/threads/:id/fork-from/:messageId` | — | `ThreadSummary` of the fork |
 | `POST <base>/threads/:id/promote` | — | `{ ok: true }` |
 | `DELETE <base>/threads/:id/from/:messageId` | — | `{ ok: true }` |
+| `GET <base>/threads/:id/queue` | — | `ChatQueueState` — `{ items: QueuedMessageView[], paused: QueuePause \| null }` |
+| `DELETE <base>/threads/:id/queue` | — | `ChatQueueState` (empty); also lifts a pause |
+| `POST <base>/threads/:id/queue/resume` | — | `ChatQueueState & { runId? }` — lifts a pause; `runId` when the head started |
+| `PATCH <base>/queue/:messageId` | `{ message?, attachments?: { mediaId }[] \| null, position?: number }` | `ChatQueueState`; `410` when the message already started or was removed |
+| `DELETE <base>/queue/:messageId` | — | `ChatQueueState`; `410` when already gone, `404` unknown, `403` another actor's |
 | `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
 | `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx` |
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |

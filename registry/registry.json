@@ -66,6 +66,11 @@
           "target": "@components/agent-chat/chat-follow-ups.tsx"
         },
         {
+          "path": "src/components/agent-chat/chat-queue.tsx",
+          "type": "registry:component",
+          "target": "@components/agent-chat/chat-queue.tsx"
+        },
+        {
           "path": "src/components/agent-chat/chat-welcome.tsx",
           "type": "registry:component",
           "target": "@components/agent-chat/chat-welcome.tsx"

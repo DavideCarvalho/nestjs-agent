@@ -1,6 +1,7 @@
 import type {
   AgentCatalogEntry,
   AgentClientConfig,
+  ChatQueueState,
   MessageAttachment,
   MessageFeedback,
   MessageFeedbackValue,
@@ -57,6 +58,39 @@ export interface ChatStreamResponse {
   body: ReadableStream<Uint8Array>;
   runId?: string;
   threadId?: string;
+  /**
+   * The server queued the message instead of starting a turn (`202`): the thread already had one
+   * running — another tab, another device. `body` is then empty; the transport reports this as a
+   * transient `data-queue` part and `useAgentChat` moves the message into `chat.queue`.
+   */
+  queued?: QueuedSendResult;
+}
+
+/**
+ * `POST <base>/chat` answered `202`: the message waits in the thread's queue (see
+ * docs/stream-protocol.md, "Message queue").
+ */
+export interface QueuedSendResult {
+  queued: true;
+  threadId: string;
+  /** The queued message's id — also the id of the run it will start. */
+  messageId: string;
+  /** 0-based place in the queue when it was queued. */
+  position: number;
+  queue: ChatQueueState;
+  /** Set when it started straight away (the thread was idle after all): attach to this run. */
+  runId?: string;
+  /** The run an interrupt cancelled to make room for it. */
+  interrupting?: string;
+}
+
+/** What `PATCH <base>/queue/:messageId` takes. */
+export interface QueuedMessageUpdate {
+  message?: string;
+  /** `[{ mediaId }]` refs replacing the message's attachments; `null` drops them. */
+  attachments?: Array<{ mediaId: string }> | null;
+  /** Move it to this 0-based place in the queue. */
+  position?: number;
 }
 
 /** What `POST <base>/messages/:id/feedback` takes. `value: null` clears the rating. */
@@ -122,6 +156,23 @@ export interface AgentBackend {
   getThread(id: string): Promise<ThreadDetail>;
   updateThread(id: string, patch: ThreadPatch): Promise<unknown>;
   deleteThread(id: string): Promise<unknown>;
+
+  /**
+   * Queue a message on a thread (`POST <base>/chat` with `mode: 'queue'` or `'interrupt'`), which
+   * the server answers with `202` JSON rather than a stream. What `chat.queue` sends through; a
+   * backend without it keeps the composer blocked while a turn runs.
+   */
+  enqueueMessage?(request: ChatStreamRequest): Promise<QueuedSendResult>;
+  /** `GET <base>/threads/:id/queue`. */
+  getQueue?(threadId: string): Promise<ChatQueueState>;
+  /** `PATCH <base>/queue/:messageId` — edit and/or move a waiting message. */
+  updateQueuedMessage?(messageId: string, update: QueuedMessageUpdate): Promise<ChatQueueState>;
+  /** `DELETE <base>/queue/:messageId`. */
+  removeQueuedMessage?(messageId: string): Promise<ChatQueueState>;
+  /** `DELETE <base>/threads/:id/queue`. */
+  clearQueue?(threadId: string): Promise<ChatQueueState>;
+  /** `POST <base>/threads/:id/queue/resume` — `runId` when the head started. */
+  resumeQueue?(threadId: string): Promise<ChatQueueState & { runId?: string }>;
 
   forkFromMessage?(threadId: string, messageId: string): Promise<ThreadSummary>;
   promoteThread?(id: string): Promise<unknown>;

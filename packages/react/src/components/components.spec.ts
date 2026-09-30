@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { createElement } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { ChatQueue } from '../queue/model.js';
 import { ChatInput } from './chat-input.js';
 import { MessageList } from './message-list.js';
 
@@ -23,6 +24,43 @@ describe('chat components (render smoke)', () => {
     ];
     render(createElement(MessageList, { messages, status: 'ready' }));
     expect(screen.getByText('Hi there')).toBeTruthy();
+  });
+
+  it('MessageList draws waiting messages after the transcript, removable and resumable', () => {
+    const queue: ChatQueue = {
+      items: [
+        {
+          id: 'q-1',
+          text: 'and in EUR?',
+          attachments: [],
+          state: 'queued',
+          interrupt: false,
+          createdAt: 'x',
+        },
+      ],
+      paused: { reason: 'run_failed', at: 'x' },
+      isSupported: true,
+      add: vi.fn(),
+      remove: vi.fn(async () => undefined),
+      edit: vi.fn(),
+      move: vi.fn(),
+      clear: vi.fn(),
+      resume: vi.fn(async () => undefined),
+      error: null,
+    };
+    const { container } = render(
+      createElement(MessageList, {
+        messages: [{ id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Sorry' }] }],
+        status: 'ready',
+        queue,
+      }),
+    );
+    expect(screen.getByText('and in EUR?')).toBeTruthy();
+    expect(container.querySelector('[data-state="paused"]')).toBeTruthy();
+    fireEvent.click(screen.getByText('Remove'));
+    expect(queue.remove).toHaveBeenCalledWith('q-1');
+    fireEvent.click(screen.getByText('Resume'));
+    expect(queue.resume).toHaveBeenCalled();
   });
 
   it('MessageList renders the empty state when idle and empty', () => {

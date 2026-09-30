@@ -9,6 +9,7 @@ export * from './turn-frames.js';
 export * from './tool-ui.js';
 export * from './tool-presentation.js';
 export * from './spi/agent-store.js';
+export * from './spi/chat-queue.js';
 export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
 export * from './spi/quota-provider.js';

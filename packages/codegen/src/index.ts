@@ -42,7 +42,10 @@ const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string; ' +
   'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null }';
-const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[] }`;
+const ATTACHMENT = '{ mediaId: string; url: string; contentType: string; name: string }';
+/** Mirrors `ChatQueueState` in core/src/spi/chat-queue.ts. */
+const CHAT_QUEUE_STATE = `{ items: { id: string; content: string; attachments?: ${ATTACHMENT}[]; agentName?: string; model?: string; interrupt?: boolean; createdAt: string; updatedAt: string }[]; paused: { reason: 'run_failed' | 'cancelled' | 'quota_exceeded' | 'start_failed'; message?: string; at: string } | null }`;
+const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; queue?: ${CHAT_QUEUE_STATE} }`;
 /** `GET /agent/config` — mirrors `AgentClientConfig` in nestjs/src/controller/config.controller.ts. */
 const CLIENT_CONFIG =
   "{ attachments: { enabled: boolean; upload: 'multipart' | 'resumable' | null; maxBytes: number; " +
@@ -251,6 +254,45 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       response: CLIENT_CONFIG,
     }),
     route(
+      'GET',
+      `${root}/threads/:id/queue`,
+      `${ns}.queue.get`,
+      { query: null, body: null, response: CHAT_QUEUE_STATE },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route(
+      'DELETE',
+      `${root}/threads/:id/queue`,
+      `${ns}.queue.clear`,
+      { query: null, body: null, response: CHAT_QUEUE_STATE },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route(
+      'POST',
+      `${root}/threads/:id/queue/resume`,
+      `${ns}.queue.resume`,
+      { query: null, body: null, response: `${CHAT_QUEUE_STATE.slice(0, -2)}; runId?: string }` },
+      [{ name: 'id', source: 'path' }],
+    ),
+    route(
+      'PATCH',
+      `${root}/queue/:messageId`,
+      `${ns}.queue.update`,
+      {
+        query: null,
+        body: '{ message?: string; attachments?: { mediaId: string }[] | null; position?: number }',
+        response: CHAT_QUEUE_STATE,
+      },
+      [{ name: 'messageId', source: 'path' }],
+    ),
+    route(
+      'DELETE',
+      `${root}/queue/:messageId`,
+      `${ns}.queue.remove`,
+      { query: null, body: null, response: CHAT_QUEUE_STATE },
+      [{ name: 'messageId', source: 'path' }],
+    ),
+    route(
       'POST',
       `${root}/chat/:runId/cancel`,
       `${ns}.chat.cancel`,
@@ -264,7 +306,8 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
  * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
  * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, skills, tools, memories, staged
- * attachments, message feedback, model catalog, quota, cancel) into your generated `api.ts` — so they're available as a typed client
+ * attachments, message feedback, model catalog, quota, the thread message queue, cancel) into your
+ * generated `api.ts` — so they're available as a typed client
  * / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static

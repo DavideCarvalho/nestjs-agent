@@ -2,8 +2,13 @@ import {
   type AgentStore,
   type AgentUiComponent,
   type AppendMessageInput,
+  type ChatQueueStore,
   type CreateThreadInput,
+  type EnqueueMessageInput,
   type MessageFeedback,
+  type QueuePause,
+  type QueuedMessage,
+  type QueuedMessagePatch,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -22,6 +27,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { type EntityManager, raw } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
+import { AgentQueuedMessage } from './entities/agent-queued-message.entity';
 import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
@@ -63,7 +69,7 @@ type TurnMessage = Pick<AgentMessage, TurnMessageKey> & {
  * concurrent turns. Behaviour mirrors the in-memory reference store (fork/truncate/quota/
  * active-stream/soft-delete semantics) so the two are interchangeable in tests.
  */
-export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
+export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQueueStore {
   constructor(private readonly em: EntityManager) {}
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
@@ -422,6 +428,169 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader {
       thread.updatedAt = new Date();
       await em.flush();
     }
+  }
+
+  /**
+   * One conditional UPDATE, so of two racing claims exactly one changes the row: set the holder to
+   * `runId` only when there is none, it is already `runId`, or it is `replacing`.
+   */
+  async claimActiveStream(
+    threadId: string,
+    runId: string,
+    options: { replacing?: string } = {},
+  ): Promise<boolean> {
+    const em = this.em.fork();
+    const holders: Array<{ activeStreamId: string | null }> = [
+      { activeStreamId: null },
+      { activeStreamId: runId },
+      ...(options.replacing !== undefined ? [{ activeStreamId: options.replacing }] : []),
+    ];
+    const changed = await em.nativeUpdate(
+      AgentThread,
+      { id: threadId, $or: holders },
+      { activeStreamId: runId },
+    );
+    return changed > 0;
+  }
+
+  async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
+    const em = this.em.fork();
+    const changed = await em.nativeUpdate(
+      AgentThread,
+      { id: threadId, activeStreamId: runId },
+      { activeStreamId: null },
+    );
+    return changed > 0;
+  }
+
+  async enqueueMessage(input: EnqueueMessageInput): Promise<QueuedMessage> {
+    const em = this.em.fork();
+    const existing = await em.find(
+      AgentQueuedMessage,
+      { thread: input.threadId },
+      { fields: ['position'], orderBy: { position: 'asc' } },
+    );
+    const first = existing[0]?.position;
+    const last = existing[existing.length - 1]?.position;
+    const now = new Date();
+    const message = em.create(AgentQueuedMessage, {
+      id: crypto.randomUUID(),
+      thread: em.getReference(AgentThread, input.threadId),
+      actor: input.actor,
+      content: input.content,
+      attachments:
+        input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
+      agentName: input.agentName ?? null,
+      model: input.model ?? null,
+      pageContext: input.pageContext ?? null,
+      interrupt: input.interrupt === true,
+      position: input.at === 'head' ? (first ?? 1) - 1 : (last ?? -1) + 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    em.persist(message);
+    await em.flush();
+    return this.toQueuedMessage(message, input.threadId);
+  }
+
+  async listQueue(threadId: string): Promise<QueuedMessage[]> {
+    const em = this.em.fork();
+    const rows = await em.find(
+      AgentQueuedMessage,
+      { thread: threadId },
+      { orderBy: { position: 'asc', createdAt: 'asc' } },
+    );
+    return rows.map((row) => this.toQueuedMessage(row, threadId));
+  }
+
+  async getQueuedMessage(id: string): Promise<QueuedMessage | null> {
+    const em = this.em.fork();
+    const row = await em.findOne(AgentQueuedMessage, { id });
+    return row === null ? null : this.toQueuedMessage(row, row.thread.id);
+  }
+
+  async updateQueuedMessage(id: string, patch: QueuedMessagePatch): Promise<QueuedMessage | null> {
+    const em = this.em.fork();
+    const row = await em.findOne(AgentQueuedMessage, { id });
+    if (row === null) {
+      return null;
+    }
+    if (patch.content !== undefined) {
+      row.content = patch.content;
+    }
+    if (patch.attachments !== undefined) {
+      row.attachments =
+        patch.attachments === null || patch.attachments.length === 0 ? null : patch.attachments;
+    }
+    row.updatedAt = new Date();
+    await em.flush();
+    return this.toQueuedMessage(row, row.thread.id);
+  }
+
+  /** Rewrites the thread's positions as 0..n-1 in the new order — a queue is a handful of rows. */
+  async moveQueuedMessage(id: string, index: number): Promise<boolean> {
+    const em = this.em.fork();
+    const moving = await em.findOne(AgentQueuedMessage, { id });
+    if (moving === null) {
+      return false;
+    }
+    const order = (
+      await em.find(
+        AgentQueuedMessage,
+        { thread: moving.thread.id },
+        { orderBy: { position: 'asc', createdAt: 'asc' } },
+      )
+    ).filter((row) => row.id !== id);
+    const target = Math.max(0, Math.min(order.length, Math.trunc(index)));
+    order.splice(target, 0, moving);
+    for (const [position, row] of order.entries()) {
+      row.position = position;
+    }
+    await em.flush();
+    return true;
+  }
+
+  async removeQueuedMessage(id: string): Promise<boolean> {
+    const em = this.em.fork();
+    return (await em.nativeDelete(AgentQueuedMessage, { id })) > 0;
+  }
+
+  async clearQueue(threadId: string): Promise<number> {
+    const em = this.em.fork();
+    return em.nativeDelete(AgentQueuedMessage, { thread: threadId });
+  }
+
+  async queuePause(threadId: string): Promise<QueuePause | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(AgentThread, { id: threadId }, { fields: ['queuePause'] });
+    return thread?.queuePause ?? null;
+  }
+
+  async setQueuePause(threadId: string, pause: QueuePause | null): Promise<void> {
+    const em = this.em.fork();
+    const thread = await em.findOne(AgentThread, { id: threadId });
+    if (thread !== null) {
+      thread.queuePause = pause;
+      await em.flush();
+    }
+  }
+
+  private toQueuedMessage(row: AgentQueuedMessage, threadId: string): QueuedMessage {
+    return {
+      id: row.id,
+      threadId,
+      actor: row.actor,
+      content: row.content,
+      ...(row.attachments != null && row.attachments.length > 0
+        ? { attachments: row.attachments }
+        : {}),
+      ...(row.agentName != null ? { agentName: row.agentName } : {}),
+      ...(row.model != null ? { model: row.model } : {}),
+      ...(row.pageContext != null ? { pageContext: row.pageContext } : {}),
+      ...(row.interrupt ? { interrupt: true } : {}),
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString(),
+    };
   }
 
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {

@@ -302,6 +302,25 @@ as long as ids only increase — see *Numbering a stream you rebuild* in the pro
 `Last-Event-ID` header) skips what a reconnecting client already has; the React transport uses it to
 continue a message after a network drop. See docs/stream-protocol.md.
 
+### Sending while a turn is running (the message queue)
+
+`POST /agent/chat` on a thread that already has a turn running no longer starts a second one: the
+message is queued on the thread (persisted — it survives restarts) and the answer is `202 { queued:
+true, messageId, position, queue }`. When the running turn completes, the next queued message
+starts under its own id, and the settling turn's stream says so in a final `queue` frame
+(`started: { messageId, runId }`). `mode: 'interrupt'` cancels the running turn and runs the message
+next; `mode: 'queue'` always queues. A failed turn or a Stop pauses the queue (`POST
+/agent/threads/:id/queue/resume` lifts it); an exhausted quota pauses it as the next message starts.
+`GET`/`DELETE /agent/threads/:id/queue`, `PATCH`/`DELETE /agent/queue/:messageId` list, clear,
+edit, move and remove what is waiting.
+
+Both runners and both SQL stores support it (`ChatQueueStore`; the stores add an
+`agent_queued_message` table and an `agent_thread.queue_pause` column on boot). Admission is a
+compare-and-set on the thread's active run, so exactly one turn runs per thread across pods, and a
+durable drain is journaled — it never starts a queued message twice. `AgentService.chat()` stays a
+start-or-refuse call for in-process callers (`409 run_active` on a busy thread); `send()` is the
+queueing one. Policy and wire contract: *Message queue* in docs/stream-protocol.md.
+
 ### Message feedback
 
 `POST /agent/messages/:id/feedback` `{ value: 'up' | 'down' | null, comment? }` rates a message in

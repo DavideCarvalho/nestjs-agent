@@ -124,6 +124,23 @@ ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER;
 ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER;
 ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT;
 CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
+-- the chat message queue
+ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT;
+CREATE TABLE agent_queued_message (
+  id TEXT PRIMARY KEY NOT NULL,
+  thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  content TEXT NOT NULL,
+  attachments TEXT,
+  agent_name TEXT,
+  model TEXT,
+  page_context TEXT,
+  interrupt INTEGER NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX agent_queued_message_thread_position_idx ON agent_queued_message (thread_id, position);
 ```
 
 The index is not optional on Postgres: `agent_tool_call.message_id` carries a foreign key, and

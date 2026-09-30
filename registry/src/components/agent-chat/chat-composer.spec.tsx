@@ -60,6 +60,15 @@ describe('ChatComposer', () => {
     expect(textarea.value).toBe('');
   });
 
+  it('sends on Enter mid-turn, so the chat can queue it', () => {
+    const onSubmit = vi.fn();
+    render(<Harness status="streaming" onStop={() => undefined} onSubmit={onSubmit} />);
+    const textarea = screen.getByLabelText('Ask anything');
+    fireEvent.change(textarea, { target: { value: 'and in EUR?' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSubmit).toHaveBeenCalledWith('and in EUR?');
+  });
+
   it('refuses to submit an empty draft', () => {
     const onSubmit = vi.fn();
     render(<Harness status="ready" onSubmit={onSubmit} />);

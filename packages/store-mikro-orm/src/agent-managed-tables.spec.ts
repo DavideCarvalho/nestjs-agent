@@ -7,6 +7,7 @@ describe('agentManagedTables', () => {
       'agent_memory',
       'agent_message',
       'agent_model_pricing',
+      'agent_queued_message',
       'agent_run',
       'agent_thread',
       'agent_token_usage',

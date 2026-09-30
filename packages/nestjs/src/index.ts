@@ -11,6 +11,9 @@ export type {
 export {
   AgentService,
   type ChatParams,
+  type ChatSendMode,
+  type ChatSendResult,
+  type QueuedSend,
   type ThreadDefaultAgentReader,
   type ThreadModelReader,
 } from './agent.service.js';
@@ -73,6 +76,14 @@ export {
   type FunctionalTool,
 } from './functional-tool.js';
 export { InlineAgentRunner } from './runner/inline-agent-runner.js';
+export { QueueController } from './controller/queue.controller.js';
+export {
+  ChatQueueService,
+  type QueuePlan,
+  type QueueSettleOutcome,
+  type QueuedTurn,
+  type QueuedTurnStarter,
+} from './queue/chat-queue.service.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
 export {
   LedgerQuotaProvider,
