@@ -11,6 +11,7 @@ import {
   type DetachedDelivery,
   type ElicitationReply,
   type HumanReply,
+  RUN_ENDED_BEFORE_TOOL_CALL,
   RunCancelledError,
   type SinkWriter,
   agentFailureCode,
@@ -20,6 +21,7 @@ import {
   runAgentLoop,
   settleAll,
   settleUnsettledDelegation,
+  streamFailure,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
@@ -60,7 +62,17 @@ export class InlineAgentRunner implements AgentRunner {
    * that was running it is gone (a restart), and a thread it still holds is a stale claim.
    */
   async isRunActive(runId: string): Promise<boolean> {
-    return this.live.has(runId);
+    if (this.live.has(runId)) {
+      return true;
+    }
+    // A delegated run is not in `live` (it holds no thread of its own turn), but one parked on a
+    // person is as alive as its parent: its decision has somewhere to go.
+    for (const key of this.pending.keys()) {
+      if (key.startsWith(`${runId}:`)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async start(
@@ -103,6 +115,10 @@ export class InlineAgentRunner implements AgentRunner {
           errorCode: code,
           errorMessage: message,
         });
+        // A call this run had put to a person is not waiting for anything any more.
+        await Promise.resolve(
+          this.store.failUnsettledToolCalls?.(runId, RUN_ENDED_BEFORE_TOOL_CALL),
+        ).catch(() => 0);
         const writer = await deps.sink.open(runId);
         // The queue behind it pauses (a failed turn's next message would likely fail the same way),
         // told to the reader before the error frame.
@@ -110,8 +126,9 @@ export class InlineAgentRunner implements AgentRunner {
         // Clear the thread's active run — a failed run isn't "still running" for `activeRunForThread`.
         await releaseThreadRun(this.store, input.threadId, runId);
         // Terminate the live stream with a typed failure so the transport emits an error frame
-        // instead of leaking the message as assistant text.
-        await writer.fail({ code, message });
+        // instead of leaking the message as assistant text. The frame is for the person reading the
+        // chat; the error itself went to the log and the run row above.
+        await writer.fail(streamFailure(error));
       })
       .finally(() => {
         this.cancelled.delete(runId);
@@ -408,6 +425,9 @@ export class InlineAgentRunner implements AgentRunner {
           status: cancelled ? 'cancelled' : 'failed',
           ...(cancelled ? {} : { errorCode: agentFailureCode(error), errorMessage: message }),
         });
+        await Promise.resolve(
+          this.store.failUnsettledToolCalls?.(runId, RUN_ENDED_BEFORE_TOOL_CALL),
+        ).catch(() => 0);
         // The loop delivers its own success; a run that never produced an answer has to settle the
         // delegation itself, or the calling conversation shows "started" for ever.
         await settleUnsettledDelegation({

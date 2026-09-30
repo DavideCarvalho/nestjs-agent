@@ -176,6 +176,12 @@ export interface TranscriptToolCall {
   reject: TranscriptSettleState;
   /** A failed decision — the call is still parked, so the affordance stays live. */
   error: string | null;
+  /**
+   * The server's machine-readable reason for {@link error}, when it gave one. `run_not_active`
+   * means the turn that asked has ended: nothing is waiting for the decision, and pressing again
+   * will be refused again — word it yourself and let the person send the message again.
+   */
+  errorCode: string | null;
 }
 
 /**
@@ -305,6 +311,8 @@ export interface TranscriptElicitationBlock {
   outcome: TranscriptElicitationOutcome | null;
   /** A failed submission — the run is still parked, so the form stays live. */
   error: string | null;
+  /** The server's machine-readable reason for {@link error} (`run_not_active`, …), when it gave one. */
+  errorCode: string | null;
   answer: TranscriptSettleState;
   skip: TranscriptSettleState;
 }
@@ -366,6 +374,8 @@ export interface ElicitationBlockOptions {
   /** Which decision this call is sending, or `null` for none. */
   submitting: (toolCallId: string) => SettleAction | null;
   errorOf: (toolCallId: string) => string | null;
+  /** The `code` of the error `errorOf` reports, when the server sent one. */
+  errorCodeOf?: (toolCallId: string) => string | null;
 }
 
 /** Where an approval decision is sent, and what the last one did. */
@@ -377,6 +387,8 @@ export interface ApprovalBlockOptions {
   /** Which decision this call is sending, or `null` for none. */
   submitting: (toolCallId: string) => SettleAction | null;
   errorOf: (toolCallId: string) => string | null;
+  /** The `code` of the error `errorOf` reports, when the server sent one. */
+  errorCodeOf?: (toolCallId: string) => string | null;
 }
 
 export interface BuildBlocksOptions {
@@ -695,6 +707,7 @@ function buildToolCall(
       run: () => options?.reject(toolCallId),
     },
     error: options?.errorOf(toolCallId) ?? null,
+    errorCode: options?.errorCodeOf?.(toolCallId) ?? null,
   };
 }
 
@@ -876,6 +889,7 @@ function buildElicitationBlock(
     isValid: questions.every((question) => question.error === null),
     outcome,
     error: options.errorOf(toolCallId),
+    errorCode: options.errorCodeOf?.(toolCallId) ?? null,
     answer: {
       available: isPending && options.canAnswer,
       isSubmitting: sending === 'answer',

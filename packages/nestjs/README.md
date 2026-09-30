@@ -286,6 +286,21 @@ turns it on), or upload through your own route and give the React side your own 
 your `resolve` recognises. `list` is optional and only needed for `GET /agent/attachments` and
 sweeping.
 
+### A turn that dies mid-step
+
+A failing run settles what it left: the calls it had put to a person become `failed`
+(`AgentStore.failUnsettledToolCalls`), its run row is settled and its thread released — also when
+the durable runtime refused a checkpoint position, where nothing can be journaled and the three
+are written straight to the store. The next turn on the thread is shown a result for every tool
+call the dead one made. `AgentService.approve` / `reject` / `answer` / `skip` (and
+`signalToolCall`) throw `RunNotActiveException` — `409 { code: 'run_not_active' }` — when the run
+that asked has ended, instead of signalling a run that will never read it. The stream's error
+frame carries a stable `code` and, in production, a generic message (`exposeStreamErrorDetails`
+from core overrides that); the error itself is logged with its run id and kept on the run row.
+
+A tool receives `ctx.idempotencyKey` (`<runId>:<toolCallId>`) — pass it on to whatever the tool
+writes to, so a call re-executed after a worker crash lands on the first attempt.
+
 ### Who may read a run
 
 `GET /agent/chat/:runId/stream` and `POST /agent/chat/:runId/cancel` both resolve the acting actor

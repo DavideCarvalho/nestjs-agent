@@ -20,6 +20,7 @@ import {
   type ThreadTurnReader,
   type ToolCallApproval,
   type ToolCallApprovalState,
+  type ToolCallOutcome,
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
@@ -784,6 +785,42 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       updates.executedAt = new Date();
     }
     await this.db.update(agentToolCall).set(updates).where(eq(agentToolCall.id, input.toolCallId));
+  }
+
+  async toolCallOutcomes(toolCallIds: readonly string[]): Promise<ToolCallOutcome[]> {
+    if (toolCallIds.length === 0) {
+      return [];
+    }
+    const rows = await this.db
+      .select({
+        id: agentToolCall.id,
+        status: agentToolCall.status,
+        output: agentToolCall.output,
+        error: agentToolCall.error,
+      })
+      .from(agentToolCall)
+      .where(inArray(agentToolCall.id, [...toolCallIds]));
+    return rows.map((row) => ({
+      id: row.id,
+      status: row.status,
+      ...(row.output !== undefined && row.output !== null ? { output: row.output } : {}),
+      ...(typeof row.error === 'string' ? { error: row.error } : {}),
+    }));
+  }
+
+  async failUnsettledToolCalls(runId: string, error: string): Promise<number> {
+    const pending = and(
+      eq(agentToolCall.runId, runId),
+      eq(agentToolCall.status, 'pending_approval'),
+    );
+    // Counted first: an UPDATE's affected-row count is spelled differently by every driver this
+    // adapter runs on. The number is informational; the write is what matters.
+    const rows = await this.db.select({ id: agentToolCall.id }).from(agentToolCall).where(pending);
+    if (rows.length === 0) {
+      return 0;
+    }
+    await this.db.update(agentToolCall).set({ status: 'failed', error }).where(pending);
+    return rows.length;
   }
 
   /**

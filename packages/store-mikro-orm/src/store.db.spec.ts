@@ -943,4 +943,46 @@ describe('MikroOrmAgentStore — a recorded run round-trips every field it was s
     const em = orm.em.fork();
     expect((await em.findOne(AgentRun, { id: 'run-root' }))?.parentRunId ?? null).toBeNull();
   });
+
+  it('reads what a dangling call settled with, and fails the calls a dead run left waiting', async () => {
+    const thread = await store.createThread({ actor: { id: 'actor-1' } });
+    const message = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'saving',
+    });
+    for (const [toolCallId, status, runId] of [
+      ['dead-waiting', 'pending_approval', 'run-dead'],
+      ['dead-ran', 'pending_approval', 'run-dead'],
+      ['live-waiting', 'pending_approval', 'run-live'],
+    ] as const) {
+      await store.recordToolCall({
+        toolCallId,
+        messageId: message.id,
+        toolName: 'save',
+        toolType: 'action',
+        input: {},
+        status,
+        runId,
+      });
+    }
+    await store.updateToolCall({ toolCallId: 'dead-ran', status: 'executed', output: { ok: 1 } });
+
+    expect(await store.failUnsettledToolCalls('run-dead', 'the run ended')).toBe(1);
+    // Only still-pending calls: a repeat changes nothing.
+    expect(await store.failUnsettledToolCalls('run-dead', 'again')).toBe(0);
+
+    const outcomes = await store.toolCallOutcomes([
+      'dead-waiting',
+      'dead-ran',
+      'live-waiting',
+      'missing',
+    ]);
+    expect(outcomes.sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { id: 'dead-ran', status: 'executed', output: { ok: 1 } },
+      { id: 'dead-waiting', status: 'failed', error: 'the run ended' },
+      { id: 'live-waiting', status: 'pending_approval' },
+    ]);
+    expect(await store.toolCallOutcomes([])).toEqual([]);
+  });
 });

@@ -154,6 +154,37 @@ real durable suspend: the run is checkpointed to the state store on `ctx.waitFor
 on approval — surviving restarts, replay-safe. Without durable, an in-process runner holds the turn
 open. Either way the wire protocol is identical.
 
+### A turn that dies mid-step
+
+A run that fails — the durable runtime refused a checkpoint position, a store write threw, the
+provider errored — settles what it left behind: the calls it had put to a person become `failed`,
+its run row is settled, its thread is released. The next message on the thread starts a turn, and
+that turn is shown a result for every tool call the dead one made (the real output where the call's
+row says it ran; otherwise "never completed — check before doing it again"). A decision on a dead
+run's card answers `409 { code: 'run_not_active' }`. The stream's `event: error` carries a stable
+`code` (`run_failed`, `replay_diverged`, `model_no_output`, …) and, in production, a generic
+`message`; the error itself is in the log and on the run row. See `docs/stream-protocol.md`.
+
+### Making a tool safe to run twice
+
+A tool's side effect and the checkpoint that records it are two writes. Under the durable runner a
+worker that dies between them leaves a call the journal does not know ran, and the runtime's
+recovery runs the step again; a transient retry (below) re-invokes it too. The library cannot make
+your write atomic with its journal, so it hands every tool the key that makes the second attempt
+recognisable:
+
+```ts
+async execute(input: ChargeInput, ctx: AiToolCtx) {
+  // `<runId>:<toolCallId>` — the same for every execution of THIS call, and for no other.
+  return this.payments.charge(input, { idempotencyKey: ctx.idempotencyKey });
+}
+```
+
+Pass it as the provider's `Idempotency-Key`, store it in a unique column on the row you insert, or
+use it as the `id` of the workflow you start — whichever makes a repeat land on the first attempt's
+result. `ctx.toolCallId` is there too. Both are absent where a tool runs outside a turn (the MCP
+server, a direct `registry.invoke`).
+
 ### Transient tool errors
 
 A tool call gets **no durable step retries** by default — a bare `@Step()`, since a tool may not be

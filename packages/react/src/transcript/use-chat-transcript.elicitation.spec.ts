@@ -277,6 +277,22 @@ describe('useChatTranscript — approving a parked tool call', () => {
 
     act(() => call(result)?.reject.run());
     await waitFor(() => expect(call(result)?.error).toBe('not your thread'));
+    expect(call(result)?.errorCode).toBeNull();
+  });
+
+  it('carries the code of a refusal, so a dead turn’s card can be worded by the app', async () => {
+    const refusal = Object.assign(new Error('This request is no longer waiting for an answer'), {
+      status: 409,
+      code: 'run_not_active',
+    });
+    const onApprove = vi.fn(() => Promise.reject(refusal));
+    const { result } = renderHook(() =>
+      useChatTranscript({ messages: pendingApproval(), status: 'ready', onApprove }),
+    );
+
+    act(() => call(result)?.approve.run());
+    await waitFor(() => expect(call(result)?.errorCode).toBe('run_not_active'));
+    expect(call(result)?.error).toBe('This request is no longer waiting for an answer');
   });
 });
 

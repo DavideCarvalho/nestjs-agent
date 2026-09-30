@@ -34,6 +34,7 @@ import {
   findCatalogModel,
   mayDecideApproval,
   readElicitationQuestions,
+  settleDeadRun,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -53,6 +54,7 @@ import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
+import { RunNotActiveException } from './run-not-active.exception.js';
 
 /**
  * What a send does when its thread already has a turn running:
@@ -349,6 +351,11 @@ export class AgentService {
 
     const mode = params.mode ?? 'auto';
     const { live, stale } = await queue.holder(threadId, this.runner);
+    if (stale !== null) {
+      // The thread is still pointed at a run that is gone: settle the calls it left showing an
+      // approval card before another turn reads the thread.
+      await settleDeadRun(this.store, { runId: stale });
+    }
     // `queue` always answers as a queued send (202), so a client that asked for it handles one
     // shape; an idle thread starts it straight away all the same (`enqueue` kicks the queue).
     if (live === null && mode !== 'queue') {
@@ -719,7 +726,27 @@ export class AgentService {
   async signalToolCall(toolCallId: string, reply: HumanReply): Promise<void> {
     await this.assertNotExpired(toolCallId);
     const runId = await this.resolveRunForToolCall(toolCallId);
+    await this.assertRunWaiting(runId);
     return this.runner.signal(runId, toolCallId, reply);
+  }
+
+  /**
+   * Refuse a decision addressed at a run that is over (`409 run_not_active`). The runtime would take
+   * the signal and buffer it for a run that never comes back — the person's "yes" is accepted, the
+   * card says so, and nothing runs. Settles the calls the dead run left awaiting a decision on the
+   * way out, so the card stops asking. A runner that cannot say whether a run is alive is taken at
+   * its word that it is, and so is one that fails to answer.
+   */
+  private async assertRunWaiting(runId: string): Promise<void> {
+    if (typeof this.runner.isRunActive !== 'function') {
+      return;
+    }
+    const active = await this.runner.isRunActive(runId).catch(() => true);
+    if (active) {
+      return;
+    }
+    await settleDeadRun(this.store, { runId });
+    throw new RunNotActiveException(runId);
   }
 
   async cancel(actor: Actor, runId: string): Promise<void> {

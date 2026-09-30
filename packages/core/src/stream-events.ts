@@ -229,3 +229,19 @@ export function decodeStreamEvent(line: string): AgentStreamEvent | null {
   }
   return null;
 }
+
+/**
+ * The `code` of a failed run's `event: error` frame — what a client branches on, and translates.
+ * `quota_exceeded`, `output_rejected` and `structured_output_invalid` are outcomes the library words
+ * itself (their `message` is safe to show as it is); the rest are crashes, whose `message` is a
+ * generic sentence in production. Open-ended on purpose: a host's own runner may send other codes.
+ */
+export type AgentStreamErrorCode =
+  | 'quota_exceeded'
+  | 'output_rejected'
+  | 'structured_output_invalid'
+  /** The durable runtime refused a checkpoint position: the run's journal and its code disagree. */
+  | 'replay_diverged'
+  /** A model call ended without producing anything. */
+  | 'model_no_output'
+  | 'run_failed';

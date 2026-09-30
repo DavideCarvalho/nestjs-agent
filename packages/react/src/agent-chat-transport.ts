@@ -3,6 +3,7 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 import type { AgentBackend, ChatStreamResponse, QueuedSendResult } from './backend.js';
 import { AgentClient } from './client.js';
 import { reasoningDurationMetadata } from './reasoning/timing.js';
+import type { AgentRunFailure } from './run-errors.js';
 
 /** JSON-safe metadata, as the SDK's `toolMetadata` requires (its `JSONObject` is not exported). */
 type ToolMetadata = { [key: string]: string };
@@ -90,6 +91,12 @@ export interface AgentChatTransportOptions {
    * what the run wrote — `useAgentChat` re-reads the thread.
    */
   onResumeGone?: (runId: string) => void;
+  /**
+   * The run's stream ended with the backend's `event: error` frame — called with its `code` and
+   * `message` right before the stream is closed with an error chunk. The chunk can only carry the
+   * text; this is where the `code` reaches a caller, so it can word the failure itself.
+   */
+  onRunError?: (failure: AgentRunFailure) => void;
   /** Injectable for tests / non-browser runtimes. Defaults to global fetch. */
   fetch?: typeof fetch;
 }
@@ -305,6 +312,16 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
     const backend = this.backend;
     const policy = this.reconnectPolicy();
     const notify = (state: StreamConnectionState) => this.options.onConnectionChange?.(state);
+    const reportRunError = (failure: { code: string | undefined; message: string }) => {
+      try {
+        this.options.onRunError?.({
+          ...failure,
+          ...(streamRunId !== undefined ? { runId: streamRunId } : {}),
+        });
+      } catch {
+        /* a listener that throws must not replace the stream's own terminal */
+      }
+    };
     const aborted = () => cancelled || context.signal?.aborted === true;
     const canResume = () =>
       policy !== null && lastSeq !== undefined && streamRunId !== undefined && !aborted();
@@ -705,7 +722,9 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 return;
               }
               if (frame.event === 'error') {
-                fail(parseErrorText(frame.data));
+                const failure = parseErrorFrame(frame.data);
+                reportRunError(failure);
+                fail(failure.message);
                 return;
               }
               if (frame.event === 'meta') {
@@ -793,23 +812,26 @@ function parseMeta(data: string | undefined): AgentStreamMeta | null {
   return null;
 }
 
-/** Pull a human-facing message out of the backend's `event: error` frame (`{code,message}`). */
-function parseErrorText(data: string | undefined): string {
-  if (!data) return 'Agent run failed';
+/** Read the backend's `event: error` frame (`{code,message}`); a malformed one is a bare failure. */
+function parseErrorFrame(data: string | undefined): { code: string | undefined; message: string } {
+  const fallback = { code: undefined, message: 'Agent run failed' };
+  if (!data) return fallback;
   try {
     const parsed: unknown = JSON.parse(data);
-    if (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      'message' in parsed &&
-      typeof parsed.message === 'string'
-    ) {
-      return parsed.message;
+    if (parsed !== null && typeof parsed === 'object') {
+      const record = parsed as { code?: unknown; message?: unknown };
+      return {
+        code: typeof record.code === 'string' && record.code !== '' ? record.code : undefined,
+        message:
+          typeof record.message === 'string' && record.message !== ''
+            ? record.message
+            : fallback.message,
+      };
     }
   } catch {
     /* malformed error frame — fall through to the default */
   }
-  return 'Agent run failed';
+  return fallback;
 }
 
 /** Parse a `data:` frame as an `AgentStreamEvent`. Returns null for anything without a `kind`. */

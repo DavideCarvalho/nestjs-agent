@@ -261,3 +261,10 @@ export {
   useAgentChat,
   type UseAgentChatOptions,
 } from './use-agent-chat.js';
+export {
+  AGENT_RUN_ERROR_CODES,
+  type AgentRunErrorCode,
+  type AgentRunFailure,
+  RUN_NOT_ACTIVE_CODE,
+  isRunNotActiveError,
+} from './run-errors.js';

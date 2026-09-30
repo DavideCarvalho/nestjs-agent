@@ -21,13 +21,42 @@ Frames are separated by a blank line (`\n\n`). Four shapes:
 | `event: meta` + `data: {"runId": string, "threadId": string}` | Identity of the run. Send it first. A client binds approve/reject/cancel to `runId` and a threadless chat adopts `threadId`. |
 | `data: <AgentStreamEvent JSON>` (no `event:` line) | One stream event, one JSON object per frame. |
 | `event: done` + `data: {}` | The run ended normally (including a cancel — see `cancelled`). |
-| `event: error` + `data: {"code": string, "message": string}` | The run failed. `message` is shown to the user. Codes this library uses: `quota_exceeded`, `output_rejected`, `structured_output_invalid`, `run_failed`. |
+| `event: error` + `data: {"code": string, "message": string}` | The run failed. `code` is stable — a client branches on it and words the failure itself; `message` is a sentence safe to show as it is. See *Error codes* below. |
 
 Multi-line `data:` is joined with `\n`.
 
 `GET <base>/chat/:runId/stream` replays the run's buffered frames from the beginning and then tails
 it. Answer `404` when nothing is streaming under that id — the client reads that as "nothing to
 resume", not an error.
+
+### Error codes
+
+| `code` | Means | `message` |
+|---|---|---|
+| `quota_exceeded` | the actor's budget is spent | which budget — the library's own words |
+| `output_rejected` | an output processor refused the answer | the refusal — the library's own words |
+| `structured_output_invalid` | the answer never satisfied the agent's output schema | the library's own words |
+| `replay_diverged` | the durable runtime refused to resume the run: its journal and the deployed code disagree. The turn is over and will not come back; a new send starts a new one | generic in production |
+| `model_no_output` | a model call ended without producing anything | generic in production |
+| `run_failed` | anything else | generic in production |
+
+For the last three the error's own text names run ids, checkpoint positions, hosts and provider
+internals — nothing the person reading the chat can act on, and not theirs to see. In production
+(`NODE_ENV === 'production'`) the frame carries one fixed sentence
+(`RUN_FAILED_MESSAGE`: "The assistant could not finish this answer. Please try again.") and the
+error itself goes to the server log and the run row (`errorCode` / `errorMessage`). Outside
+production the raw message rides the frame, since the reader is the one debugging it;
+`exposeStreamErrorDetails(true | false)` decides it outright. A runner of your own should do the
+same: a stable `code`, a `message` written for a person.
+
+The React client keeps the frame on `chat.runError` (`{ code, message, runId? }`) until the next
+attempt starts — `chat.error` carries only the message — so an app renders its own text per code.
+
+A failed run leaves nothing waiting on it: the calls it had put to a person are settled `failed`,
+its run row is settled, and its thread is released, so the next send on the thread starts a turn.
+That turn is shown every tool call the dead one made with a result — the real output where the
+call's row says it ran, otherwise one saying it was never completed — because a provider refuses a
+prompt in which a tool call has no result after it.
 
 ### Sequence numbers and reconnecting
 
@@ -148,7 +177,12 @@ or without `approval-requested`. The frame adds who may decide and until when:
   `POST <base>/tool-call/reject` `{ toolCallId, reason?, via? }`. The approval id IS the tool call
   id. `remember: true` approves later calls of the same tool in the same thread without asking;
   `via` names the surface the decision came through (the lib records `'web'` when omitted). A
-  server answers `403` to a caller who is not the approver and `410` once the request lapsed.
+  server answers `403` to a caller who is not the approver, `410` once the request lapsed, and
+  `409 { code: 'run_not_active', message }` when the run that asked has ended (it failed, was
+  cancelled, or its worker is gone): nothing is waiting for the decision and nothing will run, so
+  it is refused instead of accepted and dropped. A client treats the card as stale — the React
+  layer's `isRunNotActiveError(error)` recognises the answer — and the person sends the message
+  again.
 
 The stream stays open while the run waits (a client that dropped reconnects through
 `GET <base>/chat/:runId/stream`). After the decision, continue on that stream with
@@ -189,7 +223,8 @@ are the only way a decision reaches it.
 `POST <base>/tool-call/answer { toolCallId, answers?: Record<questionId, string[]>, via? }` (an
 omitted question takes its `defaults`) or declined with
 `POST <base>/tool-call/skip { toolCallId, via? }`. `via` names the surface the answer came through,
-as on approve/reject (`'web'` when omitted). The matching `tool-output` carries the settled outcome:
+as on approve/reject (`'web'` when omitted). Both answer `409 { code: 'run_not_active' }` when the
+run that asked has ended, as approve/reject do. The matching `tool-output` carries the settled outcome:
 
 ```ts
 {
@@ -529,7 +564,7 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 | `DELETE <base>/queue/:messageId` | — | `ChatQueueState`; `410` when already gone, `404` unknown, `403` another actor's |
 | `POST <base>/queue/:messageId/interrupt` | — | `ChatQueueState & { interrupting?, runId? }` — the message moves to the head as an interrupt and the running turn is cancelled for it (`interrupting`); with nothing running it starts (`runId`). `410`/`404`/`403` as above (see *Interrupting with a message that is already waiting*) |
 | `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
-| `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx` |
+| `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx`; `409 { code: 'run_not_active' }` when the run that asked has ended |
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |
 | `GET <base>/tools?agent=` | — | see *Tool catalog* |
 | `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |

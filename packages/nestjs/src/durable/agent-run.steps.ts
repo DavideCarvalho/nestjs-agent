@@ -13,6 +13,7 @@ import {
   observeTurnFrames,
   publishAgentToolRetry,
   stampToolKinds,
+  toolCallContext,
   traceLlmTurn,
   traceToolExecution,
   withAskTool,
@@ -220,7 +221,7 @@ export class AgentRunSteps {
     );
     // AgentDeps carries no `host` today (AgentDepsFactory never populates one), so the rebuilt ctx
     // is exactly `input.ctx` plus `emitUi` — no narrower than what the non-dispatched path threads.
-    const ctx: AiToolCtx = { ...input.ctx, emitUi: ui.emit };
+    const ctx: AiToolCtx = { ...toolCallContext(input.ctx, input.toolCallId), emitUi: ui.emit };
     // The envelope carries the numeric half (attempts/backoffMs) the dispatching loop already
     // resolved — the SAME policy as the non-dispatched path. `classify` isn't wire-safe, so it's
     // resolved from THIS worker's own local module options instead (same DI re-resolution as

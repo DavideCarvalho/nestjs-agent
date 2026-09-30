@@ -11,6 +11,27 @@ export interface AiToolCtx {
   threadId: string;
   runId: string;
   requestId: string;
+  /**
+   * The id of the tool call this invocation serves. Absent where a tool is invoked outside a turn
+   * (the MCP server, a direct `registry.invoke`).
+   */
+  toolCallId?: string;
+  /**
+   * `<runId>:<toolCallId>` — the same value for every execution of THIS call, and for no other.
+   *
+   * A tool's side effect and the checkpoint that records it are two writes. Under the durable
+   * runner a worker that dies between them leaves a call the journal does not know ran, and the
+   * runtime's recovery runs it again; an in-step transient retry (a deadlock, a lock-wait timeout)
+   * re-invokes it too. The library cannot make your write atomic with its journal — so it hands you
+   * the key that makes the second attempt recognisable: pass it to whatever you call as its
+   * idempotency key (a payment provider's `Idempotency-Key`, a unique column on the row you insert,
+   * a workflow's `id`), and a re-execution lands on the first one's result instead of doing it
+   * twice. Stable across replays and across pods: the run id is the run's own, and the call id
+   * comes out of the journaled model step.
+   *
+   * Absent where a tool is invoked outside a turn (the MCP server, a direct `registry.invoke`).
+   */
+  idempotencyKey?: string;
   /** The name of the agent running this turn — provenance a tool can scope on (e.g. capability sets). */
   agentName?: string;
   pageContext?: PageContext;

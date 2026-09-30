@@ -105,3 +105,4 @@ export {
 
 // Re-export the core surface so consumers import tools/types from one place.
 export * from '@dudousxd/nestjs-agent-core';
+export { RunNotActiveException } from './run-not-active.exception.js';

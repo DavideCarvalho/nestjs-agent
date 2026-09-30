@@ -20,6 +20,7 @@ import {
   type ThreadTurnReader,
   type ToolCallApproval,
   type ToolCallApprovalState,
+  type ToolCallOutcome,
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
@@ -868,6 +869,33 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       toolCall.executedAt = new Date();
     }
     await em.flush();
+  }
+
+  async toolCallOutcomes(toolCallIds: readonly string[]): Promise<ToolCallOutcome[]> {
+    if (toolCallIds.length === 0) {
+      return [];
+    }
+    const em = this.em.fork();
+    const calls = await em.find(
+      AgentToolCall,
+      { id: { $in: [...toolCallIds] } },
+      { fields: ['id', 'status', 'output', 'error'] },
+    );
+    return calls.map((call) => ({
+      id: call.id,
+      status: call.status,
+      ...(call.output !== undefined && call.output !== null ? { output: call.output } : {}),
+      ...(typeof call.error === 'string' ? { error: call.error } : {}),
+    }));
+  }
+
+  async failUnsettledToolCalls(runId: string, error: string): Promise<number> {
+    const em = this.em.fork();
+    return em.nativeUpdate(
+      AgentToolCall,
+      { runId, status: 'pending_approval' },
+      { status: 'failed', error },
+    );
   }
 
   /**
