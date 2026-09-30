@@ -742,7 +742,9 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       },
       cancel() {
         cancelled = true;
-        void reader.cancel();
+        // A stop aborts the request first, which errors the body: cancelling an errored stream
+        // rejects with that same AbortError, and nobody is left to hear it.
+        reader.cancel().catch(() => undefined);
         endAttempt();
       },
     });
