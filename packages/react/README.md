@@ -42,7 +42,7 @@ handlers passed. On top of the AI SDK chat it returns:
 | `quota` / `blocked` | `useQuota`'s state, and the window blocking sends (the `blocked` option overrides it). |
 | `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — the same object shape the transcript's handlers take. |
 | `fork` / `truncateFrom` / `promote` | `({ messageId, threadId? })` / `({ threadId? })`, defaulting to this chat's thread. |
-| `cancel`, `regenerate`, `getThreadId`, `backend`, `runId`, `activeRunId`, `isLoadingHistory`, `connection`, `background` | — |
+| `cancel`, `regenerate`, `getThreadId`, `backend`, `runId`, `activeRunId`, `isLoadingHistory`, `connection`, `background` | — `isLoadingHistory` is already `true` on the first render with a `threadId`, so a page can show a skeleton instead of flashing its empty state |
 
 Threads (list, rename, delete) are `useThreads()`; the granular hooks stay the escape hatch.
 
@@ -170,6 +170,8 @@ catalog to the transcript and every tool call carries a `description`, and every
 ```tsx
 const chat = useAgentChat();
 const { catalog } = useToolCatalog(); // the provider's backend; `{ backend, agent }` to override
+// Several agents on one surface: every tool the actor reaches through any of them.
+const all = useToolCatalog({ agent: ALL_AGENTS }); // GET /agent/tools?agent=*
 const transcript = useChatTranscript({ messages: chat.messages, status: chat.status, toolCatalog: catalog });
 
 // in a `tools` block:
@@ -253,11 +255,19 @@ ones a human actually decided. A settled set keeps its block (`isPending: false`
 `selected` showing what was chosen), so one piece of markup renders both states.
 
 Detection is structural rather than by tool name — an intake and an `ask` persist under whatever
-name their row holds — and lifting is opt-in on `onAnswer` for the same reason `sources` is: with
-nowhere to send an answer, a question set is still just a tool card.
+name their row holds.
 
-**A tool call awaiting approval.** Wire `onApprove`/`onReject` and every call in a `tools` block
-carries its own decision:
+**Decisions settle through the backend by default.** `onApprove`, `onReject`, `onAnswer` and
+`onSkip` left undefined are NOT "off": each defaults to the in-scope backend's call (the enclosing
+`<AgentProvider>`'s `approveToolCall` / `rejectToolCall` / `answerToolCall` / `skipToolCall`), so a
+parked approval or question set is actionable with no wiring. Pass your own handler to route it
+elsewhere, `null` to drop one affordance (`onAnswer: null` keeps question sets as plain tool
+cards), or `readOnly: true` for a surface nobody acts on — an audit view, a shared or archived
+conversation. `readOnly` keeps parked approvals and question sets rendered (with their outcome)
+but offers no approve / reject / answer / skip, edit, fork, regenerate or stop, whatever is in
+scope; `<MessageList readOnly>` and `useAgentChat({ transcript: { readOnly: true } })` take it too.
+
+**A tool call awaiting approval.** Every call in a `tools` block carries its own decision:
 
 ```tsx
 {block.calls.map((call) => (

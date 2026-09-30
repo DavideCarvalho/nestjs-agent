@@ -2,7 +2,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentClient } from '../client.js';
-import { useToolCatalog } from './use-tool-catalog.js';
+import { ALL_AGENTS, useToolCatalog } from './use-tool-catalog.js';
 
 const entries = [
   {
@@ -33,6 +33,19 @@ describe('useToolCatalog', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?agent=support');
     expect(first.result.current.catalog).toEqual({ query: entries[0]?.presentation });
     expect(second.result.current.entries).toHaveLength(2);
+  });
+
+  it("asks for every agent's tools with ALL_AGENTS, for a surface showing several agents", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify(entries), { status: 200 }),
+    );
+    const { result } = renderHook(() =>
+      useToolCatalog({ backend: clientWith(fetchMock), agent: ALL_AGENTS }),
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?agent=*');
+    expect(result.current.catalog).toEqual({ query: entries[0]?.presentation });
   });
 
   it('reports a failure and retries on refresh', async () => {

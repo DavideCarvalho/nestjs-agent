@@ -138,6 +138,34 @@ describe('GET /agent/tools', () => {
     expect((res.body as ToolCatalogEntry[]).map((entry) => entry.name)).toEqual(['query']);
   });
 
+  it('`agent=*` answers every tool the actor reaches through any agent, each once', async () => {
+    const server = (await boot()).getHttpServer();
+    const admin = await request(server)
+      .get('/agent/tools?agent=*')
+      .set('x-actor-id', 'a1')
+      .set('x-actor-role', 'ADMIN');
+    expect(admin.status).toBe(200);
+    expect((admin.body as ToolCatalogEntry[]).map((entry) => entry.name).sort()).toEqual([
+      'plain',
+      'purge',
+      'query',
+    ]);
+    expect((admin.body as ToolCatalogEntry[]).find((entry) => entry.name === 'query')).toEqual({
+      name: 'query',
+      kind: 'read',
+      presentation: queryPresentation,
+    });
+
+    const user = await request(server)
+      .get('/agent/tools?agent=*')
+      .set('x-actor-id', 'u1')
+      .set('x-actor-role', 'USER');
+    expect((user.body as ToolCatalogEntry[]).map((entry) => entry.name).sort()).toEqual([
+      'plain',
+      'query',
+    ]);
+  });
+
   it('answers 404 for an agent that does not exist rather than listing every tool', async () => {
     const res = await request((await boot()).getHttpServer())
       .get('/agent/tools?agent=ghost')

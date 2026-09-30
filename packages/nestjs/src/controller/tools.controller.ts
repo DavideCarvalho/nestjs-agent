@@ -2,6 +2,7 @@ import {
   AGENT_ACTOR_RESOLVER,
   AGENT_DEPS_FACTORY,
   AGENT_REGISTRY,
+  ALL_AGENTS,
   type ActorResolver,
   AgentRegistry,
   type ToolCatalogEntry,
@@ -35,21 +36,36 @@ export class ToolsController {
   @Get()
   async list(
     @Req() req: Request,
-    /** The agent whose tools to list. Omitted → the default agent, the one a turn naming none uses. */
+    /**
+     * The agent whose tools to list. Omitted → the default agent, the one a turn naming none uses.
+     * `*` → every agent's: the union of what this actor reaches through any of them, each tool once
+     * — for a surface that shows several agents' conversations.
+     */
     @Query('agent') agent?: string,
   ): Promise<ToolCatalogEntry[]> {
     // An unknown name would otherwise resolve to NO allow-list — every tool — which is the widest
     // answer this endpoint can give, for a typo.
-    if (agent !== undefined && this.agents.get(agent) === undefined) {
+    if (agent !== undefined && agent !== ALL_AGENTS && this.agents.get(agent) === undefined) {
       throw new NotFoundException(`No agent named "${agent}"`);
     }
     const actor = await this.actorResolver.resolve(req);
-    const deps = this.depsFactory.forAgent(agent);
-    const specs = await deps.registry.visibleSpecs(actor, deps.rolesPolicy, deps.toolAllowList);
-    return specs.map((spec) => ({
-      name: spec.name,
-      kind: spec.kind,
-      ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
-    }));
+    const names =
+      agent === ALL_AGENTS
+        ? [undefined, ...this.agents.list().map((definition) => definition.name)]
+        : [agent];
+    const entries = new Map<string, ToolCatalogEntry>();
+    for (const name of names) {
+      const deps = this.depsFactory.forAgent(name);
+      const specs = await deps.registry.visibleSpecs(actor, deps.rolesPolicy, deps.toolAllowList);
+      for (const spec of specs) {
+        if (entries.has(spec.name)) continue;
+        entries.set(spec.name, {
+          name: spec.name,
+          kind: spec.kind,
+          ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
+        });
+      }
+    }
+    return [...entries.values()];
   }
 }

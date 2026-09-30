@@ -1,4 +1,6 @@
-import type { ToolCatalogEntry } from '@dudousxd/nestjs-agent-core';
+import { ALL_AGENTS, type ToolCatalogEntry } from '@dudousxd/nestjs-agent-core';
+
+export { ALL_AGENTS };
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type AgentBackend, AgentBackendUnsupportedError } from '../backend.js';
 import { useAgentBackend } from '../provider.js';
@@ -13,7 +15,11 @@ export interface UseToolCatalogOptions {
    * (the shared copy is keyed by it): a backend constructed inline refetches every render.
    */
   backend?: ToolsBackend;
-  /** The agent whose tools to list. Omitted → the server's default agent. */
+  /**
+   * The agent whose tools to list. Omitted → the server's default agent. {@link ALL_AGENTS} (`'*'`)
+   * → every tool the actor reaches through any agent, each once — for an app with several agents
+   * whose conversations one surface shows.
+   */
   agent?: string;
   /** `false` holds the request (e.g. until the user is signed in). Default `true`. */
   enabled?: boolean;

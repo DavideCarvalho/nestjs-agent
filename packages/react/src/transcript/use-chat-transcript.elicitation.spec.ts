@@ -279,3 +279,69 @@ describe('useChatTranscript — approving a parked tool call', () => {
     await waitFor(() => expect(call(result)?.error).toBe('not your thread'));
   });
 });
+
+describe('useChatTranscript — readOnly', () => {
+  const backend = {
+    answerToolCall: vi.fn(),
+    skipToolCall: vi.fn(),
+    approveToolCall: vi.fn(),
+    rejectToolCall: vi.fn(),
+  } as unknown as AgentBackend;
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(AgentProvider, { backend }, children);
+
+  it('shows a question set as a form nobody can settle, even with a backend in scope', () => {
+    const { result } = renderHook(
+      () => useChatTranscript({ messages: parked(), status: 'ready', readOnly: true }),
+      { wrapper },
+    );
+    const block = questionSet(result);
+    expect(block.kind).toBe('elicitation');
+    expect(block.answer.available).toBe(false);
+    expect(block.skip.available).toBe(false);
+  });
+
+  it('offers no approve/reject, fork, regenerate, edit or stop — whatever handlers are in scope', () => {
+    const messages: UIMessage[] = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'purge it' }] },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-purgeCache',
+            toolCallId: 'call-2',
+            state: 'input-available',
+            input: { key: 'all' },
+            toolMetadata: { toolKind: 'action' },
+          } as UIMessage['parts'][number],
+        ],
+      },
+    ];
+    const { result } = renderHook(
+      () =>
+        useChatTranscript({
+          messages,
+          status: 'streaming',
+          readOnly: true,
+          onApprove: vi.fn(),
+          onFork: vi.fn(),
+          regeneratable: true,
+          onRegenerate: vi.fn(),
+          editable: true,
+          onEditSubmit: vi.fn(),
+          onStop: vi.fn(),
+        }),
+      { wrapper },
+    );
+    const [user, answer] = result.current.items;
+    const call = (answer?.blocks[0] as TranscriptToolBlock).calls[0];
+    expect(call?.isAwaitingApproval).toBe(true);
+    expect(call?.approve.available).toBe(false);
+    expect(call?.reject.available).toBe(false);
+    expect(answer?.fork.available).toBe(false);
+    expect(answer?.regenerate.available).toBe(false);
+    expect(user?.edit.available).toBe(false);
+    expect(result.current.stop.available).toBe(false);
+  });
+});
