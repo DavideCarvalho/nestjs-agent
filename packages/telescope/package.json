@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-telescope",
-  "version": "0.8.24",
+  "version": "0.8.25",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
