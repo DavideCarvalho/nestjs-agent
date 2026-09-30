@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.29.1
+
+### Patch Changes
+
+- [#253](https://github.com/DavideCarvalho/nestjs-agent/pull/253) [`17c62f5`](https://github.com/DavideCarvalho/nestjs-agent/commit/17c62f56a023fafbabc3a0af59f43c77543ed242) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Stopping an answer no longer leaves an unhandled `AbortError` in the console. The chat's stop aborts the request, which errors the response body; the transport then cancelled that body and dropped the promise, which rejects with the same `AbortError: BodyStreamBuffer was aborted`.
+
 ## 0.29.0
 
 ### Minor Changes
