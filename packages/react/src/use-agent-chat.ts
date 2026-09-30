@@ -1,5 +1,7 @@
 import { useChat } from '@ai-sdk/react';
 import type {
+  ChatQueueState,
+  MessageAttachment,
   QuotaBlock,
   StoredMessage,
   ThreadDetail,
@@ -18,11 +20,17 @@ import {
   type UseAttachmentsOptions,
   useAttachments,
 } from './attachments/use-attachments.js';
-import { type AgentBackend, requireBackendMethod } from './backend.js';
+import {
+  type AgentBackend,
+  AgentBackendUnsupportedError,
+  type QueuedSendResult,
+  requireBackendMethod,
+} from './backend.js';
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 import { type ModelOption, type ModelsState, useModels } from './catalog/use-models.js';
 import { useToolCatalog } from './presentation/use-tool-catalog.js';
 import { useAgentBackend } from './provider.js';
+import type { ChatQueue, QueuedChatMessage, WhileRunning } from './queue/model.js';
 import { type QuotaState, useQuota } from './quota/use-quota.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 import {
@@ -102,6 +110,14 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
   blocked?: QuotaBlock | null;
   /** Validation and upload for `chat.composer.files` — see `useAttachments`. */
   composer?: Omit<UseAttachmentsOptions, 'backend'>;
+  /**
+   * What `composer.submit()` and `sendMessage` do while a turn is still running. Default `'queue'`:
+   * the message waits in the thread's queue (server-side — it survives a reload) and runs when the
+   * turn settles; `chat.queue` lists and edits what is waiting. `'interrupt'` cancels the running
+   * turn and runs the message next. `'block'` refuses the send (`composer.blockedBy === 'busy'`).
+   * A backend without `enqueueMessage` behaves as `'block'`.
+   */
+  whileRunning?: WhileRunning;
   /**
    * Overrides for `chat.transcript` — anything `useChatTranscript` takes (`sources`, `editable` +
    * `onEditSubmit`, `followUps`, `getUsage`, a `toolCatalog` of your own, `onApprove: null`, …).
@@ -198,6 +214,83 @@ export interface ChatModels {
   pinToThread: (id: string | null) => Promise<void>;
   isLoading: boolean;
   error: Error | null;
+}
+
+/** A queued message that became the thread's running turn, which this chat attaches to. */
+interface StartedQueuedTurn {
+  messageId: string;
+  runId: string;
+  text: string;
+  attachments: MessageAttachment[];
+}
+
+const EMPTY_QUEUE: ChatQueueState = { items: [], paused: null };
+
+let localQueueSequence = 0;
+
+/** The user message a queued message becomes once its turn starts. */
+function queuedUserMessage(turn: StartedQueuedTurn): UIMessage {
+  return {
+    id: turn.messageId,
+    role: 'user',
+    metadata: { createdAt: new Date().toISOString() },
+    parts: [
+      ...turn.attachments.map((attachment) => ({
+        type: 'file' as const,
+        mediaType: attachment.contentType,
+        filename: attachment.name,
+        url: attachment.url,
+        providerMetadata: { agent: { mediaId: attachment.mediaId } },
+      })),
+      ...(turn.text.length > 0 ? [{ type: 'text' as const, text: turn.text }] : []),
+    ],
+  };
+}
+
+/** The text and staged files of whatever `sendMessage` was handed, for a send that is queued. */
+function draftOf(message: unknown): { text: string; attachments: MessageAttachment[] } {
+  if (typeof message !== 'object' || message === null) {
+    return { text: '', attachments: [] };
+  }
+  const draft = message as {
+    text?: unknown;
+    files?: unknown;
+    parts?: Array<{ type?: string; text?: unknown }>;
+  };
+  let text = typeof draft.text === 'string' ? draft.text : '';
+  if (text === '' && Array.isArray(draft.parts)) {
+    text = draft.parts
+      .filter((part) => part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text as string)
+      .join('');
+  }
+  const files = Array.isArray(draft.files)
+    ? (draft.files as Array<Record<string, unknown>>)
+    : Array.isArray(draft.parts)
+      ? (draft.parts as Array<Record<string, unknown>>).filter((part) => part.type === 'file')
+      : [];
+  const attachments = files.flatMap((file): MessageAttachment[] => {
+    const mediaId = (file.providerMetadata as { agent?: { mediaId?: unknown } } | undefined)?.agent
+      ?.mediaId;
+    return typeof mediaId === 'string'
+      ? [
+          {
+            mediaId,
+            url: String(file.url ?? ''),
+            contentType: String(file.mediaType ?? 'application/octet-stream'),
+            name: String(file.filename ?? mediaId),
+          },
+        ]
+      : [];
+  });
+  return { text, attachments };
+}
+
+function lastUserIndex(messages: UIMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') return index;
+  }
+  return -1;
 }
 
 /** Why the composer cannot send right now. */
@@ -301,6 +394,40 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     [],
   );
 
+  // ---- queue state (declared early: the transport's callbacks feed it) ------------------------
+  const [queueState, setQueueState] = useState<ChatQueueState>(EMPTY_QUEUE);
+  const queueStateRef = useRef(queueState);
+  const applyQueue = useCallback((next: ChatQueueState) => {
+    queueStateRef.current = next;
+    setQueueState(next);
+  }, []);
+  // Sends on their way to the server, shown in the queue until it answers.
+  const [pendingSends, setPendingSends] = useState<QueuedChatMessage[]>([]);
+  const [queueError, setQueueError] = useState<Error | null>(null);
+  // The queued message the running turn handed the thread to — attached to once that turn settles.
+  const handoff = useRef<StartedQueuedTurn | undefined>(undefined);
+  // A plain send the server queued instead of starting (another tab's turn was running).
+  const queuedSend = useRef<QueuedSendResult | undefined>(undefined);
+  // Queue sends made before a new chat's first turn named its thread.
+  const threadWaiters = useRef<Array<(threadId: string) => void>>([]);
+
+  /** The body fields every send carries: agent, thread, model, page context. */
+  const turnBody = useCallback((): Record<string, unknown> => {
+    const current = latest.current;
+    const pageContext = current.getPageContext?.() ?? null;
+    const threadId = currentThreadId();
+    // A locked agent runs on its own model: a pick is not sent (the server would refuse it).
+    const model = current.model ?? (lockedRef.current ? undefined : pickedModelRef.current);
+    return {
+      // Read per send: a host that switches agents before the first message (a picker on a new
+      // chat) sends the one picked now, not the one this chat mounted with.
+      ...(current.agent !== undefined ? { agent: current.agent } : {}),
+      ...(threadId !== undefined ? { threadId } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(pageContext ? { pageContext } : {}),
+    };
+  }, [currentThreadId]);
+
   // Where the live stream stands — `reconnecting` while the transport retries a dropped one.
   const [connection, setConnection] = useState<StreamConnectionState>({ status: 'live' });
   // The run ended while the stream was away: what streamed is incomplete, the thread is not.
@@ -312,6 +439,11 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     function onMeta(meta: AgentStreamMeta): void {
       settlingRunIdRef.current = meta.runId;
       setRunId(meta.runId);
+      if (meta.threadId) {
+        const waiting = threadWaiters.current;
+        threadWaiters.current = [];
+        for (const resolve of waiting) resolve(meta.threadId);
+      }
       if (
         latest.current.threadId === undefined &&
         meta.threadId &&
@@ -336,27 +468,18 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       },
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
       getBody: () => {
-        const current = latest.current;
-        const pageContext = current.getPageContext?.() ?? null;
         const regenerate = regenerateNext.current;
         regenerateNext.current = false;
-        const threadId = currentThreadId();
-        // A locked agent runs on its own model: a pick is not sent (the server would refuse it).
-        const model = current.model ?? (lockedRef.current ? undefined : pickedModelRef.current);
-        return {
-          // Read per send: a host that switches agents before the first message (a picker on a
-          // new chat) sends the one picked now, not the one this chat mounted with.
-          ...(current.agent !== undefined ? { agent: current.agent } : {}),
-          ...(threadId !== undefined ? { threadId } : {}),
-          ...(model !== undefined ? { model } : {}),
-          ...(pageContext ? { pageContext } : {}),
-          ...(regenerate ? { regenerate: true } : {}),
-        };
+        return { ...turnBody(), ...(regenerate ? { regenerate: true } : {}) };
       },
       getResumeRunId: () => latest.current.resumeRunId ?? autoResumeRunIdRef.current,
       onMeta,
       onAttemptStart: () => {
         settlingRunIdRef.current = undefined;
+      },
+      // A queued turn this chat went to attach to had already finished: read what it wrote.
+      onResumeGone: () => {
+        void resyncFromThread();
       },
     });
   }, []);
@@ -371,6 +494,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onData: (part) => {
       latest.current.onData?.(part);
+      if (part.type === 'data-queue') {
+        onQueueData(part.data);
+      }
       if (part.type === 'data-title') {
         const title = (part.data as { title?: unknown } | null)?.title;
         if (typeof title === 'string') {
@@ -394,6 +520,21 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         notifyThreads(client, { type: 'changed' });
       }
       setConnection({ status: 'live' });
+      const queuedInstead = queuedSend.current;
+      if (queuedInstead !== undefined) {
+        queuedSend.current = undefined;
+        // The SDK already showed the send as a user message; it is waiting in the queue instead.
+        chatRef.current.setMessages((current) => {
+          const last = lastUserIndex(current);
+          return last === -1 ? current : current.slice(0, last);
+        });
+      }
+      const next = handoff.current;
+      handoff.current = undefined;
+      if (next !== undefined) {
+        attachTo(next);
+        return;
+      }
       if (resyncAfterSettle.current) {
         resyncAfterSettle.current = false;
         void resyncFromThread();
@@ -403,6 +544,59 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
 
   const chatRef = useRef(chat);
   chatRef.current = chat;
+
+  /** A `data-queue` part: the queue as it now stands, and maybe the turn this run handed over to. */
+  function onQueueData(data: unknown): void {
+    const frame = (data ?? {}) as {
+      queue?: ChatQueueState;
+      started?: { messageId: string; runId: string };
+      queuedSend?: QueuedSendResult;
+    };
+    const before = queueStateRef.current;
+    if (frame.queue !== undefined) applyQueue(frame.queue);
+    const started = frame.started;
+    // A run's own stream may open by announcing itself (a queue kicked while idle): not a handoff.
+    if (started !== undefined && started.runId !== settlingRunIdRef.current) {
+      const waiting = before.items.find((item) => item.id === started.messageId);
+      handoff.current = {
+        ...started,
+        text: waiting?.content ?? '',
+        attachments: waiting?.attachments ?? [],
+      };
+    }
+    if (frame.queuedSend !== undefined) {
+      queuedSend.current = frame.queuedSend;
+      if (frame.queuedSend.runId !== undefined) {
+        handoff.current = {
+          messageId: frame.queuedSend.messageId,
+          runId: frame.queuedSend.runId,
+          ...draftOf(chatRef.current.messages[lastUserIndex(chatRef.current.messages)]),
+        };
+      }
+    }
+  }
+
+  /**
+   * Show a queued message as the user message it now is, and attach to the turn it started. After
+   * the SDK has fully settled the previous response — resuming from inside its `onFinish` would
+   * have that response's cleanup clobber this one.
+   */
+  function attachTo(turn: StartedQueuedTurn): void {
+    setTimeout(() => {
+      if (turn.text.length > 0 || turn.attachments.length > 0) {
+        chatRef.current.setMessages((current) =>
+          current.some((message) => message.id === turn.messageId)
+            ? current
+            : [...current, queuedUserMessage(turn)],
+        );
+      } else {
+        // Queued somewhere this chat never saw: the thread has it, once the turn has run.
+        resyncAfterSettle.current = true;
+      }
+      autoResumeRunIdRef.current = turn.runId;
+      void chatRef.current.resumeStream();
+    }, 0);
+  }
 
   /** Replace the transcript with the persisted thread — after a run finished while we were away. */
   async function resyncFromThread(): Promise<void> {
@@ -418,6 +612,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
 
   // A new conversation starts from rest: nothing of the previous thread's run state carries over.
   const firstChatId = useRef(chatId);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `applyQueue` is stable; `chatId` names the conversation
   useEffect(() => {
     if (chatId === firstChatId.current) return;
     firstChatId.current = chatId;
@@ -429,6 +624,11 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     setHistoryError(null);
     autoResumeRunIdRef.current = undefined;
     pendingPin.current = undefined;
+    applyQueue(EMPTY_QUEUE);
+    setPendingSends([]);
+    setQueueError(null);
+    handoff.current = undefined;
+    queuedSend.current = undefined;
   }, [chatId]);
 
   // A thread's history and its still-streaming turn, in one read. Re-runs per conversation; a
@@ -454,6 +654,18 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
           setActiveRunId(active);
           setThreadModel(thread.model ?? null);
           setHistoryError(null);
+          const queue = thread.queue ?? EMPTY_QUEUE;
+          applyQueue(queue);
+          // Messages left waiting with nothing running and nothing pausing them — the process
+          // that would have started them went away. Start the head now.
+          if (
+            queue.items.length > 0 &&
+            queue.paused === null &&
+            active === null &&
+            typeof client.resumeQueue === 'function'
+          ) {
+            void resumeQueueRef.current().catch(() => undefined);
+          }
           const resuming = wantResume && active !== null;
           if (wantHistory && chatRef.current.messages.length === 0) {
             // The run being resumed replays from its first frame, so its rows are left to the stream.
@@ -511,12 +723,100 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const blockedRef = useRef(blocked);
   blockedRef.current = blocked;
 
+  // ---- queue ---------------------------------------------------------------------------------
+  const whileRunning: WhileRunning =
+    typeof client.enqueueMessage === 'function' ? (options.whileRunning ?? 'queue') : 'block';
+  const whileRunningRef = useRef(whileRunning);
+  whileRunningRef.current = whileRunning;
+
+  /** This chat's thread — waiting for a new chat's first turn to name it, when one is in flight. */
+  const threadForQueue = useCallback(async (): Promise<string> => {
+    const known = currentThreadId();
+    if (known !== undefined) return known;
+    if (!isTurnInFlight()) throw new Error('queue: this chat has no thread yet');
+    return new Promise<string>((resolve) => threadWaiters.current.push(resolve));
+  }, [currentThreadId, isTurnInFlight]);
+
+  /** Run a queue operation, keeping the last failure on `chat.queue.error`. */
+  const queueCall = useCallback(async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      const result = await run();
+      setQueueError(null);
+      return result;
+    } catch (error) {
+      setQueueError(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attachTo` reads refs only
+  const enqueue = useCallback(
+    async (
+      text: string,
+      {
+        attachments = [],
+        mode = 'queue',
+      }: { attachments?: MessageAttachment[]; mode?: 'queue' | 'interrupt' } = {},
+    ): Promise<void> => {
+      const block = blockedRef.current;
+      if (block != null) throw new QuotaBlockedError(block);
+      const send = client.enqueueMessage;
+      if (typeof send !== 'function') throw new AgentBackendUnsupportedError('enqueueMessage');
+      localQueueSequence += 1;
+      const localId = `local-queued-${localQueueSequence}`;
+      setPendingSends((current) => [
+        ...current,
+        {
+          id: localId,
+          text,
+          attachments,
+          state: 'sending',
+          interrupt: mode === 'interrupt',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      try {
+        await queueCall(async () => {
+          const threadId = await threadForQueue();
+          const result = await send.call(client, {
+            body: {
+              ...turnBody(),
+              threadId,
+              message: text,
+              mode,
+              ...(attachments.length > 0
+                ? { attachments: attachments.map(({ mediaId }) => ({ mediaId })) }
+                : {}),
+            },
+          });
+          applyQueue(result.queue);
+          if (result.runId !== undefined) {
+            // Nothing was running after all: it started at once.
+            const turn = { messageId: result.messageId, runId: result.runId, text, attachments };
+            if (isTurnInFlight()) handoff.current = turn;
+            else attachTo(turn);
+          }
+        });
+      } finally {
+        setPendingSends((current) => current.filter((item) => item.id !== localId));
+      }
+    },
+    [client, queueCall, threadForQueue, turnBody, applyQueue, isTurnInFlight],
+  );
+
   type SdkSendMessage = typeof chat.sendMessage;
   const sendMessage = useCallback<SdkSendMessage>(
     async (...args: Parameters<SdkSendMessage>) => {
       const block = blockedRef.current;
       if (block != null) throw new QuotaBlockedError(block);
-      if (isTurnInFlight()) return;
+      if (isTurnInFlight()) {
+        // Mid-turn: the message waits in the thread's queue — unless this chat blocks instead.
+        const mode = whileRunningRef.current;
+        if (mode === 'block') return;
+        const draft = draftOf(args[0]);
+        await enqueue(draft.text, { attachments: draft.attachments, mode });
+        return;
+      }
       turnInFlight.current = true;
       try {
         await chatRef.current.sendMessage(...args);
@@ -524,8 +824,111 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         turnInFlight.current = false;
       }
     },
-    [isTurnInFlight],
+    [isTurnInFlight, enqueue],
   );
+
+  const removeQueued = useCallback(
+    async (id: string): Promise<void> => {
+      const previous = queueStateRef.current;
+      applyQueue({ ...previous, items: previous.items.filter((item) => item.id !== id) });
+      try {
+        applyQueue(await queueCall(() => requireBackendMethod(client, 'removeQueuedMessage')(id)));
+      } catch (error) {
+        applyQueue(previous);
+        throw error;
+      }
+    },
+    [client, queueCall, applyQueue],
+  );
+
+  const editQueued = useCallback(
+    async (id: string, text: string): Promise<void> => {
+      applyQueue(
+        await queueCall(() =>
+          requireBackendMethod(client, 'updateQueuedMessage')(id, { message: text }),
+        ),
+      );
+    },
+    [client, queueCall, applyQueue],
+  );
+
+  const moveQueued = useCallback(
+    async (id: string, index: number): Promise<void> => {
+      const previous = queueStateRef.current;
+      const moving = previous.items.find((item) => item.id === id);
+      if (moving !== undefined) {
+        const rest = previous.items.filter((item) => item.id !== id);
+        rest.splice(Math.max(0, Math.min(rest.length, index)), 0, moving);
+        applyQueue({ ...previous, items: rest });
+      }
+      try {
+        applyQueue(
+          await queueCall(() =>
+            requireBackendMethod(client, 'updateQueuedMessage')(id, { position: index }),
+          ),
+        );
+      } catch (error) {
+        applyQueue(previous);
+        throw error;
+      }
+    },
+    [client, queueCall, applyQueue],
+  );
+
+  const clearQueue = useCallback(async (): Promise<void> => {
+    const threadId = currentThreadId();
+    if (threadId === undefined) return;
+    applyQueue(await queueCall(() => requireBackendMethod(client, 'clearQueue')(threadId)));
+  }, [client, queueCall, currentThreadId, applyQueue]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attachTo` reads refs only
+  const resumeQueue = useCallback(async (): Promise<void> => {
+    const threadId = currentThreadId();
+    if (threadId === undefined) return;
+    const before = queueStateRef.current;
+    const result = await queueCall(() => requireBackendMethod(client, 'resumeQueue')(threadId));
+    applyQueue({ items: result.items, paused: result.paused });
+    if (result.runId !== undefined) {
+      const head = before.items.find((item) => item.id === result.runId) ?? before.items[0];
+      const turn = {
+        messageId: result.runId,
+        runId: result.runId,
+        text: head?.content ?? '',
+        attachments: head?.attachments ?? [],
+      };
+      if (isTurnInFlight()) handoff.current = turn;
+      else attachTo(turn);
+    }
+  }, [client, queueCall, currentThreadId, applyQueue, isTurnInFlight]);
+  const resumeQueueRef = useRef(resumeQueue);
+  resumeQueueRef.current = resumeQueue;
+
+  const queuedItems: QueuedChatMessage[] = [
+    ...pendingSends.filter((item) => item.interrupt),
+    ...queueState.items.map(
+      (item): QueuedChatMessage => ({
+        id: item.id,
+        text: item.content,
+        attachments: item.attachments ?? [],
+        state: 'queued',
+        interrupt: item.interrupt === true,
+        createdAt: item.createdAt,
+      }),
+    ),
+    ...pendingSends.filter((item) => !item.interrupt),
+  ];
+  const queue: ChatQueue = {
+    items: queuedItems,
+    paused: queueState.paused,
+    isSupported: typeof client.enqueueMessage === 'function',
+    add: enqueue,
+    remove: removeQueued,
+    edit: editQueued,
+    move: moveQueued,
+    clear: clearQueue,
+    resume: resumeQueue,
+    error: queueError,
+  };
 
   // chat.addToolResult is generic over the backend's tool registry, which we don't statically type
   // here. Expose a string-keyed adapter and narrow once at the SDK boundary.
@@ -805,6 +1208,8 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   // SDK's. `reconnecting` is still a busy status to the transcript model (see `ChatStatus`).
   const status: ChatStatus = connection.status === 'reconnecting' ? 'reconnecting' : chat.status;
   const isBusy = status === 'submitted' || status === 'streaming' || status === 'reconnecting';
+  const isBusyRef = useRef(isBusy);
+  isBusyRef.current = isBusy;
 
   // ---- composer ------------------------------------------------------------------------------
   const files = useAttachments({ ...options.composer, backend: client });
@@ -814,7 +1219,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       ? 'quota'
       : files.isUploading
         ? 'uploading'
-        : isBusy
+        : isBusy && whileRunning === 'block'
           ? 'busy'
           : text.trim().length === 0 && files.refs.length === 0
             ? 'empty'
@@ -842,11 +1247,20 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     const draft = current.text.trim();
     setText('');
     current.files.clear();
+    const mode = whileRunningRef.current;
+    if (mode !== 'block' && (isTurnInFlight() || isBusyRef.current)) {
+      // Mid-turn: wait in the thread's queue (or, `interrupt`, cut in) instead of refusing.
+      const attachments = current.files.items.flatMap((item) =>
+        item.status === 'ready' && item.attachment !== undefined ? [item.attachment] : [],
+      );
+      await enqueue(draft, { attachments, mode });
+      return;
+    }
     await sendMessage(
       files.length > 0 ? { text: draft, files } : { text: draft },
       refs.length > 0 ? { body: { attachments: refs } } : undefined,
     );
-  }, [sendMessage]);
+  }, [sendMessage, enqueue, isTurnInFlight]);
   const composer: ChatComposer = {
     text,
     setText,
@@ -878,6 +1292,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       ? { onFork: (input: MessageActionInput) => fork(input).then(() => undefined) }
       : {}),
     ...(ownCatalog === undefined ? { toolCatalog: tools.catalog } : {}),
+    queue: { items: queue.items, paused: queue.paused, remove: removeQueued },
     ...options.transcript,
   });
 
@@ -914,6 +1329,11 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     transcript,
     /** A headless composer: draft, files, send gate, `submit()`. */
     composer,
+    /**
+     * Messages sent while a turn was running, waiting their turn (server-side): list, edit, move,
+     * remove, clear, and resume a paused queue.
+     */
+    queue,
     /** The model picker: `list`, `selected`, `select(id)`, `pinToThread(id)`. */
     models,
     /** The caller's budget (`GET <base>/quota`); `quota.blocked` gates sends. */

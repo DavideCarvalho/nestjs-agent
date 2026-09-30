@@ -145,6 +145,7 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
         'active_stream_id',
         'default_agent',
         'model',
+        'queue_pause',
         'created_at',
         'updated_at',
         'deleted_at',

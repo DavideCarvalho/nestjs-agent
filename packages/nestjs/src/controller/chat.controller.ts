@@ -18,7 +18,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { AgentService } from '../agent.service.js';
+import { AgentService, type ChatSendMode } from '../agent.service.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachment-limits.js';
 
 interface ChatBody {
@@ -38,6 +38,28 @@ interface ChatBody {
   transient?: boolean;
   /** Run this turn on a catalog model (see `GET models`) instead of the thread's pinned one. */
   model?: string;
+  /**
+   * What to do when the thread already has a turn running: `'auto'` (default) queues it, `'queue'`
+   * always queues it (behind anything already waiting), `'interrupt'` cancels the running turn and
+   * runs this next. See `ChatSendMode`.
+   */
+  mode?: unknown;
+  /** Shorthand for `mode: 'interrupt'`. */
+  interrupt?: boolean;
+}
+
+/** The send mode a body asked for, or a 400. */
+function sendMode(body: ChatBody): ChatSendMode {
+  if (body.interrupt === true) {
+    return 'interrupt';
+  }
+  if (body.mode === undefined || body.mode === null) {
+    return 'auto';
+  }
+  if (body.mode === 'auto' || body.mode === 'queue' || body.mode === 'interrupt') {
+    return body.mode;
+  }
+  throw new BadRequestException("mode must be 'auto', 'queue' or 'interrupt'");
 }
 
 /**
@@ -45,7 +67,7 @@ interface ChatBody {
  * point at one it staged: the url the model provider will fetch is resolved server-side from the
  * id (see `AgentService.chat`), so anything else here would be an SSRF the caller writes.
  */
-function attachmentRefs(claimed: unknown): AttachmentRef[] {
+export function attachmentRefs(claimed: unknown): AttachmentRef[] {
   if (claimed === undefined) {
     return [];
   }
@@ -81,11 +103,18 @@ export class ChatController {
     @Inject(AGENT_ACTOR_RESOLVER) private readonly actorResolver: ActorResolver,
   ) {}
 
+  /**
+   * Start a turn and stream it — or, when the thread already has one running, queue the message and
+   * answer `202 { queued: true, messageId, position, queue, … }` (JSON, no stream): it runs when the
+   * turn ahead of it settles, and the stream of the run holding the thread announces it with a
+   * `queue` frame.
+   */
   @Post('chat')
   async chat(@Req() req: Request, @Res() res: Response, @Body() body: ChatBody): Promise<void> {
     const actor = await this.actorResolver.resolve(req);
     const attachments = attachmentRefs(body.attachments);
-    const { runId, threadId } = await this.agent.chat({
+    const mode = sendMode(body);
+    const result = await this.agent.send({
       actor,
       message: body.message,
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
@@ -95,7 +124,13 @@ export class ChatController {
       ...(body.regenerate === true ? { regenerate: true } : {}),
       ...(body.transient === true ? { transient: true } : {}),
       ...(typeof body.model === 'string' && body.model.length > 0 ? { model: body.model } : {}),
+      mode,
     });
+    if (result.queued === true) {
+      res.status(202).json(result);
+      return;
+    }
+    const { runId, threadId } = result;
     // The run was just started for this actor, so no ownership read is needed — and one would race
     // the run itself, which clears the thread's active stream (what ownership is derived from) the
     // moment it finishes.

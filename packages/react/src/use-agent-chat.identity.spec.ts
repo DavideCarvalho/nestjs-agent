@@ -80,6 +80,8 @@ describe('transcript identity', () => {
     const { result } = renderTranscript({
       threadId: 'thr-1',
       resumeRunId: 'run-1',
+      // A send racing the resume is refused, not queued (queueing is use-agent-chat.queue.spec).
+      whileRunning: 'block',
       backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
     });
 
@@ -101,6 +103,7 @@ describe('transcript identity', () => {
     const fetchMock = streamingFetch();
     const { result } = renderTranscript({
       threadId: 'thr-1',
+      whileRunning: 'block',
       backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),
     });
 

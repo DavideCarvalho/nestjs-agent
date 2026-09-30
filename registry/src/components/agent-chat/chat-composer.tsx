@@ -56,6 +56,12 @@ export interface ChatComposerProps {
   submitLabel?: string;
   /** The key that sends, shown as a hint beside submit. `null` hides the hint. */
   submitHint?: string | null;
+  /**
+   * What Enter does while a turn is in flight (the button is Stop then). `'submit'` (default) sends —
+   * `useAgentChat` queues a message sent mid-turn, so it runs when the turn settles. `'block'`
+   * ignores it, for a chat whose backend cannot queue.
+   */
+  whileBusy?: 'submit' | 'block';
   className?: string;
 }
 
@@ -80,6 +86,7 @@ export function ChatComposer({
   onAutocompleteError,
   submitLabel = 'Send',
   submitHint = 'Enter',
+  whileBusy = 'submit',
   className,
 }: ChatComposerProps) {
   const [internal, setInternal] = useState(defaultValue);
@@ -103,7 +110,7 @@ export function ChatComposer({
 
   function submit() {
     const trimmed = draft.trim();
-    if (!trimmed || disabled || isBusy) {
+    if (!trimmed || disabled || (isBusy && whileBusy === 'block')) {
       return;
     }
     onSubmit(trimmed);

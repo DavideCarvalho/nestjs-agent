@@ -5,6 +5,7 @@ import {
   type AnswerInput,
   type ApproveInput,
   type AutocompleteSource,
+  type ChatQueue as ChatQueueModel,
   type ChatStatus,
   type EditSubmitInput,
   type MessageActionInput,
@@ -20,6 +21,7 @@ import { ChatCommandPalette, type ChatSuggestion } from './chat-command-palette'
 import { ChatComposer } from './chat-composer';
 import { type ChatContextSource, ChatContextStrip } from './chat-context-strip';
 import { type ChatMode, ChatModePills } from './chat-mode-pills';
+import { ChatQueue } from './chat-queue';
 import type { RenderToolPartFn } from './chat-tool-group';
 import { ChatTranscriptView } from './chat-transcript';
 import { ChatWelcome } from './chat-welcome';
@@ -28,7 +30,16 @@ export interface AgentChatProps {
   /** `chat.messages` and `chat.status` from `useAgentChat` — or any AI SDK v7 chat. */
   messages: UIMessage[];
   status: ChatStatus;
+  /**
+   * Send a message — `(text) => chat.sendMessage({ text })`. Mid-turn the composer still sends, and
+   * `useAgentChat` queues it (see `queue`).
+   */
   onSubmit: (text: string) => void;
+  /**
+   * `chat.queue` — messages sent mid-turn, drawn under the transcript as waiting bubbles with a
+   * remove control, and a resume control while the queue is paused.
+   */
+  queue?: ChatQueueModel;
   /** Cancel the turn in flight — `chat.cancel`. Without it the composer offers no stop. */
   onStop?: () => void | Promise<void>;
   editable?: boolean;
@@ -97,6 +108,7 @@ export function AgentChat({
   messages,
   status,
   onSubmit,
+  queue,
   onStop,
   editable,
   onEditSubmit,
@@ -152,6 +164,9 @@ export function AgentChat({
     onSkip,
     onApprove,
     onReject,
+    ...(queue !== undefined
+      ? { queue: { items: queue.items, paused: queue.paused, remove: queue.remove } }
+      : {}),
   });
 
   const composer = (
@@ -214,6 +229,12 @@ export function AgentChat({
         onFollowUpSelect={onSubmit}
       />
       <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
+        <ChatQueue
+          items={transcript.queued}
+          paused={transcript.queuePaused}
+          {...(queue !== undefined ? { onResume: queue.resume } : {})}
+          className="pb-3"
+        />
         {composer}
         {modePills ? <div className="pt-3">{modePills}</div> : null}
       </div>

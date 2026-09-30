@@ -1,6 +1,7 @@
 import type {
   AgentCatalogEntry,
   AgentClientConfig,
+  ChatQueueState,
   MessageAttachment,
   MessageFeedback,
   ModelCatalogView,
@@ -17,6 +18,8 @@ import type {
   ChatStreamRequest,
   ChatStreamResponse,
   MessageFeedbackInput,
+  QueuedMessageUpdate,
+  QueuedSendResult,
   ResumeStreamRequest,
   ThreadPatch,
   UploadAttachmentOptions,
@@ -154,10 +157,53 @@ export class AgentClient implements AgentBackend {
       ...this.credentials(),
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     });
+    if (response.status === 202) {
+      // Queued behind a turn already running on the thread: JSON, not a stream.
+      return { body: emptyStream(), queued: (await response.json()) as QueuedSendResult };
+    }
     if (!response.ok || !response.body) {
       throw await this.failure(response, 'POST', `${this.agentPath()}/chat`);
     }
     return streamResponse(response);
+  }
+
+  /**
+   * `POST <path>/chat` for a message that should wait in the thread's queue — the body carries
+   * `mode: 'queue'` (or `'interrupt'`), which the server always answers with `202` JSON.
+   */
+  enqueueMessage(request: ChatStreamRequest): Promise<QueuedSendResult> {
+    return this.request<QueuedSendResult>('POST', '/chat', {
+      mode: 'queue',
+      ...request.body,
+    });
+  }
+
+  /** `GET <path>/threads/:id/queue` — the thread's waiting messages, and whether it drains. */
+  getQueue(threadId: string): Promise<ChatQueueState> {
+    return this.request<ChatQueueState>('GET', `/threads/${encodeURIComponent(threadId)}/queue`);
+  }
+
+  /** `PATCH <path>/queue/:messageId` — change a waiting message's text/attachments, or move it. */
+  updateQueuedMessage(messageId: string, update: QueuedMessageUpdate): Promise<ChatQueueState> {
+    return this.request<ChatQueueState>('PATCH', `/queue/${encodeURIComponent(messageId)}`, update);
+  }
+
+  /** `DELETE <path>/queue/:messageId`. */
+  removeQueuedMessage(messageId: string): Promise<ChatQueueState> {
+    return this.request<ChatQueueState>('DELETE', `/queue/${encodeURIComponent(messageId)}`);
+  }
+
+  /** `DELETE <path>/threads/:id/queue` — drop every waiting message. */
+  clearQueue(threadId: string): Promise<ChatQueueState> {
+    return this.request<ChatQueueState>('DELETE', `/threads/${encodeURIComponent(threadId)}/queue`);
+  }
+
+  /** `POST <path>/threads/:id/queue/resume` — lift a pause; `runId` when the head started. */
+  resumeQueue(threadId: string): Promise<ChatQueueState & { runId?: string }> {
+    return this.request<ChatQueueState & { runId?: string }>(
+      'POST',
+      `/threads/${encodeURIComponent(threadId)}/queue/resume`,
+    );
   }
 
   /**
@@ -479,6 +525,14 @@ export class AgentClient implements AgentBackend {
     if (!text) return undefined as T;
     return JSON.parse(text) as T;
   }
+}
+
+function emptyStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  });
 }
 
 function streamResponse(response: Response): ChatStreamResponse {

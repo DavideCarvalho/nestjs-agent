@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
+import type { ChatQueueState } from './spi/chat-queue.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
 import type { AgentUiComponent } from './stream-events.js';
 import type { ToolPresentation } from './tool-presentation.js';
@@ -574,6 +575,12 @@ export interface ToolCallApproval {
 
 export interface ThreadDetail extends ThreadSummary {
   messages: StoredMessage[];
+  /**
+   * Messages sent while a turn was running, waiting to run after it, and whether the queue is
+   * draining. Present when the store supports a queue (`ChatQueueStore`); the REST read-model
+   * omits it otherwise.
+   */
+  queue?: ChatQueueState;
 }
 
 export type ToolCallStatus =

@@ -80,6 +80,7 @@ Adding a capability to either repo means adding its row here, with a status for 
 | Chat attachments by id, media-backed, bring-your-own storage | yes | yes — `attachments: attachmentStores.media()` | `{ mediaId }` refs only (`400` otherwise), resolved per actor by the store, urls re-minted on read. Adonis stores through `@adonis-agora/media` (optional peer, typed structurally). Not ported: the resumable (tus) upload routes — uploads stay `multipart` — and the "referenced by one of your messages" access fallback (`canAccess` covers it). |
 | Zero-config server — anonymous per-browser identity, tools open unless restricted, `@AiTool` name/kind defaults, `aiSdkModels` | yes | yes | Same cookie contract (`agent_anon`, `anon:` + SHA-256) and boot notice; `new AuthActorResolver()` is the one-line switch. The Adonis MCP server keeps its own `['ADMIN']` default. Adonis keeps `defaultAgent.systemPrompt` rather than a module-level one. |
 | One way each — single `quota`, `GET config`, `activeRunId` only, no `/quota/today` | yes | yes | Adonis 0.48 also made the agent protocol its only wire (no `streamProtocol`). |
+| Message queue — send while a turn runs (server-side, per-thread FIFO), interrupt, edit/move/remove, pause/resume | yes | not ported | Same wire contract (docs/stream-protocol.md, *Message queue*), so `chat.queue` in the shared React client works against both. Admission became a compare-and-set on the thread's active run (`claimActiveStream` / `releaseActiveStream`): before this, a send on a busy thread started a second, concurrent turn, and a settling run cleared the thread unconditionally — which, with a queue, would clear the run it had just handed the thread to. A queued message's run id is its own id, which is what makes a retried drain idempotent. The durable drain is one journaled `localStep('queue:<outcome>')` behind `ctx.patched('agent:chat-queue')`, then `ctx.startChild(AgentRunWorkflow, input, messageId)`; a cancel settled outside the body drains from the runner. The exact Adonis port list is below. |
 | Semantic recall over a transcript | not started | not started | Still a different feature, and still not folded into memory: searching what was SAID is retrieval over messages, and `Retriever`/`Reranker`/`EmbeddingProvider` already exist for it. Memory searches CONCLUSIONS. |
 
 The round-trip row is worth a note in both directions. NestJS was dropping `attachments` in two of
@@ -87,6 +88,61 @@ three adapters; Adonis was not, but was dropping `persona` in both of its own. N
 by reading either repo — the check that finds them is a fixture typed
 `Required<Omit<AppendMessageInput, …>>`, so a new optional input field fails to COMPILE until it is
 covered. That technique originated in Adonis and was brought back here.
+
+## Porting the message queue to `adonis-agent`
+
+What the Adonis side must implement to reach the row above — the React client needs nothing new.
+
+1. **SPI (copy from core `spi/chat-queue.ts`).** `QueuedMessage`, `QueuedMessageView`,
+   `ChatQueueState`, `QueuePause`/`QueuePauseReason`, `EnqueueMessageInput`, `QueuedMessagePatch`,
+   `ChatQueueStore` (all twelve members, probed structurally by `isChatQueueStore`),
+   `releaseThreadRun`, `queuedMessageView`. `ThreadDetail.queue?`. The `queue` stream event
+   (`{ kind: 'queue', queue, started? }`) in the copied vocabulary — as a `{ t: 'event' }` frame.
+   `AgentRunner.start(input, { runId? })` and the optional `isRunActive(runId)`.
+2. **Lucid store.** Table `agent_queued_message` (`id` pk, `thread_id` fk → `agent_thread`
+   cascade, `actor` json, `content` text, `attachments` json null, `agent_name`, `model`,
+   `page_context` json null, `interrupt` bool default false, `position` int, `created_at`,
+   `updated_at`; index `(thread_id, position)`), column `agent_thread.queue_pause` json null — both
+   in `createAgentTables`, the column as a repair for an existing table. `claimActiveStream` is ONE
+   conditional `UPDATE … WHERE id = ? AND (active_stream_id IS NULL OR active_stream_id IN (?, ?))`
+   reading the affected-row count; `releaseActiveStream` the same with `= ?`; `removeQueuedMessage`
+   a conditional delete returning whether it removed a row. Head inserts take `min(position) - 1`,
+   tail `max(position) + 1`; a move rewrites `0..n-1`. The in-memory store too.
+3. **Contract.** Run `CHAT_QUEUE_STORE_CONTRACT` (framework-agnostic — each case throws) against
+   every store, as both NestJS SQL stores and the in-memory store do.
+4. **Service (`ChatQueueService` here).** `plan(threadId, runId, outcome, error?)` — the drain:
+   only the current holder decides; empty queue → release, then re-read once; pause per outcome
+   (`failed` → `run_failed`; `cancelled` → `cancelled` unless the head is an interrupt); quota check
+   of the head's actor → `quota_exceeded`; claim for the head's id replacing the settler; conditional
+   delete of the head (give the claim back and retry on a miss); build the run input (attachment
+   urls re-minted, today's `day`); answer `{ next?, frame? }` without starting anything. `kick`
+   (start the head of an idle thread, replacing a dead holder), `launch` (start under the claimed
+   id; on failure re-queue at the head, pause `start_failed`, release), `publish` (write a `queue`
+   frame into the holder's stream).
+5. **Send path.** `send({ …, mode })`: resolve agent/model/attachments and ownership first; on a
+   queue-capable store, claim with a fresh id when the thread is idle (and `mode !== 'queue'`),
+   else enqueue — `interrupt` at the head with `interrupt: true`, clearing any pause, then cancel the
+   holder; otherwise kick. `regenerate` on a busy thread → `409 run_active`. The HTTP route answers
+   `202` with the queued body. Keep a start-or-refuse `chat()` for in-process callers (`409` when it
+   would queue).
+6. **Runners.** Inline: track live runs for `isRunActive`; on completion drain BEFORE the stream's
+   end (wrap the top-level sink writer's `end`), on failure before `fail`, on cancel before the
+   `cancelled` frame; a completed run whose cancel was requested drains as `cancelled`; every
+   release conditional. Durable: `isRunActive` from the run row (unknown → alive; `completed`,
+   `failed`, `cancelled`, `dead` → not); the completion drain as `ctx.patched('agent:chat-queue')`
+   → `localStep('queue:completed')` (reading the run's cancel state inside it) →
+   `ctx.startChild(AgentRunWorkflow, next.input, next.runId)`, the failure drain as
+   `localStep('queue:failed')` before `deactivate`, `deactivate` made conditional; a cancel settled
+   outside the body drains from the runner's `cancel`. Only a thread's own turn drains — never a
+   sub-agent's run (`sinkRunId`/`deliverTo` set).
+7. **Routes.** `GET`/`DELETE <path>/threads/:id/queue`, `POST <path>/threads/:id/queue/resume`,
+   `PATCH`/`DELETE <path>/queue/:messageId` — ownership-gated (`404` unknown, `403` another actor's,
+   `410` already started/removed), each answering the queue and publishing it. `queue` on the thread
+   read.
+8. **Specs to port.** `chat-queue.e2e.spec.ts` (inline: queue, drain order, idle `mode: 'queue'`,
+   failure pause + resume, Stop pause, interrupt, edit/move/remove + ownership, quota at start, stale
+   holder, `chat()` refusal, regenerate refusal) and `durable/agent-chat-queue.spec.ts` (completion
+   handoff under the message's id, failure pause, interrupt from outside the body).
 
 ## What parity does not mean
 

@@ -2,6 +2,7 @@ import type { EntitySchema } from '@mikro-orm/core';
 import { agentMemorySchema } from './agent-memory.entity';
 import { agentMessageSchema } from './agent-message.entity';
 import { agentModelPricingSchema } from './agent-model-pricing.entity';
+import { agentQueuedMessageSchema } from './agent-queued-message.entity';
 import { agentRunSchema } from './agent-run.entity';
 import { agentThreadSchema } from './agent-thread.entity';
 import { agentTokenUsageSchema } from './agent-token-usage.entity';
@@ -12,6 +13,7 @@ export * from './rag-ingestion-log.entity';
 export * from './agent-thread.entity';
 export * from './agent-memory.entity';
 export * from './agent-message.entity';
+export * from './agent-queued-message.entity';
 export * from './agent-tool-call.entity';
 export * from './agent-token-usage.entity';
 export * from './agent-model-pricing.entity';
@@ -21,13 +23,14 @@ export * from './agent-run.entity';
 export const AGENT_COLLATION = 'utf8mb4_unicode_ci';
 
 /**
- * Builds the eight agent entity schemas. Pass `collation` to stamp string columns for
+ * Builds the agent entity schemas. Pass `collation` to stamp string columns for
  * MySQL parity; omit it for engines (e.g. SQLite) that reject named collations.
  */
 export function agentEntities(options: { collation?: string } = {}): EntitySchema[] {
   return [
     agentThreadSchema(options.collation),
     agentMessageSchema(options.collation),
+    agentQueuedMessageSchema(options.collation),
     agentToolCallSchema(options.collation),
     agentTokenUsageSchema(options.collation),
     agentModelPricingSchema(options.collation),

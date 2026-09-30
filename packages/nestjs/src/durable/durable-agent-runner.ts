@@ -3,17 +3,20 @@ import {
   AGENT_SINK,
   AGENT_STORE,
   type AgentRunInput,
+  type AgentRunStartOptions,
   type AgentRunner,
   type AgentStore,
   type HumanReply,
   type TokenStreamSink,
   encodeStreamEvent,
+  releaseThreadRun,
 } from '@dudousxd/nestjs-agent-core';
 import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
 import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
 import { InProcessTokenStreamSink } from '../in-process-sink.js';
+import { ChatQueueService } from '../queue/chat-queue.service.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
 
 /**
@@ -26,6 +29,16 @@ function threadOfRun(input: unknown): string | undefined {
     return undefined;
   }
   return typeof input.threadId === 'string' ? input.threadId : undefined;
+}
+
+/** A thread's own turn, read structurally off a recorded input — see {@link threadOfRun}. */
+function isThreadTurn(input: unknown): boolean {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    (input as { sinkRunId?: unknown }).sinkRunId === undefined &&
+    (input as { deliverTo?: unknown }).deliverTo === undefined
+  );
 }
 
 /**
@@ -46,6 +59,7 @@ export class DurableAgentRunner implements AgentRunner {
     @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
+    @Optional() private readonly queue?: ChatQueueService,
   ) {
     // A durable turn runs on whichever worker takes `agent.run`, and its model call is dispatched
     // again from there — so the process holding the reader's SSE connection is generally not the
@@ -62,10 +76,15 @@ export class DurableAgentRunner implements AgentRunner {
     }
   }
 
-  async start(input: AgentRunInput): Promise<{ runId: string }> {
+  async start(
+    input: AgentRunInput,
+    options: AgentRunStartOptions = {},
+  ): Promise<{ runId: string }> {
     const stamped: AgentRunInput = { ...input, day: input.day ?? utcDay() };
-    // Own the run id so we can still return it when the run suspends synchronously (below).
-    const runId = randomUUID();
+    // Own the run id so we can still return it when the run suspends synchronously (below). A
+    // caller-chosen id (a queued message's) makes the start idempotent: the runtime answers a start
+    // under an id it already has with that run, instead of starting a second one.
+    const runId = options.runId ?? randomUUID();
     try {
       await this.workflows.start(AgentRunWorkflow, stamped, runId);
     } catch (error) {
@@ -82,6 +101,25 @@ export class DurableAgentRunner implements AgentRunner {
       }
     }
     return { runId };
+  }
+
+  /**
+   * From the runtime's own run row. A run it does not know yet counts as running — a queued turn is
+   * claimed before its `startChild` lands — and so does one it cannot be asked about: only a run the
+   * runtime reports settled (`completed`/`failed`/`cancelled`/`dead`) is stale.
+   */
+  async isRunActive(runId: string): Promise<boolean> {
+    try {
+      const status = (await this.runs.getRunDetail(runId))?.run.status;
+      return !(
+        status === 'completed' ||
+        status === 'failed' ||
+        status === 'cancelled' ||
+        status === 'dead'
+      );
+    } catch {
+      return true;
+    }
   }
 
   async signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void> {
@@ -114,19 +152,40 @@ export class DurableAgentRunner implements AgentRunner {
    */
   async cancel(runId: string): Promise<void> {
     this.logger.log(`cancelling agent run ${runId}`);
-    const threadId = await this.threadOf(runId);
+    const input = await this.inputOf(runId);
+    const threadId = threadOfRun(input);
     await this.runs.cancel(runId, { compensate: true });
-    if (threadId !== undefined) {
-      await this.store.setActiveStream(threadId, null);
-    }
     const writer = await this.sink.open(runId);
+    if (threadId !== undefined) {
+      // A thread's own turn hands the thread on first: an interrupt's message starts now, anything
+      // else queued pauses behind the Stop. A sub-agent's run (it streams into another run's sink,
+      // or delivers into another thread) has no queue of its own.
+      if (this.queue?.supported === true && isThreadTurn(input)) {
+        try {
+          const frame = await this.queue.handoff(
+            { threadId, runId, outcome: 'cancelled' },
+            (next, nextRunId) => this.start(next, { runId: nextRunId }),
+          );
+          if (frame !== undefined) {
+            await writer.write(encodeStreamEvent(frame));
+          }
+        } catch (error) {
+          this.logger.error(
+            `could not advance the queue of thread ${threadId} after cancelling ${runId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      await releaseThreadRun(this.store, threadId, runId);
+    }
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();
     await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
   }
 
   /**
-   * Which thread a run was streaming, or `undefined` where the gateway cannot say.
+   * The input a run was started with (which thread it was streaming), or `undefined` where the gateway cannot say.
    *
    * A read failure answers `undefined` instead of propagating, the same posture `AgentRunWorkflow`
    * takes for its own cancel observation: failing to ask is not an answer worth failing a cancel
@@ -135,9 +194,9 @@ export class DurableAgentRunner implements AgentRunner {
    * with a subscriber holding a stream that never settles, from the one call whose entire job is to
    * make a run stop.
    */
-  private async threadOf(runId: string): Promise<string | undefined> {
+  private async inputOf(runId: string): Promise<unknown> {
     try {
-      return threadOfRun((await this.runs.getRunDetail(runId))?.run.input);
+      return (await this.runs.getRunDetail(runId))?.run.input;
     } catch {
       return undefined;
     }

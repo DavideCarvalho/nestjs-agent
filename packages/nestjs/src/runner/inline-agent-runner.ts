@@ -4,6 +4,7 @@ import {
   type Actor,
   type AgentLoopHooks,
   type AgentRunInput,
+  type AgentRunStartOptions,
   type AgentRunner,
   type AgentStore,
   type Decision,
@@ -11,16 +12,19 @@ import {
   type ElicitationReply,
   type HumanReply,
   RunCancelledError,
+  type SinkWriter,
   agentFailureCode,
   encodeStreamEvent,
   publishAgentRunFailed,
+  releaseThreadRun,
   runAgentLoop,
   settleAll,
   settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { type AgentDeps, childSinkWriter, utcDay } from '../agent-deps.js';
+import { ChatQueueService, type QueueSettleOutcome } from '../queue/chat-queue.service.js';
 
 /**
  * Runs the agent turn in-process. HITL approval resolves a pending promise keyed by
@@ -42,16 +46,31 @@ export class InlineAgentRunner implements AgentRunner {
    * running it. A cancelled id is dropped once the run settles, so the set tracks live runs only.
    */
   private readonly cancelled = new Set<string>();
+  /** Top-level runs this process is running now — what {@link isRunActive} answers from. */
+  private readonly live = new Set<string>();
 
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
+    @Optional() private readonly queue?: ChatQueueService,
   ) {}
 
-  async start(input: AgentRunInput): Promise<{ runId: string }> {
-    const runId = crypto.randomUUID();
+  /**
+   * In-process, so exact: a run this process is not running is not running anywhere — the process
+   * that was running it is gone (a restart), and a thread it still holds is a stale claim.
+   */
+  async isRunActive(runId: string): Promise<boolean> {
+    return this.live.has(runId);
+  }
+
+  async start(
+    input: AgentRunInput,
+    options: AgentRunStartOptions = {},
+  ): Promise<{ runId: string }> {
+    const runId = options.runId ?? crypto.randomUUID();
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
+    this.live.add(runId);
     const hooks = this.topLevelHooks({
       runId,
       deps,
@@ -62,13 +81,14 @@ export class InlineAgentRunner implements AgentRunner {
         ...(input.delegationPath ?? []),
         ...(input.agentName !== undefined ? [input.agentName] : []),
       ],
+      input,
     });
 
     void runAgentLoop({ ...deps, day }, input, hooks)
-      .then(() => this.store.setActiveStream(input.threadId, null))
+      .then(() => releaseThreadRun(this.store, input.threadId, runId))
       .catch(async (error) => {
         if (error instanceof RunCancelledError) {
-          await this.settleCancelled(runId, input.threadId, deps);
+          await this.settleCancelled(runId, input, deps);
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -83,14 +103,20 @@ export class InlineAgentRunner implements AgentRunner {
           errorCode: code,
           errorMessage: message,
         });
+        const writer = await deps.sink.open(runId);
+        // The queue behind it pauses (a failed turn's next message would likely fail the same way),
+        // told to the reader before the error frame.
+        await this.settleQueue(writer, input, runId, 'failed', message);
         // Clear the thread's active run — a failed run isn't "still running" for `activeRunForThread`.
-        await this.store.setActiveStream(input.threadId, null);
+        await releaseThreadRun(this.store, input.threadId, runId);
         // Terminate the live stream with a typed failure so the transport emits an error frame
         // instead of leaking the message as assistant text.
-        const writer = await deps.sink.open(runId);
         await writer.fail({ code, message });
       })
-      .finally(() => this.cancelled.delete(runId));
+      .finally(() => {
+        this.cancelled.delete(runId);
+        this.live.delete(runId);
+      });
 
     return { runId };
   }
@@ -135,15 +161,65 @@ export class InlineAgentRunner implements AgentRunner {
    * the stream ENDED after a `cancelled` frame rather than failed, so a client that retries failed
    * streams does not retry this one.
    */
-  private async settleCancelled(runId: string, threadId: string, deps: AgentDeps): Promise<void> {
+  private async settleCancelled(
+    runId: string,
+    input: AgentRunInput,
+    deps: AgentDeps,
+  ): Promise<void> {
     this.logger.log(`agent run ${runId} cancelled`);
-    await this.store.setActiveStream(threadId, null);
     const writer = await deps.sink.open(runId);
+    // An interrupt's message starts now; otherwise the queue pauses behind the Stop.
+    await this.settleQueue(writer, input, runId, 'cancelled');
+    await releaseThreadRun(this.store, input.threadId, runId);
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();
     // Last, so the reader is released before the bookkeeping: everything above is what someone is
     // waiting on, and the run row is what someone reads afterwards.
     await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
+  }
+
+  /**
+   * Move the thread past a settling TOP-LEVEL run — to the next queued message, which starts here,
+   * or to a paused/empty queue — and write the resulting `queue` frame into this run's stream. A
+   * no-op without a queue-capable store, and for a run that is not a thread's own turn.
+   *
+   * Never throws: the run is settling either way, and a queue that could not be advanced is picked
+   * up by the next send or resume on the thread.
+   */
+  private async settleQueue(
+    writer: SinkWriter,
+    input: AgentRunInput,
+    runId: string,
+    outcome: QueueSettleOutcome,
+    error?: string,
+  ): Promise<void> {
+    const queue = this.queue;
+    if (queue === undefined || !queue.supported || !isThreadTurn(input)) {
+      return;
+    }
+    // A Stop that arrived too late to interrupt anything (the turn's last model call was already
+    // answering) still means stop: the queue behind it pauses as it would after a cancel.
+    const settled = outcome === 'completed' && this.cancelled.has(runId) ? 'cancelled' : outcome;
+    try {
+      const frame = await queue.handoff(
+        {
+          threadId: input.threadId,
+          runId,
+          outcome: settled,
+          ...(error !== undefined ? { error } : {}),
+        },
+        (next, nextRunId) => this.start(next, { runId: nextRunId }),
+      );
+      if (frame !== undefined) {
+        await writer.write(encodeStreamEvent(frame));
+      }
+    } catch (failure) {
+      this.logger.error(
+        `could not advance the queue of thread ${input.threadId} after run ${runId}: ${
+          failure instanceof Error ? failure.message : String(failure)
+        }`,
+      );
+    }
   }
 
   /**
@@ -195,11 +271,27 @@ export class InlineAgentRunner implements AgentRunner {
     threadId: string;
     /** This run's delegation chain with its own agent appended — see `AgentRunInput.delegationPath`. */
     chainBelow: readonly string[];
+    input: AgentRunInput;
   }): AgentLoopHooks {
-    const { runId, deps, actor, day, threadId, chainBelow } = args;
+    const { runId, deps, actor, day, threadId, chainBelow, input } = args;
     return {
       runId,
-      openSink: () => deps.sink.open(runId),
+      // The loop ends the stream when the turn completes. Just before, the thread passes to the next
+      // queued message (or is released), and the reader is told which — so by the time a client
+      // sees the run end, the thread is already free or already running what it queued.
+      openSink: async () => {
+        const writer = await deps.sink.open(runId);
+        return this.queue === undefined
+          ? writer
+          : {
+              write: (chunk) => writer.write(chunk),
+              fail: (error) => writer.fail(error),
+              end: async () => {
+                await this.settleQueue(writer, input, runId, 'completed');
+                await writer.end();
+              },
+            };
+      },
       awaitApproval: (call, _ctx, opts) => this.parkApproval(runId, call.id, opts?.timeoutMs),
       awaitAnswers: (request) => this.park<ElicitationReply>(runId, request.id),
       step: (_name, fn) => fn(),
@@ -413,4 +505,12 @@ export class InlineAgentRunner implements AgentRunner {
       await this.store.setActiveStream(subThread.id, null);
     }
   }
+}
+
+/**
+ * A thread's own turn — not a sub-agent's run on a subthread, which neither holds its thread's
+ * queue nor answers to it.
+ */
+function isThreadTurn(input: AgentRunInput): boolean {
+  return input.sinkRunId === undefined && input.deliverTo === undefined;
 }

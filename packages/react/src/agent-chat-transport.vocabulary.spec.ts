@@ -98,6 +98,19 @@ describe('AgentChatTransport — generative UI, title, approval, nesting', () =>
     ]);
   });
 
+  it('forwards a queue frame as a transient data-queue chunk, handoff included', async () => {
+    const queue = { items: [], paused: null };
+    const chunks = await chunksFor([
+      { kind: 'text', text: 'done' },
+      { kind: 'queue', queue, started: { messageId: 'q-1', runId: 'q-1' } },
+    ]);
+    expect(chunks).toContainEqual({
+      type: 'data-queue',
+      data: { queue, started: { messageId: 'q-1', runId: 'q-1' } },
+      transient: true,
+    });
+  });
+
   it('forwards a title as a transient data-title chunk', async () => {
     const chunks = await chunksFor([{ kind: 'title', title: 'Revenue by region' }]);
     expect(chunks).toContainEqual({

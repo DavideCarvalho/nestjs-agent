@@ -8,6 +8,7 @@ import type { Connection, EntityManager, MikroORM } from '@mikro-orm/core';
 const AGENT_TABLE_NAMES = new Set([
   'agent_thread',
   'agent_message',
+  'agent_queued_message',
   'agent_tool_call',
   'agent_token_usage',
   'agent_model_pricing',

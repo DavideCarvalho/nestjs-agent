@@ -12,6 +12,7 @@ import {
   type AgentStore,
   type AttachmentRef,
   type AttachmentStagingStore,
+  type ChatQueueState,
   type Decision,
   type ElicitationReply,
   type HumanReply,
@@ -37,6 +38,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   GoneException,
   HttpException,
@@ -50,6 +52,34 @@ import {
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
+import { ChatQueueService } from './queue/chat-queue.service.js';
+
+/**
+ * What a send does when its thread already has a turn running:
+ *  - `'auto'` (default) — run now when the thread is idle, else wait in the thread's queue.
+ *  - `'queue'` — always wait in the queue, behind whatever is already waiting (it still starts at
+ *    once when nothing is running and nothing is ahead of it).
+ *  - `'interrupt'` — cancel the running turn and run this one next, ahead of the queue.
+ */
+export type ChatSendMode = 'auto' | 'queue' | 'interrupt';
+
+/** A send that is waiting in its thread's queue instead of running. */
+export interface QueuedSend {
+  threadId: string;
+  queued: true;
+  /** The queued message's id — also the run id it will start under. */
+  messageId: string;
+  /** 0-based place in the queue at the time it was queued (`0` → next). */
+  position: number;
+  queue: ChatQueueState;
+  /** The turn it started under, when it started straight away (an idle thread). */
+  runId?: string;
+  /** The run an interrupt cancelled to make room for it. */
+  interrupting?: string;
+}
+
+/** What {@link AgentService.send} did: started a turn, or queued the message. */
+export type ChatSendResult = { runId: string; threadId: string; queued?: undefined } | QueuedSend;
 
 export interface ChatParams {
   actor: Actor;
@@ -75,6 +105,8 @@ export interface ChatParams {
    * the thread list until the caller promotes it. Ignored when `threadId` is set.
    */
   transient?: boolean;
+  /** What to do when the thread already has a turn running — see {@link ChatSendMode}. */
+  mode?: ChatSendMode;
 }
 
 /**
@@ -112,7 +144,25 @@ export class AgentService {
     @Optional()
     @Inject(AGENT_OPTIONS)
     private readonly options?: Pick<AgentModuleOptions, 'quota'>,
+    @Optional() private readonly queue?: ChatQueueService,
   ) {}
+
+  /** The queue service when the bound store can hold a queue, else `undefined`. */
+  private queueing(): ChatQueueService | undefined {
+    return this.queue?.supported === true ? this.queue : undefined;
+  }
+
+  /** The queue service, or a 501 naming what is missing. */
+  private requireQueue(): ChatQueueService {
+    const queue = this.queueing();
+    if (queue === undefined) {
+      throw new NotImplementedException(
+        'Queueing messages requires an AgentStore that implements ChatQueueStore; the bound store ' +
+          'does not.',
+      );
+    }
+    return queue;
+  }
 
   /**
    * The actor's budget across windows (`GET <base>/quota`) — the bound {@link QuotaProvider}'s
@@ -220,7 +270,38 @@ export class AgentService {
     return (await this.store.getThread(threadId))?.model ?? null;
   }
 
+  /**
+   * Start a turn — for in-process callers that need a run id back. A send that would have to wait
+   * (its thread already has a turn running) is refused with `409` instead; {@link send} is the form
+   * that queues it.
+   */
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
+    const result = await this.send({ ...params, mode: 'auto' });
+    if (result.queued !== true) {
+      return result;
+    }
+    if (result.runId !== undefined) {
+      // The thread freed up while it was being queued, and it started straight away.
+      return { runId: result.runId, threadId: result.threadId };
+    }
+    // Take it back out, so this call has no effect — unless it started in the meantime.
+    const store = this.requireQueue().queueStore();
+    if (!(await store.removeQueuedMessage(result.messageId))) {
+      return { runId: result.messageId, threadId: result.threadId };
+    }
+    await this.requireQueue().publish(result.threadId);
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'run_active',
+      message: `thread ${result.threadId} already has a turn running`,
+    });
+  }
+
+  /**
+   * Send a message: start a turn, or — when its thread already has one running — queue the message
+   * to run after it (see {@link ChatSendMode}). What `POST <base>/chat` calls.
+   */
+  async send(params: ChatParams): Promise<ChatSendResult> {
     // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
@@ -240,9 +321,9 @@ export class AgentService {
         ...(params.transient === true ? { transient: true } : {}),
       });
       threadId = created.id;
-    } else if (params.regenerate === true) {
-      // Regenerate re-runs a run on an existing thread — gate it by ownership like the other
-      // thread-scoped actions so one actor can't rewind another's conversation.
+    } else {
+      // Every send onto an existing thread is gated by ownership: a regenerate rewinds the thread,
+      // and a queued message would otherwise land in someone else's conversation.
       await this.assertOwnsThread(params.actor, threadId);
     }
 
@@ -258,9 +339,191 @@ export class AgentService {
       ...(model !== undefined ? { model } : {}),
     };
 
-    const { runId } = await this.runner.start(input);
-    await this.store.setActiveStream(threadId, runId);
-    return { runId, threadId };
+    const queue = this.queueing();
+    if (queue === undefined) {
+      // No admission to take: a store that predates the queue starts every send at once.
+      const { runId } = await this.runner.start(input);
+      await this.store.setActiveStream(threadId, runId);
+      return { runId, threadId };
+    }
+
+    const mode = params.mode ?? 'auto';
+    const { live, stale } = await queue.holder(threadId, this.runner);
+    // `queue` always answers as a queued send (202), so a client that asked for it handles one
+    // shape; an idle thread starts it straight away all the same (`enqueue` kicks the queue).
+    if (live === null && mode !== 'queue') {
+      const runId = crypto.randomUUID();
+      if (
+        await queue
+          .queueStore()
+          .claimActiveStream(threadId, runId, stale !== null ? { replacing: stale } : {})
+      ) {
+        return { runId: await this.startClaimed(input, runId), threadId };
+      }
+      // Lost the race for the thread to another send: fall through and queue behind it.
+    }
+    if (params.regenerate === true) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'run_active',
+        message: 'cannot regenerate while a turn is running on this thread',
+      });
+    }
+    return this.enqueue(queue, input, mode, live);
+  }
+
+  /**
+   * Start a turn the thread is already claimed for, under the claimed id. A runner that minted an
+   * id of its own anyway gets the thread re-pointed at it; one that fails to start frees the thread.
+   */
+  private async startClaimed(input: AgentRunInput, runId: string): Promise<string> {
+    const store = this.requireQueue().queueStore();
+    let started: string;
+    try {
+      started = (await this.runner.start(input, { runId })).runId;
+    } catch (error) {
+      await store.releaseActiveStream(input.threadId, runId);
+      throw error;
+    }
+    if (started !== runId) {
+      await store.claimActiveStream(input.threadId, started, { replacing: runId });
+    }
+    return started;
+  }
+
+  /** Put a send in its thread's queue, then drain it if the thread turned out to be free. */
+  private async enqueue(
+    queue: ChatQueueService,
+    input: AgentRunInput,
+    mode: ChatSendMode,
+    live: string | null,
+  ): Promise<QueuedSend> {
+    const store = queue.queueStore();
+    const threadId = input.threadId;
+    const interrupting = mode === 'interrupt' && live !== null ? live : undefined;
+    const queued = await store.enqueueMessage({
+      threadId,
+      actor: input.actor,
+      content: input.userText,
+      ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+      ...(interrupting !== undefined ? { interrupt: true, at: 'head' as const } : {}),
+    });
+    let runId: string | undefined;
+    if (interrupting !== undefined) {
+      // An interrupt is a person choosing to run this now: whatever paused the queue, they are
+      // overriding it. The cancel settles into the queue, which starts this message.
+      await store.setQueuePause(threadId, null);
+      await queue.publish(threadId);
+      await this.runner.cancel(interrupting);
+    } else {
+      // The run holding the thread may have settled between our look and our enqueue — its drain
+      // then found nothing. Starting the head here covers that; with a live holder it does nothing.
+      runId = await queue.kick(threadId, this.runner);
+      if (runId === undefined) {
+        await queue.publish(threadId);
+      }
+    }
+    const state = await queue.state(threadId);
+    const position = state.items.findIndex((item) => item.id === queued.id);
+    return {
+      threadId,
+      queued: true,
+      messageId: queued.id,
+      position: position === -1 ? 0 : position,
+      queue: state,
+      ...(runId !== undefined && runId === queued.id ? { runId } : {}),
+      ...(interrupting !== undefined ? { interrupting } : {}),
+    };
+  }
+
+  /** `GET <base>/threads/:id/queue` — the thread's waiting messages and whether it drains. */
+  async getQueue(actor: Actor, threadId: string): Promise<ChatQueueState> {
+    await this.assertOwnsThread(actor, threadId);
+    return this.requireQueue().state(threadId);
+  }
+
+  /**
+   * `PATCH <base>/queue/:messageId` — change a waiting message's text and/or attachments, and/or move
+   * it to `position` in the queue. Answers the thread's queue.
+   */
+  async updateQueuedMessage(
+    actor: Actor,
+    messageId: string,
+    patch: { message?: string; attachments?: AttachmentRef[] | null; position?: number },
+  ): Promise<ChatQueueState> {
+    const queue = this.requireQueue();
+    const store = queue.queueStore();
+    const threadId = await this.assertOwnsQueuedMessage(actor, messageId);
+    if (patch.message !== undefined && patch.message.trim().length === 0) {
+      throw new BadRequestException('message must not be empty');
+    }
+    const attachments =
+      patch.attachments === undefined || patch.attachments === null
+        ? patch.attachments
+        : await this.resolveAttachments(actor, patch.attachments);
+    if (patch.message !== undefined || attachments !== undefined) {
+      const updated = await store.updateQueuedMessage(messageId, {
+        ...(patch.message !== undefined ? { content: patch.message } : {}),
+        ...(attachments !== undefined ? { attachments } : {}),
+      });
+      if (updated === null) {
+        throw new GoneException(`queued message ${messageId} already started or was removed`);
+      }
+    }
+    if (patch.position !== undefined) {
+      if (!Number.isInteger(patch.position) || patch.position < 0) {
+        throw new BadRequestException('position must be a non-negative integer');
+      }
+      if (!(await store.moveQueuedMessage(messageId, patch.position))) {
+        throw new GoneException(`queued message ${messageId} already started or was removed`);
+      }
+    }
+    return queue.publish(threadId);
+  }
+
+  /** `DELETE <base>/queue/:messageId` — drop a waiting message. Answers the thread's queue. */
+  async removeQueuedMessage(actor: Actor, messageId: string): Promise<ChatQueueState> {
+    const queue = this.requireQueue();
+    const threadId = await this.assertOwnsQueuedMessage(actor, messageId);
+    if (!(await queue.queueStore().removeQueuedMessage(messageId))) {
+      throw new GoneException(`queued message ${messageId} already started or was removed`);
+    }
+    return queue.publish(threadId);
+  }
+
+  /** `DELETE <base>/threads/:id/queue` — drop every waiting message (and any pause). */
+  async clearQueue(actor: Actor, threadId: string): Promise<ChatQueueState> {
+    await this.assertOwnsThread(actor, threadId);
+    const queue = this.requireQueue();
+    await queue.queueStore().clearQueue(threadId);
+    await queue.queueStore().setQueuePause(threadId, null);
+    return queue.publish(threadId);
+  }
+
+  /**
+   * `POST <base>/threads/:id/queue/resume` — lift a pause and start the head when nothing is
+   * running. Answers the queue, and the run the head started under, if it did.
+   */
+  async resumeQueue(actor: Actor, threadId: string): Promise<ChatQueueState & { runId?: string }> {
+    await this.assertOwnsThread(actor, threadId);
+    const queue = this.requireQueue();
+    await queue.queueStore().setQueuePause(threadId, null);
+    const runId = await queue.kick(threadId, this.runner);
+    const state = runId === undefined ? await queue.publish(threadId) : await queue.state(threadId);
+    return { ...state, ...(runId !== undefined ? { runId } : {}) };
+  }
+
+  /** The thread a queued message waits on, once the caller is shown to own it. */
+  private async assertOwnsQueuedMessage(actor: Actor, messageId: string): Promise<string> {
+    const message = await this.requireQueue().queueStore().getQueuedMessage(messageId);
+    if (message === null) {
+      throw new NotFoundException(`queued message ${messageId} not found`);
+    }
+    await this.assertOwnsThread(actor, message.threadId);
+    return message.threadId;
   }
 
   /**
@@ -533,9 +796,11 @@ export class AgentService {
 
   private async toDetailView(thread: ThreadDetail, actor: Actor): Promise<ThreadDetail> {
     const summary = await this.toSummaryView(thread);
+    const queue = this.queueing();
     return {
       ...summary,
       messages: await this.freshAttachmentUrls(thread.messages, actor),
+      ...(queue !== undefined ? { queue: await queue.state(thread.id) } : {}),
     };
   }
 

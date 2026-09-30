@@ -1,6 +1,6 @@
 import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
-import type { AgentBackend, ChatStreamResponse } from './backend.js';
+import type { AgentBackend, ChatStreamResponse, QueuedSendResult } from './backend.js';
 import { AgentClient } from './client.js';
 import { reasoningDurationMetadata } from './reasoning/timing.js';
 
@@ -84,6 +84,12 @@ export interface AgentChatTransportOptions {
    * an early failure (no meta ever arrives) to a PRIOR attempt's id.
    */
   onAttemptStart?: () => void;
+  /**
+   * A resume found nothing streaming under the run id (the backend answered 404): the run already
+   * ended. The SDK is told there is nothing to resume, so the caller is the one that has to reload
+   * what the run wrote — `useAgentChat` re-reads the thread.
+   */
+  onResumeGone?: (runId: string) => void;
   /** Injectable for tests / non-browser runtimes. Defaults to global fetch. */
   fetch?: typeof fetch;
 }
@@ -125,7 +131,9 @@ const ASK_TOOL_NAME = 'ask';
  *                           native `tool-approval-request` (the part moves to `approval-requested`)
  *  - `approval-settled`   → `data-approval-settled` part keyed by the call id (who decided, through
  *                           what, remembered or not); the outcome still rides the call's own output
- *  - `title`, `cancelled` → transient `data-title` / `data-cancelled` (never stored on the message)
+ *  - `title`, `cancelled`, `queue` → transient `data-title` / `data-cancelled` / `data-queue` (never
+ *                           stored on the message). A send the server queued (`202`) is reported
+ *                           as a transient `data-queue` too, carrying `queuedSend`
  *  - any other kind       → `data-<kind>` part carrying the frame minus `kind`, keyed by its `id`
  *                           when it has one — forwarded, never dropped
  * `parentId` on a tool frame rides the part's `toolMetadata` next to `toolKind`.
@@ -198,6 +206,12 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         ...(headers !== undefined ? { headers } : {}),
         ...(options.abortSignal ? { signal: options.abortSignal } : {}),
       });
+      if (response.queued !== undefined) {
+        // The thread already had a turn running (another tab, another device): the server queued
+        // the message instead. Nothing streams; the chat learns it through a transient part.
+        this.attemptLive = false;
+        return queuedChunkStream(response.queued);
+      }
       this.captureHeaderMeta(response);
       return this.toChunkStream(response, {
         ...(headers !== undefined ? { headers } : {}),
@@ -232,6 +246,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       });
       if (response === null) {
         this.attemptLive = false;
+        this.options.onResumeGone?.(runId);
         return null;
       }
       this.captureHeaderMeta(response);
@@ -611,6 +626,9 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               break;
             case 'title':
             case 'cancelled':
+            // The thread's queue changed, or this run handed the thread to the next queued message
+            // (`started`). Thread-level, like the title.
+            case 'queue':
               // Thread- and run-level facts, not message content: seen by `onData`, never stored
               // as a part of the message.
               forwardAsData(event, true);
@@ -710,6 +728,20 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       },
     });
   }
+}
+
+/** The chunk stream for a send the server queued: one transient `data-queue` part, then the end. */
+function queuedChunkStream(queued: QueuedSendResult): ReadableStream<UIMessageChunk> {
+  return new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      controller.enqueue({
+        type: 'data-queue',
+        data: { queue: queued.queue, queuedSend: queued },
+        transient: true,
+      });
+      controller.close();
+    },
+  });
 }
 
 interface SseFrame {
