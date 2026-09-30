@@ -321,6 +321,31 @@ describe('AgentClient streams', () => {
     expect(calls[0]?.init.headers).toMatchObject({ 'X-XSRF-TOKEN': 'csrf-2' });
   });
 
+  it('a stop whose request was already aborted leaves no unhandled rejection', async () => {
+    // What fetch does on abort: the body errors, and cancelling it rejects with the AbortError.
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(META + frame(1, { kind: 'text', text: 'partial' })));
+      },
+      cancel() {
+        throw new DOMException('BodyStreamBuffer was aborted', 'AbortError');
+      },
+    });
+    const transport = new AgentChatTransport({ backend: backendWith(body, []), agent: 'support' });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const reader = (await transport.sendMessages(sendArgs())).getReader();
+      await reader.read();
+      await reader.cancel();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+  });
+
   it('reads a 404 resume as nothing to resume', async () => {
     const { fetch } = fakeFetch(404);
     expect(await new AgentClient({ fetch }).resumeChatStream({ runId: 'r' })).toBeNull();
