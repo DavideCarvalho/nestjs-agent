@@ -1079,7 +1079,21 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         /* best-effort — the SDK stop already flipped the UI */
       }
     }
-  }, [client]);
+    // The server pauses a queue whose turn was stopped, and says so on the stream this chat just
+    // closed — so ask. Without it the waiting messages look like they are about to run.
+    const threadId = currentThreadId();
+    if (
+      threadId !== undefined &&
+      queueStateRef.current.items.length > 0 &&
+      typeof client.getQueue === 'function'
+    ) {
+      try {
+        applyQueue(await client.getQueue(threadId));
+      } catch {
+        /* best-effort — the thread's next load reads the queue again */
+      }
+    }
+  }, [client, currentThreadId, applyQueue]);
 
   // Approve / reject / answer / skip route by tool-call id alone — the server derives the run
   // awaiting it (a sub-agent's own run when the call belongs to a delegated agent).

@@ -522,6 +522,38 @@ describe('useAgentChat — the message queue', () => {
     await act(async () => release.resolve());
   });
 
+  it('shows the queue paused right after a stop, which closed the stream that would have said so', async () => {
+    const release = deferred();
+    const backend = queueBackend({
+      open: () => ({
+        body: gatedStream([meta('run-1'), text('re: first')], release.promise, [DONE]),
+      }),
+    });
+    backend.getQueue = async () => backend.queue;
+    backend.cancelStream = async () => {
+      // What the server does with a stopped turn that has messages waiting behind it.
+      backend.queue = { ...backend.queue, paused: { reason: 'cancelled', at: 'x' } };
+      return { aborted: true };
+    };
+    const { result } = renderHook(() => useAgentChat({ backend, threadId: 'thr-1' }));
+    await settle();
+    await act(async () => {
+      void result.current.sendMessage({ text: 'first' });
+    });
+    await waitFor(() => expect(result.current.status).toBe('streaming'));
+    await act(async () => {
+      await result.current.queue.add('second');
+    });
+    expect(result.current.queue.paused).toBeNull();
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(result.current.queue.paused).toMatchObject({ reason: 'cancelled' });
+    expect(result.current.transcript.queued).toMatchObject([{ text: 'second', state: 'paused' }]);
+    await act(async () => release.resolve());
+  });
+
   it('an interrupt with nothing running starts that message, and the chat attaches to it', async () => {
     const backend = queueBackend({
       open: () => ({ body: sse([meta('run-1'), DONE]) }),
