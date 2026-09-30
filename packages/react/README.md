@@ -621,6 +621,35 @@ const readCookie = (name: string) =>
 </AgentProvider>;
 ```
 
+
+### An AG-UI agent (`agUiChatStream`)
+
+`useAgentChat` can drive any [AG-UI 1.0](https://docs.ag-ui.com/spec/1.0) producer — this library's
+own (`@adonis-agora/agent/ag-ui`), CopilotKit's, a Python or .NET agent. Put `agUiChatStream` behind
+`openChatStream`: it POSTs a `RunAgentInput` (the send's text as the user message, `pageContext`,
+`agent` and `model` in `forwardedProps`) and hands the transport the answer re-framed in this
+library's stream protocol, so the transcript, tool activity and generative UI render unchanged.
+
+```ts
+import { agUiChatStream, type AgentBackend } from '@dudousxd/nestjs-agent-react';
+
+const backend: AgentBackend = {
+  ...myBackend,
+  openChatStream: (request) =>
+    agUiChatStream(request, { url: '/agent/ag-ui', headers: { 'x-csrf-token': csrf } }),
+};
+```
+
+- Text, reasoning, steps, tool calls and tool results map one to one; `RUN_ERROR` is the stream's
+  error, a cancelled outcome writes `cancelled`.
+- `CUSTOM` events named `agora.*` (generative UI, title, queue, approvals) become the frames they
+  stand for; any other `CUSTOM` is ignored, as the protocol requires.
+- An interrupt outcome arrives as a `ui` part, component `AgUiInterrupt`, props `{ interrupts }`:
+  answering it is a new run with `resume`, which the app sends through its own backend.
+- A send without a `threadId` gets a new one (AG-UI's thread id is the consumer's), returned as
+  the stream's `threadId`, so `onThreadCreated` fires as usual.
+- `reframeAgUiStream(body, { threadId })` is the re-framing alone, for a backend that fetches itself.
+
 ### Typing ahead: the message queue
 
 Send while a turn is still answering and the message waits in the thread's queue — server-side, so
