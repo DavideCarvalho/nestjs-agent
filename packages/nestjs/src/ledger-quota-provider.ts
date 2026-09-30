@@ -7,6 +7,7 @@ import {
   type QuotaWindow,
   exhaustedWindow,
   quotaPeriodRange,
+  quotaWarning,
 } from '@dudousxd/nestjs-agent-core';
 
 /** Ceilings for a {@link LedgerQuotaProvider} window. Either, both, or neither. */
@@ -19,6 +20,15 @@ export interface QuotaWindowLimits {
 export interface QuotaLimits {
   day?: QuotaWindowLimits;
   month?: QuotaWindowLimits;
+}
+
+/** {@link LedgerQuotaProvider}'s tuning beyond the ceilings. */
+export interface LedgerQuotaOptions {
+  /**
+   * The soft limit: the share of a ceiling (`0..1`) past which the report carries a `warning`.
+   * Stamped on every window that has a ceiling. Omit → no warnings.
+   */
+  warnAt?: number;
 }
 
 /**
@@ -34,6 +44,7 @@ export class LedgerQuotaProvider implements QuotaProvider {
   constructor(
     private readonly store: AgentStore,
     private readonly limits: QuotaLimits = {},
+    private readonly options: LedgerQuotaOptions = {},
   ) {}
 
   async report(query: QuotaQuery): Promise<QuotaReport> {
@@ -46,7 +57,12 @@ export class LedgerQuotaProvider implements QuotaProvider {
       windows.push(this.window('month', used.usedTokens, used.costUsd, range.resetsAt));
     }
     const blocked = exhaustedWindow(windows);
-    return { windows, ...(blocked !== undefined ? { blocked } : {}) };
+    const warning = quotaWarning(windows);
+    return {
+      windows,
+      ...(blocked !== undefined ? { blocked } : {}),
+      ...(warning !== undefined ? { warning } : {}),
+    };
   }
 
   private async dayWindow(actorRef: string, now: Date): Promise<QuotaWindow> {
@@ -69,6 +85,10 @@ export class LedgerQuotaProvider implements QuotaProvider {
       usedUsd,
       ...(limits.usd !== undefined ? { limitUsd: limits.usd } : {}),
       resetsAt,
+      ...(this.options.warnAt !== undefined &&
+      (limits.tokens !== undefined || limits.usd !== undefined)
+        ? { warnAt: this.options.warnAt }
+        : {}),
     };
   }
 }

@@ -279,6 +279,10 @@ export interface TranscriptElicitationOutcome {
   defaulted: string[];
   /** The questions against the chosen labels, as the model read them back. */
   summary: string | null;
+  /** Who answered (or skipped) — an approval's `decidedBy`. `null` when the run did not record it. */
+  answeredBy: string | null;
+  /** The surface it came through (`'web'`, `'slack'`, …) — an approval's `decidedVia`. */
+  answeredVia: string | null;
 }
 
 /**
@@ -787,6 +791,8 @@ function readElicitationOutcome(part: AnyToolUIPart): TranscriptElicitationOutco
       ? output.defaulted.filter((id): id is string => typeof id === 'string')
       : [],
     summary: typeof output.summary === 'string' ? output.summary : null,
+    answeredBy: typeof output.answeredBy === 'string' ? output.answeredBy : null,
+    answeredVia: typeof output.answeredVia === 'string' ? output.answeredVia : null,
   };
 }
 

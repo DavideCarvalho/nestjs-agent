@@ -11,6 +11,7 @@ import type {
   ThreadSummary,
   ToolCatalogEntry,
 } from '@dudousxd/nestjs-agent-core';
+import type { HttpErrorListener } from './http-error.js';
 
 /**
  * Partial update accepted by `PATCH <base>/threads/:threadId`. `defaultAgent: null` clears a
@@ -80,6 +81,8 @@ export interface AgentConnection {
   headers: () => Promise<Record<string, string>>;
   credentials?: RequestCredentials;
   fetch: typeof fetch;
+  /** The client's `onHttpError` — call it with an upload's error answer before throwing it. */
+  onHttpError?: HttpErrorListener;
 }
 
 /**
@@ -133,8 +136,9 @@ export interface AgentBackend {
   answerToolCall?(input: {
     toolCallId: string;
     answers?: Record<string, string[]>;
+    via?: string;
   }): Promise<unknown>;
-  skipToolCall?(input: { toolCallId: string }): Promise<unknown>;
+  skipToolCall?(input: { toolCallId: string; via?: string }): Promise<unknown>;
 
   uploadAttachment?(file: File, options?: UploadAttachmentOptions): Promise<MessageAttachment>;
   listTools?(agent?: string): Promise<ToolCatalogEntry[]>;

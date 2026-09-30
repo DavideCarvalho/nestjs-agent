@@ -1,4 +1,8 @@
-import type { ModelCatalogEntry, ModelCatalogView } from '@dudousxd/nestjs-agent-core';
+import type {
+  ModelCatalogEntry,
+  ModelCatalogLock,
+  ModelCatalogView,
+} from '@dudousxd/nestjs-agent-core';
 import { useMemo } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
 import { useAgentBackend } from '../provider.js';
@@ -26,6 +30,11 @@ export interface ModelsState {
   models: ModelOption[];
   /** The model a turn runs on when none is picked, or `null` when the provider decides. */
   defaultModel: string | null;
+  /**
+   * The agent always runs on one model (`{ model, reason? }`), or `null`. A picker shows it
+   * read-only: the server runs every turn on it and refuses any other.
+   */
+  locked: ModelCatalogLock | null;
   /** The entry for `id`, or `undefined`. */
   find: (id: string | null | undefined) => ModelOption | undefined;
   isLoading: boolean;
@@ -36,8 +45,8 @@ export interface ModelsState {
 /**
  * The models this caller may pick (`GET <base>/models?agent=`), with badges and availability — the
  * data behind a model picker. Headless: render the options however you like, then send the pick
- * as `useAgentChat({ model })`, `sendMessage(msg, { body: { model } })`, or pin it on the thread
- * with `chat.setThreadModel(id)`.
+ * as `useAgentChat({ model })` or `sendMessage(msg, { body: { model } })` (that turn only), or
+ * pin it on the thread with `chat.models.pinToThread(id)`.
  */
 export function useModels(options: UseModelsOptions = {}): ModelsState {
   const { agent, enabled = true } = options;
@@ -61,6 +70,7 @@ export function useModels(options: UseModelsOptions = {}): ModelsState {
       providers,
       models,
       defaultModel: data?.default ?? null,
+      locked: data?.locked ?? null,
       find: (id) => (id == null ? undefined : byId.get(id)),
       isLoading,
       error,

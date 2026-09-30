@@ -1,5 +1,5 @@
 import { type Mock, describe, expect, it, vi } from 'vitest';
-import { AgentClient } from './client.js';
+import { AgentClient, AgentHttpError } from './client.js';
 
 function jsonResponse(body: unknown, init: { status?: number } = {}): Response {
   return new Response(JSON.stringify(body), { status: init.status ?? 200, statusText: 'OK' });
@@ -129,6 +129,87 @@ describe('AgentClient', () => {
       await expect(
         client.uploadAttachment(new File(['x'], 'x.png', { type: 'image/png' })),
       ).rejects.toMatchObject({ status: 413 });
+    });
+  });
+
+  describe('error answers', () => {
+    it("carries the server's message, code and parsed body", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { code: 'quota_exceeded', period: 'day', message: 'Daily AI budget used up' },
+          { status: 429 },
+        ),
+      );
+      const client = new AgentClient({ fetch: fetchMock });
+
+      const error = await client
+        .openChatStream({ body: { message: 'hi' } })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(AgentHttpError);
+      expect(error).toMatchObject({
+        status: 429,
+        code: 'quota_exceeded',
+        message: 'Daily AI budget used up',
+        body: { code: 'quota_exceeded', period: 'day', message: 'Daily AI budget used up' },
+        method: 'POST',
+        path: '/agent/chat',
+      });
+    });
+
+    it("reads NestJS's validation shape (a list of messages)", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { statusCode: 400, message: ['model is not offered', 'bad id'], error: 'Bad Request' },
+          { status: 400 },
+        ),
+      );
+      const client = new AgentClient({ fetch: fetchMock });
+
+      await expect(client.approveToolCall({ toolCallId: 'c1' })).rejects.toMatchObject({
+        status: 400,
+        message: 'model is not offered; bad id',
+      });
+    });
+
+    it('keeps a non-JSON body as text and falls back to a generic message', async () => {
+      const fetchMock = vi.fn<typeof fetch>(
+        async () =>
+          new Response('<html>bad gateway</html>', { status: 502, statusText: 'Bad Gateway' }),
+      );
+      const client = new AgentClient({ fetch: fetchMock });
+
+      const error = (await client
+        .listThreads()
+        .catch((caught: unknown) => caught)) as AgentHttpError;
+
+      expect(error.status).toBe(502);
+      expect(error.body).toBe('<html>bad gateway</html>');
+      expect(error.code).toBeUndefined();
+      expect(error.message).toBe('Agent request failed: GET /agent/threads → 502 Bad Gateway');
+    });
+
+    it('reports every error answer to onHttpError before throwing it', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        jsonResponse({ message: 'Session ended', code: 'session_ended' }, { status: 401 }),
+      );
+      const onHttpError = vi.fn();
+      const client = new AgentClient({ fetch: fetchMock, onHttpError });
+
+      await expect(client.getQuota()).rejects.toBeInstanceOf(AgentHttpError);
+      await expect(client.openChatStream({ body: {} })).rejects.toBeInstanceOf(AgentHttpError);
+
+      expect(onHttpError).toHaveBeenCalledTimes(2);
+      expect(onHttpError.mock.calls[0]?.[0]).toMatchObject({ status: 401, code: 'session_ended' });
+    });
+
+    it('does not report a resume 404 — that is "nothing is streaming", not an error', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => new Response('', { status: 404 }));
+      const onHttpError = vi.fn();
+      const client = new AgentClient({ fetch: fetchMock, onHttpError });
+
+      await expect(client.resumeChatStream({ runId: 'r1' })).resolves.toBeNull();
+      expect(onHttpError).not.toHaveBeenCalled();
     });
   });
 });

@@ -316,6 +316,21 @@ describe('configured intake — the checkpoints it adds, and to whom', () => {
     expect(row?.output).toMatchObject({ answers: { scope: ['file'] }, skipped: false });
   });
 
+  it('records who answered and through which surface, streamed and persisted alike', async () => {
+    const journal = new Journal();
+    const { store, frames } = await pass(journal, {
+      extra: { intake: INTAKE },
+      reply: { answers: { scope: ['file'] }, answeredByRef: 'u-9', answeredVia: 'slack' },
+    });
+    const [row] = store.toolCallRows();
+    expect(row?.output).toMatchObject({ answeredBy: 'u-9', answeredVia: 'slack' });
+    const output = frames.find(
+      (frame): frame is { kind: 'tool-output'; output: unknown } =>
+        (frame as { kind: string }).kind === 'tool-output',
+    );
+    expect(output?.output).toMatchObject({ answeredBy: 'u-9', answeredVia: 'slack' });
+  });
+
   it('records a skip as rejected, so it never reads as an answer the user gave', async () => {
     const journal = new Journal();
     const { store } = await pass(journal, {

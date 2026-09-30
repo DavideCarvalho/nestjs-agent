@@ -39,6 +39,8 @@ interface AnswerBody {
    * valid submission rather than an error.
    */
   answers?: unknown;
+  /** The surface the answer came through. Defaults to `'web'`. */
+  via?: unknown;
 }
 
 function toolCallId(claimed: unknown): string {
@@ -153,15 +155,20 @@ export class ToolCallController {
   @Post('answer')
   async answer(@Req() req: Request, @Body() body: AnswerBody): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.answer(actor, toolCallId(body.toolCallId), answers(body.answers));
+    await this.agent.answer(actor, toolCallId(body.toolCallId), answers(body.answers), {
+      via: via(body.via),
+    });
     return { ok: true };
   }
 
   /** Decline to answer and let the agent proceed on the answers it pre-picked. */
   @Post('skip')
-  async skip(@Req() req: Request, @Body() body: { toolCallId: unknown }): Promise<{ ok: boolean }> {
+  async skip(
+    @Req() req: Request,
+    @Body() body: { toolCallId: unknown; via?: unknown },
+  ): Promise<{ ok: boolean }> {
     const actor = await this.actorResolver.resolve(req);
-    await this.agent.skip(actor, toolCallId(body.toolCallId));
+    await this.agent.skip(actor, toolCallId(body.toolCallId), { via: via(body.via) });
     return { ok: true };
   }
 }

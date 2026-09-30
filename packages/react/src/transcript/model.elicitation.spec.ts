@@ -178,12 +178,31 @@ describe('buildTranscriptBlocks — a parked question set', () => {
       skipped: false,
       defaulted: ['tests'],
       summary: 'The user answered:\nHow much should I cover? → This file',
+      answeredBy: null,
+      answeredVia: null,
     });
     // The settled answers are what the form shows, so one piece of markup renders both states.
     expect(block.questions[0]?.selected).toEqual(['file']);
     expect(block.questions[0]?.options[0]?.isSelected).toBe(true);
     // Which of them the human actually touched survives the settlement.
     expect(block.questions.map((question) => question.isPristine)).toEqual([false, true]);
+  });
+
+  it("reads who answered and through which surface, like an approval's decidedBy/decidedVia", () => {
+    const block = only([
+      askPart({
+        state: 'output-available',
+        output: {
+          answers: { scope: ['file'], tests: ['unit'] },
+          skipped: false,
+          defaulted: [],
+          answeredBy: 'Ana',
+          answeredVia: 'slack',
+        },
+      }),
+    ]);
+
+    expect(block.outcome).toMatchObject({ answeredBy: 'Ana', answeredVia: 'slack' });
   });
 
   it('surfaces a failed submission and keeps the form live', () => {

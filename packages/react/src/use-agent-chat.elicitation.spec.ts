@@ -43,6 +43,27 @@ describe('useAgentChat — settling a question set', () => {
     expect(JSON.parse(String(settles()[2]?.init?.body))).toEqual({ toolCallId: 'intake-run-3' });
   });
 
+  it('names the surface an answer or a skip came through, like approve does', async () => {
+    const bodies: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      if (String(url).includes('/tool-call/')) bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse();
+    });
+    const { result } = renderHook(() =>
+      useAgentChat({ threadId: 'thr-1', backend: new AgentClient({ fetch: fetchMock }) }),
+    );
+
+    await act(async () => {
+      await result.current.answer({ toolCallId: 'q1', answers: { a: ['x'] }, via: 'voice' });
+      await result.current.skip({ toolCallId: 'q2', via: 'voice' });
+    });
+
+    expect(bodies).toEqual([
+      { toolCallId: 'q1', answers: { a: ['x'] }, via: 'voice' },
+      { toolCallId: 'q2', via: 'voice' },
+    ]);
+  });
+
   it('lets a refusal reach the caller rather than resolving as if it worked', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(403));
     const { result } = renderHook(() =>

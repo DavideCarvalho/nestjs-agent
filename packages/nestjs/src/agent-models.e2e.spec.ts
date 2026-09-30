@@ -48,6 +48,31 @@ class RoleCatalog implements ModelCatalog {
   }
 }
 
+/** An agent that always runs on `pro`: the picker is locked, every other model unavailable. */
+class LockedCatalog implements ModelCatalog {
+  list() {
+    return {
+      default: 'pro',
+      locked: { model: 'pro', reason: 'This assistant always uses Pro' },
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          models: [
+            {
+              id: 'fast',
+              label: 'Fast',
+              available: false,
+              unavailableReason: 'This assistant always uses Pro',
+            },
+            { id: 'pro', label: 'Pro', available: true },
+          ],
+        },
+      ],
+    };
+  }
+}
+
 let app: NestExpressApplication | undefined;
 
 async function boot(models?: ModelCatalog) {
@@ -160,10 +185,44 @@ describe('the model a turn runs on', () => {
     await send(server, 'admin', { threadId, model: 'pro' }, 'ADMIN');
     expect(seen.slice(1)).toEqual(['fast', 'pro']);
 
+    // The send's own model was that turn's only: the pin is untouched.
+    expect((await service.getThread({ id: 'admin' }, threadId))?.model).toBe('fast');
+    await send(server, 'admin', { threadId }, 'ADMIN');
+    expect(seen.at(-1)).toBe('fast');
+
     expect((await patch({ model: 'legacy' })).status).toBe(400);
     expect((await patch({ model: null })).status).toBe(200);
     expect((await service.getThread({ id: 'admin' }, threadId))?.model).toBeNull();
     await send(server, 'admin', { threadId }, 'ADMIN');
     expect(seen.at(-1)).toBeUndefined();
+  });
+});
+
+describe('a send names a model for that turn only', () => {
+  it('never pins it — not on a new thread, not on an existing one', async () => {
+    const { server, service, seen } = await boot(new RoleCatalog());
+    const first = await send(server, 'u1', { model: 'fast' });
+    const threadId = threadIdOf(first);
+    expect((await service.getThread({ id: 'u1' }, threadId))?.model ?? null).toBeNull();
+
+    await send(server, 'u1', { threadId, model: 'fast' });
+    expect((await service.getThread({ id: 'u1' }, threadId))?.model ?? null).toBeNull();
+    await send(server, 'u1', { threadId });
+    expect(seen).toEqual(['fast', 'fast', undefined]);
+  });
+});
+
+describe('a catalog locked to one model', () => {
+  it('reports the lock, runs every turn on it, and refuses another model', async () => {
+    const { server, seen } = await boot(new LockedCatalog());
+    const models = await request(server).get('/agent/models').set('x-actor-id', 'u1');
+    expect(models.body.locked).toEqual({ model: 'pro', reason: 'This assistant always uses Pro' });
+
+    expect((await send(server, 'u1', {})).status).toBe(201);
+    expect((await send(server, 'u1', { model: 'pro' })).status).toBe(201);
+    const refused = await send(server, 'u1', { model: 'fast' });
+    expect(refused.status).toBe(400);
+    expect(refused.body.message).toContain('always uses Pro');
+    expect(seen).toEqual(['pro', 'pro']);
   });
 });

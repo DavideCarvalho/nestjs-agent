@@ -189,6 +189,36 @@ describe('AgentChatTransport reconnect', () => {
     expect(textOf(await collect(await transport.sendMessages(sendArgs())))).toBe('ab');
   });
 
+  it('resumes a runner whose ids are increasing but not contiguous (rebuilt from checkpoints)', async () => {
+    // A runner that numbers frames from durable positions (step × 1000 + index) rather than a
+    // counter: the ids jump, and a stream rebuilt after a restart condenses what already streamed
+    // into fewer frames numbered at or below what the client has — only the rest is new.
+    const backend = backendWith(
+      stream(
+        [
+          META,
+          frame(1_000, { kind: 'step-start' }),
+          frame(1_001, { kind: 'text', text: 'Hel' }),
+          frame(1_002, { kind: 'text', text: 'lo' }),
+        ],
+        'drop',
+      ),
+      [
+        stream([
+          META,
+          frame(1_000, { kind: 'step-start' }),
+          frame(1_001, { kind: 'text', text: 'Hello' }),
+          frame(4_000, { kind: 'text', text: ', world' }),
+          DONE,
+        ]),
+      ],
+    );
+    const transport = new AgentChatTransport({ backend, reconnect: { baseDelayMs: 0 } });
+
+    expect(textOf(await collect(await transport.sendMessages(sendArgs())))).toBe('Hello, world');
+    expect(backend.resumed[0]?.after).toBe(1_002);
+  });
+
   it('retries with backoff, and gives up with an error after the last attempt', async () => {
     const states: StreamConnectionState[] = [];
     const backend = backendWith(stream([META, frame(1, { kind: 'text', text: 'a' })], 'drop'), [
