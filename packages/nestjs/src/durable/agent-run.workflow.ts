@@ -37,6 +37,7 @@ import {
   type QueueSettleOutcome,
 } from '../queue/chat-queue.service.js';
 import { AgentRunSteps } from './agent-run.steps.js';
+import { stepOf } from './outside-workflow-ctx.js';
 
 /**
  * The agent turn AS a durable workflow. Persist/stream checkpoints are `ctx.localStep`s — the
@@ -105,7 +106,7 @@ export class AgentRunWorkflow {
     if (!(await ctx.patched('agent:chat-queue'))) {
       return undefined;
     }
-    const plan = await ctx.localStep(`queue:${outcome}`, async (): Promise<QueuePlan> => {
+    const plan = await stepOf(ctx)(`queue:${outcome}`, async (): Promise<QueuePlan> => {
       try {
         // A Stop that arrived too late to interrupt anything still pauses the queue behind it.
         const settled =
@@ -134,7 +135,7 @@ export class AgentRunWorkflow {
         throw failure;
       }
       const reason = failure instanceof Error ? failure.message : String(failure);
-      return ctx.localStep('queue:restore', async () => {
+      return stepOf(ctx)('queue:restore', async () => {
         await queue.restore(input.threadId, next, 'start_failed', reason);
         return queue.pausedFrame(input.threadId);
       });
@@ -182,7 +183,7 @@ export class AgentRunWorkflow {
     if (delivery === undefined) {
       return;
     }
-    await ctx.localStep('deliver:detached:unsettled', () =>
+    await stepOf(ctx)('deliver:detached:unsettled', () =>
       settleUnsettledDelegation({
         store: this.store,
         delivery,
@@ -215,7 +216,7 @@ export class AgentRunWorkflow {
     // stream. Both shapes of sub-agent qualify: one forwarding into an ancestor's sink, and a
     // DETACHED one, which has no ancestor sink and is recognized by its delivery address instead.
     if (input.sinkRunId !== undefined || input.deliverTo !== undefined) {
-      await ctx.localStep('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
+      await stepOf(ctx)('activate', () => this.store.setActiveStream(input.threadId, ctx.runId));
     }
     const sinkRunId = input.sinkRunId ?? ctx.runId;
     // The chain this run sits on, with its own agent appended — what lets a child recognise a
@@ -269,7 +270,9 @@ export class AgentRunWorkflow {
       // settles either one is the same `POST /agent/tool-call/*` family.
       awaitAnswers: (request) =>
         ctx.waitForSignal<ElicitationReply>(`tool:${ctx.runId}:${request.id}`),
-      step: (name, fn) => ctx.localStep(name, fn),
+      // Bodies run outside the ambient workflow ctx, so nothing the application does in there can
+      // take a position in this run's journal (see `outsideWorkflowCtx`).
+      step: (name, fn) => stepOf(ctx)(name, fn),
       // Both durable step primitives take their checkpoint position on the CALL, before their first
       // await, so launching a batch in one tick — what `settleAll` does — fixes the block of
       // positions in call order however the tools then settle. `ctx.patched` keeps a run that
@@ -283,7 +286,7 @@ export class AgentRunWorkflow {
       // worker throws durable-worker's own Suspend), so only the Symbol.for marker is reliable.
       isControlFlowError: (error) => isWorkflowControlFlowSignal(error),
       runAgent: async (agentName, task) => {
-        const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
+        const subThreadId = await stepOf(ctx)(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
             actor: input.actor,
             transient: true,
@@ -314,7 +317,7 @@ export class AgentRunWorkflow {
       //   - `deliverTo` instead. The parent's tool result is a receipt, so the answer needs an
       //     address of its own, and by the time it exists nobody is holding one.
       startAgent: async ({ agentName, task, toolCallId }) => {
-        const subThreadId = await ctx.localStep(`subthread:${agentName}`, async () => {
+        const subThreadId = await stepOf(ctx)(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({ actor: input.actor, transient: true });
           return thread.id;
         });
@@ -368,7 +371,7 @@ export class AgentRunWorkflow {
       // Genuine completion (not a suspend) — clear so `activeRunForThread` no longer reports this
       // run. `input.threadId` is whichever thread this run's own `activate`/the top-level `chat()`
       // call marked active, so this is correct for both a top-level run and a sub-agent's subthread.
-      await ctx.localStep('deactivate', () =>
+      await stepOf(ctx)('deactivate', () =>
         releaseThreadRun(this.store, input.threadId, ctx.runId),
       );
       return result;
@@ -392,7 +395,7 @@ export class AgentRunWorkflow {
       // Nothing is published as a failure, and the error is rethrown so the runtime records the run
       // `cancelled` rather than completed.
       if (error instanceof RunCancelledError) {
-        await ctx.localStep('deactivate', () =>
+        await stepOf(ctx)('deactivate', () =>
           releaseThreadRun(this.store, input.threadId, ctx.runId),
         );
         await this.settleDetachedParent(ctx, input, { status: 'cancelled' });
@@ -418,7 +421,7 @@ export class AgentRunWorkflow {
       publishAgentRunFailed({ runId: ctx.runId, code, message });
       // Settle the run's persisted outcome (the loop only records completions — it can't catch its
       // own crash). Optional-call: a store without run recording degrades to no reliability metrics.
-      await ctx.localStep(
+      await stepOf(ctx)(
         'persist:run:fail',
         () =>
           this.store.recordRunEnd?.({
@@ -430,7 +433,7 @@ export class AgentRunWorkflow {
       );
       // The queue behind a failed turn pauses — its next message would likely fail the same way.
       const queueFrame = await this.advanceQueue(ctx, input, 'failed', message);
-      await ctx.localStep('deactivate', () =>
+      await stepOf(ctx)('deactivate', () =>
         releaseThreadRun(this.store, input.threadId, ctx.runId),
       );
       await this.settleDetachedParent(ctx, input, { status: 'failed', error: message });
