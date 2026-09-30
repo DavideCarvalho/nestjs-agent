@@ -78,8 +78,13 @@ from durable facts, never from a per-process counter:
    it covered. A rebuilt step's condensed frames take ids inside that step's range (from just
    after the previous checkpoint's last id), so a client that saw the step skips them all and a
    client that did not takes them all in.
-4. **Never reuse an id for different content, never go backwards.** A client that saw only part
-   of a step before the restart gets the rest from the frames that follow; what it had stays.
+4. **Never reuse an id for different content, never go backwards.**
+
+Put a rebuilt step's condensed frames at the start of its range and the frame it parked on (an
+approval, a question) at the end, where the live stream raised it; that request's settlement takes
+the first id after the range. The one case numbering cannot fix is a client that saw only part of a
+step that was then condensed: it keeps what it had and skips the condensed rest, and the stored
+answer (a reload of the thread) is complete. Checkpoint at every pause to keep that window small.
 
 `meta` still comes first on every attach, and `?after=` / `Last-Event-ID` work the same way. This
 library's own runner needs none of this: its sink keeps the run's frames, so a replay is the
