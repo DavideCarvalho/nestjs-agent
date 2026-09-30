@@ -52,56 +52,64 @@ Extracted and generalized from the flip-nestjs admin assistant.
 ## Install
 
 ```bash
-pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
-# persistence + (optional) durable runner:
-pnpm add @dudousxd/nestjs-agent-store-mikro-orm @dudousxd/nestjs-durable
+pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-ai-sdk @ai-sdk/openai zod
 ```
 
 ## Quickstart
 
-Register the module, then declare tools as ordinary injectables with `@AiTool`.
+The whole server — a public chat with one tool:
 
 ```ts
-import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+@AiTool({ description: 'Current weather for a city.', input: z.object({ city: z.string() }) })
+export class GetWeatherTool {                        // name: getWeather, kind: read
+  async execute({ city }: { city: string }) {
+    return { city, tempC: 21, summary: 'partly cloudy' };
+  }
+}
 
 @Module({
-  imports: [
-    AgentModule.forRoot({
-      // --- infrastructure ---
-      model: myModelProvider,          // a Vercel AI SDK wrapper (ModelProvider SPI)
-      store: myAgentStore,             // e.g. the MikroORM store
-      defaultRoles: ['ADMIN'],         // roles a tool requires when its own `roles` is omitted
-      actorResolver: new HeaderActorResolver(), // who's calling — see "Identity" below
-      // path: 'agent',                // route prefix (default 'agent')
-      // durable: true,                // run each turn as the durable `agent.run` workflow
-      // --- the default agent (optional) ---
-      defaultAgent: {
-        systemPrompt: 'You are a helpful ops assistant.',
-        // modelId: 'claude-sonnet-4-6', // optional accounting label; the provider can report its own
-      },
-    }),
-  ],
-  providers: [GetWeatherTool, PurgeCacheTool],
+  imports: [AgentModule.forRoot({ model: aiSdkModel(openai('gpt-5-mini')) })],
+  providers: [GetWeatherTool],
 })
 export class AppModule {}
 ```
 
-```ts
-import { AiTool, type ToolHandler, type AiToolCtx } from '@dudousxd/nestjs-agent';
-import { z } from 'zod';
+And the whole client:
 
-@AiTool({
-  name: 'getWeather',
-  kind: 'read',                        // 'read' auto-executes; 'action' requires HITL approval
-  description: 'Current weather for a city.',
-  input: z.object({ city: z.string() }),
-})
-export class GetWeatherTool implements ToolHandler<{ city: string }> {
-  async execute(input: { city: string }, ctx: AiToolCtx) {
-    return { tempC: 21, summary: 'partly cloudy' };
-  }
+```tsx
+import { ChatInput, MessageList, useAgentChat } from '@dudousxd/nestjs-agent-react';
+
+export function Chat() {
+  const chat = useAgentChat();
+  return (
+    <>
+      <MessageList messages={chat.messages} status={chat.status} />
+      <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
+    </>
+  );
 }
 ```
+
+Everything else defaults, and each default is one option away:
+
+| Default | Change it with |
+|---|---|
+| In-memory store (boot warning: not for production) | `store`, or import `MikroOrmAgentStoreModule` / `DrizzleAgentStoreModule` — found automatically |
+| Public endpoints, each browser its own anonymous actor | `actorResolver: requestUserActorResolver()` (reads `req.user`), or your own |
+| Every tool callable by any resolved actor; `action` tools need approval | `@AiTool({ roles })`, `defaultRoles`, `rolesPolicy` |
+| `'You are a helpful assistant.'` | `systemPrompt`, or `@Agent` classes |
+| One model | `aiSdkModels({ fast: …, smart: … }, { default: 'fast' })` — its catalog feeds the picker |
+| Usage reported, never enforced | `quota: { limits: { day: { tokens: 200_000 } } }` |
+| Tool name from the class, kind `read` | `@AiTool({ name, kind: 'action' })` |
+
+On the client, `<AgentProvider baseUrl path credentials getHeaders>` configures the connection once
+for every hook; `useAgentChat` loads a `threadId`'s history, re-attaches a streaming turn, gates on
+quota, and hands you `chat.transcript`, `chat.composer` and `chat.models` already wired.
 
 A tool can also push a component into the answer — `await ctx.emitUi('WeatherCard', { tempC: 21 })`
 streams a `ui` frame and persists it on the assistant message (replay-safe under the durable runner);
@@ -115,7 +123,7 @@ The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 
 | Method & path | Purpose |
 |---|---|
-| `POST /agent/chat` | Start a turn; streams tokens as SSE (`event: meta` → `data:{delta}` → `event: done`) |
+| `POST /agent/chat` | Start a turn; streams SSE frames (`event: meta` → `data: {"kind":"text",…}` … → `event: done`) — see docs/stream-protocol.md |
 | `GET /agent/chat/:runId/stream` | Resume an in-flight run's stream |
 | `POST /agent/chat/:runId/cancel` | Cancel a run |
 | `POST /agent/tool-call/approve` · `/reject` | Human-in-the-loop decision for an `action` tool |
@@ -124,13 +132,19 @@ The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 
 ### Identity (`ActorResolver`)
 
-The agent never invents a caller. Every request's actor — `{ id, roles?, tenantRef? }` — comes
-from an `ActorResolver` you configure; tool authorization is a set-intersection of the actor's
-`roles` against each tool's. There's **no insecure default**: omit `actorResolver` and every request
-throws until you wire one. The shipped `HeaderActorResolver` reads `x-actor-id` /
-`x-actor-role` (comma-separated → `roles`) / `x-tenant-ref` and is only safe behind a trusted gateway
-that strips and re-sets those headers; production apps typically implement `ActorResolver` over a
-verified session/JWT instead.
+Every request's actor — `{ id, roles?, tenantRef? }` — comes from an `ActorResolver`. With none
+configured the endpoints are **public** and each browser is its own anonymous actor: a random token
+in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS), the actor id a SHA-256 digest of it,
+so visitors never see each other's threads, quota or attachments (a boot notice says so). Require
+login in one line with `actorResolver: requestUserActorResolver()` (reads `req.user` — Passport,
+cookie sessions), or implement `ActorResolver` over your own session/JWT. The shipped
+`HeaderActorResolver` reads `x-actor-id` / `x-actor-role` / `x-tenant-ref` and is only safe behind a
+trusted gateway that strips and re-sets those headers.
+
+Tools are callable by any resolved actor unless they name `roles` (or the module sets
+`defaultRoles`). An `action` tool still parks on approval — by the requester by default, which for an
+anonymous visitor is a confirmation step, not an authorization; gate consequential tools with
+`roles`. A public deployment without `quota` limits has unbounded model spend.
 
 ### Human-in-the-loop & durability
 
