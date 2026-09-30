@@ -487,6 +487,36 @@ describe('useAgentChat — the message queue', () => {
     expect(backend.opened).toEqual([]);
   });
 
+  it('shows the queue a stop paused, which no frame of the closed stream could announce', async () => {
+    const release = deferred();
+    const backend = queueBackend({
+      open: () => ({ body: gatedStream([meta('run-1'), text('…')], release.promise, [DONE]) }),
+    });
+    const { result } = renderHook(() => useAgentChat({ backend, threadId: 'thr-1' }));
+    await settle();
+    await act(async () => {
+      void result.current.sendMessage({ text: 'first' });
+    });
+    await waitFor(() => expect(result.current.status).toBe('streaming'));
+    await act(async () => {
+      await result.current.queue.add('waiting');
+    });
+    // The server pauses the queue behind a Stop; the stream that would say so is already closed.
+    backend.cancelStream = async () => {
+      backend.queue = { items: backend.queue.items, paused: { reason: 'cancelled', at: 'x' } };
+      return { aborted: true };
+    };
+    backend.getQueue = async () => backend.queue;
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(result.current.queue.paused).toMatchObject({ reason: 'cancelled' });
+    expect(result.current.queue.items).toHaveLength(1);
+    await act(async () => release.resolve());
+  });
+
   it('turns a waiting message into the interrupt, in place', async () => {
     const release = deferred();
     const backend = queueBackend({

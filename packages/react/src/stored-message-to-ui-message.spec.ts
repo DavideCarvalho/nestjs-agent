@@ -134,6 +134,36 @@ describe('storedMessageToUiMessage', () => {
     );
   });
 
+  /**
+   * A reloaded thread must not turn a failure into a result either. A call whose turn died before
+   * it was settled is stored with an `error` and no output; mapped as `output-available` it reloads
+   * as a completed call, and an approval card reads "done" for an action that never ran.
+   */
+  it('reloads a failed call as an error, not as an available output', () => {
+    const ui = storedMessageToUiMessage(
+      message({
+        toolCalls: [{ id: 'call-1', name: 'purgeCache', input: { key: 'cfg' }, kind: 'action' }],
+        toolResults: [
+          {
+            id: 'call-1',
+            name: 'purgeCache',
+            output: null,
+            error: 'the run ended before this tool call was settled',
+          },
+        ],
+      }),
+    );
+
+    expect(ui.parts[0]).toEqual({
+      type: 'tool-purgeCache',
+      toolCallId: 'call-1',
+      toolMetadata: { toolKind: 'action' },
+      state: 'output-error',
+      input: { key: 'cfg' },
+      errorText: 'the run ended before this tool call was settled',
+    });
+  });
+
   it('maps attachments to file parts, alongside the text part', () => {
     const ui = storedMessageToUiMessage(
       message({

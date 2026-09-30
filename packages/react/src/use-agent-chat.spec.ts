@@ -199,6 +199,76 @@ describe('useAgentChat', () => {
       ).toBe(true);
     });
 
+    /**
+     * A stream attached to after a reload opens with no `meta` frame — the run id is known only from
+     * the thread read. Stop has to cancel THAT run: with no id the client closed nothing and asked
+     * the server for nothing, and the answer kept streaming under a Stop button that did nothing.
+     */
+    it('cancels the run it re-attached to, which no meta frame ever named', async () => {
+      const encoder = new TextEncoder();
+      let release: (() => void) | undefined;
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/agent/threads/thr-1')) {
+          return jsonResponse({
+            id: 'thr-1',
+            title: 'Resumed thread',
+            transient: false,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            messages: [],
+            activeRunId: 'run-live',
+          });
+        }
+        if (url.endsWith('/agent/chat/run-live/stream')) {
+          // Open until the run is cancelled, the way a live run's stream is.
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode('id: 1\ndata: {"kind":"step-start"}\n\n'));
+              controller.enqueue(
+                encoder.encode('id: 2\ndata: {"kind":"text","text":"still going"}\n\n'),
+              );
+              release = () => {
+                controller.enqueue(encoder.encode('event: done\ndata: {}\n\n'));
+                controller.close();
+              };
+            },
+          });
+          return new Response(body, { status: 200, statusText: 'OK' });
+        }
+        if (url.endsWith('/agent/chat/run-live/cancel') && init?.method === 'POST') {
+          release?.();
+          return jsonResponse({ aborted: true });
+        }
+        return jsonResponse();
+      });
+      const settled: string[] = [];
+
+      const { result } = renderHook(() =>
+        useAgentChat({
+          threadId: 'thr-1',
+          resume: true,
+          backend: new AgentClient({ fetch: fetchMock }),
+          onRunSettled: ({ runId }) => settled.push(runId),
+        }),
+      );
+
+      await waitFor(() => expect(result.current.runId).toBe('run-live'));
+
+      await act(async () => {
+        await result.current.cancel();
+      });
+
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).endsWith('/agent/chat/run-live/cancel') && init?.method === 'POST',
+        ),
+      ).toBe(true);
+      // The re-attached run settles like one this chat started: its host refreshes on it.
+      await waitFor(() => expect(settled).toEqual(['run-live']));
+    });
+
     it('does not attach to a stream when the thread has no active run', async () => {
       const fetchMock = vi.fn<typeof fetch>(async (input) => {
         const url = String(input);

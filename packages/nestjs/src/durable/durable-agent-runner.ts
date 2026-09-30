@@ -16,7 +16,8 @@ import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-d
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
 import { InProcessTokenStreamSink } from '../in-process-sink.js';
-import { ChatQueueService } from '../queue/chat-queue.service.js';
+import type { ChatQueueService } from '../queue/chat-queue.service.js';
+import { AGENT_CHAT_QUEUE } from '../queue/chat-queue.token.js';
 import { AgentRunWorkflow } from './agent-run.workflow.js';
 
 /**
@@ -59,7 +60,9 @@ export class DurableAgentRunner implements AgentRunner {
     @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
-    @Optional() private readonly queue?: ChatQueueService,
+    // By token: this file ships in the `/durable` bundle, whose copy of the `ChatQueueService`
+    // class is not the one `AgentModule` provides.
+    @Optional() @Inject(AGENT_CHAT_QUEUE) private readonly queue?: ChatQueueService,
   ) {
     // A durable turn runs on whichever worker takes `agent.run`, and its model call is dispatched
     // again from there — so the process holding the reader's SSE connection is generally not the
