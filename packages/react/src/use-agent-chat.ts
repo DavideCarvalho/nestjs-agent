@@ -489,6 +489,12 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         return { ...turnBody(), ...(regenerate ? { regenerate: true } : {}) };
       },
       getResumeRunId: () => latest.current.resumeRunId ?? autoResumeRunIdRef.current,
+      // A stream attached to after a reload carries no `meta` frame: without this the chat would
+      // be reading a run it cannot name, and `cancel()` would stop nothing.
+      onResumeAttached: (resumedRunId) => {
+        settlingRunIdRef.current = resumedRunId;
+        setRunId(resumedRunId);
+      },
       onMeta,
       onAttemptStart: () => {
         settlingRunIdRef.current = undefined;
@@ -1079,7 +1085,21 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         /* best-effort — the SDK stop already flipped the UI */
       }
     }
-  }, [client]);
+    // The stream that would have carried the `queue` frame was closed above, so a queue the stop
+    // just paused is read back: otherwise its messages keep saying "up next" with nothing coming.
+    const threadId = currentThreadId();
+    if (
+      threadId !== undefined &&
+      queueStateRef.current.items.length > 0 &&
+      typeof client.getQueue === 'function'
+    ) {
+      try {
+        applyQueue(await client.getQueue(threadId));
+      } catch {
+        /* best-effort — the next thread read brings it */
+      }
+    }
+  }, [client, currentThreadId, applyQueue]);
 
   // Approve / reject / answer / skip route by tool-call id alone — the server derives the run
   // awaiting it (a sub-agent's own run when the call belongs to a delegated agent).

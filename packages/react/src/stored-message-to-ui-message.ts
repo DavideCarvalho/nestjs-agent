@@ -23,7 +23,9 @@ import type { AgentMessageMetadata } from './stored-thread-to-ui-messages.js';
  *                            same parts the live `approval-requested`/`approval-settled` frames
  *                            become, so the transcript folds both into `call.approval` either way.
  *   - each `toolCall`      → a `tool-<name>` part, pairing its `toolResult` (matched by id):
- *       - a result found   → `output-available` state, carrying `output`.
+ *       - a result found   → `output-available` state, carrying `output`; `output-denied` when a
+ *                            person declined it; `output-error` (carrying `errorText`) when it
+ *                            failed — the states the live stream leaves the part in.
  *       - no result found  → `input-available` state (the call never finished, e.g. the run was
  *                            interrupted) — `output` is omitted, never a fabricated value.
  *     When the store reports the tool's kind (`'read' | 'action'`), it rides along as
@@ -172,7 +174,17 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
                   : {}),
               },
             }
-          : { state: 'output-available', input: call.input, output: result.output }
+          : typeof result.error === 'string' && result.error !== ''
+            ? {
+                // A call that FAILED — the tool threw, its input was refused, or its turn died
+                // before it was settled — is not an available output either. The live stream says
+                // so with `tool-output-error`; a reloaded thread has to say the same, or the card of
+                // an action that never ran comes back reading as one that completed.
+                state: 'output-error',
+                input: call.input,
+                errorText: result.error,
+              }
+            : { state: 'output-available', input: call.input, output: result.output }
         : { state: 'input-available', input: call.input }),
     });
     parts.push(...(pushedByCall.get(call.id) ?? []));

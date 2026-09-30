@@ -21,7 +21,7 @@
     "typecheck": "turbo run typecheck",
     "typecheck:specs": "turbo run typecheck:specs",
     "lint": "biome check .",
-    "check:dist": "node scripts/check-dist-react.mjs && pnpm --filter @dudousxd/nestjs-agent-react test:dist",
+    "check:dist": "node scripts/check-dist-react.mjs && node scripts/check-dist-nestjs-di.mjs && pnpm --filter @dudousxd/nestjs-agent-react test:dist",
     "lint:fix": "biome check --write .",
     "changeset": "changeset",
     "version-packages": "changeset version && biome check --write .",

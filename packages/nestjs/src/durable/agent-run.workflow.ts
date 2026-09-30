@@ -33,11 +33,12 @@ import {
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
-import {
+import type {
   ChatQueueService,
-  type QueuePlan,
-  type QueueSettleOutcome,
+  QueuePlan,
+  QueueSettleOutcome,
 } from '../queue/chat-queue.service.js';
+import { AGENT_CHAT_QUEUE } from '../queue/chat-queue.token.js';
 import { AgentRunSteps } from './agent-run.steps.js';
 import { stepOf } from './outside-workflow-ctx.js';
 
@@ -78,8 +79,9 @@ export class AgentRunWorkflow {
     @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
     // The thread's message queue. Provided by `AgentModule` on every surface, so whether a turn
     // writes the queue checkpoints depends on the bound STORE (the same on every pod of a
-    // deployment), never on which pod replays it.
-    @Optional() private readonly queue?: ChatQueueService,
+    // deployment), never on which pod replays it. By token: this file ships in the `/durable`
+    // bundle, whose copy of the `ChatQueueService` class is not the one `AgentModule` provides.
+    @Optional() @Inject(AGENT_CHAT_QUEUE) private readonly queue?: ChatQueueService,
   ) {}
 
   /**

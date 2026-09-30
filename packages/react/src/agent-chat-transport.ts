@@ -75,6 +75,12 @@ export interface AgentChatTransportOptions {
    * and surfaces its 404". Wire this to the thread's `activeRunId`.
    */
   getResumeRunId?: () => string | undefined;
+  /**
+   * Fires once `reconnectToStream` has attached to a run's stream, with that run's id. A resumed
+   * stream replays frames but opens with no `meta` frame, so this is the only place a caller learns
+   * which run it is now reading — what a Stop pressed after a reload has to cancel.
+   */
+  onResumeAttached?: (runId: string) => void;
   /** Fires whenever a stream emits its `meta` frame. */
   onMeta?: (meta: AgentStreamMeta) => void;
   /**
@@ -257,6 +263,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         return null;
       }
       this.captureHeaderMeta(response);
+      this.options.onResumeAttached?.(response.runId ?? runId);
       return this.toChunkStream(response, {
         runId,
         ...(headers !== undefined ? { headers } : {}),

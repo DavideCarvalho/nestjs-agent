@@ -60,6 +60,7 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
+import { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
 import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
@@ -221,6 +222,7 @@ function sharedProviders(durable: boolean): Provider[] {
     // The thread message queue — every surface, since both runners and the durable workflow settle
     // into it, and the chat routes enqueue into it.
     ChatQueueService,
+    { provide: AGENT_CHAT_QUEUE, useExisting: ChatQueueService },
     InlineAgentRunner,
     AgentService,
     // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
@@ -275,6 +277,7 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
     AgentDepsFactory,
     AgentService,
     ChatQueueService,
+    AGENT_CHAT_QUEUE,
     InlineAgentRunner,
     AGENT_APPROVAL_PORT,
   ];

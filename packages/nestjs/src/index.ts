@@ -84,6 +84,7 @@ export {
   type QueuedTurn,
   type QueuedTurnStarter,
 } from './queue/chat-queue.service.js';
+export { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
 export {
   LedgerQuotaProvider,
