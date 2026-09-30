@@ -1,5 +1,23 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.24.0
+
+### Minor Changes
+
+- [#234](https://github.com/DavideCarvalho/nestjs-agent/pull/234) [`39b6d0b`](https://github.com/DavideCarvalho/nestjs-agent/commit/39b6d0b56b3b165e2c685ba35192b3af2dcf6cfb) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Host message metadata and nested-call replay, for runners that are not this library's loop:
+
+  - `StoredMessage.metadata` (host-defined, e.g. the model that answered or the error a turn ended with) is replayed into the client message's `metadata`, under the library's own keys.
+  - A new `message-metadata` stream frame carries the same facts live and maps to the AI SDK's `message-metadata` chunk.
+  - `ToolCallRequest.parentId` is replayed as the tool part's `toolMetadata.parentId`, so a reloaded thread nests code-mode inner calls the way the live stream did.
+  - `useAgentChat({ agent })` is read at every send, so a host that switches agents before the first message (an agent picker on a new chat) sends the one picked now.
+  - `chat.composer.submit()` puts the staged attachments on the sent user message as file parts (with their `mediaId`), so the bubble shows them before the thread is reloaded.
+  - `chat.models.defaultModel`: the catalog default, for a picker that marks it.
+
+### Patch Changes
+
+- Updated dependencies [[`39b6d0b`](https://github.com/DavideCarvalho/nestjs-agent/commit/39b6d0b56b3b165e2c685ba35192b3af2dcf6cfb)]:
+  - @dudousxd/nestjs-agent-core@0.29.0
+
 ## 0.23.0
 
 ### Minor Changes
