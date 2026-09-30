@@ -342,6 +342,9 @@ try {
 }
 ```
 
+On the transcript model the same refusal is `call.errorCode === 'run_not_active'` (and
+`elicitation.errorCode`) next to `call.error`, the server's message.
+
 ### Completing as you type
 
 `useComposerAutocomplete` is the state machine behind a `/`-style menu in the composer. It is

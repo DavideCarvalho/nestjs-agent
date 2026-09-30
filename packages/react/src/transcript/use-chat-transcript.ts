@@ -479,7 +479,9 @@ function useTranscriptItems({
   // Which decision each parked call is sending, not merely that one is: the two affordances on a
   // call are never in flight together, and only the pressed one should report progress.
   const [settling, setSettling] = useState<ReadonlyMap<string, SettleAction>>(() => new Map());
-  const [settleErrors, setSettleErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [settleErrors, setSettleErrors] = useState<
+    ReadonlyMap<string, { message: string; code: string | null }>
+  >(() => new Map());
 
   const backend = useAgentBackend();
   const handlers = settleHandlers(options, backend);
@@ -547,10 +549,10 @@ function useTranscriptItems({
           return next;
         });
         setSettleErrors((current) =>
-          new Map(current).set(
-            toolCallId,
-            error instanceof Error ? error.message : 'Could not settle this',
-          ),
+          new Map(current).set(toolCallId, {
+            message: error instanceof Error ? error.message : 'Could not settle this',
+            code: settleErrorCode(error),
+          }),
         );
       };
       // Sent in the click's own tick, not a microtask later — a synchronous throw and a rejected
@@ -746,7 +748,8 @@ function useTranscriptItems({
                 answer,
                 skip,
                 submitting: (toolCallId) => settling.get(toolCallId) ?? null,
-                errorOf: (toolCallId) => settleErrors.get(toolCallId) ?? null,
+                errorOf: (toolCallId) => settleErrors.get(toolCallId)?.message ?? null,
+                errorCodeOf: (toolCallId) => settleErrors.get(toolCallId)?.code ?? null,
               },
             }
           : {}),
@@ -758,7 +761,8 @@ function useTranscriptItems({
                 approve,
                 reject,
                 submitting: (toolCallId) => settling.get(toolCallId) ?? null,
-                errorOf: (toolCallId) => settleErrors.get(toolCallId) ?? null,
+                errorOf: (toolCallId) => settleErrors.get(toolCallId)?.message ?? null,
+                errorCodeOf: (toolCallId) => settleErrors.get(toolCallId)?.code ?? null,
               },
             }
           : {}),
@@ -941,4 +945,10 @@ function contentSignature(messages: UIMessage[]): string {
     }
   }
   return `${messages.length}|${last.id}|${last.parts?.length ?? 0}|${length}`;
+}
+
+/** The server's machine-readable reason for refusing a decision (`run_not_active`, …), if any. */
+function settleErrorCode(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code !== '' ? code : null;
 }

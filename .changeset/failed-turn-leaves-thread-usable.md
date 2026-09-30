@@ -42,7 +42,8 @@ output generated. Check the stream for errors." — every time, for the rest of 
   it surface as "No output generated".
 - **React (headless).** `chat.runError` is the failed run's `{ code, message, runId? }` until the
   next attempt starts, and the transport takes `onRunError`; `isRunNotActiveError(error)` recognises
-  the 409 on a decision. `AGENT_RUN_ERROR_CODES` lists the codes. Nothing is rendered: the app words
+  the 409 on a decision, and the transcript model carries it as `call.errorCode` /
+  `elicitation.errorCode` next to `error`. `AGENT_RUN_ERROR_CODES` lists the codes. Nothing is rendered: the app words
   each code itself.
 - **A tool is handed an idempotency key.** `ctx.idempotencyKey` is `<runId>:<toolCallId>` — the same
   for every execution of one call — and `ctx.toolCallId` names the call. A worker that dies between
