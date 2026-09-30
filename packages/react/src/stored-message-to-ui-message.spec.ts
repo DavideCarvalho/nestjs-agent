@@ -56,6 +56,24 @@ describe('storedMessageToUiMessage', () => {
     });
   });
 
+  it("replays a nested call's parentId and the host's metadata under the library's keys", () => {
+    const ui = storedMessageToUiMessage(
+      message({
+        content: 'Done',
+        toolCalls: [
+          { id: 'c1', name: 'execute', input: {}, kind: 'read' },
+          { id: 'c1.0', name: 'orders.get', input: {}, kind: 'read', parentId: 'c1' },
+        ],
+        metadata: { model: 'openai/gpt', createdAt: 'host value loses' },
+      }),
+    );
+    expect(ui.parts[2]).toMatchObject({
+      type: 'tool-orders.get',
+      toolMetadata: { toolKind: 'read', parentId: 'c1' },
+    });
+    expect(ui.metadata).toEqual({ model: 'openai/gpt', createdAt: '2026-01-01T00:00:00.000Z' });
+  });
+
   it('skips the text part when content is empty', () => {
     const ui = storedMessageToUiMessage(message({ content: '' }));
     expect(ui.parts).toEqual([]);

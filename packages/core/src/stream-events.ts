@@ -171,6 +171,14 @@ export type AgentStreamEvent =
    */
   | { kind: 'title'; title: string }
   /**
+   * Host-defined facts about the message being streamed (the model that answered, how long it took,
+   * the error it ended with), merged into the client message's `metadata`. The persisted
+   * counterpart is `StoredMessage.metadata`, so a reload reads the same values. The library's own
+   * loop never writes it; a runner that is not this library's loop uses it for what its store keeps
+   * per message.
+   */
+  | { kind: 'message-metadata'; metadata: Record<string, unknown> }
+  /**
    * Someone stopped this run. The stream's LAST frame, written by the runner that settled the
    * cancel, immediately before a normal `end()` — never a `fail()`, because a cancel is not an
    * error and a client that retries on a failed stream must not retry this.
