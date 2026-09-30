@@ -648,6 +648,11 @@ const backend: AgentBackend = {
   answering it is a new run with `resume`, which the app sends through its own backend.
 - A send without a `threadId` gets a new one (AG-UI's thread id is the consumer's), returned as
   the stream's `threadId`, so `onThreadCreated` fires as usual.
+- Activity (`ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA`) arrives as a `ui` part, component `AgUiActivity`,
+  id `activity:<messageId>`, props `{ activityType, content }`: the whole content each time (the
+  delta's JSON Patch applied), so the widget updates in place.
+- `content: (body) => parts` sends a file with the message as AG-UI content parts (`image`,
+  `document`… by inline `data`), next to the text part.
 - `reframeAgUiStream(body, { threadId })` is the re-framing alone, for a backend that fetches itself.
 
 ### Typing ahead: the message queue

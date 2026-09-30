@@ -21,6 +21,9 @@ import type { ChatStreamRequest, ChatStreamResponse } from './backend.js';
  *  - `TOOL_CALL_START` / `ARGS` / `END` → `tool-input-start` / `-delta` / `-available`;
  *    `TOOL_CALL_RESULT` → `tool-output` (or `tool-output-error` / `-denied`, from
  *    `metadata['agora.outcome']`);
+ *  - `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` → a `ui` part named `AgUiActivity`, id
+ *    `activity:<messageId>`, props `{ activityType, content }` — the whole content each time (the
+ *    delta's JSON Patch applied here), so a repeat replaces the widget in place;
  *  - `RUN_ERROR` → the stream's `event: error`; `RUN_FINISHED` → `event: done` (a cancelled
  *    outcome writes `cancelled` first; an interrupt outcome writes a `ui` part named
  *    `AgUiInterrupt` carrying the interrupts, for the app to render);
@@ -42,7 +45,25 @@ export interface AgUiChatStreamOptions {
   forwardedProps?: (body: Record<string, unknown>) => unknown;
   /** Read the refusal of a non-2xx answer. Default: the JSON body's `message`, else the status. */
   refusal?: (response: Response) => Promise<Error>;
+  /**
+   * The user message's `content` for the send. Default: the body's `message` as a string. Return
+   * a list of AG-UI content parts to send a file with it — `{ type: 'image' | 'document' | …,
+   * source: { type: 'data', value: <base64>, mimeType } }` — and the text as a `text` part.
+   */
+  content?: (body: Record<string, unknown>) => string | AgUiContentPart[];
 }
+
+/** One AG-UI content part of a user message (text, or media by inline data, url or file handle). */
+export type AgUiContentPart =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image' | 'audio' | 'video' | 'document';
+      source:
+        | { type: 'data'; value: string; mimeType: string }
+        | { type: 'url'; value: string; mimeType?: string }
+        | { type: 'file'; value: string; provider?: string; mimeType?: string };
+      metadata?: Record<string, unknown>;
+    };
 
 /** The ids of an AG-UI run this consumer invented, when the send did not name a thread. */
 function newId(): string {
@@ -84,7 +105,7 @@ export async function agUiChatStream(
     threadId,
     runId: newId(),
     protocolVersion: '1.0',
-    messages: [{ id: newId(), role: 'user', content: message }],
+    messages: [{ id: newId(), role: 'user', content: options.content?.(body) ?? message }],
     ...(forwarded !== undefined ? { forwardedProps: forwarded } : {}),
   };
   const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -184,6 +205,7 @@ export function reframeAgUiStream(
 }
 
 function createReframer(threadId: string): Reframer {
+  const activities = new Map<string, { activityType: string; content: Record<string, unknown> }>();
   let seq = 0;
   let metaSent = false;
   const tools = new Map<string, { name: string; args: string }>();
@@ -296,6 +318,35 @@ function createReframer(threadId: string): Reframer {
           else frame({ kind: 'tool-output', id, output: parseJson(content, content) });
           break;
         }
+        case 'ACTIVITY_SNAPSHOT':
+        case 'ACTIVITY_DELTA': {
+          const messageId = typeof event.messageId === 'string' ? event.messageId : '';
+          if (messageId === '') break;
+          const known = activities.get(messageId);
+          const activityType =
+            typeof event.activityType === 'string'
+              ? event.activityType
+              : (known?.activityType ?? '');
+          let content: Record<string, unknown> | undefined;
+          if (event.type === 'ACTIVITY_SNAPSHOT') {
+            // `replace: false` leaves an existing activity as it stands
+            if (known !== undefined && event.replace === false) break;
+            content = isRecord(event.content) ? event.content : {};
+          } else {
+            // a delta for an activity nothing created is skipped, never fatal
+            if (known === undefined || !Array.isArray(event.patch)) break;
+            content = applyPatch(known.content, event.patch);
+            if (content === undefined) break;
+          }
+          activities.set(messageId, { activityType, content });
+          frame({
+            kind: 'ui',
+            id: `activity:${messageId}`,
+            component: 'AgUiActivity',
+            props: { activityType, content },
+          });
+          break;
+        }
         case 'RUN_ERROR':
           state.closed = true;
           out += `event: error\ndata: ${JSON.stringify({
@@ -354,4 +405,51 @@ function contentText(content: unknown): string {
     .filter((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string')
     .map((part) => (part as { text: string }).text)
     .join('');
+}
+
+/**
+ * RFC 6902 on a copy: `add`, `replace`, `remove` (and `test`, which fails the patch). `undefined`
+ * when the patch does not apply — the activity then keeps its last good content until a snapshot.
+ */
+function applyPatch(
+  target: Record<string, unknown>,
+  patch: unknown[],
+): Record<string, unknown> | undefined {
+  const doc = structuredClone(target) as Record<string, unknown>;
+  for (const operation of patch) {
+    if (!isRecord(operation) || typeof operation.path !== 'string') return undefined;
+    const tokens = operation.path
+      .split('/')
+      .slice(1)
+      .map((token) => token.replace(/~1/g, '/').replace(/~0/g, '~'));
+    const key = tokens.pop();
+    if (key === undefined) return undefined;
+    let parent: unknown = doc;
+    for (const token of tokens) {
+      parent = Array.isArray(parent)
+        ? parent[Number(token)]
+        : isRecord(parent)
+          ? parent[token]
+          : undefined;
+      if (parent === undefined) return undefined;
+    }
+    if (Array.isArray(parent)) {
+      const index = key === '-' ? parent.length : Number(key);
+      if (!Number.isInteger(index) || index < 0 || index > parent.length) return undefined;
+      if (operation.op === 'add') parent.splice(index, 0, operation.value);
+      else if (operation.op === 'replace' && index < parent.length) parent[index] = operation.value;
+      else if (operation.op === 'remove' && index < parent.length) parent.splice(index, 1);
+      else if (operation.op === 'test') {
+        if (JSON.stringify(parent[index]) !== JSON.stringify(operation.value)) return undefined;
+      } else return undefined;
+    } else if (isRecord(parent)) {
+      if (operation.op === 'add' || (operation.op === 'replace' && key in parent)) {
+        parent[key] = operation.value;
+      } else if (operation.op === 'remove' && key in parent) delete parent[key];
+      else if (operation.op === 'test') {
+        if (JSON.stringify(parent[key]) !== JSON.stringify(operation.value)) return undefined;
+      } else return undefined;
+    } else return undefined;
+  }
+  return doc;
 }

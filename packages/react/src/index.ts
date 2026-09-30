@@ -41,6 +41,7 @@ export {
 } from './backend.js';
 export {
   type AgUiChatStreamOptions,
+  type AgUiContentPart,
   agUiChatStream,
   reframeAgUiStream,
 } from './ag-ui-backend.js';
