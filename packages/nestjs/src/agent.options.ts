@@ -11,7 +11,6 @@ import type {
   OutputProcessor,
   PromptBuilder,
   QuotaProvider,
-  QuotaStore,
   Retriever,
   RolesPolicy,
   ScopeResolver,
@@ -51,8 +50,9 @@ import type { QuotaLimits } from './ledger-quota-provider.js';
 export type AgentSurface = 'http' | 'engine' | 'both';
 
 /**
- * `AgentModuleOptions.attachments` — bounds and content-type allowlist for the optional
- * `POST /agent/attachments` upload controller (see `attachments.upload`).
+ * `AgentModuleOptions.attachments` — limits for `POST <base>/attachments`, when the bound
+ * `AGENT_ATTACHMENT_STAGING` store does not declare its own (`AgentMediaAttachmentsModule` does, and
+ * then it is the only source). Served to clients by `GET <base>/config`.
  */
 export interface AgentAttachmentsOptions {
   /** Per-file size cap. Defaults to 20 MiB. */
@@ -62,13 +62,6 @@ export interface AgentAttachmentsOptions {
    * `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`, `text/plain`, `text/csv`.
    */
   allowedContentTypes?: string[];
-  /**
-   * Mount `POST /agent/attachments`. Defaults to `false` — the controller is build-time (static)
-   * wiring, so this can't be inferred from whether `AGENT_ATTACHMENT_STAGING` ends up bound (that's
-   * a DI-time fact); set it explicitly. `true` with no `AGENT_ATTACHMENT_STAGING` provider bound
-   * fails boot loudly instead of silently mounting a controller that 501s on every request.
-   */
-  upload?: boolean;
 }
 
 /**
@@ -151,34 +144,20 @@ export interface AgentModuleOptions {
   /** Live token transport. Defaults to a single-process in-memory sink. */
   sink?: TokenStreamSink;
   /**
-   * A {@link QuotaStore} for the daily token budget. Optional — omit (and omit `quotaLimitTokens`)
-   * to disable quotas. Provide this to plug a custom budget; for the common case use the simpler
-   * `quotaLimitTokens` instead, which binds the built-in ledger-backed store.
+   * The caller's budget. `{ limits: { day?: { tokens?, usd? }, month?: { tokens?, usd? } } }` puts
+   * ceilings on the built-in ledger provider; a {@link QuotaProvider} of your own replaces it. Either
+   * way `GET <base>/quota` reports it and a send whose report comes back `blocked` is refused with
+   * `429` before the turn starts. Omit → reported (usage off the ledger), never enforced — for a
+   * public (anonymous) deployment that means unbounded model spend, so set limits there; they apply
+   * per actor, which is per browser in anonymous mode.
    */
-  quota?: QuotaStore;
+  quota?: { limits: QuotaLimits } | QuotaProvider;
   /**
    * Which models a caller may pick — `GET <base>/models`, a send's `model`, a thread's pinned model
-   * (`PATCH <base>/threads/:id { model }`). The picked id reaches the {@link ModelProvider} as
-   * `ModelTurnArgs.model`. Omit → an empty catalog, and a request naming a model is refused.
+   * (`PATCH <base>/threads/:id { model }`). Omit → the catalog the model provider carries
+   * (`aiSdkModels`), else none, and a request naming a model is refused.
    */
   models?: ModelCatalog;
-  /**
-   * The actor's budget across windows, for `GET <base>/quota` — and, once set, a gate: a send whose
-   * report comes back `blocked` is refused with `429` before the turn starts. Default: a
-   * {@link LedgerQuotaProvider} over the usage ledger (reporting only, unless `quotaLimits` is set).
-   */
-  quotaProvider?: QuotaProvider;
-  /**
-   * Ceilings for the default ledger provider's windows — `{ day?: { tokens?, usd? }, month?: {
-   * tokens?, usd? } }`. Setting it turns the send gate on. Ignored when `quotaProvider` is given.
-   */
-  quotaLimits?: QuotaLimits;
-  /**
-   * Daily per-actor token budget, enforced against the persisted usage ledger by the built-in
-   * `LedgerQuotaStore`. A convenience over wiring a {@link QuotaStore} by hand — set this and quotas
-   * turn on with no extra store. Ignored when an explicit `quota` is provided. Omit to disable.
-   */
-  quotaLimitTokens?: number;
   /** Tool authorization gate. Defaults to role-in-`defaultRoles`. */
   rolesPolicy?: RolesPolicy;
   /**
@@ -267,7 +246,7 @@ export interface AgentModuleOptions {
   /**
    * A {@link HistoryPolicy} of your own — for a window the built-in can't express (pinning the
    * thread's opening brief, keeping every message that carries a tool result, a budget that varies
-   * by actor). A convenience-vs-custom pair like `quotaLimitTokens`/`quota`: this outranks a
+   * by actor). A convenience-vs-custom pair: this outranks a
    * module-wide `history`, and `@Agent({ history })` outranks both for the agent that declares it.
    * `select` MUST be pure — see the SPI's determinism contract.
    */
@@ -338,7 +317,7 @@ export interface AgentModuleOptions {
 
   /**
    * Guard(s) applied uniformly to EVERY controller this module mounts (chat, threads, tool-call,
-   * quota, agents, and — when `attachments.upload` is set — attachments). Third-party controller
+   * quota, agents, attachments, config, …). Third-party controller
    * classes can't be annotated with `@UseGuards` by consumers, so without this option every route is
    * open beyond whatever `actorResolver` itself enforces. Guard classes are added to this module's
    * `providers` so Nest can DI-instantiate them; if a guard has its own dependencies, make sure they
@@ -346,7 +325,7 @@ export interface AgentModuleOptions {
    */
   guards?: Type<CanActivate>[];
 
-  /** Bounds/allowlist for the optional attachment-upload controller. Omit → 20 MiB, the documented default types, not mounted. */
+  /** Upload limits when the staging store declares none. Omit → 20 MiB and the default types. */
   attachments?: AgentAttachmentsOptions;
 
   /**
@@ -382,16 +361,8 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
   guards?: Type<CanActivate>[];
 
   /**
-   * Mount `POST /agent/attachments`. Static, build-time control (same reasoning as `durable`/`path`
-   * above) — `useFactory` resolves too late to decide which controllers exist. The resolved
-   * `AgentModuleOptions.attachments` (maxBytes/allowedContentTypes) still applies at request time;
-   * only the yes/no mount decision has to live here.
-   */
-  attachmentsUpload?: boolean;
-
-  /**
    * Which half of the module this process mounts (see {@link AgentSurface}). Same static-wiring
-   * reasoning as `attachmentsUpload`/`durable` above — `useFactory` resolves too late to decide
+   * reasoning as `durable` above — `useFactory` resolves too late to decide
    * which controllers exist. Omit → `'both'`, today's behavior with zero change.
    */
   surface?: AgentSurface;

@@ -1,5 +1,6 @@
 import type {
   AgentCatalogEntry,
+  AgentClientConfig,
   MessageAttachment,
   MessageFeedback,
   ModelCatalogView,
@@ -327,6 +328,11 @@ export class AgentClient implements AgentBackend {
   /** `GET <path>/agents` — the registered agents, the default one flagged. */
   listAgents(): Promise<AgentCatalogEntry[]> {
     return this.request<AgentCatalogEntry[]>('GET', '/agents');
+  }
+
+  /** `GET <path>/config` — attachment limits and upload mode, and which features are on. */
+  getConfig(): Promise<AgentClientConfig> {
+    return this.request<AgentClientConfig>('GET', '/config');
   }
 
   /** `GET <path>/quota` — the caller's budget windows and the one blocking sends, if any. */

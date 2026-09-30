@@ -2,6 +2,7 @@ import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentBackend, UploadAttachmentOptions } from '../backend.js';
 import { AgentBackendUnsupportedError } from '../backend.js';
+import { useAgentConfig } from '../config/use-agent-config.js';
 import { useAgentBackend } from '../provider.js';
 import { acceptsFile, dragHasFiles, filesFromClipboard } from './files.js';
 
@@ -37,11 +38,17 @@ export interface UseAttachmentsOptions {
   upload?: (file: File, options: UploadAttachmentOptions) => Promise<MessageAttachment>;
   /** Used for the default `upload`. Default: the enclosing `<AgentProvider>`'s. */
   backend?: AgentBackend;
-  /** `<input accept>` grammar: `'image/*,.pdf'` or `['image/*', 'application/pdf']`. */
+  /**
+   * `<input accept>` grammar: `'image/*,.pdf'` or `['image/*', 'application/pdf']`. Default: the
+   * server's allowed content types (`GET <base>/config`).
+   */
   accept?: string | readonly string[];
-  /** Per-file ceiling, in bytes. */
+  /** Per-file ceiling, in bytes. Default: the server's (`GET <base>/config`). */
   maxBytes?: number;
-  /** How many files may be staged at once (rejected ones do not count). */
+  /**
+   * How many files may be staged at once (rejected ones do not count). Default: how many one
+   * message may carry, per the server (`GET <base>/config`).
+   */
   maxFiles?: number;
   /** Words for a rejection; default English. */
   describeRejection?: (reason: AttachmentRejection, file: File) => string;
@@ -59,9 +66,7 @@ export interface AttachmentsState {
   clear: () => void;
   /** An upload is still running — hold the send button. */
   isUploading: boolean;
-  /** What to send: the ready uploads, in order. */
-  attachments: MessageAttachment[];
-  /** The same, as the `{ mediaId }` refs `POST <base>/chat` takes. */
+  /** What to send: the ready uploads, in order, as the `{ mediaId }` refs `POST <base>/chat` takes. */
   refs: Array<{ mediaId: string }>;
   /** Props for a hidden `<input type="file">`: `accept`, `multiple`, `onChange`. */
   inputProps: {
@@ -106,7 +111,7 @@ let sequence = 0;
 /**
  * Staged attachments for a composer, headless: validation (`accept`, `maxBytes`, `maxFiles`),
  * one upload per file with progress and cancel, retry, previews, and the event handlers for a file
- * input, a drop zone and paste — no markup, no styles. Send `attachments` (or `refs`) with the
+ * input, a drop zone and paste — no markup, no styles. Send `refs` with the
  * message, then `clear()`:
  *
  * ```ts
@@ -116,8 +121,21 @@ let sequence = 0;
  */
 export function useAttachments(options: UseAttachmentsOptions = {}): AttachmentsState {
   const backend = useAgentBackend(options.backend);
-  const latest = useRef({ ...options, backend });
-  latest.current = { ...options, backend };
+  // The server's limits are the defaults, so a composer never repeats (and drifts from) them.
+  const { config } = useAgentConfig({ backend });
+  const limits = config?.attachments;
+  const accept = options.accept ?? limits?.allowedContentTypes;
+  const maxBytes = options.maxBytes ?? limits?.maxBytes;
+  const maxFiles = options.maxFiles ?? limits?.maxPerMessage;
+  const effective = {
+    ...options,
+    backend,
+    ...(accept !== undefined ? { accept } : {}),
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+    ...(maxFiles !== undefined ? { maxFiles } : {}),
+  };
+  const latest = useRef(effective);
+  latest.current = effective;
   const [items, setItems] = useState<StagedAttachment[]>([]);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -292,12 +310,11 @@ export function useAttachments(options: UseAttachmentsOptions = {}): Attachments
     [add],
   );
 
-  const accept = options.accept;
   const inputProps = useMemo(
     () => ({
       type: 'file' as const,
       accept: typeof accept === 'string' ? accept : accept?.join(','),
-      multiple: options.maxFiles === undefined || options.maxFiles > 1,
+      multiple: maxFiles === undefined || maxFiles > 1,
       onChange: (event: { currentTarget: HTMLInputElement }) => {
         const input = event.currentTarget;
         add(input.files);
@@ -305,7 +322,7 @@ export function useAttachments(options: UseAttachmentsOptions = {}): Attachments
         input.value = '';
       },
     }),
-    [accept, options.maxFiles, add],
+    [accept, maxFiles, add],
   );
 
   return useMemo(() => {
@@ -313,7 +330,6 @@ export function useAttachments(options: UseAttachmentsOptions = {}): Attachments
       (item): item is StagedAttachment & { attachment: MessageAttachment } =>
         item.status === 'ready' && item.attachment !== undefined,
     );
-    const attachments = ready.map((item) => item.attachment);
     return {
       items,
       add,
@@ -321,8 +337,7 @@ export function useAttachments(options: UseAttachmentsOptions = {}): Attachments
       retry,
       clear,
       isUploading: items.some((item) => item.status === 'uploading'),
-      attachments,
-      refs: attachments.map((attachment) => ({ mediaId: attachment.mediaId })),
+      refs: ready.map((item) => ({ mediaId: item.attachment.mediaId })),
       inputProps,
       dropZoneProps,
       isDragging: dragDepth > 0,

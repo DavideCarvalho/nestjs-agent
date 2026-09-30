@@ -18,7 +18,7 @@ const MONDAY = new Date('2026-03-02T00:00:00.000Z');
 const FRIDAY = new Date('2026-03-06T00:00:00.000Z');
 
 function buildService(store: AgentStore, staging?: InMemoryAttachmentStagingStore): AgentService {
-  return new AgentService(runner, store, deps, undefined, staging);
+  return new AgentService(runner, store, deps, staging);
 }
 
 async function stage(
@@ -193,5 +193,66 @@ describe('AgentService — what is safe to collect', () => {
         olderThan: FRIDAY,
       }),
     ).rejects.toBeInstanceOf(NotImplementedException);
+  });
+});
+
+describe('a replayed thread’s attachment urls', () => {
+  it('are re-minted by mediaId on every read, so an old turn never shows an expired link', async () => {
+    const store = new InMemoryAgentStore();
+    let minted = 0;
+    const staging = {
+      stage: vi.fn(),
+      resolve: vi.fn(async ({ mediaId }: { mediaId: string }) => {
+        minted += 1;
+        return {
+          mediaId,
+          url: `https://cdn.test/${mediaId}?sig=${minted}`,
+          contentType: 'image/png',
+          name: 'a.png',
+        };
+      }),
+    };
+    const service = new AgentService(runner, store, deps, staging as never);
+    const thread = await store.createThread({ actor: ACTOR });
+    await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'look',
+      attachments: [
+        {
+          mediaId: 'm1',
+          url: 'https://cdn.test/m1?sig=expired',
+          contentType: 'image/png',
+          name: 'a.png',
+        },
+      ],
+    });
+
+    const first = await service.getThread(ACTOR, thread.id);
+    const second = await service.getThread(ACTOR, thread.id);
+    expect(first?.messages[0]?.attachments?.[0]?.url).toBe('https://cdn.test/m1?sig=1');
+    expect(second?.messages[0]?.attachments?.[0]?.url).toBe('https://cdn.test/m1?sig=2');
+    expect(staging.resolve).toHaveBeenCalledWith({ mediaId: 'm1', actor: ACTOR });
+  });
+
+  it('keep the stored url when the store will not resolve it', async () => {
+    const store = new InMemoryAgentStore();
+    const staging = { stage: vi.fn(), resolve: vi.fn(async () => null) };
+    const service = new AgentService(runner, store, deps, staging as never);
+    const thread = await store.createThread({ actor: ACTOR });
+    const stored = {
+      mediaId: 'm1',
+      url: 'https://cdn.test/old',
+      contentType: 'image/png',
+      name: 'a.png',
+    };
+    await store.appendMessage({
+      threadId: thread.id,
+      role: 'user',
+      content: 'x',
+      attachments: [stored],
+    });
+    const detail = await service.getThread(ACTOR, thread.id);
+    expect(detail?.messages[0]?.attachments?.[0]).toEqual(stored);
   });
 });

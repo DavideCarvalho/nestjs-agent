@@ -729,6 +729,11 @@ const { files } = chat.composer;
 <button disabled={!chat.composer.canSend} onClick={() => chat.composer.submit()} />
 ```
 
+`accept`, `maxBytes` and `maxFiles` default to the server's own limits (`GET <base>/config`, read
+once per backend by `useAgentConfig()`), so the composer never repeats them; pass them only to
+narrow further. What a send carries is `files.refs` — `{ mediaId }` only, the one shape the server
+accepts (each item's full `attachment` is there for display).
+
 An item is `uploading`, `ready`, `error` (retry with `files.retry(id)`) or `rejected` (failed
 `accept`/`maxBytes`/`maxFiles` and never uploaded; `error` says why). `remove` cancels an upload in
 flight. `messageFiles(message)` reads the files back off any message — live or replayed — with a

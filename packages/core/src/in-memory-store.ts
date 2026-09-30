@@ -204,7 +204,8 @@ export class InMemoryAgentStore implements AgentStore {
     return {
       ...this.toSummary(row),
       messages: row.messages.map((message) => this.withApprovals(message)),
-      ...(row.activeStreamId !== undefined ? { activeStreamId: row.activeStreamId } : {}),
+      // The run streaming right now — the one field the read-model reports it under.
+      ...(row.activeStreamId !== undefined ? { activeRunId: row.activeStreamId } : {}),
     };
   }
 

@@ -42,7 +42,12 @@ const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string; ' +
   'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null }';
-const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; activeStreamId?: string }`;
+const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[] }`;
+/** `GET /agent/config` — mirrors `AgentClientConfig` in nestjs/src/controller/config.controller.ts. */
+const CLIENT_CONFIG =
+  "{ attachments: { enabled: boolean; upload: 'multipart' | 'resumable' | null; maxBytes: number; " +
+  'allowedContentTypes: string[]; maxPerMessage: number }; models: { enabled: boolean }; ' +
+  'quota: { enforced: boolean }; identity: { anonymous: boolean } }';
 /** `GET /agent/quota` — mirrors `QuotaReport` in core/src/spi/quota-provider.ts. */
 const QUOTA_REPORT =
   "{ windows: { period: 'day' | 'month'; usedTokens: number; limitTokens?: number; usedUsd: number; " +
@@ -238,11 +243,10 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       body: null,
       response: QUOTA_REPORT,
     }),
-    route('GET', `${root}/quota/today`, `${ns}.quota`, {
+    route('GET', `${root}/config`, `${ns}.config`, {
       query: null,
       body: null,
-      response:
-        '{ usedTokens: number; limitTokens: number | null; withinLimit: boolean; costUsd: number }',
+      response: CLIENT_CONFIG,
     }),
     route(
       'POST',

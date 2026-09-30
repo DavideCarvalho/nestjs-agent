@@ -9,7 +9,6 @@ import {
   AGENT_OPTIONS,
   AGENT_PROMPT_CONTRIBUTORS,
   AGENT_QUOTA_PROVIDER,
-  AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
   AGENT_RUNNER,
@@ -25,7 +24,7 @@ import {
   InMemoryAgentStore,
   type ModelCatalog,
   type ModelProvider,
-  type QuotaStore,
+  type QuotaProvider,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -45,6 +44,7 @@ import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
 import { AttachmentsController } from './controller/attachments.controller.js';
 import { ChatController } from './controller/chat.controller.js';
+import { ConfigController } from './controller/config.controller.js';
 import { MemoriesController } from './controller/memories.controller.js';
 import { MessagesController } from './controller/messages.controller.js';
 import { ModelsController } from './controller/models.controller.js';
@@ -58,7 +58,6 @@ import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
-import { LedgerQuotaStore } from './ledger-quota-store.js';
 import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
@@ -118,6 +117,10 @@ function resolveStore(options: AgentModuleOptions, modules: ModulesContainer): A
       'import a store module (e.g. MikroOrmAgentStoreModule.forFeature()).',
   );
   return new InMemoryAgentStore();
+}
+
+function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProvider {
+  return quota !== undefined && typeof (quota as QuotaProvider).report === 'function';
 }
 
 /** The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`). */
@@ -188,22 +191,12 @@ function sharedProviders(durable: boolean): Provider[] {
       inject: [AGENT_OPTIONS],
     },
     {
-      // An explicit `quota` wins; otherwise `quotaLimitTokens` binds the built-in ledger-backed
-      // store; otherwise quotas are off (undefined). The ledger store reads the same usage rows
-      // the loop already writes, so enforcement needs no extra shared state across replicas.
-      provide: AGENT_QUOTA_STORE,
-      useFactory: (o: AgentModuleOptions, store: AgentStore) =>
-        o.quota ??
-        (o.quotaLimitTokens !== undefined
-          ? new LedgerQuotaStore(store, o.quotaLimitTokens)
-          : undefined),
-      inject: [AGENT_OPTIONS, AGENT_STORE],
-    },
-    {
+      // `quota` is either a provider of the host's own or ceilings for the built-in ledger one;
+      // omitted, the ledger provider still reports usage, with no ceiling to block on.
       provide: AGENT_QUOTA_PROVIDER,
-      useFactory: (o: AgentModuleOptions, store: AgentStore, quota: QuotaStore | undefined) =>
-        o.quotaProvider ?? new LedgerQuotaProvider(store, quota, o.quotaLimits),
-      inject: [AGENT_OPTIONS, AGENT_STORE, AGENT_QUOTA_STORE],
+      useFactory: (o: AgentModuleOptions, store: AgentStore) =>
+        isQuotaProvider(o.quota) ? o.quota : new LedgerQuotaProvider(store, o.quota?.limits),
+      inject: [AGENT_OPTIONS, AGENT_STORE],
     },
     {
       provide: AGENT_MODEL_CATALOG,
@@ -262,7 +255,6 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
     AGENT_ACTOR_RESOLVER,
     AGENT_MODEL,
     AGENT_STORE,
-    AGENT_QUOTA_STORE,
     AGENT_MODEL_CATALOG,
     AGENT_QUOTA_PROVIDER,
     AGENT_PROMPT_CONTRIBUTORS,
@@ -287,26 +279,16 @@ const BASE_CONTROLLERS = [
   ToolsController,
   MessagesController,
   ModelsController,
+  ConfigController,
+  AttachmentsController,
 ];
 
-/** Every controller class `guards` may ever target — stamped uniformly regardless of which of them are actually mounted this build (harmless: metadata on an unregistered class is simply unused). */
-const GUARDABLE_CONTROLLERS = [...BASE_CONTROLLERS, AttachmentsController];
+/** Every controller class `guards` targets. */
+const GUARDABLE_CONTROLLERS = BASE_CONTROLLERS;
 
-/** The controllers to mount: the base six, plus attachments when the host opted into uploads. */
-function controllersFor(mountAttachments: boolean): Type<object>[] {
-  return mountAttachments ? [...BASE_CONTROLLERS, AttachmentsController] : BASE_CONTROLLERS;
-}
-
-/**
- * `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic, so its
- * routes (and whatever guards they'd carry) have no business existing there. `'http'`/`'both'`
- * (and the omitted default) mount the same set `controllersFor` always has.
- */
-function controllersForSurface(
-  surface: AgentSurface | undefined,
-  mountAttachments: boolean,
-): Type<object>[] {
-  return surface === 'engine' ? [] : controllersFor(mountAttachments);
+/** `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic. */
+function controllersForSurface(surface: AgentSurface | undefined): Type<object>[] {
+  return surface === 'engine' ? [] : BASE_CONTROLLERS;
 }
 
 /**
@@ -358,7 +340,7 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersForSurface(options.surface, options.attachments?.upload === true),
+      controllers: controllersForSurface(options.surface),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false),
@@ -375,7 +357,7 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersForSurface(options.surface, options.attachmentsUpload === true),
+      controllers: controllersForSurface(options.surface),
       providers: [
         {
           provide: AGENT_OPTIONS,

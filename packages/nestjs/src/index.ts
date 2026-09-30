@@ -17,9 +17,15 @@ export {
 export {
   AttachmentsController,
   ATTACHMENT_PAGE_SIZE,
-  DEFAULT_MAX_ATTACHMENT_BYTES,
-  DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES,
 } from './controller/attachments.controller.js';
+export {
+  type AttachmentLimits,
+  attachmentLimits,
+  DEFAULT_ALLOWED_ATTACHMENT_CONTENT_TYPES,
+  DEFAULT_MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from './attachment-limits.js';
+export { ConfigController } from './controller/config.controller.js';
 export {
   AiTool,
   type AiToolOptions,
@@ -73,7 +79,6 @@ export {
   type QuotaLimits,
   type QuotaWindowLimits,
 } from './ledger-quota-provider.js';
-export { LedgerQuotaStore } from './ledger-quota-store.js';
 export { type AgentDeps, utcDay } from './agent-deps.js';
 export { AgentDepsFactory, delegateToolName } from './agent-deps.factory.js';
 export { HeaderActorResolver } from './resolver/header-actor-resolver.js';

@@ -71,7 +71,7 @@ export interface AgentChatTransportOptions {
    * The run id to resume on mount, if any. Returning `undefined` makes
    * `reconnectToStream` resolve to `null` WITHOUT hitting the network —
    * this is the generalized fix for "useChat fires a doomed GET on mount
-   * and surfaces its 404". Wire this to the thread's `activeStreamId`.
+   * and surfaces its 404". Wire this to the thread's `activeRunId`.
    */
   getResumeRunId?: () => string | undefined;
   /** Fires whenever a stream emits its `meta` frame. */
@@ -453,7 +453,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
               // it entirely — `undefined`, never a crash). `null` means "priced provider/estimate
               // unavailable", distinct from a real $0 turn — surfaced verbatim as message metadata
               // (merged onto `message.metadata` by the AI SDK) so a UI can render running cost
-              // without polling `GET /quota/today`.
+              // without polling `GET /quota`.
               if (event.costUsd !== undefined) {
                 controller.enqueue({
                   type: 'message-metadata',

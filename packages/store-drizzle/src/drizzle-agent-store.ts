@@ -104,7 +104,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader {
         const onMessage = approvals.get(message.id);
         return onMessage !== undefined ? { ...stored, approvals: onMessage } : stored;
       }),
-      ...(thread.activeStreamId != null ? { activeStreamId: thread.activeStreamId } : {}),
+      ...(thread.activeStreamId != null ? { activeRunId: thread.activeStreamId } : {}),
     };
   }
 

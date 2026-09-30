@@ -23,7 +23,7 @@ function serviceWith(store: InMemoryAgentStore): { service: AgentService; sent: 
     },
     cancel: async () => {},
   };
-  const service = new AgentService(runner, store, {} as unknown as AgentDepsFactory, undefined);
+  const service = new AgentService(runner, store, {} as unknown as AgentDepsFactory);
   return { service, sent };
 }
 

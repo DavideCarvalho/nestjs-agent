@@ -76,7 +76,6 @@ async function boot(
         store: new InMemoryAgentStore(),
         actorResolver: new HeaderActorResolver(),
         defaultAgent: 'default',
-        attachments: { upload: true },
         ...options,
       }),
     ],
@@ -117,10 +116,7 @@ describe('AttachmentsController', () => {
 
   it('rejects a disallowed content type with 415', async () => {
     const staging = new FakeStagingStore();
-    const testApp = await boot(
-      { attachments: { upload: true, allowedContentTypes: ['image/png'] } },
-      staging,
-    );
+    const testApp = await boot({ attachments: { allowedContentTypes: ['image/png'] } }, staging);
 
     const res = await request(testApp.getHttpServer())
       .post('/agent/attachments')
@@ -133,7 +129,7 @@ describe('AttachmentsController', () => {
 
   it('rejects a file over the configured size cap with 413', async () => {
     const staging = new FakeStagingStore();
-    const testApp = await boot({ attachments: { upload: true, maxBytes: 4 } }, staging);
+    const testApp = await boot({ attachments: { maxBytes: 4 } }, staging);
 
     const res = await request(testApp.getHttpServer())
       .post('/agent/attachments')
@@ -151,10 +147,7 @@ describe('AttachmentsController', () => {
     const staging = new FakeStagingStore();
     // A cap far above the ceiling: without a multer limit the whole body lands in memory first and
     // this request succeeds, which is the OOM an authenticated caller could ask for at will.
-    const testApp = await boot(
-      { attachments: { upload: true, maxBytes: 512 * 1024 * 1024 } },
-      staging,
-    );
+    const testApp = await boot({ attachments: { maxBytes: 512 * 1024 * 1024 } }, staging);
 
     const res = await request(testApp.getHttpServer())
       .post('/agent/attachments')
@@ -180,99 +173,36 @@ describe('AttachmentsController', () => {
     expect(res.status).toBe(400);
   });
 
-  it('fails boot loudly when attachments.upload is true but no staging store is bound', async () => {
-    await expect(boot()).rejects.toThrow(/AGENT_ATTACHMENT_STAGING/);
-  });
-
-  it('does not mount the controller at all when attachments.upload is left false', async () => {
-    const testApp = await boot({ attachments: { upload: false } });
+  it('answers 501 with no staging store bound — the route exists, uploads are just off', async () => {
+    const testApp = await boot();
     const res = await request(testApp.getHttpServer())
       .post('/agent/attachments')
       .set('x-actor-id', 'u1')
       .attach('file', Buffer.from('hello'), { filename: 'a.txt', contentType: 'text/plain' });
-    expect(res.status).toBe(404);
-
-    const listed = await request(testApp.getHttpServer())
-      .get('/agent/attachments')
-      .set('x-actor-id', 'u1');
-    expect(listed.status).toBe(404);
-  });
-});
-
-async function stageFor(
-  staging: InMemoryAttachmentStagingStore,
-  actorId: string,
-  filename: string,
-): Promise<void> {
-  await staging.stage({
-    data: Buffer.from('bytes'),
-    filename,
-    contentType: 'image/png',
-    sizeBytes: 5,
-    actor: { id: actorId },
-  });
-}
-
-describe('AttachmentsController — listing what an actor has staged', () => {
-  it('returns the caller’s own inventory', async () => {
-    const staging = new InMemoryAttachmentStagingStore();
-    await stageFor(staging, 'u1', 'mine.png');
-    const testApp = await boot({}, staging);
-
-    const res = await request(testApp.getHttpServer())
-      .get('/agent/attachments')
-      .set('x-actor-id', 'u1');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([
-      expect.objectContaining({ name: 'mine.png', contentType: 'image/png', sizeBytes: 5 }),
-    ]);
-  });
-
-  it('never shows one actor another’s files', async () => {
-    const staging = new InMemoryAttachmentStagingStore();
-    await stageFor(staging, 'u1', 'mine.png');
-    const testApp = await boot({}, staging);
-
-    const res = await request(testApp.getHttpServer())
-      .get('/agent/attachments')
-      .set('x-actor-id', 'u2');
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
-  });
-
-  it('carries no url — a file list must not mint one fetchable link per row', async () => {
-    const staging = new InMemoryAttachmentStagingStore();
-    await stageFor(staging, 'u1', 'mine.png');
-    const testApp = await boot({}, staging);
-
-    const res = await request(testApp.getHttpServer())
-      .get('/agent/attachments')
-      .set('x-actor-id', 'u1');
-
-    expect(res.body[0]).not.toHaveProperty('url');
-  });
-
-  it('bounds the page rather than serving an unbounded inventory', async () => {
-    const staging = new InMemoryAttachmentStagingStore();
-    await stageFor(staging, 'u1', 'mine.png');
-    const list = vi.spyOn(staging, 'list');
-    const testApp = await boot({}, staging);
-
-    await request(testApp.getHttpServer()).get('/agent/attachments').set('x-actor-id', 'u1');
-
-    expect(list.mock.calls[0]?.[0]?.limit).toBe(ATTACHMENT_PAGE_SIZE);
-  });
-
-  it('answers 501 when the bound staging store keeps no inventory', async () => {
-    const staging = new FakeStagingStore();
-    const testApp = await boot({}, staging);
-
-    const res = await request(testApp.getHttpServer())
-      .get('/agent/attachments')
-      .set('x-actor-id', 'u1');
-
     expect(res.status).toBe(501);
+  });
+
+  it('takes the staging store’s own declared limits over the module option', async () => {
+    const staging = new FakeStagingStore();
+    Object.assign(staging, {
+      describe: () => ({ maxBytes: 3, allowedContentTypes: ['text/plain'], upload: 'multipart' }),
+    });
+    const testApp = await boot({ attachments: { maxBytes: 1_000_000 } }, staging);
+    const res = await request(testApp.getHttpServer())
+      .post('/agent/attachments')
+      .set('x-actor-id', 'u1')
+      .attach('file', Buffer.from('hello'), { filename: 'a.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(413);
+
+    const config = await request(testApp.getHttpServer())
+      .get('/agent/config')
+      .set('x-actor-id', 'u1');
+    expect(config.body.attachments).toEqual({
+      enabled: true,
+      upload: 'multipart',
+      maxBytes: 3,
+      allowedContentTypes: ['text/plain'],
+      maxPerMessage: 10,
+    });
   });
 });

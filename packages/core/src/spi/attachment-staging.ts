@@ -106,4 +106,22 @@ export interface AttachmentStagingStore {
    * an empty inventory and an unanswerable one look identical and mean opposite things.
    */
   list?(input: ListStagedAttachmentsInput): Promise<StagedAttachment[]>;
+  /**
+   * The limits this store enforces and how a client should upload to it — what `GET <base>/config`
+   * serves, and what `POST <base>/attachments` validates against. A store that declares them is the
+   * single source of attachment limits (`AgentModule`'s own `attachments` option is ignored).
+   * Absent → the module's `attachments` option, else the defaults.
+   */
+  describe?(): AttachmentStagingDescription;
+}
+
+/** What {@link AttachmentStagingStore.describe} declares. */
+export interface AttachmentStagingDescription {
+  maxBytes?: number;
+  allowedContentTypes?: readonly string[];
+  /**
+   * How a client uploads: `'multipart'` — one `POST <base>/attachments`; `'resumable'` — the
+   * chunked `<base>/attachments/uploads` routes (`AgentMediaAttachmentsModule`). Default multipart.
+   */
+  upload?: 'multipart' | 'resumable';
 }

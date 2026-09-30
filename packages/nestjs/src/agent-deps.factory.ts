@@ -3,7 +3,6 @@ import {
   AGENT_MODEL,
   AGENT_PRICING_STORE,
   AGENT_PROMPT_CONTRIBUTORS,
-  AGENT_QUOTA_STORE,
   AGENT_REGISTRY,
   AGENT_ROLES_POLICY,
   AGENT_SINK,
@@ -19,7 +18,6 @@ import {
   type MemoryConfig,
   type ModelProvider,
   type PromptContributor,
-  type QuotaStore,
   type RolesPolicy,
   type SkillsConfig,
   type TokenStreamSink,
@@ -58,10 +56,8 @@ export class AgentDepsFactory {
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
     @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
     @Inject(AGENT_PROMPT_CONTRIBUTORS) private readonly promptContributors: PromptContributor[],
-    @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
-    // Optional: AGENT_PRICING_STORE has no local provider in this module (unlike AGENT_QUOTA_STORE,
-    // which is always a registered factory) — it's bound externally (e.g. by a store module), so a
-    // plain @Inject would throw when nothing binds it.
+    // Optional: AGENT_PRICING_STORE has no local provider in this module — it's bound externally
+    // (e.g. by a store module), so a plain @Inject would throw when nothing binds it.
     @Optional()
     @Inject(AGENT_PRICING_STORE)
     private readonly pricingStore: AgentPricingStore | undefined,
@@ -141,7 +137,6 @@ export class AgentDepsFactory {
         ? { maxAgentAppearances: definition.maxAgentAppearances }
         : {}),
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
-      ...(this.quota !== undefined ? { quota: this.quota } : {}),
       ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),
       ...(historyPolicy !== undefined ? { historyPolicy } : {}),
       inputProcessors: this.options.inputProcessors ?? [],

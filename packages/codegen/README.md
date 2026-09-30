@@ -30,7 +30,7 @@ export default defineConfig({
 ```
 
 Generates `api.agent.threads.list()`, `api.agent.threads.fork()`, `api.agent.toolCall.approve()`,
-`api.agent.quota()`, etc. Options: `basePath` (controller mount prefix) and `name` (client namespace,
+`api.agent.quota.report()`, `api.agent.config()`, etc. Options: `basePath` (controller mount prefix) and `name` (client namespace,
 default `agent`).
 
 ## License

@@ -753,7 +753,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         ? 'uploading'
         : isBusy
           ? 'busy'
-          : text.trim().length === 0 && files.attachments.length === 0
+          : text.trim().length === 0 && files.refs.length === 0
             ? 'empty'
             : null;
   const composerRef = useRef({ text, files, blockedBy });

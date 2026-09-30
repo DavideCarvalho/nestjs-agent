@@ -37,6 +37,11 @@ export {
   type UploadAttachmentOptions,
 } from './backend.js';
 export { AgentProvider, type AgentProviderProps, useAgentBackend } from './provider.js';
+export {
+  type AgentConfigState,
+  useAgentConfig,
+  type UseAgentConfigOptions,
+} from './config/use-agent-config.js';
 export { type AgentsState, useAgents, type UseAgentsOptions } from './catalog/use-agents.js';
 export {
   type ModelOption,

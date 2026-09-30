@@ -86,7 +86,9 @@ describe('useAttachments', () => {
 
     expect(result.current.isUploading).toBe(false);
     expect(result.current.refs).toEqual([{ mediaId: 'media-a.png' }, { mediaId: 'media-b.pdf' }]);
-    expect(result.current.attachments.map((a) => a.name)).toEqual(['a.png', 'b.pdf']);
+    expect(
+      result.current.items.flatMap((item) => (item.attachment ? [item.attachment.name] : [])),
+    ).toEqual(['a.png', 'b.pdf']);
   });
 
   it('cancels an upload on remove, and never lets it land afterwards', async () => {
@@ -362,5 +364,62 @@ describe('AgentClient attachments strategy', () => {
       },
     ]);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('useAttachments — defaults from GET <base>/config', () => {
+  it('takes accept, maxBytes and maxFiles from the server when not given', async () => {
+    const backend = {
+      getConfig: vi.fn(async () => ({
+        attachments: {
+          enabled: true,
+          upload: 'multipart' as const,
+          maxBytes: 4,
+          allowedContentTypes: ['image/png'],
+          maxPerMessage: 1,
+        },
+        models: { enabled: false },
+        quota: { enforced: false },
+        identity: { anonymous: true },
+      })),
+      uploadAttachment: vi.fn(() => new Promise<never>(() => {})),
+    } as unknown as AgentBackend;
+    const { result } = renderHook(() => useAttachments({ backend }));
+    await waitFor(() => expect(result.current.inputProps.accept).toBe('image/png'));
+    expect(result.current.inputProps.multiple).toBe(false);
+    act(() =>
+      result.current.add([
+        file('a.pdf', 'application/pdf'),
+        new File(['too big'], 'b.png', { type: 'image/png' }),
+        new File(['ok'], 'c.png', { type: 'image/png' }),
+        new File(['ok'], 'd.png', { type: 'image/png' }),
+      ]),
+    );
+    expect(result.current.items.map((item) => item.status)).toEqual([
+      'rejected',
+      'rejected',
+      'uploading',
+      'rejected',
+    ]);
+  });
+
+  it('keeps an explicit option over the server default', async () => {
+    const backend = {
+      getConfig: vi.fn(async () => ({
+        attachments: {
+          enabled: true,
+          upload: 'multipart' as const,
+          maxBytes: 4,
+          allowedContentTypes: ['image/png'],
+          maxPerMessage: 1,
+        },
+        models: { enabled: false },
+        quota: { enforced: false },
+        identity: { anonymous: false },
+      })),
+    } as unknown as AgentBackend;
+    const { result } = renderHook(() => useAttachments({ backend, accept: 'application/pdf' }));
+    await waitFor(() => expect(backend.getConfig).toHaveBeenCalled());
+    expect(result.current.inputProps.accept).toBe('application/pdf');
   });
 });
