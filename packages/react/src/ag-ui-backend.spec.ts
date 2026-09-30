@@ -258,3 +258,83 @@ describe('agUiChatStream', () => {
     expect(input.threadId).toBe('t9');
   });
 });
+
+describe('activity and content parts', () => {
+  it('turns activity snapshots and deltas into one ui part updated in place', async () => {
+    const out = frames(
+      await read(
+        reframeAgUiStream(
+          agUiBody([
+            { type: 'RUN_STARTED', threadId: 't1', runId: 'r1' },
+            {
+              type: 'ACTIVITY_SNAPSHOT',
+              messageId: 'a1',
+              activityType: 'reading',
+              content: { step: 'Lendo', done: 0, total: 3 },
+            },
+            {
+              type: 'ACTIVITY_DELTA',
+              messageId: 'a1',
+              activityType: 'reading',
+              patch: [
+                { op: 'replace', path: '/done', value: 2 },
+                { op: 'add', path: '/note', value: 'quase' },
+              ],
+            },
+            // a delta for an activity nothing created is skipped
+            { type: 'ACTIVITY_DELTA', messageId: 'nope', activityType: 'x', patch: [] },
+            // a patch that does not apply keeps the last good content
+            {
+              type: 'ACTIVITY_DELTA',
+              messageId: 'a1',
+              activityType: 'reading',
+              patch: [{ op: 'replace', path: '/missing/deep', value: 1 }],
+            },
+            { type: 'RUN_FINISHED', threadId: 't1', runId: 'r1' },
+          ]),
+          { threadId: 't1' },
+        ),
+      ),
+    );
+    const parts = out.map((frame) => frame.data).filter((data) => data?.kind === 'ui');
+    expect(parts).toEqual([
+      {
+        kind: 'ui',
+        id: 'activity:a1',
+        component: 'AgUiActivity',
+        props: { activityType: 'reading', content: { step: 'Lendo', done: 0, total: 3 } },
+      },
+      {
+        kind: 'ui',
+        id: 'activity:a1',
+        component: 'AgUiActivity',
+        props: {
+          activityType: 'reading',
+          content: { step: 'Lendo', done: 2, total: 3, note: 'quase' },
+        },
+      },
+    ]);
+  });
+
+  it('sends the content parts the app builds for the send', async () => {
+    const fetch = vi.fn(async () => new Response(agUiBody(run), { status: 200 }));
+    await agUiChatStream(
+      { body: { message: 'O que é isto?' } },
+      {
+        url: '/x',
+        fetch: fetch as unknown as typeof globalThis.fetch,
+        content: (body) => [
+          { type: 'text', text: String(body.message) },
+          { type: 'image', source: { type: 'data', value: 'aGk=', mimeType: 'image/png' } },
+        ],
+      },
+    );
+    const input = JSON.parse(
+      String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body),
+    );
+    expect(input.messages[0].content).toEqual([
+      { type: 'text', text: 'O que é isto?' },
+      { type: 'image', source: { type: 'data', value: 'aGk=', mimeType: 'image/png' } },
+    ]);
+  });
+});
