@@ -60,4 +60,4 @@ the same code is production-ready.
 - `POST /agent/chat` — start a turn, stream SSE
 - `GET /agent/threads/:id` — read the thread (used to find the pending tool call)
 - `POST /agent/tool-call/approve` — deliver the HITL approval signal
-- `GET /agent/quota/today`, `GET /agent/threads`
+- `GET /agent/quota`, `GET /agent/threads`, `GET /agent/config`

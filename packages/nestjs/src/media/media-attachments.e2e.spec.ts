@@ -27,7 +27,7 @@ afterEach(async () => {
   app = undefined;
 });
 
-async function boot(options: { attachmentsUpload?: boolean } = {}) {
+async function boot() {
   const modelCalls: ModelMessage[][] = [];
   const mediaStore = new InMemoryMediaStore();
   const moduleRef = await Test.createTestingModule({
@@ -47,7 +47,6 @@ async function boot(options: { attachmentsUpload?: boolean } = {}) {
         store: new InMemoryAgentStore(),
         actorResolver: new HeaderActorResolver(),
         defaultAgent: 'default',
-        ...(options.attachmentsUpload ? { attachments: { upload: true } } : {}),
       }),
       AgentMediaAttachmentsModule.forRoot(),
     ],
@@ -156,7 +155,7 @@ describe('AgentMediaAttachmentsModule (e2e)', () => {
   });
 
   it('backs the plain POST /agent/attachments route and its listing too', async () => {
-    const built = await boot({ attachmentsUpload: true });
+    const built = await boot();
     const server = built.app.getHttpServer();
     const posted = await request(server)
       .post('/agent/attachments')
@@ -171,6 +170,18 @@ describe('AgentMediaAttachmentsModule (e2e)', () => {
 });
 
 describe('AgentMediaAttachmentsModule defaults', () => {
+  it('is the single source of limits, served by GET /agent/config with the resumable mode', async () => {
+    const built = await boot();
+    const res = await request(built.app.getHttpServer())
+      .get('/agent/config')
+      .set('x-actor-id', 'alice');
+    expect(res.body.attachments).toMatchObject({
+      enabled: true,
+      upload: 'resumable',
+      maxBytes: 20 * 1024 * 1024,
+    });
+  });
+
   it('boots with forRoot() and no options at all', async () => {
     const built = await boot();
     const res = await request(built.app.getHttpServer())

@@ -16,7 +16,7 @@ describe('nestjsAgentCodegen', () => {
     expect(names).toContain('agent.threads.fork');
     expect(names).toContain('agent.toolCall.approve');
     expect(names).toContain('agent.toolCall.reject');
-    expect(names).toContain('agent.quota');
+    expect(names).toContain('agent.config');
     expect(names).toContain('agent.chat.cancel');
     expect(names).toContain('agent.toolCall.answer');
     expect(names).toContain('agent.toolCall.skip');

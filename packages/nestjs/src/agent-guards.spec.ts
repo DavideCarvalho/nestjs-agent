@@ -147,7 +147,7 @@ describe('guards option — forRoot', () => {
         '/agent/tool-call/approve',
         { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } },
       ],
-      ['/agent/quota/today'],
+      ['/agent/quota'],
       ['/agent/agents'],
     ];
     for (const [path, init] of routes) {

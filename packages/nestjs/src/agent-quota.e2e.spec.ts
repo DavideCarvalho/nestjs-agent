@@ -72,22 +72,22 @@ describe('GET /agent/quota', () => {
     expect(typeof day.resetsAt).toBe('string');
   });
 
-  it("carries the daily token quota as the day window's ceiling", async () => {
-    const { server } = await boot({ quotaLimitTokens: 5000 });
+  it('carries configured ceilings on the windows', async () => {
+    const { server } = await boot({ quota: { limits: { day: { tokens: 5000 } } } });
     const res = await quota(server);
     expect(res.body.windows[0]).toMatchObject({ period: 'day', limitTokens: 5000 });
   });
 
-  it('keeps GET /agent/quota/today as it was', async () => {
-    const { server } = await boot({ quotaLimitTokens: 5000 });
+  it('no longer serves GET /agent/quota/today', async () => {
+    const { server } = await boot();
     const res = await request(server).get('/agent/quota/today').set('x-actor-id', 'u1');
-    expect(res.body).toEqual({ usedTokens: 0, costUsd: 0, limitTokens: 5000, withinLimit: true });
+    expect(res.status).toBe(404);
   });
 });
 
 describe('the send gate', () => {
   it('refuses a send once a configured window is exhausted, naming the window', async () => {
-    const { server, turns } = await boot({ quotaLimits: { month: { tokens: 1 } } });
+    const { server, turns } = await boot({ quota: { limits: { month: { tokens: 1 } } } });
     expect((await chat(server)).status).toBe(201);
 
     const report = await quota(server);
@@ -106,7 +106,7 @@ describe('the send gate', () => {
       blocked: { period: 'month', reason: 'Monthly AI budget reached' },
     };
     const provider: QuotaProvider = { report: async () => blocked };
-    const { server, turns } = await boot({ quotaProvider: provider });
+    const { server, turns } = await boot({ quota: provider });
 
     expect((await quota(server)).body).toEqual(blocked);
     const refused = await chat(server);
@@ -134,7 +134,7 @@ describe('LedgerQuotaProvider', () => {
       usage: { inputTokens: 1, outputTokens: 1 },
       costUsd: 0.5,
     });
-    const report = await new LedgerQuotaProvider(store, undefined, { day: { usd: 0.25 } }).report({
+    const report = await new LedgerQuotaProvider(store, { day: { usd: 0.25 } }).report({
       actor: { id: 'u1' },
     });
     expect(report.blocked?.period).toBe('day');

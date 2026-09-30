@@ -4,7 +4,6 @@ import {
   type QuotaProvider,
   type QuotaQuery,
   type QuotaReport,
-  type QuotaStore,
   type QuotaWindow,
   exhaustedWindow,
   quotaPeriodRange,
@@ -16,7 +15,7 @@ export interface QuotaWindowLimits {
   usd?: number;
 }
 
-/** Per-window ceilings: `AgentModule.forRoot({ quotaLimits })`. */
+/** Per-window ceilings: `AgentModule.forRoot({ quota: { limits } })`. */
 export interface QuotaLimits {
   day?: QuotaWindowLimits;
   month?: QuotaWindowLimits;
@@ -25,8 +24,7 @@ export interface QuotaLimits {
 /**
  * The default {@link QuotaProvider}: windows read off the usage ledger the loop already writes.
  *
- * - `day` — always; `usedTokens`/limit come from the bound {@link QuotaStore} when there is one (so
- *   the report matches what the loop enforces), spend from the ledger.
+ * - `day` — always.
  * - `month` — when the store implements `usageBetween`.
  *
  * `limits` add ceilings per window (tokens and/or USD). A window that reaches one makes the report
@@ -35,7 +33,6 @@ export interface QuotaLimits {
 export class LedgerQuotaProvider implements QuotaProvider {
   constructor(
     private readonly store: AgentStore,
-    private readonly quota?: QuotaStore,
     private readonly limits: QuotaLimits = {},
   ) {}
 
@@ -55,16 +52,7 @@ export class LedgerQuotaProvider implements QuotaProvider {
   private async dayWindow(actorRef: string, now: Date): Promise<QuotaWindow> {
     const range = quotaPeriodRange('day', now);
     const { usedTokens, costUsd } = await this.store.quotaToday(actorRef, range.fromDay);
-    if (this.quota === undefined) {
-      return this.window('day', usedTokens, costUsd, range.resetsAt);
-    }
-    const state = await this.quota.check(actorRef, range.fromDay);
-    const window = this.window('day', state.usedTokens, costUsd, range.resetsAt);
-    // The configured `quotaLimits.day.tokens` wins; otherwise the store's own ceiling.
-    if (window.limitTokens === undefined) {
-      window.limitTokens = state.limitTokens;
-    }
-    return window;
+    return this.window('day', usedTokens, costUsd, range.resetsAt);
   }
 
   private window(

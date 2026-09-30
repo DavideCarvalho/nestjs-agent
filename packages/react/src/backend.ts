@@ -1,5 +1,6 @@
 import type {
   AgentCatalogEntry,
+  AgentClientConfig,
   MessageAttachment,
   MessageFeedback,
   MessageFeedbackValue,
@@ -144,6 +145,8 @@ export interface AgentBackend {
   listModels?(agent?: string): Promise<ModelCatalogView>;
   /** `GET <base>/agents` — what an agent picker offers. */
   listAgents?(): Promise<AgentCatalogEntry[]>;
+  /** `GET <base>/config` — attachment limits and upload mode, and which features are on. */
+  getConfig?(): Promise<AgentClientConfig>;
   setMessageFeedback?(
     messageId: string,
     input: MessageFeedbackInput,

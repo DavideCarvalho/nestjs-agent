@@ -4,7 +4,6 @@ import {
   AGENT_MODEL_CATALOG,
   AGENT_OPTIONS,
   AGENT_QUOTA_PROVIDER,
-  AGENT_QUOTA_STORE,
   AGENT_RUNNER,
   AGENT_STORE,
   type Actor,
@@ -25,10 +24,9 @@ import {
   type PageContext,
   type QuotaProvider,
   type QuotaReport,
-  type QuotaStore,
-  type QuotaView,
   REQUESTER_APPROVER,
   type StagedAttachment,
+  type StoredMessage,
   type ThreadDetail,
   type ThreadSummary,
   type UpdateThreadInput,
@@ -102,7 +100,6 @@ export class AgentService {
     @Inject(AGENT_RUNNER) private readonly runner: AgentRunner,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_DEPS_FACTORY) private readonly deps: AgentDepsFactory,
-    @Inject(AGENT_QUOTA_STORE) private readonly quota: QuotaStore | undefined,
     @Optional()
     @Inject(AGENT_ATTACHMENT_STAGING)
     private readonly staging?: AttachmentStagingStore,
@@ -114,7 +111,7 @@ export class AgentService {
     private readonly quotaProvider?: QuotaProvider,
     @Optional()
     @Inject(AGENT_OPTIONS)
-    private readonly options?: Pick<AgentModuleOptions, 'quotaProvider' | 'quotaLimits'>,
+    private readonly options?: Pick<AgentModuleOptions, 'quota'>,
   ) {}
 
   /**
@@ -125,29 +122,16 @@ export class AgentService {
     if (this.quotaProvider !== undefined) {
       return this.quotaProvider.report({ actor });
     }
-    const today = await this.quotaToday(actor.id);
-    return {
-      windows: [
-        {
-          period: 'day',
-          usedTokens: today.usedTokens,
-          ...(today.limitTokens !== null ? { limitTokens: today.limitTokens } : {}),
-          usedUsd: today.costUsd,
-        },
-      ],
-      ...(today.withinLimit ? {} : { blocked: { period: 'day' as const } }),
-    };
+    const { usedTokens, costUsd } = await this.store.quotaToday(actor.id, utcDay());
+    return { windows: [{ period: 'day', usedTokens, usedUsd: costUsd }] };
   }
 
   /**
    * Refuse a turn the actor's budget no longer covers — only when the host configured one
-   * (`quotaProvider` or `quotaLimits`): the default report is informational, and the daily token
-   * quota the loop enforces keeps working as it always has.
+   * (`quota`): the default report is informational.
    */
   private async assertWithinQuota(actor: Actor): Promise<void> {
-    const gated =
-      this.options?.quotaProvider !== undefined || this.options?.quotaLimits !== undefined;
-    if (!gated || this.quotaProvider === undefined) {
+    if (this.options?.quota === undefined || this.quotaProvider === undefined) {
       return;
     }
     const { blocked } = await this.quotaProvider.report({ actor });
@@ -412,7 +396,7 @@ export class AgentService {
   async getThread(actor: Actor, threadId: string): Promise<ThreadDetail | null> {
     await this.assertOwnsThread(actor, threadId);
     const thread = await this.store.getThread(threadId);
-    return thread === null ? null : this.toDetailView(thread);
+    return thread === null ? null : this.toDetailView(thread, actor);
   }
 
   async deleteThread(actor: Actor, threadId: string): Promise<void> {
@@ -519,17 +503,48 @@ export class AgentService {
       ...thread,
       defaultAgent: thread.defaultAgent ?? null,
       model: thread.model ?? null,
-      activeRunId: (await this.store.activeRunForThread?.(thread.id)) ?? null,
+      activeRunId: (await this.store.activeRunForThread?.(thread.id)) ?? thread.activeRunId ?? null,
     };
   }
 
-  private async toDetailView(thread: ThreadDetail): Promise<ThreadDetail> {
+  private async toDetailView(thread: ThreadDetail, actor: Actor): Promise<ThreadDetail> {
     const summary = await this.toSummaryView(thread);
     return {
       ...summary,
-      messages: thread.messages,
-      ...(thread.activeStreamId !== undefined ? { activeStreamId: thread.activeStreamId } : {}),
+      messages: await this.freshAttachmentUrls(thread.messages, actor),
     };
+  }
+
+  /**
+   * Re-mint each replayed attachment's url from the staging store, by `mediaId`: the url persisted
+   * with the message was minted for THAT turn (a presigned url with an expiry), so an old turn would
+   * otherwise show a dead link. The store's own access check applies — an attachment it will not
+   * resolve for this actor keeps the url it was stored with.
+   */
+  private async freshAttachmentUrls(
+    messages: StoredMessage[],
+    actor: Actor,
+  ): Promise<StoredMessage[]> {
+    const staging = this.staging;
+    if (staging === undefined || !messages.some((message) => message.attachments?.length)) {
+      return messages;
+    }
+    return Promise.all(
+      messages.map(async (message) => {
+        if (message.attachments === undefined || message.attachments.length === 0) return message;
+        const attachments = await Promise.all(
+          message.attachments.map(async (attachment) => {
+            try {
+              const fresh = await staging.resolve({ mediaId: attachment.mediaId, actor });
+              return fresh ?? attachment;
+            } catch {
+              return attachment;
+            }
+          }),
+        );
+        return { ...message, attachments };
+      }),
+    );
   }
 
   async promoteThread(actor: Actor, threadId: string): Promise<void> {
@@ -665,26 +680,6 @@ export class AgentService {
       );
     }
     return list;
-  }
-
-  /**
-   * The day's usage for the badge: tokens + summed USD cost from the store, and the configured
-   * limit from the quota store (null → unlimited). `withinLimit` comes from the quota store so it
-   * can never drift from what enforcement uses.
-   */
-  async quotaToday(actorRef: string): Promise<QuotaView> {
-    const day = utcDay();
-    const { usedTokens, costUsd } = await this.store.quotaToday(actorRef, day);
-    if (this.quota === undefined) {
-      return { usedTokens, costUsd, limitTokens: null, withinLimit: true };
-    }
-    const state = await this.quota.check(actorRef, day);
-    return {
-      usedTokens: state.usedTokens,
-      costUsd,
-      limitTokens: state.limitTokens,
-      withinLimit: state.withinLimit,
-    };
   }
 
   /**

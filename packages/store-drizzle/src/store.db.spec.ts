@@ -136,9 +136,9 @@ describe('DrizzleAgentStore (better-sqlite3)', () => {
     await store.setActiveStream(thread.id, 'run-9');
     const afterStream = await store.getThread(thread.id);
     expect(afterStream?.title).toBe('Renamed');
-    expect(afterStream?.activeStreamId).toBe('run-9');
+    expect(afterStream?.activeRunId).toBe('run-9');
     await store.setActiveStream(thread.id, null);
-    expect((await store.getThread(thread.id))?.activeStreamId).toBeUndefined();
+    expect((await store.getThread(thread.id))?.activeRunId).toBeUndefined();
 
     // recordUsage twice → quotaToday sums them
     await store.recordUsage({

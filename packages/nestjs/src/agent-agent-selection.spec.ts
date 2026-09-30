@@ -13,7 +13,7 @@ const runner: AgentRunner = {
 const deps = { defaultAgentName: () => 'module-default' } as unknown as AgentDepsFactory;
 
 function buildService(store: AgentStore): AgentService {
-  return new AgentService(runner, store, deps, undefined);
+  return new AgentService(runner, store, deps);
 }
 
 describe('AgentService — picking the agent for a turn', () => {

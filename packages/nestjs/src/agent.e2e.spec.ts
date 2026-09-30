@@ -4,7 +4,6 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
-  QuotaStore,
   RecordToolCallInput,
   RecordUsageInput,
   Retriever,
@@ -21,7 +20,6 @@ import {
   type FakeScript,
   InMemoryAgentStore,
   InMemoryPricingStore,
-  InMemoryQuotaStore,
 } from '@dudousxd/nestjs-agent-testing';
 import {
   type DynamicModule,
@@ -35,9 +33,10 @@ import {
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from './agent.module.js';
+import type { AgentModuleOptions } from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { Agent } from './decorator/agent.decorator.js';
 import { AiTool } from './decorator/ai-tool.decorator.js';
@@ -193,7 +192,7 @@ interface BuildOptions {
   /** Extra `@Agent`-decorated provider classes to register (e.g. an orchestrator + its sub-agents). */
   agents?: Type<object>[];
   path?: string;
-  quota?: QuotaStore;
+  quota?: AgentModuleOptions['quota'];
   toolTimeoutMs?: number;
   followUps?: boolean | { count: number };
   retrieval?: { mode: 'inject'; retriever: Retriever; topK?: number };
@@ -445,9 +444,9 @@ describe('AgentModule (inline)', () => {
     expect(res.status).toBe(403);
   });
 
-  it('surfaces a quota-exceeded run as an event: error frame, not a done frame', async () => {
+  it('refuses a send the quota blocks with 429 before any turn runs', async () => {
     const built = await buildApp(() => ({ text: 'should not run' }), {
-      quota: new InMemoryQuotaStore(0),
+      quota: { limits: { day: { tokens: 0 } } },
     });
     app = built.app;
     const res = await request(app.getHttpServer())
@@ -455,9 +454,8 @@ describe('AgentModule (inline)', () => {
       .set('x-actor-id', 'u1')
       .set('x-actor-role', 'ADMIN')
       .send({ message: 'hi' });
-    expect(res.text).toContain('event: error');
-    expect(res.text).toContain('quota_exceeded');
-    expect(res.text).not.toContain('event: done');
+    expect(res.status).toBe(429);
+    expect(res.body).toMatchObject({ code: 'quota_exceeded', period: 'day' });
   });
 
   it('does not bake defaultRoles into a tool spec (a custom policy sees undefined roles)', async () => {
@@ -869,7 +867,7 @@ describe('activeRunId (Feature 5)', () => {
     expect(afterRun?.activeRunId).toBeNull();
   });
 
-  it('reports null on a store that does not implement activeRunForThread', async () => {
+  it('reads the streaming run off the thread row on a store without activeRunForThread — null once settled', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         AgentModule.forRoot({
@@ -889,8 +887,10 @@ describe('activeRunId (Feature 5)', () => {
       actor: { id: 'u1', roles: ['ADMIN'] },
       message: 'hi',
     });
-    const detail = await service.getThread({ id: 'u1', roles: ['ADMIN'] }, threadId);
-    expect(detail?.activeRunId).toBeNull();
+    await vi.waitFor(async () => {
+      const detail = await service.getThread({ id: 'u1', roles: ['ADMIN'] }, threadId);
+      expect(detail?.activeRunId).toBeNull();
+    });
   });
 });
 

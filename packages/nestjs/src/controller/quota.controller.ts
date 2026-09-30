@@ -19,10 +19,4 @@ export class QuotaController {
     const actor = await this.actorResolver.resolve(req);
     return this.agent.quotaReport(actor);
   }
-
-  @Get('today')
-  async today(@Req() req: Request) {
-    const actor = await this.actorResolver.resolve(req);
-    return this.agent.quotaToday(actor.id);
-  }
 }

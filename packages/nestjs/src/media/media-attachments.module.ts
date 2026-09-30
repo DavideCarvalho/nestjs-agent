@@ -33,7 +33,7 @@ import { AGENT_MEDIA_ATTACHMENTS, AGENT_MEDIA_ATTACHMENTS_OPTIONS } from './toke
 /** See `agent.module.ts` — Nest's `GUARDS_METADATA` key, inlined for the same ESM reason. */
 const GUARDS_METADATA = '__guards__';
 
-function stagingProvider(): Provider {
+function stagingProvider(routes: boolean): Provider {
   return {
     provide: AGENT_MEDIA_ATTACHMENTS,
     inject: [
@@ -57,7 +57,13 @@ function stagingProvider(): Provider {
         );
       }
       return new MediaAttachmentStaging(
-        { storage, store, uploads, ...(agentStore !== undefined ? { agentStore } : {}) },
+        {
+          storage,
+          store,
+          uploads,
+          resumableRoutes: routes,
+          ...(agentStore !== undefined ? { agentStore } : {}),
+        },
         options,
       );
     },
@@ -88,7 +94,7 @@ function build(
     controllers: routes ? [AgentMediaUploadsController] : [],
     providers: [
       optionsProvider,
-      stagingProvider(),
+      stagingProvider(routes),
       { provide: AGENT_ATTACHMENT_STAGING, useExisting: AGENT_MEDIA_ATTACHMENTS },
       { provide: MediaAttachmentStaging, useExisting: AGENT_MEDIA_ATTACHMENTS },
       ...guards,

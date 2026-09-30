@@ -120,7 +120,7 @@ The module mounts SSE + REST endpoints under `/agent` (configurable via `path`):
 | `POST /agent/chat/:runId/cancel` | Cancel a run |
 | `POST /agent/tool-call/approve` · `/reject` | Human-in-the-loop decision for an `action` tool |
 | `GET /agent/threads` · `/:id` · `DELETE /:id` · `POST /:id/fork-from/:messageId` | Thread history |
-| `GET /agent/threads/personas/catalog` · `GET /agent/quota/today` | Personas & quota |
+| `GET /agent/agents` · `GET /agent/quota` · `GET /agent/config` | Agents, quota, client config |
 
 ### Identity (`ActorResolver`)
 

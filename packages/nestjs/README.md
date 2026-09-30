@@ -142,9 +142,13 @@ With nothing bound to `AGENT_ATTACHMENT_STAGING` there is no way to tell whose m
 turn carrying attachments is refused with `501`. Text-only turns are unaffected. At most 10
 attachments per turn.
 
-The optional `POST /agent/attachments` upload route (`attachments: { upload: true }`) aborts a body
-larger than `HARD_MAX_ATTACHMENT_BYTES` (32 MiB) while it streams; `attachments.maxBytes` narrows
-that ceiling at request time and cannot raise it.
+`POST /agent/attachments` (multipart, live whenever a staging store is bound — `501` otherwise)
+aborts a body larger than `HARD_MAX_ATTACHMENT_BYTES` (32 MiB) while it streams; the configured
+`maxBytes` narrows that ceiling at request time and cannot raise it. The limits come from ONE place:
+the staging store's own `describe()` when it declares them (`AgentMediaAttachmentsModule` does),
+else `AgentModule`'s `attachments: { maxBytes, allowedContentTypes }`, else 20 MiB and the default
+types. `GET /agent/config` serves them — with the upload mode (`multipart` or `resumable`) and the
+per-message cap — so a client never repeats them.
 
 ### Sweeping attachments nobody sent
 
@@ -170,8 +174,7 @@ regenerating a turn does — deletes messages and frees their media again. If ei
 missing the call raises `501` rather than reporting everything as collectable.
 
 `GET /agent/attachments` returns the caller's own staged files as metadata (no urls — those are
-minted per turn by `resolve`), bounded to `ATTACHMENT_PAGE_SIZE`, and rides the same
-`attachments: { upload: true }` flag. It takes no `threadId` filter: a thread's attachments already
+minted per turn by `resolve`), bounded to `ATTACHMENT_PAGE_SIZE`. It takes no `threadId` filter: a thread's attachments already
 ride on its messages in `GET /agent/threads/:id`.
 
 ### Attachments on nestjs-media (`@dudousxd/nestjs-agent/media`)
@@ -218,10 +221,14 @@ Each attachment is a media record (`ownerType: 'agent-actor'`, `ownerId: actor.i
 | 3. complete | `POST /agent/attachments/uploads/:mediaId/complete` → `MessageAttachment` | agent — checks the bytes landed at the declared size |
 | drop | `DELETE /agent/attachments/uploads/:mediaId` | agent — aborts the session, deletes bytes + record |
 
-`@dudousxd/nestjs-agent-react/media` drives all three for `useAttachments`. `POST /agent/attachments`
-(the buffered multipart route, `attachments: { upload: true }`) keeps working on the same store — its
-`stage()` writes a media record too — but it is not needed with this module; `GET
-/agent/attachments` lists either kind.
+`@dudousxd/nestjs-agent-react/media` drives all three for `useAttachments`; this is THE upload route
+with this module (`GET /agent/config` answers `upload: 'resumable'`). The buffered multipart `POST
+/agent/attachments` still stages into the same store, but is not the documented path here; `GET
+/agent/attachments` lists either kind. The module's `maxBytes` / `allowedContentTypes` are the only
+limits in force — `AgentModule`'s `attachments` option is ignored while it is imported.
+
+A replayed thread (`GET /agent/threads/:id`) re-mints each attachment's url from the store by
+`mediaId` on every read, so an old turn never shows an expired presigned link.
 
 `resolve` hands the model provider a presigned url when the disk can mint one (`urlExpiresInSeconds`,
 default 7 days), the disk's public `url()` with `visibility: 'public'`, or — on a disk that can do
@@ -273,8 +280,8 @@ export class S3Staging implements AttachmentStagingStore {
 { provide: AGENT_ATTACHMENT_STAGING, useClass: S3Staging }
 ```
 
-Then either set `attachments: { upload: true }` for the built-in `POST /agent/attachments` (which
-calls your `stage`), or upload through your own route and give the React side your own `upload`
+Then the built-in `POST /agent/attachments` calls your `stage` (no flag — binding the store is what
+turns it on), or upload through your own route and give the React side your own `upload`
 (`useAttachments({ upload })` / a backend's `uploadAttachment`) that resolves to a `{ mediaId, … }`
 your `resolve` recognises. `list` is optional and only needed for `GET /agent/attachments` and
 sweeping.
@@ -348,13 +355,13 @@ and only reports. Configure it and it also gates sends — a `blocked` report re
 ```ts
 AgentModule.forRoot({
   // ceilings on the default ledger provider
-  quotaLimits: { day: { tokens: 200_000 }, month: { usd: 20 } },
+  quota: { limits: { day: { tokens: 200_000 }, month: { usd: 20 } } },
   // …or your own budget, e.g. an AI-gateway spend cap:
-  // quotaProvider: { report: async ({ actor }) => myGatewayBudget(actor.id) },
+  // quota: { report: async ({ actor }) => myGatewayBudget(actor.id) },
 });
 ```
 
-`GET /agent/quota/today` stays as it was.
+In anonymous mode the limits apply per browser (each is its own actor).
 
 ### Who approves an action, and for how long
 

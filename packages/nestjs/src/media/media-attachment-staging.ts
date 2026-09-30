@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   Actor,
   AgentStore,
+  AttachmentStagingDescription,
   AttachmentStagingStore,
   ListStagedAttachmentsInput,
   MessageAttachment,
@@ -64,6 +65,8 @@ export interface MediaAttachmentStagingDeps {
   uploads: ResumableUploadManager | null;
   /** Lets media referenced from the actor's own thread resolve (see {@link MediaAttachmentStaging.resolve}). */
   agentStore?: AgentStore;
+  /** The resumable-upload routes are mounted — what {@link MediaAttachmentStaging.describe} tells clients. */
+  resumableRoutes?: boolean;
 }
 
 export interface BeginMediaUploadInput {
@@ -118,6 +121,15 @@ export class MediaAttachmentStaging implements AttachmentStagingStore {
     this.allowed = options.allowedContentTypes ?? DEFAULT_ALLOWED_CONTENT_TYPES;
     this.now = options.clock ?? (() => new Date());
     this.newId = options.idGenerator ?? (() => randomUUID());
+  }
+
+  /** The limits this store enforces, and how a client uploads to it (see `GET <base>/config`). */
+  describe(): AttachmentStagingDescription {
+    return {
+      maxBytes: this.maxBytes,
+      allowedContentTypes: this.allowed,
+      upload: this.deps.resumableRoutes === false ? 'multipart' : 'resumable',
+    };
   }
 
   private get diskName(): string {

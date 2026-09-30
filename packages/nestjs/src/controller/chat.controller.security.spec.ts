@@ -183,11 +183,27 @@ describe('attachments a chat body claims', () => {
         ],
       });
 
-    expect(res.status).toBe(501);
+    // Refused on the body shape before the (unconfigured) staging store is ever asked.
+    expect(res.status).toBe(400);
     expect(urlsSeenByModel(built.modelCalls)).toEqual([]);
   });
 
-  it('is rebuilt from the staging store, discarding the url the body named', async () => {
+  it('refuses a ref that carries anything besides its id — the url never reaches the model', async () => {
+    const staging = new FakeStagingStore();
+    const built = await boot({ staging });
+    const res = await request(built.app.getHttpServer())
+      .post('/agent/chat')
+      .set('x-actor-id', 'u1')
+      .send({
+        message: 'summarize this',
+        attachments: [{ mediaId: 'media-owned-by-u1', url: METADATA_URL }],
+      });
+    expect(res.status).toBe(400);
+    expect(staging.resolved).toEqual([]);
+    expect(urlsSeenByModel(built.modelCalls)).toEqual([]);
+  });
+
+  it('is rebuilt from the staging store by id', async () => {
     const staging = new FakeStagingStore();
     const built = await boot({ staging });
 
@@ -196,14 +212,7 @@ describe('attachments a chat body claims', () => {
       .set('x-actor-id', 'u1')
       .send({
         message: 'summarize this',
-        attachments: [
-          {
-            mediaId: 'media-owned-by-u1',
-            url: METADATA_URL,
-            contentType: 'image/png',
-            name: 'creds.png',
-          },
-        ],
+        attachments: [{ mediaId: 'media-owned-by-u1' }],
       });
 
     expect(res.status).toBe(201);

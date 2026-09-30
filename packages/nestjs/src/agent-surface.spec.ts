@@ -68,7 +68,7 @@ const AGENT_ROUTES: [string, string, Record<string, string>][] = [
   ['post', '/agent/chat', { 'x-actor-id': 'u1', 'x-actor-role': 'ADMIN' }],
   ['get', '/agent/threads', { 'x-actor-id': 'u1' }],
   ['post', '/agent/tool-call/approve', { 'x-actor-id': 'u1' }],
-  ['get', '/agent/quota/today', { 'x-actor-id': 'u1' }],
+  ['get', '/agent/quota', { 'x-actor-id': 'u1' }],
   ['get', '/agent/agents', { 'x-actor-id': 'u1' }],
   ['get', '/agent/skills', { 'x-actor-id': 'u1' }],
 ];

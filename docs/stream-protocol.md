@@ -293,7 +293,7 @@ client throws `AgentHttpError` carrying `status`.
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
 | `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model? }`) |
-| `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`) |
+| `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`); `activeRunId` is the run streaming right now, the one to resume |
 | `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins) |
 | `DELETE <base>/threads/:id` | — | `{ ok: true }` |
 | `POST <base>/threads/:id/fork-from/:messageId` | — | `ThreadSummary` of the fork |
@@ -307,7 +307,7 @@ client throws `AgentHttpError` carrying `status`.
 | `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null }` |
 | `GET <base>/agents` | — | `{ name, description, isDefault? }[]` |
 | `GET <base>/quota` | — | `{ windows: [{ period: 'day' \| 'month', usedTokens, limitTokens?, usedUsd, limitUsd?, resetsAt? }], blocked?: { period, reason? } }` |
-| `GET <base>/quota/today` | — | `{ usedTokens, limitTokens: number \| null, withinLimit, costUsd }` |
+| `GET <base>/config` | — | `{ attachments: { enabled, upload: 'multipart' \| 'resumable' \| null, maxBytes, allowedContentTypes, maxPerMessage }, models: { enabled }, quota: { enforced }, identity: { anonymous } }` — server facts a client would otherwise repeat; `useAttachments` takes its defaults from it |
 
 **Models.** A turn's model is the send's `model`, else the thread's pinned `model`, else the
 server's default. Serve the catalog from whatever decides what a caller may use (plan, budget,
@@ -315,18 +315,21 @@ provider health) and refuse anything else with `400` — the client only ever se
 listed, but a server must not trust that. `chat.models` renders the catalog and `select(id)`
 sends the pick; `chat.models.pinToThread(id)` pins it.
 
-**Attachments.** The client uploads each file on its own (`POST <base>/attachments`, multipart
-`file`), then names the uploads by id on the send: `POST <base>/chat { message, attachments:
-[{ mediaId }] }`. Only the id is trusted — the server resolves the url the model fetches from its
-own storage. `GET <base>/threads/:id` returns them on the user message as `attachments: [{ mediaId,
-url, contentType, name }]` (the `url` fresh enough to display), replayed as `file` parts carrying
+**Attachments.** The client uploads each file on its own — `POST <base>/attachments` (multipart
+`file`), or the resumable `<base>/attachments/uploads` routes when `GET <base>/config` says
+`upload: 'resumable'` — then names the uploads by id on the send: `POST <base>/chat { message,
+attachments: [{ mediaId }] }`. That is the one shape: an entry carrying anything besides `mediaId` is
+refused with `400`, and only the id is trusted — the server resolves the url the model fetches from
+its own storage. `GET <base>/threads/:id` returns them on the user message as `attachments: [{
+mediaId, url, contentType, name }]`, the `url` re-minted by `mediaId` on every read (so an old turn's
+presigned link has not expired), replayed as `file` parts carrying
 `providerMetadata.agent.mediaId`. `useAttachments` stages, validates and uploads; `messageFiles`
 reads them back off a message.
 
 **Quota.** `GET <base>/quota` reports every budget window the server enforces; `blocked` names the
 exhausted one. A server that enforces it answers `POST <base>/chat` with `429` and
 `{ code: 'quota_exceeded', period, message }` while blocked. `useQuota` renders the windows and
-`useAgentChat({ blocked })` stops the client from sending in the meantime. A backend with its own
+`useAgentChat` stops the client from sending in the meantime. A backend with its own
 budget (an AI-gateway spend cap) reports it here in the same shape.
 
 **Identity.** Every route acts as the actor the server resolves from the request; nothing in the

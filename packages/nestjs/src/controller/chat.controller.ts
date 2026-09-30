@@ -19,12 +19,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AgentService } from '../agent.service.js';
-
-/**
- * How many attachments one turn may name. Each costs a staging-store read before the run starts,
- * and no model provider accepts anywhere near this many parts in a single message.
- */
-export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachment-limits.js';
 
 interface ChatBody {
   message: string;
@@ -65,6 +60,11 @@ function attachmentRefs(claimed: unknown): AttachmentRef[] {
   return claimed.map((entry: unknown) => {
     if (typeof entry !== 'object' || entry === null || !('mediaId' in entry)) {
       throw new BadRequestException('each attachment must be an object with a mediaId');
+    }
+    // One shape: a ref names an upload, nothing more. A full attachment (url, name, …) is refused
+    // rather than trimmed, so a client that still sends one learns it instead of relying on it.
+    if (Object.keys(entry).some((key) => key !== 'mediaId')) {
+      throw new BadRequestException('attachments are { mediaId } refs — send nothing but the id');
     }
     const { mediaId } = entry as { mediaId: unknown };
     if (typeof mediaId !== 'string' || mediaId.length === 0) {

@@ -557,7 +557,6 @@ export interface ToolCallApproval {
 
 export interface ThreadDetail extends ThreadSummary {
   messages: StoredMessage[];
-  activeStreamId?: string;
 }
 
 export type ToolCallStatus =
@@ -631,4 +630,30 @@ export interface ToolStepEnvelope {
    * and ONLY then, so a loop that predates this (and never sets it) always gets the bare output.
    */
   collectUi?: boolean;
+}
+
+/**
+ * What `GET <base>/config` answers — server-side facts a client would otherwise repeat in its own
+ * configuration (and let drift).
+ */
+export interface AgentClientConfig {
+  attachments: AgentAttachmentConfig;
+  /** A model catalog is bound, so `GET <base>/models` lists something to pick. */
+  models: { enabled: boolean };
+  /** Sends are refused with `429` once `GET <base>/quota` reports `blocked`. */
+  quota: { enforced: boolean };
+  /** No `actorResolver`: every browser is its own anonymous actor. */
+  identity: { anonymous: boolean };
+}
+
+/** The attachment rules in force — what the upload route enforces. */
+export interface AgentAttachmentConfig {
+  /** A staging store is bound, so uploads work at all. */
+  enabled: boolean;
+  /** How a client uploads (`null` when `enabled` is false). */
+  upload: 'multipart' | 'resumable' | null;
+  maxBytes: number;
+  allowedContentTypes: readonly string[];
+  /** How many attachments one message may name. */
+  maxPerMessage: number;
 }
