@@ -53,6 +53,7 @@ describe('storedThreadToUiMessages', () => {
     // Aggregated usage summed across both merged rows.
     expect(ui?.metadata).toEqual({
       usage: { inputTokens: 250, outputTokens: 50, costUsd: 0.003 },
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
   });
 
@@ -74,6 +75,7 @@ describe('storedThreadToUiMessages', () => {
 
     expect(ui?.metadata).toEqual({
       usage: { inputTokens: 30, outputTokens: 6, costUsd: 0.01 },
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
   });
 
@@ -91,10 +93,11 @@ describe('storedThreadToUiMessages', () => {
 
     expect(ui?.metadata).toEqual({
       usage: { inputTokens: 30, outputTokens: 6, costUsd: null },
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
   });
 
-  it('omits metadata entirely when none of the merged rows carry usage', () => {
+  it('omits usage when none of the merged rows carry any, keeping the turn start time', () => {
     const rows: StoredMessage[] = [
       message({ id: 'a1', content: 'step one' }),
       message({ id: 'a2', content: 'step two' }),
@@ -106,7 +109,7 @@ describe('storedThreadToUiMessages', () => {
       { type: 'text', text: 'step one' },
       { type: 'text', text: 'step two' },
     ]);
-    expect('metadata' in (ui ?? {})).toBe(false);
+    expect(ui?.metadata).toEqual({ createdAt: '2026-01-01T00:00:00.000Z' });
   });
 
   it('breaks the group on an interleaved user message — no merge across a user turn', () => {
@@ -119,10 +122,12 @@ describe('storedThreadToUiMessages', () => {
     const ui = storedThreadToUiMessages(rows);
 
     expect(ui.map((entry) => entry.id)).toEqual(['a1', 'u1', 'a2']);
-    expect(ui.every((entry) => !('metadata' in entry))).toBe(true);
+    expect(ui.every((entry) => !('usage' in ((entry.metadata as object | undefined) ?? {})))).toBe(
+      true,
+    );
   });
 
-  it('leaves a single-message turn byte-for-byte identical to storedMessageToUiMessage (no metadata added)', () => {
+  it('leaves a single-message turn identical to storedMessageToUiMessage (its own usage and time)', () => {
     const row = message({
       id: 'a1',
       content: 'just one step',
@@ -133,7 +138,10 @@ describe('storedThreadToUiMessages', () => {
     const direct = storedMessageToUiMessage(row);
 
     expect(grouped).toEqual(direct);
-    expect('metadata' in (grouped ?? {})).toBe(false);
+    expect(grouped?.metadata).toEqual({
+      usage: { inputTokens: 10, outputTokens: 5, costUsd: 0.001 },
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('passes non-assistant rows through storedMessageToUiMessage unchanged, one row per message', () => {

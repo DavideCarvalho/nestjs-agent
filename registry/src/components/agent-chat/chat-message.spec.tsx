@@ -18,10 +18,10 @@ interface HarnessProps {
   messages?: UIMessage[];
   status?: ChatStatus;
   editable?: boolean;
-  onEditSubmit?: (messageId: string, text: string) => void;
-  onFork?: (messageId: string) => void;
+  onEditSubmit?: (input: { messageId: string; text: string }) => void;
+  onFork?: (input: { messageId: string }) => void;
   regeneratable?: boolean;
-  onRegenerate?: (messageId: string) => void;
+  onRegenerate?: (input: { messageId: string }) => void;
   writeClipboard?: (text: string) => Promise<void>;
 }
 
@@ -63,7 +63,7 @@ describe('ChatMessage actions', () => {
     fireEvent.change(textarea, { target: { value: 'catch me up on 3.5' } });
     fireEvent.click(screen.getByText('Resend'));
 
-    expect(onEditSubmit).toHaveBeenCalledWith('u1', 'catch me up on 3.5');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'u1', text: 'catch me up on 3.5' });
   });
 
   it('refuses to resend an empty edit', () => {
@@ -101,7 +101,7 @@ describe('ChatMessage actions', () => {
     const buttons = screen.getAllByLabelText('Regenerate');
     expect(buttons).toHaveLength(1);
     fireEvent.click(buttons[0] as HTMLElement);
-    expect(onRegenerate).toHaveBeenCalledWith('a2');
+    expect(onRegenerate).toHaveBeenCalledWith({ messageId: 'a2' });
   });
 
   it('forks from whichever message the reader points at', () => {
@@ -110,7 +110,7 @@ describe('ChatMessage actions', () => {
 
     fireEvent.click(screen.getAllByLabelText('Fork from here')[1] as HTMLElement);
 
-    expect(onFork).toHaveBeenCalledWith('a1');
+    expect(onFork).toHaveBeenCalledWith({ messageId: 'a1' });
   });
 
   it('separates the two roles in the markup', () => {

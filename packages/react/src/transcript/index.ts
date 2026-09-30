@@ -34,7 +34,13 @@ export {
   type UsageSummary,
 } from './model.js';
 export {
+  type AnswerInput,
+  type ApproveInput,
   type ChatTranscript,
+  type EditSubmitInput,
+  type MessageActionInput,
+  type RejectInput,
+  type SkipInput,
   type TranscriptActionState,
   type TranscriptCopyState,
   type TranscriptEditState,

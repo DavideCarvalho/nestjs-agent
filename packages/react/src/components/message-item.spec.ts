@@ -14,7 +14,7 @@ describe('MessageItem affordances', () => {
     const onFork = vi.fn();
     render(createElement(MessageItem, { message: textMessage('assistant', 'hi'), onFork }));
     fireEvent.click(screen.getByTitle('Fork thread from this message'));
-    expect(onFork).toHaveBeenCalledWith('m1');
+    expect(onFork).toHaveBeenCalledWith({ messageId: 'm1' });
   });
 
   it('shows Regenerate only for assistant messages and fires onRegenerate', () => {
@@ -43,7 +43,7 @@ describe('MessageItem affordances', () => {
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'new text' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
-    expect(onEditSubmit).toHaveBeenCalledWith('new text');
+    expect(onEditSubmit).toHaveBeenCalledWith({ messageId: 'm1', text: 'new text' });
   });
 
   it('renders the usage line for an assistant turn', () => {

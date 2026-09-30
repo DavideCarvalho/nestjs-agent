@@ -1,7 +1,11 @@
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import type { ChatStatus, MessageUsageInfo } from '../transcript/model.js';
-import { useChatTranscript } from '../transcript/use-chat-transcript.js';
+import {
+  type EditSubmitInput,
+  type MessageActionInput,
+  useChatTranscript,
+} from '../transcript/use-chat-transcript.js';
 import {
   type MessageItemClassNames,
   MessageItemView,
@@ -43,13 +47,13 @@ export interface MessageListProps {
   /** Extra content for one message's action row — e.g. a badge naming which agent answered. */
   getMeta?: (message: UIMessage) => React.ReactNode;
   /** When set, every message gets a "Fork" affordance calling back with its id. */
-  onFork?: (uiMessageId: string) => void | Promise<void>;
+  onFork?: (input: MessageActionInput) => void | Promise<void>;
   /** User messages get an inline edit-and-resubmit affordance. */
   editable?: boolean;
-  onEditSubmit?: (uiMessageId: string, newText: string) => void | Promise<void>;
+  onEditSubmit?: (input: EditSubmitInput) => void | Promise<void>;
   /** The last assistant message gets a "Regenerate" affordance. */
   regeneratable?: boolean;
-  onRegenerate?: (uiMessageId: string) => void | Promise<void>;
+  onRegenerate?: (input: MessageActionInput) => void | Promise<void>;
   /** Per-message resolvers for the usage line and the persisted timestamp. */
   getUsage?: (message: UIMessage) => MessageUsageInfo | null;
   getCreatedAt?: (message: UIMessage) => string | null;

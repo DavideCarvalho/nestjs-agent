@@ -22,6 +22,7 @@ describe('useAgentChat — settling a question set', () => {
     const { result } = renderHook(() =>
       useAgentChat({ threadId: 'thr-1', backend: new AgentClient({ fetch: fetchMock }) }),
     );
+    const settles = () => calls.filter((call) => call.url.includes('/tool-call/'));
 
     await act(async () => {
       await result.current.answer({ toolCallId: 'intake-run-1', answers: { scope: ['file'] } });
@@ -29,17 +30,17 @@ describe('useAgentChat — settling a question set', () => {
       await result.current.skip({ toolCallId: 'intake-run-3' });
     });
 
-    expect(calls.map((call) => call.url)).toEqual([
+    expect(settles().map((call) => call.url)).toEqual([
       '/agent/tool-call/answer',
       '/agent/tool-call/answer',
       '/agent/tool-call/skip',
     ]);
-    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+    expect(JSON.parse(String(settles()[0]?.init?.body))).toEqual({
       toolCallId: 'intake-run-1',
       answers: { scope: ['file'] },
     });
-    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ toolCallId: 'intake-run-2' });
-    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ toolCallId: 'intake-run-3' });
+    expect(JSON.parse(String(settles()[1]?.init?.body))).toEqual({ toolCallId: 'intake-run-2' });
+    expect(JSON.parse(String(settles()[2]?.init?.body))).toEqual({ toolCallId: 'intake-run-3' });
   });
 
   it('lets a refusal reach the caller rather than resolving as if it worked', async () => {

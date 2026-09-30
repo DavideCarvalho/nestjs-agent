@@ -61,7 +61,12 @@ describe('AgentProvider', () => {
     expect(result.current.backend).toBeInstanceOf(AgentClient);
     expect(result.current.chat.backend).toBe(result.current.backend);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/threads'))).toBe(true),
+    );
+    const [url, init] = fetchMock.mock.calls.find(([candidate]) =>
+      String(candidate).endsWith('/threads'),
+    ) as [string, RequestInit];
     expect(url).toBe('https://api.example.com/api/agent/threads');
     expect(init.credentials).toBe('include');
     expect((init.headers as Record<string, string>)['x-csrf']).toBe('tok');
@@ -156,7 +161,9 @@ describe('without a provider', () => {
       }));
       expect(result.current.chat.backend).toBe(result.current.backend);
       await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-      expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/agent/threads');
+      const urls = fetchMock.mock.calls.map((call) => (call as unknown as [string])[0]);
+      await waitFor(() => expect(urls).toContain('/agent/threads'));
+      expect(urls.every((url) => url.startsWith('/agent/'))).toBe(true);
     } finally {
       globalThis.fetch = original;
     }

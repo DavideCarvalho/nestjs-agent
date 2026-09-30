@@ -82,7 +82,7 @@ export function useToolCatalog(options: UseToolCatalogOptions = {}): ToolCatalog
     load(client, agent).then(
       (loaded) => {
         if (cancelled) return;
-        setEntries(loaded);
+        setEntries(Array.isArray(loaded) ? loaded : []);
         setError(null);
         setLoading(false);
       },

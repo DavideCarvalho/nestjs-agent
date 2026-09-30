@@ -54,6 +54,7 @@ describe('useAgentChat background runs', () => {
     const { result } = renderHook(() =>
       useAgentChat({
         threadId: 'thr-1',
+        history: false,
         background: true,
         backgroundPollMs: 10,
         backend: new AgentClient({ fetch: fetchMock as unknown as typeof fetch }),

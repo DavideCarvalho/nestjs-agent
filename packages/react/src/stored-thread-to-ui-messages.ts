@@ -34,6 +34,8 @@ export interface AgentMessageMetadata extends Partial<StoredTurnMetadata> {
   feedback?: MessageFeedback;
   runId?: string;
   costUsd?: number | null;
+  /** ISO timestamp: the stored row's `createdAt` (a merged turn: its first row's), or when a live turn started streaming. */
+  createdAt?: string;
 }
 
 /**
@@ -121,9 +123,11 @@ function mergeTurn(rows: StoredMessage[]): UIMessage {
   const usage = sumUsage(rows);
   // A turn is rated through its last row — the id this message carries.
   const feedback = lastRow.feedback;
+  const createdAt = rows[0]?.createdAt;
   const metadata: AgentMessageMetadata = {
     ...(usage !== undefined ? { usage } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
+    ...(createdAt ? { createdAt } : {}),
   };
 
   return {

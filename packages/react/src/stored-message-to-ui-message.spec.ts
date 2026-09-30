@@ -20,6 +20,7 @@ describe('storedMessageToUiMessage', () => {
       id: 'msg-1',
       role: 'assistant',
       parts: [{ type: 'text', text: 'Hello there' }],
+      metadata: { createdAt: '2026-01-01T00:00:00.000Z' },
     });
   });
 

@@ -59,7 +59,7 @@ describe('AgentChat — human in the loop', () => {
     expect(screen.queryByText(/Question 1 of/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(onAnswer).toHaveBeenCalledWith('intake-run-1', {});
+    expect(onAnswer).toHaveBeenCalledWith({ toolCallId: 'intake-run-1', answers: {} });
   });
 
   it('offers the approval on the tool card that is waiting for it', () => {
@@ -76,15 +76,32 @@ describe('AgentChat — human in the loop', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
 
-    expect(onApprove).toHaveBeenCalledWith('call-2');
+    expect(onApprove).toHaveBeenCalledWith({ toolCallId: 'call-2' });
   });
 
-  it('renders neither affordance for a host that wired neither', () => {
+  it('works with nothing wired — decisions go to the provider’s backend', () => {
     render(
       <AgentChat
         messages={assistant([ASK, PENDING_ACTION])}
         status="streaming"
         onSubmit={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeNull();
+  });
+
+  it('renders neither affordance for a host that opts out with null', () => {
+    render(
+      <AgentChat
+        messages={assistant([ASK, PENDING_ACTION])}
+        status="streaming"
+        onSubmit={() => undefined}
+        onAnswer={null}
+        onSkip={null}
+        onApprove={null}
+        onReject={null}
       />,
     );
 

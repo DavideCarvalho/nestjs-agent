@@ -22,17 +22,29 @@ function Chat() {
   const chat = useAgentChat(); // same-origin, `/agent` — no provider needed
   return (
     <>
-      <MessageList
-        messages={chat.messages}
-        status={chat.status}
-        regeneratable
-        onRegenerate={() => chat.regenerate()}
-      />
+      <MessageList messages={chat.messages} status={chat.status} />
       <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
     </>
   );
 }
 ```
+
+`useAgentChat` does the wiring itself: give it a `threadId` and it loads that thread's history and
+re-attaches to a turn still streaming on it (`history: false` / `resume: false` opt out); it gates
+sends on the reported quota; approvals and question sets in the transcript are actionable with no
+handlers passed. On top of the AI SDK chat it returns:
+
+| On `chat` | What it is |
+|---|---|
+| `transcript` | `useChatTranscript` already bound to the chat — approve/reject/answer/skip, stop, fork, regenerate, the tool catalog, and timestamps/usage read from message metadata. Override any of it with `useAgentChat({ transcript: { … } })`. |
+| `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both; `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'`. |
+| `models` | `{ list, providers, selected, select(id), pinToThread(id) }` — loaded the first time `list` is read. |
+| `quota` / `blocked` | `useQuota`'s state, and the window blocking sends (the `blocked` option overrides it). |
+| `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — the same object shape the transcript's handlers take. |
+| `fork` / `truncateFrom` / `promote` | `({ messageId, threadId? })` / `({ threadId? })`, defaulting to this chat's thread. |
+| `cancel`, `regenerate`, `getThreadId`, `backend`, `runId`, `activeRunId`, `isLoadingHistory`, `connection`, `background` | — |
+
+Threads (list, rename, delete) are `useThreads()`; the granular hooks stay the escape hatch.
 
 ### Configure the connection once: `<AgentProvider>`
 
@@ -81,14 +93,14 @@ import { useAgentChat, useChatTranscript } from '@dudousxd/nestjs-agent-react';
 
 function Chat() {
   const chat = useAgentChat();
+  // `chat.transcript` is this, pre-wired; `useChatTranscript` directly for any AI SDK chat.
   const transcript = useChatTranscript({
     messages: chat.messages,
     status: chat.status,
     editable: true,
-    onEditSubmit: (id, text) => chat.sendMessage({ text }),
-    onFork: (id) => chat.forkThread(threadId, id),
+    onEditSubmit: ({ text }) => chat.sendMessage({ text }),
+    onFork: ({ messageId }) => chat.fork({ messageId }),
     onStop: () => chat.cancel(),
-    getUsage: (message) => readUsage(message),
   });
 
   return (
@@ -446,8 +458,7 @@ function CustomChat({ threadId }: { threadId?: string }) {
     // `exactOptionalPropertyTypes`, so an explicit `threadId: undefined` doesn't type-check.
     ...(threadId !== undefined ? { threadId } : {}),
     agent: 'support',
-    // Reattach to a turn still streaming when the page loaded — survives a refresh.
-    resume: true,
+    // A `threadId` loads its history and re-attaches to a turn still streaming — by default.
     onThreadCreated: (newThreadId) => router.replace(`/chat/${newThreadId}`),
     // Fires once per run when the SERVER is done writing (title + terminal state persisted) —
     // the right signal to refetch a thread list/sidebar; `onFinish` only means "a turn rendered".
@@ -492,10 +503,7 @@ disables itself while busy never noticed; a double-submitted one, and StrictMode
 effect, did.
 
 `chat` is the AI SDK v7 `useChat` return value (`messages`, `status`, `sendMessage`, `stop`, …) spread
-together with the extras: `runId`/`activeRunId`, `connection`, `getThreadId`, `backend` (the `AgentBackend`; also
-under its old name `client`), thread list/CRUD
-(`threads`, `loadThreads`, `loadThread`, `deleteThread`, `forkThread`, `renameThread`, `promoteThread`,
-`truncateFromMessage`), `quota`/`loadQuota`, `cancel`, HITL `approve`/`reject` and `answer`/`skip`, and `regenerate`.
+together with the extras in the table above.
 `MyToolCard`'s `part` prop above types as the exported `AnyToolUIPart` (`ToolUIPart | DynamicToolUIPart`
 — `MessageItem` uses the same union for its own `renderToolPart` callback).
 
@@ -593,14 +601,10 @@ its run persisted (the live message carries `metadata.runId`).
 ### Picking a model and an agent
 
 ```tsx
-import { useAgents, useModels } from '@dudousxd/nestjs-agent-react';
+const chat = useAgentChat();
+const { providers, selected, select } = chat.models; // loaded on first read
 
-const [model, setModel] = useState<string | undefined>();
-const chat = useAgentChat({ model }); // sent as the body's `model` on every turn
-const { providers, find, defaultModel } = useModels({ agent: 'support' });
-const { agents } = useAgents();
-
-<select value={model ?? defaultModel ?? ''} onChange={(e) => setModel(e.target.value)}>
+<select value={selected ?? ''} onChange={(e) => select(e.target.value)}>
   {providers.map((p) => (
     <optgroup key={p.id} label={p.label}>
       {p.models.map((m) => (
@@ -613,10 +617,14 @@ const { agents } = useAgents();
 </select>
 ```
 
-`useModels` reads `GET <base>/models?agent=` (models grouped by provider, with badges and
-availability; `models` is the same list flattened, `find(id)` looks one up). A single send can
-override with `sendMessage(msg, { body: { model } })`; `chat.setThreadModel(id)` pins a model on
-the thread (`null` unpins), so every later turn without its own runs on it. The server refuses a
+`chat.models` reads `GET <base>/models?agent=` (models grouped by provider, with badges and
+availability; `list` is the same flattened) the first time `list`/`providers` is read. `select(id)`
+runs the following turns on it (sent as the body's `model`); `selected` is the pick, else the
+thread's pin, else the server default. `pinToThread(id)` pins it on the thread (`null` unpins) so
+it survives reloads — on a chat with no thread yet, the pin lands when the first send creates one.
+`useAgentChat({ model })` controls the model yourself; a single send can override it with
+`sendMessage(msg, { body: { model } })`. `useModels()` / `useAgents()` are the standalone hooks
+(an agent picker: `useAgents().agents`, sent as `useAgentChat({ agent })`). The server refuses a
 model its catalog does not offer as available.
 
 ### Quota
@@ -624,17 +632,19 @@ model its catalog does not offer as available.
 ```tsx
 import { QuotaBlockedError, useQuota } from '@dudousxd/nestjs-agent-react';
 
-const quota = useQuota();                           // GET <base>/quota
-const chat = useAgentChat({ blocked: quota.blocked });
+const chat = useAgentChat(); // reads GET <base>/quota and gates sends on it
+const { quota } = chat;
 
 <meter value={quota.month?.usedUsd} max={quota.month?.limitUsd} />
-{quota.blocked ? <p>{quota.blocked.reason}</p> : null}
+{chat.blocked ? <p>{chat.blocked.reason}</p> : null}
 ```
 
-`useQuota` returns every window (`day`, `month`, …) with its usage and ceilings, and `blocked` when
-one is exhausted; it re-reads after every run a chat on the same backend settles (`pollMs` to poll
-as well). With `blocked` passed in, `sendMessage`/`regenerate` reject with `QuotaBlockedError`
-instead of starting a turn the server would refuse with `429`.
+`chat.quota` (and the standalone `useQuota()`) returns every window (`day`, `month`, …) with its
+usage and ceilings, and `blocked` when one is exhausted; it re-reads after every run a chat on the
+same backend settles. While a window is exhausted, `sendMessage`/`regenerate` reject with
+`QuotaBlockedError` (and `chat.composer.blockedBy` is `'quota'`) instead of starting a turn the server
+would refuse with `429`. `useAgentChat({ blocked })` overrides the gate (`null` never blocks);
+`quota: false` skips the request.
 
 ### The transport, standalone
 
@@ -670,16 +680,15 @@ contract — for a backend that serves these routes without this library's loop 
 
 ### Loading persisted history
 
-A reloaded thread's `StoredMessage[]` (from `AgentClient.getThread`) needs converting to `UIMessage[]`
-before it can seed `useChat`'s `initialMessages`:
+`useAgentChat({ threadId })` loads it for you. To seed a chat with history you already have (SSR,
+a cache), convert the thread's `StoredMessage[]` and pass it as `initialMessages` — the hook then
+skips its own read:
 
 ```ts
 import { storedThreadToUiMessages } from '@dudousxd/nestjs-agent-react';
 
-const detail = await chat.backend.getThread(threadId);
 const initialMessages = storedThreadToUiMessages(detail.messages);
-// Feed into useAgentChat({ threadId, initialMessages, ... }) on the mount that owns this thread —
-// `initialMessages` is only read once, on mount.
+useAgentChat({ threadId, initialMessages });
 ```
 
 `storedThreadToUiMessages` merges the store's one-row-per-model-iteration turns (a turn with tool
@@ -691,19 +700,17 @@ persisted pushed components as `data-ui` parts, so a reloaded thread shows what 
 
 ### Attachments
 
-`useAttachments` is the composer's file tray without the tray: validation, one upload per file
-with progress and cancel, retry, image previews, and the handlers for a file input, a drop zone and
-paste.
+`chat.composer.files` (or `useAttachments()` on its own) is the composer's file tray without the
+tray: validation, one upload per file with progress and cancel, retry, image previews, and the
+handlers for a file input, a drop zone and paste. `chat.composer.submit()` sends the ready files
+with the draft and clears them.
 
 ```tsx
-import { messageFiles, useAttachments } from '@dudousxd/nestjs-agent-react';
-
-const files = useAttachments({
-  // uploads through the provider's backend; or `upload: (file, { signal, onProgress }) => myUpload(file)`
-  accept: 'image/*,.pdf',
-  maxBytes: 20 * 1024 * 1024,
-  maxFiles: 5,
+const chat = useAgentChat({
+  // optional — or `upload: (file, { signal, onProgress }) => myUpload(file)`
+  composer: { accept: 'image/*,.pdf', maxBytes: 20 * 1024 * 1024, maxFiles: 5 },
 });
+const { files } = chat.composer;
 
 <div {...files.dropZoneProps} data-dragging={files.isDragging}>
   <textarea onPaste={files.onPaste} />
@@ -718,13 +725,8 @@ const files = useAttachments({
   ))}
 </div>
 
-<button
-  disabled={files.isUploading}
-  onClick={async () => {
-    await chat.sendMessage({ text }, { body: { attachments: files.refs } });
-    files.clear();
-  }}
-/>
+<textarea value={chat.composer.text} onChange={(e) => chat.composer.setText(e.target.value)} />
+<button disabled={!chat.composer.canSend} onClick={() => chat.composer.submit()} />
 ```
 
 An item is `uploading`, `ready`, `error` (retry with `files.retry(id)`) or `rejected` (failed

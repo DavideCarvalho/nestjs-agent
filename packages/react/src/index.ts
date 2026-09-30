@@ -62,7 +62,6 @@ export {
   type AgentClientOptions,
   AgentHttpError,
   type CancelResult,
-  type QuotaToday,
   type ThreadPatch,
 } from './client.js';
 // Named, never `export *`: a wildcard re-export from a barrel defeats a bundler's ability to see
@@ -184,6 +183,12 @@ export {
   type BuildBlocksOptions,
   buildTranscriptBlocks,
   type ChatTranscript,
+  type AnswerInput,
+  type ApproveInput,
+  type EditSubmitInput,
+  type MessageActionInput,
+  type RejectInput,
+  type SkipInput,
   describeTimestamp,
   describeUsage,
   type ElicitationBlockOptions,
