@@ -765,11 +765,25 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     const current = composerRef.current;
     if (current.blockedBy !== null) return;
     const refs = current.files.refs;
+    // The sent message shows its files right away, as the reloaded thread will (`messageFiles`).
+    const files = current.files.items.flatMap((item) =>
+      item.status === 'ready' && item.attachment !== undefined
+        ? [
+            {
+              type: 'file' as const,
+              mediaType: item.attachment.contentType,
+              filename: item.attachment.name,
+              url: item.attachment.url,
+              providerMetadata: { agent: { mediaId: item.attachment.mediaId } },
+            },
+          ]
+        : [],
+    );
     const draft = current.text.trim();
     setText('');
     current.files.clear();
     await sendMessage(
-      { text: draft },
+      files.length > 0 ? { text: draft, files } : { text: draft },
       refs.length > 0 ? { body: { attachments: refs } } : undefined,
     );
   }, [sendMessage]);

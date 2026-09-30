@@ -198,6 +198,15 @@ describe('useAgentChat — composer', () => {
     const request = vi.mocked(backend.openChatStream).mock.calls[0]?.[0];
     expect(request?.body.message).toBe('look at this');
     expect(request?.body.attachments).toEqual([{ mediaId: 'm-a.png' }]);
+    // The sent message shows its files at once, like a reloaded one.
+    const sent = result.current.messages.find((message) => message.role === 'user');
+    expect(sent?.parts).toContainEqual(
+      expect.objectContaining({
+        type: 'file',
+        filename: 'a.png',
+        providerMetadata: { agent: { mediaId: 'm-a.png' } },
+      }),
+    );
     expect(result.current.composer.text).toBe('');
     expect(result.current.composer.files.items).toHaveLength(0);
   });
