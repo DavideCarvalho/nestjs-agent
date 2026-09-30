@@ -4,6 +4,11 @@ import type { PayloadOf } from '@dudousxd/nestjs-diagnostics';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { isControlFlowSignal } from './control-flow.js';
 import {
+  type ToolCallOutcome,
+  danglingToolCallIds,
+  settleDanglingToolCalls,
+} from './dangling-tool-calls.js';
+import {
   type DetachedDelegationReceipt,
   detachedDelivered,
   detachedStarted,
@@ -97,7 +102,7 @@ import {
 import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
-import type { SinkWriter } from './spi/token-stream-sink.js';
+import type { SinkWriter, StreamError } from './spi/token-stream-sink.js';
 import type { AiToolCtx } from './spi/tool.js';
 import {
   type AgentStreamEvent,
@@ -599,7 +604,68 @@ export function agentFailureCode(error: unknown): string {
   if (error instanceof StructuredOutputError) {
     return 'structured_output_invalid';
   }
-  return 'run_failed';
+  if (isReplayIntegrityError(error)) {
+    return 'replay_diverged';
+  }
+  return isNoOutputError(error) ? 'model_no_output' : 'run_failed';
+}
+
+/**
+ * A model call that ended without producing anything — the AI SDK's `NoOutputGeneratedError`.
+ * Matched by name, and by its message as well: an error that crossed a dispatched step comes back
+ * rebuilt by the runtime, which keeps the message and not always the class name.
+ */
+function isNoOutputError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.name === 'AI_NoOutputGeneratedError' ||
+    error.name === 'NoOutputGeneratedError' ||
+    error.message.startsWith('No output generated')
+  );
+}
+
+/**
+ * What a person is told when a run fails for a reason that is ours rather than theirs. The error's
+ * own text is for whoever operates the deployment: it names run ids, checkpoint positions and
+ * provider internals ("non-determinism at <uuid>#41 …", "No output generated. Check the stream for
+ * errors."), which mean nothing to the person reading the chat and are not theirs to see.
+ */
+export const RUN_FAILED_MESSAGE = 'The assistant could not finish this answer. Please try again.';
+
+let streamErrorDetails: boolean | undefined;
+
+/**
+ * Whether an error frame carries the error's own message. Unset → only outside production
+ * (`NODE_ENV !== 'production'`), where the person reading the stream is the one debugging it.
+ * `true`/`false` decides it outright; `undefined` returns to the default.
+ */
+export function exposeStreamErrorDetails(expose: boolean | undefined): void {
+  streamErrorDetails = expose;
+}
+
+/** The codes whose message the library wrote for the person, and is therefore safe to show. */
+const WORDED_CODES = new Set(['quota_exceeded', 'output_rejected', 'structured_output_invalid']);
+
+/**
+ * The terminal a failed run closes its stream with — what `SinkWriter.fail` takes, and what the
+ * transport sends as the `event: error` frame.
+ *
+ * The frame is what the PERSON sees. For a crash it carries a stable `code` (what a client branches
+ * on, and translates) and {@link RUN_FAILED_MESSAGE}; the error itself belongs in the log and on the
+ * run row, which is where the runners put it. Outside production the raw message rides the frame as
+ * it always did (see {@link exposeStreamErrorDetails}). A message the library words itself
+ * (`quota_exceeded`, `output_rejected`, `structured_output_invalid`) is sent as it is.
+ */
+export function streamFailure(error: unknown): StreamError {
+  const detail = error instanceof Error ? error.message : String(error);
+  const code = agentFailureCode(error);
+  if (WORDED_CODES.has(code)) {
+    return { code, message: detail };
+  }
+  const exposed = streamErrorDetails ?? process.env.NODE_ENV !== 'production';
+  return { code, message: exposed ? detail : RUN_FAILED_MESSAGE };
 }
 
 /**
@@ -902,12 +968,14 @@ async function loadSelectedHistory(
   input: AgentRunInput,
   hooks: AgentLoopHooks,
 ): Promise<TurnHistory> {
-  return hooks.step('load:thread', async (): Promise<TurnHistory> => {
+  const recorded = await hooks.step('load:thread', async (): Promise<TurnHistory> => {
     const thread = await readThreadForTurn(deps, input.threadId);
+    // Settled BEFORE the ceiling sees it and inside the checkpoint: what the calls' rows said is
+    // part of the recorded payload, so a replay composes the same prompt without asking again.
     const { keep, drop } = splitHistory(
       deps.historyPolicy,
       input,
-      toModelMessages(thread.messages),
+      await settleHistory(deps, toModelMessages(thread.messages)),
     );
     return {
       messages: keep,
@@ -916,6 +984,29 @@ async function loadSelectedHistory(
       hasAssistantMessage: thread.hasAssistantMessage,
     };
   });
+  // Settled once more on the way out of the journal: a payload recorded before the read settled
+  // dangling calls itself still has to reach the model as a prompt a provider accepts. A no-op —
+  // the same array elements — on a payload that is already whole.
+  return { ...recorded, messages: settleDanglingToolCalls(recorded.messages) };
+}
+
+/**
+ * Settle the history's dangling tool calls (see {@link settleDanglingToolCalls}) from the calls' own
+ * rows where the store can read them. A store that cannot answer, or fails to, leaves the calls to
+ * be put to the model as never completed.
+ */
+async function settleHistory(
+  deps: AgentLoopDeps,
+  messages: ModelMessage[],
+): Promise<ModelMessage[]> {
+  const dangling = danglingToolCallIds(messages);
+  if (dangling.length === 0) {
+    return messages;
+  }
+  const outcomes = await Promise.resolve(deps.store.toolCallOutcomes?.(dangling) ?? []).catch(
+    (): ToolCallOutcome[] => [],
+  );
+  return settleDanglingToolCalls(messages, outcomes);
 }
 
 /** The three things a turn reads off its thread, however the store was able to answer them. */
@@ -1000,7 +1091,13 @@ async function loadWholeThread(
 ): Promise<TurnHistory> {
   const thread = await hooks.step('load:thread', () => deps.store.getThread(input.threadId));
   const stored = thread?.messages ?? [];
-  const { keep, drop } = splitHistory(deps.historyPolicy, input, toModelMessages(stored));
+  // Outside the checkpoint (this shape journals the store's whole `ThreadDetail`), so it is settled
+  // from the messages alone: a pure function of the recorded payload, the same on every replay.
+  const { keep, drop } = splitHistory(
+    deps.historyPolicy,
+    input,
+    settleDanglingToolCalls(toModelMessages(stored)),
+  );
   return {
     messages: keep,
     dropped: drop,
@@ -1292,6 +1389,17 @@ async function awaitElicitation(
       ctx,
     ),
   );
+}
+
+/**
+ * The per-CALL half of a tool's context: which call this is, and the key that stays the same for
+ * every execution of it (see {@link AiToolCtx.idempotencyKey}).
+ */
+export function toolCallContext<T extends { runId: string }>(
+  ctx: T,
+  toolCallId: string,
+): T & { toolCallId: string; idempotencyKey: string } {
+  return { ...ctx, toolCallId, idempotencyKey: `${ctx.runId}:${toolCallId}` };
 }
 
 /** The tool context a turn hands to a handler — and to the wait an elicitation parks on. */
@@ -2005,7 +2113,7 @@ async function invokeClaimedTool(
                 return deps.registry.invoke(
                   call.name,
                   call.input,
-                  { ...ctx, emitUi: ui.emit },
+                  { ...toolCallContext(ctx, call.id), emitUi: ui.emit },
                   deps.rolesPolicy,
                 );
               },

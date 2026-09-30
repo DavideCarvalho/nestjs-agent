@@ -4,6 +4,7 @@ import {
   AgentStreamError,
   type AttachmentRef,
   type PageContext,
+  streamFailure,
 } from '@dudousxd/nestjs-agent-core';
 import {
   BadRequestException,
@@ -219,10 +220,7 @@ export class ChatController {
       const payload =
         error instanceof AgentStreamError
           ? { code: error.code, message: error.message }
-          : {
-              code: 'run_failed',
-              message: error instanceof Error ? error.message : 'stream error',
-            };
+          : streamFailure(error);
       res.write(`event: error\ndata: ${JSON.stringify(payload)}\n\n`);
     }
     res.end();

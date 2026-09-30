@@ -9,7 +9,7 @@ import {
   type Decision,
   type ElicitationReply,
   type LlmStepEnvelope,
-  QuotaExceededError,
+  RUN_ENDED_BEFORE_TOOL_CALL,
   RunCancelledError,
   type ToolCallRequest,
   type ToolStepEnvelope,
@@ -20,7 +20,9 @@ import {
   releaseThreadRun,
   runAgentLoop,
   settleAll,
+  settleDeadRun,
   settleUnsettledDelegation,
+  streamFailure,
 } from '@dudousxd/nestjs-agent-core';
 import { RUN_GATEWAY, Workflow } from '@dudousxd/nestjs-durable';
 import {
@@ -28,7 +30,7 @@ import {
   type WorkflowCtx,
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter, utcDay } from '../agent-deps.js';
 import {
@@ -55,6 +57,8 @@ import { stepOf } from './outside-workflow-ctx.js';
 @Injectable()
 @Workflow({ name: 'agent.run', version: '1' })
 export class AgentRunWorkflow {
+  private readonly logger = new Logger(AgentRunWorkflow.name);
+
   constructor(
     @Inject(AGENT_DEPS_FACTORY) private readonly factory: AgentDepsFactory,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
@@ -407,9 +411,19 @@ export class AgentRunWorkflow {
       // the checkpoints that actually disagreed. The stream still has to be settled, though, or the
       // subscriber hangs on a run the engine is about to fail.
       if (isReplayIntegrityError(error)) {
-        const failure = { code: 'run_failed' as const, message: (error as Error).message };
-        publishAgentRunFailed({ runId: ctx.runId, ...failure });
-        await (await hooks.openSink()).fail(failure);
+        const detail = (error as Error).message;
+        const code = agentFailureCode(error);
+        this.logger.error(`agent run ${ctx.runId} failed (${code}): ${detail}`);
+        publishAgentRunFailed({ runId: ctx.runId, code, message: detail });
+        // What the checkpoints below would have settled, written straight to the store instead:
+        // the run's row, the calls it left awaiting a decision, and — for a thread's own turn — the
+        // thread, so the next message starts a turn instead of queueing behind a run that is gone.
+        await settleDeadRun(this.store, {
+          runId: ctx.runId,
+          threadId: input.threadId,
+          failure: { code, message: detail },
+        });
+        await (await hooks.openSink()).fail(streamFailure(error));
         throw error;
       }
       // A real failure (e.g. quota exceeded, which throws before the sink is even opened) would
@@ -418,19 +432,23 @@ export class AgentRunWorkflow {
       // still records the run as failed.
       const message = error instanceof Error ? error.message : String(error);
       const code = agentFailureCode(error);
+      this.logger.error(`agent run ${ctx.runId} failed (${code}): ${message}`);
       publishAgentRunFailed({ runId: ctx.runId, code, message });
       // Settle the run's persisted outcome (the loop only records completions — it can't catch its
       // own crash). Optional-call: a store without run recording degrades to no reliability metrics.
-      await stepOf(ctx)(
-        'persist:run:fail',
-        () =>
-          this.store.recordRunEnd?.({
-            runId: ctx.runId,
-            status: 'failed',
-            errorCode: code,
-            errorMessage: message,
-          }) ?? Promise.resolve(),
-      );
+      await stepOf(ctx)('persist:run:fail', async () => {
+        await this.store.recordRunEnd?.({
+          runId: ctx.runId,
+          status: 'failed',
+          errorCode: code,
+          errorMessage: message,
+        });
+        // A call this run had put to a person is not waiting for anything any more. Inside the same
+        // checkpoint, so it adds no position to a failing run's journal.
+        await Promise.resolve(
+          this.store.failUnsettledToolCalls?.(ctx.runId, RUN_ENDED_BEFORE_TOOL_CALL),
+        ).catch(() => 0);
+      });
       // The queue behind a failed turn pauses — its next message would likely fail the same way.
       const queueFrame = await this.advanceQueue(ctx, input, 'failed', message);
       await stepOf(ctx)('deactivate', () =>
@@ -443,7 +461,8 @@ export class AgentRunWorkflow {
       if (queueFrame !== undefined) {
         await writer.write(encodeStreamEvent(queueFrame));
       }
-      await writer.fail({ code, message });
+      // The frame is for the person reading the chat; the error itself went to the log and the row.
+      await writer.fail(streamFailure(error));
       throw error;
     }
   }

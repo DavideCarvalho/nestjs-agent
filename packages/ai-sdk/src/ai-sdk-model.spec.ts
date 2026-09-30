@@ -79,6 +79,25 @@ describe('aiSdkModel', () => {
     streamTextMock.mockReturnValue(fakeStreamResult());
   });
 
+  it('throws the provider error the stream carried, not the SDK\u2019s "No output generated"', async () => {
+    const providerError = new Error('tool_use ids were found without tool_result blocks');
+    const noOutput = Promise.reject(new Error('No output generated. Check the stream for errors.'));
+    noOutput.catch(() => undefined);
+    streamTextMock.mockReturnValue(
+      fakeStreamResult({
+        stream: (async function* generate() {
+          yield { type: 'error', error: providerError };
+        })(),
+        toolCalls: noOutput,
+        usage: noOutput,
+        finalStep: noOutput,
+      }),
+    );
+    const provider = aiSdkModel('openai/gpt-4o');
+    await expect(
+      provider.runTurn({ system: 's', messages: [], tools: [], sink: createSink() }),
+    ).rejects.toBe(providerError);
+  });
   it('streams text deltas to the sink in order and accumulates the final text', async () => {
     const sink = createSink();
     const model = aiSdkModel('openai/gpt-4o');

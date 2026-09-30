@@ -39,6 +39,20 @@ export { AgentRegistry } from './agent-registry.js';
 export { isReplayIntegrityError } from './replay-integrity.js';
 export { isControlFlowSignal } from './control-flow.js';
 export {
+  danglingToolCallIds,
+  settleDanglingToolCalls,
+  RUN_ENDED_BEFORE_TOOL_CALL,
+  UNFINISHED_TOOL_CALL,
+  type ToolCallOutcome,
+} from './dangling-tool-calls.js';
+export {
+  settleDeadRun,
+  RUN_NOT_ACTIVE_CODE,
+  RUN_NOT_ACTIVE_MESSAGE,
+  RUN_NO_LONGER_RUNNING,
+  type SettleDeadRunInput,
+} from './dead-run.js';
+export {
   normalizeDelegation,
   detachedStarted,
   detachedDelivered,
@@ -61,6 +75,10 @@ export {
   QuotaExceededError,
   RunCancelledError,
   agentFailureCode,
+  streamFailure,
+  exposeStreamErrorDetails,
+  toolCallContext,
+  RUN_FAILED_MESSAGE,
   withToolTimeout,
   settleAll,
   withAskTool,

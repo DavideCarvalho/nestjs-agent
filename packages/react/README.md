@@ -305,6 +305,43 @@ A refused settlement (403 "not your thread" or "not your approval", 410 "expired
 `call.error` with the affordance still live, rather than escaping as an unhandled rejection. Render
 it — a button that silently does nothing is indistinguishable from a broken one.
 
+### When a run fails
+
+The server closes a failed run's stream with `event: error` + `{ code, message }`. `chat.error`
+carries the message; `chat.runError` carries the whole frame — `{ code, message, runId? }`, `null`
+again once the next attempt starts — so the app words each failure itself. The library renders
+nothing for it:
+
+```tsx
+import { isRunNotActiveError } from '@dudousxd/nestjs-agent-react';
+
+const FRIENDLY: Record<string, string> = {
+  replay_diverged: 'This answer was interrupted by an update. Send your message again.',
+  model_no_output: 'The model returned nothing. Try again.',
+  run_failed: 'Something went wrong on our side. Try again.',
+};
+
+{chat.runError && <p role="alert">{FRIENDLY[chat.runError.code ?? ''] ?? chat.runError.message}</p>}
+```
+
+`AGENT_RUN_ERROR_CODES` lists the codes this library's loop sends (`quota_exceeded`,
+`output_rejected`, `structured_output_invalid`, `replay_diverged`, `model_no_output`, `run_failed`).
+In production the `message` of the last three is one generic sentence — the error itself stays in
+the server's log.
+
+A failed turn leaves its thread usable: the next send starts a new turn. What it cannot do is
+answer a card the dead turn left on screen. `approve` / `reject` / `answer` / `skip` on one reject
+with an `AgentHttpError` whose `status` is `409` and `code` is `run_not_active`:
+
+```tsx
+try {
+  await chat.approve({ toolCallId });
+} catch (error) {
+  if (isRunNotActiveError(error)) showStale('This request expired with its turn — send it again.');
+  else throw error;
+}
+```
+
 ### Completing as you type
 
 `useComposerAutocomplete` is the state machine behind a `/`-style menu in the composer. It is

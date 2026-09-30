@@ -38,6 +38,7 @@ import type {
   WhileRunning,
 } from './queue/model.js';
 import { type QuotaState, useQuota } from './quota/use-quota.js';
+import type { AgentRunFailure } from './run-errors.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 import {
   type AgentMessageMetadata,
@@ -388,6 +389,8 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   // effect below has asked for anything, and a page never flashes its empty state.
   const [historyFor, setHistoryFor] = useState<string | undefined>(undefined);
   const [historyError, setHistoryError] = useState<Error | null>(null);
+  // How the last run's stream said it failed (`event: error`), until the next attempt starts.
+  const [runError, setRunError] = useState<AgentRunFailure | null>(null);
   // The model pinned on the loaded thread.
   const [threadModel, setThreadModel] = useState<string | null>(null);
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
@@ -489,7 +492,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       onMeta,
       onAttemptStart: () => {
         settlingRunIdRef.current = undefined;
+        setRunError(null);
       },
+      onRunError: (failure) => setRunError(failure),
       // A queued turn this chat went to attach to had already finished: read what it wrote.
       onResumeGone: () => {
         void resyncFromThread();
@@ -635,6 +640,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     setPickedModel(undefined);
     setBackgroundRuns([]);
     setHistoryError(null);
+    setRunError(null);
     autoResumeRunIdRef.current = undefined;
     pendingPin.current = undefined;
     applyQueue(EMPTY_QUEUE);
@@ -1392,6 +1398,13 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     isLoadingHistory,
     /** Reading the thread's history failed. */
     historyError,
+    /**
+     * How the last run's stream said it failed — the `event: error` frame's `code` and `message` —
+     * or `null`. Cleared when the next attempt starts and when the chat moves to another thread.
+     * `chat.error` still carries the message; this is where the `code` is, so the app can word each
+     * failure itself (`replay_diverged`, `model_no_output`, `run_failed`, `quota_exceeded`, …).
+     */
+    runError,
     /**
      * The thread this chat is on right now: the `threadId` option, else the one the backend created
      * on the first send. A getter, because the created id is learned mid-stream.
