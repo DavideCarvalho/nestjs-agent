@@ -26,6 +26,7 @@ import { Step } from '@dudousxd/nestjs-durable';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { childSinkWriter } from '../agent-deps.js';
+import { outsideWorkflowCtx } from './outside-workflow-ctx.js';
 
 /**
  * Serializable input for the dispatched `llm` step: a {@link LlmStepEnvelope} plus the sink routing
@@ -89,7 +90,11 @@ export class AgentRunSteps {
    * across however many turns/retries it takes.
    */
   @Step({ retries: 3 })
-  async llm(input: DispatchedLlmInput): Promise<BufferedModelTurnResult> {
+  llm(input: DispatchedLlmInput): Promise<BufferedModelTurnResult> {
+    return outsideWorkflowCtx(() => this.runLlm(input));
+  }
+
+  private async runLlm(input: DispatchedLlmInput): Promise<BufferedModelTurnResult> {
     const deps = this.factory.forAgent(input.agentName);
     // The envelope carries only wire-safe data — a `ToolDefinition` holds a live Zod/StandardSchema
     // instance that can't survive JSON transport, so this handler re-derives it from `input.actor`,
@@ -177,7 +182,13 @@ export class AgentRunSteps {
    * ATTEMPT, so a retried invocation gets its own fresh timeout window.
    */
   @Step()
-  async tool(input: DispatchedToolInput): Promise<unknown> {
+  tool(input: DispatchedToolInput): Promise<unknown> {
+    // A tool is the application's code: whatever it starts is a run of its own, never a position
+    // in the agent run's journal (see `outsideWorkflowCtx`).
+    return outsideWorkflowCtx(() => this.runTool(input));
+  }
+
+  private async runTool(input: DispatchedToolInput): Promise<unknown> {
     const deps = this.factory.forAgent(input.ctx.agentName);
     // The approval gate lives in the LOOP, which resolved this call's kind from the registry of the
     // process that ran the body. This worker has its own registry, and it is the process that
