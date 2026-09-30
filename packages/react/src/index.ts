@@ -66,7 +66,9 @@ export {
   AgentClient,
   type AgentClientOptions,
   AgentHttpError,
+  type AgentRequestError,
   type CancelResult,
+  type HttpErrorListener,
   type ThreadPatch,
 } from './client.js';
 // Named, never `export *`: a wildcard re-export from a barrel defeats a bundler's ability to see

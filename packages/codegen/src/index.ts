@@ -50,15 +50,17 @@ const CLIENT_CONFIG =
   'quota: { enforced: boolean }; identity: { anonymous: boolean } }';
 /** `GET /agent/quota` — mirrors `QuotaReport` in core/src/spi/quota-provider.ts. */
 const QUOTA_REPORT =
-  "{ windows: { period: 'day' | 'month'; usedTokens: number; limitTokens?: number; usedUsd: number; " +
-  "limitUsd?: number; resetsAt?: string }[]; blocked?: { period: 'day' | 'month'; reason?: string } }";
+  "{ windows: { period: 'day' | 'month'; usedTokens?: number; limitTokens?: number; usedUsd: number; " +
+  "limitUsd?: number; resetsAt?: string; warnAt?: number }[]; blocked?: { period: 'day' | 'month'; reason?: string }; " +
+  "warning?: { period: 'day' | 'month'; ratio: number; reason?: string } }";
 /** `GET /agent/models` — mirrors `ModelCatalogView` in core/src/spi/model-catalog.ts. */
 const MODEL_CATALOG_VIEW =
   '{ default: string | null; providers: { id: string; label: string; models: { id: string; ' +
   'label: string; description?: string; badges?: string[]; available: boolean; ' +
-  'unavailableReason?: string; contextWindow?: number }[] }[] }';
+  'unavailableReason?: string; contextWindow?: number }[] }[]; locked?: { model: string; reason?: string } }';
 /** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
-const AGENT_CATALOG_ENTRY = '{ name: string; description: string; isDefault?: boolean }';
+const AGENT_CATALOG_ENTRY =
+  '{ name: string; description: string; isDefault?: boolean; lockedModel?: string }';
 
 const TOOL_RESULT_FIELD = '{ path: string; label: string; unit?: string }';
 /** Mirrors `ToolResultView` in core/src/tool-presentation.ts. */

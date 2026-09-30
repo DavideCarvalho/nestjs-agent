@@ -174,8 +174,27 @@ describe('answers submitted for a parked question set', () => {
     expect((await post(booted, 'answer', { toolCallId: 'call-1' })).status).toBe(201);
 
     expect(booted.signalled).toEqual([
-      { toolCallId: 'call-1', reply: { answers: { q1: ['a', 'b'] }, answeredByRef: 'u1' } },
-      { toolCallId: 'call-1', reply: { answers: {}, answeredByRef: 'u1' } },
+      {
+        toolCallId: 'call-1',
+        reply: { answers: { q1: ['a', 'b'] }, answeredByRef: 'u1', answeredVia: 'web' },
+      },
+      { toolCallId: 'call-1', reply: { answers: {}, answeredByRef: 'u1', answeredVia: 'web' } },
+    ]);
+  });
+
+  it('records the surface an answer or a skip came through, like a decision', async () => {
+    const booted = await boot();
+
+    expect((await post(booted, 'answer', { toolCallId: 'call-1', via: 'slack' })).status).toBe(201);
+    expect((await post(booted, 'skip', { toolCallId: 'call-1', via: 'teams' })).status).toBe(201);
+    expect((await post(booted, 'answer', { toolCallId: 'call-1', via: 42 })).status).toBe(400);
+
+    expect(booted.signalled).toEqual([
+      { toolCallId: 'call-1', reply: { answers: {}, answeredByRef: 'u1', answeredVia: 'slack' } },
+      {
+        toolCallId: 'call-1',
+        reply: { answers: {}, skipped: true, answeredByRef: 'u1', answeredVia: 'teams' },
+      },
     ]);
   });
 
@@ -333,7 +352,11 @@ describe('answers checked against the questions they answer', () => {
     expect(booted.signalled).toEqual([
       {
         toolCallId: 'call-1',
-        reply: { answers: { seats: ['3'], when: ['2026-10-01'] }, answeredByRef: 'u1' },
+        reply: {
+          answers: { seats: ['3'], when: ['2026-10-01'] },
+          answeredByRef: 'u1',
+          answeredVia: 'web',
+        },
       },
     ]);
   });

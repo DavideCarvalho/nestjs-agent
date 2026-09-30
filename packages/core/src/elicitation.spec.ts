@@ -180,4 +180,42 @@ describe('resolveElicitation — a reply that came back off the approvals inbox'
     const reply = { answers: { scope: ['file'] }, answeredByRef: 'u1' };
     expect(normalizeElicitationReply(reply)).toBe(reply);
   });
+
+  it('carries the channel a decision came through as the one it was answered through', () => {
+    expect(
+      normalizeElicitationReply({
+        approved: true,
+        executedByRef: 'admin-7',
+        decidedVia: 'console',
+      }),
+    ).toMatchObject({ answeredByRef: 'admin-7', answeredVia: 'console' });
+  });
+});
+
+describe('who answered — recorded on the settled outcome', () => {
+  it('names who answered and through which surface, like an approval names who decided', () => {
+    const outcome = settleElicitation(request, {
+      answers: { scope: ['file'] },
+      answeredByRef: 'u1',
+      answeredVia: 'slack',
+    });
+    expect(outcome).toMatchObject({ answeredBy: 'u1', answeredVia: 'slack' });
+  });
+
+  it('records a skip the same way', () => {
+    expect(
+      resolveElicitation(request, {
+        answers: {},
+        skipped: true,
+        answeredByRef: 'u1',
+        answeredVia: 'web',
+      }),
+    ).toMatchObject({ skipped: true, answeredBy: 'u1', answeredVia: 'web' });
+  });
+
+  it('leaves both out when the reply does not say', () => {
+    const outcome = resolveElicitation(request, { answers: {} });
+    expect(outcome).not.toHaveProperty('answeredBy');
+    expect(outcome).not.toHaveProperty('answeredVia');
+  });
 });

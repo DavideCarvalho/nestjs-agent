@@ -136,6 +136,29 @@ describe('MediaUploadError', () => {
     await expect(upload(pdf(), {})).rejects.toBeInstanceOf(MediaUploadError);
     await expect(upload(pdf(), {})).rejects.toMatchObject({ status: 413 });
   });
+
+  it("carries the server's message, code and body, and reports it to onHttpError", async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({ message: 'PDFs over 20 MB are refused', code: 'too_large' }, { status: 413 }),
+    );
+    const onHttpError = vi.fn();
+    const client = new AgentClient({
+      fetch: fetchImpl as unknown as typeof fetch,
+      onHttpError,
+      attachments: { upload: mediaAttachments() },
+    });
+
+    const error = await client.uploadAttachment(pdf()).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(MediaUploadError);
+    expect(error).toMatchObject({
+      status: 413,
+      code: 'too_large',
+      message: 'PDFs over 20 MB are refused',
+      body: { message: 'PDFs over 20 MB are refused', code: 'too_large' },
+    });
+    expect(onHttpError).toHaveBeenCalledWith(error);
+  });
 });
 
 describe('mediaAttachments — the one-line default', () => {

@@ -195,7 +195,13 @@ function sharedProviders(durable: boolean): Provider[] {
       // omitted, the ledger provider still reports usage, with no ceiling to block on.
       provide: AGENT_QUOTA_PROVIDER,
       useFactory: (o: AgentModuleOptions, store: AgentStore) =>
-        isQuotaProvider(o.quota) ? o.quota : new LedgerQuotaProvider(store, o.quota?.limits),
+        isQuotaProvider(o.quota)
+          ? o.quota
+          : new LedgerQuotaProvider(
+              store,
+              o.quota?.limits,
+              o.quota?.warnAt !== undefined ? { warnAt: o.quota.warnAt } : {},
+            ),
       inject: [AGENT_OPTIONS, AGENT_STORE],
     },
     {

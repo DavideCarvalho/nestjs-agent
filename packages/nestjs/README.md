@@ -297,7 +297,8 @@ through `AgentService.subscribeAs(actor, runId)`.
 ### Resuming a dropped stream
 
 Every event frame of `POST /agent/chat` and `GET /agent/chat/:runId/stream` carries an SSE `id:` —
-its 1-based position in the run, the same on every attach. `GET …/stream?after=<n>` (or the
+its 1-based position in the run, the same on every attach (a runner of your own may number with gaps,
+as long as ids only increase — see *Numbering a stream you rebuild* in the protocol doc). `GET …/stream?after=<n>` (or the
 `Last-Event-ID` header) skips what a reconnecting client already has; the React transport uses it to
 continue a message after a network drop. See docs/stream-protocol.md.
 
@@ -346,8 +347,9 @@ turn rather than answering on another. `staticModelCatalog(view)` wraps a fixed 
 
 ### Budgets: `GET /agent/quota`
 
-`GET /agent/quota` reports `{ windows: [{ period: 'day' | 'month', usedTokens, limitTokens?,
-usedUsd, limitUsd?, resetsAt? }], blocked? }` from a `QuotaProvider`. The default,
+`GET /agent/quota` reports `{ windows: [{ period: 'day' | 'month', usedTokens?, limitTokens?,
+usedUsd, limitUsd?, resetsAt?, warnAt? }], blocked?, warning? }` from a `QuotaProvider` (a USD-only
+budget leaves `usedTokens` out; `quota: { limits, warnAt: 0.8 }` adds a soft-limit `warning`). The default,
 `LedgerQuotaProvider`, reads the usage ledger (day, plus month when the store has `usageBetween`)
 and only reports. Configure it and it also gates sends — a `blocked` report refuses `POST
 /agent/chat` with `429 { code: 'quota_exceeded', period }` before the turn starts:

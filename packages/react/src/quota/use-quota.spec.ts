@@ -52,6 +52,41 @@ describe('useQuota', () => {
   });
 });
 
+describe('useQuota — the soft limit', () => {
+  it("exposes the server's warning", async () => {
+    const api = backend(async () => ({
+      windows: [{ period: 'month', usedUsd: 4.5, limitUsd: 5, warnAt: 0.8 }],
+      warning: { period: 'month', ratio: 0.9 },
+    }));
+    const { result } = renderHook(() => useQuota({ backend: api }));
+    await waitFor(() => expect(result.current.warning).toEqual({ period: 'month', ratio: 0.9 }));
+    expect(result.current.month?.usedTokens).toBeUndefined();
+  });
+
+  it("derives it from the windows' warnAt when the server sent none", async () => {
+    const api = backend(async () => ({
+      windows: [{ period: 'day', usedUsd: 0.85, limitUsd: 1, warnAt: 0.8 }],
+    }));
+    const { result } = renderHook(() => useQuota({ backend: api }));
+    await waitFor(() => expect(result.current.warning).toEqual({ period: 'day', ratio: 0.85 }));
+  });
+
+  it('has no warning below the threshold, or while blocked', async () => {
+    const api = backend(async () => BLOCKED);
+    const { result } = renderHook(() => useQuota({ backend: api }));
+    await waitFor(() => expect(result.current.blocked).not.toBeNull());
+    expect(result.current.warning).toBeNull();
+  });
+
+  it('chat.quota carries it too', async () => {
+    const api = backend(async () => ({
+      windows: [{ period: 'day', usedUsd: 0.9, limitUsd: 1, warnAt: 0.8 }],
+    }));
+    const { result } = renderHook(() => useAgentChat({ backend: api }));
+    await waitFor(() => expect(result.current.quota.warning?.period).toBe('day'));
+  });
+});
+
 describe('useAgentChat({ blocked })', () => {
   it('refuses to send while a window is exhausted, without calling the server', async () => {
     const api = backend(async () => BLOCKED);

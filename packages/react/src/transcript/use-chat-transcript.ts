@@ -92,11 +92,15 @@ export interface MessageActionInput {
 export interface AnswerInput {
   toolCallId: string;
   answers?: Record<string, string[]>;
+  /** The surface the answer came through; the server records `'web'` when omitted. */
+  via?: string;
 }
 
 /** Declining a parked question set. */
 export interface SkipInput {
   toolCallId: string;
+  /** The surface the skip came through; the server records `'web'` when omitted. */
+  via?: string;
 }
 
 /** Approving a tool call parked on a human. */

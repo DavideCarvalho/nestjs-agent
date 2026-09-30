@@ -84,7 +84,9 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
   /**
    * The model every turn runs on, controlled by you. Omitted → `chat.models.selected` (what
    * `chat.models.select(id)` picked), else the thread's pinned model, else the server default. A
-   * single send can still override it with `sendMessage(msg, { body: { model } })`.
+   * single send can still override it with `sendMessage(msg, { body: { model } })`. Sent as the
+   * turn's `model`, which the server applies to that turn only — pinning a model on the thread is
+   * `chat.models.pinToThread(id)`.
    */
   model?: string;
   /**
@@ -157,21 +159,41 @@ export interface ChatBackground {
   refresh: () => Promise<void>;
 }
 
-/** The chat's model picker state. Loaded the first time `list`/`providers` is read. */
+/**
+ * The chat's model picker state. Loaded the first time `list`/`providers`/`defaultModel`/`locked`
+ * is read.
+ *
+ * Two different choices: `select(id)` picks the model this chat's following sends name — each send
+ * carries it as `model`, which the server applies to that turn only and never stores; the pick is
+ * this conversation's, so switching threads drops it. `pinToThread(id)` stores a model on the
+ * thread (`PATCH threads/:id { model }`), which every later turn without a `model` of its own runs
+ * on, across reloads and devices.
+ */
 export interface ChatModels {
   /** Every model the caller may pick, flattened (`[]` until loaded). */
   readonly list: ModelOption[];
   /** The same, grouped by provider. */
   readonly providers: ModelsState['providers'];
-  /** What the next turn runs on: the `model` option, the pick, the thread's pin, else the default. */
+  /**
+   * What the next turn runs on: the lock, the `model` option, the pick, the thread's pin, else the
+   * default.
+   */
   selected: string | null;
+  /** The model pinned on the thread (`null` when none, or before the thread is read). */
+  pinned: string | null;
   /** The catalog's default — what a turn runs on when nothing is picked or pinned (`null` until loaded). */
   readonly defaultModel: string | null;
-  /** Run the following turns on `id` (sent as the body's `model`). */
+  /**
+   * The agent always runs on one model (`{ model, reason? }`), or `null`. While locked, `select`
+   * does nothing and `selected` is the locked model.
+   */
+  readonly locked: ModelsState['locked'];
+  /** Run this chat's following sends on `id` — each send's `model`, that turn only. */
   select: (id: string) => void;
   /**
    * Pin `id` on the thread (`null` unpins) — every later turn without its own `model` runs on it,
-   * across reloads. On a chat with no thread yet, the pin lands when the first send creates one.
+   * across reloads. Replaces the pick, so the next send runs on the pin. On a chat with no thread
+   * yet, the pin lands when the first send creates one.
    */
   pinToThread: (id: string | null) => Promise<void>;
   isLoading: boolean;
@@ -262,6 +284,8 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
   const pickedModelRef = useRef(pickedModel);
   pickedModelRef.current = pickedModel;
+  // The agent is locked to one model (read off the catalog once it loads).
+  const lockedRef = useRef(false);
   // A pin asked for before the chat had a thread — sent once the first send creates one.
   const pendingPin = useRef<{ model: string | null } | undefined>(undefined);
 
@@ -314,7 +338,8 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         const regenerate = regenerateNext.current;
         regenerateNext.current = false;
         const threadId = currentThreadId();
-        const model = current.model ?? pickedModelRef.current;
+        // A locked agent runs on its own model: a pick is not sent (the server would refuse it).
+        const model = current.model ?? (lockedRef.current ? undefined : pickedModelRef.current);
         return {
           // Read per send: a host that switches agents before the first message (a picker on a
           // new chat) sends the one picked now, not the one this chat mounted with.
@@ -396,6 +421,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     setRunId(undefined);
     setActiveRunId(null);
     setThreadModel(null);
+    setPickedModel(undefined);
     setBackgroundRuns([]);
     setHistoryError(null);
     autoResumeRunIdRef.current = undefined;
@@ -603,21 +629,25 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   );
 
   const answer = useCallback(
-    async ({ toolCallId, answers }: AnswerInput): Promise<void> => {
+    async ({ toolCallId, answers, via }: AnswerInput): Promise<void> => {
       await requireBackendMethod(
         client,
         'answerToolCall',
       )({
         toolCallId,
         ...(answers !== undefined ? { answers } : {}),
+        ...(via !== undefined ? { via } : {}),
       });
     },
     [client],
   );
 
   const skip = useCallback(
-    async ({ toolCallId }: SkipInput): Promise<void> => {
-      await requireBackendMethod(client, 'skipToolCall')({ toolCallId });
+    async ({ toolCallId, via }: SkipInput): Promise<void> => {
+      await requireBackendMethod(
+        client,
+        'skipToolCall',
+      )({ toolCallId, ...(via !== undefined ? { via } : {}) });
     },
     [client],
   );
@@ -713,11 +743,16 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     // After render: the getter may be read while a child renders.
     queueMicrotask(() => setModelsWanted(true));
   }, []);
-  const selectModel = useCallback((id: string) => setPickedModel(id), []);
+  lockedRef.current = catalog.locked !== null;
+  const selectModel = useCallback((id: string) => {
+    if (!lockedRef.current) setPickedModel(id);
+  }, []);
   const pinToThread = useCallback(
     async (model: string | null): Promise<void> => {
       const threadId = currentThreadId();
       setThreadModel(model);
+      // The pin is what later turns run on: a pick would override it on every send.
+      setPickedModel(undefined);
       if (threadId === undefined) {
         pendingPin.current = { model };
         return;
@@ -736,10 +771,21 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       wantModels();
       return catalog.providers;
     },
-    selected: options.model ?? pickedModel ?? threadModel ?? catalog.defaultModel ?? null,
+    selected:
+      catalog.locked?.model ??
+      options.model ??
+      pickedModel ??
+      threadModel ??
+      catalog.defaultModel ??
+      null,
+    pinned: threadModel,
     get defaultModel() {
       wantModels();
       return catalog.defaultModel;
+    },
+    get locked() {
+      wantModels();
+      return catalog.locked;
     },
     select: selectModel,
     pinToThread,

@@ -145,13 +145,14 @@ export interface AgentModuleOptions {
   sink?: TokenStreamSink;
   /**
    * The caller's budget. `{ limits: { day?: { tokens?, usd? }, month?: { tokens?, usd? } } }` puts
-   * ceilings on the built-in ledger provider; a {@link QuotaProvider} of your own replaces it. Either
+   * ceilings on the built-in ledger provider, and `warnAt` (`0..1`, e.g. `0.8`) a soft limit past
+   * which the report carries a `warning`; a {@link QuotaProvider} of your own replaces it. Either
    * way `GET <base>/quota` reports it and a send whose report comes back `blocked` is refused with
    * `429` before the turn starts. Omit → reported (usage off the ledger), never enforced — for a
    * public (anonymous) deployment that means unbounded model spend, so set limits there; they apply
    * per actor, which is per browser in anonymous mode.
    */
-  quota?: { limits: QuotaLimits } | QuotaProvider;
+  quota?: { limits: QuotaLimits; warnAt?: number } | QuotaProvider;
   /**
    * Which models a caller may pick — `GET <base>/models`, a send's `model`, a thread's pinned model
    * (`PATCH <base>/threads/:id { model }`). Omit → the catalog the model provider carries

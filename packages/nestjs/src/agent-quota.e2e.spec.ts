@@ -72,6 +72,18 @@ describe('GET /agent/quota', () => {
     expect(typeof day.resetsAt).toBe('string');
   });
 
+  it('warns past warnAt: the threshold on every window, the warning on the report', async () => {
+    const { server } = await boot({ quota: { limits: { day: { tokens: 5000 } }, warnAt: 0.0001 } });
+    await chat(server);
+
+    const res = await quota(server);
+
+    expect(res.body.windows[0]).toMatchObject({ period: 'day', limitTokens: 5000, warnAt: 0.0001 });
+    expect(res.body.blocked).toBeUndefined();
+    expect(res.body.warning).toMatchObject({ period: 'day' });
+    expect(res.body.warning.ratio).toBeGreaterThan(0);
+  });
+
   it('carries configured ceilings on the windows', async () => {
     const { server } = await boot({ quota: { limits: { day: { tokens: 5000 } } } });
     const res = await quota(server);

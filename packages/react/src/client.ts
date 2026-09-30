@@ -22,21 +22,53 @@ import type {
   UploadAttachmentOptions,
 } from './backend.js';
 
+import {
+  type AgentRequestError,
+  type ErrorAnswer,
+  type HttpErrorListener,
+  readErrorAnswer,
+  readErrorResponse,
+  reportHttpError,
+} from './http-error.js';
+
 export type { ThreadPatch } from './backend.js';
+export type { AgentRequestError, HttpErrorListener } from './http-error.js';
 
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
- * branch (e.g. 403 → "not your thread", 429 → quota) instead of string-matching a generic Error.
+ * branch (e.g. 403 → "not your thread", 429 → quota) instead of string-matching a generic Error,
+ * and what the server said: `message` is the body's `message` when it sent one (so a hook that
+ * shows `error.message` shows the server's words), `code` its machine-readable `code`, and `body`
+ * the whole answer, parsed when it is JSON.
  */
-export class AgentHttpError extends Error {
+export class AgentHttpError extends Error implements AgentRequestError {
+  /** The answer's body: parsed JSON, else its text; `undefined` when empty. */
+  readonly body: unknown;
+  /** The body's `code` (`quota_exceeded`, …), when the server sent one. */
+  readonly code: string | undefined;
+
   constructor(
     readonly status: number,
     readonly method: string,
     readonly path: string,
     statusText: string,
+    answer: ErrorAnswer = { body: undefined, message: undefined, code: undefined },
   ) {
-    super(`Agent request failed: ${method} ${path} → ${status} ${statusText}`);
+    super(answer.message ?? `Agent request failed: ${method} ${path} → ${status} ${statusText}`);
     this.name = 'AgentHttpError';
+    this.body = answer.body;
+    this.code = answer.code;
+  }
+
+  /** Read a refused `response`'s body into an error. */
+  static async from(response: Response, method: string, path: string): Promise<AgentHttpError> {
+    return new AgentHttpError(
+      response.status,
+      method,
+      path,
+      response.statusText,
+      await readErrorResponse(response),
+    );
   }
 }
 
@@ -74,6 +106,13 @@ export interface AgentClientOptions {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
+  /**
+   * Called with every error answer (an {@link AgentHttpError}, or a `MediaUploadError` from a
+   * `mediaAttachments()` upload) right before it is thrown — the place for app-wide reactions such
+   * as "401 → sign in again". The error still reaches the caller. Not called for the `404` a
+   * resume answers when nothing is streaming, which is an answer, not a failure.
+   */
+  onHttpError?: HttpErrorListener;
   /** Attachment uploads. */
   attachments?: {
     /**
@@ -116,12 +155,7 @@ export class AgentClient implements AgentBackend {
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     });
     if (!response.ok || !response.body) {
-      throw new AgentHttpError(
-        response.status,
-        'POST',
-        `${this.agentPath()}/chat`,
-        response.statusText,
-      );
+      throw await this.failure(response, 'POST', `${this.agentPath()}/chat`);
     }
     return streamResponse(response);
   }
@@ -147,12 +181,7 @@ export class AgentClient implements AgentBackend {
       return null;
     }
     if (!response.ok || !response.body) {
-      throw new AgentHttpError(
-        response.status,
-        'GET',
-        `${this.agentPath()}${path}`,
-        response.statusText,
-      );
+      throw await this.failure(response, 'GET', `${this.agentPath()}${path}`);
     }
     return streamResponse(response);
   }
@@ -280,14 +309,15 @@ export class AgentClient implements AgentBackend {
       };
       xhr.onload = () => {
         if (xhr.status < 200 || xhr.status >= 300) {
-          reject(
-            new AgentHttpError(
-              xhr.status,
-              'POST',
-              `${this.agentPath()}/attachments`,
-              xhr.statusText,
-            ),
+          const error = new AgentHttpError(
+            xhr.status,
+            'POST',
+            `${this.agentPath()}/attachments`,
+            xhr.statusText,
+            readErrorAnswer(xhr.responseText),
           );
+          reportHttpError(this.options.onHttpError, error);
+          reject(error);
           return;
         }
         onProgress?.(1);
@@ -361,10 +391,12 @@ export class AgentClient implements AgentBackend {
    * out takes the pre-picked default the request carried, resolved server-side against the request
    * the run already holds. Omit the whole object and the user has confirmed every pre-picked
    * answer — which is the point of the surface, so it is a valid submission rather than a blank.
+   * `via` names the surface the answer came through (the server records `'web'` when omitted).
    */
   answerToolCall(input: {
     toolCallId: string;
     answers?: Record<string, string[]>;
+    via?: string;
   }): Promise<void> {
     return this.request<void>('POST', '/tool-call/answer', input);
   }
@@ -374,7 +406,7 @@ export class AgentClient implements AgentBackend {
    * values a confirmation would, and persists differently on purpose — only one of them is
    * evidence the user chose them.
    */
-  skipToolCall(input: { toolCallId: string }): Promise<void> {
+  skipToolCall(input: { toolCallId: string; via?: string }): Promise<void> {
     return this.request<void>('POST', '/tool-call/skip', input);
   }
 
@@ -390,6 +422,7 @@ export class AgentClient implements AgentBackend {
       headers: () => this.resolveHeaders(),
       fetch: this.fetchImpl(),
       ...this.credentials(),
+      ...(this.options.onHttpError !== undefined ? { onHttpError: this.options.onHttpError } : {}),
     };
   }
 
@@ -430,9 +463,16 @@ export class AgentClient implements AgentBackend {
     return this.handleResponse<T>(response, method, path);
   }
 
+  /** The error for a refused `response`, already reported to `onHttpError`. */
+  private async failure(response: Response, method: string, path: string): Promise<AgentHttpError> {
+    const error = await AgentHttpError.from(response, method, path);
+    reportHttpError(this.options.onHttpError, error);
+    return error;
+  }
+
   private async handleResponse<T>(response: Response, method: string, path: string): Promise<T> {
     if (!response.ok) {
-      throw new AgentHttpError(response.status, method, path, response.statusText);
+      throw await this.failure(response, method, path);
     }
     if (response.status === 204) return undefined as T;
     const text = await response.text();

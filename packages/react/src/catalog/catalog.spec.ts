@@ -153,6 +153,99 @@ describe('useAgentChat model selection', () => {
   });
 });
 
+describe("useAgentChat — a turn's model vs the thread's pin", () => {
+  it('pinning replaces the pick: later sends leave the model to the pin', async () => {
+    const api = backend({
+      getThread: async (id) => ({
+        id,
+        title: 'T',
+        transient: false,
+        createdAt: 'x',
+        updatedAt: 'x',
+        model: null,
+        messages: [],
+      }),
+    });
+    const { result } = renderHook(() => useAgentChat({ backend: api, threadId: 'thr-1' }));
+    await waitFor(() => expect(result.current.models.pinned).toBeNull());
+
+    act(() => result.current.models.select('sonnet'));
+    await act(async () => {
+      await result.current.sendMessage({ text: 'one' });
+    });
+    await act(async () => {
+      await result.current.models.pinToThread('fast');
+    });
+    expect(result.current.models.pinned).toBe('fast');
+    expect(result.current.models.selected).toBe('fast');
+    await act(async () => {
+      await result.current.sendMessage({ text: 'two' });
+    });
+
+    const bodies = vi.mocked(api.openChatStream).mock.calls.map(([request]) => request.body);
+    expect(bodies.map((body) => body.model)).toEqual(['sonnet', undefined]);
+  });
+
+  it('a pick belongs to the conversation it was made in', async () => {
+    const thread = (id: string, model: string | null) => ({
+      id,
+      title: 'T',
+      transient: false,
+      createdAt: 'x',
+      updatedAt: 'x',
+      model,
+      messages: [],
+    });
+    const api = backend({
+      getThread: async (id) => thread(id, id === 'thr-2' ? 'pro' : null),
+    });
+    const { result, rerender } = renderHook(
+      (props: { threadId: string }) => useAgentChat({ backend: api, ...props }),
+      { initialProps: { threadId: 'thr-1' } },
+    );
+    act(() => result.current.models.select('sonnet'));
+    expect(result.current.models.selected).toBe('sonnet');
+
+    rerender({ threadId: 'thr-2' });
+    await waitFor(() => expect(result.current.models.pinned).toBe('pro'));
+    expect(result.current.models.selected).toBe('pro');
+  });
+
+  it('a locked agent: the picker reports the lock, selects it, and ignores picks', async () => {
+    const api = backend({
+      listModels: vi.fn(async () => ({
+        ...VIEW,
+        default: 'pro',
+        locked: { model: 'pro', reason: 'This assistant always uses Pro' },
+      })),
+    });
+    const { result } = renderHook(() => useAgentChat({ backend: api }));
+    expect(result.current.models.list).toEqual([]);
+    await waitFor(() =>
+      expect(result.current.models.locked).toEqual({
+        model: 'pro',
+        reason: 'This assistant always uses Pro',
+      }),
+    );
+    act(() => result.current.models.select('sonnet'));
+    expect(result.current.models.selected).toBe('pro');
+    await act(async () => {
+      await result.current.sendMessage({ text: 'hi' });
+    });
+    expect(vi.mocked(api.openChatStream).mock.calls[0]?.[0].body.model).toBeUndefined();
+  });
+});
+
+describe('useModels — a locked catalog', () => {
+  it('exposes the lock', async () => {
+    const api = backend({
+      listModels: vi.fn(async () => ({ ...VIEW, locked: { model: 'fast' } })),
+    });
+    const { result } = renderHook(() => useModels({ backend: api }));
+    await waitFor(() => expect(result.current.locked).toEqual({ model: 'fast' }));
+  });
+});
+
 describe('AgentClient catalogs', () => {
   it('asks GET /agent/models?agent= and GET /agent/agents', async () => {
     const urls: string[] = [];

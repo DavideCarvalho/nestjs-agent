@@ -184,13 +184,27 @@ export class AgentService {
     return entry.id;
   }
 
-  /** The model a turn runs on: the send's own, else the thread's pinned one, else none. */
+  /**
+   * The model a turn runs on: the send's own (that turn only — it is never stored on the thread),
+   * else the thread's pinned one, else none. An agent the catalog locks to one model runs on it
+   * whatever was sent or pinned, and a send naming another model is refused.
+   */
   private async resolveModel(
     actor: Actor,
     agent: string,
     requested: string | undefined,
     threadId: string | undefined,
   ): Promise<string | undefined> {
+    const locked =
+      this.models !== undefined ? (await this.models.list({ actor, agent })).locked : undefined;
+    if (locked !== undefined) {
+      if (requested !== undefined && requested !== locked.model) {
+        throw new BadRequestException(
+          `model "${requested}" cannot be selected: ${locked.reason ?? `this agent always uses "${locked.model}"`}`,
+        );
+      }
+      return locked.model;
+    }
     const model = requested ?? (threadId !== undefined ? await this.threadModel(threadId) : null);
     if (model === null || model === undefined) {
       return undefined;
@@ -351,10 +365,15 @@ export class AgentService {
     actor: Actor,
     toolCallId: string,
     answers: Record<string, string[]> = {},
+    opts: { via?: string } = {},
   ): Promise<void> {
     await this.assertOwnsToolCall(actor, toolCallId);
     await this.assertAnswersFit(toolCallId, answers);
-    const reply: ElicitationReply = { answers, answeredByRef: actor.id };
+    const reply: ElicitationReply = {
+      answers,
+      answeredByRef: actor.id,
+      ...(opts.via !== undefined ? { answeredVia: opts.via } : {}),
+    };
     return this.signalToolCall(toolCallId, reply);
   }
 
@@ -363,9 +382,14 @@ export class AgentService {
    * them: the run records this as a rejection, so a reader auditing what the agent was told can
    * tell a choice the user made from one they refused to make.
    */
-  async skip(actor: Actor, toolCallId: string): Promise<void> {
+  async skip(actor: Actor, toolCallId: string, opts: { via?: string } = {}): Promise<void> {
     await this.assertOwnsToolCall(actor, toolCallId);
-    const reply: ElicitationReply = { answers: {}, skipped: true, answeredByRef: actor.id };
+    const reply: ElicitationReply = {
+      answers: {},
+      skipped: true,
+      answeredByRef: actor.id,
+      ...(opts.via !== undefined ? { answeredVia: opts.via } : {}),
+    };
     return this.signalToolCall(toolCallId, reply);
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exhaustedWindow, quotaPeriodRange } from './quota-provider.js';
+import { exhaustedWindow, quotaPeriodRange, quotaWarning } from './quota-provider.js';
 
 describe('quotaPeriodRange', () => {
   it('spans the UTC day and resets at the next midnight', () => {
@@ -38,5 +38,32 @@ describe('exhaustedWindow', () => {
 
   it('never blocks a window without ceilings', () => {
     expect(exhaustedWindow([{ period: 'day', usedTokens: 1e9, usedUsd: 1e9 }])).toBeUndefined();
+  });
+
+  it('reads a USD-only window, which reports no tokens at all', () => {
+    expect(exhaustedWindow([{ period: 'month', usedUsd: 5, limitUsd: 5 }])).toEqual({
+      period: 'month',
+      reason: 'Monthly spend limit reached',
+    });
+    expect(exhaustedWindow([{ period: 'month', usedUsd: 1, limitUsd: 5 }])).toBeUndefined();
+  });
+});
+
+describe('quotaWarning', () => {
+  it('names the fullest window past its warnAt, by spend or tokens', () => {
+    expect(
+      quotaWarning([
+        { period: 'day', usedUsd: 0.5, limitUsd: 1, warnAt: 0.8 },
+        { period: 'month', usedTokens: 90, limitTokens: 100, usedUsd: 0, warnAt: 0.8 },
+      ]),
+    ).toEqual({ period: 'month', ratio: 0.9 });
+  });
+
+  it('stays quiet below warnAt, without warnAt, and once a window is exhausted', () => {
+    expect(
+      quotaWarning([{ period: 'day', usedUsd: 0.5, limitUsd: 1, warnAt: 0.8 }]),
+    ).toBeUndefined();
+    expect(quotaWarning([{ period: 'day', usedUsd: 0.99, limitUsd: 1 }])).toBeUndefined();
+    expect(quotaWarning([{ period: 'day', usedUsd: 1, limitUsd: 1, warnAt: 0.8 }])).toBeUndefined();
   });
 });

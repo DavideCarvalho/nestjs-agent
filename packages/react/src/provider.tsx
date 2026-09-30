@@ -3,6 +3,7 @@ import type { AgentBackend, AttachmentUploadStrategy } from './backend.js';
 import { AgentClient } from './client.js';
 import { sharedContext } from './components/ambient-ui.js';
 import { GenuiProvider, type GenuiProviderValue } from './genui/generative-ui.js';
+import type { HttpErrorListener } from './http-error.js';
 
 // Shared by key, like the genui contexts: `/media` and `/genui` are separate bundles.
 const AgentBackendContext: Context<AgentBackend | null> = sharedContext<AgentBackend>(
@@ -31,6 +32,12 @@ export interface AgentProviderProps {
   credentials?: RequestCredentials;
   /** Injectable for tests / non-browser runtimes. */
   fetch?: typeof fetch;
+  /**
+   * Every error answer of the built-in client (an `AgentHttpError`, or a `MediaUploadError` from
+   * `mediaAttachments()`), right before it is thrown — for app-wide reactions such as "401 → sign
+   * in again". Read at call time, so it may change between renders.
+   */
+  onHttpError?: HttpErrorListener;
   /** Attachment uploads of the built-in client. */
   attachments?: {
     /** e.g. `mediaAttachments()` from `@dudousxd/nestjs-agent-react/media`. */
@@ -65,13 +72,14 @@ export function AgentProvider({
   getHeaders,
   credentials,
   fetch,
+  onHttpError,
   attachments,
   genui,
   children,
 }: AgentProviderProps) {
   // Headers are read per request, so a re-render with new ones reaches the same client.
-  const latestHeaders = useRef({ headers, getHeaders });
-  latestHeaders.current = { headers, getHeaders };
+  const latestHeaders = useRef({ headers, getHeaders, onHttpError });
+  latestHeaders.current = { headers, getHeaders, onHttpError };
   const upload = attachments?.upload;
   const value = useMemo(
     () =>
@@ -82,6 +90,7 @@ export function AgentProvider({
         ...(credentials !== undefined ? { credentials } : {}),
         ...(fetch !== undefined ? { fetch } : {}),
         ...(upload !== undefined ? { attachments: { upload } } : {}),
+        onHttpError: (error) => latestHeaders.current.onHttpError?.(error),
         getHeaders: async () => {
           const current = latestHeaders.current;
           const dynamic = (await current.getHeaders?.()) ?? {};

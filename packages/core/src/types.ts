@@ -454,6 +454,11 @@ export interface AgentCatalogEntry {
   description: string;
   /** Whether this is the agent a turn uses when the caller names none. Omitted when not the default. */
   isDefault?: boolean;
+  /**
+   * The catalog model this agent always runs on, when it is locked to one — an agent picker can say
+   * so before a chat starts. `GET <base>/models?agent=` reports the same lock as `locked`.
+   */
+  lockedModel?: string;
 }
 
 export interface ThreadSummary {

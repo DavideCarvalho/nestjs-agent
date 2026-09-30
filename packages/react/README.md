@@ -38,7 +38,7 @@ handlers passed. On top of the AI SDK chat it returns:
 |---|---|
 | `transcript` | `useChatTranscript` already bound to the chat — approve/reject/answer/skip, stop, fork, regenerate, the tool catalog, and timestamps/usage read from message metadata. Override any of it with `useAgentChat({ transcript: { … } })`. |
 | `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both; `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'`. |
-| `models` | `{ list, providers, selected, select(id), pinToThread(id) }` — loaded the first time `list` is read. |
+| `models` | `{ list, providers, selected, pinned, locked, select(id), pinToThread(id) }` — loaded the first time `list` is read. |
 | `quota` / `blocked` | `useQuota`'s state, and the window blocking sends (the `blocked` option overrides it). |
 | `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — the same object shape the transcript's handlers take. |
 | `fork` / `truncateFrom` / `promote` | `({ messageId, threadId? })` / `({ threadId? })`, defaulting to this chat's thread. |
@@ -619,9 +619,12 @@ const { providers, selected, select } = chat.models; // loaded on first read
 
 `chat.models` reads `GET <base>/models?agent=` (models grouped by provider, with badges and
 availability; `list` is the same flattened) the first time `list`/`providers` is read. `select(id)`
-runs the following turns on it (sent as the body's `model`); `selected` is the pick, else the
-thread's pin, else the server default. `pinToThread(id)` pins it on the thread (`null` unpins) so
-it survives reloads — on a chat with no thread yet, the pin lands when the first send creates one.
+runs this chat's following sends on it (sent as the body's `model`, which the server applies to
+that turn only; switching threads drops the pick); `selected` is the pick, else the thread's pin
+(`pinned`), else the server default. `pinToThread(id)` pins it on the thread (`null` unpins) so it
+survives reloads, replacing the pick — on a chat with no thread yet, the pin lands when the first
+send creates one. `locked` (`{ model, reason? }`) is set when the agent always runs on one model:
+`selected` is then that model and `select` does nothing.
 `useAgentChat({ model })` controls the model yourself; a single send can override it with
 `sendMessage(msg, { body: { model } })`. `useModels()` / `useAgents()` are the standalone hooks
 (an agent picker: `useAgents().agents`, sent as `useAgentChat({ agent })`). The server refuses a

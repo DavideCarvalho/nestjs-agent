@@ -1,4 +1,10 @@
-import type { QuotaBlock, QuotaReport, QuotaWindow } from '@dudousxd/nestjs-agent-core';
+import {
+  type QuotaBlock,
+  type QuotaReport,
+  type QuotaWarning,
+  type QuotaWindow,
+  quotaWarning,
+} from '@dudousxd/nestjs-agent-core';
 import { useEffect, useMemo } from 'react';
 import { type AgentBackend, requireBackendMethod } from '../backend.js';
 import { useResource } from '../catalog/use-resource.js';
@@ -23,6 +29,11 @@ export interface QuotaState {
   month: QuotaWindow | undefined;
   /** The window that blocks sends, or `null` — pass it to `useAgentChat({ blocked })`. */
   blocked: QuotaBlock | null;
+  /**
+   * The soft limit: the fullest window past its `warnAt` (`{ period, ratio, reason? }`), or `null`.
+   * The server's `warning`, else derived from the windows; never set while `blocked`.
+   */
+  warning: QuotaWarning | null;
   isLoading: boolean;
   error: Error | null;
   refresh: () => Promise<void>;
@@ -63,6 +74,10 @@ export function useQuota(options: UseQuotaOptions = {}): QuotaState {
       day: windows.find((window) => window.period === 'day'),
       month: windows.find((window) => window.period === 'month'),
       blocked: data?.blocked ?? null,
+      warning:
+        data === undefined || data.blocked !== undefined
+          ? null
+          : (data.warning ?? quotaWarning(windows) ?? null),
       isLoading,
       error,
       refresh,

@@ -2,6 +2,12 @@ import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import { streamChunks } from '@dudousxd/nestjs-media-client';
 import type { AttachmentUploadStrategy, UploadAttachmentOptions } from '../backend.js';
 import { type AgentClientOptions, normalizeAgentPath } from '../client.js';
+import {
+  type AgentRequestError,
+  type ErrorAnswer,
+  readErrorResponse,
+  reportHttpError,
+} from '../http-error.js';
 
 /** Tuning for {@link mediaAttachments}; every field optional. */
 export interface MediaAttachmentsOptions {
@@ -30,6 +36,7 @@ export function mediaAttachments(options: MediaAttachmentsOptions = {}): Attachm
       getHeaders: connection.headers,
       fetch: connection.fetch,
       ...(connection.credentials !== undefined ? { credentials: connection.credentials } : {}),
+      ...(connection.onHttpError !== undefined ? { onHttpError: connection.onHttpError } : {}),
     })(file, uploadOptions);
 }
 
@@ -52,19 +59,28 @@ export type AttachmentUpload = (
 ) => Promise<MessageAttachment>;
 
 /**
- * A non-2xx answer from the agent's upload routes. Carries `status` like `AgentHttpError` does
- * (413 too large, 415 type refused, 404 not yours) — its own class because this subpath is bundled
- * apart from the root entry, where an `instanceof AgentHttpError` would not match a copy.
+ * A non-2xx answer from the agent's upload routes. Carries what `AgentHttpError` does — `status`
+ * (413 too large, 415 type refused, 404 not yours), the server's `message`, `code` and `body` —
+ * as its own class because this subpath is bundled apart from the root entry, where an
+ * `instanceof AgentHttpError` would not match a copy. Both satisfy `AgentRequestError`.
  */
-export class MediaUploadError extends Error {
+export class MediaUploadError extends Error implements AgentRequestError {
+  readonly body: unknown;
+  readonly code: string | undefined;
+
   constructor(
     readonly status: number,
     readonly method: string,
     readonly path: string,
     statusText: string,
+    answer: ErrorAnswer = { body: undefined, message: undefined, code: undefined },
   ) {
-    super(`Attachment upload failed: ${method} ${path} → ${status} ${statusText}`);
+    super(
+      answer.message ?? `Attachment upload failed: ${method} ${path} → ${status} ${statusText}`,
+    );
     this.name = 'MediaUploadError';
+    this.body = answer.body;
+    this.code = answer.code;
   }
 }
 
@@ -119,7 +135,15 @@ export function createMediaUpload(options: MediaUploadOptions = {}): AttachmentU
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!response.ok) {
-      throw new MediaUploadError(response.status, method, url, response.statusText);
+      const error = new MediaUploadError(
+        response.status,
+        method,
+        url,
+        response.statusText,
+        await readErrorResponse(response),
+      );
+      reportHttpError(options.onHttpError, error);
+      throw error;
     }
     return (await response.json()) as T;
   };

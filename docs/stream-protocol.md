@@ -31,7 +31,8 @@ resume", not an error.
 
 ### Sequence numbers and reconnecting
 
-Number every event frame with an SSE `id:` line — its 1-based position in the run:
+Number every event frame with an SSE `id:` line — a positive safe integer, strictly increasing
+within the run:
 
 ```text
 id: 7
@@ -39,8 +40,11 @@ data: {"kind":"text","text":"…"}
 ```
 
 - The number is a property of the frame, not of the connection: the same frame carries the same id
-  on the `POST` that started the run and on every later `GET …/stream`. (This library derives it
-  from the run's buffered stream, which every sink replays from its first chunk in write order.)
+  on the `POST` that started the run and on every later `GET …/stream`. (This library numbers the
+  frames by their 1-based position in the run's buffered stream, which every sink replays from its
+  first chunk in write order.)
+- Ids may skip numbers. Only the order matters: a client keeps the highest id it took in as its
+  cursor and drops anything at or below it.
 - `meta`, `done` and `error` carry no id. Send `meta` again on every attach.
 - `GET <base>/chat/:runId/stream?after=<n>` sends only the frames numbered above `n` (still preceded
   by `meta`). Honour the standard `Last-Event-ID` request header the same way; `after` wins when
@@ -53,6 +57,33 @@ below its cursor, so a server that ignores `after` still resumes correctly, only
 A `404` on that re-attach means the run ended while the client was away; `useAgentChat` then
 reloads the thread. A stream **without** ids is never resumed: one that closes without `done` is
 treated as finished, as before.
+
+#### Numbering a stream you rebuild
+
+A runner that is not this library's loop often cannot replay a run frame for frame after its
+process restarts: the live deltas are gone, and it rebuilds what already streamed from its own
+durable state (checkpoints, stored steps), condensed into fewer, larger frames. A counter restarted
+at `1` would then give the same id to different frames, and a client resuming with
+`?after=<n>` would skip frames it never saw, or take in again what it already has. So derive ids
+from durable facts, never from a per-process counter:
+
+1. **Ids live in the run's own time, not the process's.** Number each frame from something that
+   survives a restart and only moves forward — for example milliseconds since the run started (the
+   start instant stored with the run), taking `max(previous + 1, elapsed)` so ids stay strictly
+   increasing. Frames written after a restart then number above anything written before it.
+2. **Give every frame of one source event its own slot.** When one event becomes several frames,
+   number them `event × K + index` (with `K` above the most frames one event can produce), so every
+   attach numbers them alike.
+3. **Rebuilt frames reuse the range of what they replace.** Store with each checkpoint the last id
+   it covered. A rebuilt step's condensed frames take ids inside that step's range (from just
+   after the previous checkpoint's last id), so a client that saw the step skips them all and a
+   client that did not takes them all in.
+4. **Never reuse an id for different content, never go backwards.** A client that saw only part
+   of a step before the restart gets the rest from the frames that follow; what it had stays.
+
+`meta` still comes first on every attach, and `?after=` / `Last-Event-ID` work the same way. This
+library's own runner needs none of this: its sink keeps the run's frames, so a replay is the
+original stream.
 
 ## Event rules
 
@@ -149,9 +180,26 @@ are the only way a decision reaches it.
 ### Asking the user
 
 `elicitation` parks the run on a question set; it is answered with
-`POST <base>/tool-call/answer { toolCallId, answers?: Record<questionId, string[]> }` (an omitted
-question takes its `defaults`) or declined with `POST <base>/tool-call/skip { toolCallId }`. The
-matching `tool-output` carries the settled answers.
+`POST <base>/tool-call/answer { toolCallId, answers?: Record<questionId, string[]>, via? }` (an
+omitted question takes its `defaults`) or declined with
+`POST <base>/tool-call/skip { toolCallId, via? }`. `via` names the surface the answer came through,
+as on approve/reject (`'web'` when omitted). The matching `tool-output` carries the settled outcome:
+
+```ts
+{
+  answers: Record<questionId, string[]>;  // every question, defaults filled in
+  skipped: boolean;
+  defaulted: string[];                    // questions filled from their defaults
+  summary?: string;                       // the answers as the model read them
+  answeredBy?: string;                    // who answered or skipped — an approval's decidedBy
+  answeredVia?: string;                   // through which surface — an approval's decidedVia
+}
+```
+
+Persist the same object as the call's stored result, so a reload shows who answered too. The
+transcript reads it into `TranscriptElicitationBlock.outcome` (`answeredBy` / `answeredVia`, `null`
+when absent). In this library `answeredBy` is the answering actor's id; a host that serves these
+routes itself may send a display name.
 
 A question is either a pick from `options` or a typed value:
 
@@ -287,12 +335,21 @@ the live stream did.
 
 Everything `AgentClient` (the default `AgentBackend` of `@dudousxd/nestjs-agent-react`) calls, so a
 backend that is not this library can serve the same routes and keep the React layer unchanged.
-`<base>` is wherever you mount them (`/agent` in this library). Errors are plain HTTP statuses; the
-client throws `AgentHttpError` carrying `status`.
+`<base>` is wherever you mount them (`/agent` in this library).
+
+**Errors.** A refused request answers its HTTP status with a JSON body `{ message, code? }` —
+`message` in words a person can read (NestJS's validation list of messages is accepted too), `code`
+a machine-readable reason (`quota_exceeded`, `model_not_allowed`, …). The client throws
+`AgentHttpError` (`MediaUploadError` for `mediaAttachments()` uploads) carrying `status`, `code`,
+the parsed `body`, and the server's `message` as its own `message` — so every hook that shows
+`error.message` (a failed send in `chat.error`, a refused upload on the staged file, a refused
+approve/answer on the card) shows the server's words. `<AgentProvider onHttpError>` (or
+`new AgentClient({ onHttpError })`) sees every error answer before it is thrown, for app-wide
+reactions such as "401 → sign in again"; a resume's `404` is not an error and is not reported.
 
 | Route | Body / query | Answers |
 |---|---|---|
-| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?, transient? }` | the SSE stream above; `400` for a `model` the catalog does not offer as available |
+| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient? }` | the SSE stream above; `400` for a `model` the catalog does not offer as available. `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* |
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
 | `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model? }`) |
@@ -307,16 +364,42 @@ client throws `AgentHttpError` carrying `status`.
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |
 | `GET <base>/tools?agent=` | — | see *Tool catalog* |
 | `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
-| `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null }` |
-| `GET <base>/agents` | — | `{ name, description, isDefault? }[]` |
-| `GET <base>/quota` | — | `{ windows: [{ period: 'day' \| 'month', usedTokens, limitTokens?, usedUsd, limitUsd?, resetsAt? }], blocked?: { period, reason? } }` |
+| `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null, locked?: { model, reason? } }` |
+| `GET <base>/agents` | — | `{ name, description, isDefault?, lockedModel? }[]` |
+| `GET <base>/quota` | — | `{ windows: [{ period: 'day' \| 'month', usedTokens?, limitTokens?, usedUsd, limitUsd?, resetsAt?, warnAt? }], blocked?: { period, reason? }, warning?: { period, ratio, reason? } }` |
 | `GET <base>/config` | — | `{ attachments: { enabled, upload: 'multipart' \| 'resumable' \| null, maxBytes, allowedContentTypes, maxPerMessage }, models: { enabled }, quota: { enforced }, identity: { anonymous } }` — server facts a client would otherwise repeat; `useAttachments` takes its defaults from it |
 
 **Models.** A turn's model is the send's `model`, else the thread's pinned `model`, else the
-server's default. Serve the catalog from whatever decides what a caller may use (plan, budget,
-provider health) and refuse anything else with `400` — the client only ever sends ids the catalog
-listed, but a server must not trust that. `chat.models` renders the catalog and `select(id)`
-sends the pick; `chat.models.pinToThread(id)` pins it.
+server's default. A send's `model` applies to **that turn only**: the server never stores it on the
+thread, whether the send creates the thread or continues one. Pinning is its own, explicit
+request — `PATCH <base>/threads/:id { model }` (`null` unpins) — and only a pin outlives the turn.
+Serve the catalog from whatever decides what a caller may use (plan, budget, provider health) and
+refuse anything else with `400` — the client only ever sends ids the catalog listed, but a server
+must not trust that. `chat.models` renders the catalog; `select(id)` makes this chat's following
+sends name that model (dropped when the chat switches threads); `chat.models.pinToThread(id)` pins
+it, replacing the pick; `chat.models.pinned` is the thread's pin.
+
+An agent **locked** to one model answers `locked: { model, reason? }` on `GET <base>/models` (and
+`lockedModel` on its `GET <base>/agents` entry). Every turn then runs on `locked.model`, whatever
+the send or the thread's pin names; a send naming another model is refused with `400`. List the
+other models as unavailable as well, so a client that predates the field cannot pick them.
+`useModels().locked` / `chat.models.locked` expose it; while locked, `select` does nothing and
+`selected` is the locked model. In this library the lock comes from your `ModelCatalog`.
+
+**Regenerating an answer.** `POST <base>/chat { threadId, regenerate: true }` answers the thread's
+last user message again — the retry button under the last answer (`chat.regenerate()`, the
+transcript's `item.regenerate.run()`). The server:
+
+1. requires `threadId` (`400` without one) and the caller's own thread;
+2. does **not** store a user message — `message` in the body is ignored, the stored one is
+   answered;
+3. drops the answer(s) after that user message (the replaced turn's rows, and whatever the runner
+   keeps of it — a sandboxed agent's own session history included), so the model does not see the
+   answer it is replacing;
+4. streams the new answer as a normal run, under a new `runId`.
+
+`model`, `agent` and `pageContext` apply as on any send. The client removes the old answer from the
+screen before the new one streams, so a reload shows the same single user message and one answer.
 
 **Attachments.** The client uploads each file on its own — `POST <base>/attachments` (multipart
 `file`), or the resumable `<base>/attachments/uploads` routes when `GET <base>/config` says
@@ -334,6 +417,14 @@ exhausted one. A server that enforces it answers `POST <base>/chat` with `429` a
 `{ code: 'quota_exceeded', period, message }` while blocked. `useQuota` renders the windows and
 `useAgentChat` stops the client from sending in the meantime. A backend with its own
 budget (an AI-gateway spend cap) reports it here in the same shape.
+
+- A window reports the units its budget counts: a USD-only budget leaves `usedTokens` (and
+  `limitTokens`) out rather than sending `0`; a token-only one still sends `usedUsd`.
+- `warnAt` (`0..1`) is the window's soft limit: past that share of a ceiling a client should warn.
+  The report's `warning: { period, ratio, reason? }` names the fullest window past its `warnAt`
+  (never while `blocked`). `useQuota().warning` / `chat.quota.warning` expose it — the server's,
+  else derived from the windows (`quotaWarning` in core). In this library,
+  `AgentModule.forRoot({ quota: { limits, warnAt: 0.8 } })` sets it on the ledger's windows.
 
 **Identity.** Every route acts as the actor the server resolves from the request; nothing in the
 body names one. With no resolver configured this library serves the routes publicly and gives each
