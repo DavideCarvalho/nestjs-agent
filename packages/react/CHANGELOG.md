@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.31.0
+
+### Minor Changes
+
+- [#260](https://github.com/DavideCarvalho/nestjs-agent/pull/260) [`5ef81ca`](https://github.com/DavideCarvalho/nestjs-agent/commit/5ef81ca1ccb3a2168117efe0faf14f06e5810cbe) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `agUiChatStream`: AG-UI activity (`ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA`) arrives as a `ui` part `AgUiActivity` updated in place (the JSON Patch applied), and the `content` option sends a file with the message as AG-UI content parts.
+
 ## 0.30.0
 
 ### Minor Changes
