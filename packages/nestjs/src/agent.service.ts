@@ -494,6 +494,58 @@ export class AgentService {
     return queue.publish(threadId);
   }
 
+  /**
+   * `POST <base>/queue/:messageId/interrupt` — run a message that is already waiting NOW: it moves
+   * to the head of its queue marked as an interrupt, any pause is lifted, and the running turn is
+   * cancelled (its settle starts this message — the same path a `mode: 'interrupt'` send takes).
+   * With nothing running, the message starts at once.
+   *
+   * One request, and the message never leaves the queue: a client that removed it and sent it again
+   * would lose it if the second call failed, and would run it twice if another tab's drain started
+   * it in between. Answers the queue, plus `interrupting` (the run that was cancelled) or `runId`
+   * (the run this message started).
+   */
+  async interruptQueuedMessage(
+    actor: Actor,
+    messageId: string,
+  ): Promise<ChatQueueState & { runId?: string; interrupting?: string }> {
+    const queue = this.requireQueue();
+    const store = queue.queueStore();
+    const threadId = await this.assertOwnsQueuedMessage(actor, messageId);
+    const gone = () =>
+      new GoneException(`queued message ${messageId} already started or was removed`);
+    const marked = await store.updateQueuedMessage(messageId, { interrupt: true });
+    if (marked === null) {
+      throw gone();
+    }
+    if (marked.interrupt !== true) {
+      // Cancelling for a message the store did not mark would pause the queue behind the cancel
+      // instead of starting it — refuse before anything is cancelled.
+      throw new NotImplementedException(
+        'Interrupting a queued message requires a ChatQueueStore whose updateQueuedMessage stores ' +
+          '`interrupt`; the bound store ignored it.',
+      );
+    }
+    if (!(await store.moveQueuedMessage(messageId, 0))) {
+      throw gone();
+    }
+    // A person choosing to run this now overrides whatever paused the queue.
+    await store.setQueuePause(threadId, null);
+    const { live } = await queue.holder(threadId, this.runner);
+    if (live !== null && live !== messageId && (await store.getQueuedMessage(messageId)) !== null) {
+      const state = await queue.publish(threadId);
+      await this.runner.cancel(live);
+      return { ...state, interrupting: live };
+    }
+    if (live !== null) {
+      // The drain started it while this request was on its way: it is the running turn already.
+      return { ...(await queue.state(threadId)), runId: messageId };
+    }
+    const runId = await queue.kick(threadId, this.runner);
+    const state = runId === undefined ? await queue.publish(threadId) : await queue.state(threadId);
+    return { ...state, ...(runId !== undefined ? { runId } : {}) };
+  }
+
   /** `DELETE <base>/threads/:id/queue` — drop every waiting message (and any pause). */
   async clearQueue(actor: Actor, threadId: string): Promise<ChatQueueState> {
     await this.assertOwnsThread(actor, threadId);

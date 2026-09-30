@@ -15,6 +15,7 @@ import {
   type ReconnectOptions,
   type StreamConnectionState,
 } from './agent-chat-transport.js';
+import { attachmentFile } from './attachments/files.js';
 import {
   type AttachmentsState,
   type UseAttachmentsOptions,
@@ -30,7 +31,12 @@ import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.
 import { type ModelOption, type ModelsState, useModels } from './catalog/use-models.js';
 import { useToolCatalog } from './presentation/use-tool-catalog.js';
 import { useAgentBackend } from './provider.js';
-import type { ChatQueue, QueuedChatMessage, WhileRunning } from './queue/model.js';
+import type {
+  ChatQueue,
+  QueuedChatMessage,
+  SendWhileRunning,
+  WhileRunning,
+} from './queue/model.js';
 import { type QuotaState, useQuota } from './quota/use-quota.js';
 import { storedMessageToUiMessage } from './stored-message-to-ui-message.js';
 import {
@@ -115,7 +121,8 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
    * the message waits in the thread's queue (server-side — it survives a reload) and runs when the
    * turn settles; `chat.queue` lists and edits what is waiting. `'interrupt'` cancels the running
    * turn and runs the message next. `'block'` refuses the send (`composer.blockedBy === 'busy'`).
-   * A backend without `enqueueMessage` behaves as `'block'`.
+   * A backend without `enqueueMessage` behaves as `'block'`. One send can answer differently:
+   * `composer.submit({ mode })`, `sendMessage(message, { mode })`.
    */
   whileRunning?: WhileRunning;
   /**
@@ -305,8 +312,14 @@ export interface ChatComposer {
   canSend: boolean;
   /** Why `canSend` is false, or `null`. */
   blockedBy: ComposerBlock | null;
-  /** Send the draft with the ready files attached, then clear both. A no-op while blocked. */
-  submit: () => Promise<void>;
+  /**
+   * Send the draft with the ready files attached, then clear both. A no-op while blocked.
+   *
+   * `submit({ mode })` says what to do if a turn is running, for this send only — `'interrupt'`
+   * for a "send now" button next to a plain send that queues. It overrides `whileRunning`
+   * (`'block'` included) and clears the draft like any other submit.
+   */
+  submit: (options?: SendWhileRunning) => Promise<void>;
 }
 
 interface AddToolResultArgs {
@@ -728,6 +741,8 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     typeof client.enqueueMessage === 'function' ? (options.whileRunning ?? 'queue') : 'block';
   const whileRunningRef = useRef(whileRunning);
   whileRunningRef.current = whileRunning;
+  const canQueueRef = useRef(false);
+  canQueueRef.current = typeof client.enqueueMessage === 'function';
 
   /** This chat's thread — waiting for a new chat's first turn to name it, when one is in flight. */
   const threadForQueue = useCallback(async (): Promise<string> => {
@@ -770,6 +785,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
           id: localId,
           text,
           attachments,
+          files: attachments.map(attachmentFile),
           state: 'sending',
           interrupt: mode === 'interrupt',
           createdAt: new Date().toISOString(),
@@ -805,21 +821,30 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   );
 
   type SdkSendMessage = typeof chat.sendMessage;
-  const sendMessage = useCallback<SdkSendMessage>(
-    async (...args: Parameters<SdkSendMessage>) => {
+  const sendMessage = useCallback(
+    async (
+      message?: Parameters<SdkSendMessage>[0],
+      options?: Parameters<SdkSendMessage>[1] & SendWhileRunning,
+    ): Promise<void> => {
       const block = blockedRef.current;
       if (block != null) throw new QuotaBlockedError(block);
+      // `mode` is this hook's, not the SDK's: it never reaches the request.
+      const { mode: ownMode, ...sdkOptions } = options ?? {};
       if (isTurnInFlight()) {
-        // Mid-turn: the message waits in the thread's queue — unless this chat blocks instead.
-        const mode = whileRunningRef.current;
+        // Mid-turn: the message waits in the thread's queue — unless this chat blocks instead. A
+        // backend that cannot queue blocks whatever was asked for.
+        const mode = canQueueRef.current ? (ownMode ?? whileRunningRef.current) : 'block';
         if (mode === 'block') return;
-        const draft = draftOf(args[0]);
+        const draft = draftOf(message);
         await enqueue(draft.text, { attachments: draft.attachments, mode });
         return;
       }
       turnInFlight.current = true;
       try {
-        await chatRef.current.sendMessage(...args);
+        await chatRef.current.sendMessage(
+          message as Parameters<SdkSendMessage>[0],
+          options === undefined ? undefined : (sdkOptions as Parameters<SdkSendMessage>[1]),
+        );
       } finally {
         turnInFlight.current = false;
       }
@@ -839,6 +864,45 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       }
     },
     [client, queueCall, applyQueue],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attachTo` reads refs only
+  const interruptQueued = useCallback(
+    async (id: string): Promise<void> => {
+      const previous = queueStateRef.current;
+      const moving = previous.items.find((item) => item.id === id);
+      if (moving !== undefined) {
+        // Shown where it will be at once: at the head, as the interrupt, the pause lifted.
+        applyQueue({
+          paused: null,
+          items: [
+            { ...moving, interrupt: true },
+            ...previous.items.filter((item) => item.id !== id),
+          ],
+        });
+      }
+      try {
+        const result = await queueCall(() =>
+          requireBackendMethod(client, 'interruptQueuedMessage')(id),
+        );
+        applyQueue({ items: result.items, paused: result.paused });
+        if (result.runId !== undefined) {
+          // Nothing was running: it started at once.
+          const turn = {
+            messageId: result.runId,
+            runId: result.runId,
+            text: moving?.content ?? '',
+            attachments: moving?.attachments ?? [],
+          };
+          if (isTurnInFlight()) handoff.current = turn;
+          else attachTo(turn);
+        }
+      } catch (error) {
+        applyQueue(previous);
+        throw error;
+      }
+    },
+    [client, queueCall, applyQueue, isTurnInFlight],
   );
 
   const editQueued = useCallback(
@@ -910,6 +974,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         id: item.id,
         text: item.content,
         attachments: item.attachments ?? [],
+        files: (item.attachments ?? []).map(attachmentFile),
         state: 'queued',
         interrupt: item.interrupt === true,
         createdAt: item.createdAt,
@@ -923,6 +988,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     isSupported: typeof client.enqueueMessage === 'function',
     add: enqueue,
     remove: removeQueued,
+    interrupt: interruptQueued,
     edit: editQueued,
     move: moveQueued,
     clear: clearQueue,
@@ -1226,41 +1292,49 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
             : null;
   const composerRef = useRef({ text, files, blockedBy });
   composerRef.current = { text, files, blockedBy };
-  const submit = useCallback(async (): Promise<void> => {
-    const current = composerRef.current;
-    if (current.blockedBy !== null) return;
-    const refs = current.files.refs;
-    // The sent message shows its files right away, as the reloaded thread will (`messageFiles`).
-    const files = current.files.items.flatMap((item) =>
-      item.status === 'ready' && item.attachment !== undefined
-        ? [
-            {
-              type: 'file' as const,
-              mediaType: item.attachment.contentType,
-              filename: item.attachment.name,
-              url: item.attachment.url,
-              providerMetadata: { agent: { mediaId: item.attachment.mediaId } },
-            },
-          ]
-        : [],
-    );
-    const draft = current.text.trim();
-    setText('');
-    current.files.clear();
-    const mode = whileRunningRef.current;
-    if (mode !== 'block' && (isTurnInFlight() || isBusyRef.current)) {
-      // Mid-turn: wait in the thread's queue (or, `interrupt`, cut in) instead of refusing.
-      const attachments = current.files.items.flatMap((item) =>
-        item.status === 'ready' && item.attachment !== undefined ? [item.attachment] : [],
+  const submit = useCallback(
+    async (options?: SendWhileRunning): Promise<void> => {
+      const current = composerRef.current;
+      // A mode named for this call is an answer to "a turn is running": it lifts that one block.
+      const asked = canQueueRef.current ? options?.mode : undefined;
+      if (current.blockedBy !== null && !(current.blockedBy === 'busy' && asked !== undefined)) {
+        return;
+      }
+      if (current.text.trim().length === 0 && current.files.refs.length === 0) return;
+      const refs = current.files.refs;
+      // The sent message shows its files right away, as the reloaded thread will (`messageFiles`).
+      const files = current.files.items.flatMap((item) =>
+        item.status === 'ready' && item.attachment !== undefined
+          ? [
+              {
+                type: 'file' as const,
+                mediaType: item.attachment.contentType,
+                filename: item.attachment.name,
+                url: item.attachment.url,
+                providerMetadata: { agent: { mediaId: item.attachment.mediaId } },
+              },
+            ]
+          : [],
       );
-      await enqueue(draft, { attachments, mode });
-      return;
-    }
-    await sendMessage(
-      files.length > 0 ? { text: draft, files } : { text: draft },
-      refs.length > 0 ? { body: { attachments: refs } } : undefined,
-    );
-  }, [sendMessage, enqueue, isTurnInFlight]);
+      const draft = current.text.trim();
+      setText('');
+      current.files.clear();
+      const mode = asked ?? whileRunningRef.current;
+      if (mode !== 'block' && (isTurnInFlight() || isBusyRef.current)) {
+        // Mid-turn: wait in the thread's queue (or, `interrupt`, cut in) instead of refusing.
+        const attachments = current.files.items.flatMap((item) =>
+          item.status === 'ready' && item.attachment !== undefined ? [item.attachment] : [],
+        );
+        await enqueue(draft, { attachments, mode });
+        return;
+      }
+      await sendMessage(
+        files.length > 0 ? { text: draft, files } : { text: draft },
+        refs.length > 0 ? { body: { attachments: refs } } : undefined,
+      );
+    },
+    [sendMessage, enqueue, isTurnInFlight],
+  );
   const composer: ChatComposer = {
     text,
     setText,

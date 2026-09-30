@@ -522,6 +522,9 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       row.attachments =
         patch.attachments === null || patch.attachments.length === 0 ? null : patch.attachments;
     }
+    if (patch.interrupt !== undefined) {
+      row.interrupt = patch.interrupt;
+    }
     row.updatedAt = new Date();
     await em.flush();
     return this.toQueuedMessage(row, row.thread.id);

@@ -1,3 +1,4 @@
+import type { MessageAttachment } from '@dudousxd/nestjs-agent-core';
 import type { FileUIPart, UIMessage } from 'ai';
 
 /** How a renderer is likely to show a file. */
@@ -27,6 +28,27 @@ export function fileKind(mediaType: string): MessageFileKind {
   return 'other';
 }
 
+function messageFile(url: string, mediaType: string, name: string | null, mediaId: string | null) {
+  const dot = name?.lastIndexOf('.') ?? -1;
+  const file: MessageFile = {
+    url,
+    mediaType,
+    filename: name,
+    kind: fileKind(mediaType),
+    extension: name !== null && dot > 0 ? name.slice(dot + 1).toLowerCase() : null,
+    mediaId,
+  };
+  return file;
+}
+
+/**
+ * An uploaded attachment as the {@link MessageFile} it is once its message is sent — so a message
+ * still waiting (in the queue, in the composer) draws its files with the same code a sent one does.
+ */
+export function attachmentFile(attachment: MessageAttachment): MessageFile {
+  return messageFile(attachment.url, attachment.contentType, attachment.name, attachment.mediaId);
+}
+
 /**
  * The files on a message — the user's attachments (live, or replayed from `StoredMessage.attachments`
  * by `storedMessageToUiMessage`) and any the model produced — in part order. Data only: pair it with
@@ -37,17 +59,15 @@ export function messageFiles(message: Pick<UIMessage, 'parts'>): MessageFile[] {
   for (const part of message.parts) {
     if (part.type !== 'file') continue;
     const file = part as FileUIPart;
-    const filename = file.filename ?? null;
-    const dot = filename?.lastIndexOf('.') ?? -1;
     const mediaId = (file.providerMetadata?.agent as { mediaId?: unknown } | undefined)?.mediaId;
-    files.push({
-      url: file.url,
-      mediaType: file.mediaType,
-      filename,
-      kind: fileKind(file.mediaType),
-      extension: filename !== null && dot > 0 ? filename.slice(dot + 1).toLowerCase() : null,
-      mediaId: typeof mediaId === 'string' ? mediaId : null,
-    });
+    files.push(
+      messageFile(
+        file.url,
+        file.mediaType,
+        file.filename ?? null,
+        typeof mediaId === 'string' ? mediaId : null,
+      ),
+    );
   }
   return files;
 }

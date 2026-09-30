@@ -5,6 +5,11 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    // Off on purpose. The base config turns decorator metadata on for the NestJS packages, and
+    // tsup answers `emitDecoratorMetadata` by compiling through swc — whose JSX transform is the
+    // classic one (`React.createElement`), whatever `jsx` says above. Nothing here has a decorator.
+    "experimentalDecorators": false,
+    "emitDecoratorMetadata": false,
     "outDir": "dist",
     "rootDir": "src"
   },

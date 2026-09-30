@@ -87,6 +87,19 @@ export class QueueController {
     });
   }
 
+  /**
+   * Run a waiting message now: it moves to the head as an interrupt and the running turn is
+   * cancelled for it. Carries `interrupting` (the cancelled run), or `runId` when nothing was
+   * running and it started at once.
+   */
+  @Post('queue/:messageId/interrupt')
+  async interrupt(
+    @Req() req: Request,
+    @Param('messageId') messageId: string,
+  ): Promise<ChatQueueState & { runId?: string; interrupting?: string }> {
+    return this.agent.interruptQueuedMessage(await this.actorResolver.resolve(req), messageId);
+  }
+
   @Delete('queue/:messageId')
   async remove(
     @Req() req: Request,

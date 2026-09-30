@@ -21,10 +21,11 @@
     "typecheck": "turbo run typecheck",
     "typecheck:specs": "turbo run typecheck:specs",
     "lint": "biome check .",
+    "check:dist": "node scripts/check-dist-react.mjs && pnpm --filter @dudousxd/nestjs-agent-react test:dist",
     "lint:fix": "biome check --write .",
     "changeset": "changeset",
     "version-packages": "changeset version && biome check --write .",
-    "release": "pnpm --filter './packages/*' build && changeset publish"
+    "release": "pnpm --filter './packages/*' build && pnpm check:dist && changeset publish"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",

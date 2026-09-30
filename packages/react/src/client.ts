@@ -193,6 +193,19 @@ export class AgentClient implements AgentBackend {
     return this.request<ChatQueueState>('DELETE', `/queue/${encodeURIComponent(messageId)}`);
   }
 
+  /**
+   * `POST <path>/queue/:messageId/interrupt` — run a waiting message now, cancelling the running
+   * turn for it. `runId` when nothing was running and it started; else `interrupting`.
+   */
+  interruptQueuedMessage(
+    messageId: string,
+  ): Promise<ChatQueueState & { runId?: string; interrupting?: string }> {
+    return this.request<ChatQueueState & { runId?: string; interrupting?: string }>(
+      'POST',
+      `/queue/${encodeURIComponent(messageId)}/interrupt`,
+    );
+  }
+
   /** `DELETE <path>/threads/:id/queue` — drop every waiting message. */
   clearQueue(threadId: string): Promise<ChatQueueState> {
     return this.request<ChatQueueState>('DELETE', `/threads/${encodeURIComponent(threadId)}/queue`);

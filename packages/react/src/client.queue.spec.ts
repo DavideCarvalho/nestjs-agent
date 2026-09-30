@@ -83,6 +83,13 @@ describe('AgentClient — the message queue', () => {
       '/agent/threads/thr-1/queue/resume',
       undefined,
     ],
+    [
+      'interruptQueuedMessage',
+      (c: AgentClient) => c.interruptQueuedMessage('q 1'),
+      'POST',
+      '/agent/queue/q%201/interrupt',
+      undefined,
+    ],
   ])('%s → %s %s', async (_name, run, method, path, body) => {
     const fetchMock = vi.fn<typeof fetch>(async () => json(STATE));
     const client = new AgentClient({ fetch: fetchMock });

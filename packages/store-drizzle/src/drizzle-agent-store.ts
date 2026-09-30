@@ -495,6 +495,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       updates.attachments =
         patch.attachments === null || patch.attachments.length === 0 ? null : patch.attachments;
     }
+    if (patch.interrupt !== undefined) {
+      updates.interrupt = patch.interrupt;
+    }
     await this.db.update(agentQueuedMessage).set(updates).where(eq(agentQueuedMessage.id, id));
     return this.getQueuedMessage(id);
   }

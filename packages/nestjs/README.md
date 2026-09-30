@@ -311,6 +311,8 @@ starts under its own id, and the settling turn's stream says so in a final `queu
 (`started: { messageId, runId }`). `mode: 'interrupt'` cancels the running turn and runs the message
 next; `mode: 'queue'` always queues. A failed turn or a Stop pauses the queue (`POST
 /agent/threads/:id/queue/resume` lifts it); an exhausted quota pauses it as the next message starts.
+`POST /agent/queue/:messageId/interrupt` runs a message that is already waiting now — it moves to
+the head as an interrupt and the running turn is cancelled for it, in one request.
 `GET`/`DELETE /agent/threads/:id/queue`, `PATCH`/`DELETE /agent/queue/:messageId` list, clear,
 edit, move and remove what is waiting.
 

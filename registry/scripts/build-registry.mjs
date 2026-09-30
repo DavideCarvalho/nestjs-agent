@@ -2,8 +2,12 @@
 // Renders registry.json into the flat `/r/` files `shadcn add <url>` fetches: one JSON per item
 // with every file's source inlined, plus an index listing the items without their contents.
 //
-//   node scripts/build-registry.mjs                       # → registry/dist/r
-//   node scripts/build-registry.mjs --out ../../aviary/public/r
+//   node scripts/build-registry.mjs                 # → registry/dist/r
+//   node scripts/build-registry.mjs --out <dir>     # <dir> is relative to where you run it
+//
+// `--out` resolves against the working directory, like any CLI path — not against this package, so
+// the same command works from a worktree, from the docs site, or from CI. The docs site builds its
+// copy from a pinned ref of this repo (aviary's `pnpm sync:registry`), not from a checkout.
 //
 // The docs site serves the output as static assets, so this runs when the components change, not
 // on every site build.
@@ -16,10 +20,13 @@ const REGISTRY_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ITEM_SCHEMA = 'https://ui.shadcn.com/schema/registry-item.json';
 
 const outFlag = process.argv.indexOf('--out');
-const outDir = resolve(
-  REGISTRY_ROOT,
-  outFlag === -1 ? 'dist/r' : (process.argv[outFlag + 1] ?? 'dist/r'),
-);
+const outArg = outFlag === -1 ? undefined : process.argv[outFlag + 1];
+if (outFlag !== -1 && (outArg === undefined || outArg.startsWith('--'))) {
+  console.error('✖ --out needs a directory');
+  process.exit(1);
+}
+const outDir =
+  outArg === undefined ? join(REGISTRY_ROOT, 'dist/r') : resolve(process.cwd(), outArg);
 
 const registry = JSON.parse(readFileSync(join(REGISTRY_ROOT, 'registry.json'), 'utf8'));
 
