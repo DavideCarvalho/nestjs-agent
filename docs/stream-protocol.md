@@ -90,6 +90,7 @@ treated as finished, as before.
 | `approval-settled` | `id`, `status: 'approved' \| 'rejected' \| 'expired'`, `approver?`, `decidedBy?`, `decidedVia?`, `remember?: boolean`, `reason?` | `data-approval-settled` part (id = call id); folded into the call's `approval` by the transcript. The call's own state still moves on its output frame |
 | `ui` | `id`, `component: string`, `props: object`, `version?: number`, `toolCallId?: string` | `data-ui` part (id = component id, data carries `toolCallId`); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
 | `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
+| `message-metadata` | `metadata: object` | `message-metadata` — merged into the message's `metadata`. Host-defined facts (the model that answered, the turn's duration, the error it ended with); persist the same values as `StoredMessage.metadata`. This library's loop never sends it |
 | `cancelled` | — | transient `data-cancelled`. Send it as the last frame before `done` when someone stopped the run, so a reader can tell a truncated answer from a complete one |
 | *anything else* | any | `data-<kind>` part carrying the frame minus `kind`, keyed by `id` when the frame has a string `id` |
 
@@ -209,6 +210,8 @@ answer route: the transcript model reports them, but only the server can refuse 
 - a `parentId` naming a call the client does not have (or forming a cycle) is shown top-level — it
   is never an error.
 
+A stored `toolCalls[]` entry carries the same `parentId`, so a reloaded thread nests the call too.
+
 The transcript model exposes this as `TranscriptToolBlock.roots` / `TranscriptToolCall.children`.
 Keep inner-call frames adjacent to their parent (no prose between them) so they land in the same
 tool block.
@@ -274,7 +277,7 @@ message may carry, per step:
 | `reasoningMs?: number` | that part's `providerMetadata.agent.reasoningMs` (the transcript's `durationMs`) |
 | `ui?: { id, component, props, version?, toolCallId? }[]` | `data-ui` parts, first-seen order, last props per `id`; one with a `toolCallId` goes right after that call's tool part |
 | `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
-
+| `metadata?: object` | spread into `message.metadata` under the library's own keys (`usage`, `feedback`, `createdAt` win) — what `message-metadata` frames streamed |
 | `feedback?: { value: 'up' \| 'down', comment?, updatedAt }` | `message.metadata.feedback` (on a merged turn, the last row's) — what `useMessageFeedback` shows |
 
 A runner serving these routes should persist the same values it streamed, so a reload shows what

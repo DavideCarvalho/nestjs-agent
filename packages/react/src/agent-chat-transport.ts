@@ -605,6 +605,10 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
                 },
               });
               break;
+            case 'message-metadata':
+              ensureStarted();
+              controller.enqueue({ type: 'message-metadata', messageMetadata: event.metadata });
+              break;
             case 'title':
             case 'cancelled':
               // Thread- and run-level facts, not message content: seen by `onData`, never stored

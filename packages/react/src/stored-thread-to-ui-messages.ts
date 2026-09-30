@@ -36,6 +36,8 @@ export interface AgentMessageMetadata extends Partial<StoredTurnMetadata> {
   costUsd?: number | null;
   /** ISO timestamp: the stored row's `createdAt` (a merged turn: its first row's), or when a live turn started streaming. */
   createdAt?: string;
+  /** Host-defined keys: `StoredMessage.metadata` and the stream's `message-metadata` frames. */
+  [key: string]: unknown;
 }
 
 /**
@@ -125,6 +127,8 @@ function mergeTurn(rows: StoredMessage[]): UIMessage {
   const feedback = lastRow.feedback;
   const createdAt = rows[0]?.createdAt;
   const metadata: AgentMessageMetadata = {
+    // Host facts of every row, a later row's winning (the turn's final state), under the library's.
+    ...Object.assign({}, ...rows.map((row) => row.metadata ?? {})),
     ...(usage !== undefined ? { usage } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(createdAt ? { createdAt } : {}),

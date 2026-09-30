@@ -103,6 +103,25 @@ describe('AgentChatTransport', () => {
     expect(toolOutput).toMatchObject({ toolCallId: 't1', output: { rows: [] } });
   });
 
+  it('maps a message-metadata frame onto the message metadata chunk', async () => {
+    const transport = new AgentChatTransport({
+      fetch: fakeFetch(
+        sseStream([
+          'data: {"kind":"text","text":"Hi"}\n\n',
+          'data: {"kind":"message-metadata","metadata":{"model":"openai/gpt","error":"cut short"}}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]),
+      ),
+    });
+
+    const chunks = await collect(await transport.sendMessages(sendArgs()));
+
+    expect(chunks.find((chunk) => chunk.type === 'message-metadata')).toEqual({
+      type: 'message-metadata',
+      messageMetadata: { model: 'openai/gpt', error: 'cut short' },
+    });
+  });
+
   it('carries a refusal through as the SDK denial, never as an error chunk', async () => {
     // The state a card branches on. Mapped to `tool-output-error`, a person's own "no" reaches the
     // UI as the red treatment a crash gets, under whatever text the error carried.

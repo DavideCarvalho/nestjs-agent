@@ -136,6 +136,11 @@ export interface ToolCallRequest {
    * (defensively treated as `read` wherever a definite value is required).
    */
   kind?: ToolKind;
+  /**
+   * The call this one ran inside (a code-mode `execute`, a delegated agent) — the same `parentId`
+   * the live `tool-input-*` frames carried, so a reloaded thread nests the call where the stream did.
+   */
+  parentId?: string;
 }
 
 /** Result of running a tool. */
@@ -517,6 +522,13 @@ export interface StoredMessage {
    * nobody rated it, or on a store that does not record feedback.
    */
   feedback?: MessageFeedback;
+  /**
+   * Host-defined facts about the message (which model answered, how long it took, the error a turn
+   * ended with, …) — what a runner that is not this library's loop streamed as a
+   * `message-metadata` frame. Replayed into the client message's `metadata`, under the library's
+   * own keys (`usage`, `feedback`, `createdAt` win on a clash). Never read by the library itself.
+   */
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 

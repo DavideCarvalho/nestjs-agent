@@ -165,6 +165,8 @@ export interface ChatModels {
   readonly providers: ModelsState['providers'];
   /** What the next turn runs on: the `model` option, the pick, the thread's pin, else the default. */
   selected: string | null;
+  /** The catalog's default — what a turn runs on when nothing is picked or pinned (`null` until loaded). */
+  readonly defaultModel: string | null;
   /** Run the following turns on `id` (sent as the body's `model`). */
   select: (id: string) => void;
   /**
@@ -314,6 +316,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         const threadId = currentThreadId();
         const model = current.model ?? pickedModelRef.current;
         return {
+          // Read per send: a host that switches agents before the first message (a picker on a
+          // new chat) sends the one picked now, not the one this chat mounted with.
+          ...(current.agent !== undefined ? { agent: current.agent } : {}),
           ...(threadId !== undefined ? { threadId } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(pageContext ? { pageContext } : {}),
@@ -732,6 +737,10 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       return catalog.providers;
     },
     selected: options.model ?? pickedModel ?? threadModel ?? catalog.defaultModel ?? null,
+    get defaultModel() {
+      wantModels();
+      return catalog.defaultModel;
+    },
     select: selectModel,
     pinToThread,
     isLoading: modelsWanted && catalog.isLoading,
@@ -762,11 +771,25 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     const current = composerRef.current;
     if (current.blockedBy !== null) return;
     const refs = current.files.refs;
+    // The sent message shows its files right away, as the reloaded thread will (`messageFiles`).
+    const files = current.files.items.flatMap((item) =>
+      item.status === 'ready' && item.attachment !== undefined
+        ? [
+            {
+              type: 'file' as const,
+              mediaType: item.attachment.contentType,
+              filename: item.attachment.name,
+              url: item.attachment.url,
+              providerMetadata: { agent: { mediaId: item.attachment.mediaId } },
+            },
+          ]
+        : [],
+    );
     const draft = current.text.trim();
     setText('');
     current.files.clear();
     await sendMessage(
-      { text: draft },
+      files.length > 0 ? { text: draft, files } : { text: draft },
       refs.length > 0 ? { body: { attachments: refs } } : undefined,
     );
   }, [sendMessage]);

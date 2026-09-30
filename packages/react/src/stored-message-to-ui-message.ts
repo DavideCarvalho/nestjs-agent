@@ -146,10 +146,15 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
     // `call.kind` — the store's `'read' | 'action'` classification, once it lands there
     // (parallel to `RecordToolCallInput.toolType` and the stream's `toolKind`).
     const toolKind = call.kind;
+    // `parentId` nests a replayed call under its parent, as the live frames did.
+    const toolMetadata = {
+      ...(toolKind !== undefined ? { toolKind } : {}),
+      ...(call.parentId !== undefined ? { parentId: call.parentId } : {}),
+    };
     parts.push({
       type: `tool-${call.name}`,
       toolCallId: call.id,
-      ...(toolKind !== undefined ? { toolMetadata: { toolKind } } : {}),
+      ...(Object.keys(toolMetadata).length > 0 ? { toolMetadata } : {}),
       ...(result !== undefined
         ? isRefusal(result)
           ? {
@@ -174,6 +179,8 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
   }
 
   const metadata: AgentMessageMetadata = {
+    // The host's own facts first: the library's keys win on a clash.
+    ...message.metadata,
     ...(message.feedback !== undefined ? { feedback: message.feedback } : {}),
     ...(message.createdAt ? { createdAt: message.createdAt } : {}),
     ...(message.usage !== undefined
