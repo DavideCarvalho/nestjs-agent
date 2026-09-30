@@ -165,6 +165,8 @@ export interface ChatModels {
   readonly providers: ModelsState['providers'];
   /** What the next turn runs on: the `model` option, the pick, the thread's pin, else the default. */
   selected: string | null;
+  /** The catalog's default — what a turn runs on when nothing is picked or pinned (`null` until loaded). */
+  readonly defaultModel: string | null;
   /** Run the following turns on `id` (sent as the body's `model`). */
   select: (id: string) => void;
   /**
@@ -735,6 +737,10 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       return catalog.providers;
     },
     selected: options.model ?? pickedModel ?? threadModel ?? catalog.defaultModel ?? null,
+    get defaultModel() {
+      wantModels();
+      return catalog.defaultModel;
+    },
     select: selectModel,
     pinToThread,
     isLoading: modelsWanted && catalog.isLoading,
