@@ -1,7 +1,7 @@
 import type { ModelMessage, SinkWriter, ToolDefinition } from '@dudousxd/nestjs-agent-core';
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { aiSdkModel } from './ai-sdk-model.js';
+import { aiSdkModel, aiSdkModels } from './ai-sdk-model.js';
 
 const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
 
@@ -390,33 +390,81 @@ describe('aiSdkModel — structured output', () => {
       ...(model !== undefined ? { model } : {}),
     });
 
-    it('swaps a gateway id for the picked one, and keeps it when nothing was picked', async () => {
+    it('runs its own model when nothing was picked, or its own id was', async () => {
       const provider = aiSdkModel('openai/gpt-4o');
-      await provider.runTurn(turn('anthropic/claude-fast'));
       await provider.runTurn(turn());
+      await provider.runTurn(turn('openai/gpt-4o'));
       expect(streamTextMock.mock.calls.map(([call]) => call.model)).toEqual([
-        'anthropic/claude-fast',
+        'openai/gpt-4o',
         'openai/gpt-4o',
       ]);
     });
 
-    it('resolves the pick through resolveModel, and keeps that option off the SDK call', async () => {
-      const resolved = { modelId: 'resolved' } as unknown as Parameters<typeof aiSdkModel>[0];
-      const provider = aiSdkModel('openai/gpt-4o', {
-        temperature: 0.2,
-        resolveModel: (id) => (id === 'fast' ? resolved : 'openai/gpt-4o'),
-      });
-      await provider.runTurn(turn('fast'));
-      const call = streamTextMock.mock.calls[0]?.[0];
-      expect(call.model).toBe(resolved);
-      expect(call.temperature).toBe(0.2);
-      expect(call).not.toHaveProperty('resolveModel');
-    });
-
-    it('ignores a pick when bound to a provider instance and given no resolver', async () => {
+    it('refuses a pick it cannot honour instead of silently answering on another model', () => {
       const instance = { modelId: 'instance' } as unknown as Parameters<typeof aiSdkModel>[0];
-      await aiSdkModel(instance).runTurn(turn('fast'));
-      expect(streamTextMock.mock.calls[0]?.[0].model).toBe(instance);
+      expect(() => aiSdkModel(instance).runTurn(turn('fast'))).toThrow(/aiSdkModels/);
+      expect(() => aiSdkModel('openai/gpt-4o').runTurn(turn('other'))).toThrow(/picked model/);
+      expect(streamTextMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('aiSdkModels', () => {
+  beforeEach(() => {
+    streamTextMock.mockReset();
+    streamTextMock.mockImplementation(() => fakeStreamResult());
+  });
+
+  const turn = (model?: string) => ({
+    system: '',
+    messages: [],
+    tools: [],
+    sink: createSink(),
+    ...(model !== undefined ? { model } : {}),
+  });
+  const smart = { modelId: 'claude', provider: 'anthropic.messages' } as unknown as Parameters<
+    typeof aiSdkModel
+  >[0];
+
+  it('carries the catalog a picker lists, grouped by provider, with the default flagged', async () => {
+    const provider = aiSdkModels(
+      {
+        'openai/gpt-5-mini': { model: 'openai/gpt-5-mini', label: 'Fast', badges: ['fast'] },
+        smart,
+      },
+      { default: 'smart', providerLabels: { anthropic: 'Anthropic' } },
+    );
+    const view = await provider.catalog.list({ actor: { id: 'u' } });
+    expect(view.default).toBe('smart');
+    expect(view.providers).toEqual([
+      {
+        id: 'openai',
+        label: 'Openai',
+        models: [{ id: 'openai/gpt-5-mini', label: 'Fast', badges: ['fast'], available: true }],
+      },
+      {
+        id: 'anthropic',
+        label: 'Anthropic',
+        models: [{ id: 'smart', label: 'smart', available: true }],
+      },
+    ]);
+  });
+
+  it('runs the picked model, the default when none, and refuses one it does not offer', async () => {
+    const provider = aiSdkModels({ fast: 'openai/gpt-5-mini', smart }, { temperature: 0.1 });
+    await provider.runTurn(turn('smart'));
+    await provider.runTurn(turn());
+    expect(streamTextMock.mock.calls.map(([call]) => call.model)).toEqual([
+      smart,
+      'openai/gpt-5-mini',
+    ]);
+    expect(streamTextMock.mock.calls[0]?.[0].temperature).toBe(0.1);
+    expect(() => provider.runTurn(turn('nope'))).toThrow(/not offered/);
+  });
+
+  it('refuses a default that is not on offer', () => {
+    expect(() => aiSdkModels({ fast: 'openai/gpt-5-mini' }, { default: 'slow' })).toThrow(
+      /default "slow"/,
+    );
   });
 });

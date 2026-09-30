@@ -85,12 +85,10 @@ import {
 } from '@dudousxd/nestjs-agent-store-mikro-orm';
 
 AgentModule.forRootAsync({
-  // AGENT_STORE already comes from MikroOrmAgentStoreModule.forFeature(), which is global.
-  externalStore: true,
+  // No `store`: AgentModule finds the AGENT_STORE MikroOrmAgentStoreModule.forFeature() binds.
   inject: [MikroOrmMemoryProvider],
   useFactory: (memory: MikroOrmMemoryProvider) => ({
     model,
-    actorResolver,
     memory: { provider: memory },
   }),
 });

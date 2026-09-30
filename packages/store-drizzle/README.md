@@ -62,12 +62,10 @@ creates alongside the other six.
 import { DrizzleAgentStoreModule, DrizzleMemoryProvider } from '@dudousxd/nestjs-agent-store-drizzle';
 
 AgentModule.forRootAsync({
-  // AGENT_STORE already comes from DrizzleAgentStoreModule.forRoot({ db }), which is global.
-  externalStore: true,
+  // No `store`: AgentModule finds the AGENT_STORE DrizzleAgentStoreModule.forRoot({ db }) binds.
   inject: [DrizzleMemoryProvider],
   useFactory: (memory: DrizzleMemoryProvider) => ({
     model,
-    actorResolver,
     memory: { provider: memory },
   }),
 });

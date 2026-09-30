@@ -69,7 +69,7 @@ function registry(): ToolRegistry {
 }
 
 describe('ToolRegistry', () => {
-  const policy = new DefaultRolesPolicy();
+  const policy = new DefaultRolesPolicy(['ADMIN']);
 
   it('offers neutral definitions for an allowed actor (no execute leaks)', async () => {
     const defs = await registry().definitionsFor({ id: 'u1', roles: ['ADMIN'] }, policy);
@@ -187,7 +187,7 @@ describe('ToolRegistry', () => {
 });
 
 describe('ToolRegistry — disabled tools', () => {
-  const policy = new DefaultRolesPolicy();
+  const policy = new DefaultRolesPolicy(['ADMIN']);
   const admin: Actor = { id: 'u1', roles: ['ADMIN'] };
 
   function withEnabled(
@@ -270,7 +270,7 @@ describe('ToolRegistry — disabled tools', () => {
 });
 
 describe('ToolRegistry — a tool that gates its own actors', () => {
-  const policy = new DefaultRolesPolicy();
+  const policy = new DefaultRolesPolicy(['ADMIN']);
   const admin: Actor = { id: 'u1', roles: ['ADMIN'] };
   const otherAdmin: Actor = { id: 'u2', roles: ['ADMIN'] };
 
@@ -356,5 +356,34 @@ describe('filterToolsByAllowList', () => {
 
   it('returns no tools for an empty allow-list', () => {
     expect(filterToolsByAllowList(specs, [])).toEqual([]);
+  });
+});
+
+describe('DefaultRolesPolicy — the default', () => {
+  const spec = (roles?: string[]) =>
+    ({
+      name: 't',
+      kind: 'read',
+      description: 'd',
+      inputSchema: z.object({}),
+      ...(roles !== undefined ? { roles } : {}),
+    }) as never;
+
+  it('restricts nobody: a tool without roles is callable by any actor, anonymous included', () => {
+    const policy = new DefaultRolesPolicy();
+    expect(policy.can({ id: 'anon:abc', roles: ['anonymous'] }, spec())).toBe(true);
+    expect(policy.can({ id: 'u1' }, spec())).toBe(true);
+  });
+
+  it('still restricts a tool that names its roles', () => {
+    const policy = new DefaultRolesPolicy();
+    expect(policy.can({ id: 'u1', roles: ['USER'] }, spec(['ADMIN']))).toBe(false);
+    expect(policy.can({ id: 'u1', roles: ['ADMIN'] }, spec(['ADMIN']))).toBe(true);
+  });
+
+  it('module-wide defaultRoles restrict the tools that name none', () => {
+    const policy = new DefaultRolesPolicy(['USER']);
+    expect(policy.can({ id: 'anon:abc', roles: ['anonymous'] }, spec())).toBe(false);
+    expect(policy.can({ id: 'u1', roles: ['USER'] }, spec())).toBe(true);
   });
 });

@@ -56,17 +56,30 @@ the result the agent loop needs:
   governance estimates from tokens.
 - **Model id** — the response's `modelId` is recorded with the turn for cost accounting.
 
-## The model a caller picked
+## Several models: `aiSdkModels`
 
-With a `ModelCatalog` bound (`AgentModule.forRoot({ models })`), a turn may carry a picked model id
-as `ModelTurnArgs.model`. `resolveModel` turns it into the `LanguageModel` to call:
+`aiSdkModel(model)` serves one model — a turn that picked another is refused, never silently run on
+this one. For a model picker, `aiSdkModels` takes a map (the keys are what a client picks) and
+carries the catalog `AgentModule` lists when `models` is omitted:
 
 ```ts
-aiSdkModel(openai('gpt-4o-mini'), { resolveModel: (id) => openai(id) });
+import { aiSdkModels } from '@dudousxd/nestjs-agent-ai-sdk';
+
+AgentModule.forRoot({
+  model: aiSdkModels(
+    {
+      fast: { model: openai('gpt-5-mini'), label: 'Fast', badges: ['fast'] },
+      smart: { model: anthropic('claude-sonnet-4-5'), label: 'Smart', badges: ['reasoning'] },
+      'openai/o3': 'openai/o3', // an AI Gateway id works as the model too
+    },
+    { default: 'fast', temperature: 0.3 },
+  ),
+});
 ```
 
-Without `resolveModel`, a string model (an AI Gateway id such as `'openai/gpt-4o-mini'`) is replaced
-by the picked id, and a provider instance ignores the pick.
+Entries group by provider (`provider`, else the id's prefix before `/`, else the model's own
+provider); `providerLabels` names the groups. A turn with no pick runs on `default` (the first entry
+when omitted). For per-actor availability pass your own `models` catalog next to it.
 
 ## License
 

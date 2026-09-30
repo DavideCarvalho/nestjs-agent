@@ -131,7 +131,8 @@ export class AgentDepsFactory {
         : {}),
       registry: this.registry,
       promptContributors: this.promptContributors,
-      systemPrompt: definition?.systemPrompt ?? 'You are a helpful assistant.',
+      systemPrompt:
+        definition?.systemPrompt ?? this.options.systemPrompt ?? 'You are a helpful assistant.',
       maxSteps: definition?.maxSteps ?? 8,
       ...(definition?.maxDelegationDepth !== undefined
         ? { maxDelegationDepth: definition.maxDelegationDepth }

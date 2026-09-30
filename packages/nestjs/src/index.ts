@@ -25,6 +25,8 @@ export {
   type AiToolOptions,
   AI_TOOL_METADATA,
   readAiToolMetadata,
+  type ResolvedAiToolOptions,
+  toolNameFromClass,
 } from './decorator/ai-tool.decorator.js';
 export {
   Agent,
@@ -75,6 +77,15 @@ export { LedgerQuotaStore } from './ledger-quota-store.js';
 export { type AgentDeps, utcDay } from './agent-deps.js';
 export { AgentDepsFactory, delegateToolName } from './agent-deps.factory.js';
 export { HeaderActorResolver } from './resolver/header-actor-resolver.js';
+export {
+  AnonymousActorResolver,
+  type AnonymousActorOptions,
+} from './resolver/anonymous-actor-resolver.js';
+export {
+  defaultRequestUserMapper,
+  requestUserActorResolver,
+  type RequestUserMapper,
+} from './resolver/request-user-actor-resolver.js';
 
 // Re-export the core surface so consumers import tools/types from one place.
 export * from '@dudousxd/nestjs-agent-core';
