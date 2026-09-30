@@ -1,5 +1,20 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.26.0
+
+### Minor Changes
+
+- [#238](https://github.com/DavideCarvalho/nestjs-agent/pull/238) [`4c69aed`](https://github.com/DavideCarvalho/nestjs-agent/commit/4c69aedd3e4e81f32c08af5f3a52e7f9b561fced) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Gaps found moving flip-nestjs onto the React client:
+
+  - `useAgentChat({ threadId })` reports `isLoadingHistory: true` from the very first render (and on the first render after a thread switch) until the history read settles, so a page shows its skeleton instead of flashing the empty state.
+  - `GET <base>/tools?agent=*` answers every tool the actor reaches through any agent, each once; `useToolCatalog({ agent: ALL_AGENTS })` reads it (`ALL_AGENTS` from core and react).
+  - `readOnly` on `useChatTranscript` / `useTranscriptItem` / `<MessageList>`: no approve / reject / answer / skip, edit, fork, regenerate or stop, whatever handlers or backend are in scope — parked approvals and question sets still render. Documents that decision handlers left undefined settle through the in-scope backend.
+
+### Patch Changes
+
+- Updated dependencies [[`4c69aed`](https://github.com/DavideCarvalho/nestjs-agent/commit/4c69aedd3e4e81f32c08af5f3a52e7f9b561fced)]:
+  - @dudousxd/nestjs-agent-core@0.31.0
+
 ## 0.25.0
 
 ### Minor Changes
