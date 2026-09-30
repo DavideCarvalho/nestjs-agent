@@ -169,6 +169,15 @@ export interface AgentBackend {
   updateQueuedMessage?(messageId: string, update: QueuedMessageUpdate): Promise<ChatQueueState>;
   /** `DELETE <base>/queue/:messageId`. */
   removeQueuedMessage?(messageId: string): Promise<ChatQueueState>;
+  /**
+   * `POST <base>/queue/:messageId/interrupt` — run a waiting message now: it moves to the head as an
+   * interrupt and the running turn is cancelled for it. `interrupting` is the run that was
+   * cancelled; `runId` is set instead when nothing was running and the message started at once.
+   * What `chat.queue.interrupt(id)` calls.
+   */
+  interruptQueuedMessage?(
+    messageId: string,
+  ): Promise<ChatQueueState & { runId?: string; interrupting?: string }>;
   /** `DELETE <base>/threads/:id/queue`. */
   clearQueue?(threadId: string): Promise<ChatQueueState>;
   /** `POST <base>/threads/:id/queue/resume` — `runId` when the head started. */

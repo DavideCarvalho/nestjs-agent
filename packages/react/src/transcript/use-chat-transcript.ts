@@ -2,6 +2,7 @@ import type { QueuePause } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { type MessageFile, attachmentFile } from '../attachments/files.js';
 import type { AgentBackend } from '../backend.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import { useAgentBackend } from '../provider.js';
@@ -208,11 +209,15 @@ export interface UseChatTranscriptOptions extends TranscriptItemOptions {
    * after the transcript as {@link ChatTranscript.queued}: pending user messages, not yet sent.
    */
   queue?: {
-    items: QueuedChatMessage[];
+    /** `files` may be left out by a host that builds these itself: it is derived from `attachments`. */
+    items: Array<Omit<QueuedChatMessage, 'files'> & { files?: MessageFile[] }>;
     paused: QueuePause | null;
     remove?: (id: string) => void | Promise<void>;
   } | null;
 }
+
+/** One file on a waiting message: a sent message's {@link MessageFile}, and a `TranscriptFile`. */
+export type TranscriptQueuedFile = MessageFile & TranscriptFile;
 
 /**
  * A message waiting in the thread's queue, as the transcript shows it: a user message that has not
@@ -222,7 +227,12 @@ export interface TranscriptQueuedItem {
   id: string;
   role: 'user';
   text: string;
-  files: TranscriptFile[];
+  /**
+   * The message's files, in the shape a sent message's have: a {@link MessageFile} (what
+   * `messageFiles()` gives — `kind`, `extension`, `mediaId`) that is also a `TranscriptFile`
+   * (`isImage`), so either renderer takes it as it is.
+   */
+  files: TranscriptQueuedFile[];
   /**
    * `'sending'` — on its way to the server. `'queued'` — waiting for the running turn.
    * `'paused'` — waiting, but the queue is paused (see {@link ChatTranscript.queuePaused}).
@@ -397,11 +407,9 @@ function useQueuedItems(
       id: message.id,
       role: 'user',
       text: message.text,
-      files: message.attachments.map((attachment) => ({
-        url: attachment.url,
-        mediaType: attachment.contentType,
-        filename: attachment.name,
-        isImage: attachment.contentType.startsWith('image/'),
+      files: (message.files ?? message.attachments.map(attachmentFile)).map((file) => ({
+        ...file,
+        isImage: file.kind === 'image',
       })),
       state,
       position,

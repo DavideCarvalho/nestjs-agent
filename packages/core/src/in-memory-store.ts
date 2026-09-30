@@ -531,6 +531,14 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
         message.attachments = patch.attachments;
       }
     }
+    if (patch.interrupt !== undefined) {
+      if (patch.interrupt) {
+        message.interrupt = true;
+      } else {
+        // biome-ignore lint/performance/noDelete: exactOptionalPropertyTypes forbids assigning undefined to an optional prop
+        delete message.interrupt;
+      }
+    }
     message.updatedAt = this.now();
     return { ...message };
   }

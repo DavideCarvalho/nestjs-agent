@@ -18,6 +18,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
+      # The files people install, not the source: no built module may call `React.x` without
+      # importing React, and every entry of the React package loads and renders with no global
+      # React. A classic-JSX build passes every other step here and breaks in the consumer's browser.
+      - run: pnpm check:dist
       - run: pnpm typecheck
       # Specs are excluded from every package's build tsconfig (they would be emitted to dist),
       # so `pnpm typecheck` never sees them. This is the same check with the specs included, for

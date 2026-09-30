@@ -82,11 +82,19 @@ export interface EnqueueMessageInput {
   at?: 'tail' | 'head';
 }
 
-/** What `PATCH <base>/queue/:messageId` may change. An omitted key leaves the field as it is. */
+/**
+ * What a store may change on a waiting message (`PATCH <base>/queue/:messageId` sets the text and
+ * attachments). An omitted key leaves the field as it is.
+ */
 export interface QueuedMessagePatch {
   content?: string;
   /** `null` drops every attachment. */
   attachments?: MessageAttachment[] | null;
+  /**
+   * Mark (or unmark) the message as an interrupt — what `POST <base>/queue/:messageId/interrupt`
+   * does to a message that is already waiting, before it cancels the running turn for it.
+   */
+  interrupt?: boolean;
 }
 
 /**

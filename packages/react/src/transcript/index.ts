@@ -46,6 +46,7 @@ export {
   type TranscriptEditState,
   type TranscriptItem,
   type TranscriptItemOptions,
+  type TranscriptQueuedFile,
   type TranscriptQueuedItem,
   type TranscriptStopState,
   type TranscriptWindow,

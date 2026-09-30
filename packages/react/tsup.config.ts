@@ -30,6 +30,17 @@ const external = [
   '@dudousxd/nestjs-media-client',
 ];
 
+// JSX compiles to the automatic runtime (`react/jsx-runtime`), never to `React.createElement`: a
+// module built the classic way needs a global `React`, which a consumer's app does not have.
+// Said here as well as in tsconfig.json (`jsx: react-jsx`) so neither file alone can undo it;
+// `scripts/verify-dist.mjs` and the repo's `check-dist-react` fail the build if it regresses.
+const jsx = {
+  esbuildOptions(options: { jsx?: string; jsxImportSource?: string }) {
+    options.jsx = 'automatic';
+    options.jsxImportSource = 'react';
+  },
+};
+
 export default defineConfig([
   {
     entry: {
@@ -46,6 +57,7 @@ export default defineConfig([
     sourcemap: true,
     outDir: 'dist',
     external,
+    ...jsx,
   },
   {
     entry: {
@@ -62,5 +74,6 @@ export default defineConfig([
     sourcemap: true,
     outDir: 'dist',
     external,
+    ...jsx,
   },
 ]);

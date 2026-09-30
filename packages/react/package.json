@@ -84,6 +84,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "test:dist": "node scripts/verify-dist.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:specs": "tsc -p tsconfig.spec.json"
   },

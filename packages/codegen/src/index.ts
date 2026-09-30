@@ -286,6 +286,17 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       [{ name: 'messageId', source: 'path' }],
     ),
     route(
+      'POST',
+      `${root}/queue/:messageId/interrupt`,
+      `${ns}.queue.interrupt`,
+      {
+        query: null,
+        body: null,
+        response: `${CHAT_QUEUE_STATE.slice(0, -2)}; runId?: string; interrupting?: string }`,
+      },
+      [{ name: 'messageId', source: 'path' }],
+    ),
+    route(
       'DELETE',
       `${root}/queue/:messageId`,
       `${ns}.queue.remove`,

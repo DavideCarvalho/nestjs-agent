@@ -12,6 +12,7 @@ export {
   filesFromClipboard,
   type MessageFile,
   type MessageFileKind,
+  attachmentFile,
   messageFiles,
 } from './attachments/files.js';
 export {
@@ -219,6 +220,7 @@ export {
   type TranscriptElicitationOutcome,
   type TranscriptItem,
   type TranscriptItemOptions,
+  type TranscriptQueuedFile,
   type TranscriptQueuedItem,
   type TranscriptQuestion,
   type TranscriptQuestionOption,
@@ -240,7 +242,12 @@ export {
   useTranscriptItem,
   type UseTranscriptItemOptions,
 } from './transcript/index.js';
-export type { ChatQueue, QueuedChatMessage, WhileRunning } from './queue/model.js';
+export type {
+  ChatQueue,
+  QueuedChatMessage,
+  SendWhileRunning,
+  WhileRunning,
+} from './queue/model.js';
 // The queue's wire shapes, so a renderer needs no second import for them.
 export type {
   ChatQueueState,

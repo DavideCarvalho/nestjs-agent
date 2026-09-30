@@ -344,6 +344,86 @@ describe('chat message queue', () => {
     ]);
   });
 
+  it('turns a waiting message into the interrupt: it cuts in, and nothing is sent twice', async () => {
+    const { model, store, threadId, server } = await boot();
+    model.hold('first');
+    const first = send(server, { threadId, message: 'first' }).then((res) => res);
+    await model.reached('first');
+    const runId = (await store.activeRunForThread(threadId)) as string;
+    const a = (await send(server, { threadId, message: 'a' })).body.messageId as string;
+    const b = (await send(server, { threadId, message: 'b' })).body.messageId as string;
+
+    const stranger = await request(server)
+      .post(`/agent/queue/${b}/interrupt`)
+      .set('x-actor-id', 'intruder');
+    expect(stranger.status).toBe(403);
+    expect((await store.listQueue(threadId)).map((message) => message.id)).toEqual([a, b]);
+
+    const interrupt = await request(server)
+      .post(`/agent/queue/${b}/interrupt`)
+      .set('x-actor-id', 'u1');
+    expect(interrupt.status).toBeLessThan(300);
+    // The same message, same id — moved to the head and marked, never removed and re-sent.
+    expect(interrupt.body).toMatchObject({
+      interrupting: runId,
+      items: [
+        { id: b, content: 'b', interrupt: true },
+        { id: a, content: 'a' },
+      ],
+      paused: null,
+    });
+
+    model.release('first');
+    const { events } = eventsOf((await first).text);
+    expect(events.filter((event) => event.kind === 'queue').at(-1)).toMatchObject({
+      started: { messageId: b, runId: b },
+      queue: { items: [{ id: a }], paused: null },
+    });
+    await until(
+      async () => model.seen,
+      (seen) => seen.includes('a'),
+    );
+    expect(model.seen).toEqual(['first', 'b', 'a']);
+    const transcript = await settledTranscript(store, threadId, 2);
+    expect(transcript.slice(-4)).toEqual([
+      'user: b',
+      'assistant: re: b',
+      'user: a',
+      'assistant: re: a',
+    ]);
+    // It ran, so it is gone: a second interrupt has nothing to act on.
+    expect(
+      (await request(server).post(`/agent/queue/${b}/interrupt`).set('x-actor-id', 'u1')).status,
+    ).toBe(404);
+  });
+
+  it('an interrupt on a paused, idle thread lifts the pause and starts that message', async () => {
+    const { model, store, threadId, server } = await boot();
+    model.hold('first');
+    model.failing.add('first');
+    const first = send(server, { threadId, message: 'first' }).then((res) => res);
+    await model.reached('first');
+    const a = (await send(server, { threadId, message: 'a' })).body.messageId as string;
+    const b = (await send(server, { threadId, message: 'b' })).body.messageId as string;
+    model.release('first');
+    await first;
+    await until(
+      () => store.queuePause(threadId),
+      (pause) => pause !== null,
+    );
+
+    const interrupt = await request(server)
+      .post(`/agent/queue/${b}/interrupt`)
+      .set('x-actor-id', 'u1');
+    expect(interrupt.body).toMatchObject({ runId: b, items: [{ id: a }], paused: null });
+    expect(interrupt.body.interrupting).toBeUndefined();
+    await until(
+      async () => model.seen,
+      (seen) => seen.includes('a'),
+    );
+    expect(model.seen).toEqual(['first', 'b', 'a']);
+  });
+
   it('edits, reorders and removes queued messages — only the thread owner may', async () => {
     const { model, store, threadId, server } = await boot();
     model.hold('first');

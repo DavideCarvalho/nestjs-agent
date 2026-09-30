@@ -37,8 +37,8 @@ handlers passed. On top of the AI SDK chat it returns:
 | On `chat` | What it is |
 |---|---|
 | `transcript` | `useChatTranscript` already bound to the chat — approve/reject/answer/skip, stop, fork, regenerate, the tool catalog, and timestamps/usage read from message metadata. Override any of it with `useAgentChat({ transcript: { … } })`. |
-| `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both — while a turn runs it QUEUES it (see *Typing ahead*); `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'` (`'busy'` only with `whileRunning: 'block'`). |
-| `queue` | `{ items, paused, isSupported, add(text, { attachments?, mode? }), remove(id), edit(id, text), move(id, index), clear(), resume(), error }` — messages sent mid-turn, waiting server-side for the running turn to settle. |
+| `composer` | `{ text, setText, files, canSend, blockedBy, submit() }` — `files` is `useAttachments` on the chat's backend; `submit()` sends the draft with the ready files attached and clears both — while a turn runs it QUEUES it (see *Typing ahead*), and `submit({ mode: 'interrupt' \| 'queue' })` picks what happens mid-turn for that one send; `blockedBy` is `'empty' \| 'busy' \| 'uploading' \| 'quota'` (`'busy'` only with `whileRunning: 'block'`). |
+| `queue` | `{ items, paused, isSupported, add(text, { attachments?, mode? }), remove(id), interrupt(id), edit(id, text), move(id, index), clear(), resume(), error }` — messages sent mid-turn, waiting server-side for the running turn to settle. |
 | `models` | `{ list, providers, selected, pinned, locked, select(id), pinToThread(id) }` — loaded the first time `list` is read. |
 | `quota` / `blocked` | `useQuota`'s state, and the window blocking sends (the `blocked` option overrides it). |
 | `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — the same object shape the transcript's handlers take. |
@@ -607,8 +607,21 @@ const chat = useAgentChat({ threadId });
 - `useAgentChat({ whileRunning })`: `'queue'` (default), `'interrupt'` (cancel the running turn and
   run this next), or `'block'` (refuse, `composer.blockedBy === 'busy'` — the old behaviour, also
   what a backend without `enqueueMessage` gets).
+- One send can answer differently from the chat's `whileRunning`: `composer.submit({ mode })` and
+  `sendMessage(message, { mode })` take `'queue'` or `'interrupt'` — a "send now" button next to a
+  plain send that queues. The composer clears its own draft and files either way; with nothing
+  running, `mode` means nothing and the message is simply sent. It also lifts `'block'` for that
+  send.
 - `chat.queue.edit(id, text)`, `move(id, index)`, `remove(id)`, `clear()` change what is waiting;
   `add(text, { attachments, mode })` queues from your own code.
+- `chat.queue.interrupt(id)` runs a message that is already waiting NOW: it moves to the head as an
+  interrupt and the running turn is cancelled for it, in one server call (the message keeps its id
+  and never leaves the queue — do not `remove` and `add` it again). With nothing running it starts
+  at once.
+- A waiting message's files have the shape a sent message's do: `chat.queue.items[n].files` is
+  `MessageFile[]` — what `messageFiles(message)` gives — and `chat.transcript.queued[n].files` is the
+  same plus `isImage`, so one file renderer draws both. `attachmentFile(attachment)` makes one from
+  an uploaded `MessageAttachment`.
 - The queue pauses behind a failed turn (`run_failed`), a Stop (`cancelled`) or an exhausted quota
   (`quota_exceeded`); `chat.queue.paused` says which, `resume()` lifts it. A queue left waiting with
   nothing running is started when the thread loads.

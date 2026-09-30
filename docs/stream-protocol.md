@@ -439,6 +439,34 @@ a drain's read and its release is never stranded. A holder that is no longer run
 that crashed mid-turn) is replaced by the next send or resume rather than queued behind for ever;
 a server that cannot tell whether a holder is alive must assume it is.
 
+### Interrupting with a message that is already waiting
+
+`POST <base>/queue/:messageId/interrupt` runs a waiting message **now** — the "send this one now"
+button on a queued bubble. In one request, the server:
+
+1. marks the message `interrupt: true` and moves it to the head of its queue (it keeps its id, its
+   text, its attachments, everything it was queued with);
+2. lifts any pause — a person asking for this message overrides whatever stopped the queue;
+3. cancels the run holding the thread. That cancel settles into the queue like any other, finds an
+   interrupt at the head, and starts it (the *cancelled* row of the policy table).
+
+It answers the queue as it now stands plus `interrupting` (the run it cancelled):
+
+```json
+{ "items": [{ "id": "q_9", "content": "skip that — do this", "interrupt": true, "createdAt": "…", "updatedAt": "…" }, { "id": "q_7", "content": "and in EUR?", "createdAt": "…", "updatedAt": "…" }], "paused": null, "interrupting": "run_1" }
+```
+
+With nothing running (a paused queue, an idle thread) there is nothing to cancel: the message
+starts at once and the answer carries `runId` (the message's own id) instead of `interrupting`, the
+same shape `queue/resume` answers. If the drain started the message while the request was on its
+way, the answer is `runId` too and nothing is cancelled — the message is never cancelled for itself.
+`410` when it already started or was removed between the ownership check and the move, `404`
+unknown, `403` another actor's, `501` on a store that cannot mark a waiting message.
+
+This is a route of its own because the client cannot compose it safely: removing the message and
+sending it again with `mode: 'interrupt'` loses it if the second request fails, and runs it twice if
+another tab's drain starts it in between. Here the message never leaves the queue.
+
 ### For a backend that is not this library
 
 To serve the queue to the React client (`chat.queue`, `whileRunning`), a backend implements:
@@ -451,8 +479,11 @@ To serve the queue to the React client (`chat.queue`, `whileRunning`), a backend
    with the policy table above, using compare-and-set admission.
 5. The `queue` frame — on every change while a turn holds the thread, and with `started` on a
    handoff.
-6. The five queue routes (`GET`/`DELETE threads/:id/queue`, `POST threads/:id/queue/resume`,
-   `PATCH`/`DELETE queue/:messageId`), ownership-gated like the thread routes.
+6. The queue routes (`GET`/`DELETE threads/:id/queue`, `POST threads/:id/queue/resume`,
+   `PATCH`/`DELETE queue/:messageId`, `POST queue/:messageId/interrupt`), ownership-gated like the
+   thread routes. `queue/:messageId/interrupt` is optional: a backend without it leaves
+   `AgentBackend.interruptQueuedMessage` out (or answers `404`/`501`), and `chat.queue.interrupt(id)`
+   rejects while everything else works.
 7. `queue` on `GET <base>/threads/:id`.
 
 A backend that serves none of it keeps working: the client's `whileRunning` falls back to `'block'`
@@ -496,6 +527,7 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 | `POST <base>/threads/:id/queue/resume` | — | `ChatQueueState & { runId? }` — lifts a pause; `runId` when the head started |
 | `PATCH <base>/queue/:messageId` | `{ message?, attachments?: { mediaId }[] \| null, position?: number }` | `ChatQueueState`; `410` when the message already started or was removed |
 | `DELETE <base>/queue/:messageId` | — | `ChatQueueState`; `410` when already gone, `404` unknown, `403` another actor's |
+| `POST <base>/queue/:messageId/interrupt` | — | `ChatQueueState & { interrupting?, runId? }` — the message moves to the head as an interrupt and the running turn is cancelled for it (`interrupting`); with nothing running it starts (`runId`). `410`/`404`/`403` as above (see *Interrupting with a message that is already waiting*) |
 | `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
 | `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx` |
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |
