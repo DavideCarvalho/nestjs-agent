@@ -314,6 +314,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         const threadId = currentThreadId();
         const model = current.model ?? pickedModelRef.current;
         return {
+          // Read per send: a host that switches agents before the first message (a picker on a
+          // new chat) sends the one picked now, not the one this chat mounted with.
+          ...(current.agent !== undefined ? { agent: current.agent } : {}),
           ...(threadId !== undefined ? { threadId } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(pageContext ? { pageContext } : {}),

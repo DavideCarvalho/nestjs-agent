@@ -242,3 +242,20 @@ describe('useAgentChat — transcript', () => {
     expect(result.current.transcript.stop.available).toBe(false);
   });
 });
+
+describe('useAgentChat — agent', () => {
+  it('sends the agent picked at send time, not the one the chat mounted with', async () => {
+    const backend = fakeBackend();
+    const { result, rerender } = renderHook(
+      ({ agent }: { agent: string }) => useAgentChat({ backend, agent }),
+      { initialProps: { agent: 'first' } },
+    );
+    rerender({ agent: 'second' });
+    await act(async () => {
+      await result.current.sendMessage({ text: 'hi' });
+    });
+    expect(backend.openChatStream).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ agent: 'second' }) }),
+    );
+  });
+});
