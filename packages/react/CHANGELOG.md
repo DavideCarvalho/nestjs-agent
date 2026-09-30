@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.30.0
+
+### Minor Changes
+
+- [#258](https://github.com/DavideCarvalho/nestjs-agent/pull/258) [`5ccecf9`](https://github.com/DavideCarvalho/nestjs-agent/commit/5ccecf9f558c8d7f782652d8c0b180f1b968969d) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `useAgentChat` can drive an AG-UI 1.0 agent: `agUiChatStream(request, { url })` behind `openChatStream` POSTs a `RunAgentInput` and re-frames the AG-UI answer in this library's stream protocol, so the transcript, tool activity and generative UI render unchanged. `reframeAgUiStream` is the re-framing alone.
+
 ## 0.29.2
 
 ### Patch Changes
