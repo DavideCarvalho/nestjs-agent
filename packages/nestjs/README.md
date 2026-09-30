@@ -18,28 +18,47 @@ pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
 
 ## Use
 
+The whole server — a public chat with one tool:
+
 ```ts
-import { AgentModule, AiTool, HeaderActorResolver, type ToolHandler } from '@dudousxd/nestjs-agent';
+import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { openai } from '@ai-sdk/openai';
 import { z } from 'zod';
 
-@AiTool({ name: 'getWeather', kind: 'read', description: 'Current weather.', input: z.object({ city: z.string() }) })
-export class GetWeatherTool implements ToolHandler<{ city: string }> {
-  async execute(input: { city: string }) { return { tempC: 21 }; }
+@AiTool({ description: 'Current weather for a city', input: z.object({ city: z.string() }) })
+export class GetWeatherTool {            // name: getWeather, kind: read
+  async execute({ city }: { city: string }) { return { city, tempC: 21 }; }
 }
 
 @Module({
-  imports: [AgentModule.forRoot({
-    model, store, actorResolver: new HeaderActorResolver(),
-    defaultAgent: { systemPrompt: '…', modelId: 'claude-sonnet-4-6' },
-  })],
+  imports: [AgentModule.forRoot({ model: aiSdkModel(openai('gpt-5-mini')) })],
   providers: [GetWeatherTool],
 })
 export class AppModule {}
 ```
 
-The module mounts SSE + REST endpoints under `/agent` (`POST /agent/chat`, tool-call approve/reject,
-threads, quota). Add `durable: true` + `AgentDurableModule` for the durable runner;
-`AgentModule.forFeature([…])` for multi-agent orchestration.
+The module mounts SSE + REST endpoints under `/agent` (`POST /agent/chat`, threads, tool-call
+approve/reject, quota, models, tools). Everything but `model` defaults, and each default is one
+option away:
+
+| Default | Change it with |
+|---|---|
+| In-memory store (boot warning: not for production) | `store`, or import a store module (`MikroOrmAgentStoreModule.forFeature()`) — found automatically |
+| Public endpoints; each browser its own anonymous actor (HttpOnly cookie) | `actorResolver: requestUserActorResolver()` (reads `req.user`), or your own |
+| Every tool callable by any resolved actor | `@AiTool({ roles })`, `defaultRoles`, or a `rolesPolicy` |
+| `'You are a helpful assistant.'` | `systemPrompt: 'You are …'` or `({ actor }) => …`; `@Agent` classes for personas |
+| `@AiTool` name = class name minus `Tool`, camelCased; kind `read` | `@AiTool({ name, kind: 'action' })` |
+
+**Anonymous mode, and what it means.** With no `actorResolver`, anyone who can reach the API can
+chat, and each browser gets its own identity: a random token in an `HttpOnly`, `SameSite=Lax`
+cookie (`Secure` over HTTPS), the actor id a SHA-256 digest of it. Threads, quota and attachments
+are scoped by that id, so visitors never see each other's conversations; clearing cookies starts
+over. `action` tools still park on approval — but the approver is the requester, so for an anonymous
+visitor approval is a confirmation step, not an authorization: gate a consequential tool with
+`roles` (which anonymous actors do not hold). Without a quota, a public deployment's model spend is
+unbounded — set `quota` limits (they apply per anonymous id) before going public. Requiring login
+is one line: `actorResolver: requestUserActorResolver()`.
 
 ### How a chat talks about a tool
 
@@ -286,36 +305,37 @@ bundled stores and `InMemoryAgentStore` have them) — `501` otherwise.
 
 ```ts
 AgentModule.forRoot({
-  model: aiSdkModel('openai/gpt-4o-mini', { resolveModel: (id) => gateway(id) }),
-  models: {
-    list: ({ actor }) => ({
-      default: 'openai/gpt-4o-mini',
-      providers: [
-        {
-          id: 'openai',
-          label: 'OpenAI',
-          models: [
-            { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini', badges: ['fast'], available: true },
-            {
-              id: 'openai/o3',
-              label: 'o3',
-              badges: ['reasoning'],
-              available: actor.roles?.includes('PRO') === true,
-              unavailableReason: 'Pro plan',
-            },
-          ],
-        },
-      ],
-    }),
-  },
+  model: aiSdkModels(
+    {
+      'openai/gpt-4o-mini': { model: 'openai/gpt-4o-mini', label: 'GPT-4o mini', badges: ['fast'] },
+      'openai/o3': { model: 'openai/o3', label: 'o3', badges: ['reasoning'] },
+    },
+    { default: 'openai/gpt-4o-mini' },
+  ),
 });
+```
+
+`aiSdkModels` (from `@dudousxd/nestjs-agent-ai-sdk`) carries its own catalog, used when `models` is
+omitted. For availability that depends on the caller, pass a `models` catalog of your own next to it:
+
+```ts
+models: {
+  list: ({ actor }) => ({
+    default: 'openai/gpt-4o-mini',
+    providers: [{ id: 'openai', label: 'OpenAI', models: [
+      { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini', available: true },
+      { id: 'openai/o3', label: 'o3', available: actor.roles?.includes('PRO') === true, unavailableReason: 'Pro plan' },
+    ] }],
+  }),
+},
 ```
 
 `GET /agent/models?agent=` answers the catalog for the caller (empty without one). A turn runs on
 the send's `model`, else the thread's pinned one (`PATCH /agent/threads/:id { model }`), else the
 provider's default; the id reaches the provider as `ModelTurnArgs.model` for every call of the turn.
 A model the catalog does not list as available for that actor and agent is refused with `400` —
-when pinned and again on each turn. `staticModelCatalog(view)` wraps a fixed list.
+when pinned and again on each turn — and a provider asked for a model it does not serve fails the
+turn rather than answering on another. `staticModelCatalog(view)` wraps a fixed list.
 
 ### Budgets: `GET /agent/quota`
 

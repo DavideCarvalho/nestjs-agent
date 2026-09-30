@@ -9,6 +9,7 @@ import type {
   ModelCatalog,
   ModelProvider,
   OutputProcessor,
+  PromptBuilder,
   QuotaProvider,
   QuotaStore,
   Retriever,
@@ -129,12 +130,22 @@ export interface AgentMemoryOptions {
 
 export interface AgentModuleOptions {
   // --- infrastructure ---
-  /** The LLM provider (e.g. a Vercel AI SDK wrapper). Required. */
+  /**
+   * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model
+   * picker (its catalog is used when `models` is omitted). The only required option.
+   */
   model: ModelProvider;
   /**
-   * Persistence adapter. Optional — omit it and import a store module (e.g.
-   * `MikroOrmAgentStoreModule.forFeature()`) that binds `AGENT_STORE` globally instead. When
-   * provided here it takes precedence within this module's scope.
+   * The base prompt of the default agent (and of any `@Agent` that declares none) — a string, or a
+   * function of the turn's `{ actor, agentName, pageContext }`. Omit → `'You are a helpful
+   * assistant.'`.
+   */
+  systemPrompt?: string | PromptBuilder;
+  /**
+   * Persistence adapter. Omit it and either import a store module (e.g.
+   * `MikroOrmAgentStoreModule.forFeature()`, which binds `AGENT_STORE` globally — it is found and
+   * used), or run on the built-in in-memory store — fine for a demo, logged at boot as not for
+   * production: threads vanish on restart and are not shared between processes.
    */
   store?: AgentStore;
   /** Live token transport. Defaults to a single-process in-memory sink. */
@@ -177,15 +188,20 @@ export interface AgentModuleOptions {
    * deciding actor must hold that role. See `ApprovalPolicy`.
    */
   approvalPolicy?: ApprovalPolicy;
-  /** Default roles a tool requires when its `roles` is omitted. Defaults to `['ADMIN']`. */
+  /**
+   * Roles a tool requires when its own `roles` is omitted. Default `[]` — no restriction: every
+   * tool is callable by whoever `actorResolver` resolved (an anonymous visitor included, when none is
+   * configured). `action` tools still park on approval regardless.
+   */
   defaultRoles?: string[];
   /**
-   * Resolves the acting actor for each request (the identity seam). Required — the agent NEVER
-   * fabricates a caller, so this is a compile-time obligation, not an optional with a throwing
-   * placeholder. Read your authenticated principal here (session / JWT / `nestjs-context`), or use
-   * the opt-in `HeaderActorResolver` for demos and header-trusting gateways.
+   * Resolves the acting actor for each request (the identity seam). Omit → the endpoints are public
+   * and every browser is its own anonymous actor (`AnonymousActorResolver`: an `HttpOnly` cookie,
+   * the actor id a digest of it), so visitors never see each other's threads, quota or attachments.
+   * A boot notice says so. Require login with `requestUserActorResolver()` (reads `req.user`), or a
+   * resolver of your own over your session / JWT / `nestjs-context`.
    */
-  actorResolver: ActorResolver;
+  actorResolver?: ActorResolver;
   /** Route prefix the controllers mount under. Defaults to `'agent'` (→ `/agent/chat`, …). */
   path?: string;
   /**
@@ -355,18 +371,6 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
    */
   durable?: boolean;
-  /**
-   * Set when `AGENT_STORE` is bound by a globally-imported store module (e.g.
-   * `MikroOrmAgentStoreModule.forFeature()`) instead of returned as `store` from `useFactory`.
-   *
-   * `forRoot` decides this synchronously (`store` present or not), but the async factory resolves
-   * too late to inspect — so by default `forRootAsync` binds `AGENT_STORE` from the factory result,
-   * which would shadow a global store binding with `undefined` when the factory omits `store`. Set
-   * this to `true` to skip the local binding and defer to the global one. Leave it unset (and return
-   * `store` from the factory) when the store is constructed inside the factory.
-   */
-  externalStore?: boolean;
-
   /**
    * Guard(s) applied uniformly to every controller this module mounts. A STATIC field on the async
    * config object itself — NOT part of what `useFactory` resolves — because controllers (and the

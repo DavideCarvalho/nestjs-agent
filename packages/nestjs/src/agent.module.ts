@@ -22,6 +22,9 @@ import {
   type AgentRunner,
   type AgentStore,
   DefaultRolesPolicy,
+  InMemoryAgentStore,
+  type ModelCatalog,
+  type ModelProvider,
   type QuotaStore,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
@@ -29,11 +32,12 @@ import {
   type CanActivate,
   type DynamicModule,
   Global,
+  Logger,
   Module,
   type Provider,
   type Type,
 } from '@nestjs/common';
-import { DiscoveryModule, RouterModule } from '@nestjs/core';
+import { DiscoveryModule, ModulesContainer, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions, AgentSurface } from './agent.options.js';
 import { AgentService } from './agent.service.js';
@@ -55,18 +59,80 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
 import { LedgerQuotaStore } from './ledger-quota-store.js';
+import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
 
 /** Default route prefix the controllers mount under. */
 const DEFAULT_PATH = 'agent';
 
+const logger = new Logger('AgentModule');
+
+/**
+ * `AGENT_STORE` as some OTHER module binds it — a store module (`MikroOrmAgentStoreModule`,
+ * `DrizzleAgentStoreModule`, a host's own), found by scanning the container. Scanning sees every
+ * module's providers before any is instantiated, so the answer is complete whatever the import
+ * order; the instance itself is read lazily, at first use.
+ */
+function externalStoreWrapper(modules: ModulesContainer): { instance: unknown } | undefined {
+  for (const module of modules.values()) {
+    if (module.metatype === AgentModule) continue;
+    const wrapper = module.providers.get(AGENT_STORE);
+    if (wrapper !== undefined) return wrapper as { instance: unknown };
+  }
+  return undefined;
+}
+
+/** A store that forwards to another module's `AGENT_STORE`, resolved on first use. */
+function forwardingStore(wrapper: { instance: unknown }): AgentStore {
+  const target = (): Record<PropertyKey, unknown> => {
+    const instance = wrapper.instance;
+    if (instance === undefined || instance === null) {
+      throw new Error('AgentModule: the AGENT_STORE bound by another module is not ready yet');
+    }
+    return instance as Record<PropertyKey, unknown>;
+  };
+  return new Proxy({} as AgentStore, {
+    get(_, property) {
+      const store = target();
+      const value = store[property];
+      return typeof value === 'function' ? value.bind(store) : value;
+    },
+    has(_, property) {
+      return property in target();
+    },
+  });
+}
+
+/**
+ * The store: the `store` option, else one another module binds, else the in-memory default — which
+ * is loud about not being for production.
+ */
+function resolveStore(options: AgentModuleOptions, modules: ModulesContainer): AgentStore {
+  if (options.store !== undefined) return options.store;
+  const external = externalStoreWrapper(modules);
+  if (external !== undefined) return forwardingStore(external);
+  logger.warn(
+    'No `store` configured and no store module imported — using the in-memory store. Threads are ' +
+      'lost on restart and not shared between processes: not for production. Pass `store`, or ' +
+      'import a store module (e.g. MikroOrmAgentStoreModule.forFeature()).',
+  );
+  return new InMemoryAgentStore();
+}
+
+/** The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`). */
+function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
+  if (options.models !== undefined) return options.models;
+  const carried = (options.model as ModelProvider & { catalog?: ModelCatalog }).catalog;
+  return carried !== undefined && typeof carried.list === 'function' ? carried : undefined;
+}
+
 /**
  * The core wiring shared by `forRoot` / `forRootAsync`. `includeStore` controls whether we bind
  * `AGENT_STORE` locally: when the host omits `options.store` we leave it unbound so a globally-bound
  * store module (which binds `AGENT_STORE` app-wide) satisfies the dependency instead.
  */
-function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
+function sharedProviders(durable: boolean): Provider[] {
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
     // Starts empty; AgentDiscoveryService populates it from `@Agent`-decorated providers at boot.
@@ -105,7 +171,15 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     },
     {
       provide: AGENT_ACTOR_RESOLVER,
-      useFactory: (options: AgentModuleOptions) => options.actorResolver,
+      useFactory: (options: AgentModuleOptions) => {
+        if (options.actorResolver !== undefined) return options.actorResolver;
+        logger.warn(
+          'No `actorResolver` configured — the agent endpoints are PUBLIC: every browser gets its ' +
+            'own anonymous identity (an HttpOnly cookie). Set `actorResolver: ' +
+            'requestUserActorResolver()` (or your own) to require login.',
+        );
+        return new AnonymousActorResolver();
+      },
       inject: [AGENT_OPTIONS],
     },
     {
@@ -133,7 +207,7 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     },
     {
       provide: AGENT_MODEL_CATALOG,
-      useFactory: (o: AgentModuleOptions) => o.models,
+      useFactory: (o: AgentModuleOptions) => resolveCatalog(o),
       inject: [AGENT_OPTIONS],
     },
     AgentDepsFactory,
@@ -150,13 +224,11 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
     AgentApprovalPortAdapter,
     { provide: AGENT_APPROVAL_PORT, useExisting: AgentApprovalPortAdapter },
   ];
-  if (includeStore) {
-    providers.push({
-      provide: AGENT_STORE,
-      useFactory: (o: AgentModuleOptions) => o.store,
-      inject: [AGENT_OPTIONS],
-    });
-  }
+  providers.push({
+    provide: AGENT_STORE,
+    useFactory: (o: AgentModuleOptions, modules: ModulesContainer) => resolveStore(o, modules),
+    inject: [AGENT_OPTIONS, ModulesContainer],
+  });
   if (durable) {
     // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
     // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
@@ -179,11 +251,8 @@ function sharedProviders(durable: boolean, includeStore: boolean): Provider[] {
   return providers;
 }
 
-/**
- * The module's public tokens. `AGENT_STORE` is only re-exported when we bind it locally — a module
- * cannot export a token it neither provides nor imports (the store module binds it globally instead).
- */
-function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']> {
+/** The module's public tokens. */
+function exportsFor(): NonNullable<DynamicModule['exports']> {
   return [
     AGENT_OPTIONS,
     AGENT_TOOL_REGISTRY,
@@ -192,7 +261,7 @@ function exportsFor(includeStore: boolean): NonNullable<DynamicModule['exports']
     AGENT_ROLES_POLICY,
     AGENT_ACTOR_RESOLVER,
     AGENT_MODEL,
-    ...(includeStore ? [AGENT_STORE] : []),
+    AGENT_STORE,
     AGENT_QUOTA_STORE,
     AGENT_MODEL_CATALOG,
     AGENT_QUOTA_PROVIDER,
@@ -284,8 +353,6 @@ function routerFor(path: string): DynamicModule {
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
-    // Bind AGENT_STORE locally only when the host passes a store; otherwise defer to a global one.
-    const includeStore = options.store !== undefined;
     applyGuards(options.guards);
     return {
       module: AgentModule,
@@ -294,20 +361,15 @@ export class AgentModule {
       controllers: controllersForSurface(options.surface, options.attachments?.upload === true),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
-        ...sharedProviders(options.durable ?? false, includeStore),
+        ...sharedProviders(options.durable ?? false),
         ...guardProviders(options.guards),
       ],
-      exports: exportsFor(includeStore),
+      exports: exportsFor(),
     };
   }
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
-    // The async factory resolves too late to inspect `store`, so `forRootAsync` binds AGENT_STORE
-    // locally from the factory result by default. `externalStore: true` opts out — deferring to a
-    // globally-imported store module (e.g. `MikroOrmAgentStoreModule.forFeature()`) so the host
-    // doesn't have to inject that store just to hand it back as `store`.
-    const includeStore = options.externalStore !== true;
     applyGuards(options.guards);
     return {
       module: AgentModule,
@@ -330,10 +392,10 @@ export class AgentModule {
           }),
           inject: options.inject ?? [],
         },
-        ...sharedProviders(options.durable ?? false, includeStore),
+        ...sharedProviders(options.durable ?? false),
         ...guardProviders(options.guards),
       ],
-      exports: exportsFor(includeStore),
+      exports: exportsFor(),
     };
   }
 }

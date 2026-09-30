@@ -10,8 +10,8 @@ import type { Gate } from '@dudousxd/nestjs-authz';
 export interface AuthzRolesPolicyOptions {
   /**
    * Roles used by the role-based fallback ({@link DefaultRolesPolicy}) when a tool
-   * declares neither an `ability` nor `roles`. Defaults to ADMIN-only (the
-   * DefaultRolesPolicy default).
+   * declares neither an `ability` nor `roles`. Default `[]` — no restriction (the
+   * DefaultRolesPolicy default); `['ADMIN']` for the old ADMIN-only fallback.
    */
   fallbackRoles?: string[];
 }

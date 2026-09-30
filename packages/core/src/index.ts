@@ -76,3 +76,12 @@ export {
 } from './agent-loop.js';
 export * from './diagnostics.js';
 export * from './tool-retry.js';
+export {
+  InMemoryAgentStore,
+  type GovernanceMessageRow,
+  type GovernancePendingApprovalRow,
+  type GovernanceRunRow,
+  type GovernanceThreadRow,
+  type GovernanceToolCallRow,
+  type GovernanceUsageRow,
+} from './in-memory-store.js';

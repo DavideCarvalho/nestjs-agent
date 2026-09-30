@@ -1,6 +1,9 @@
 import {
   type MessageAttachment,
   type MessageUsage,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  type ModelCatalogView,
   type ModelMessage,
   type ModelProvider,
   type ModelTurnArgs,
@@ -9,6 +12,7 @@ import {
   type ToolDefinition,
   type ToolResult,
   encodeStreamEvent,
+  staticModelCatalog,
 } from '@dudousxd/nestjs-agent-core';
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 import {
@@ -50,14 +54,14 @@ export type AiSdkModelOptions = CallSettings & {
    * the guard with a plain fetch is the host's legitimate call.
    */
   experimental_download?: Experimental_DownloadFunction;
-  /**
-   * Turn the model a caller picked (`ModelTurnArgs.model` — a `ModelCatalog` id the server already
-   * checked) into the `LanguageModel` to call, e.g. `(id) => openai(id)` or a registry lookup.
-   * Omitted → a string `model` (an AI Gateway id) is replaced by the picked id verbatim, and a
-   * provider instance ignores the pick.
-   */
-  resolveModel?: (id: string) => LanguageModel;
 };
+
+/** The id a `LanguageModel` answers to: the gateway string itself, or the instance's `modelId`. */
+function idOf(model: LanguageModel): string | undefined {
+  if (typeof model === 'string') return model;
+  const id = (model as { modelId?: unknown }).modelId;
+  return typeof id === 'string' ? id : undefined;
+}
 
 /**
  * Adapt a Vercel AI SDK v7 `LanguageModel` to the core `ModelProvider` SPI so a host app writes
@@ -67,96 +71,218 @@ export type AiSdkModelOptions = CallSettings & {
  * loop to run as its own (replay-safe) steps.
  */
 export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): ModelProvider {
-  const { resolveModel, ...settings } = opts ?? {};
-  const modelFor = (picked: string | undefined): LanguageModel => {
-    if (picked === undefined) return model;
-    if (resolveModel !== undefined) return resolveModel(picked);
-    return typeof model === 'string' ? picked : model;
+  const own = idOf(model);
+  return {
+    runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+      // One model, so a pick naming another cannot be honoured — and running this one instead
+      // would answer on a model nobody chose. `aiSdkModels` is the provider for a picker.
+      if (args.model !== undefined && args.model !== own) {
+        throw new Error(
+          `aiSdkModel: this turn picked model "${args.model}", but the provider serves only ` +
+            `"${own ?? 'its one model'}". Offer several with aiSdkModels({ … }).`,
+        );
+      }
+      return runTurnOn(model, opts ?? {}, args);
+    },
+  };
+}
+
+/** A model {@link aiSdkModels} offers, with what a picker shows for it. */
+export interface AiSdkModelEntry {
+  model: LanguageModel;
+  /** Default: the id. */
+  label?: string;
+  description?: string;
+  /** Chips — `'fast'`, `'reasoning'`, `'vision'`, … */
+  badges?: string[];
+  contextWindow?: number;
+  /** The provider group it is listed under. Default: the id's prefix before `/`, else the model's provider. */
+  provider?: string;
+}
+
+export interface AiSdkModelsOptions extends AiSdkModelOptions {
+  /** The model a turn runs on when nobody picked one. Default: the first entry. */
+  default?: string;
+  /** Group id → label, for the picker. Default: the group id, capitalized. */
+  providerLabels?: Record<string, string>;
+}
+
+/** A {@link ModelProvider} over several models, carrying the catalog a picker lists them from. */
+export interface AiSdkModelsProvider extends ModelProvider {
+  catalog: ModelCatalog;
+}
+
+function groupOf(id: string, entry: AiSdkModelEntry): string {
+  if (entry.provider !== undefined) return entry.provider;
+  const slash = id.indexOf('/');
+  if (slash > 0) return id.slice(0, slash);
+  const provider =
+    typeof entry.model === 'string' ? undefined : (entry.model as { provider?: unknown }).provider;
+  return typeof provider === 'string' ? (provider.split('.')[0] ?? provider) : 'models';
+}
+
+/**
+ * Several AI SDK models behind one provider — the model picker's server half, in one place. The
+ * keys are what a client picks (and what the catalog lists); `AgentModule` uses the provider's
+ * `catalog` when `models` is omitted, so this is the whole setup:
+ *
+ * ```ts
+ * AgentModule.forRoot({
+ *   model: aiSdkModels(
+ *     {
+ *       fast: { model: openai('gpt-5-mini'), label: 'Fast', badges: ['fast'] },
+ *       smart: anthropic('claude-sonnet-4-5'),
+ *     },
+ *     { default: 'fast' },
+ *   ),
+ * })
+ * ```
+ *
+ * A turn with no pick runs on `default`; a pick the map does not hold fails the turn (the server
+ * already refuses one its catalog does not list, so this only guards a hand-rolled catalog).
+ */
+export function aiSdkModels(
+  models: Record<string, LanguageModel | AiSdkModelEntry>,
+  options: AiSdkModelsOptions = {},
+): AiSdkModelsProvider {
+  const { default: defaultId, providerLabels, ...settings } = options;
+  const entries = Object.entries(models).map(([id, value]) => {
+    const entry: AiSdkModelEntry =
+      typeof value === 'object' && value !== null && 'model' in value
+        ? (value as AiSdkModelEntry)
+        : { model: value as LanguageModel };
+    return [id, entry] as const;
+  });
+  if (entries.length === 0) throw new Error('aiSdkModels: offer at least one model');
+  const byId = new Map(entries);
+  const fallback = defaultId ?? entries[0]?.[0];
+  if (fallback === undefined || !byId.has(fallback)) {
+    throw new Error(`aiSdkModels: default "${defaultId}" is not one of the offered models`);
+  }
+  const groups = new Map<string, ModelCatalogEntry[]>();
+  for (const [id, entry] of entries) {
+    const group = groupOf(id, entry);
+    const list = groups.get(group) ?? [];
+    list.push({
+      id,
+      label: entry.label ?? id,
+      available: true,
+      ...(entry.description !== undefined ? { description: entry.description } : {}),
+      ...(entry.badges !== undefined ? { badges: entry.badges } : {}),
+      ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+    });
+    groups.set(group, list);
+  }
+  const view: ModelCatalogView = {
+    default: fallback,
+    providers: [...groups].map(([id, list]) => ({
+      id,
+      label: providerLabels?.[id] ?? id.charAt(0).toUpperCase() + id.slice(1),
+      models: list,
+    })),
   };
   return {
-    async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
-      const result = streamText({
-        ...settings,
-        model: modelFor(args.model),
-        instructions: args.system,
-        messages: mapMessages(args.messages),
-        tools: mapTools(args.tools),
-        ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
-        // `Output.object` asks the provider for its JSON/response-format mode. The agent loop only
-        // ever sets `outputSchema` on a call that carries no tools, which is what keeps this off the
-        // collision most providers have between a response format and a tool set.
-        ...(args.outputSchema
-          ? { output: Output.object({ schema: toSdkInputSchema(args.outputSchema) }) }
-          : {}),
-      });
-
-      // Translate the model's streamed parts into the neutral AgentStreamEvent vocabulary and write
-      // them to the sink, so the client reconstructs text, reasoning, and live tool-call cards (the
-      // input streaming in) — not just text. Tool RESULTS are emitted by the agent loop after it runs
-      // the tool; step boundaries are owned by the loop too (a step spans the model call + its tool
-      // execution). `text` is still accumulated for the persisted assistant message.
-      let text = '';
-      for await (const part of result.stream) {
-        switch (part.type) {
-          case 'text-delta':
-            text += part.text;
-            await args.sink.write(encodeStreamEvent({ kind: 'text', text: part.text }));
-            break;
-          case 'reasoning-delta':
-            await args.sink.write(encodeStreamEvent({ kind: 'reasoning', text: part.text }));
-            break;
-          case 'tool-input-start':
-            await args.sink.write(
-              encodeStreamEvent({
-                kind: 'tool-input-start',
-                id: part.id,
-                name: part.toolName,
-                toolKind: toolKindFor(part.toolName, args.tools),
-              }),
-            );
-            break;
-          case 'tool-input-delta':
-            await args.sink.write(
-              encodeStreamEvent({ kind: 'tool-input-delta', id: part.id, delta: part.delta }),
-            );
-            break;
-          case 'tool-call':
-            await args.sink.write(
-              encodeStreamEvent({
-                kind: 'tool-input-available',
-                id: part.toolCallId,
-                name: part.toolName,
-                input: part.input,
-                toolKind: toolKindFor(part.toolName, args.tools),
-              }),
-            );
-            break;
-          default:
-            break;
-        }
+    catalog: staticModelCatalog(view),
+    runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+      const id = args.model ?? fallback;
+      const entry = byId.get(id);
+      if (entry === undefined) {
+        throw new Error(
+          `aiSdkModels: this turn picked model "${id}", which is not offered (` +
+            `${[...byId.keys()].join(', ')}).`,
+        );
       }
-
-      // The promise accessors resolve once the stream is fully consumed above. `modelId` and the
-      // reported cost live on the final step (the top-level aliases are deprecated in AI SDK v7).
-      const [toolCalls, usage, finalStep] = await Promise.all([
-        result.toolCalls,
-        result.usage,
-        result.finalStep,
-      ]);
-
-      const modelId = finalStep.response.modelId;
-      const costUsd = extractCostUsd(finalStep.providerMetadata);
-      const object = args.outputSchema ? await parsedOutput(result.output) : undefined;
-
-      return {
-        text,
-        toolCalls: toolCalls.map(mapToolCall),
-        usage: mapUsage(usage),
-        ...(typeof modelId === 'string' && modelId.length > 0 ? { modelId } : {}),
-        ...(costUsd !== undefined ? { costUsd } : {}),
-        ...(object !== undefined ? { object } : {}),
-      };
+      return runTurnOn(entry.model, settings, args);
     },
+  };
+}
+
+/** One model turn on `model` — the shared body of {@link aiSdkModel} and {@link aiSdkModels}. */
+async function runTurnOn(
+  model: LanguageModel,
+  settings: AiSdkModelOptions,
+  args: ModelTurnArgs,
+): Promise<ModelTurnResult> {
+  const result = streamText({
+    ...settings,
+    model,
+    instructions: args.system,
+    messages: mapMessages(args.messages),
+    tools: mapTools(args.tools),
+    ...(args.abortSignal ? { abortSignal: args.abortSignal } : {}),
+    // `Output.object` asks the provider for its JSON/response-format mode. The agent loop only
+    // ever sets `outputSchema` on a call that carries no tools, which is what keeps this off the
+    // collision most providers have between a response format and a tool set.
+    ...(args.outputSchema
+      ? { output: Output.object({ schema: toSdkInputSchema(args.outputSchema) }) }
+      : {}),
+  });
+
+  // Translate the model's streamed parts into the neutral AgentStreamEvent vocabulary and write
+  // them to the sink, so the client reconstructs text, reasoning, and live tool-call cards (the
+  // input streaming in) — not just text. Tool RESULTS are emitted by the agent loop after it runs
+  // the tool; step boundaries are owned by the loop too (a step spans the model call + its tool
+  // execution). `text` is still accumulated for the persisted assistant message.
+  let text = '';
+  for await (const part of result.stream) {
+    switch (part.type) {
+      case 'text-delta':
+        text += part.text;
+        await args.sink.write(encodeStreamEvent({ kind: 'text', text: part.text }));
+        break;
+      case 'reasoning-delta':
+        await args.sink.write(encodeStreamEvent({ kind: 'reasoning', text: part.text }));
+        break;
+      case 'tool-input-start':
+        await args.sink.write(
+          encodeStreamEvent({
+            kind: 'tool-input-start',
+            id: part.id,
+            name: part.toolName,
+            toolKind: toolKindFor(part.toolName, args.tools),
+          }),
+        );
+        break;
+      case 'tool-input-delta':
+        await args.sink.write(
+          encodeStreamEvent({ kind: 'tool-input-delta', id: part.id, delta: part.delta }),
+        );
+        break;
+      case 'tool-call':
+        await args.sink.write(
+          encodeStreamEvent({
+            kind: 'tool-input-available',
+            id: part.toolCallId,
+            name: part.toolName,
+            input: part.input,
+            toolKind: toolKindFor(part.toolName, args.tools),
+          }),
+        );
+        break;
+      default:
+        break;
+    }
+  }
+
+  // The promise accessors resolve once the stream is fully consumed above. `modelId` and the
+  // reported cost live on the final step (the top-level aliases are deprecated in AI SDK v7).
+  const [toolCalls, usage, finalStep] = await Promise.all([
+    result.toolCalls,
+    result.usage,
+    result.finalStep,
+  ]);
+
+  const modelId = finalStep.response.modelId;
+  const costUsd = extractCostUsd(finalStep.providerMetadata);
+  const object = args.outputSchema ? await parsedOutput(result.output) : undefined;
+
+  return {
+    text,
+    toolCalls: toolCalls.map(mapToolCall),
+    usage: mapUsage(usage),
+    ...(typeof modelId === 'string' && modelId.length > 0 ? { modelId } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(object !== undefined ? { object } : {}),
   };
 }
 

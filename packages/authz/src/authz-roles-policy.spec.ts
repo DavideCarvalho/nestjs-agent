@@ -48,12 +48,12 @@ describe('AuthzRolesPolicy', () => {
     expect(await policy.can(guest, roleTool)).toBe(false);
   });
 
-  it('uses the default fallback (ADMIN-only) when a tool declares neither ability nor roles', async () => {
+  it('lets anyone through the default fallback when a tool declares neither ability nor roles', async () => {
     const policy = new AuthzRolesPolicy(buildGate());
     const bareTool = tool({});
 
     expect(await policy.can(admin, bareTool)).toBe(true);
-    expect(await policy.can(guest, bareTool)).toBe(false);
+    expect(await policy.can(guest, bareTool)).toBe(true);
   });
 
   it('honors configured fallbackRoles for tools with neither ability nor roles', async () => {

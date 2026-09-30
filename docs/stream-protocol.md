@@ -312,8 +312,8 @@ client throws `AgentHttpError` carrying `status`.
 **Models.** A turn's model is the send's `model`, else the thread's pinned `model`, else the
 server's default. Serve the catalog from whatever decides what a caller may use (plan, budget,
 provider health) and refuse anything else with `400` — the client only ever sends ids the catalog
-listed, but a server must not trust that. `useModels` renders the catalog, `useAgentChat({ model })`
-sends the pick, `chat.setThreadModel(id)` pins it.
+listed, but a server must not trust that. `chat.models` renders the catalog and `select(id)`
+sends the pick; `chat.models.pinToThread(id)` pins it.
 
 **Attachments.** The client uploads each file on its own (`POST <base>/attachments`, multipart
 `file`), then names the uploads by id on the send: `POST <base>/chat { message, attachments:
@@ -328,6 +328,15 @@ exhausted one. A server that enforces it answers `POST <base>/chat` with `429` a
 `{ code: 'quota_exceeded', period, message }` while blocked. `useQuota` renders the windows and
 `useAgentChat({ blocked })` stops the client from sending in the meantime. A backend with its own
 budget (an AI-gateway spend cap) reports it here in the same shape.
+
+**Identity.** Every route acts as the actor the server resolves from the request; nothing in the
+body names one. With no resolver configured this library serves the routes publicly and gives each
+browser its own anonymous actor: on the first request without it, the response sets
+`agent_anon=<32 random bytes, base64url>; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax` (plus
+`Secure` over HTTPS), and the actor id is `anon:` + a SHA-256 digest of the token. Threads, quota and
+attachments belong to that id. A client needs no code for it — the browser carries the cookie — but
+a cross-site client must send `credentials: 'include'` (and the server set `SameSite=None`). A
+backend with real auth ignores all of this and answers `401` to an unauthenticated request.
 
 **Cookie sessions and CSRF.** Nothing here assumes bearer tokens. A backend on a cookie session
 answers these routes like any other same-site request and checks its CSRF header on the mutating

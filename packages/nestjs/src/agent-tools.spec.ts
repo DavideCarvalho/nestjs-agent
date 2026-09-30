@@ -126,7 +126,8 @@ describe('GET /agent/tools', () => {
       .get('/agent/tools')
       .set('x-actor-id', 'u1')
       .set('x-actor-role', 'USER');
-    expect((res.body as ToolCatalogEntry[]).map((entry) => entry.name)).toEqual(['query']);
+    // `purge` names ADMIN; `plain` names no roles, which by default restricts nobody.
+    expect((res.body as ToolCatalogEntry[]).map((entry) => entry.name)).toEqual(['query', 'plain']);
   });
 
   it("narrows to the named agent's allow-list", async () => {

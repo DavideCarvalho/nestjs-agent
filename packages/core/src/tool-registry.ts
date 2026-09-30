@@ -206,12 +206,20 @@ export class ToolRegistry {
   }
 }
 
-/** Default gate: one of the actor's roles must be in spec.roles (defaulting to ADMIN-only). */
+/**
+ * Default gate: a tool that names `roles` is callable by an actor holding one of them; a tool that
+ * names none falls back to `defaultRoles`, and an empty list — the default — restricts nobody. So
+ * out of the box every tool is callable by whoever the `ActorResolver` resolved (an anonymous
+ * visitor included, when no resolver is configured); restrict with `@AiTool({ roles })` per tool,
+ * `AgentModule.forRoot({ defaultRoles })` module-wide, or a `rolesPolicy` of your own. `action`
+ * tools still park on approval either way.
+ */
 export class DefaultRolesPolicy implements RolesPolicy {
-  constructor(private readonly defaultRoles: string[] = ['ADMIN']) {}
+  constructor(private readonly defaultRoles: string[] = []) {}
 
   can(actor: Actor, tool: ToolSpec): boolean {
     const allowed = tool.roles ?? this.defaultRoles;
+    if (allowed.length === 0) return true;
     return (actor.roles ?? []).some((role) => allowed.includes(role));
   }
 }
