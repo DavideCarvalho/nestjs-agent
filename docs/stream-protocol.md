@@ -315,7 +315,9 @@ reach — what `useToolCatalog` reads to narrate calls by the tool's declared wo
 name. `presentation` is `{ label, running, done, icon?, detail?, tone?, confirm?: { title, verb,
 detail? }, result? }` (`running`/`done`/`confirm` are `{dotted.path}` templates over the call's input;
 `result` is a view over its output — see `ToolPresentation` in `packages/core/src/tool-presentation.ts`).
-A runner that serves these routes can answer it from its own tool list; a tool with no entry is
+`?agent=*` answers the union across every agent — each tool the caller reaches through any of them,
+once — for a surface that shows several agents' conversations (`useToolCatalog({ agent:
+ALL_AGENTS })`). A runner that serves these routes can answer it from its own tool list; a tool with no entry is
 narrated generically.
 
 ## Persisted history

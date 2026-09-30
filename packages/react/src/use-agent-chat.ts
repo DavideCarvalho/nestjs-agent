@@ -277,7 +277,10 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const autoResumeRunIdRef = useRef<string | undefined>(undefined);
   // The loaded thread's active run, if any — `null` once read with none.
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // The thread whose history read has settled (loaded or failed). The history is loading until it
+  // is the bound thread — derived, so it already reads `true` on the first render, before the
+  // effect below has asked for anything, and a page never flashes its empty state.
+  const [historyFor, setHistoryFor] = useState<string | undefined>(undefined);
   const [historyError, setHistoryError] = useState<Error | null>(null);
   // The model pinned on the loaded thread.
   const [threadModel, setThreadModel] = useState<string | null>(null);
@@ -441,7 +444,6 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     const wantResume = current.resume !== false && current.resumeRunId === undefined;
     if (!wantHistory && !wantResume) return;
     let cancelled = false;
-    if (wantHistory) setIsLoadingHistory(true);
     client
       .getThread(threadId)
       .then(
@@ -474,13 +476,19 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         },
       )
       .finally(() => {
-        if (!cancelled) setIsLoadingHistory(false);
+        if (!cancelled) setHistoryFor(threadId);
       });
     return () => {
       cancelled = true;
-      setIsLoadingHistory(false);
     };
   }, [client, chatId, options.threadId]);
+
+  const isLoadingHistory =
+    options.threadId !== undefined &&
+    options.threadId !== createdThreadId.current &&
+    options.history !== false &&
+    options.initialMessages === undefined &&
+    historyFor !== options.threadId;
 
   /**
    * One turn in flight per chat. The SDK commits its single in-flight response BEFORE it reaches

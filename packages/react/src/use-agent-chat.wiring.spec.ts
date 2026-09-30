@@ -87,6 +87,64 @@ describe('useAgentChat — history', () => {
     expect(result.current.transcript.items[0]?.timestamp).not.toBeNull();
   });
 
+  it('reports the history as loading from the very first render, so nothing flashes empty', async () => {
+    let resolve: (value: ThreadDetail) => void = () => undefined;
+    const backend = fakeBackend({
+      getThread: vi.fn(
+        () =>
+          new Promise<ThreadDetail>((done) => {
+            resolve = done;
+          }),
+      ),
+    });
+    const renders: boolean[] = [];
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId?: string }) => {
+        const chat = useAgentChat({ backend, ...(threadId !== undefined ? { threadId } : {}) });
+        renders.push(chat.isLoadingHistory);
+        return chat;
+      },
+      { initialProps: { threadId: 'thr-1' } as { threadId?: string } },
+    );
+
+    expect(renders[0]).toBe(true);
+    await act(async () => resolve(detail('thr-1', [row({ id: 'u1', content: 'hi' })])));
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+
+    // A switch is loading on its own first render too, before the effect asks for the thread.
+    renders.length = 0;
+    rerender({ threadId: 'thr-2' });
+    expect(renders[0]).toBe(true);
+    await act(async () => resolve(detail('thr-2', [])));
+    await waitFor(() => expect(result.current.isLoadingHistory).toBe(false));
+
+    // No thread, or history turned off: never loading.
+    rerender({});
+    expect(result.current.isLoadingHistory).toBe(false);
+  });
+
+  it('is not loading when there is no history to read', () => {
+    const backend = fakeBackend();
+    const off = renderHook(() =>
+      useAgentChat({ backend, threadId: 'thr-1', history: false, resume: false }),
+    );
+    expect(off.result.current.isLoadingHistory).toBe(false);
+    const seeded = renderHook(() =>
+      useAgentChat({ backend, threadId: 'thr-1', initialMessages: [], resume: false }),
+    );
+    expect(seeded.result.current.isLoadingHistory).toBe(false);
+  });
+
+  it('stops loading when the read fails', async () => {
+    const backend = fakeBackend({
+      getThread: vi.fn(async () => Promise.reject(new Error('gone'))),
+    });
+    const { result } = renderHook(() => useAgentChat({ backend, threadId: 'thr-1' }));
+    expect(result.current.isLoadingHistory).toBe(true);
+    await waitFor(() => expect(result.current.historyError?.message).toBe('gone'));
+    expect(result.current.isLoadingHistory).toBe(false);
+  });
+
   it('switching threadId swaps in the other thread’s history', async () => {
     const backend = fakeBackend({
       getThread: vi.fn(async (id: string) =>

@@ -152,6 +152,7 @@ export {
   toolCallState,
 } from './presentation/tool-activity.js';
 export {
+  ALL_AGENTS,
   type ToolCatalogState,
   useToolCatalog,
   type UseToolCatalogOptions,

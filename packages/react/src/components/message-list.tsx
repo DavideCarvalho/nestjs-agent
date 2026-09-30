@@ -46,6 +46,11 @@ export interface MessageListProps {
   reasoningLabel?: React.ReactNode;
   /** Extra content for one message's action row — e.g. a badge naming which agent answered. */
   getMeta?: (message: UIMessage) => React.ReactNode;
+  /**
+   * Nobody acts on this list (an audit or shared view): parked approvals and question sets render
+   * without their actions, and no fork / edit / regenerate — see `useChatTranscript({ readOnly })`.
+   */
+  readOnly?: boolean;
   /** When set, every message gets a "Fork" affordance calling back with its id. */
   onFork?: (input: MessageActionInput) => void | Promise<void>;
   /** User messages get an inline edit-and-resubmit affordance. */
@@ -90,6 +95,7 @@ export function MessageList({
   renderUi,
   reasoningLabel,
   getMeta,
+  readOnly,
   onFork,
   editable,
   onEditSubmit,
@@ -108,6 +114,7 @@ export function MessageList({
   const transcript = useChatTranscript({
     messages,
     status,
+    ...(readOnly !== undefined ? { readOnly } : {}),
     ...(onFork ? { onFork } : {}),
     ...(editable !== undefined ? { editable } : {}),
     ...(onEditSubmit ? { onEditSubmit } : {}),

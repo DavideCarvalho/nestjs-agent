@@ -118,6 +118,16 @@ export interface RejectInput {
 }
 
 export interface TranscriptItemOptions {
+  /**
+   * A transcript nobody acts on (an audit view, a shared or archived conversation): no approve /
+   * reject, answer / skip, edit, fork, regenerate or stop — whatever handlers or backend are in
+   * scope. Parked approvals and question sets still render, with their actions unavailable.
+   *
+   * Without it the decision handlers DEFAULT to the in-scope backend (`<AgentProvider>`'s), so a
+   * parked call is actionable with no wiring; a read-only surface would otherwise have to pass
+   * `onApprove: null`, `onReject: null`, `onAnswer: null` and `onSkip: null` one by one.
+   */
+  readOnly?: boolean;
   /** User messages get an inline edit-and-resubmit machine. */
   editable?: boolean;
   onEditSubmit?: (input: EditSubmitInput) => void | Promise<void>;
@@ -310,7 +320,7 @@ export function useChatTranscript(options: UseChatTranscriptOptions): ChatTransc
     },
     scroll,
     stop: {
-      available: isBusy && options.onStop !== undefined,
+      available: isBusy && options.readOnly !== true && options.onStop !== undefined,
       isStopping: stopRequested,
       stop,
     },
@@ -628,12 +638,14 @@ function useTranscriptItems({
         toggleReasoning: (key, open) => stableToggle(key)(open),
         ...(options.sources !== undefined ? { sources: options.sources } : {}),
         ...(options.toolCatalog !== undefined ? { toolCatalog: options.toolCatalog } : {}),
-        ...(handlers.onAnswer !== undefined
+        // Read-only still lifts question sets into their block, so the outcome shows.
+        ...(handlers.onAnswer !== undefined ||
+        (options.readOnly === true && options.onAnswer !== null)
           ? {
               elicitation: {
                 picked: (toolCallId, questionId) => picks.get(pickKey(toolCallId, questionId)),
                 pick,
-                canAnswer: true,
+                canAnswer: handlers.onAnswer !== undefined,
                 canSkip: handlers.onSkip !== undefined,
                 answer,
                 skip,
@@ -664,7 +676,11 @@ function useTranscriptItems({
         copy: callbacks.copy,
       },
       edit: {
-        available: isUser && options.editable === true && options.onEditSubmit !== undefined,
+        available:
+          isUser &&
+          options.readOnly !== true &&
+          options.editable === true &&
+          options.onEditSubmit !== undefined,
         isEditing,
         draft: draft ?? text,
         canSave: (draft ?? '').trim().length > 0,
@@ -680,12 +696,15 @@ function useTranscriptItems({
         }),
       },
       fork: {
-        available: options.onFork !== undefined,
+        available: options.readOnly !== true && options.onFork !== undefined,
         run: callbacks.fork,
       },
       regenerate: {
         available:
-          isLastAssistant && options.regeneratable === true && options.onRegenerate !== undefined,
+          isLastAssistant &&
+          options.readOnly !== true &&
+          options.regeneratable === true &&
+          options.onRegenerate !== undefined,
         run: callbacks.regenerate,
       },
     });
@@ -720,7 +739,7 @@ interface SettleHandlers {
  */
 function settleHandlers(options: TranscriptItemOptions, backend: AgentBackend): SettleHandlers {
   const pick = <T>(own: T | null | undefined, fallback: T | undefined): T | undefined =>
-    own === null ? undefined : (own ?? fallback);
+    options.readOnly === true || own === null ? undefined : (own ?? fallback);
   return {
     onAnswer: pick(
       options.onAnswer,
