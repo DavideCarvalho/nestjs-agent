@@ -215,11 +215,67 @@ export class ToolRegistry {
  * tools still park on approval either way.
  */
 export class DefaultRolesPolicy implements RolesPolicy {
-  constructor(private readonly defaultRoles: string[] = []) {}
+  /** What an empty roles list means here — see {@link EmptyRoles}. */
+  readonly emptyRoles: EmptyRoles;
+
+  constructor(
+    readonly defaultRoles: string[] = [],
+    options: RolesPolicyOptions = {},
+  ) {
+    this.emptyRoles = options.emptyRoles ?? 'allow';
+  }
 
   can(actor: Actor, tool: ToolSpec): boolean {
     const allowed = tool.roles ?? this.defaultRoles;
-    if (allowed.length === 0) return true;
+    if (allowed.length === 0) return this.emptyRoles === 'allow';
     return (actor.roles ?? []).some((role) => allowed.includes(role));
   }
+}
+
+/**
+ * What an empty roles list means to {@link DefaultRolesPolicy}: `'allow'` (the default) — no
+ * restriction; `'deny'` — nobody.
+ *
+ * The open default is what makes a one-line `AgentModule.forRoot({ model })` a working chat. It is
+ * also why an app that used `[]` to DENY — a `roles` computed from permissions that can come out
+ * empty, `defaultRoles: []` on a multi-tenant MCP surface — reaches everyone instead, silently.
+ * `'deny'` keeps such an app closed.
+ */
+export type EmptyRoles = 'allow' | 'deny';
+
+export interface RolesPolicyOptions {
+  /** What an empty roles list means. Default `'allow'`. */
+  emptyRoles?: EmptyRoles;
+}
+
+/**
+ * The closed gate — {@link DefaultRolesPolicy} with `emptyRoles: 'deny'`: the actor needs a role the
+ * tool declares (else one of the default roles). A tool with no `roles` and no default roles, or with
+ * an explicitly empty list, reaches nobody. What `AgentModule.forRoot({ emptyRoles: 'deny' })` binds.
+ */
+export class ClosedRolesPolicy extends DefaultRolesPolicy {
+  constructor(defaultRoles: string[] = []) {
+    super(defaultRoles, { emptyRoles: 'deny' });
+  }
+}
+
+/**
+ * Close a policy you did not build: a tool whose roles come out empty — declared `[]`, or undeclared
+ * with no default roles to fall back on — reaches nobody; anything else is the inner policy's call.
+ *
+ * The default roles are read off a {@link DefaultRolesPolicy}; any other inner policy keeps its own
+ * defaults to itself, so for it an undeclared list counts as empty. A tool gated by `ability` has
+ * nothing to do with roles and is always left to the inner policy. What the MCP server's
+ * `emptyRoles: 'deny'` wraps the agent's shared policy in.
+ */
+export function closeEmptyRoles(inner: RolesPolicy): RolesPolicy {
+  const defaults = inner instanceof DefaultRolesPolicy ? inner.defaultRoles : [];
+  return {
+    can(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
+      if (tool.ability === undefined && (tool.roles ?? defaults).length === 0) {
+        return false;
+      }
+      return inner.can(actor, tool);
+    },
+  };
 }

@@ -5,7 +5,7 @@ import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-te
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { type INestApplication, Injectable } from '@nestjs/common';
+import { type INestApplication, Injectable, type Type } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -63,7 +63,23 @@ const INITIALIZE = {
   },
 };
 
-async function boot(overrides: { auth?: ActorResolver } = {}): Promise<INestApplication> {
+/** A tool that names no roles — open by default, closed under `emptyRoles: 'deny'`. */
+@AiTool({
+  name: 'server_time',
+  kind: 'read',
+  description: 'What time it is.',
+  input: z.object({}),
+})
+@Injectable()
+class ServerTimeTool {
+  execute() {
+    return Promise.resolve('noon');
+  }
+}
+
+async function boot(
+  overrides: { auth?: ActorResolver; emptyRoles?: 'allow' | 'deny'; tools?: Type<unknown>[] } = {},
+): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AgentModule.forRoot({
@@ -82,9 +98,10 @@ async function boot(overrides: { auth?: ActorResolver } = {}): Promise<INestAppl
             { token: ANALYST_KEY, actor: { id: 'u-analyst', roles: ['ANALYST'] } },
             { token: OPS_KEY, actor: { id: 'u-ops', roles: ['OPS'] } },
           ]),
+        ...(overrides.emptyRoles !== undefined ? { emptyRoles: overrides.emptyRoles } : {}),
       }),
     ],
-    providers: [SearchDocsTool, PurgeCacheTool],
+    providers: [SearchDocsTool, PurgeCacheTool, ...(overrides.tools ?? [])],
   }).compile();
   const created = moduleRef.createNestApplication();
   await created.listen(0, '127.0.0.1');
@@ -177,6 +194,20 @@ describe('AgentMcpServerModule over HTTP', () => {
     const context = await boot();
     const { client } = await connect({ context, token: OPS_KEY });
     expect((await client.listTools()).tools).toEqual([]);
+  });
+
+  it('offers a tool that names no roles to anyone, by default', async () => {
+    const context = await boot({ tools: [ServerTimeTool] });
+    const { client } = await connect({ context, token: OPS_KEY });
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['server_time']);
+  });
+
+  it("under emptyRoles: 'deny' a tool that names no roles is neither listed nor runnable", async () => {
+    const context = await boot({ tools: [ServerTimeTool], emptyRoles: 'deny' });
+    const { client } = await connect({ context, token: ANALYST_KEY });
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['search_docs']);
+    const result = await client.callTool({ name: 'server_time', arguments: {} });
+    expect(result.isError).toBe(true);
   });
 
   it('refuses a session id presented by a different actor', async () => {

@@ -1,4 +1,4 @@
-import type { ActorResolver } from '@dudousxd/nestjs-agent-core';
+import type { ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
 import type { McpActionPolicy } from './exposed-tools.js';
 import type { McpRoutePrincipalFactory } from './routes/mcp-route-dispatcher.js';
@@ -33,6 +33,15 @@ export interface AgentMcpServerModuleOptions {
    * name left off is unreachable rather than merely unadvertised.
    */
   allowedTools?: string[];
+  /**
+   * What an empty roles list means on THIS surface. `'allow'` (default) — whatever the agent's own
+   * `RolesPolicy` says, so the MCP caller reaches exactly what a chat would. `'deny'` — a tool whose
+   * roles come out empty (declared `[]`, or none declared and no default roles) is neither listed
+   * nor callable here, whatever the chat does: for a deployment whose chat is open but whose MCP
+   * surface is reached by callers it does not otherwise know. Set `AgentModule`'s own `emptyRoles`
+   * to close both.
+   */
+  emptyRoles?: EmptyRoles;
   /** How `@Mcp()` controller routes behave on this surface. See {@link McpRouteExposureOptions}. */
   routes?: McpRouteExposureOptions;
 }
