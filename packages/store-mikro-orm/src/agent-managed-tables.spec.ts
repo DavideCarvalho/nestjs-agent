@@ -10,6 +10,7 @@ describe('agentManagedTables', () => {
       'agent_model_pricing',
       'agent_queued_message',
       'agent_run',
+      'agent_stream_frame',
       'agent_thread',
       'agent_token_usage',
       'agent_tool_call',

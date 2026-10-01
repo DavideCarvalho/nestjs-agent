@@ -5,6 +5,7 @@ import { agentMessageSchema } from './agent-message.entity';
 import { agentModelPricingSchema } from './agent-model-pricing.entity';
 import { agentQueuedMessageSchema } from './agent-queued-message.entity';
 import { agentRunSchema } from './agent-run.entity';
+import { agentStreamFrameSchema } from './agent-stream-frame.entity';
 import { agentThreadSchema } from './agent-thread.entity';
 import { agentTokenUsageSchema } from './agent-token-usage.entity';
 import { agentToolCallSchema } from './agent-tool-call.entity';
@@ -19,6 +20,7 @@ export * from './agent-tool-call.entity';
 export * from './agent-token-usage.entity';
 export * from './agent-model-pricing.entity';
 export * from './agent-run.entity';
+export * from './agent-stream-frame.entity';
 export * from './agent-confirm-token.entity';
 
 /** Default string collation baked into {@link AGENT_ENTITIES} for MySQL parity (§5). */
@@ -39,6 +41,7 @@ export function agentEntities(options: { collation?: string } = {}): EntitySchem
     agentRunSchema(options.collation),
     agentMemorySchema(options.collation),
     ragIngestionLogSchema(options.collation),
+    agentStreamFrameSchema(options.collation),
     agentConfirmTokenSchema(options.collation),
   ];
 }
