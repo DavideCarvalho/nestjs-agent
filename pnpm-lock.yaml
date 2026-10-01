@@ -746,20 +746,20 @@ importers:
         specifier: workspace:*
         version: link:../testing
       '@mikro-orm/core':
-        specifier: 7.2.1
-        version: 7.2.1
+        specifier: 7.2.2
+        version: 7.2.2
       '@mikro-orm/mysql':
-        specifier: 7.2.1
-        version: 7.2.1(@mikro-orm/core@7.2.1)(@types/node@22.20.4)
+        specifier: 7.2.2
+        version: 7.2.2(@mikro-orm/core@7.2.2)(@types/node@22.20.4)
       '@mikro-orm/nestjs':
         specifier: 7.1.0
-        version: 7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+        version: 7.1.0(@mikro-orm/core@7.2.2)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@mikro-orm/postgresql':
-        specifier: 7.2.1
-        version: 7.2.1(@mikro-orm/core@7.2.1)
+        specifier: 7.2.2
+        version: 7.2.2(@mikro-orm/core@7.2.2)
       '@mikro-orm/sqlite':
-        specifier: 7.2.1
-        version: 7.2.1(@mikro-orm/core@7.2.1)
+        specifier: 7.2.2
+        version: 7.2.2(@mikro-orm/core@7.2.2)
       '@nestjs/common':
         specifier: 12.0.4
         version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -1978,8 +1978,8 @@ packages:
   '@mermaid-js/parser@1.2.0':
     resolution: {integrity: sha512-oYPyv8A4As1yH5Bx+04iQEQxXuIQDe0GKCNSRgao6z8AM9jixXIfP0vsppRLvGf+nKIOb9/LdpWA4YuJiVvESA==}
 
-  '@mikro-orm/core@7.2.1':
-    resolution: {integrity: sha512-+gtJoScbin/C3wPItSZkj5vlMTq/LphBLIxHyi5brCbeA6VDcYuoMopiqoFUMQxdhXXrZlKNIHXGrhb8r3biVg==}
+  '@mikro-orm/core@7.2.2':
+    resolution: {integrity: sha512-+KNiaYK4GHOYohPJzhhogIu5hD3kE5YZi+V+zmx50Jaw1UNJsDP8MCaVNAZ8yFWiODIACZuIFsEYQClSdTNvcA==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
       dataloader: 2.2.3
@@ -1987,11 +1987,11 @@ packages:
       dataloader:
         optional: true
 
-  '@mikro-orm/mysql@7.2.1':
-    resolution: {integrity: sha512-IxCEnfHUzFcxVkRCVaC0KtGoHRRLogxxgeI+J4Pk7oxtDf/jtvYQuFL4tSbmlrH3qzmLQeYYPyJPuDr+a2F7ag==}
+  '@mikro-orm/mysql@7.2.2':
+    resolution: {integrity: sha512-OyRnpMLnmKa4BBAWBkevrKQgtWdkwJ2AKBtmqoC+bCG60KGGQpi02w8N0fe1THjNi3qmtsgnp/NpCUM8TjPrpg==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
 
   '@mikro-orm/nestjs@7.1.0':
     resolution: {integrity: sha512-S7UXOR4jYtl+lSl23GxQNoWaI3naf5WGUaWMjqZ1o+xcp+fha8une9Yu3qEizZNA+iulE4qA+yaB6sKnA67fbw==}
@@ -2002,23 +2002,23 @@ packages:
       '@nestjs/core': ^11.0.5 || ^12.0.0
       reflect-metadata: ^0.1.0 || ^0.2.0
 
-  '@mikro-orm/postgresql@7.2.1':
-    resolution: {integrity: sha512-PQ1qe4Bj/hQSHYJjR02l06FfEDwniAvncduwZSCLSKuaCUddHc5AN2Utj3yo4xRIVRY8pOa7DFitEQPBozTMJA==}
+  '@mikro-orm/postgresql@7.2.2':
+    resolution: {integrity: sha512-aVdTt3LeOGT7KRoPlazQwB/KgdF4w6EUL9bVCHVMg5/ERZPpJPJ/Ku29iBVnlBvvSKvxiMcyE56/354rgc2A7w==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
 
-  '@mikro-orm/sql@7.2.1':
-    resolution: {integrity: sha512-3M9dQeUDLlvAT5VJr/KBGAk9C7xez+psVCnvNkAO4hRhwx2Wm7N1HkuyP4Bwj0MjkHVB6LYvhTw/V6pYsVM8lA==}
+  '@mikro-orm/sql@7.2.2':
+    resolution: {integrity: sha512-biH6xuFtrNEa7Lg130lD0WoncP+FGhDDVZJmeYhQCPljI9KRHw6iqFyOPNDkduaGbnvnpxE2diZIqS6NVCTfJA==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
 
-  '@mikro-orm/sqlite@7.2.1':
-    resolution: {integrity: sha512-+iAPGORAqLl+TcBF+JSLOfRq+PwTQG1NLts+AvN9D8C2czlbDpyjyeaAFSR+5wJlMEZ4wv2rdzt4jSS5T7x3XQ==}
+  '@mikro-orm/sqlite@7.2.2':
+    resolution: {integrity: sha512-pnY0Xc4OyVrrd9OhWCO1VxfzLkbsC2WVBrq1lBoRN4eBRZGZpen4fp7xtCQfKNcIml6T0rDtqv1zl3H/vImnGA==}
     engines: {node: '>= 22.17.0'}
     peerDependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
 
   '@modelcontextprotocol/sdk@1.30.0':
     resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
@@ -6785,29 +6785,29 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@mikro-orm/core@7.2.1': {}
+  '@mikro-orm/core@7.2.2': {}
 
-  '@mikro-orm/mysql@7.2.1(@mikro-orm/core@7.2.1)(@types/node@22.20.4)':
+  '@mikro-orm/mysql@7.2.2(@mikro-orm/core@7.2.2)(@types/node@22.20.4)':
     dependencies:
-      '@mikro-orm/core': 7.2.1
-      '@mikro-orm/sql': 7.2.1(@mikro-orm/core@7.2.1)
+      '@mikro-orm/core': 7.2.2
+      '@mikro-orm/sql': 7.2.2(@mikro-orm/core@7.2.2)
       kysely: 0.29.6
       mysql2: 3.24.4(@types/node@22.20.4)
       sqlstring: 2.3.3
     transitivePeerDependencies:
       - '@types/node'
 
-  '@mikro-orm/nestjs@7.1.0(@mikro-orm/core@7.2.1)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
+  '@mikro-orm/nestjs@7.1.0(@mikro-orm/core@7.2.2)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
       '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
 
-  '@mikro-orm/postgresql@7.2.1(@mikro-orm/core@7.2.1)':
+  '@mikro-orm/postgresql@7.2.2(@mikro-orm/core@7.2.2)':
     dependencies:
-      '@mikro-orm/core': 7.2.1
-      '@mikro-orm/sql': 7.2.1(@mikro-orm/core@7.2.1)
+      '@mikro-orm/core': 7.2.2
+      '@mikro-orm/sql': 7.2.2(@mikro-orm/core@7.2.2)
       kysely: 0.29.6
       pg: 8.23.0
       pg-cursor: 2.22.0(pg@8.23.0)
@@ -6817,15 +6817,15 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
 
-  '@mikro-orm/sql@7.2.1(@mikro-orm/core@7.2.1)':
+  '@mikro-orm/sql@7.2.2(@mikro-orm/core@7.2.2)':
     dependencies:
-      '@mikro-orm/core': 7.2.1
+      '@mikro-orm/core': 7.2.2
       kysely: 0.29.6
 
-  '@mikro-orm/sqlite@7.2.1(@mikro-orm/core@7.2.1)':
+  '@mikro-orm/sqlite@7.2.2(@mikro-orm/core@7.2.2)':
     dependencies:
-      '@mikro-orm/core': 7.2.1
-      '@mikro-orm/sql': 7.2.1(@mikro-orm/core@7.2.1)
+      '@mikro-orm/core': 7.2.2
+      '@mikro-orm/sql': 7.2.2(@mikro-orm/core@7.2.2)
       better-sqlite3: 13.0.3
       kysely: 0.29.6
 
