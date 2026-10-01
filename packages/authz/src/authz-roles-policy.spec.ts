@@ -63,4 +63,11 @@ describe('AuthzRolesPolicy', () => {
     expect(await policy.can(guest, bareTool)).toBe(true);
     expect(await policy.can(admin, bareTool)).toBe(false);
   });
+
+  it("closes the fallback under emptyRoles: 'deny' — a tool with neither ability nor roles reaches nobody", async () => {
+    const policy = new AuthzRolesPolicy(buildGate(), { emptyRoles: 'deny' });
+    expect(await policy.can(admin, tool({}))).toBe(false);
+    expect(await policy.can(admin, tool({ roles: [] }))).toBe(false);
+    expect(await policy.can(admin, tool({ roles: ['ADMIN'] }))).toBe(true);
+  });
 });

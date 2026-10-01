@@ -20,6 +20,7 @@ import {
   AgentRegistry,
   type AgentRunner,
   type AgentStore,
+  ClosedRolesPolicy,
   DefaultRolesPolicy,
   InMemoryAgentStore,
   type ModelCatalog,
@@ -173,7 +174,10 @@ function sharedProviders(durable: boolean): Provider[] {
     {
       provide: AGENT_ROLES_POLICY,
       useFactory: (options: AgentModuleOptions) =>
-        options.rolesPolicy ?? new DefaultRolesPolicy(options.defaultRoles),
+        options.rolesPolicy ??
+        (options.emptyRoles === 'deny'
+          ? new ClosedRolesPolicy(options.defaultRoles)
+          : new DefaultRolesPolicy(options.defaultRoles)),
       inject: [AGENT_OPTIONS],
     },
     {

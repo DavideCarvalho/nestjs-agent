@@ -556,6 +556,23 @@ export class AppModule {}
 export class PurgeCacheTool implements ToolHandler<{ key: string }> { /* … */ }
 ```
 
+### An empty roles list
+
+Out of the box an empty list is **open**: a tool that names no `roles` (with no `defaultRoles`), or
+names `roles: []`, reaches every resolved actor — which is what makes `AgentModule.forRoot({ model })`
+a working chat. If your app uses `[]` to mean "no one" (a `roles` computed from permissions that can
+come out empty), keep it closed:
+
+```ts
+AgentModule.forRoot({ model, emptyRoles: 'deny' }); // binds ClosedRolesPolicy
+AgentMcpServerModule.forRoot({ name, version, auth, emptyRoles: 'deny' }); // the MCP surface alone
+```
+
+Closed, the actor needs a role the tool declares (else one of `defaultRoles`). Building the policy
+yourself: `new ClosedRolesPolicy(defaultRoles)`, `new DefaultRolesPolicy(defaultRoles, { emptyRoles:
+'deny' })`, `closeEmptyRoles(policy)` around one you did not build, or `AuthzRolesPolicy`'s
+`{ emptyRoles: 'deny' }` for its role fallback. The default stays `'allow'`.
+
 ### Turning a tool off, and gating it per user
 
 `roles`/`ability` answer "may this actor use it?" with one app-wide policy, and an agent's `tools`

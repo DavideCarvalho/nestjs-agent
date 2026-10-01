@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   type Actor,
   type AiToolCtx,
+  ClosedRolesPolicy,
   DefaultRolesPolicy,
   type RolesPolicy,
   ToolDisabledError,
@@ -13,6 +14,7 @@ import {
   ToolNotFoundError,
   ToolRegistry,
   type ToolSpec,
+  closeEmptyRoles,
   createNoopEmitUi,
   filterToolsByAllowList,
 } from './index.js';
@@ -385,5 +387,87 @@ describe('DefaultRolesPolicy — the default', () => {
     const policy = new DefaultRolesPolicy(['USER']);
     expect(policy.can({ id: 'anon:abc', roles: ['anonymous'] }, spec())).toBe(false);
     expect(policy.can({ id: 'u1', roles: ['USER'] }, spec())).toBe(true);
+  });
+});
+
+describe('an empty roles list', () => {
+  const tool = (roles?: string[], extra: Partial<ToolSpec> = {}): ToolSpec => ({
+    name: 'listInvoices',
+    kind: 'read',
+    description: 'l',
+    inputSchema: z.object({}),
+    ...(roles !== undefined ? { roles } : {}),
+    ...extra,
+  });
+  const staff: Actor = { id: 'u1', roles: ['STAFF'] };
+  const nobody: Actor = { id: 'u2' };
+
+  it('is open by default — declared empty, or undeclared with empty defaults', () => {
+    const policy = new DefaultRolesPolicy();
+    expect(policy.can(staff, tool([]))).toBe(true);
+    expect(policy.can(staff, tool())).toBe(true);
+    expect(policy.can(nobody, tool())).toBe(true);
+    expect(new DefaultRolesPolicy([], { emptyRoles: 'allow' }).can(nobody, tool([]))).toBe(true);
+  });
+
+  it("reaches nobody under emptyRoles: 'deny'", () => {
+    for (const policy of [
+      new ClosedRolesPolicy(),
+      new DefaultRolesPolicy([], { emptyRoles: 'deny' }),
+    ]) {
+      expect(policy.can(staff, tool([]))).toBe(false);
+      expect(policy.can(staff, tool())).toBe(false);
+      expect(policy.can(staff, tool(['STAFF']))).toBe(true);
+      expect(policy.can(staff, tool(['ADMIN']))).toBe(false);
+      expect(policy.can(nobody, tool(['STAFF']))).toBe(false);
+      expect(policy.can({ id: 'u3', roles: [] }, tool(['STAFF']))).toBe(false);
+    }
+  });
+
+  it('closed, a declared empty list is not rescued by the default roles', () => {
+    const policy = new ClosedRolesPolicy(['STAFF']);
+    expect(policy.can(staff, tool())).toBe(true);
+    expect(policy.can(staff, tool([]))).toBe(false);
+  });
+
+  it('closed, a tool with no roles is neither offered nor invocable', async () => {
+    const reg = new ToolRegistry();
+    reg.register(tool([]), { execute: async () => ({ ok: true }) });
+
+    const open = new DefaultRolesPolicy();
+    expect((await reg.definitionsFor(staff, open)).map((t) => t.name)).toEqual(['listInvoices']);
+
+    const closed = new ClosedRolesPolicy();
+    expect(await reg.definitionsFor(staff, closed)).toEqual([]);
+    await expect(reg.invoke('listInvoices', {}, ctxFor(staff), closed)).rejects.toBeInstanceOf(
+      ToolForbiddenError,
+    );
+  });
+
+  describe('closeEmptyRoles — closing a policy someone else built', () => {
+    it('denies a tool whose roles come out empty, and asks the inner policy otherwise', async () => {
+      const asked: string[] = [];
+      const inner: RolesPolicy = {
+        can: (_actor, spec) => {
+          asked.push(spec.name);
+          return true;
+        },
+      };
+      const closed = closeEmptyRoles(inner);
+      expect(await closed.can(staff, tool([]))).toBe(false);
+      expect(await closed.can(staff, tool())).toBe(false);
+      expect(asked).toEqual([]);
+      expect(await closed.can(staff, tool(['STAFF']))).toBe(true);
+      expect(asked).toEqual(['listInvoices']);
+    });
+
+    it("keeps a DefaultRolesPolicy's default roles, and leaves ability-gated tools to the inner policy", async () => {
+      const closed = closeEmptyRoles(new DefaultRolesPolicy(['STAFF']));
+      expect(await closed.can(staff, tool())).toBe(true);
+      expect(await closed.can(nobody, tool())).toBe(false);
+      expect(await closed.can(staff, tool([]))).toBe(false);
+      const byAbility = closeEmptyRoles({ can: () => true });
+      expect(await byAbility.can(nobody, tool(undefined, { ability: 'invoices.read' }))).toBe(true);
+    });
   });
 });

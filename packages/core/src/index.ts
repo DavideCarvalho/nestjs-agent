@@ -65,6 +65,10 @@ export {
 export {
   ToolRegistry,
   DefaultRolesPolicy,
+  ClosedRolesPolicy,
+  closeEmptyRoles,
+  type EmptyRoles,
+  type RolesPolicyOptions,
   ToolDisabledError,
   ToolForbiddenError,
   ToolNotFoundError,

@@ -1,6 +1,7 @@
 import {
   type Actor,
   DefaultRolesPolicy,
+  type EmptyRoles,
   type RolesPolicy,
   type ToolSpec,
 } from '@dudousxd/nestjs-agent-core';
@@ -14,6 +15,12 @@ export interface AuthzRolesPolicyOptions {
    * DefaultRolesPolicy default); `['ADMIN']` for the old ADMIN-only fallback.
    */
   fallbackRoles?: string[];
+  /**
+   * What an empty roles list means to that fallback: `'allow'` (default) — no restriction;
+   * `'deny'` — nobody, so a tool with neither an `ability` nor `roles` (and no `fallbackRoles`)
+   * reaches no one. See `EmptyRoles`.
+   */
+  emptyRoles?: EmptyRoles;
 }
 
 /**
@@ -56,6 +63,8 @@ export class AuthzRolesPolicy implements RolesPolicy {
     if (tool.ability !== undefined) {
       return this.gate.forUser(userFromActor(actor)).allows(tool.ability);
     }
-    return new DefaultRolesPolicy(this.options?.fallbackRoles).can(actor, tool);
+    return new DefaultRolesPolicy(this.options?.fallbackRoles, {
+      emptyRoles: this.options?.emptyRoles ?? 'allow',
+    }).can(actor, tool);
   }
 }

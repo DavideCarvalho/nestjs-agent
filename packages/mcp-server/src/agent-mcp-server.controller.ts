@@ -6,6 +6,7 @@ import {
   type Actor,
   type RolesPolicy,
   type ToolRegistry,
+  closeEmptyRoles,
 } from '@dudousxd/nestjs-agent-core';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -159,7 +160,8 @@ export class AgentMcpServerController {
       version: this.options.version,
       registry: this.registry,
       routeTools: this.routeTools,
-      policy: this.policy,
+      // The agent's own policy — closed on this surface alone when `emptyRoles: 'deny'` says so.
+      policy: this.options.emptyRoles === 'deny' ? closeEmptyRoles(this.policy) : this.policy,
       ...(this.options.actions !== undefined ? { actions: this.options.actions } : {}),
       ...(this.options.allowedTools !== undefined
         ? { allowedTools: this.options.allowedTools }

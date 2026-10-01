@@ -3,6 +3,7 @@ import type {
   AgentHistoryWindow,
   AgentStore,
   ApprovalPolicy,
+  EmptyRoles,
   HistoryPolicy,
   InputProcessor,
   MemoryProvider,
@@ -175,6 +176,14 @@ export interface AgentModuleOptions {
    * configured). `action` tools still park on approval regardless.
    */
   defaultRoles?: string[];
+  /**
+   * What an empty roles list means to the default `RolesPolicy`: `'allow'` (default) — no
+   * restriction, so a tool that names no roles reaches every resolved actor; `'deny'` — nobody, so a
+   * tool needs `roles` (or a non-empty `defaultRoles`) to be reachable. For an app where `[]` means
+   * "no one" — a `roles` computed from permissions that can come out empty. Binds
+   * `ClosedRolesPolicy`. Ignored when `rolesPolicy` is set.
+   */
+  emptyRoles?: EmptyRoles;
   /**
    * Resolves the acting actor for each request (the identity seam). Omit → the endpoints are public
    * and every browser is its own anonymous actor (`AnonymousActorResolver`: an `HttpOnly` cookie,
