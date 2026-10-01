@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-telescope
 
+## 0.8.34
+
+### Patch Changes
+
+- Updated dependencies [[`dbd5592`](https://github.com/DavideCarvalho/nestjs-agent/commit/dbd55926dbda26d300d4a913173e7ad1182f4afc), [`dbd5592`](https://github.com/DavideCarvalho/nestjs-agent/commit/dbd55926dbda26d300d4a913173e7ad1182f4afc)]:
+  - @dudousxd/nestjs-agent-core@0.38.1
+
 ## 0.8.33
 
 ### Patch Changes
