@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ToolPreflightDeniedError } from './tool-registry.js';
 import {
   DEFAULT_TOOL_TRANSIENT_RETRY_ATTEMPTS,
   DEFAULT_TOOL_TRANSIENT_RETRY_BACKOFF_MS,
@@ -255,4 +256,21 @@ describe('invokeWithTransientRetry', () => {
     expect(result).toBe('ok');
     expect(calls).toBe(2);
   });
+});
+
+it('never asks a custom retry classifier about an action preflight denial', async () => {
+  const classify = vi.fn(() => true);
+  const call = vi.fn(async () => {
+    throw new ToolPreflightDeniedError('write', 'Previous deadlock requires review');
+  });
+  await expect(
+    invokeWithTransientRetry(call, { attempts: 2, backoffMs: 0, classify }),
+  ).rejects.toThrow('review');
+  expect(call).toHaveBeenCalledTimes(1);
+  expect(classify).not.toHaveBeenCalled();
+  expect(
+    isTransientToolError(
+      new ToolPreflightDeniedError('write', 'lock wait timeout requires review'),
+    ),
+  ).toBe(false);
 });

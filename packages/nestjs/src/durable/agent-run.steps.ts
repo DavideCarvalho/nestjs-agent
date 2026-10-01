@@ -7,10 +7,13 @@ import {
   type ToolStepEnvelope,
   type ToolTransientRetrySetting,
   createFrameBuffer,
+  createNoopEmitUi,
   createUiCollector,
   encodeStreamEvent,
   intersectAllowLists,
   invokeWithTransientRetry,
+  isControlFlowSignal,
+  isReplayIntegrityError,
   observeTurnFrames,
   publishAgentToolRetry,
   stampToolKinds,
@@ -22,6 +25,7 @@ import {
   withSkillTool,
   withToolTimeout,
   withTurnFrames,
+  wrapToolPreflightDenied,
   wrapToolStepOutput,
 } from '@dudousxd/nestjs-agent-core';
 import { Step } from '@dudousxd/nestjs-durable';
@@ -172,6 +176,34 @@ export class AgentRunSteps {
     // (it serves HTTP and replays run bodies), and its own registry would answer `undefined` and
     // downgrade an action to a read — dispatching it, unapproved, to a worker that does know it.
     const stamped = stampToolKinds(turn, deps);
+    // Prepare on the worker that owns the registry; a coordinator can have no tool providers.
+    // This result rides the existing LLM step, then the coordinator's persist:toolcall checkpoint.
+    const allowedTools = intersectAllowLists(deps.toolAllowList, input.personaAllowedTools);
+    for (const call of stamped.toolCalls) {
+      if (call.kind !== 'action') continue;
+      try {
+        const context = input.preflightContext ?? {
+          actor: input.actor,
+          threadId: input.threadId ?? '',
+          runId: input.runId,
+          requestId: input.runId,
+          ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        };
+        call.preflight = await deps.registry.prepare(
+          call.name,
+          call.input,
+          { ...toolCallContext(context, call.id), emitUi: createNoopEmitUi(call.id) },
+          deps.rolesPolicy,
+          allowedTools === undefined ? {} : { allowedTools },
+        );
+      } catch (error) {
+        if (isControlFlowSignal(error) || isReplayIntegrityError(error)) throw error;
+        call.preflight = {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     return buffer === undefined ? stamped : { ...stamped, bufferedFrames: buffer.frames() };
   }
 
@@ -242,38 +274,50 @@ export class AgentRunSteps {
     // Span-wrapped HERE like `llm` above (same replay-safety-by-construction reasoning) — the
     // timeout AND the retry loop sit INSIDE the span so every attempt (and a timed-out attempt)
     // surfaces under the span's error phase.
-    const output = await traceToolExecution(
-      input.ctx.runId,
-      { toolCallId: input.toolCallId, toolName: input.toolName, toolType: input.toolType },
-      () =>
-        invokeWithTransientRetry(
-          () => {
-            // A retry is a new attempt of the same call: its pushes reuse the failed attempt's ids.
-            ui.restart();
-            const invocation = deps.registry.invoke(
-              input.toolName,
-              input.input,
-              ctx,
-              deps.rolesPolicy,
-              input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {},
-            );
-            return input.timeoutMs !== undefined
-              ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
-              : invocation;
-          },
-          transientRetry,
-          {
-            onRetry: (attempt, error) => {
-              publishAgentToolRetry({
-                toolName: input.toolName,
-                toolCallId: input.toolCallId,
-                attempt,
-                message: error instanceof Error ? error.message : String(error),
-              });
-            },
-          },
-        ),
+    const allowedTools = intersectAllowLists(
+      deps.toolAllowList,
+      input.allowedTools === undefined ? undefined : [...input.allowedTools],
     );
+    let output: unknown;
+    try {
+      output = await traceToolExecution(
+        input.ctx.runId,
+        { toolCallId: input.toolCallId, toolName: input.toolName, toolType: input.toolType },
+        () =>
+          invokeWithTransientRetry(
+            () => {
+              // A retry is a new attempt of the same call: its pushes reuse the failed attempt's ids.
+              ui.restart();
+              const invocation = deps.registry.invoke(
+                input.toolName,
+                input.input,
+                ctx,
+                deps.rolesPolicy,
+                allowedTools === undefined ? {} : { allowedTools },
+              );
+              return input.timeoutMs !== undefined
+                ? withToolTimeout(invocation, input.timeoutMs, input.toolName)
+                : invocation;
+            },
+            transientRetry,
+            {
+              onRetry: (attempt, error) => {
+                publishAgentToolRetry({
+                  toolName: input.toolName,
+                  toolCallId: input.toolCallId,
+                  attempt,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+              },
+            },
+          ),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name === 'ToolPreflightDeniedError') {
+        return wrapToolPreflightDenied(error.message);
+      }
+      throw error;
+    }
     // Wrapped only when the dispatching loop asked for it (`collectUi`) AND something was pushed, so
     // a loop that predates this always reads the bare output it expects.
     return input.collectUi === true ? wrapToolStepOutput(output, ui.components()) : output;

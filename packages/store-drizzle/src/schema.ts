@@ -10,6 +10,7 @@ import type {
   QueuePause,
   ToolCallRequest,
   ToolCallStatus,
+  ToolConfirmation,
   ToolKind,
   ToolResult,
   UsagePurpose,
@@ -129,6 +130,8 @@ export const agentToolCall = sqliteTable(
     executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
     /** The run (turn) this call belongs to, for a trace deep-link; null for a pre-rollout row. */
     runId: text('run_id'),
+    /** Resolved per-call wording; null falls back to presentation templates. */
+    confirmation: text('confirmation', { mode: 'json' }).$type<ToolConfirmation>(),
     /** Who had to approve it (`requester` or a role); null for a call no policy put to anyone. */
     approver: text('approver'),
     /** When the approval request lapses; null → never. */

@@ -405,6 +405,57 @@ In anonymous mode the limits apply per browser (each is its own actor).
 
 ### Who approves an action, and for how long
 
+Action handlers can implement an optional read-only `preflight(input, ctx, { phase })`. The
+registry authorizes and validates the input first. `prepare` runs before an approval is requested;
+`execute` rechecks current state inside the tool checkpoint immediately before its side effect.
+Automatic and remembered approvals still run both checks; direct registry and MCP invocations
+run the execution check too.
+
+```ts
+class RemoveSessionsTool implements ToolHandler<{ accountId: string }, { removed: number }> {
+  constructor(private readonly sessions: SessionsService) {}
+
+  async preflight(input: { accountId: string }, ctx: AiToolCtx, { phase }: ToolPreflightOptions): Promise<ToolPreflightResult<{ removed: number }>> {
+    const count = await this.sessions.countForActor(input.accountId, ctx.actor);
+    if (count === 0) return { status: 'completed', output: { removed: 0 } };
+    if (await this.sessions.isLocked(input.accountId)) {
+      return { status: 'denied', reason: 'This account is locked.' };
+    }
+    return {
+      status: 'ready',
+      confirmation: { title: `Remove ${count} sessions?`, verb: 'Remove' },
+    };
+  }
+
+  async execute(input: { accountId: string }, ctx: AiToolCtx) {
+    return this.sessions.removeForActor(input.accountId, ctx.actor, ctx.idempotencyKey);
+  }
+}
+```
+
+`ready` may supply fully resolved `ToolConfirmation` strings (`title`, `verb`, optional `detail`)
+that override the tool's presentation templates for this call, including after a history reload.
+`denied` returns a domain refusal to the model, and `completed` returns an existing result. Both
+skip approval and execution during preparation. A completed terminal action ends the turn.
+A refusal after a person approves preserves that approval while reporting that the mutation did
+not run. An exception becomes a failed tool result. Read tools ignore this hook.
+
+Functional tools use the same handler contract:
+
+```ts
+provideAgentTool({
+  spec: removeSessionsSpec,
+  handler: { preflight: checkSessions, execute: removeSessions },
+});
+```
+
+Preflight must not perform writes or emit UI. Its preparation result is journaled with the existing
+call checkpoint (and, for remote execution, first with the model worker's turn); replay uses that
+result without rerunning the check or changing its approval branch. The execution check is
+journaled inside the existing tool checkpoint. Keep domain checks inside `execute` or an atomic
+transaction as needed: a preflight check cannot eliminate concurrent changes between reads and
+writes, and it does not replace idempotency.
+
 Every `action` tool call waits on the person chatting by default. `approvalPolicy` changes that per
 call:
 

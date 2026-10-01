@@ -37,6 +37,43 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
   });
 
   describe('MikroOrmAgentStore', () => {
+    it('roundtrips resolved confirmation and preserves approved metadata after domain refusal', async () => {
+      const confirmation = { title: 'Remove 3 sessions?', verb: 'Remove', detail: 'For account A' };
+      const thread = await store.createThread({ actor: { id: 'preflight-actor' } });
+      const message = await store.appendMessage({
+        threadId: thread.id,
+        role: 'assistant',
+        content: 'removing',
+        toolCalls: [{ id: 'preflight-call', name: 'remove', input: {} }],
+      });
+      await store.recordToolCall({
+        toolCallId: 'preflight-call',
+        messageId: message.id,
+        toolName: 'remove',
+        toolType: 'action',
+        input: {},
+        status: 'pending_approval',
+        approver: 'requester',
+        confirmation,
+      });
+      expect((await store.getThread(thread.id))?.messages[0]?.approvals?.[0]).toMatchObject({
+        status: 'pending',
+        confirmation,
+      });
+      await store.updateToolCall({
+        toolCallId: 'preflight-call',
+        status: 'failed',
+        error: 'account became locked',
+        executedByRef: 'preflight-actor',
+        decidedVia: 'web',
+      });
+      expect((await store.getThread(thread.id))?.messages[0]?.approvals?.[0]).toMatchObject({
+        status: 'approved',
+        confirmation,
+        decidedBy: 'preflight-actor',
+      });
+    });
+
     it('creates a thread under the id the caller names, and refuses one already taken', async () => {
       const actor = { id: 'named-actor' };
       const named = await store.createThread({ actor, id: 'thread-from-client' });

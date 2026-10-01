@@ -151,7 +151,7 @@ original stream.
 | `tool-output-error` | `id`, `error: string` | `tool-output-error` — the call failed, effects unknown |
 | `tool-output-denied` | `id`, `reason?` | `tool-output-denied` — a person said no; nothing ran |
 | `elicitation` | `id`, `request: { preamble?, questions[] }` | opens an `ask` tool call carrying the questions (see *Asking the user*) |
-| `approval-requested` | `id`, `approver: string`, `expiresAt?: string`, `reason?: string` | `data-approval-requested` part (id = call id) + native `tool-approval-request` (`approvalId` = call id); the tool part moves to `state: 'approval-requested'` |
+| `approval-requested` | `id`, `approver: string`, `expiresAt?: string`, `reason?: string`, `confirmation?: ToolConfirmation` | `data-approval-requested` part (id = call id) + native `tool-approval-request` (`approvalId` = call id); the tool part moves to `state: 'approval-requested'` |
 | `approval-settled` | `id`, `status: 'approved' \| 'rejected' \| 'expired'`, `approver?`, `decidedBy?`, `decidedVia?`, `remember?: boolean`, `reason?` | `data-approval-settled` part (id = call id); folded into the call's `approval` by the transcript. The call's own state still moves on its output frame |
 | `ui` | `id`, `component: string`, `props: object`, `version?: number`, `toolCallId?: string` | `data-ui` part (id = component id, data carries `toolCallId`); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
 | `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
@@ -166,6 +166,7 @@ original stream.
 `action` call whose input is available and whose outcome has not arrived as awaiting approval, with
 or without `approval-requested`. The frame adds who may decide and until when:
 
+- `confirmation` contains resolved `title`, `verb`, and optional `detail` strings from action preflight. It overrides catalog confirmation templates and survives history reloads; clients render it without template interpolation.
 - `approver` is an open vocabulary the host defines — `'requester'` (the person chatting), `'admin'`,
   a role or team name. A client uses it to show "waiting on an admin" instead of buttons the viewer
   cannot use.

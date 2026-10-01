@@ -1,6 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { RolesPolicy } from './spi/roles-policy.js';
-import type { AiToolCtx, ToolDescribeScope, ToolHandler } from './spi/tool.js';
+import type { AiToolCtx, ToolDescribeScope, ToolHandler, ToolPreflightResult } from './spi/tool.js';
 import {
   canActorUseTool,
   filterToolsByAllowList,
@@ -54,6 +54,17 @@ export class ToolInputInvalidError extends Error {
       `Invalid input for tool "${toolName}": ${issues.map((issue) => issue.message).join('; ')}`,
     );
     this.name = 'ToolInputInvalidError';
+  }
+}
+
+/** An action refused by its current domain state, rather than by a person. */
+export class ToolPreflightDeniedError extends Error {
+  constructor(
+    public readonly toolName: string,
+    public readonly reason: string,
+  ) {
+    super(reason);
+    this.name = 'ToolPreflightDeniedError';
   }
 }
 
@@ -182,6 +193,39 @@ export class ToolRegistry {
     policy: RolesPolicy,
     options: InvokeOptions = {},
   ): Promise<unknown> {
+    const { entry, value, ctx: withEmit } = await this.validated(name, input, ctx, policy, options);
+    const result =
+      entry.spec.kind === 'action'
+        ? await entry.handler.preflight?.(value, withEmit, { phase: 'execute' })
+        : undefined;
+    if (result?.status === 'denied') throw new ToolPreflightDeniedError(name, result.reason);
+    if (result?.status === 'completed') return result.output;
+    return entry.handler.execute(value, withEmit);
+  }
+
+  /** Authorize and validate without executing. The caller journals this result before approval. */
+  async prepare(
+    name: string,
+    input: unknown,
+    ctx: AiToolCtx,
+    policy: RolesPolicy,
+    options: InvokeOptions = {},
+  ): Promise<ToolPreflightResult> {
+    const { entry, value, ctx: withEmit } = await this.validated(name, input, ctx, policy, options);
+    return (
+      (entry.spec.kind === 'action'
+        ? await entry.handler.preflight?.(value, withEmit, { phase: 'prepare' })
+        : undefined) ?? { status: 'ready' }
+    );
+  }
+
+  private async validated(
+    name: string,
+    input: unknown,
+    ctx: AiToolCtx,
+    policy: RolesPolicy,
+    options: InvokeOptions,
+  ): Promise<{ entry: Entry; value: unknown; ctx: AiToolCtx }> {
     const entry = this.entries.get(name);
     if (entry === undefined) {
       throw new ToolNotFoundError(name);
@@ -208,7 +252,7 @@ export class ToolRegistry {
     // a JavaScript host) gets the no-op rather than a tool that crashes calling it.
     const withEmit: AiToolCtx =
       typeof ctx.emitUi === 'function' ? ctx : { ...ctx, emitUi: createNoopEmitUi(ctx.requestId) };
-    return entry.handler.execute(validation.value, withEmit);
+    return { entry, value: validation.value, ctx: withEmit };
   }
 }
 

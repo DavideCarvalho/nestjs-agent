@@ -74,6 +74,7 @@ export {
   ToolForbiddenError,
   ToolNotFoundError,
   ToolInputInvalidError,
+  ToolPreflightDeniedError,
   type InvokeOptions,
 } from './tool-registry.js';
 export {

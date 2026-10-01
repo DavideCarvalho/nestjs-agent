@@ -15,6 +15,7 @@ import {
   type Decision,
   DefaultRolesPolicy,
   type ModelMessage,
+  type ToolPreflightResult,
   ToolRegistry,
   decodeStreamEvent,
   runAgentLoop,
@@ -67,6 +68,9 @@ async function run(
     policy?: ApprovalPolicy;
     script?: FakeScript;
     step?: AgentLoopHooks['step'];
+    registry?: ToolRegistry;
+    toolAllowList?: string[];
+    toolTransientRetry?: AgentLoopDeps['toolTransientRetry'];
   } = {},
 ): Promise<RunResult> {
   const runId = options.runId ?? 'run-1';
@@ -80,11 +84,15 @@ async function run(
       return script(args, turnIndex);
     }),
     store: h.store,
-    registry: registry(),
+    registry: options.registry ?? registry(),
     rolesPolicy: new DefaultRolesPolicy(),
     modelId: 'fake-1',
     day: '2026-06-30',
     systemPrompt: 'test',
+    ...(options.toolAllowList !== undefined ? { toolAllowList: options.toolAllowList } : {}),
+    ...(options.toolTransientRetry !== undefined
+      ? { toolTransientRetry: options.toolTransientRetry }
+      : {}),
     ...(options.policy !== undefined ? { approvalPolicy: options.policy } : {}),
   };
   const hooks: AgentLoopHooks = {
@@ -306,5 +314,240 @@ describe('approvals v2 — runs claimed before approval policies', () => {
     expect(awaited).toEqual([{ id: 'call-0-purgeCache', opts: undefined }]);
     expect(events.some((event) => event.kind === 'approval-settled')).toBe(false);
     expect(h.store.toolCallRows()[0]).toMatchObject({ status: 'executed', remember: true });
+  });
+});
+
+describe('action preflight in the approval loop', () => {
+  function checked(check: (phase: 'prepare' | 'execute') => ToolPreflightResult) {
+    const reg = new ToolRegistry();
+    let writes = 0;
+    const phases: string[] = [];
+    reg.register(
+      {
+        name: 'purgeCache',
+        kind: 'action',
+        description: 'purge',
+        inputSchema: z.object({ key: z.string() }),
+      },
+      {
+        preflight: (_input, _ctx, { phase }) => {
+          phases.push(phase);
+          return check(phase);
+        },
+        execute: async () => {
+          writes++;
+          return 'changed';
+        },
+      },
+    );
+    return { reg, phases, writes: () => writes };
+  }
+  it.each(['denied', 'completed'] as const)(
+    'does not request approval or execute when preparation is %s',
+    async (status) => {
+      const h = await harness();
+      const tool = checked(() =>
+        status === 'denied'
+          ? { status, reason: 'locked by owner' }
+          : { status, output: 'existing' },
+      );
+      const result = await run(h, { registry: tool.reg });
+      expect(result.awaited).toEqual([]);
+      expect(result.events.some((event) => event.kind === 'approval-requested')).toBe(false);
+      expect(tool.writes()).toBe(0);
+      expect(tool.phases).toEqual(['prepare']);
+      const outcome = result.messages.at(-1)?.flatMap((message) => message.toolResults ?? [])[0];
+      expect(outcome?.output).toEqual(
+        status === 'completed' ? 'existing' : { rejected: true, reason: 'locked by owner' },
+      );
+      expect(outcome?.denied).toBe(status === 'denied' ? true : undefined);
+      if (status === 'denied') expect(outcome?.error).not.toContain('person');
+    },
+  );
+  it('rechecks domain state after a person approves and does not write', async () => {
+    const h = await harness();
+    const tool = checked((phase) =>
+      phase === 'prepare' ? { status: 'ready' } : { status: 'denied', reason: 'state changed' },
+    );
+    const result = await run(h, { registry: tool.reg });
+    expect(result.awaited).toHaveLength(1);
+    expect(tool.phases).toEqual(['prepare', 'execute']);
+    expect(tool.writes()).toBe(0);
+    expect(
+      (await h.store.getThread(h.threadId))?.messages.flatMap(
+        (message) => message.approvals ?? [],
+      )[0]?.status,
+    ).toBe('approved');
+    expect(result.events).toContainEqual({
+      kind: 'tool-output-denied',
+      id: 'call-0-purgeCache',
+      reason: 'state changed',
+    });
+  });
+  it('journals an execution denial so replay cannot rerun it after state changes', async () => {
+    const h = await harness();
+    let deny = true;
+    const tool = checked((phase) =>
+      phase === 'execute' && deny ? { status: 'denied', reason: 'locked' } : { status: 'ready' },
+    );
+    const journal = new Map<string, unknown>();
+    const step: AgentLoopHooks['step'] = async (name, fn) => {
+      if (journal.has(name)) return structuredClone(journal.get(name)) as never;
+      const result = await fn();
+      journal.set(name, structuredClone(result));
+      return result;
+    };
+    await run(h, { registry: tool.reg, step });
+    deny = false;
+    await run(h, { registry: tool.reg, step });
+    expect(tool.writes()).toBe(0);
+    expect(tool.phases).toEqual(['prepare', 'execute']);
+    expect(journal.has('tool:call-0-purgeCache')).toBe(true);
+  });
+  it('holds execution to an agent allow-list narrowed while approval was pending', async () => {
+    const h = await harness();
+    const allowed = ['purgeCache'];
+    const tool = checked(() => ({ status: 'ready' }));
+    const result = await run(h, {
+      registry: tool.reg,
+      toolAllowList: allowed,
+      decide: () => {
+        allowed.splice(0);
+        return { approved: true };
+      },
+    });
+    expect(tool.writes()).toBe(0);
+    expect(tool.phases).toEqual(['prepare']);
+    expect(result.events.some((event) => event.kind === 'tool-output-error')).toBe(true);
+  });
+  it('ends a terminal action turn when preparation returns its existing output', async () => {
+    const h = await harness();
+    const reg = new ToolRegistry();
+    reg.register(
+      {
+        name: 'purgeCache',
+        kind: 'action',
+        description: 'purge',
+        terminal: true,
+        inputSchema: z.object({ key: z.string() }),
+      },
+      {
+        preflight: () => ({ status: 'completed', output: 'existing' }),
+        execute: async () => {
+          throw new Error('must not execute');
+        },
+      },
+    );
+    const result = await run(h, { registry: reg });
+    expect(result.awaited).toEqual([]);
+    expect(result.messages).toHaveLength(1);
+  });
+  it.each([false, true])(
+    'never retries a denied state even with transient wording (custom classifier %s)',
+    async (custom) => {
+      const h = await harness();
+      let attempts = 0;
+      const tool = checked((phase) =>
+        phase === 'prepare' || ++attempts > 1
+          ? { status: 'ready' }
+          : { status: 'denied', reason: 'Previous deadlock requires manual review' },
+      );
+      await run(h, {
+        registry: tool.reg,
+        toolTransientRetry: {
+          attempts: 2,
+          backoffMs: 0,
+          ...(custom ? { classify: () => true } : {}),
+        },
+      });
+      expect(tool.writes()).toBe(0);
+      expect(attempts).toBe(1);
+    },
+  );
+  it.each(['executed', 'completed'] as const)(
+    'keeps a reserved-looking %s output as user data',
+    async (mode) => {
+      const h = await harness();
+      const output = {
+        '@@nestjs-agent/tool-step-ui': 1,
+        output: 'data',
+        ui: [],
+        preflightDenied: 'not a refusal',
+      };
+      const reg = new ToolRegistry();
+      reg.register(
+        {
+          name: 'purgeCache',
+          kind: 'action',
+          description: 'purge',
+          inputSchema: z.object({ key: z.string() }),
+        },
+        {
+          preflight: (_input, _ctx, { phase }) =>
+            phase === 'execute' && mode === 'completed'
+              ? { status: 'completed', output }
+              : { status: 'ready' },
+          execute: async () => output,
+        },
+      );
+      const result = await run(h, { registry: reg });
+      const settled = result.messages.at(-1)?.flatMap((message) => message.toolResults ?? [])[0];
+      expect(settled?.output).toEqual(output);
+      expect(settled?.denied).toBeUndefined();
+    },
+  );
+  it('checks both phases for automatic approvals', async () => {
+    const h = await harness();
+    const tool = checked(() => ({ status: 'ready' }));
+    const result = await run(h, {
+      registry: tool.reg,
+      policy: { requirementFor: () => ({ required: false, approver: 'requester' }) },
+    });
+    expect(result.awaited).toEqual([]);
+    expect(tool.phases).toEqual(['prepare', 'execute']);
+    expect(tool.writes()).toBe(1);
+  });
+  it('still prepares remembered approvals', async () => {
+    const h = await harness();
+    await run(h, { decide: () => ({ approved: true, remember: true }) });
+    const tool = checked(() => ({ status: 'denied', reason: 'locked' }));
+    const result = await run(h, { runId: 'run-2', registry: tool.reg });
+    expect(result.awaited).toEqual([]);
+    expect(tool.phases).toEqual(['prepare']);
+    expect(tool.writes()).toBe(0);
+  });
+  it('persists and streams resolved confirmation from preparation', async () => {
+    const h = await harness();
+    const confirmation = {
+      title: 'Remove 3 linked sessions?',
+      verb: 'Remove',
+      detail: 'Literal {braces} survive',
+    };
+    const tool = checked(() => ({ status: 'ready', confirmation }));
+    const result = await run(h, { registry: tool.reg });
+    expect(result.events).toContainEqual({
+      kind: 'approval-requested',
+      id: 'call-0-purgeCache',
+      approver: 'requester',
+      confirmation,
+    });
+    const detail = await h.store.getThread(h.threadId);
+    expect(detail?.messages.flatMap((message) => message.approvals ?? [])[0]?.confirmation).toEqual(
+      confirmation,
+    );
+  });
+  it('records a preparation exception as a failed result without asking', async () => {
+    const h = await harness();
+    const tool = checked(() => {
+      throw new Error('domain unavailable');
+    });
+    const result = await run(h, { registry: tool.reg });
+    expect(result.awaited).toEqual([]);
+    expect(tool.writes()).toBe(0);
+    expect(result.events).toContainEqual({
+      kind: 'tool-output-error',
+      id: 'call-0-purgeCache',
+      error: 'domain unavailable',
+    });
   });
 });

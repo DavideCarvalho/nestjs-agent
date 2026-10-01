@@ -2,8 +2,9 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
 import type { ChatQueueState } from './spi/chat-queue.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
+import type { ToolPreflightResult } from './spi/tool.js';
 import type { AgentUiComponent } from './stream-events.js';
-import type { ToolPresentation } from './tool-presentation.js';
+import type { ToolConfirmation, ToolPresentation } from './tool-presentation.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
 
 /** Who is driving the turn. Roles + tenant come from the host app (nestjs-context/authz). */
@@ -125,6 +126,9 @@ export interface ToolDefinition {
 
 /** A tool call the model asked for during a turn. */
 export interface ToolCallRequest {
+  /** Trusted action preparation from the dispatched model worker, journaled with its turn.
+   * Model-provider supplied values are overwritten by the worker. Absent on legacy turns. */
+  preflight?: ToolPreflightResult | { status: 'failed'; error: string };
   id: string;
   name: string;
   input: unknown;
@@ -648,6 +652,8 @@ export type ToolCallApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expi
 
 /** The persisted approval metadata of one action tool call. See {@link StoredMessage.approvals}. */
 export interface ToolCallApproval {
+  /** Resolved confirmation from the action preflight; overrides presentation templates. */
+  confirmation?: ToolConfirmation;
   toolCallId: string;
   /** Who may decide: `'requester'` (the thread's own actor) or a role name. */
   approver: string;
@@ -688,6 +694,8 @@ export type ToolCallStatus =
  * re-resolves the model/sink/registry from its own DI via AGENT_DEPS_FACTORY.forAgent(agentName).
  */
 export interface LlmStepEnvelope {
+  /** Full invocation identity for action preparation at the worker. Optional for old envelopes. */
+  preflightContext?: ToolStepCtx;
   /** Undefined = default agent (same semantics as {@link AgentRunInput.agentName}). */
   agentName?: string;
   system: string;

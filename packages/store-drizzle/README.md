@@ -237,3 +237,9 @@ for the full model.
 ## License
 
 MIT © Davide Carvalho
+
+
+Action preflight confirmations persist in the nullable `agent_tool_call.confirmation` JSON column.
+The schema helper adds this column to existing databases. Hosts managing their own migrations must
+add it before upgrading (`JSONB` on PostgreSQL, `JSON` on MySQL, JSON text on SQLite). The stored
+confirmation is returned in `StoredMessage.approvals` so a reload uses the same wording.

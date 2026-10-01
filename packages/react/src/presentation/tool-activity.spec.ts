@@ -191,3 +191,27 @@ describe('transcript integration', () => {
     expect(toolBlock(parts, catalog).calls[0]?.description.phrase).toBe('Querying orders');
   });
 });
+
+it('uses the resolved per-call confirmation in the transcript instead of catalog templates', () => {
+  const confirmation = { title: 'Remove 3 {literal} sessions?', verb: 'Remove' };
+  const message: UIMessage = {
+    id: 'm',
+    role: 'assistant',
+    parts: [
+      part('1', 'purge', 'approval-requested', { input: { key: 'sessions' } }),
+      {
+        type: 'data-approval-requested',
+        id: '1',
+        data: { id: '1', approver: 'requester', confirmation },
+      },
+    ],
+  };
+  const block = buildTranscriptBlocks(message, {
+    isReasoningOpen: () => false,
+    toggleReasoning: () => undefined,
+    toolCatalog: catalog,
+  })[0];
+  if (block?.kind !== 'tools') throw new Error('expected tools');
+  expect(block.calls[0]?.approval?.confirmation).toEqual(confirmation);
+  expect(block.calls[0]?.description.confirm).toEqual({ ...confirmation, detail: null });
+});

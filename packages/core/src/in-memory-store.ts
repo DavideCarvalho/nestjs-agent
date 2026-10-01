@@ -19,6 +19,7 @@ import type {
   QueuedMessagePatch,
 } from './spi/chat-queue.js';
 import { type AgentUiComponent } from './stream-events.js';
+import type { ToolConfirmation } from './tool-presentation.js';
 import {
   type MessageFeedback,
   type StoredMessage,
@@ -51,6 +52,7 @@ interface ToolCallRow {
   runId?: string;
   executedByRef?: string;
   approver?: string;
+  confirmation?: ToolConfirmation;
   expiresAt?: string;
   remember?: boolean;
   decidedVia?: string;
@@ -235,6 +237,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
         toolCallId: call.toolCallId,
         status: call.status,
         approver: call.approver,
+        confirmation: call.confirmation,
         expiresAt: call.expiresAt,
         remember: call.remember,
         executedByRef: call.executedByRef,
@@ -728,6 +731,9 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       createdAt: this.now(),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
       ...(input.approver !== undefined ? { approver: input.approver } : {}),
+      ...(input.confirmation !== undefined
+        ? { confirmation: structuredClone(input.confirmation) }
+        : {}),
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     });
   }
