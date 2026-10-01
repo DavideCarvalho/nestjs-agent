@@ -72,6 +72,13 @@ export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
   /** Named agent to run each turn. */
   agent?: string;
   /**
+   * One of the agent's personas (`GET <base>/agents` lists them) to answer as. Read per send, so a
+   * picker can switch it between messages; the server pins it on the thread, and `threadPersona`
+   * reports it back. Omitted → the thread's pinned persona, else the agent's default. A single send
+   * can name its own: `sendMessage(message, { body: { persona } })`.
+   */
+  persona?: string;
+  /**
    * Thread this chat is bound to. Omitted → the backend creates one on the first send
    * ({@link UseAgentChatOptions.onThreadCreated}). Changing it switches the chat to that thread:
    * its history loads and a turn still streaming on it is re-attached. Switching to the thread this
@@ -393,6 +400,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const [runError, setRunError] = useState<AgentRunFailure | null>(null);
   // The model pinned on the loaded thread.
   const [threadModel, setThreadModel] = useState<string | null>(null);
+  // The persona pinned on the thread — read with its history, and mirrored from each send that
+  // names one. `null` → none pinned (the agent's default persona applies).
+  const [threadPersona, setThreadPersona] = useState<string | null>(null);
   const [pickedModel, setPickedModel] = useState<string | undefined>(undefined);
   const pickedModelRef = useRef(pickedModel);
   pickedModelRef.current = pickedModel;
@@ -427,9 +437,11 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   // Queue sends made before a new chat's first turn named its thread.
   const threadWaiters = useRef<Array<(threadId: string) => void>>([]);
 
-  /** The body fields every send carries: agent, thread, model, page context. */
+  /** The body fields every send carries: agent, persona, thread, model, page context. */
   const turnBody = useCallback((): Record<string, unknown> => {
     const current = latest.current;
+    // The server pins a persona a send names; mirror it so a picker reads the thread's state.
+    if (current.persona !== undefined) setThreadPersona(current.persona);
     const pageContext = current.getPageContext?.() ?? null;
     const threadId = currentThreadId();
     // A locked agent runs on its own model: a pick is not sent (the server would refuse it).
@@ -438,6 +450,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       // Read per send: a host that switches agents before the first message (a picker on a new
       // chat) sends the one picked now, not the one this chat mounted with.
       ...(current.agent !== undefined ? { agent: current.agent } : {}),
+      ...(current.persona !== undefined ? { persona: current.persona } : {}),
       ...(threadId !== undefined ? { threadId } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(pageContext ? { pageContext } : {}),
@@ -643,6 +656,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     setRunId(undefined);
     setActiveRunId(null);
     setThreadModel(null);
+    setThreadPersona(null);
     setPickedModel(undefined);
     setBackgroundRuns([]);
     setHistoryError(null);
@@ -678,6 +692,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
           const stored = Array.isArray(thread.messages) ? thread.messages : [];
           setActiveRunId(active);
           setThreadModel(thread.model ?? null);
+          setThreadPersona(thread.persona ?? null);
           setHistoryError(null);
           const queue = thread.queue ?? EMPTY_QUEUE;
           applyQueue(queue);
@@ -1443,6 +1458,11 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     queue,
     /** The model picker: `list`, `selected`, `select(id)`, `pinToThread(id)`. */
     models,
+    /**
+     * The persona pinned on this thread (`ThreadSummary.persona`), or `null` when none is — what a
+     * persona picker on a reopened thread starts from (`?? agent.defaultPersona`).
+     */
+    threadPersona,
     /** The caller's budget (`GET <base>/quota`); `quota.blocked` gates sends. */
     quota,
     /** The window blocking sends right now (the `blocked` option, else the quota report's). */

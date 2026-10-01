@@ -205,6 +205,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       createdAt: ts,
       updatedAt: ts,
       messages: [],
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
     };
     this.threads.set(id, row);
     return this.toSummary(row);
@@ -305,6 +306,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       messages: kept.map(({ feedback: _feedback, ...message }) => ({ ...message })),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
       ...(source.model != null ? { model: source.model } : {}),
+      ...(source.persona != null ? { persona: source.persona } : {}),
     };
     this.threads.set(id, row);
     return this.toSummary(row);
@@ -361,6 +363,9 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
     if (patch.model !== undefined) {
       row.model = patch.model;
     }
+    if (patch.persona !== undefined) {
+      row.persona = patch.persona;
+    }
     row.updatedAt = this.now();
   }
 
@@ -375,6 +380,11 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
    */
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     return this.threads.get(threadId)?.defaultAgent ?? null;
+  }
+
+  /** The thread's persona, projected like {@link defaultAgentForThread}. */
+  async personaForThread(threadId: string): Promise<string | null> {
+    return this.threads.get(threadId)?.persona ?? null;
   }
 
   /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
@@ -493,6 +503,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
         ? { attachments: input.attachments }
         : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
       ...(input.interrupt === true ? { interrupt: true } : {}),
@@ -615,6 +626,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
       ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
       ...(input.reasoningMs !== undefined ? { reasoningMs: input.reasoningMs } : {}),
@@ -986,6 +998,7 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       ...(last !== undefined ? { lastMessagePreview: last.content.slice(0, 120) } : {}),
       defaultAgent: row.defaultAgent ?? null,
       ...(row.model != null ? { model: row.model } : {}),
+      persona: row.persona ?? null,
     };
   }
 }

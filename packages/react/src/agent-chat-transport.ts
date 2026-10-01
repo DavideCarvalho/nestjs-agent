@@ -62,6 +62,8 @@ export interface AgentChatTransportOptions {
   credentials?: RequestCredentials;
   /** Named agent to run the turn (backend `agent` field). */
   agent?: string;
+  /** One of the agent's personas to answer as (backend `persona` field). */
+  persona?: string;
   /**
    * Extra body fields evaluated per send — the hook injects `threadId`
    * and `pageContext` through this. Returned object is spread into the
@@ -209,6 +211,7 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
       const message = lastMessage ? extractText(lastMessage) : '';
       const body: Record<string, unknown> = {
         ...(this.options.agent !== undefined ? { agent: this.options.agent } : {}),
+        ...(this.options.persona !== undefined ? { persona: this.options.persona } : {}),
         ...(this.options.getBody?.() ?? {}),
         ...((options.body as Record<string, unknown> | undefined) ?? {}),
         message,

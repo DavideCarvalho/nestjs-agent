@@ -306,6 +306,74 @@ export interface PromptContext {
   /** The selected agent's name. */
   agentName: string;
   pageContext?: PageContext;
+  /**
+   * The persona this turn runs under, when it runs under one — so an agent's own `@SystemPrompt`
+   * (or a contributor) can vary by persona without the persona carrying a prompt of its own.
+   */
+  persona?: PersonaRef;
+  /**
+   * The agent's own resolved base prompt. Set only while a persona's {@link Persona.systemPrompt} is
+   * being resolved, so a persona builder can wrap the base rather than discard it.
+   */
+  basePrompt?: string;
+}
+
+/**
+ * A named variant of ONE agent: its own prompt and, optionally, a narrower tool allow-list. The
+ * caller picks one per send (`POST <base>/chat { persona }`); everything else — the agent's model,
+ * its access rules, its handoffs, its history — stays the agent's. A variant that needs any of those
+ * to differ is a different `@Agent`, not a persona.
+ */
+export interface Persona {
+  /** Unique within its agent — what a send names and what a message records. */
+  id: string;
+  /** What a picker shows. */
+  label: string;
+  /** One line about what the persona is for, for a picker. */
+  description?: string;
+  /**
+   * The persona's prompt. A flat string STANDS IN FOR the agent's base prompt; a
+   * {@link PromptBuilder} is handed that base as `ctx.basePrompt`, so it can wrap it instead. The
+   * cross-agent contributors still follow either way. Omit → the agent's base prompt, unchanged
+   * (which can itself read `ctx.persona`).
+   */
+  systemPrompt?: string | PromptBuilder;
+  /**
+   * Only these tool names are offered — and only these may be invoked — under this persona. Layered
+   * AFTER the agent's own allow-list, `enabled`, the roles policy and `canUse`: it narrows, never
+   * widens. Omit → whatever the agent offers.
+   */
+  allowedTools?: string[];
+  /**
+   * Agent names this persona answers for: a send, a queued message or a thread that names one of
+   * them runs as THIS agent under THIS persona. For an app that turns separate agents into personas
+   * of one — the threads, messages and in-flight runs that recorded the old agent name keep
+   * resolving, with no data migration.
+   */
+  aliases?: string[];
+}
+
+/** What a prompt builder and a tool see of the turn's persona. */
+export interface PersonaRef {
+  id: string;
+  label: string;
+}
+
+/**
+ * A persona as a turn RESOLVED it, journaled in the `persona:resolve` checkpoint — so every replay
+ * of the run uses this, and not whatever the persona's configuration says by the time it resumes.
+ */
+export interface TurnPersona extends PersonaRef {
+  allowedTools?: string[];
+  /** The persona's prompt, resolved (with the base prompt it wraps). Absent → the base prompt. */
+  prompt?: string;
+}
+
+/** One persona as `GET <base>/agents` lists it — what a persona picker renders. */
+export interface PersonaCatalogEntry {
+  id: string;
+  label: string;
+  description?: string;
 }
 
 /**
@@ -336,6 +404,13 @@ export interface AgentRunInput {
   day?: string;
   /** Which named agent runs this turn. Omitted → the default/single agent. */
   agentName?: string;
+  /**
+   * The persona of {@link agentName} this turn runs under (a {@link Persona.id}). Resolved by the
+   * service from the send, the thread and the agent's default BEFORE the run starts, so it is part
+   * of the run's own input; the loop resolves its definition once, in the `persona:resolve`
+   * checkpoint. Omitted → no persona, and no checkpoint spent on one.
+   */
+  persona?: string;
   /**
    * How many agent→agent delegations deep this run already is (0 for a top-level turn). The runner
    * increments it for each child run; the loop refuses to delegate past its depth ceiling.
@@ -444,6 +519,10 @@ export interface AgentDefinition {
    * Whether this agent is offered the built-in `ask` tool. Undefined → the module-wide setting.
    */
   ask?: boolean;
+  /** Named variants of this agent — see {@link Persona}. Undefined → none. */
+  personas?: Persona[];
+  /** The persona a send runs under when neither it nor its thread names one. Undefined → none. */
+  defaultPersona?: string;
 }
 
 /**
@@ -460,6 +539,10 @@ export interface AgentCatalogEntry {
    * so before a chat starts. `GET <base>/models?agent=` reports the same lock as `locked`.
    */
   lockedModel?: string;
+  /** The agent's personas, for a persona picker. Omitted when it declares none. */
+  personas?: PersonaCatalogEntry[];
+  /** The persona a send runs under when it names none. Omitted when the agent has no default. */
+  defaultPersona?: string;
 }
 
 export interface ThreadSummary {
@@ -487,6 +570,12 @@ export interface ThreadSummary {
    * it; the REST read-model normalizes that to `null`.
    */
   model?: string | null;
+  /**
+   * The persona this thread's turns run under when a send names none — the last one a send on it
+   * named, or `PATCH <base>/threads/:id { persona }`. `null` → the agent's default. Undefined for a
+   * store that does not persist it; the REST read-model normalizes that to `null`.
+   */
+  persona?: string | null;
 }
 
 export interface StoredMessage {
@@ -495,6 +584,8 @@ export interface StoredMessage {
   content: string;
   /** Which agent produced this message (assistant messages) — provenance for replay / UI / telescope. */
   agentName?: string;
+  /** The persona the turn that wrote this message ran under; absent when it ran under none. */
+  persona?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
   /** Files the user attached to this message (image/PDF). Persisted with the message, replayed as-is. */
@@ -617,6 +708,11 @@ export interface LlmStepEnvelope {
   bufferOutput?: boolean;
   /** The turn's selected model ({@link AgentRunInput.model}), for the worker's provider call. */
   model?: string;
+  /**
+   * The allow-list of the persona the turn resolved (`persona:resolve`), which the serving worker
+   * intersects with the agent's own. Absent → no persona narrowing, as before personas existed.
+   */
+  personaAllowedTools?: string[];
 }
 
 /**
@@ -629,6 +725,8 @@ export interface ToolStepCtx {
   runId: string;
   requestId: string;
   agentName?: string;
+  /** The persona the turn runs under ({@link AiToolCtx.persona}). */
+  persona?: string;
   pageContext?: PageContext;
 }
 
@@ -637,6 +735,11 @@ export interface ToolStepEnvelope {
   toolName: string;
   input: unknown;
   ctx: ToolStepCtx;
+  /**
+   * The only tool names this call may invoke — the turn's persona allow-list (intersected with the
+   * agent's). Checked by `ToolRegistry.invoke` on the worker. Absent → no such check.
+   */
+  allowedTools?: string[];
   /** Applied INSIDE the handler (`withToolTimeout`) — never as a durable step `timeoutMs`. */
   timeoutMs?: number;
   /**

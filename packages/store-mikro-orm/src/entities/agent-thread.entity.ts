@@ -16,6 +16,8 @@ export class AgentThread {
   defaultAgent?: string | null;
   /** The model every turn on this thread runs on unless the send names one; `null` → default. */
   model?: string | null;
+  /** The persona a send on this thread runs under when it names none; `null` → the agent's default. */
+  persona?: string | null;
   /** Why the thread's message queue stopped draining; `null` → it drains. */
   queuePause?: QueuePause | null;
   createdAt!: Date;
@@ -44,6 +46,7 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
       activeStreamId: { type: 'string', nullable: true, fieldName: 'active_stream_id', ...str },
       defaultAgent: { type: 'string', nullable: true, fieldName: 'default_agent', ...str },
       model: { type: 'string', nullable: true, ...str },
+      persona: { type: 'string', nullable: true, ...str },
       queuePause: { type: 'json', nullable: true, fieldName: 'queue_pause' },
       createdAt: { type: 'datetime', fieldName: 'created_at' },
       updatedAt: { type: 'datetime', fieldName: 'updated_at' },

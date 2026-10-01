@@ -8,6 +8,8 @@ export interface AgentRunStarted {
   actorId: string;
   /** Which agent is handling the run. */
   agentName?: string;
+  /** The persona of that agent the run is under, when it is under one. */
+  persona?: string;
 }
 export interface AgentMessageEvent {
   runId: string;

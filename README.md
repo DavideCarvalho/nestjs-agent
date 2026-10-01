@@ -562,6 +562,61 @@ AgentModule.forFeature([
 Target an agent per request with `{ "agent": "ops-orchestrator" }` in the chat body. Each agent
 gets its own system prompt, model, and tool allow-list (intersected with the persona's).
 
+## Personas (variants of one agent)
+
+A persona is a named variant of ONE agent: its own prompt and, optionally, a narrower tool
+allow-list. Everything else — the model, the access rules, the handoffs, the history window — stays
+the agent's. A variant that needs any of those to differ is another `@Agent`, not a persona.
+
+```ts
+@Agent({
+  name: 'assistant',
+  defaultPersona: 'general',
+  personas: [
+    { id: 'general', label: 'General' },
+    { id: 'sql', label: 'SQL focused', description: 'Writes the query first',
+      systemPrompt: (ctx) => `${ctx.basePrompt}\nWrite the query before explaining it.` },
+    { id: 'read-only', label: 'Read only', allowedTools: ['executeSql', 'renderResult'] },
+  ],
+})
+export class AssistantAgent {
+  constructor(private readonly schema: SchemaService) {}
+
+  @SystemPrompt()
+  prompt(ctx: PromptContext) {
+    // `ctx.persona` is here too — a persona prompt that needs DI branches on it instead.
+    return buildPrompt(ctx.persona?.id ?? 'general', this.schema);
+  }
+}
+```
+
+- **Picking one.** `POST <base>/chat { persona: 'sql' }` (`useAgentChat({ persona })`, AG-UI
+  `forwardedProps.persona`). A persona a send NAMES is pinned on the thread (`thread.persona`); a send
+  that names none runs under the thread's pin, else `defaultPersona`, else none. `PATCH
+  <base>/threads/:id { persona }` pins or clears (`null`) it. An id the agent does not declare is
+  `400 persona_not_found`.
+- **The prompt.** A flat `systemPrompt` stands in for the agent's base prompt; a builder gets that base
+  as `ctx.basePrompt` and can wrap it. Omit it and the base prompt applies, with `ctx.persona` set.
+  `@SystemPromptContributor()` sections follow either way.
+- **The tools.** `allowedTools` narrows what is OFFERED and what may be INVOKED, after the agent's
+  allow-list, `enabled`, the roles policy and `canUse` — it never widens. A tool, a handoff included,
+  that the model names anyway fails as forbidden. Tools see it as `ctx.persona`.
+- **Provenance.** Every message the turn writes records `persona`; `GET <base>/agents` lists each
+  agent's `personas` (`{ id, label, description? }`) and `defaultPersona` for a picker
+  (`useAgents().personasOf(agent)`), and `useAgentChat().threadPersona` is the thread's pin.
+- **Durability.** The service resolves the persona before the run starts, so it is part of the run's
+  input (and of a queued message, which starts under the persona it was sent with). The loop resolves
+  its definition once, in a `persona:resolve` checkpoint, and every replay reads that back: a run
+  parked on an approval finishes on the prompt and allow-list it started with, even after the
+  persona was edited or removed. A run that names no persona spends no checkpoint on one — which is
+  every run started before personas existed, so those replay unchanged after the upgrade.
+- **Folding agents into personas.** `aliases: ['sql-focused']` on a persona makes the old agent name
+  resolve to this agent + persona: a stale client's `{ agent: 'sql-focused' }`, a thread whose
+  `defaultAgent` is the old name, a queued message, and a durable run journaled under it all keep
+  answering — no data migration. Old rows keep the `agentName` they were written with.
+
+No `personas` → none of this happens, and a turn is byte-identical to one before the feature.
+
 ## Authorization
 
 A tool declares **one** of two gates — `roles` or `ability`:

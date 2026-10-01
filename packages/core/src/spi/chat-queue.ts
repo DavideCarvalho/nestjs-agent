@@ -36,6 +36,8 @@ export interface QueuedMessage {
   content: string;
   attachments?: MessageAttachment[];
   agentName?: string;
+  /** The persona the send resolved (explicit, the thread's, or the agent's default) — what it starts under. */
+  persona?: string;
   model?: string;
   pageContext?: PageContext;
   /**
@@ -53,6 +55,7 @@ export interface QueuedMessageView {
   content: string;
   attachments?: MessageAttachment[];
   agentName?: string;
+  persona?: string;
   model?: string;
   interrupt?: boolean;
   createdAt: string;
@@ -75,6 +78,7 @@ export interface EnqueueMessageInput {
   content: string;
   attachments?: MessageAttachment[];
   agentName?: string;
+  persona?: string;
   model?: string;
   pageContext?: PageContext;
   interrupt?: boolean;
@@ -186,6 +190,7 @@ export function queuedMessageView(message: QueuedMessage): QueuedMessageView {
       ? { attachments: message.attachments }
       : {}),
     ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),
+    ...(message.persona !== undefined ? { persona: message.persona } : {}),
     ...(message.model !== undefined ? { model: message.model } : {}),
     ...(message.interrupt === true ? { interrupt: true } : {}),
     createdAt: message.createdAt,

@@ -370,6 +370,7 @@ message may carry, per step:
 | `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
 | `metadata?: object` | spread into `message.metadata` under the library's own keys (`usage`, `feedback`, `createdAt` win) — what `message-metadata` frames streamed |
 | `feedback?: { value: 'up' \| 'down', comment?, updatedAt }` | `message.metadata.feedback` (on a merged turn, the last row's) — what `useMessageFeedback` shows |
+| `agentName?: string`, `persona?: string` | `message.metadata.agentName` / `.persona` (on a merged turn, the last row's) — which agent, and which of its personas, answered |
 
 A runner serving these routes should persist the same values it streamed, so a reload shows what
 the live stream did.
@@ -410,13 +411,14 @@ transcript until it runs: the turn it starts appends it as its user message.
 away; `interrupting` only for an interrupt. **A queued message's run id is its own `messageId`** —
 a client can name the run before it starts.
 
-Everything a send carries (`agent`, `model`, `attachments`, `pageContext`) is resolved and checked
+Everything a send carries (`agent`, `persona`, `model`, `attachments`, `pageContext`) is resolved and checked
 when it is queued (`400`/`403`/`429` then, not later), and stored with the message; the actor is the
 one who queued it. `regenerate` is refused with `409 { code: 'run_active' }` while a turn runs — it
 rewinds the thread under the running turn.
 
-A `QueuedMessageView` is `{ id, content, attachments?: MessageAttachment[], agentName?, model?,
-interrupt?: true, createdAt, updatedAt }`. A `QueuePause` is `{ reason: 'run_failed' | 'cancelled' |
+A `QueuedMessageView` is `{ id, content, attachments?: MessageAttachment[], agentName?, persona?,
+model?, interrupt?: true, createdAt, updatedAt }` — `persona` is the one the send resolved (named,
+pinned on the thread, or the agent's default), and the message starts under it. A `QueuePause` is `{ reason: 'run_failed' | 'cancelled' |
 'quota_exceeded' | 'start_failed', message?, at }`.
 
 ### Draining
@@ -547,12 +549,12 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 
 | Route | Body / query | Answers |
 |---|---|---|
-| `POST <base>/chat` | `{ message, threadId?, agent?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient?, mode?: 'auto' \| 'queue' \| 'interrupt' }` | the SSE stream above — or `202 { queued: true, … }` JSON when the message waits in the thread's queue (see *Message queue*); `400` for a `model` the catalog does not offer as available. `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* (`409 run_active` while a turn runs) |
+| `POST <base>/chat` | `{ message, threadId?, agent?, persona?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient?, mode?: 'auto' \| 'queue' \| 'interrupt' }` | the SSE stream above — or `202 { queued: true, … }` JSON when the message waits in the thread's queue (see *Message queue*); `400` for a `model` the catalog does not offer as available, `400 { code: 'persona_not_found' }` for a `persona` the agent does not declare (see *Personas*). `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* (`409 run_active` while a turn runs) |
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
-| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model? }`) |
+| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model?, persona? }`) |
 | `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`, and `queue?: ChatQueueState` when the server queues); `activeRunId` is the run streaming right now, the one to resume |
-| `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins) |
+| `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null, persona?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins); `persona` pins one of the agent's personas (`null` clears; `400 persona_not_found` for one it does not declare) |
 | `DELETE <base>/threads/:id` | — | `{ ok: true }` |
 | `POST <base>/threads/:id/fork-from/:messageId` | — | `ThreadSummary` of the fork |
 | `POST <base>/threads/:id/promote` | — | `{ ok: true }` |
@@ -569,9 +571,16 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 | `GET <base>/tools?agent=` | — | see *Tool catalog* |
 | `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
 | `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null, locked?: { model, reason? } }` |
-| `GET <base>/agents` | — | `{ name, description, isDefault?, lockedModel? }[]` |
+| `GET <base>/agents` | — | `{ name, description, isDefault?, lockedModel?, personas?: { id, label, description? }[], defaultPersona? }[]` |
 | `GET <base>/quota` | — | `{ windows: [{ period: 'day' \| 'month', usedTokens?, limitTokens?, usedUsd, limitUsd?, resetsAt?, warnAt? }], blocked?: { period, reason? }, warning?: { period, ratio, reason? } }` |
 | `GET <base>/config` | — | `{ attachments: { enabled, upload: 'multipart' \| 'resumable' \| null, maxBytes, allowedContentTypes, maxPerMessage }, models: { enabled }, quota: { enforced }, identity: { anonymous } }` — server facts a client would otherwise repeat; `useAttachments` takes its defaults from it |
+
+**Personas.** A turn's persona is the send's `persona`, else the thread's pinned `persona` (when the
+turn's agent declares it), else the agent's `defaultPersona`, else none. Unlike `model`, a persona a
+send NAMES is pinned on the thread — it is the person's pick for the conversation, and a reopened
+thread's picker reads it back from `persona` on the summary. An `agent` that a persona took over
+(its `aliases`) runs as that persona's agent, under it. Every message a turn writes records the
+persona it ran under.
 
 **Models.** A turn's model is the send's `model`, else the thread's pinned `model`, else the
 server's default. A send's `model` applies to **that turn only**: the server never stores it on the

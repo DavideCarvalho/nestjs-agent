@@ -24,11 +24,13 @@ export interface ThreadPatch {
   defaultAgent?: string | null;
   /** Pin a catalog model on the thread; `null` unpins it. */
   model?: string | null;
+  /** Pin one of the agent's personas on the thread; `null` clears it (the agent's default applies). */
+  persona?: string | null;
 }
 
 /** Starting a turn: the body `POST <base>/chat` takes (see docs/stream-protocol.md). */
 export interface ChatStreamRequest {
-  /** `{ message, threadId?, agent?, model?, attachments?, pageContext?, regenerate?, … }`. */
+  /** `{ message, threadId?, agent?, persona?, model?, attachments?, pageContext?, regenerate?, … }`. */
   body: Record<string, unknown>;
   /** Per-request headers the AI SDK was handed for this send. */
   headers?: Record<string, string>;

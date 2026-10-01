@@ -16,6 +16,7 @@ export type EveryMessageField = Required<Omit<AppendMessageInput, 'threadId' | '
 
 export const EVERY_MESSAGE_FIELD: EveryMessageField = {
   agentName: 'analyst',
+  persona: 'sql-focused',
   runId: 'run-1',
   toolCalls: [{ id: 'call-1', name: 'executeSql', input: { query: 'select 1' }, kind: 'read' }],
   toolResults: [{ id: 'call-1', name: 'executeSql', output: { rows: 1 } }],

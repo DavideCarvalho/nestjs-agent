@@ -37,14 +37,14 @@ const UI_COMPONENT =
   '{ id: string; component: string; props: Record<string, unknown>; version?: number }';
 /** `StoredMessage.feedback` / `POST /agent/messages/:id/feedback` — mirrors `MessageFeedback` in core/src/types.ts. */
 const MESSAGE_FEEDBACK = "{ value: 'up' | 'down'; comment?: string; updatedAt: string }";
-const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; reasoning?: string; reasoningMs?: number; ui?: ${UI_COMPONENT}[]; feedback?: ${MESSAGE_FEEDBACK}; createdAt: string }`;
+const STORED_MESSAGE = `{ id: string; role: 'user' | 'assistant' | 'system'; content: string; agentName?: string; persona?: string; toolCalls?: Record<string, unknown>[]; toolResults?: Record<string, unknown>[]; followUps?: string[]; usage?: ${USAGE}; reasoning?: string; reasoningMs?: number; ui?: ${UI_COMPONENT}[]; feedback?: ${MESSAGE_FEEDBACK}; createdAt: string }`;
 const THREAD_SUMMARY =
   '{ id: string; title: string; transient: boolean; ' +
   'createdAt: string; updatedAt: string; lastMessagePreview?: string; ' +
-  'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null }';
+  'defaultAgent?: string | null; activeRunId?: string | null; model?: string | null; persona?: string | null }';
 const ATTACHMENT = '{ mediaId: string; url: string; contentType: string; name: string }';
 /** Mirrors `ChatQueueState` in core/src/spi/chat-queue.ts. */
-const CHAT_QUEUE_STATE = `{ items: { id: string; content: string; attachments?: ${ATTACHMENT}[]; agentName?: string; model?: string; interrupt?: boolean; createdAt: string; updatedAt: string }[]; paused: { reason: 'run_failed' | 'cancelled' | 'quota_exceeded' | 'start_failed'; message?: string; at: string } | null }`;
+const CHAT_QUEUE_STATE = `{ items: { id: string; content: string; attachments?: ${ATTACHMENT}[]; agentName?: string; persona?: string; model?: string; interrupt?: boolean; createdAt: string; updatedAt: string }[]; paused: { reason: 'run_failed' | 'cancelled' | 'quota_exceeded' | 'start_failed'; message?: string; at: string } | null }`;
 const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAGE}[]; queue?: ${CHAT_QUEUE_STATE} }`;
 /** `GET /agent/config` — mirrors `AgentClientConfig` in nestjs/src/controller/config.controller.ts. */
 const CLIENT_CONFIG =
@@ -63,7 +63,8 @@ const MODEL_CATALOG_VIEW =
   'unavailableReason?: string; contextWindow?: number }[] }[]; locked?: { model: string; reason?: string } }';
 /** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
 const AGENT_CATALOG_ENTRY =
-  '{ name: string; description: string; isDefault?: boolean; lockedModel?: string }';
+  '{ name: string; description: string; isDefault?: boolean; lockedModel?: string; ' +
+  'personas?: { id: string; label: string; description?: string }[]; defaultPersona?: string }';
 
 const TOOL_RESULT_FIELD = '{ path: string; label: string; unit?: string }';
 /** Mirrors `ToolResultView` in core/src/tool-presentation.ts. */
@@ -145,7 +146,7 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       `${ns}.threads.rename`,
       {
         query: null,
-        body: '{ title?: string; defaultAgent?: string | null; model?: string | null }',
+        body: '{ title?: string; defaultAgent?: string | null; model?: string | null; persona?: string | null }',
         response: '{ ok: boolean }',
       },
       [{ name: 'id', source: 'path' }],

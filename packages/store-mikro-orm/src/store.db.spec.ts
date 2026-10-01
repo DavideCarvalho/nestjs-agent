@@ -575,6 +575,7 @@ describe('MikroOrmAgentStore — a thread patch a client reads back', () => {
     title: 'Renamed',
     defaultAgent: 'researcher',
     model: 'gpt-fast',
+    persona: 'sql-focused',
   };
 
   it('returns every patched field from getThread', async () => {
@@ -611,6 +612,33 @@ describe('MikroOrmAgentStore — a thread patch a client reads back', () => {
     await store.updateThread(thread.id, { model: null });
     expect(await store.modelForThread(thread.id)).toBeNull();
     expect(await store.modelForThread('missing')).toBeNull();
+  });
+
+  it('pins, reads, clears and forks the thread persona', async () => {
+    const created = await store.createThread({ actor: { id: 'actor-persona' }, persona: 'sql' });
+    expect(await store.personaForThread(created.id)).toBe('sql');
+    expect(created.persona).toBe('sql');
+
+    const thread = await store.createThread({ actor: { id: 'actor-persona' } });
+    expect(await store.personaForThread(thread.id)).toBeNull();
+    expect((await store.getThread(thread.id))?.persona).toBeNull();
+
+    await store.updateThread(thread.id, { persona: 'read-only' });
+    expect(await store.personaForThread(thread.id)).toBe('read-only');
+    expect((await store.getThread(thread.id))?.persona).toBe('read-only');
+    const answer = await store.appendMessage({
+      threadId: thread.id,
+      role: 'assistant',
+      content: 'a',
+      persona: 'read-only',
+    });
+    const fork = await store.forkThread(thread.id, answer.id);
+    expect(fork.persona).toBe('read-only');
+    expect((await store.getThread(fork.id))?.messages[0]?.persona).toBe('read-only');
+
+    await store.updateThread(thread.id, { persona: null });
+    expect(await store.personaForThread(thread.id)).toBeNull();
+    expect(await store.personaForThread('missing')).toBeNull();
   });
 
   it('reads the default agent without materializing the thread', async () => {

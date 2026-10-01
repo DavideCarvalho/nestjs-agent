@@ -34,6 +34,8 @@ export interface AiToolCtx {
   idempotencyKey?: string;
   /** The name of the agent running this turn — provenance a tool can scope on (e.g. capability sets). */
   agentName?: string;
+  /** The persona of {@link agentName} the turn runs under, when it runs under one. */
+  persona?: string;
   pageContext?: PageContext;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;

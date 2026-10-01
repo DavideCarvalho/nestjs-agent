@@ -1,5 +1,6 @@
 import {
   AGENT_ATTACHMENT_STAGING,
+  AGENT_DEPS_FACTORY,
   AGENT_OPTIONS,
   AGENT_QUOTA_PROVIDER,
   AGENT_SINK,
@@ -23,8 +24,10 @@ import {
   queuedMessageView,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, NotImplementedException, Optional } from '@nestjs/common';
+import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { utcDay } from '../agent-deps.js';
 import type { AgentModuleOptions } from '../agent.options.js';
+import { threadPersona } from '../thread-persona.js';
 
 /** How the run that held a thread ended. */
 export type QueueSettleOutcome = 'completed' | 'failed' | 'cancelled';
@@ -92,6 +95,11 @@ export class ChatQueueService {
     @Optional()
     @Inject(AGENT_ATTACHMENT_STAGING)
     private readonly staging?: AttachmentStagingStore,
+    // Optional: a queue built outside the module (a test, a host's own wiring) resolves no persona
+    // for a message that did not carry one, which is how such a message always started.
+    @Optional()
+    @Inject(AGENT_DEPS_FACTORY)
+    private readonly deps?: AgentDepsFactory,
   ) {}
 
   /** Whether the bound store can hold a queue. Without one, a busy thread is not queued. */
@@ -401,16 +409,47 @@ export class ChatQueueService {
    */
   private async inputFor(message: QueuedMessage): Promise<AgentRunInput> {
     const attachments = await this.freshAttachments(message.actor, message.attachments ?? []);
+    const { agentName, persona } = await this.targetFor(message);
     return {
       threadId: message.threadId,
       actor: message.actor,
       userText: message.content,
       day: utcDay(),
-      ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),
+      ...(agentName !== undefined ? { agentName } : {}),
+      ...(persona !== undefined ? { persona } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(message.pageContext !== undefined ? { pageContext: message.pageContext } : {}),
       ...(message.model !== undefined ? { model: message.model } : {}),
     };
+  }
+
+  /**
+   * The agent and persona a queued message starts as. A message carries the persona its send
+   * resolved; one that carries none — queued before personas existed, or by a host that sets none —
+   * resolves it now, exactly as a send would: an agent name a persona took over, then the thread's
+   * pinned persona, then the agent's default. Never refused here: nobody is waiting on a 400.
+   */
+  private async targetFor(
+    message: QueuedMessage,
+  ): Promise<{ agentName?: string; persona?: string }> {
+    const deps = this.deps;
+    if (message.persona !== undefined || deps === undefined || message.agentName === undefined) {
+      return {
+        ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),
+        ...(message.persona !== undefined ? { persona: message.persona } : {}),
+      };
+    }
+    const target = deps.resolveAgent(message.agentName);
+    const hasPersonas = deps.personaCatalog(target.agentName).length > 0;
+    const persona =
+      target.persona ??
+      (hasPersonas
+        ? deps.resolvePersona({
+            agentName: target.agentName,
+            threadPersona: await threadPersona(this.store, message.threadId),
+          })
+        : undefined);
+    return { agentName: target.agentName, ...(persona !== undefined ? { persona } : {}) };
   }
 
   private async freshAttachments(

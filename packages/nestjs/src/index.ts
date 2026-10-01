@@ -19,6 +19,7 @@ export {
   type ThreadDefaultAgentReader,
   type ThreadModelReader,
 } from './agent.service.js';
+export { type ThreadPersonaReader, threadPersona } from './thread-persona.js';
 export {
   AttachmentsController,
   ATTACHMENT_PAGE_SIZE,

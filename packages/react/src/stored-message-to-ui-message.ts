@@ -195,6 +195,8 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
     ...message.metadata,
     ...(message.feedback !== undefined ? { feedback: message.feedback } : {}),
     ...(message.createdAt ? { createdAt: message.createdAt } : {}),
+    ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),
+    ...(message.persona !== undefined ? { persona: message.persona } : {}),
     ...(message.usage !== undefined
       ? {
           usage: {

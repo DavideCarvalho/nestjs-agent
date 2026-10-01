@@ -28,6 +28,11 @@ interface ChatBody {
   /** Name of the agent to run (orchestrator or a sub-agent). Defaults to the module's default. */
   agent?: string;
   /**
+   * One of the agent's personas (`@Agent({ personas })`) to answer as — pinned on the thread. 400
+   * `persona_not_found` when the agent declares none by that id.
+   */
+  persona?: string;
+  /**
    * Files attached to this message (image/PDF), named by the `mediaId` `POST /agent/attachments`
    * (or the host's own upload) returned. Any other field sent alongside it is ignored.
    */
@@ -120,6 +125,9 @@ export class ChatController {
       message: body.message,
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
+      ...(typeof body.persona === 'string' && body.persona.length > 0
+        ? { personaId: body.persona }
+        : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
       ...(body.regenerate === true ? { regenerate: true } : {}),
