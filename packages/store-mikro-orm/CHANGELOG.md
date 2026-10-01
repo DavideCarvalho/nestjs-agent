@@ -1,5 +1,17 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.28.1
+
+### Patch Changes
+
+- [#272](https://github.com/DavideCarvalho/nestjs-agent/pull/272) [`dbd5592`](https://github.com/DavideCarvalho/nestjs-agent/commit/dbd55926dbda26d300d4a913173e7ad1182f4afc) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `referencedMediaIds` (and so `AgentService.collectableAttachments` and the media-backed
+  "referenced by one of your messages" access fallback) now counts a message WAITING IN A THREAD'S
+  QUEUE as a reference to its attachments, on the in-memory, Drizzle and MikroORM stores. Before, a
+  sweep could collect the files of a queued (or paused-queue) message before it ran, failing the turn
+  it was waiting to start. Removing the queued message, or editing its attachments away, frees them
+  again. No schema change: it reads `agent_queued_message.attachments`. Parity with
+  `@adonis-agora/agent` 0.58.
+
 ## 0.28.0
 
 ### Minor Changes
