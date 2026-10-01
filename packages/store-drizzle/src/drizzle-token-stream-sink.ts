@@ -5,28 +5,40 @@ import {
   type StreamFrameTable,
 } from '@dudousxd/nestjs-agent-core';
 import { and, asc, eq, gt, inArray, lt, max, sql } from 'drizzle-orm';
-import { type AgentDrizzleDb, agentStreamFrame } from './schema.js';
+import {
+  type AgentDialect,
+  type AgentDrizzleDb,
+  type AgentSqliteDb,
+  type AgentTables,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+  isUniqueViolation,
+  runSql,
+} from './dialect.js';
+import { agentStreamFrame } from './schema.js';
 
-/** Did this insert lose the race for a `(run_id, seq)`? SQLite's own constraint code, nothing else. */
-function isUniqueViolation(error: unknown): boolean {
-  for (let current = error; current !== null && typeof current === 'object'; ) {
-    const code = (current as { code?: unknown }).code;
-    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-/** {@link StreamFrameTable} over `agent_stream_frame`, through a Drizzle SQLite handle. */
+/** {@link StreamFrameTable} over `agent_stream_frame`, through a Drizzle handle on any dialect. */
 export class DrizzleStreamFrameTable implements StreamFrameTable {
-  constructor(private readonly db: AgentDrizzleDb) {}
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
+  constructor(db: AgentDrizzleDb) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   async append(
     runId: string,
     row: { frame: string | null; error: string | null; createdAt: number },
   ): Promise<void> {
     // The next number and the insert are one statement: the (run_id, seq) key settles a race.
-    await this.db.run(
+    // MySQL takes an INSERT … SELECT from the table it inserts into (it materialises the read).
+    await runSql(
+      this.db,
+      this.dialect,
       sql`INSERT INTO agent_stream_frame (run_id, seq, frame, error, created_at)
           SELECT ${runId}, COALESCE(MAX(seq), 0) + 1, ${row.frame}, ${row.error}, ${row.createdAt}
           FROM agent_stream_frame WHERE run_id = ${runId}`,
@@ -36,36 +48,38 @@ export class DrizzleStreamFrameTable implements StreamFrameTable {
   async read(runId: string, after: number, limit: number): Promise<StreamFrameRow[]> {
     return this.db
       .select({
-        seq: agentStreamFrame.seq,
-        frame: agentStreamFrame.frame,
-        error: agentStreamFrame.error,
+        seq: this.t.agentStreamFrame.seq,
+        frame: this.t.agentStreamFrame.frame,
+        error: this.t.agentStreamFrame.error,
       })
-      .from(agentStreamFrame)
-      .where(and(eq(agentStreamFrame.runId, runId), gt(agentStreamFrame.seq, after)))
-      .orderBy(asc(agentStreamFrame.seq))
+      .from(this.t.agentStreamFrame)
+      .where(and(eq(this.t.agentStreamFrame.runId, runId), gt(this.t.agentStreamFrame.seq, after)))
+      .orderBy(asc(this.t.agentStreamFrame.seq))
       .limit(limit);
   }
 
   async has(runId: string): Promise<boolean> {
     const rows = await this.db
-      .select({ seq: agentStreamFrame.seq })
-      .from(agentStreamFrame)
-      .where(eq(agentStreamFrame.runId, runId))
+      .select({ seq: this.t.agentStreamFrame.seq })
+      .from(this.t.agentStreamFrame)
+      .where(eq(this.t.agentStreamFrame.runId, runId))
       .limit(1);
     return rows.length > 0;
   }
 
   async remove(runIds: readonly string[]): Promise<void> {
     if (runIds.length === 0) return;
-    await this.db.delete(agentStreamFrame).where(inArray(agentStreamFrame.runId, [...runIds]));
+    await this.db
+      .delete(this.t.agentStreamFrame)
+      .where(inArray(this.t.agentStreamFrame.runId, [...runIds]));
   }
 
   async lapsedRuns(cutoff: number): Promise<string[]> {
     const rows = await this.db
-      .select({ runId: agentStreamFrame.runId })
-      .from(agentStreamFrame)
-      .groupBy(agentStreamFrame.runId)
-      .having(lt(max(agentStreamFrame.createdAt), cutoff));
+      .select({ runId: this.t.agentStreamFrame.runId })
+      .from(this.t.agentStreamFrame)
+      .groupBy(this.t.agentStreamFrame.runId)
+      .having(lt(max(this.t.agentStreamFrame.createdAt), cutoff));
     return rows.map((row) => row.runId);
   }
 

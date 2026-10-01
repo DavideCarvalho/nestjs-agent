@@ -48,6 +48,7 @@ import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
+import { MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
 
 /** No error code recorded on a failed run (the caller didn't classify it). Groups those together. */
 const UNCLASSIFIED_ERROR_CODE = 'unknown';
@@ -750,7 +751,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const messages = await em.find(
       AgentMessage,
       { thread },
-      { orderBy: { createdAt: 'desc', id: 'desc' }, limit: query.messageLimit },
+      { orderBy: MESSAGE_ORDER_NEWEST_FIRST, limit: query.messageLimit },
     );
     const toolCallCounts = await this.toolCallCountsByMessage(
       em,

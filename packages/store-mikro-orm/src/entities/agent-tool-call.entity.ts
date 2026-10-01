@@ -1,6 +1,7 @@
 import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentMessage } from './agent-message.entity';
+import { DATETIME, LongTextType } from './column-types';
 
 /** A tool call requested during an assistant turn. The pk is the model-supplied `toolCallId`. */
 export class AgentToolCall {
@@ -39,6 +40,12 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
     class: AgentToolCall,
     tableName: 'agent_tool_call',
     repository: () => AgentToolCallRepository,
+    // Declared, not left to the ORM: MikroORM indexes a many-to-one for you on MySQL and SQLite but
+    // NOT on Postgres, where every message-scoped read here (the turn reader's IN (…), the approval
+    // read, `truncateFrom`'s delete, the cascade from agent_message) then scanned the whole table.
+    // Unnamed, so it takes the name the ORM already gave its own index elsewhere — a MySQL or SQLite
+    // schema sees the index it has, and only Postgres gains one.
+    indexes: [{ properties: ['message'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },
       message: {
@@ -55,12 +62,12 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
       status: { type: 'string', ...str },
       executedByRef: { type: 'string', nullable: true, fieldName: 'executed_by_ref', ...str },
       executionMs: { type: 'integer', nullable: true, fieldName: 'execution_ms' },
-      error: { type: 'text', nullable: true, ...str },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
-      executedAt: { type: 'datetime', nullable: true, fieldName: 'executed_at' },
+      error: { type: LongTextType, nullable: true, ...str },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
+      executedAt: { ...DATETIME, nullable: true, fieldName: 'executed_at' },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
       approver: { type: 'string', nullable: true, ...str },
-      expiresAt: { type: 'datetime', nullable: true, fieldName: 'expires_at' },
+      expiresAt: { ...DATETIME, nullable: true, fieldName: 'expires_at' },
       remember: { type: 'boolean', nullable: true },
       decidedVia: { type: 'string', nullable: true, fieldName: 'decided_via', ...str },
     },

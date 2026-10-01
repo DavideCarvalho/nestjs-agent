@@ -1,5 +1,6 @@
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
+import { DATETIME, LongTextType, identityCollation } from './column-types';
 
 /**
  * A run's lifecycle status. Not part of the core SPI (that surfaces `string`) — internal only.
@@ -46,6 +47,7 @@ export class AgentRunRepository extends EntityRepository<AgentRun> {}
 /** Builds the `agent_run` schema. `thread` cascades on delete (§5). */
 export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
   const str = collation !== undefined ? { collation } : {};
+  const identity = identityCollation(collation);
   return new EntitySchema<AgentRun>({
     class: AgentRun,
     tableName: 'agent_run',
@@ -60,15 +62,15 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
         fieldName: 'thread_id',
         ...str,
       },
-      actorRef: { type: 'string', fieldName: 'actor_ref', ...str },
+      actorRef: { type: 'string', fieldName: 'actor_ref', ...identity },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       status: { type: 'string', ...str },
       durationMs: { type: 'integer', nullable: true, fieldName: 'duration_ms' },
       errorCode: { type: 'string', nullable: true, fieldName: 'error_code', ...str },
-      errorMessage: { type: 'text', nullable: true, fieldName: 'error_message', ...str },
+      errorMessage: { type: LongTextType, nullable: true, fieldName: 'error_message', ...str },
       retries: { type: 'integer', default: 0 },
-      startedAt: { type: 'datetime', fieldName: 'started_at' },
-      settledAt: { type: 'datetime', nullable: true, fieldName: 'settled_at' },
+      startedAt: { ...DATETIME, fieldName: 'started_at' },
+      settledAt: { ...DATETIME, nullable: true, fieldName: 'settled_at' },
       promptHash: { type: 'string', nullable: true, fieldName: 'prompt_hash', ...str },
       parentRunId: { type: 'string', nullable: true, fieldName: 'parent_run_id', ...str },
     },

@@ -1,6 +1,7 @@
 import type { Actor, MessageAttachment, PageContext } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
+import { DATETIME, LongTextType } from './column-types';
 
 /**
  * A message sent while a turn was running on its thread, waiting to run after it — see the core
@@ -50,7 +51,7 @@ export function agentQueuedMessageSchema(collation?: string): EntitySchema<Agent
         ...str,
       },
       actor: { type: 'json' },
-      content: { type: 'text', ...str },
+      content: { type: LongTextType, ...str },
       attachments: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       persona: { type: 'string', nullable: true, ...str },
@@ -58,8 +59,8 @@ export function agentQueuedMessageSchema(collation?: string): EntitySchema<Agent
       pageContext: { type: 'json', nullable: true, fieldName: 'page_context' },
       interrupt: { type: 'boolean', default: false },
       position: { type: 'integer' },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
-      updatedAt: { type: 'datetime', fieldName: 'updated_at' },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
+      updatedAt: { ...DATETIME, fieldName: 'updated_at' },
     },
   });
 }

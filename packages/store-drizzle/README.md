@@ -16,15 +16,33 @@ pnpm add @dudousxd/nestjs-agent-store-drizzle drizzle-orm
 ## Use
 
 The host app owns the connection and passes in an already-opened Drizzle handle — this module never
-opens one itself. Any SQLite-dialect driver works (better-sqlite3, libsql, D1, …).
+opens one itself. **SQLite, Postgres and MySQL** all work — CI runs every store suite on
+better-sqlite3, node-postgres (Postgres 16) and mysql2 (MySQL 8.4), and the other Drizzle drivers of
+each dialect speak the same query builder. Build the handle with the schema object for your dialect;
+every store reads the dialect off the handle.
 
 ```ts
+// SQLite
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { DrizzleAgentStoreModule, agentSchema, ensureAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
-
+import { agentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
 const db = drizzle(new Database('app.db'), { schema: agentSchema });
-await ensureAgentSchema(db); // idempotent CREATE TABLE IF NOT EXISTS — or run your own migrations
+
+// Postgres
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { pgAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
+const db = drizzle(pool, { schema: pgAgentSchema });
+
+// MySQL (8.0+)
+import { drizzle } from 'drizzle-orm/mysql2';
+import { mysqlAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
+const db = drizzle(pool, { schema: mysqlAgentSchema, mode: 'default' });
+```
+
+```ts
+import { DrizzleAgentStoreModule, ensureAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
+
+await ensureAgentSchema(db); // idempotent: creates what is missing — or run your own migrations
 
 @Module({
   imports: [
@@ -35,10 +53,31 @@ await ensureAgentSchema(db); // idempotent CREATE TABLE IF NOT EXISTS — or run
 export class AppModule {}
 ```
 
-The package ships the `agentSchema` (Drizzle tables), `ensureAgentSchema` (a non-destructive
-DDL helper for a quick start), `DrizzleAgentStore`, `DrizzleGovernanceQueries`, and
-`DrizzleRagIngestionLog`. For production,
-prefer your normal drizzle-kit migrations over the `ensureAgentSchema` helper.
+The package ships the tables for each dialect (`agentSchema` · `pgAgentSchema` · `mysqlAgentSchema`
+— same table, column and property names), `ensureAgentSchema` (a non-destructive DDL helper),
+`DrizzleAgentStore`, `DrizzleGovernanceQueries`, and `DrizzleRagIngestionLog`. For production, prefer
+your normal drizzle-kit migrations over the `ensureAgentSchema` helper: point drizzle-kit at the
+schema object for your dialect.
+
+### What each dialect stores
+
+| | SQLite | Postgres | MySQL |
+|---|---|---|---|
+| JSON columns | `text` (JSON) | `jsonb` | `json` |
+| timestamps | epoch-ms `integer` | `timestamptz(3)` | `datetime(3)`, UTC |
+| long text (content, reasoning, errors) | `text` | `text` | `longtext` |
+| keys and labels | `text` | `text` | `varchar(255)` |
+| prices / costs | `real` | `double precision` | `double` |
+| id / actor comparison | exact | exact | exact (`utf8mb4_bin`) |
+
+`ensureAgentSchema` renders its DDL from these schema objects, creates missing tables, columns and
+indexes, and never drops or alters anything. On Postgres and MySQL it holds a cross-replica lock
+(`pg_advisory_xact_lock` / `get_lock`) for the duration, so replicas booting an empty database at
+once do not race their `CREATE TABLE`s.
+
+Messages carry a per-thread `seq`, assigned on append, which is what orders a transcript — two
+messages of one turn routinely share a timestamp. A row written before the column existed has none
+and sorts first, by `created_at`, as before.
 
 ## The read a turn makes
 
@@ -56,7 +95,7 @@ a client rendering a transcript.
 ## Memory
 
 `DrizzleMemoryProvider` is a `MemoryProvider` over `agent_memory`, a table `ensureAgentSchema`
-creates alongside the other six.
+creates alongside the other agent tables.
 
 ```ts
 import { DrizzleAgentStoreModule, DrizzleMemoryProvider } from '@dudousxd/nestjs-agent-store-drizzle';

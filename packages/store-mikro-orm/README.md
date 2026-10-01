@@ -59,6 +59,27 @@ alter table agent_tool_call add column remember boolean null;
 alter table agent_tool_call add column decided_via varchar(255) null;
 ```
 
+Upgrading to the release that ran this store on real Postgres and MySQL (rather than SQLite only):
+
+- `agent_message` gains a nullable `seq` (integer) — each message's place in its thread, assigned on
+  append, which is now what orders a transcript. `created_at` could not: two messages of one turn
+  share a timestamp, and the random uuid that broke the tie read them back swapped. Rows from before
+  have no `seq` and sort first, in `created_at` order, as before.
+- `agent_tool_call` declares its `message_id` index. MikroORM indexes a many-to-one for you on MySQL
+  and SQLite — so nothing changes there — but not on Postgres, which gains the index.
+- **MySQL only:** every timestamp becomes `datetime(6)` (MikroORM's bare `datetime` is whole seconds);
+  the long text columns (`content`, `reasoning`, errors, memory text, stream frames) become `longtext`
+  (`text` stops at 64 KB and the insert fails past it); and the identity columns (`actor_ref`,
+  `tenant_ref`, `agent_memory.scope`/`origin_actor_ref`) take the binary collation of your charset
+  (`utf8mb4_bin`), because under `utf8mb4_unicode_ci` two actors whose refs differed only in case
+  listed each other's threads. Postgres and SQLite already behaved this way and see no change.
+
+`ensureAgentSchema` applies all of it on the first boot after the upgrade. On MySQL those `modify`
+statements rebuild `agent_message`, `agent_tool_call` and friends (a table copy each): on a large
+deployment, run them in a maintenance window instead: boot with
+`MikroOrmAgentStoreModule.forFeature({ autoSchema: false })`, and call `ensureAgentSchema(orm)` from a
+one-off script when it suits you — it is the same heal, run once.
+
 ## The read a turn makes
 
 The agent loop does not call `getThread` to build a prompt. This store implements the core SPI's

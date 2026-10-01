@@ -74,23 +74,20 @@ export async function ensureAgentSchema(orm: MikroORM): Promise<void> {
   const connection = em.getConnection();
   const dialect = detectDialect(em);
 
-  await connection.execute(createMarkerTableSql());
+  await createMarkerTable(em, dialect);
   const expected = computeExpectedFingerprint(orm);
   if ((await readStoredFingerprint(connection)) === expected) {
     return;
   }
 
-  await acquireSchemaLock(connection, dialect);
-  try {
+  await withSchemaLock(em, dialect, async () => {
     // Re-read under the lock: another replica may have healed while we waited.
     if ((await readStoredFingerprint(connection)) === expected) {
       return;
     }
     await healAgentSchema(em, dialect);
     await writeFingerprint(connection, dialect, expected);
-  } finally {
-    await releaseSchemaLock(connection, dialect);
-  }
+  });
 }
 
 /**
@@ -295,6 +292,23 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * `create table if not exists` the marker, outside the lock so a steady-state boot stays one read.
+ * Postgres does not make that statement race-safe: two replicas booting an empty database at once
+ * both pass the existence check and the loser fails on `pg_type_typname_nsp_index`. So a failure is
+ * retried once under the schema lock, by which time the winner's table is there and the guard holds.
+ */
+async function createMarkerTable(em: EntityManager, dialect: SqlDialect): Promise<void> {
+  const connection = em.getConnection();
+  try {
+    await connection.execute(createMarkerTableSql());
+  } catch {
+    await withSchemaLock(em, dialect, async () => {
+      await connection.execute(createMarkerTableSql());
+    });
+  }
+}
+
 function createMarkerTableSql(): string {
   return `create table if not exists ${MARKER_TABLE} (id varchar(32) not null primary key, fingerprint varchar(64) not null, applied_at bigint not null)`;
 }
@@ -319,29 +333,52 @@ async function writeFingerprint(
   await connection.execute(upsert, [MARKER_ROW_ID, fingerprint, Date.now()]);
 }
 
-async function acquireSchemaLock(connection: Connection, dialect: SqlDialect): Promise<void> {
-  try {
-    if (dialect === 'mysql') {
-      await connection.execute(`select get_lock('${SCHEMA_LOCK_NAME}', 10)`);
-    } else if (dialect === 'postgres') {
-      await connection.execute(`select pg_advisory_lock(hashtext('${SCHEMA_LOCK_NAME}'))`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `[nestjs-agent-store-mikro-orm] could not acquire the agent-schema advisory lock (proceeding without it): ${message}`,
-    );
+/**
+ * Run `work` holding the cross-replica schema lock (Postgres advisory lock, MySQL `get_lock`).
+ *
+ * Both are SESSION locks: whoever takes one must release it on the same connection, or it stays held
+ * by whichever pooled connection took it — and every other replica's next heal then waits on it
+ * forever (`pg_advisory_lock` has no timeout). A plain `connection.execute` borrows any pooled
+ * connection per statement, so the lock is taken and released inside a transaction, which pins one
+ * connection for its whole life; on Postgres it is the transaction-scoped `pg_advisory_xact_lock`,
+ * released by the commit. `work` itself runs OUTSIDE that transaction, on the usual connections: the
+ * heal tolerates a failed non-structural statement, which inside a Postgres transaction would abort
+ * everything after it.
+ */
+async function withSchemaLock(
+  em: EntityManager,
+  dialect: SqlDialect,
+  work: () => Promise<void>,
+): Promise<void> {
+  if (dialect !== 'postgres' && dialect !== 'mysql') {
+    await work();
+    return;
   }
-}
-
-async function releaseSchemaLock(connection: Connection, dialect: SqlDialect): Promise<void> {
-  try {
-    if (dialect === 'mysql') {
-      await connection.execute(`select release_lock('${SCHEMA_LOCK_NAME}')`);
-    } else if (dialect === 'postgres') {
-      await connection.execute(`select pg_advisory_unlock(hashtext('${SCHEMA_LOCK_NAME}'))`);
+  await em.fork().transactional(async (locked) => {
+    const connection = locked.getConnection();
+    const ctx = locked.getTransactionContext();
+    const run = (sql: string) => connection.execute(sql, [], 'all', ctx);
+    try {
+      await run(
+        dialect === 'mysql'
+          ? `select get_lock('${SCHEMA_LOCK_NAME}', 10)`
+          : `select pg_advisory_xact_lock(hashtext('${SCHEMA_LOCK_NAME}'))`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[nestjs-agent-store-mikro-orm] could not acquire the agent-schema advisory lock (proceeding without it): ${message}`,
+      );
+      await work();
+      return;
     }
-  } catch {
-    // best-effort release; a dropped connection frees the lock anyway
-  }
+    try {
+      await work();
+    } finally {
+      if (dialect === 'mysql') {
+        // best-effort: a dropped connection frees the lock anyway
+        await run(`select release_lock('${SCHEMA_LOCK_NAME}')`).catch(() => undefined);
+      }
+    }
+  });
 }

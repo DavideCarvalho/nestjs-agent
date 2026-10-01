@@ -1,6 +1,7 @@
 import type { UsagePurpose } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
+import { DATETIME, identityCollation } from './column-types';
 
 /** A token-usage ledger row, summed per actor per day by {@link MikroOrmAgentStore.quotaToday}. */
 export class AgentTokenUsage {
@@ -28,6 +29,7 @@ export class AgentTokenUsageRepository extends EntityRepository<AgentTokenUsage>
 /** Builds the `agent_token_usage` schema. `thread` cascades on delete (§5). */
 export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTokenUsage> {
   const str = collation !== undefined ? { collation } : {};
+  const identity = identityCollation(collation);
   return new EntitySchema<AgentTokenUsage>({
     class: AgentTokenUsage,
     tableName: 'agent_token_usage',
@@ -44,7 +46,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
         fieldName: 'thread_id',
         ...str,
       },
-      actorRef: { type: 'string', fieldName: 'actor_ref', ...str },
+      actorRef: { type: 'string', fieldName: 'actor_ref', ...identity },
       messageId: { type: 'string', nullable: true, fieldName: 'message_id', ...str },
       modelId: { type: 'string', fieldName: 'model_id', ...str },
       purpose: { type: 'string', ...str },
@@ -53,7 +55,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       cacheWriteTokens: { type: 'integer', nullable: true, fieldName: 'cache_write_tokens' },
       cacheReadTokens: { type: 'integer', nullable: true, fieldName: 'cache_read_tokens' },
       costUsd: { type: 'float', nullable: true, fieldName: 'cost_usd' },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
     },
   });
 }

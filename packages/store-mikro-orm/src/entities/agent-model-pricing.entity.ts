@@ -1,4 +1,5 @@
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { DATETIME } from './column-types';
 
 /** Per-model token pricing, versioned by `effectiveFrom`; `isCurrent` flags the live row. */
 export class AgentModelPricing {
@@ -36,7 +37,7 @@ export function agentModelPricingSchema(collation?: string): EntitySchema<AgentM
         fieldName: 'cache_write_price_per_1m',
       },
       cacheReadPricePer1m: { type: 'float', nullable: true, fieldName: 'cache_read_price_per_1m' },
-      effectiveFrom: { type: 'datetime', fieldName: 'effective_from' },
+      effectiveFrom: { ...DATETIME, fieldName: 'effective_from' },
       isCurrent: { type: 'boolean', fieldName: 'is_current' },
     },
   });

@@ -18,6 +18,27 @@ function check(condition: boolean, message: string, actual?: unknown): void {
   }
 }
 
+/** `value` as JSON with every object's keys sorted, so two equal values always serialize alike. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+}
+
+/**
+ * Deep equality that ignores object key order. A JSON column hands objects back with its own key
+ * order — Postgres `jsonb` and MySQL `JSON` both normalize it — and that is still the same value.
+ */
+function same(actual: unknown, expected: unknown): boolean {
+  return canonical(actual) === canonical(expected);
+}
+
 const ACTOR = { id: 'contract-actor', roles: ['member'], tenantRef: 't1' };
 
 const ATTACHMENT: MessageAttachment = {
@@ -75,18 +96,14 @@ export const CHAT_QUEUE_STORE_CONTRACT: readonly ChatQueueContractCase[] = [
       const [listed] = await store.listQueue(threadId);
       for (const message of [queued, read, listed]) {
         check(message?.threadId === threadId, 'threadId', message?.threadId);
-        check(JSON.stringify(message?.actor) === JSON.stringify(ACTOR), 'actor', message?.actor);
+        check(same(message?.actor, ACTOR), 'actor', message?.actor);
         check(message?.content === 'with everything', 'content', message?.content);
-        check(
-          JSON.stringify(message?.attachments) === JSON.stringify([ATTACHMENT]),
-          'attachments',
-          message?.attachments,
-        );
+        check(same(message?.attachments, [ATTACHMENT]), 'attachments', message?.attachments);
         check(message?.agentName === 'research', 'agentName', message?.agentName);
         check(message?.persona === 'sql-focused', 'persona', message?.persona);
         check(message?.model === 'fast-1', 'model', message?.model);
         check(
-          JSON.stringify(message?.pageContext) === JSON.stringify({ kind: 'invoice', id: 42 }),
+          same(message?.pageContext, { kind: 'invoice', id: 42 }),
           'pageContext',
           message?.pageContext,
         );
@@ -187,7 +204,7 @@ export const CHAT_QUEUE_STORE_CONTRACT: readonly ChatQueueContractCase[] = [
       };
       await store.setQueuePause(threadId, pause);
       const read = await store.queuePause(threadId);
-      check(JSON.stringify(read) === JSON.stringify(pause), 'pause round-trips', read);
+      check(same(read, pause), 'pause round-trips', read);
       await store.setQueuePause(threadId, null);
       check((await store.queuePause(threadId)) === null, 'pause lifted');
     },

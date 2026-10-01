@@ -27,6 +27,7 @@ import {
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import {
+  type SQL,
   and,
   asc,
   desc,
@@ -42,7 +43,16 @@ import {
   sql,
 } from 'drizzle-orm';
 import {
+  type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSqliteDb,
+  type AgentTables,
+  affectedRows,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+} from './dialect.js';
+import {
   type AgentMessageRow,
   type AgentQueuedMessageRow,
   type AgentRunRow,
@@ -63,18 +73,20 @@ import {
 export type { ThreadTurnPage, ThreadTurnQuery };
 
 /** The message columns a model turn reads. `usage`, `follow_ups` and `run_id` are nobody's business here. */
-const TURN_MESSAGE_COLUMNS = {
-  id: agentMessage.id,
-  role: agentMessage.role,
-  content: agentMessage.content,
-  agentName: agentMessage.agentName,
-  toolCalls: agentMessage.toolCalls,
-  toolResults: agentMessage.toolResults,
-  attachments: agentMessage.attachments,
-  createdAt: agentMessage.createdAt,
-};
+function turnMessageColumns(message: AgentTables['agentMessage']) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    agentName: message.agentName,
+    toolCalls: message.toolCalls,
+    toolResults: message.toolResults,
+    attachments: message.attachments,
+    createdAt: message.createdAt,
+  };
+}
 
-type TurnMessageRow = { [K in keyof typeof TURN_MESSAGE_COLUMNS]: AgentMessageRow[K] };
+type TurnMessageRow = { [K in keyof ReturnType<typeof turnMessageColumns>]: AgentMessageRow[K] };
 
 /**
  * {@link AgentStore} backed by Drizzle ORM — a second adapter alongside the MikroORM one, proving
@@ -83,7 +95,15 @@ type TurnMessageRow = { [K in keyof typeof TURN_MESSAGE_COLUMNS]: AgentMessageRo
  * exactly (fork/truncate/quota/active-stream/soft-delete semantics) so the two are interchangeable.
  */
 export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueueStore {
-  constructor(private readonly db: AgentDrizzleDb) {}
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
+  constructor(db: AgentDrizzleDb) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
     const now = new Date();
@@ -102,23 +122,23 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       updatedAt: now,
       deletedAt: null,
     };
-    await this.db.insert(agentThread).values(thread);
+    await this.db.insert(this.t.agentThread).values(thread);
     return this.toSummary(thread);
   }
 
   async getThread(threadId: string): Promise<ThreadDetail | null> {
     const [thread] = await this.db
       .select()
-      .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     if (thread === undefined) {
       return null;
     }
     const messages = await this.db
       .select()
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, threadId))
-      .orderBy(asc(agentMessage.createdAt), asc(agentMessage.id));
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, threadId))
+      .orderBy(...this.messageOrder());
     const last = messages[messages.length - 1];
     const approvals = await this.approvalsFor(messages.map((message) => message.id));
     return {
@@ -147,17 +167,22 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
    */
   async loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null> {
     const [thread] = await this.db
-      .select({ title: agentThread.title, defaultAgent: agentThread.defaultAgent })
-      .from(agentThread)
-      .where(and(eq(agentThread.id, query.threadId), isNull(agentThread.deletedAt)));
+      .select({ title: this.t.agentThread.title, defaultAgent: this.t.agentThread.defaultAgent })
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, query.threadId), isNull(this.t.agentThread.deletedAt)));
     if (thread === undefined) {
       return null;
     }
     const messages = await this.loadTurnWindow(query.threadId, query.messageLimit);
     const [answered] = await this.db
-      .select({ id: agentMessage.id })
-      .from(agentMessage)
-      .where(and(eq(agentMessage.threadId, query.threadId), eq(agentMessage.role, 'assistant')))
+      .select({ id: this.t.agentMessage.id })
+      .from(this.t.agentMessage)
+      .where(
+        and(
+          eq(this.t.agentMessage.threadId, query.threadId),
+          eq(this.t.agentMessage.role, 'assistant'),
+        ),
+      )
       .limit(1);
     return {
       title: thread.title,
@@ -179,10 +204,10 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       return [];
     }
     const window = this.db
-      .select(TURN_MESSAGE_COLUMNS)
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, threadId))
-      .orderBy(desc(agentMessage.createdAt), desc(agentMessage.id));
+      .select(turnMessageColumns(this.t.agentMessage))
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, threadId))
+      .orderBy(...this.messageOrderNewestFirst());
     const rows: TurnMessageRow[] = limit === undefined ? await window : await window.limit(limit);
     return rows.reverse().map((row) => this.toStoredMessage(row));
   }
@@ -190,23 +215,23 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
     const threads = await this.db
       .select()
-      .from(agentThread)
+      .from(this.t.agentThread)
       .where(
         and(
-          eq(agentThread.actorRef, actorRef),
-          eq(agentThread.transient, false),
-          isNull(agentThread.deletedAt),
+          eq(this.t.agentThread.actorRef, actorRef),
+          eq(this.t.agentThread.transient, false),
+          isNull(this.t.agentThread.deletedAt),
         ),
       )
-      .orderBy(desc(agentThread.updatedAt))
+      .orderBy(desc(this.t.agentThread.updatedAt))
       .limit(limit);
     const summaries: ThreadSummary[] = [];
     for (const thread of threads) {
       const [last] = await this.db
         .select()
-        .from(agentMessage)
-        .where(eq(agentMessage.threadId, thread.id))
-        .orderBy(desc(agentMessage.createdAt), desc(agentMessage.id))
+        .from(this.t.agentMessage)
+        .where(eq(this.t.agentMessage.threadId, thread.id))
+        .orderBy(...this.messageOrderNewestFirst())
         .limit(1);
       summaries.push(this.toSummary(thread, last?.content));
     }
@@ -215,21 +240,24 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
 
   async softDeleteThread(threadId: string): Promise<void> {
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ deletedAt: new Date() })
-      .where(eq(agentThread.id, threadId));
+      .where(eq(this.t.agentThread.id, threadId));
   }
 
   async forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
-    const [source] = await this.db.select().from(agentThread).where(eq(agentThread.id, threadId));
+    const [source] = await this.db
+      .select()
+      .from(this.t.agentThread)
+      .where(eq(this.t.agentThread.id, threadId));
     if (source === undefined) {
       throw new Error(`thread ${threadId} not found`);
     }
     const messages = await this.db
       .select()
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, threadId))
-      .orderBy(asc(agentMessage.createdAt), asc(agentMessage.id));
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, threadId))
+      .orderBy(...this.messageOrder());
     const cutoff = messages.findIndex((message) => message.id === fromMessageId);
     const kept = cutoff >= 0 ? messages.slice(0, cutoff + 1) : messages;
     const now = new Date();
@@ -249,11 +277,13 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       updatedAt: now,
       deletedAt: null,
     };
-    await this.db.insert(agentThread).values(fork);
+    await this.db.insert(this.t.agentThread).values(fork);
     if (kept.length > 0) {
-      await this.db.insert(agentMessage).values(
-        kept.map((message) => ({
+      await this.db.insert(this.t.agentMessage).values(
+        kept.map((message, index) => ({
           id: crypto.randomUUID(),
+          // Numbered afresh in the order just read, so the copy reads back in the original's order.
+          seq: index + 1,
           threadId: fork.id,
           role: message.role,
           content: message.content,
@@ -280,29 +310,32 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
 
   async ownerOfThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ actorRef: agentThread.actorRef })
-      .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .select({ actorRef: this.t.agentThread.actorRef })
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     return thread?.actorRef ?? null;
   }
 
   async ownerOfToolCall(toolCallId: string): Promise<string | null> {
     const [row] = await this.db
-      .select({ actorRef: agentThread.actorRef })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
-      .where(eq(agentToolCall.id, toolCallId));
+      .select({ actorRef: this.t.agentThread.actorRef })
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
+      .where(eq(this.t.agentToolCall.id, toolCallId));
     return row?.actorRef ?? null;
   }
 
   async runForToolCall(toolCallId: string): Promise<string | null> {
     const [row] = await this.db
-      .select({ runId: agentToolCall.runId, activeStreamId: agentThread.activeStreamId })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
-      .where(eq(agentToolCall.id, toolCallId));
+      .select({
+        runId: this.t.agentToolCall.runId,
+        activeStreamId: this.t.agentThread.activeStreamId,
+      })
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
+      .where(eq(this.t.agentToolCall.id, toolCallId));
     return row?.runId ?? row?.activeStreamId ?? null;
   }
 
@@ -318,19 +351,24 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     }
     const rows = await this.db
       .select({
-        id: agentToolCall.id,
-        messageId: agentToolCall.messageId,
-        status: agentToolCall.status,
-        approver: agentToolCall.approver,
-        expiresAt: agentToolCall.expiresAt,
-        remember: agentToolCall.remember,
-        executedByRef: agentToolCall.executedByRef,
-        decidedVia: agentToolCall.decidedVia,
-        error: agentToolCall.error,
+        id: this.t.agentToolCall.id,
+        messageId: this.t.agentToolCall.messageId,
+        status: this.t.agentToolCall.status,
+        approver: this.t.agentToolCall.approver,
+        expiresAt: this.t.agentToolCall.expiresAt,
+        remember: this.t.agentToolCall.remember,
+        executedByRef: this.t.agentToolCall.executedByRef,
+        decidedVia: this.t.agentToolCall.decidedVia,
+        error: this.t.agentToolCall.error,
       })
-      .from(agentToolCall)
-      .where(and(inArray(agentToolCall.messageId, messageIds), isNotNull(agentToolCall.approver)))
-      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id));
+      .from(this.t.agentToolCall)
+      .where(
+        and(
+          inArray(this.t.agentToolCall.messageId, messageIds),
+          isNotNull(this.t.agentToolCall.approver),
+        ),
+      )
+      .orderBy(asc(this.t.agentToolCall.createdAt), asc(this.t.agentToolCall.id));
     for (const row of rows) {
       const approval = toolCallApprovalFromRow({ ...row, toolCallId: row.id });
       if (approval === null) {
@@ -346,30 +384,32 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   /** Tools whose approval someone asked to remember in this thread. */
   async rememberedApprovals(threadId: string): Promise<string[]> {
     const rows = await this.db
-      .selectDistinct({ toolName: agentToolCall.toolName })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .where(and(eq(agentMessage.threadId, threadId), eq(agentToolCall.remember, true)));
+      .selectDistinct({ toolName: this.t.agentToolCall.toolName })
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .where(
+        and(eq(this.t.agentMessage.threadId, threadId), eq(this.t.agentToolCall.remember, true)),
+      );
     return rows.map((row) => row.toolName);
   }
 
   async toolCallInput(toolCallId: string): Promise<unknown> {
     const [row] = await this.db
-      .select({ input: agentToolCall.input })
-      .from(agentToolCall)
-      .where(eq(agentToolCall.id, toolCallId));
+      .select({ input: this.t.agentToolCall.input })
+      .from(this.t.agentToolCall)
+      .where(eq(this.t.agentToolCall.id, toolCallId));
     return row?.input ?? null;
   }
 
   async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
     const [row] = await this.db
       .select({
-        status: agentToolCall.status,
-        approver: agentToolCall.approver,
-        expiresAt: agentToolCall.expiresAt,
+        status: this.t.agentToolCall.status,
+        approver: this.t.agentToolCall.approver,
+        expiresAt: this.t.agentToolCall.expiresAt,
       })
-      .from(agentToolCall)
-      .where(eq(agentToolCall.id, toolCallId));
+      .from(this.t.agentToolCall)
+      .where(eq(this.t.agentToolCall.id, toolCallId));
     if (row === undefined) {
       return null;
     }
@@ -382,32 +422,72 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ actorRef: agentThread.actorRef })
-      .from(agentThread)
-      .where(and(eq(agentThread.activeStreamId, runId), isNull(agentThread.deletedAt)));
+      .select({ actorRef: this.t.agentThread.actorRef })
+      .from(this.t.agentThread)
+      .where(
+        and(eq(this.t.agentThread.activeStreamId, runId), isNull(this.t.agentThread.deletedAt)),
+      );
     return thread?.actorRef ?? null;
   }
 
   async setTitle(threadId: string, title: string): Promise<void> {
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ title, updatedAt: new Date() })
-      .where(eq(agentThread.id, threadId));
+      .where(eq(this.t.agentThread.id, threadId));
   }
 
   async promoteThread(threadId: string): Promise<void> {
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ transient: false, updatedAt: new Date() })
-      .where(and(eq(agentThread.id, threadId), eq(agentThread.transient, true)));
+      .where(and(eq(this.t.agentThread.id, threadId), eq(this.t.agentThread.transient, true)));
+  }
+
+  /** Who holds the thread's stream right now, deleted or not. */
+  private async activeHolder(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ activeStreamId: this.t.agentThread.activeStreamId })
+      .from(this.t.agentThread)
+      .where(eq(this.t.agentThread.id, threadId));
+    return thread?.activeStreamId ?? null;
+  }
+
+  /**
+   * A thread's messages in the order they were appended: by `seq`, which append assigns. A row from
+   * before `seq` existed has none and counts as 0 — first, since every such row is older than every
+   * numbered one — and those order among themselves by `created_at`, then `id`, as they always did.
+   * `coalesce` rather than `nulls first`, which MySQL cannot spell and Postgres defaults the other way.
+   */
+  private messageOrder(): SQL[] {
+    const message = this.t.agentMessage;
+    return [asc(sql`coalesce(${message.seq}, 0)`), asc(message.createdAt), asc(message.id)];
+  }
+
+  /** {@link messageOrder}, newest first. */
+  private messageOrderNewestFirst(): SQL[] {
+    const message = this.t.agentMessage;
+    return [desc(sql`coalesce(${message.seq}, 0)`), desc(message.createdAt), desc(message.id)];
+  }
+
+  /**
+   * The next `seq` in a thread: one past its highest. Two appends racing on ONE thread can draw the
+   * same number — the turn loop never does that, and the tie then falls back to `created_at`, `id`.
+   */
+  private async nextMessageSeq(threadId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ last: max(this.t.agentMessage.seq) })
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, threadId));
+    return Number(row?.last ?? 0) + 1;
   }
 
   /** The run streaming the thread, or `null` — a projection of the one column. */
   async activeRunForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ activeStreamId: agentThread.activeStreamId })
-      .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .select({ activeStreamId: this.t.agentThread.activeStreamId })
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     return thread?.activeStreamId ?? null;
   }
 
@@ -421,38 +501,51 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     options: { replacing?: string } = {},
   ): Promise<boolean> {
     const holders = [
-      isNull(agentThread.activeStreamId),
-      eq(agentThread.activeStreamId, runId),
+      isNull(this.t.agentThread.activeStreamId),
+      eq(this.t.agentThread.activeStreamId, runId),
       ...(options.replacing !== undefined
-        ? [eq(agentThread.activeStreamId, options.replacing)]
+        ? [eq(this.t.agentThread.activeStreamId, options.replacing)]
         : []),
     ];
-    const claimed = await this.db
-      .update(agentThread)
-      .set({ activeStreamId: runId })
-      .where(and(eq(agentThread.id, threadId), or(...holders)))
-      .returning({ id: agentThread.id });
-    return claimed.length > 0;
+    const claimed = await affectedRows(
+      this.dialect,
+      this.db
+        .update(this.t.agentThread)
+        .set({ activeStreamId: runId })
+        .where(and(eq(this.t.agentThread.id, threadId), or(...holders))),
+      this.t.agentThread.id,
+    );
+    if (claimed > 0) {
+      return true;
+    }
+    // Zero can still be a win: a MySQL connection without FOUND_ROWS reports CHANGED rows, and
+    // re-claiming a thread this run already holds changes nothing. The row says who holds it now.
+    return (await this.activeHolder(threadId)) === runId;
   }
 
   async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
-    const released = await this.db
-      .update(agentThread)
-      .set({ activeStreamId: null })
-      .where(and(eq(agentThread.id, threadId), eq(agentThread.activeStreamId, runId)))
-      .returning({ id: agentThread.id });
-    return released.length > 0;
+    const released = await affectedRows(
+      this.dialect,
+      this.db
+        .update(this.t.agentThread)
+        .set({ activeStreamId: null })
+        .where(
+          and(eq(this.t.agentThread.id, threadId), eq(this.t.agentThread.activeStreamId, runId)),
+        ),
+      this.t.agentThread.id,
+    );
+    return released > 0;
   }
 
   async enqueueMessage(input: EnqueueMessageInput): Promise<QueuedMessage> {
     const now = new Date();
     const [edge] = await this.db
       .select({
-        first: min(agentQueuedMessage.position),
-        last: max(agentQueuedMessage.position),
+        first: min(this.t.agentQueuedMessage.position),
+        last: max(this.t.agentQueuedMessage.position),
       })
-      .from(agentQueuedMessage)
-      .where(eq(agentQueuedMessage.threadId, input.threadId));
+      .from(this.t.agentQueuedMessage)
+      .where(eq(this.t.agentQueuedMessage.threadId, input.threadId));
     const position = input.at === 'head' ? (edge?.first ?? 1) - 1 : (edge?.last ?? -1) + 1;
     const row: AgentQueuedMessageRow = {
       id: crypto.randomUUID(),
@@ -470,24 +563,24 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       createdAt: now,
       updatedAt: now,
     };
-    await this.db.insert(agentQueuedMessage).values(row);
+    await this.db.insert(this.t.agentQueuedMessage).values(row);
     return toQueuedMessage(row);
   }
 
   async listQueue(threadId: string): Promise<QueuedMessage[]> {
     const rows = await this.db
       .select()
-      .from(agentQueuedMessage)
-      .where(eq(agentQueuedMessage.threadId, threadId))
-      .orderBy(asc(agentQueuedMessage.position), asc(agentQueuedMessage.createdAt));
+      .from(this.t.agentQueuedMessage)
+      .where(eq(this.t.agentQueuedMessage.threadId, threadId))
+      .orderBy(asc(this.t.agentQueuedMessage.position), asc(this.t.agentQueuedMessage.createdAt));
     return rows.map(toQueuedMessage);
   }
 
   async getQueuedMessage(id: string): Promise<QueuedMessage | null> {
     const [row] = await this.db
       .select()
-      .from(agentQueuedMessage)
-      .where(eq(agentQueuedMessage.id, id));
+      .from(this.t.agentQueuedMessage)
+      .where(eq(this.t.agentQueuedMessage.id, id));
     return row === undefined ? null : toQueuedMessage(row);
   }
 
@@ -503,7 +596,10 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     if (patch.interrupt !== undefined) {
       updates.interrupt = patch.interrupt;
     }
-    await this.db.update(agentQueuedMessage).set(updates).where(eq(agentQueuedMessage.id, id));
+    await this.db
+      .update(this.t.agentQueuedMessage)
+      .set(updates)
+      .where(eq(this.t.agentQueuedMessage.id, id));
     return this.getQueuedMessage(id);
   }
 
@@ -518,49 +614,52 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     order.splice(target, 0, moving);
     for (const [position, message] of order.entries()) {
       await this.db
-        .update(agentQueuedMessage)
+        .update(this.t.agentQueuedMessage)
         .set({ position })
-        .where(eq(agentQueuedMessage.id, message.id));
+        .where(eq(this.t.agentQueuedMessage.id, message.id));
     }
     return true;
   }
 
   async removeQueuedMessage(id: string): Promise<boolean> {
-    const removed = await this.db
-      .delete(agentQueuedMessage)
-      .where(eq(agentQueuedMessage.id, id))
-      .returning({ id: agentQueuedMessage.id });
-    return removed.length > 0;
+    const removed = await affectedRows(
+      this.dialect,
+      this.db.delete(this.t.agentQueuedMessage).where(eq(this.t.agentQueuedMessage.id, id)),
+      this.t.agentQueuedMessage.id,
+    );
+    return removed > 0;
   }
 
   async clearQueue(threadId: string): Promise<number> {
-    const removed = await this.db
-      .delete(agentQueuedMessage)
-      .where(eq(agentQueuedMessage.threadId, threadId))
-      .returning({ id: agentQueuedMessage.id });
-    return removed.length;
+    return affectedRows(
+      this.dialect,
+      this.db
+        .delete(this.t.agentQueuedMessage)
+        .where(eq(this.t.agentQueuedMessage.threadId, threadId)),
+      this.t.agentQueuedMessage.id,
+    );
   }
 
   async queuePause(threadId: string): Promise<QueuePause | null> {
     const [thread] = await this.db
-      .select({ queuePause: agentThread.queuePause })
-      .from(agentThread)
-      .where(eq(agentThread.id, threadId));
+      .select({ queuePause: this.t.agentThread.queuePause })
+      .from(this.t.agentThread)
+      .where(eq(this.t.agentThread.id, threadId));
     return thread?.queuePause ?? null;
   }
 
   async setQueuePause(threadId: string, pause: QueuePause | null): Promise<void> {
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ queuePause: pause })
-      .where(eq(agentThread.id, threadId));
+      .where(eq(this.t.agentThread.id, threadId));
   }
 
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ activeStreamId: runId })
-      .where(eq(agentThread.id, threadId));
+      .where(eq(this.t.agentThread.id, threadId));
   }
 
   /**
@@ -587,7 +686,10 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       return;
     }
     updates.updatedAt = new Date();
-    await this.db.update(agentThread).set(updates).where(eq(agentThread.id, threadId));
+    await this.db
+      .update(this.t.agentThread)
+      .set(updates)
+      .where(eq(this.t.agentThread.id, threadId));
   }
 
   /**
@@ -598,9 +700,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
   async modelForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ model: agentThread.model })
-      .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .select({ model: this.t.agentThread.model })
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     return thread?.model ?? null;
   }
 
@@ -615,9 +717,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
 
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ defaultAgent: agentThread.defaultAgent })
-      .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .select({ defaultAgent: this.t.agentThread.defaultAgent })
+      .from(this.t.agentThread)
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     return thread?.defaultAgent ?? null;
   }
 
@@ -643,7 +745,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       promptHash: run.promptHash ?? null,
       parentRunId: run.parentRunId ?? null,
     };
-    await this.db.insert(agentRun).values(runRow);
+    await this.db.insert(this.t.agentRun).values(runRow);
   }
 
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
@@ -667,22 +769,22 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     if (end.errorMessage !== undefined) {
       updates.errorMessage = end.errorMessage;
     }
-    await this.db.update(agentRun).set(updates).where(eq(agentRun.id, end.runId));
+    await this.db.update(this.t.agentRun).set(updates).where(eq(this.t.agentRun.id, end.runId));
   }
 
   /** Bump the run's llm-step retry counter. Atomic `retries = retries + 1`, no read-modify-write. */
   async bumpRunRetries(runId: string): Promise<void> {
     await this.db
-      .update(agentRun)
-      .set({ retries: sql`${agentRun.retries} + 1` })
-      .where(eq(agentRun.id, runId));
+      .update(this.t.agentRun)
+      .set({ retries: sql`${this.t.agentRun.retries} + 1` })
+      .where(eq(this.t.agentRun.id, runId));
   }
 
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {
     const [thread] = await this.db
       .select()
-      .from(agentThread)
-      .where(eq(agentThread.id, input.threadId));
+      .from(this.t.agentThread)
+      .where(eq(this.t.agentThread.id, input.threadId));
     if (thread === undefined) {
       throw new Error(`thread ${input.threadId} not found`);
     }
@@ -704,60 +806,66 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       reasoningMs: input.reasoningMs ?? null,
       ui: input.ui ?? null,
       feedback: null,
+      seq: await this.nextMessageSeq(input.threadId),
       createdAt: now,
     };
-    await this.db.insert(agentMessage).values(message);
+    await this.db.insert(this.t.agentMessage).values(message);
     await this.db
-      .update(agentThread)
+      .update(this.t.agentThread)
       .set({ updatedAt: now })
-      .where(eq(agentThread.id, input.threadId));
+      .where(eq(this.t.agentThread.id, input.threadId));
     return this.toStoredMessage(message);
   }
 
   async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
     await this.db
-      .update(agentMessage)
+      .update(this.t.agentMessage)
       .set({ toolResults: results })
-      .where(eq(agentMessage.id, messageId));
+      .where(eq(this.t.agentMessage.id, messageId));
   }
 
   async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
     await this.db
-      .update(agentMessage)
+      .update(this.t.agentMessage)
       .set({ ui: ui.length > 0 ? ui : null })
-      .where(eq(agentMessage.id, messageId));
+      .where(eq(this.t.agentMessage.id, messageId));
   }
 
   async threadOfMessage(messageId: string): Promise<string | null> {
     const [row] = await this.db
-      .select({ threadId: agentMessage.threadId })
-      .from(agentMessage)
-      .where(eq(agentMessage.id, messageId))
+      .select({ threadId: this.t.agentMessage.threadId })
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.id, messageId))
       .limit(1);
     return row?.threadId ?? null;
   }
 
   async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
-    await this.db.update(agentMessage).set({ feedback }).where(eq(agentMessage.id, messageId));
+    await this.db
+      .update(this.t.agentMessage)
+      .set({ feedback })
+      .where(eq(this.t.agentMessage.id, messageId));
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
     const messages = await this.db
       .select()
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, threadId))
-      .orderBy(asc(agentMessage.createdAt), asc(agentMessage.id));
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, threadId))
+      .orderBy(...this.messageOrder());
     const cutoff = messages.findIndex((message) => message.id === messageId);
     if (cutoff < 0) {
       return;
     }
     const doomedIds = messages.slice(cutoff).map((message) => message.id);
-    await this.db.delete(agentToolCall).where(inArray(agentToolCall.messageId, doomedIds));
-    await this.db.delete(agentMessage).where(inArray(agentMessage.id, doomedIds));
+    await this.db
+      .delete(this.t.agentToolCall)
+      .where(inArray(this.t.agentToolCall.messageId, doomedIds));
+    await this.db.delete(this.t.agentMessage).where(inArray(this.t.agentMessage.id, doomedIds));
   }
 
   async recordToolCall(input: RecordToolCallInput): Promise<void> {
-    await this.db.insert(agentToolCall).values({
+    await this.db.insert(this.t.agentToolCall).values({
       id: input.toolCallId,
       messageId: input.messageId,
       toolName: input.toolName,
@@ -801,7 +909,10 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     if (input.status === 'executed' || input.status === 'auto_executed') {
       updates.executedAt = new Date();
     }
-    await this.db.update(agentToolCall).set(updates).where(eq(agentToolCall.id, input.toolCallId));
+    await this.db
+      .update(this.t.agentToolCall)
+      .set(updates)
+      .where(eq(this.t.agentToolCall.id, input.toolCallId));
   }
 
   async toolCallOutcomes(toolCallIds: readonly string[]): Promise<ToolCallOutcome[]> {
@@ -810,13 +921,13 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     }
     const rows = await this.db
       .select({
-        id: agentToolCall.id,
-        status: agentToolCall.status,
-        output: agentToolCall.output,
-        error: agentToolCall.error,
+        id: this.t.agentToolCall.id,
+        status: this.t.agentToolCall.status,
+        output: this.t.agentToolCall.output,
+        error: this.t.agentToolCall.error,
       })
-      .from(agentToolCall)
-      .where(inArray(agentToolCall.id, [...toolCallIds]));
+      .from(this.t.agentToolCall)
+      .where(inArray(this.t.agentToolCall.id, [...toolCallIds]));
     return rows.map((row) => ({
       id: row.id,
       status: row.status,
@@ -827,16 +938,19 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
 
   async failUnsettledToolCalls(runId: string, error: string): Promise<number> {
     const pending = and(
-      eq(agentToolCall.runId, runId),
-      eq(agentToolCall.status, 'pending_approval'),
+      eq(this.t.agentToolCall.runId, runId),
+      eq(this.t.agentToolCall.status, 'pending_approval'),
     );
     // Counted first: an UPDATE's affected-row count is spelled differently by every driver this
     // adapter runs on. The number is informational; the write is what matters.
-    const rows = await this.db.select({ id: agentToolCall.id }).from(agentToolCall).where(pending);
+    const rows = await this.db
+      .select({ id: this.t.agentToolCall.id })
+      .from(this.t.agentToolCall)
+      .where(pending);
     if (rows.length === 0) {
       return 0;
     }
-    await this.db.update(agentToolCall).set({ status: 'failed', error }).where(pending);
+    await this.db.update(this.t.agentToolCall).set({ status: 'failed', error }).where(pending);
     return rows.length;
   }
 
@@ -859,16 +973,23 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       return [];
     }
     const rows = await this.db
-      .select({ attachments: agentMessage.attachments })
-      .from(agentMessage)
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
-      .where(and(eq(agentThread.actorRef, actorRef), isNotNull(agentMessage.attachments)));
+      .select({ attachments: this.t.agentMessage.attachments })
+      .from(this.t.agentMessage)
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
+      .where(
+        and(eq(this.t.agentThread.actorRef, actorRef), isNotNull(this.t.agentMessage.attachments)),
+      );
     // A message waiting in a thread's queue has been sent and not yet run: what it carries is in use.
     const queued = await this.db
-      .select({ attachments: agentQueuedMessage.attachments })
-      .from(agentQueuedMessage)
-      .innerJoin(agentThread, eq(agentQueuedMessage.threadId, agentThread.id))
-      .where(and(eq(agentThread.actorRef, actorRef), isNotNull(agentQueuedMessage.attachments)));
+      .select({ attachments: this.t.agentQueuedMessage.attachments })
+      .from(this.t.agentQueuedMessage)
+      .innerJoin(this.t.agentThread, eq(this.t.agentQueuedMessage.threadId, this.t.agentThread.id))
+      .where(
+        and(
+          eq(this.t.agentThread.actorRef, actorRef),
+          isNotNull(this.t.agentQueuedMessage.attachments),
+        ),
+      );
     const wanted = new Set(mediaIds);
     const found = new Set<string>();
     for (const row of [...rows, ...queued]) {
@@ -882,7 +1003,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {
-    await this.db.insert(agentTokenUsage).values({
+    await this.db.insert(this.t.agentTokenUsage).values({
       id: crypto.randomUUID(),
       threadId: input.threadId,
       actorRef: input.actorRef,
@@ -914,12 +1035,12 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     const end = new Date(`${toDay}T23:59:59.999Z`);
     const rows = await this.db
       .select()
-      .from(agentTokenUsage)
+      .from(this.t.agentTokenUsage)
       .where(
         and(
-          eq(agentTokenUsage.actorRef, actorRef),
-          gte(agentTokenUsage.createdAt, start),
-          lte(agentTokenUsage.createdAt, end),
+          eq(this.t.agentTokenUsage.actorRef, actorRef),
+          gte(this.t.agentTokenUsage.createdAt, start),
+          lte(this.t.agentTokenUsage.createdAt, end),
         ),
       );
     const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);

@@ -1,5 +1,6 @@
 import type { QueuePause } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { DATETIME, identityCollation } from './column-types';
 
 /**
  * A conversation thread. `deletedAt` drives soft delete (§5): a deleted thread is
@@ -32,6 +33,7 @@ export class AgentThreadRepository extends EntityRepository<AgentThread> {}
 /** Builds the `agent_thread` schema. `collation` is applied to string columns (MySQL parity). */
 export function agentThreadSchema(collation?: string): EntitySchema<AgentThread> {
   const str = collation !== undefined ? { collation } : {};
+  const identity = identityCollation(collation);
   return new EntitySchema<AgentThread>({
     class: AgentThread,
     tableName: 'agent_thread',
@@ -39,8 +41,8 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
     indexes: [{ name: 'agent_thread_actor_updated_idx', properties: ['actorRef', 'updatedAt'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },
-      actorRef: { type: 'string', fieldName: 'actor_ref', ...str },
-      tenantRef: { type: 'string', nullable: true, fieldName: 'tenant_ref', ...str },
+      actorRef: { type: 'string', fieldName: 'actor_ref', ...identity },
+      tenantRef: { type: 'string', nullable: true, fieldName: 'tenant_ref', ...identity },
       title: { type: 'string', ...str },
       transient: { type: 'boolean', default: false },
       activeStreamId: { type: 'string', nullable: true, fieldName: 'active_stream_id', ...str },
@@ -48,9 +50,9 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
       model: { type: 'string', nullable: true, ...str },
       persona: { type: 'string', nullable: true, ...str },
       queuePause: { type: 'json', nullable: true, fieldName: 'queue_pause' },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
-      updatedAt: { type: 'datetime', fieldName: 'updated_at' },
-      deletedAt: { type: 'datetime', nullable: true, fieldName: 'deleted_at' },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
+      updatedAt: { ...DATETIME, fieldName: 'updated_at' },
+      deletedAt: { ...DATETIME, nullable: true, fieldName: 'deleted_at' },
     },
   });
 }

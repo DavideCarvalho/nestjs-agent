@@ -2,11 +2,17 @@ import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { type SQL, and, asc, count, desc, eq, gt, lt, or } from 'drizzle-orm';
 import {
+  type AgentDialect,
   type AgentDrizzleDb,
-  type RagIngestionLogRow,
-  type RagIngestionStatus,
-  ragIngestionLog,
-} from './schema.js';
+  type AgentSqliteDb,
+  type AgentTables,
+  affectedRows,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+  upsert,
+} from './dialect.js';
+import { type RagIngestionLogRow, type RagIngestionStatus, ragIngestionLog } from './schema.js';
 
 /**
  * The `aviary:rag:*` payloads this recorder reads, re-declared here so it couples to the *wire
@@ -60,6 +66,7 @@ function num(value: unknown): number | null {
  * read this table the way {@link DrizzleRagIngestionLog} does — and to keep `iterate`'s keyset
  * arithmetic, which is derived from exactly this order, in view.
  */
+// Built on the SQLite table, and right on every dialect: an ORDER BY renders only the column's name.
 export const RAG_INGESTION_LOG_PAGE_ORDER: SQL[] = [
   desc(ragIngestionLog.updatedAt),
   asc(ragIngestionLog.documentId),
@@ -81,10 +88,9 @@ function batches(batchSize: number | undefined): number {
  * The only two columns a keyset sweep needs to keep going. `listDocumentIds` selects exactly these:
  * the id it returns, plus the `updatedAt` half of the cursor.
  */
-const CURSOR_COLUMNS = {
-  documentId: ragIngestionLog.documentId,
-  updatedAt: ragIngestionLog.updatedAt,
-};
+function cursorColumns(log: AgentTables['ragIngestionLog']) {
+  return { documentId: log.documentId, updatedAt: log.updatedAt };
+}
 
 /** The coordinates half of a log query: which rows, with nothing said about paging. */
 export interface RagIngestionLogWhere {
@@ -139,7 +145,15 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   private teardowns: (() => void)[] = [];
   private readonly inFlight = new Set<Promise<void>>();
 
-  constructor(private readonly db: AgentDrizzleDb) {}
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
+  constructor(db: AgentDrizzleDb) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   onModuleInit(): void {
     for (const channel of CHANNELS) {
@@ -171,7 +185,7 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   async list(query: RagIngestionLogQuery = {}): Promise<RagIngestionLogRow[]> {
     const rows = this.db
       .select()
-      .from(ragIngestionLog)
+      .from(this.t.ragIngestionLog)
       .where(this.where(query))
       .orderBy(...RAG_INGESTION_LOG_PAGE_ORDER)
       .limit(query.limit ?? DEFAULT_PAGE_SIZE);
@@ -191,7 +205,7 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ rows: RagIngestionLogRow[]; total: number }> {
     const [totalRow] = await this.db
       .select({ value: count() })
-      .from(ragIngestionLog)
+      .from(this.t.ragIngestionLog)
       .where(this.where(query));
     return { rows: await this.list(query), total: totalRow?.value ?? 0 };
   }
@@ -249,7 +263,7 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     return this.sweep(where, batches(options.batchSize), options.after, (filter, limit) =>
       this.db
         .select()
-        .from(ragIngestionLog)
+        .from(this.t.ragIngestionLog)
         .where(filter)
         .orderBy(...RAG_INGESTION_LOG_PAGE_ORDER)
         .limit(limit),
@@ -276,8 +290,8 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     const ids: string[] = [];
     const rows = this.sweep(where, batches(options.batchSize), undefined, (filter, limit) =>
       this.db
-        .select(CURSOR_COLUMNS)
-        .from(ragIngestionLog)
+        .select(cursorColumns(this.t.ragIngestionLog))
+        .from(this.t.ragIngestionLog)
         .where(filter)
         .orderBy(...RAG_INGESTION_LOG_PAGE_ORDER)
         .limit(limit),
@@ -292,27 +306,33 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   async get(documentId: string): Promise<RagIngestionLogRow | null> {
     const [row] = await this.db
       .select()
-      .from(ragIngestionLog)
-      .where(eq(ragIngestionLog.documentId, documentId));
+      .from(this.t.ragIngestionLog)
+      .where(eq(this.t.ragIngestionLog.documentId, documentId));
     return row ?? null;
   }
 
   /** Forget one document's record. Returns whether a row was actually removed. */
   async remove(documentId: string): Promise<boolean> {
-    const removed = await this.db
-      .delete(ragIngestionLog)
-      .where(eq(ragIngestionLog.documentId, documentId))
-      .returning({ documentId: ragIngestionLog.documentId });
-    return removed.length > 0;
+    const removed = await affectedRows(
+      this.dialect,
+      this.db
+        .delete(this.t.ragIngestionLog)
+        .where(eq(this.t.ragIngestionLog.documentId, documentId)),
+      this.t.ragIngestionLog.documentId,
+    );
+    return removed > 0;
   }
 
   /** Forget every record for a collection — for when the collection itself is deleted. */
   async removeByCollection(collection: string): Promise<number> {
-    const removed = await this.db
-      .delete(ragIngestionLog)
-      .where(eq(ragIngestionLog.collection, collection))
-      .returning({ documentId: ragIngestionLog.documentId });
-    return removed.length;
+    const removed = await affectedRows(
+      this.dialect,
+      this.db
+        .delete(this.t.ragIngestionLog)
+        .where(eq(this.t.ragIngestionLog.collection, collection)),
+      this.t.ragIngestionLog.documentId,
+    );
+    return removed;
   }
 
   /**
@@ -349,8 +369,10 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
 
   private where(query: RagIngestionLogWhere): SQL | undefined {
     return and(
-      query.collection !== undefined ? eq(ragIngestionLog.collection, query.collection) : undefined,
-      query.status !== undefined ? eq(ragIngestionLog.status, query.status) : undefined,
+      query.collection !== undefined
+        ? eq(this.t.ragIngestionLog.collection, query.collection)
+        : undefined,
+      query.status !== undefined ? eq(this.t.ragIngestionLog.status, query.status) : undefined,
     );
   }
 
@@ -373,10 +395,10 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     return and(
       base,
       or(
-        lt(ragIngestionLog.updatedAt, cursor.updatedAt),
+        lt(this.t.ragIngestionLog.updatedAt, cursor.updatedAt),
         and(
-          eq(ragIngestionLog.updatedAt, cursor.updatedAt),
-          gt(ragIngestionLog.documentId, cursor.documentId),
+          eq(this.t.ragIngestionLog.updatedAt, cursor.updatedAt),
+          gt(this.t.ragIngestionLog.documentId, cursor.documentId),
         ),
       ),
     );
@@ -423,10 +445,12 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
       // for the same NEW document can't race to a duplicate-key insert the way find-then-insert
       // would. `createdAt` is set on insert but absent from the conflict `set`, so an update never
       // overwrites it.
-      await this.db
-        .insert(ragIngestionLog)
-        .values({ documentId, createdAt: now, ...outcome })
-        .onConflictDoUpdate({ target: ragIngestionLog.documentId, set: outcome });
+      await upsert(
+        this.dialect,
+        this.db.insert(this.t.ragIngestionLog).values({ documentId, createdAt: now, ...outcome }),
+        this.t.ragIngestionLog.documentId,
+        outcome,
+      );
     } catch (error) {
       this.logger.warn(
         `Could not record RAG ingestion outcome for ${documentId}: ${

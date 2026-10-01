@@ -16,7 +16,10 @@ import type { AgentDrizzleDb } from './schema.js';
 
 /** Options for {@link DrizzleAgentStoreModule.forRoot}. The app owns and supplies the db handle. */
 export interface DrizzleAgentStoreModuleOptions {
-  /** A Drizzle SQLite database instance (`drizzle(client, { schema: agentSchema })`). */
+  /**
+   * A Drizzle database on SQLite, Postgres or MySQL — `drizzle(client, { schema: agentSchema })`,
+   * `pgAgentSchema` or `mysqlAgentSchema`. The stores read the dialect off the handle.
+   */
   db: AgentDrizzleDb;
   /**
    * Bind {@link AGENT_PRICING_STORE} (which {@link DrizzleGovernanceQueries} prices usage against) to
