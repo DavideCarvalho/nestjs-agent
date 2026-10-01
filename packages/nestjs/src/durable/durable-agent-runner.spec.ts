@@ -24,7 +24,9 @@ function unreached(): never {
   throw new Error('DurableAgentRunner.start must not touch the run gateway');
 }
 
-const runGateway: RunGateway = {
+// `satisfies`, not an annotation: RunGateway is an abstract class, and spreading a class-typed value
+// drops its methods from the type, so `{ ...runGateway, ...gateway }` below would not type as a gateway.
+const runGateway = {
   topology: unreached,
   getRunDetail: unreached,
   listRuns: unreached,
@@ -36,7 +38,9 @@ const runGateway: RunGateway = {
   redispatchPending: unreached,
   retryWithInput: unreached,
   subscribe: unreached,
-};
+  runFacets: unreached,
+  runValueFacets: unreached,
+} satisfies RunGateway;
 
 function runnerWith(start: WorkflowService['start']): DurableAgentRunner {
   const workflows = { start, signal: vi.fn() } as unknown as WorkflowService;
