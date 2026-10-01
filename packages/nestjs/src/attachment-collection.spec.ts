@@ -109,6 +109,36 @@ describe('AgentService — what is safe to collect', () => {
     expect(names(collectable)).toEqual(['abandoned.png']);
   });
 
+  it('keeps media a message waiting in the thread’s queue carries, until it leaves the queue', async () => {
+    const staging = new InMemoryAttachmentStagingStore({ now: () => MONDAY });
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: ACTOR });
+    const queued = await stage(staging, 'queued.png');
+    await stage(staging, 'abandoned.png');
+    // Sent while a turn was running (or into a paused queue): not in the transcript yet, but the
+    // turn it is waiting to start will need the file.
+    const waiting = await store.enqueueMessage({
+      threadId: thread.id,
+      actor: ACTOR,
+      content: 'and this one next',
+      attachments: [
+        { mediaId: queued, url: 'https://media.test/x', contentType: 'image/png', name: 'q.png' },
+      ],
+    });
+    const service = buildService(store, staging);
+
+    expect(names(await service.collectableAttachments(ACTOR, { olderThan: FRIDAY }))).toEqual([
+      'abandoned.png',
+    ]);
+
+    await store.removeQueuedMessage(waiting.id);
+
+    expect(names(await service.collectableAttachments(ACTOR, { olderThan: FRIDAY }))).toEqual([
+      'abandoned.png',
+      'queued.png',
+    ]);
+  });
+
   it('offers up media again once the message carrying it is truncated away', async () => {
     const staging = new InMemoryAttachmentStagingStore({ now: () => MONDAY });
     const store = new InMemoryAgentStore();

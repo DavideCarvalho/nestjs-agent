@@ -824,7 +824,8 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   }
 
   /**
-   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   * Of `mediaIds`, the ones a surviving message — or a message waiting in the queue — in one of
+   * this actor's threads still carries.
    *
    * Reads the `attachments` JSON back out and matches in memory rather than pushing the match into
    * SQL: the column holds an array of objects, and every dialect this adapter's sibling targets
@@ -845,9 +846,15 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       .from(agentMessage)
       .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
       .where(and(eq(agentThread.actorRef, actorRef), isNotNull(agentMessage.attachments)));
+    // A message waiting in a thread's queue has been sent and not yet run: what it carries is in use.
+    const queued = await this.db
+      .select({ attachments: agentQueuedMessage.attachments })
+      .from(agentQueuedMessage)
+      .innerJoin(agentThread, eq(agentQueuedMessage.threadId, agentThread.id))
+      .where(and(eq(agentThread.actorRef, actorRef), isNotNull(agentQueuedMessage.attachments)));
     const wanted = new Set(mediaIds);
     const found = new Set<string>();
-    for (const row of rows) {
+    for (const row of [...rows, ...queued]) {
       for (const attachment of row.attachments ?? []) {
         if (wanted.has(attachment.mediaId)) {
           found.add(attachment.mediaId);

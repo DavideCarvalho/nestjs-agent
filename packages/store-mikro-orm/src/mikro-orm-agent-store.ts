@@ -899,7 +899,8 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
   }
 
   /**
-   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   * Of `mediaIds`, the ones a surviving message — or a message waiting in the queue — in one of
+   * this actor's threads still carries.
    *
    * Reads the `attachments` JSON back out and matches in memory rather than pushing the match into
    * SQL: the column holds an array of objects, and each dialect this adapter supports spells that
@@ -920,9 +921,15 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       { thread: { actorRef }, attachments: { $ne: null } },
       { fields: ['attachments'] },
     );
+    // A message waiting in a thread's queue has been sent and not yet run: what it carries is in use.
+    const queued = await em.find(
+      AgentQueuedMessage,
+      { thread: { actorRef }, attachments: { $ne: null } },
+      { fields: ['attachments'] },
+    );
     const wanted = new Set(mediaIds);
     const found = new Set<string>();
-    for (const message of messages) {
+    for (const message of [...messages, ...queued]) {
       for (const attachment of message.attachments ?? []) {
         if (wanted.has(attachment.mediaId)) {
           found.add(attachment.mediaId);

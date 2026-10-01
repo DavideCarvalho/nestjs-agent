@@ -156,6 +156,8 @@ per-message cap — so a client never repeats them.
 it leaves media with nothing pointing at it. Two optional methods make that findable — `list` on
 your `AttachmentStagingStore` (you stored the bytes, so only you can enumerate them) and
 `referencedMediaIds` on your `AgentStore` (only it can see which media a live message carries).
+A message waiting in a thread's queue — sent while a turn ran, or into a paused queue — counts as
+live: its files are kept until it runs, is removed, or has its attachments edited away.
 
 ```ts
 // a job the host runs; nothing here is reachable over HTTP

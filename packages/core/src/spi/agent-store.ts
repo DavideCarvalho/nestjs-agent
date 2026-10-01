@@ -349,6 +349,11 @@ export interface AgentStore {
    * would be pinned for ever with nothing pointing at them. Answering from the surviving message
    * rows on every call is the only form of this that stays true after a truncation.
    *
+   * A message WAITING IN A THREAD'S QUEUE ({@link import('./chat-queue.js').ChatQueueStore}) counts
+   * too: it has been sent, it just has not run yet, and the turn it is waiting to start will read
+   * its attachments — a sweep that collected them would fail that turn. That holds for a paused
+   * queue as well. Removing the message, or editing its attachments away, frees them again.
+   *
    * Scoped to one actor, like every other read on this surface: media referenced only by ANOTHER
    * actor's thread is reported unreferenced here, so this can never be turned into a probe for what
    * exists in someone else's conversation. A host pairs it with its own per-actor inventory, so the

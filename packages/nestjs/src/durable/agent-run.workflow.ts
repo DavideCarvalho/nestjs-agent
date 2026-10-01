@@ -24,7 +24,7 @@ import {
   settleUnsettledDelegation,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
-import { RUN_GATEWAY, Workflow } from '@dudousxd/nestjs-durable';
+import { RUN_GATEWAY, Workflow, WorkflowService } from '@dudousxd/nestjs-durable';
 import {
   type RunGateway,
   type WorkflowCtx,
@@ -82,7 +82,70 @@ export class AgentRunWorkflow {
     // deployment), never on which pod replays it. By token: this file ships in the `/durable`
     // bundle, whose copy of the `ChatQueueService` class is not the one `AgentModule` provides.
     @Optional() @Inject(AGENT_CHAT_QUEUE) private readonly queue?: ChatQueueService,
+    // What starts a DETACHED delegation as a run of its own rather than as this run's child — see
+    // `startDetached`. `@Optional` only so a module that registered the workflow without
+    // `DurableModule` still boots; its absence fails that one delegation, never the journal's shape.
+    @Optional() private readonly workflows?: WorkflowService,
   ) {}
+
+  /**
+   * Start a detached delegation as a TOP-LEVEL run, under an id derived from this run and the call.
+   *
+   * Not `ctx.startChild`, because the runtime treats a `spawn:` child as part of its parent: a Stop
+   * on the parent cascades to every run it spawned. A detached run is exactly the one the person did
+   * NOT ask to stop — they stopped the turn they were watching, and the work it handed off is meant
+   * to outlive that turn (it is meant to outlive it finishing, after all). Cascaded, it died parked
+   * on its approval, where its body never runs again, so nothing settled the delegation and the card
+   * said "started" for ever. The agent-level edge stays: the child's input still carries
+   * `parentRunId`, which is what the run rows record.
+   *
+   * Journaled as one `detach:<toolCallId>` localStep whose body runs outside the ambient workflow
+   * ctx (so the start goes to the engine and writes no position in this run). Its recorded result
+   * keeps a replay from starting it again, and a body re-run after a crash between the start and
+   * the checkpoint asks for the same id, which the runtime answers with the run it already has.
+   * The child is stamped with this run's namespace, as `ctx.startChild` would have stamped it, so an
+   * operator re-driving a tenant's turn does not move its delegate off that tenant's workers.
+   */
+  private startDetached(
+    ctx: WorkflowCtx,
+    toolCallId: string,
+    childInput: AgentRunInput,
+  ): Promise<string> {
+    return stepOf(ctx)(`detach:${toolCallId}`, async () => {
+      const workflows = this.workflows;
+      if (workflows === undefined) {
+        throw new Error(
+          'A detached delegation needs WorkflowService (DurableModule) to start its run, and none is bound.',
+        );
+      }
+      const childRunId = `${ctx.runId}.detached.${toolCallId}`;
+      const namespace = await this.namespaceOf(ctx.runId);
+      try {
+        await workflows.start(
+          AgentRunWorkflow,
+          childInput,
+          childRunId,
+          namespace !== undefined ? { namespace } : undefined,
+        );
+      } catch (error) {
+        // A driving dispatcher may run the new run's first steps on this call and surface its
+        // suspend here — control flow of THAT run, not a failed start (see `DurableAgentRunner`).
+        if (!isWorkflowControlFlowSignal(error)) {
+          throw error;
+        }
+      }
+      return childRunId;
+    });
+  }
+
+  /** The namespace this run is stamped with, where the runtime can say. */
+  private async namespaceOf(runId: string): Promise<string | undefined> {
+    try {
+      return (await this.runs?.getRunDetail(runId))?.run.namespace;
+    } catch {
+      return undefined;
+    }
+  }
 
   /**
    * Move the thread past this settling turn — to the next queued message, started here as a
@@ -322,12 +385,16 @@ export class AgentRunWorkflow {
       //     OWN runId, and that is what `runForToolCall` answers with.
       //   - `deliverTo` instead. The parent's tool result is a receipt, so the answer needs an
       //     address of its own, and by the time it exists nobody is holding one.
+      //   - no runtime parent. A Stop on this turn must not reach the work it handed off, so the
+      //     run is started on its own (`startDetached`), not as a `spawn:` child. A run that
+      //     journaled the `spawn:` before this release replays it: `ctx.patched` answers false at a
+      //     position that already holds one.
       startAgent: async ({ agentName, task, toolCallId }) => {
         const subThreadId = await stepOf(ctx)(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({ actor: input.actor, transient: true });
           return thread.id;
         });
-        const childRunId = await ctx.startChild(AgentRunWorkflow, {
+        const childInput: AgentRunInput = {
           agentName,
           threadId: subThreadId,
           actor: input.actor,
@@ -337,8 +404,11 @@ export class AgentRunWorkflow {
           delegationPath: chainBelow,
           parentRunId: ctx.runId,
           deliverTo: { threadId: input.threadId, toolCallId },
-        });
-        return { runId: childRunId };
+        };
+        if (!(await ctx.patched('agent:detached-unlinked'))) {
+          return { runId: await ctx.startChild(AgentRunWorkflow, childInput) };
+        }
+        return { runId: await this.startDetached(ctx, toolCallId, childInput) };
       },
       // The two long steps as engine-dispatched `ctx.step`s, so a turn isn't pinned to this
       // workflow worker for the model call or a tool execution. `sinkRunId`/`childSink` are sink

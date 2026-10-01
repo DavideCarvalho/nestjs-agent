@@ -675,7 +675,8 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
   }
 
   /**
-   * Of `mediaIds`, the ones a surviving message in one of this actor's threads still carries.
+   * Of `mediaIds`, the ones a surviving message — or a message waiting in the queue — in one of
+   * this actor's threads still carries.
    * Re-derived from the messages each call, so a media whose message was truncated away reads as
    * unreferenced again.
    */
@@ -689,7 +690,10 @@ export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
       if (thread.actorRef !== actorRef) {
         continue;
       }
-      for (const message of thread.messages) {
+      // A message waiting in the thread's queue carries its attachments too: it has been sent, it
+      // just has not run yet — collecting its media would fail the turn it is waiting to start.
+      const queued = this.queues.get(thread.id) ?? [];
+      for (const message of [...thread.messages, ...queued]) {
         for (const attachment of message.attachments ?? []) {
           if (wanted.has(attachment.mediaId)) {
             found.add(attachment.mediaId);
