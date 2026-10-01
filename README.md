@@ -656,6 +656,41 @@ AgentMcpModule.forRoot({
 
 See [`packages/mcp`](./packages/mcp) for the full option surface.
 
+## Confirmed writes (preview, then commit)
+
+An `action` tool parks on a person's approval — which an MCP caller cannot give. A **confirmed
+tool** keeps the human gate INSIDE the tool instead, so the same write serves the chat and MCP: the
+first call previews without writing and returns a signed `confirmToken`; the same arguments plus
+`confirm: true` and that token commit.
+
+```ts
+import { AGENT_CONFIRM_TOKEN_STORE, defineConfirmedTool, provideAgentTool } from '@dudousxd/nestjs-agent';
+
+provideAgentTool(
+  (store: ConfirmTokenStore, config: ConfigService, orders: OrdersService) =>
+    defineConfirmedTool(
+      { name: 'refund_order', description: 'Refund an order.', input: z.object({ orderId: z.string() }),
+        secret: () => config.getOrThrow('CONFIRM_SECRET'), store },
+      {
+        prepare: ({ orderId }, ctx) => orders.loadRefundable(orderId, ctx.actor), // validate; writes nothing
+        preview: (order) => ({ summary: `Refund ${order.total}?`, data: order }),
+        commit: async (order) => ({ summary: 'Refunded.', data: await orders.refund(order) }),
+      },
+    ),
+  [AGENT_CONFIRM_TOKEN_STORE, ConfigService, OrdersService],
+);
+```
+
+- The token is an **HMAC over the tool, the actor, the tenant, the expiry and the canonical
+  arguments**: useless to another actor, tenant or tool, or with a changed argument.
+- With a store it is **single use** — claimed right before `commit` (a refusal in `prepare` does not
+  spend it) and released if `commit` throws. `DrizzleAgentStoreModule` / `MikroOrmAgentStoreModule`
+  bind one to `AGENT_CONFIRM_TOKEN_STORE` (`agent_confirm_token`, only the token's SHA-256 is kept);
+  `InMemoryConfirmTokenStore` is for one replica. Without a store a token commits as often as it is
+  sent until it expires.
+- It registers as `kind: 'read'`, so the MCP server lists it; `withConfirmFields(schema)` adds
+  `confirm` / `confirmToken` to what the model sees (a Zod 3 schema keeps its real shape).
+
 ## Your tools to an MCP client (`-mcp-server`)
 
 The other direction: mount a Streamable HTTP MCP endpoint so an external client — Claude Desktop, an

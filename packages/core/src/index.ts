@@ -108,3 +108,32 @@ export {
   type GovernanceToolCallRow,
   type GovernanceUsageRow,
 } from './in-memory-store.js';
+export {
+  canonicalJson,
+  confirmTokenExpiry,
+  type ConfirmTokenSubject,
+  DEFAULT_CONFIRM_TTL_MS,
+  hashConfirmToken,
+  InMemoryConfirmTokenStore,
+  signConfirmToken,
+  verifyConfirmToken,
+} from './confirm-token.js';
+export type { ConfirmTokenClaim, ConfirmTokenStore } from './spi/confirm-token-store.js';
+export {
+  CONFIRM_JSON_SCHEMA_PROPERTIES,
+  type ConfirmedTool,
+  type ConfirmedToolDone,
+  type ConfirmedToolMessages,
+  type ConfirmedToolOptions,
+  type ConfirmedToolOutcome,
+  type ConfirmedToolPreview,
+  type ConfirmedToolResult,
+  type ConfirmedToolSteps,
+  type ConfirmFields,
+  ConfirmTokenError,
+  defineConfirmedTool,
+  SCHEMA_EXTENSION,
+  type SchemaExtension,
+  schemaExtensionOf,
+  withConfirmFields,
+} from './confirmed-tool.js';

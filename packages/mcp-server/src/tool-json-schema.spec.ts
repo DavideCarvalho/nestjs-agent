@@ -1,3 +1,4 @@
+import { withConfirmFields } from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -60,5 +61,15 @@ describe('toMcpInputSchema', () => {
       properties: {},
       additionalProperties: true,
     });
+  });
+
+  it('describes a confirmed tool as its real Zod shape plus confirm / confirmToken', () => {
+    const schema = toMcpInputSchema(withConfirmFields(z.object({ orderId: z.string() })));
+    expect(schema.properties).toMatchObject({
+      orderId: { type: 'string' },
+      confirm: { type: 'boolean' },
+      confirmToken: { type: 'string' },
+    });
+    expect(schema.required).toEqual(['orderId']);
   });
 });
