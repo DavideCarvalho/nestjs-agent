@@ -75,3 +75,9 @@ export const AGENT_MEMORY = Symbol.for('@dudousxd/nestjs-agent:memory');
  * lazily by the bound {@link AGENT_SKILLS} provider — discovery runs after DI has built it.
  */
 export const AGENT_SKILL_SOURCES = Symbol.for('@dudousxd/nestjs-agent:skill-sources');
+/**
+ * The `ConfirmTokenStore` that makes a `defineConfirmedTool` confirmation single use. Bound by the
+ * store modules (`DrizzleAgentStoreModule`, `MikroOrmAgentStoreModule`); inject it into the factory
+ * that builds the tool (`provideAgentTool(factory, [AGENT_CONFIRM_TOKEN_STORE])`).
+ */
+export const AGENT_CONFIRM_TOKEN_STORE = Symbol.for('@dudousxd/nestjs-agent:confirm-token-store');

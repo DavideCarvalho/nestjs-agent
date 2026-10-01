@@ -12,6 +12,7 @@ import {
   type ToolDefinition,
   type ToolResult,
   encodeStreamEvent,
+  schemaExtensionOf,
   staticModelCatalog,
 } from '@dudousxd/nestjs-agent-core';
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
@@ -22,6 +23,7 @@ import {
   type FilePart,
   type FlexibleSchema,
   type ImagePart,
+  type JSONSchema7,
   type JSONValue,
   type LanguageModel,
   type LanguageModelUsage,
@@ -33,6 +35,7 @@ import {
   type ToolResultPart,
   type ToolSet,
   type TypedToolCall,
+  asSchema,
   jsonSchema,
   streamText,
   tool,
@@ -448,6 +451,21 @@ function mapTools(tools: ToolDefinition[]): ToolSet {
  * still validates the tool input against the real schema via `~standard.validate` before running it.
  */
 function toSdkInputSchema(schema: StandardSchemaV1): FlexibleSchema<unknown> {
+  // A schema that is another schema plus a few properties (`withConfirmFields`): convert the inner
+  // one the way it converts best — a Zod 3 schema only the SDK can describe — and add them.
+  const extension = schemaExtensionOf(schema);
+  if (extension !== undefined) {
+    const base = asSchema(toSdkInputSchema(extension.base));
+    return jsonSchema(async () => {
+      const described = (await base.jsonSchema) as JSONSchema7;
+      const properties = typeof described.properties === 'object' ? described.properties : {};
+      return {
+        ...described,
+        type: 'object',
+        properties: { ...properties, ...(extension.properties as JSONSchema7['properties']) },
+      };
+    });
+  }
   if (isZodSchema(schema) || hasStandardJsonSchema(schema)) {
     return schema;
   }

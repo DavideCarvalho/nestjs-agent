@@ -1,4 +1,5 @@
 import {
+  AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
   AGENT_STORE,
@@ -6,6 +7,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
+import { DrizzleConfirmTokenStore } from './drizzle-confirm-token-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
 import { DrizzleMemoryProvider } from './drizzle-memory-provider.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
@@ -40,7 +42,8 @@ export interface DrizzleAgentStoreModuleOptions {
  * Binds {@link DrizzleAgentStore} to the {@link AGENT_STORE} token consumed by
  * `@dudousxd/nestjs-agent`, plus {@link DrizzleGovernanceQueries} to
  * {@link AGENT_GOVERNANCE_QUERIES} (the read-model the dashboard/telescope surfaces consume) and
- * {@link DrizzlePricingStore} to {@link AGENT_PRICING_STORE} (the write side of that pricing table).
+ * {@link DrizzlePricingStore} to {@link AGENT_PRICING_STORE} (the write side of that pricing table),
+ * and {@link DrizzleConfirmTokenStore} to {@link AGENT_CONFIRM_TOKEN_STORE} (confirmed writes).
  * The host app supplies an already-opened Drizzle db — this module never opens a connection itself.
  *
  * The returned module is global, so {@link AGENT_STORE}, {@link AGENT_GOVERNANCE_QUERIES} and
@@ -92,6 +95,12 @@ export class DrizzleAgentStoreModule {
           inject: [AGENT_PRICING_STORE],
         },
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: DrizzleGovernanceQueries },
+        // What makes a `defineConfirmedTool` confirmation single use across replicas.
+        {
+          provide: DrizzleConfirmTokenStore,
+          useFactory: () => new DrizzleConfirmTokenStore(options.db),
+        },
+        { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: DrizzleConfirmTokenStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [DrizzleRagIngestionLog]),
@@ -102,6 +111,8 @@ export class DrizzleAgentStoreModule {
         AGENT_GOVERNANCE_QUERIES,
         DrizzlePricingStore,
         AGENT_PRICING_STORE,
+        DrizzleConfirmTokenStore,
+        AGENT_CONFIRM_TOKEN_STORE,
       ],
     };
   }

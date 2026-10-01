@@ -44,3 +44,8 @@ export {
   type ChatQueueContractCase,
   type ChatQueueContractSubject,
 } from './chat-queue-store-contract.js';
+export {
+  CONFIRM_TOKEN_STORE_CONTRACT,
+  type ConfirmTokenContractCase,
+  type ConfirmTokenContractSubject,
+} from './confirm-token-store-contract.js';

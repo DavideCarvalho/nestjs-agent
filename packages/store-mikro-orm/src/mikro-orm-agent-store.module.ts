@@ -1,4 +1,5 @@
 import {
+  AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
   AGENT_STORE,
@@ -14,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { ensureAgentSchema } from './ensure-schema';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
+import { MikroOrmConfirmTokenStore } from './mikro-orm-confirm-token-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmMemoryProvider } from './mikro-orm-memory-provider';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
@@ -140,6 +142,13 @@ export class MikroOrmAgentStoreModule {
           inject: [EntityManager, AGENT_PRICING_STORE],
         },
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: MikroOrmGovernanceQueries },
+        // What makes a `defineConfirmedTool` confirmation single use across replicas.
+        {
+          provide: MikroOrmConfirmTokenStore,
+          useFactory: (em: EntityManager) => new MikroOrmConfirmTokenStore(em),
+          inject: [EntityManager],
+        },
+        { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: MikroOrmConfirmTokenStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [MikroOrmRagIngestionLog]),
@@ -150,6 +159,8 @@ export class MikroOrmAgentStoreModule {
         AGENT_GOVERNANCE_QUERIES,
         MikroOrmPricingStore,
         AGENT_PRICING_STORE,
+        MikroOrmConfirmTokenStore,
+        AGENT_CONFIRM_TOKEN_STORE,
       ],
     };
   }

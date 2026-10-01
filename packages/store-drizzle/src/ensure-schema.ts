@@ -158,6 +158,15 @@ const statements: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS rag_ingestion_log_collection_idx
     ON rag_ingestion_log (collection, updated_at)`,
+  `CREATE TABLE IF NOT EXISTS agent_confirm_token (
+    hash TEXT PRIMARY KEY NOT NULL,
+    actor_ref TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS agent_confirm_token_expires_idx
+    ON agent_confirm_token (expires_at)`,
 ];
 
 /**

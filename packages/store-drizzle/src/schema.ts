@@ -327,6 +327,24 @@ export const ragIngestionLog = sqliteTable(
   (table) => [index('rag_ingestion_log_collection_idx').on(table.collection, table.updatedAt)],
 );
 
+/**
+ * Spent confirm tokens (`defineConfirmedTool`), one row per token, keyed by its SHA-256 — the
+ * primary key is the lock that makes a confirmation single use across replicas. Only the hash, the
+ * actor and the tool are kept, never an argument. `expires_at` is epoch-ms; past it the row is dead
+ * weight for `DrizzleConfirmTokenStore.purgeExpired`.
+ */
+export const agentConfirmToken = sqliteTable(
+  'agent_confirm_token',
+  {
+    hash: text('hash').primaryKey(),
+    actorRef: text('actor_ref').notNull(),
+    tool: text('tool').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [index('agent_confirm_token_expires_idx').on(table.expiresAt)],
+);
+
 /** The tables this store owns, as one schema object, ready for `drizzle(client, { schema })`. */
 export const agentSchema = {
   agentThread,
@@ -338,6 +356,7 @@ export const agentSchema = {
   agentRun,
   agentMemory,
   ragIngestionLog,
+  agentConfirmToken,
 };
 
 /**

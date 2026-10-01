@@ -1,4 +1,8 @@
-import type { SinkWriter, ToolDefinition } from '@dudousxd/nestjs-agent-core';
+import {
+  type SinkWriter,
+  type ToolDefinition,
+  withConfirmFields,
+} from '@dudousxd/nestjs-agent-core';
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 import type { JSONSchema7 } from 'ai';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
@@ -126,5 +130,23 @@ describe('aiSdkModel — Standard Schema → model params (real SDK)', () => {
     // No throw, and the SDK receives a valid (if shapeless) object schema; the agent loop still
     // validates input against the real Standard Schema before running the tool.
     expect(schema).toMatchObject({ type: 'object', additionalProperties: true });
+  });
+
+  it('shows a confirmed tool its real Zod shape plus confirm / confirmToken', async () => {
+    const tool: ToolDefinition = {
+      name: 'refund',
+      kind: 'read',
+      description: 'refund',
+      inputSchema: withConfirmFields(z.object({ orderId: z.string() }).strict()),
+    };
+
+    const schema = schemaSeenByModel(await runWith([tool]), 'refund');
+
+    expect(schema.properties).toMatchObject({
+      orderId: { type: 'string' },
+      confirm: { type: 'boolean' },
+      confirmToken: { type: 'string' },
+    });
+    expect(schema.required).toEqual(['orderId']);
   });
 });

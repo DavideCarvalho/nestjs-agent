@@ -1,3 +1,4 @@
+import { schemaExtensionOf } from '@dudousxd/nestjs-agent-core';
 import type { AnyObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -76,6 +77,15 @@ function asMcpInputSchema(converted: Record<string, unknown>): McpInputSchema {
  * fit it is refused whatever the client was told.
  */
 export function toMcpInputSchema(schema: StandardSchemaV1): McpInputSchema {
+  // Another schema plus a few properties (`withConfirmFields`): describe the inner one, add them.
+  const extension = schemaExtensionOf(schema);
+  if (extension !== undefined) {
+    const base = toMcpInputSchema(extension.base);
+    return asMcpInputSchema({
+      ...base,
+      properties: { ...(base.properties ?? {}), ...extension.properties },
+    });
+  }
   if (isZodSchema(schema)) {
     return asMcpInputSchema(toJsonSchemaCompat(schema));
   }
