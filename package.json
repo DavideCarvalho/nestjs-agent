@@ -37,7 +37,7 @@
     "@types/node": "22.20.4",
     "reflect-metadata": "0.2.2",
     "testcontainers": "12.1.0",
-    "turbo": "2.11.3",
+    "turbo": "2.11.5",
     "typescript": "5.9.3",
     "unplugin-swc": "1.6.0",
     "vitest": "2.1.9"
