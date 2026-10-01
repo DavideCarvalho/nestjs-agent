@@ -14,9 +14,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { TablesRelationalConfig } from 'drizzle-orm';
 import {
-  type BaseSQLiteDatabase,
   index,
   integer,
   primaryKey,
@@ -94,6 +92,12 @@ export const agentMessage = sqliteTable(
     ui: text('ui', { mode: 'json' }).$type<AgentUiComponent[]>(),
     /** The thread owner's thumbs-up/down (+ comment); `null` when unrated. Not copied on fork. */
     feedback: text('feedback', { mode: 'json' }).$type<MessageFeedback>(),
+    /**
+     * The message's place in its thread, 1-based, assigned on append — what orders a transcript.
+     * `created_at` cannot: two messages of one turn routinely share a timestamp, and the uuid that
+     * broke the tie is random. `null` on a row from before the column; those sort first.
+     */
+    seq: integer('seq'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_message_thread_created_idx').on(table.threadId, table.createdAt)],
@@ -381,19 +385,14 @@ export const agentSchema = {
   agentMemory,
   ragIngestionLog,
   agentConfirmToken,
+  agentStreamFrame,
 };
 
 /**
- * The dialect-portable Drizzle SQLite database handle the store operates on. Accepts any SQLite
- * driver (better-sqlite3, libsql, D1, …) in either sync or async result mode; the host app owns
- * the connection and passes the `drizzle(...)` instance in.
+ * The database handle the stores take — SQLite, Postgres or MySQL. Defined in `./dialect.js`;
+ * re-exported here, where it has always been importable from.
  */
-export type AgentDrizzleDb = BaseSQLiteDatabase<
-  'sync' | 'async',
-  unknown,
-  Record<string, unknown>,
-  TablesRelationalConfig
->;
+export type { AgentDrizzleDb } from './dialect.js';
 
 /** A persisted thread row as Drizzle selects it. */
 export type AgentThreadRow = typeof agentThread.$inferSelect;

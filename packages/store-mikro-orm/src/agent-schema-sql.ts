@@ -1,4 +1,4 @@
-import { type Configuration, MikroORM } from '@mikro-orm/core';
+import { type Configuration, EntitySchema, MikroORM } from '@mikro-orm/core';
 import { agentEntities } from './entities';
 
 export interface AgentSchemaSqlOptions {
@@ -10,6 +10,29 @@ export interface AgentSchemaSqlOptions {
    * so the guard is only ever meaningful on the table statement.
    */
   ifNotExists?: boolean;
+  /**
+   * The string collation to render. Default: whatever the host registered the agent entities with
+   * (`AGENT_ENTITIES` carries `utf8mb4_unicode_ci`), read off the config; none when it registered
+   * them without one.
+   */
+  collation?: string;
+}
+
+/**
+ * The collation the host's own agent entities carry, so the DDL rendered here matches the schema
+ * `ensureAgentSchema` diffs against. Rendering without it made every key column on MySQL differ in
+ * collation from what the entities declare — and those are exactly the columns MySQL refuses to
+ * `modify` while a foreign key points at them, so the heal warned about them on every boot after.
+ */
+function hostCollation(config: Configuration): string | undefined {
+  const entities = (config.get('entities') ?? []) as unknown[];
+  for (const entity of entities) {
+    if (entity instanceof EntitySchema && entity.meta.tableName === 'agent_thread') {
+      const id = entity.meta.properties.id as { collation?: string } | undefined;
+      return id?.collation;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -41,10 +64,11 @@ export async function agentSchemaSql(
   // Accept either an ORM (has `.config`) or a Configuration directly — a `Migration` only gets the
   // latter via `this.config`, and that's the primary place this helper is called.
   const config = 'config' in source ? source.config : source;
+  const collation = options?.collation ?? hostCollation(config);
   const isolated = await MikroORM.init({
     driver: config.get('driver'),
     dbName: config.get('dbName'),
-    entities: agentEntities(),
+    entities: agentEntities(collation !== undefined ? { collation } : {}),
     allowGlobalContext: true,
   });
   try {

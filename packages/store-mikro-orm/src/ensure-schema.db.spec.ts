@@ -1,12 +1,23 @@
-// Integration: ensureAgentSchema healing a real SQLite database (better-sqlite3, via
-// @mikro-orm/sqlite). Runs only under `pnpm test:db`.
+// Integration: ensureAgentSchema healing real databases. The first block is SQLite's own table
+// REBUILD path (hand-written old shapes); the second runs on SQLite, Postgres and MySQL alike. Runs
+// only under `pnpm test:db`.
 import { EntitySchema, MikroORM } from '@mikro-orm/core';
 import { SqliteDriver } from '@mikro-orm/sqlite';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
+import {
+  agentEntitiesFor,
+  columnsOf,
+  describeEachDialect,
+  dialectOf,
+  indexesOf,
+  openFreshOrm,
+  openOrmAt,
+  rawSql,
+} from './testing/real-db';
 
 /** An `agent_thread` from an older revision of the lib: no tenant, stream, agent or soft delete. */
 const THREAD_BEFORE_COLUMNS_WERE_ADDED = `create table agent_thread (
@@ -94,14 +105,6 @@ async function orm(extra: EntitySchema[] = []): Promise<MikroORM> {
     entities: [...agentEntities(), ...extra],
     allowGlobalContext: true,
   });
-}
-
-async function columnsOf(instance: MikroORM, table: string): Promise<string[]> {
-  // `Connection.execute` resolves to `any`, so the row shape is declared here rather than inferred.
-  const info: { name: string }[] = await instance.em
-    .getConnection()
-    .execute(`pragma table_info(${table})`);
-  return info.map((column) => column.name);
 }
 
 async function foreignKeysEnforced(instance: MikroORM): Promise<boolean> {
@@ -369,5 +372,178 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
     } finally {
       await instance.close(true);
     }
+  });
+});
+
+/**
+ * Columns each table gained after its first release. Dropping them from a current schema is what an
+ * older install of the lib looks like on any dialect — in the types that dialect's MikroORM really
+ * emitted, which a hand-written "old" DDL would only approximate.
+ */
+const ADDED_LATER: Record<string, string[]> = {
+  agent_thread: [
+    'tenant_ref',
+    'active_stream_id',
+    'default_agent',
+    'model',
+    'persona',
+    'queue_pause',
+    'deleted_at',
+  ],
+  agent_run: ['parent_run_id'],
+  agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'attachments', 'seq', 'persona'],
+  agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
+};
+
+/** The update DDL the differ still wants for agent tables — empty once the heal has landed. */
+async function pendingAgentDdl(instance: MikroORM): Promise<string[]> {
+  const generator = instance.em
+    .getPlatform()
+    .getSchemaGenerator(instance.em.getDriver(), instance.em);
+  const sql = await generator.getUpdateSchemaSQL({ safe: true, wrap: false });
+  return sql
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter((statement) => /\bagent_|\brag_ingestion_log\b/.test(statement));
+}
+
+describeEachDialect('ensureAgentSchema on a real database', (dialect) => {
+  const opened: MikroORM[] = [];
+  async function fresh(extra: EntitySchema[] = []): Promise<MikroORM> {
+    const instance = await openFreshOrm(
+      dialect,
+      extra.length > 0 ? { entities: [...agentEntitiesFor(dialect), ...extra] } : {},
+    );
+    opened.push(instance);
+    return instance;
+  }
+
+  afterEach(async () => {
+    for (const instance of opened.splice(0)) await instance.close(true);
+  });
+
+  it('creates every table on an empty database, and leaves the differ nothing to do', async () => {
+    const instance = await fresh();
+
+    await ensureAgentSchema(instance);
+
+    expect(await pendingAgentDdl(instance)).toEqual([]);
+    expect(await storedFingerprint(instance)).toMatch(/^[a-f0-9]{64}$/);
+    const store = new MikroOrmAgentStore(instance.em);
+    const thread = await store.createThread({ actor: { id: 'a' }, title: 'boot' });
+    expect((await store.getThread(thread.id))?.title).toBe('boot');
+  });
+
+  it('adds every later column back to tables that hold rows, and keeps the rows', async () => {
+    const instance = await fresh();
+    for (const statement of await agentSchemaSql(instance, { ifNotExists: false })) {
+      await rawSql(instance, statement);
+    }
+    for (const [table, columns] of Object.entries(ADDED_LATER)) {
+      for (const column of columns) {
+        await rawSql(instance, `alter table ${table} drop column ${column}`);
+      }
+    }
+    const transient = dialect === 'postgres' ? 'false' : '0';
+    await rawSql(
+      instance,
+      `insert into agent_thread (id, actor_ref, title, transient, created_at, updated_at) values ('t1', 'a1', 'Old chat', ${transient}, '2026-01-01 00:00:00', '2026-01-01 00:00:00')`,
+    );
+    await rawSql(
+      instance,
+      "insert into agent_message (id, thread_id, role, content, created_at) values ('m1', 't1', 'user', 'old row', '2026-01-01 00:00:00')",
+    );
+    await rawSql(
+      instance,
+      "insert into agent_run (id, thread_id, actor_ref, status, retries, started_at) values ('r1', 't1', 'a1', 'completed', 0, '2026-01-01 00:00:00')",
+    );
+
+    await ensureAgentSchema(instance);
+
+    for (const [table, columns] of Object.entries(ADDED_LATER)) {
+      expect(await columnsOf(instance, table)).toEqual(expect.arrayContaining(columns));
+    }
+    expect(await pendingAgentDdl(instance)).toEqual([]);
+    const store = new MikroOrmAgentStore(instance.em);
+    expect((await store.getThread('t1'))?.messages.map((message) => message.content)).toEqual([
+      'old row',
+    ]);
+    await store.updateThread('t1', { defaultAgent: 'researcher' });
+    expect(await store.defaultAgentForThread('t1')).toBe('researcher');
+    const runs: { id: string }[] = await rawSql(instance, 'select id from agent_run');
+    expect(runs.map((row) => row.id)).toEqual(['r1']);
+  });
+
+  it('leaves a host table the store does not own untouched', async () => {
+    const instance = await fresh([hostNoteSchema]);
+    await rawSql(
+      instance,
+      'create table host_note (id varchar(64) not null primary key, body varchar(255) not null)',
+    );
+    await rawSql(instance, "insert into host_note values ('n1', 'host row')");
+
+    await ensureAgentSchema(instance);
+
+    expect(await columnsOf(instance, 'host_note')).toEqual(['id', 'body']);
+  });
+
+  it('lets several replicas boot at once against an empty database', async () => {
+    if (dialect === 'sqlite') return; // one in-memory connection: there is no second replica
+    const first = await fresh();
+    const url = first.config.get('clientUrl') as string;
+    const others = await Promise.all(
+      [1, 2, 3].map(async () => {
+        const replica = await openOrmAt(dialect, url);
+        opened.push(replica);
+        return replica;
+      }),
+    );
+
+    await Promise.all([first, ...others].map((instance) => ensureAgentSchema(instance)));
+
+    expect(await pendingAgentDdl(first)).toEqual([]);
+  });
+
+  it('indexes the columns every message-scoped and thread-scoped read filters on', async () => {
+    const instance = await fresh();
+    await ensureAgentSchema(instance);
+    const leading = async (table: string) =>
+      (await indexesOf(instance, table)).map((index) => index.columns[0]);
+    // `truncateFrom`'s delete and the turn reader's IN (…) — and the cascade from agent_message.
+    expect(await leading('agent_tool_call')).toContain('message_id');
+    expect(await leading('agent_message')).toContain('thread_id');
+    expect(dialectOf(instance)).toBe(dialect);
+  });
+  it('widens an install from before sub-second timestamps and unbounded text, and only on MySQL', async () => {
+    const instance = await fresh();
+    // The DDL this lib rendered before: whole-second `datetime` and 64 KB `text` on MySQL, and on
+    // Postgres the very same schema it renders now.
+    for (const statement of await agentSchemaSql(instance, { ifNotExists: false })) {
+      await rawSql(
+        instance,
+        statement
+          .replaceAll('datetime(6)', 'datetime')
+          .replaceAll('timestamptz(6)', 'timestamptz')
+          .replaceAll('longtext', 'text'),
+      );
+    }
+    const before = await pendingAgentDdl(instance);
+    if (dialect === 'mysql') {
+      expect(before.some((sql) => /modify `created_at` datetime\(6\)/.test(sql))).toBe(true);
+      expect(before.some((sql) => /modify `content` longtext/.test(sql))).toBe(true);
+    } else {
+      // Nothing to alter: an upgrade must not rewrite a Postgres or SQLite table at boot.
+      expect(before).toEqual([]);
+    }
+
+    await ensureAgentSchema(instance);
+
+    expect(await pendingAgentDdl(instance)).toEqual([]);
+    const store = new MikroOrmAgentStore(instance.em);
+    const thread = await store.createThread({ actor: { id: 'a' } });
+    const big = 'y'.repeat(100_000);
+    await store.appendMessage({ threadId: thread.id, role: 'user', content: big });
+    const [message] = (await store.getThread(thread.id))?.messages ?? [];
+    expect(message?.content.length).toBe(big.length);
   });
 });

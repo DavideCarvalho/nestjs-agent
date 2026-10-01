@@ -26,13 +26,14 @@ import {
   type UpdateToolCallInput,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
-import { type EntityManager, raw } from '@mikro-orm/core';
+import { type EntityManager, QueryOrder, raw } from '@mikro-orm/core';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentQueuedMessage } from './entities/agent-queued-message.entity';
 import { AgentRun } from './entities/agent-run.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
+import { MESSAGE_ORDER, MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
 
 /**
  * Re-exported from the core SPI so a consumer can name this store's window read without importing a
@@ -97,11 +98,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
     if (thread === null) {
       return null;
     }
-    const messages = await em.find(
-      AgentMessage,
-      { thread },
-      { orderBy: { createdAt: 'asc', id: 'asc' } },
-    );
+    const messages = await em.find(AgentMessage, { thread }, { orderBy: MESSAGE_ORDER });
     // A message that carries tool calls and no results of its own is completed from the
     // `agent_tool_call` rows: an assistant message whose calls have no matching results makes the
     // NEXT turn throw MissingToolResultsError at the provider, and the rows are the only other
@@ -176,7 +173,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       { thread: threadId },
       {
         fields: TURN_MESSAGE_FIELDS,
-        orderBy: { createdAt: 'desc', id: 'desc' },
+        orderBy: MESSAGE_ORDER_NEWEST_FIRST,
         ...(limit !== undefined ? { limit } : {}),
       },
     );
@@ -299,7 +296,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       const last = await em.findOne(
         AgentMessage,
         { thread },
-        { orderBy: { createdAt: 'desc', id: 'desc' } },
+        { orderBy: MESSAGE_ORDER_NEWEST_FIRST },
       );
       summaries.push(this.toSummary(thread, last?.content));
     }
@@ -321,11 +318,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
     if (source === null) {
       throw new Error(`thread ${threadId} not found`);
     }
-    const messages = await em.find(
-      AgentMessage,
-      { thread: source },
-      { orderBy: { createdAt: 'asc', id: 'asc' } },
-    );
+    const messages = await em.find(AgentMessage, { thread: source }, { orderBy: MESSAGE_ORDER });
     const cutoff = messages.findIndex((message) => message.id === fromMessageId);
     const kept = cutoff >= 0 ? messages.slice(0, cutoff + 1) : messages;
     const now = new Date();
@@ -342,13 +335,15 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       ...(source.persona != null ? { persona: source.persona } : {}),
     });
     em.persist(fork);
-    for (const message of kept) {
+    for (const [index, message] of kept.entries()) {
       em.persist(
         em.create(AgentMessage, {
           id: crypto.randomUUID(),
           thread: fork,
           role: message.role,
           content: message.content,
+          // Numbered afresh in the order just read, so the copy reads back in the original's order.
+          seq: index + 1,
           createdAt: message.createdAt,
           ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
           ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
@@ -454,7 +449,13 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       { id: threadId, $or: holders },
       { activeStreamId: runId },
     );
-    return changed > 0;
+    if (changed > 0) {
+      return true;
+    }
+    // Zero can still be a win: a MySQL connection without FOUND_ROWS reports CHANGED rows, and
+    // re-claiming a thread this run already holds changes nothing. The row says who holds it now.
+    const thread = await em.findOne(AgentThread, { id: threadId }, { fields: ['activeStreamId'] });
+    return thread?.activeStreamId === runId;
   }
 
   async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
@@ -768,6 +769,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       thread,
       role: input.role,
       content: input.content,
+      seq: await this.nextMessageSeq(em, thread.id),
       createdAt: now,
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
@@ -785,6 +787,19 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
     em.persist(message);
     await em.flush();
     return this.toStoredMessage(message);
+  }
+
+  /**
+   * The next `seq` in a thread: one past its highest. Two appends racing on ONE thread can draw the
+   * same number — the turn loop never does that, and the tie then falls back to `created_at`, `id`.
+   */
+  private async nextMessageSeq(em: EntityManager, threadId: string): Promise<number> {
+    const [last] = await em.find(
+      AgentMessage,
+      { thread: threadId, seq: { $ne: null } },
+      { fields: ['seq'], orderBy: { seq: QueryOrder.DESC }, limit: 1 },
+    );
+    return (last?.seq ?? 0) + 1;
   }
 
   async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
@@ -829,11 +844,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
     if (thread === null) {
       return;
     }
-    const messages = await em.find(
-      AgentMessage,
-      { thread },
-      { orderBy: { createdAt: 'asc', id: 'asc' } },
-    );
+    const messages = await em.find(AgentMessage, { thread }, { orderBy: MESSAGE_ORDER });
     const cutoff = messages.findIndex((message) => message.id === messageId);
     if (cutoff < 0) {
       return;

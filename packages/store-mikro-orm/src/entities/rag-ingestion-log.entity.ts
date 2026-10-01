@@ -1,4 +1,5 @@
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { DATETIME, LongTextType } from './column-types';
 
 /** The terminal states an ingestion attempt can land in. Mirrors `MediaIngestOutcome`. */
 export type RagIngestionStatus = 'ingested' | 'skipped' | 'failed' | 'removed';
@@ -62,9 +63,9 @@ export function ragIngestionLogSchema(collation?: string): EntitySchema<RagInges
       size: { type: 'integer', nullable: true },
       chunks: { type: 'integer', nullable: true },
       reason: { type: 'string', nullable: true, ...str },
-      error: { type: 'text', nullable: true },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
-      updatedAt: { type: 'datetime', fieldName: 'updated_at' },
+      error: { type: LongTextType, nullable: true },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
+      updatedAt: { ...DATETIME, fieldName: 'updated_at' },
     },
   });
 }

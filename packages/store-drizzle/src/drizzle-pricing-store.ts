@@ -4,7 +4,16 @@ import type {
   ModelPriceInput,
 } from '@dudousxd/nestjs-agent-core';
 import { and, eq } from 'drizzle-orm';
-import { type AgentDrizzleDb, agentModelPricing } from './schema.js';
+import {
+  type AgentDialect,
+  type AgentDrizzleDb,
+  type AgentSqliteDb,
+  type AgentTables,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+} from './dialect.js';
+import { agentModelPricing } from './schema.js';
 
 /**
  * {@link AgentPricingStore} backed by Drizzle ORM — the write side of the pricing table
@@ -13,16 +22,27 @@ import { type AgentDrizzleDb, agentModelPricing } from './schema.js';
  * {@link import('@dudousxd/nestjs-agent-store-mikro-orm')} exactly (atomic supersede semantics).
  */
 export class DrizzlePricingStore implements AgentPricingStore {
-  constructor(private readonly db: AgentDrizzleDb) {}
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
+  constructor(db: AgentDrizzleDb) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   async upsertModelPrice(input: ModelPriceInput): Promise<void> {
     await this.db
-      .update(agentModelPricing)
+      .update(this.t.agentModelPricing)
       .set({ isCurrent: false })
       .where(
-        and(eq(agentModelPricing.modelId, input.modelId), eq(agentModelPricing.isCurrent, true)),
+        and(
+          eq(this.t.agentModelPricing.modelId, input.modelId),
+          eq(this.t.agentModelPricing.isCurrent, true),
+        ),
       );
-    await this.db.insert(agentModelPricing).values({
+    await this.db.insert(this.t.agentModelPricing).values({
       id: crypto.randomUUID(),
       modelId: input.modelId,
       inputPricePer1m: input.inputPricePer1m,
@@ -37,8 +57,8 @@ export class DrizzlePricingStore implements AgentPricingStore {
   async listCurrentPrices(): Promise<CurrentModelPrice[]> {
     const rows = await this.db
       .select()
-      .from(agentModelPricing)
-      .where(eq(agentModelPricing.isCurrent, true));
+      .from(this.t.agentModelPricing)
+      .where(eq(this.t.agentModelPricing.isCurrent, true));
     return rows.map((row) => ({
       modelId: row.modelId,
       inputPricePer1m: row.inputPricePer1m,

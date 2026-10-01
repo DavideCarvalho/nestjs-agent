@@ -40,7 +40,11 @@ export interface StreamFrameTable {
   remove(runIds: readonly string[]): Promise<void>;
   /** Runs whose LAST row was written before `cutoff` (epoch-ms). */
   lapsedRuns(cutoff: number): Promise<string[]>;
-  /** Is this error a lost race for a `(run_id, seq)` — and nothing else (a missing table, a dead connection)? */
+  /**
+   * Is this error a lost race for a `(run_id, seq)` — a duplicate key, or the database rolling this
+   * writer back as a deadlock victim (InnoDB's way of settling two concurrent `INSERT … SELECT`) —
+   * and nothing else (a missing table, a dead connection)?
+   */
   isUniqueViolation(error: unknown): boolean;
 }
 

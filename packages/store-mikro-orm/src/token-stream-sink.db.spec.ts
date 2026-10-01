@@ -1,52 +1,59 @@
-// Integration: MikroOrmTokenStreamSink against SQLite. Runs only under `pnpm test:db`.
+// Integration: MikroOrmTokenStreamSink on SQLite, Postgres and MySQL — two "replicas" are two ORMs
+// (two pools) over one database wherever the dialect allows it. Runs only under `pnpm test:db`.
 import { SQL_TOKEN_STREAM_SINK_CONTRACT } from '@dudousxd/nestjs-agent-testing';
-import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
-import { afterEach, describe, it } from 'vitest';
-import { ensureAgentSchema } from './ensure-schema';
-import { agentEntities } from './entities';
+import type { MikroORM } from '@mikro-orm/sqlite';
+import { afterAll, beforeAll, beforeEach, it } from 'vitest';
 import { MikroOrmTokenStreamSink } from './mikro-orm-token-stream-sink';
+import { type AgentOrmHandle, describeEachDialect, openAgentOrm, rawSql } from './testing/real-db';
 
-let orm: MikroORM | undefined;
+describeEachDialect('MikroOrmTokenStreamSink — the SQL sink contract', (dialect) => {
+  let handle: AgentOrmHandle;
+  let replicas: MikroORM[];
 
-afterEach(async () => {
-  await orm?.close(true);
-  orm = undefined;
-});
+  beforeAll(async () => {
+    handle = await openAgentOrm(dialect);
+    replicas = [handle.orm, await handle.replica()];
+  });
 
-describe('MikroOrmTokenStreamSink — the SQL sink contract', () => {
+  afterAll(async () => {
+    await handle?.close();
+  });
+
+  // The purge cases count what they purged, so each case starts from an empty table.
+  beforeEach(async () => {
+    await rawSql(handle.orm, 'delete from agent_stream_frame');
+  });
+
   for (const contractCase of SQL_TOKEN_STREAM_SINK_CONTRACT) {
     it(contractCase.name, async () => {
-      orm = await MikroORM.init({
-        driver: SqliteDriver,
-        dbName: ':memory:',
-        entities: agentEntities(),
-        allowGlobalContext: true,
-      });
-      await ensureAgentSchema(orm);
-      const { em } = orm;
-      const connection = em.getConnection();
+      const { orm } = handle;
       await contractCase.run(
         {
-          sinkOn: (_replica, options) => new MikroOrmTokenStreamSink(em, options),
+          sinkOn: (replica, options) =>
+            new MikroOrmTokenStreamSink((replicas[replica] ?? orm).em, options),
           rowCount: async (runId) =>
             (
-              await connection.execute('select seq from agent_stream_frame where run_id = ?', [
+              await rawSql<unknown[]>(orm, 'select seq from agent_stream_frame where run_id = ?', [
                 runId,
               ])
             ).length,
           seqs: async (runId) =>
             (
-              await connection.execute<{ seq: number }[]>(
+              await rawSql<{ seq: unknown }[]>(
+                orm,
                 'select seq from agent_stream_frame where run_id = ? order by seq asc',
                 [runId],
               )
             ).map((row) => Number(row.seq)),
           insertRow: async (runId, seq, frame, createdAt) => {
-            await connection.execute(
-              'insert into agent_stream_frame (run_id, seq, frame, error, created_at) values (?, ?, ?, null, ?)',
-              [runId, seq, frame, createdAt],
-              'run',
-            );
+            await orm.em
+              .fork()
+              .getConnection()
+              .execute(
+                'insert into agent_stream_frame (run_id, seq, frame, error, created_at) values (?, ?, ?, null, ?)',
+                [runId, seq, frame, createdAt],
+                'run',
+              );
           },
         },
         `run-${crypto.randomUUID()}`,

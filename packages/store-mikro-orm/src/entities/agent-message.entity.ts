@@ -9,6 +9,7 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
+import { DATETIME, LongTextType } from './column-types';
 
 /**
  * One stored message in a thread. The model-facing extras (`toolCalls`/`toolResults`/
@@ -37,6 +38,13 @@ export class AgentMessage {
   ui?: AgentUiComponent[] | null;
   /** The thread owner's thumbs-up/down (+ comment); `null` when unrated. Not copied on fork. */
   feedback?: MessageFeedback | null;
+  /**
+   * The message's place in its thread, 1-based, assigned on append — what orders a transcript.
+   * `created_at` cannot: two messages of one turn routinely share a timestamp (a whole second of
+   * them on MySQL's old `datetime`), and the uuid that broke the tie is random. `null` on a row
+   * written before the column existed; those sort first, in `created_at` order, as they always did.
+   */
+  seq?: number | null;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentMessageRepository;
 }
@@ -62,7 +70,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
         ...str,
       },
       role: { type: 'string', ...str },
-      content: { type: 'text', ...str },
+      content: { type: LongTextType, ...str },
       toolCalls: { type: 'json', nullable: true, fieldName: 'tool_calls' },
       toolResults: { type: 'json', nullable: true, fieldName: 'tool_results' },
       attachments: { type: 'json', nullable: true },
@@ -71,11 +79,12 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       persona: { type: 'string', nullable: true, ...str },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
-      reasoning: { type: 'text', nullable: true, ...str },
+      reasoning: { type: LongTextType, nullable: true, ...str },
       reasoningMs: { type: 'integer', nullable: true, fieldName: 'reasoning_ms' },
       ui: { type: 'json', nullable: true },
       feedback: { type: 'json', nullable: true },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
+      seq: { type: 'integer', nullable: true },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
     },
   });
 }

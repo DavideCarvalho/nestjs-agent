@@ -37,7 +37,7 @@ Extracted and generalized from the flip-nestjs admin assistant.
 | `@dudousxd/nestjs-agent-core` | Framework-agnostic SPIs, tool registry, the agent loop, personas, and the `aviary:agent:*` diagnostics channel; `/genui` (the isomorphic generative-UI catalog) |
 | `@dudousxd/nestjs-agent` | The NestJS module: `@AiTool` + discovery, `/agent/*` SSE controllers, inline + durable runners, multi-agent `forFeature`; `/genui` (`AgentGenuiModule`: generative-UI tools from a catalog, per-request catalogs) |
 | `@dudousxd/nestjs-agent-store-mikro-orm` | MikroORM persistence (threads, messages, tool calls, usage, pricing) |
-| `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres) |
+| `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres/MySQL) |
 | `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
 | `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
@@ -938,6 +938,18 @@ an orchestrator delegating to a sub-agent — all with the in-memory store + a d
 no API key or Redis. `pnpm --filter agent-demo start` boots the full NestJS app with the governance
 console mounted at `/ai-gateway`. See `docs/superpowers/specs/` for the API and governance-console
 design specs.
+
+## Testing against real databases
+
+`pnpm test` is the unit suite. `pnpm test:db` runs every store suite — both ORMs, every contract
+(chat queue, confirm tokens, the SQL stream sink, memory, runs/threads/tool calls, attachments,
+schema bootstrap and repair, concurrent admission) — on **SQLite, Postgres 16 and MySQL 8.4**. It
+starts one Postgres and one MySQL container for the whole run with testcontainers (each spec file
+gets its own throwaway database inside them) and removes them when it ends, so all it needs is
+Docker. Without Docker the Postgres/MySQL cases are reported as skipped, with the reason, and SQLite
+still runs; in CI (`CI` set, or `AGENT_TEST_REQUIRE_REAL_DB=1`) a missing Docker fails the run
+instead. To use servers you already have, point `AGENT_TEST_PG_URL` / `AGENT_TEST_MYSQL_URL` at a
+user that may `CREATE DATABASE`.
 
 ## Status
 

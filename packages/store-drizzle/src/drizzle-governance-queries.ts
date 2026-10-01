@@ -43,7 +43,15 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, sql, sum } from 'drizzle-orm';
 import {
+  type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSqliteDb,
+  type AgentTables,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+} from './dialect.js';
+import {
   type AgentRunStatus,
   agentMessage,
   agentRun,
@@ -168,10 +176,18 @@ function percentileMs(sortedDurationsMs: number[], p: number): number | null {
  * `quotaToday`) so day-bucketing stays dialect-portable.
  */
 export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
   constructor(
-    private readonly db: AgentDrizzleDb,
+    db: AgentDrizzleDb,
     private readonly pricingStore: AgentPricingStore,
-  ) {}
+  ) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   private async loadPricing(): Promise<Map<string, ModelPrice>> {
     const prices = await this.pricingStore.listCurrentPrices();
@@ -191,8 +207,13 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const rows = await this.db
       .select()
-      .from(agentTokenUsage)
-      .where(and(gte(agentTokenUsage.createdAt, start), lte(agentTokenUsage.createdAt, end)));
+      .from(this.t.agentTokenUsage)
+      .where(
+        and(
+          gte(this.t.agentTokenUsage.createdAt, start),
+          lte(this.t.agentTokenUsage.createdAt, end),
+        ),
+      );
     return rows.map(toUsageInput);
   }
 
@@ -220,8 +241,8 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     }
     const threads = await this.db
       .select()
-      .from(agentThread)
-      .where(and(inArray(agentThread.id, threadIds), isNull(agentThread.deletedAt)));
+      .from(this.t.agentThread)
+      .where(and(inArray(this.t.agentThread.id, threadIds), isNull(this.t.agentThread.deletedAt)));
     const threadsById = new Map<string, ThreadMeta>(
       threads.map((thread) => [thread.id, { title: thread.title, actorRef: thread.actorRef }]),
     );
@@ -236,17 +257,17 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
     const rows = await this.db
       .select({
-        toolCallId: agentToolCall.id,
-        toolName: agentToolCall.toolName,
-        toolType: agentToolCall.toolType,
-        status: agentToolCall.status,
-        threadId: agentMessage.threadId,
-        createdAt: agentToolCall.createdAt,
-        runId: agentToolCall.runId,
+        toolCallId: this.t.agentToolCall.id,
+        toolName: this.t.agentToolCall.toolName,
+        toolType: this.t.agentToolCall.toolType,
+        status: this.t.agentToolCall.status,
+        threadId: this.t.agentMessage.threadId,
+        createdAt: this.t.agentToolCall.createdAt,
+        runId: this.t.agentToolCall.runId,
       })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .orderBy(desc(agentToolCall.createdAt), desc(agentToolCall.id))
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .orderBy(desc(this.t.agentToolCall.createdAt), desc(this.t.agentToolCall.id))
       .limit(limit);
     return rows.map((row) => ({
       toolCallId: row.toolCallId,
@@ -274,10 +295,10 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       return rollups;
     }
     const messageCounts = await this.db
-      .select({ threadId: agentMessage.threadId, value: count() })
-      .from(agentMessage)
-      .where(inArray(agentMessage.threadId, threadIds))
-      .groupBy(agentMessage.threadId);
+      .select({ threadId: this.t.agentMessage.threadId, value: count() })
+      .from(this.t.agentMessage)
+      .where(inArray(this.t.agentMessage.threadId, threadIds))
+      .groupBy(this.t.agentMessage.threadId);
     for (const row of messageCounts) {
       const bucket = rollups.get(row.threadId);
       if (bucket !== undefined) {
@@ -286,13 +307,13 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     }
     const usageTotals = await this.db
       .select({
-        threadId: agentTokenUsage.threadId,
-        inputTokens: sum(agentTokenUsage.inputTokens),
-        outputTokens: sum(agentTokenUsage.outputTokens),
+        threadId: this.t.agentTokenUsage.threadId,
+        inputTokens: sum(this.t.agentTokenUsage.inputTokens),
+        outputTokens: sum(this.t.agentTokenUsage.outputTokens),
       })
-      .from(agentTokenUsage)
-      .where(inArray(agentTokenUsage.threadId, threadIds))
-      .groupBy(agentTokenUsage.threadId);
+      .from(this.t.agentTokenUsage)
+      .where(inArray(this.t.agentTokenUsage.threadId, threadIds))
+      .groupBy(this.t.agentTokenUsage.threadId);
     for (const row of usageTotals) {
       const bucket = rollups.get(row.threadId);
       if (bucket !== undefined) {
@@ -324,9 +345,9 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
     const threads = await this.db
       .select()
-      .from(agentThread)
-      .where(isNull(agentThread.deletedAt))
-      .orderBy(desc(agentThread.updatedAt), desc(agentThread.id))
+      .from(this.t.agentThread)
+      .where(isNull(this.t.agentThread.deletedAt))
+      .orderBy(desc(this.t.agentThread.updatedAt), desc(this.t.agentThread.id))
       .limit(limit);
     return this.toThreadActivityRows(threads);
   }
@@ -335,8 +356,8 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     return this.db
       .select()
-      .from(agentRun)
-      .where(and(gte(agentRun.startedAt, start), lte(agentRun.startedAt, end)));
+      .from(this.t.agentRun)
+      .where(and(gte(this.t.agentRun.startedAt, start), lte(this.t.agentRun.startedAt, end)));
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
@@ -393,12 +414,12 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const runs = await this.db
       .select()
-      .from(agentRun)
+      .from(this.t.agentRun)
       .where(
         and(
-          gte(agentRun.startedAt, start),
-          lte(agentRun.startedAt, end),
-          eq(agentRun.status, 'failed'),
+          gte(this.t.agentRun.startedAt, start),
+          lte(this.t.agentRun.startedAt, end),
+          eq(this.t.agentRun.status, 'failed'),
         ),
       );
     const byError = new Map<string, number>();
@@ -437,8 +458,8 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async recentRuns(limit: number): Promise<RecentRunRow[]> {
     const runs = await this.db
       .select()
-      .from(agentRun)
-      .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
+      .from(this.t.agentRun)
+      .orderBy(desc(this.t.agentRun.startedAt), desc(this.t.agentRun.id))
       .limit(limit);
     return runs.map(toRecentRunRow);
   }
@@ -451,21 +472,21 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
     const rows = await this.db
       .select({
-        toolCallId: agentToolCall.id,
-        toolName: agentToolCall.toolName,
-        input: agentToolCall.input,
-        threadId: agentThread.id,
-        threadTitle: agentThread.title,
-        actorRef: agentThread.actorRef,
-        agentName: agentMessage.agentName,
-        requestedAt: agentToolCall.createdAt,
-        runId: agentToolCall.runId,
+        toolCallId: this.t.agentToolCall.id,
+        toolName: this.t.agentToolCall.toolName,
+        input: this.t.agentToolCall.input,
+        threadId: this.t.agentThread.id,
+        threadTitle: this.t.agentThread.title,
+        actorRef: this.t.agentThread.actorRef,
+        agentName: this.t.agentMessage.agentName,
+        requestedAt: this.t.agentToolCall.createdAt,
+        runId: this.t.agentToolCall.runId,
       })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
-      .where(eq(agentToolCall.status, 'pending_approval'))
-      .orderBy(agentToolCall.createdAt, agentToolCall.id)
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
+      .where(eq(this.t.agentToolCall.status, 'pending_approval'))
+      .orderBy(this.t.agentToolCall.createdAt, this.t.agentToolCall.id)
       .limit(limit);
     return rows.map((row) => ({
       toolCallId: row.toolCallId,
@@ -491,8 +512,10 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const calls = await this.db
       .select()
-      .from(agentToolCall)
-      .where(and(gte(agentToolCall.createdAt, start), lte(agentToolCall.createdAt, end)));
+      .from(this.t.agentToolCall)
+      .where(
+        and(gte(this.t.agentToolCall.createdAt, start), lte(this.t.agentToolCall.createdAt, end)),
+      );
     const byTool = new Map<
       string,
       {
@@ -558,40 +581,44 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       return emptyPage(query);
     }
     const whereClause = and(
-      filters?.toolName !== undefined ? eq(agentToolCall.toolName, filters.toolName) : undefined,
+      filters?.toolName !== undefined
+        ? eq(this.t.agentToolCall.toolName, filters.toolName)
+        : undefined,
       filters?.toolType !== undefined && isToolKind(filters.toolType)
-        ? eq(agentToolCall.toolType, filters.toolType)
+        ? eq(this.t.agentToolCall.toolType, filters.toolType)
         : undefined,
       filters?.status !== undefined && isToolCallStatus(filters.status)
-        ? eq(agentToolCall.status, filters.status)
+        ? eq(this.t.agentToolCall.status, filters.status)
         : undefined,
-      filters?.threadId !== undefined ? eq(agentMessage.threadId, filters.threadId) : undefined,
+      filters?.threadId !== undefined
+        ? eq(this.t.agentMessage.threadId, filters.threadId)
+        : undefined,
       filters?.fromDay !== undefined
-        ? gte(agentToolCall.createdAt, dayStartUtc(filters.fromDay))
+        ? gte(this.t.agentToolCall.createdAt, dayStartUtc(filters.fromDay))
         : undefined,
       filters?.toDay !== undefined
-        ? lte(agentToolCall.createdAt, dayEndUtc(filters.toDay))
+        ? lte(this.t.agentToolCall.createdAt, dayEndUtc(filters.toDay))
         : undefined,
     );
     const [totalRow] = await this.db
       .select({ value: count() })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
       .where(whereClause);
     const rows = await this.db
       .select({
-        toolCallId: agentToolCall.id,
-        toolName: agentToolCall.toolName,
-        toolType: agentToolCall.toolType,
-        status: agentToolCall.status,
-        threadId: agentMessage.threadId,
-        createdAt: agentToolCall.createdAt,
-        runId: agentToolCall.runId,
+        toolCallId: this.t.agentToolCall.id,
+        toolName: this.t.agentToolCall.toolName,
+        toolType: this.t.agentToolCall.toolType,
+        status: this.t.agentToolCall.status,
+        threadId: this.t.agentMessage.threadId,
+        createdAt: this.t.agentToolCall.createdAt,
+        runId: this.t.agentToolCall.runId,
       })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
       .where(whereClause)
-      .orderBy(desc(agentToolCall.createdAt), desc(agentToolCall.id))
+      .orderBy(desc(this.t.agentToolCall.createdAt), desc(this.t.agentToolCall.id))
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
     return {
@@ -621,27 +648,29 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   ): Promise<GovernancePage<ThreadActivityRow>> {
     const filters = query.where;
     const whereClause = and(
-      isNull(agentThread.deletedAt),
-      filters?.actorRef !== undefined ? eq(agentThread.actorRef, filters.actorRef) : undefined,
+      isNull(this.t.agentThread.deletedAt),
+      filters?.actorRef !== undefined
+        ? eq(this.t.agentThread.actorRef, filters.actorRef)
+        : undefined,
       filters?.title !== undefined
-        ? like(sql`lower(${agentThread.title})`, `%${filters.title.toLowerCase()}%`)
+        ? like(sql`lower(${this.t.agentThread.title})`, `%${filters.title.toLowerCase()}%`)
         : undefined,
       filters?.fromDay !== undefined
-        ? gte(agentThread.updatedAt, dayStartUtc(filters.fromDay))
+        ? gte(this.t.agentThread.updatedAt, dayStartUtc(filters.fromDay))
         : undefined,
       filters?.toDay !== undefined
-        ? lte(agentThread.updatedAt, dayEndUtc(filters.toDay))
+        ? lte(this.t.agentThread.updatedAt, dayEndUtc(filters.toDay))
         : undefined,
     );
     const [totalRow] = await this.db
       .select({ value: count() })
-      .from(agentThread)
+      .from(this.t.agentThread)
       .where(whereClause);
     const threads = await this.db
       .select()
-      .from(agentThread)
+      .from(this.t.agentThread)
       .where(whereClause)
-      .orderBy(desc(agentThread.updatedAt), desc(agentThread.id))
+      .orderBy(desc(this.t.agentThread.updatedAt), desc(this.t.agentThread.id))
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
     const rows = await this.toThreadActivityRows(threads);
@@ -658,23 +687,32 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       return emptyPage(query);
     }
     const whereClause = and(
-      filters?.agentName !== undefined ? eq(agentRun.agentName, filters.agentName) : undefined,
+      filters?.agentName !== undefined
+        ? eq(this.t.agentRun.agentName, filters.agentName)
+        : undefined,
       filters?.status !== undefined && isRunStatus(filters.status)
-        ? eq(agentRun.status, filters.status)
+        ? eq(this.t.agentRun.status, filters.status)
         : undefined,
-      filters?.errorCode !== undefined ? eq(agentRun.errorCode, filters.errorCode) : undefined,
-      filters?.threadId !== undefined ? eq(agentRun.threadId, filters.threadId) : undefined,
+      filters?.errorCode !== undefined
+        ? eq(this.t.agentRun.errorCode, filters.errorCode)
+        : undefined,
+      filters?.threadId !== undefined ? eq(this.t.agentRun.threadId, filters.threadId) : undefined,
       filters?.fromDay !== undefined
-        ? gte(agentRun.startedAt, dayStartUtc(filters.fromDay))
+        ? gte(this.t.agentRun.startedAt, dayStartUtc(filters.fromDay))
         : undefined,
-      filters?.toDay !== undefined ? lte(agentRun.startedAt, dayEndUtc(filters.toDay)) : undefined,
+      filters?.toDay !== undefined
+        ? lte(this.t.agentRun.startedAt, dayEndUtc(filters.toDay))
+        : undefined,
     );
-    const [totalRow] = await this.db.select({ value: count() }).from(agentRun).where(whereClause);
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(this.t.agentRun)
+      .where(whereClause);
     const runs = await this.db
       .select()
-      .from(agentRun)
+      .from(this.t.agentRun)
       .where(whereClause)
-      .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
+      .orderBy(desc(this.t.agentRun.startedAt), desc(this.t.agentRun.id))
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
     return {
@@ -700,41 +738,47 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   ): Promise<GovernancePage<PendingApprovalRow>> {
     const filters = query.where;
     const whereClause = and(
-      eq(agentToolCall.status, 'pending_approval'),
-      filters?.toolName !== undefined ? eq(agentToolCall.toolName, filters.toolName) : undefined,
-      filters?.threadId !== undefined ? eq(agentThread.id, filters.threadId) : undefined,
-      filters?.actorRef !== undefined ? eq(agentThread.actorRef, filters.actorRef) : undefined,
-      filters?.agentName !== undefined ? eq(agentMessage.agentName, filters.agentName) : undefined,
+      eq(this.t.agentToolCall.status, 'pending_approval'),
+      filters?.toolName !== undefined
+        ? eq(this.t.agentToolCall.toolName, filters.toolName)
+        : undefined,
+      filters?.threadId !== undefined ? eq(this.t.agentThread.id, filters.threadId) : undefined,
+      filters?.actorRef !== undefined
+        ? eq(this.t.agentThread.actorRef, filters.actorRef)
+        : undefined,
+      filters?.agentName !== undefined
+        ? eq(this.t.agentMessage.agentName, filters.agentName)
+        : undefined,
       filters?.fromDay !== undefined
-        ? gte(agentToolCall.createdAt, dayStartUtc(filters.fromDay))
+        ? gte(this.t.agentToolCall.createdAt, dayStartUtc(filters.fromDay))
         : undefined,
       filters?.toDay !== undefined
-        ? lte(agentToolCall.createdAt, dayEndUtc(filters.toDay))
+        ? lte(this.t.agentToolCall.createdAt, dayEndUtc(filters.toDay))
         : undefined,
     );
     const [totalRow] = await this.db
       .select({ value: count() })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
       .where(whereClause);
     const rows = await this.db
       .select({
-        toolCallId: agentToolCall.id,
-        toolName: agentToolCall.toolName,
-        input: agentToolCall.input,
-        threadId: agentThread.id,
-        threadTitle: agentThread.title,
-        actorRef: agentThread.actorRef,
-        agentName: agentMessage.agentName,
-        requestedAt: agentToolCall.createdAt,
-        runId: agentToolCall.runId,
+        toolCallId: this.t.agentToolCall.id,
+        toolName: this.t.agentToolCall.toolName,
+        input: this.t.agentToolCall.input,
+        threadId: this.t.agentThread.id,
+        threadTitle: this.t.agentThread.title,
+        actorRef: this.t.agentThread.actorRef,
+        agentName: this.t.agentMessage.agentName,
+        requestedAt: this.t.agentToolCall.createdAt,
+        runId: this.t.agentToolCall.runId,
       })
-      .from(agentToolCall)
-      .innerJoin(agentMessage, eq(agentToolCall.messageId, agentMessage.id))
-      .innerJoin(agentThread, eq(agentMessage.threadId, agentThread.id))
+      .from(this.t.agentToolCall)
+      .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
       .where(whereClause)
-      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id))
+      .orderBy(asc(this.t.agentToolCall.createdAt), asc(this.t.agentToolCall.id))
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize);
     return {
@@ -762,19 +806,19 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
    */
   async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
     const [row] = await this.db
-      .select({ run: agentRun, thread: agentThread })
-      .from(agentRun)
-      .innerJoin(agentThread, eq(agentRun.threadId, agentThread.id))
-      .where(eq(agentRun.id, runId))
+      .select({ run: this.t.agentRun, thread: this.t.agentThread })
+      .from(this.t.agentRun)
+      .innerJoin(this.t.agentThread, eq(this.t.agentRun.threadId, this.t.agentThread.id))
+      .where(eq(this.t.agentRun.id, runId))
       .limit(1);
     if (row === undefined) {
       return null;
     }
     const toolCalls = await this.db
       .select()
-      .from(agentToolCall)
-      .where(eq(agentToolCall.runId, runId))
-      .orderBy(asc(agentToolCall.createdAt), asc(agentToolCall.id));
+      .from(this.t.agentToolCall)
+      .where(eq(this.t.agentToolCall.runId, runId))
+      .orderBy(asc(this.t.agentToolCall.createdAt), asc(this.t.agentToolCall.id));
     return {
       run: toRecentRunRow(row.run),
       thread: {
@@ -796,8 +840,8 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
     const [thread] = await this.db
       .select()
-      .from(agentThread)
-      .where(eq(agentThread.id, query.threadId))
+      .from(this.t.agentThread)
+      .where(eq(this.t.agentThread.id, query.threadId))
       .limit(1);
     if (thread === undefined) {
       return null;
@@ -805,31 +849,36 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const pricing = await this.loadPricing();
     const usageRows = await this.db
       .select()
-      .from(agentTokenUsage)
-      .where(eq(agentTokenUsage.threadId, thread.id));
+      .from(this.t.agentTokenUsage)
+      .where(eq(this.t.agentTokenUsage.threadId, thread.id));
     const usage = rollupThreadUsage(usageRows.map(toUsageInput), pricing);
     const [messageCountRow] = await this.db
       .select({ value: count() })
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, thread.id));
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, thread.id));
     const messages = await this.db
       .select()
-      .from(agentMessage)
-      .where(eq(agentMessage.threadId, thread.id))
-      .orderBy(desc(agentMessage.createdAt), desc(agentMessage.id))
+      .from(this.t.agentMessage)
+      .where(eq(this.t.agentMessage.threadId, thread.id))
+      .orderBy(
+        // Append order (see DrizzleAgentStore's message order), newest first.
+        desc(sql`coalesce(${this.t.agentMessage.seq}, 0)`),
+        desc(this.t.agentMessage.createdAt),
+        desc(this.t.agentMessage.id),
+      )
       .limit(query.messageLimit);
     const toolCallCounts = await this.toolCallCountsByMessage(
       messages.map((message) => message.id),
     );
     const [runTotalRow] = await this.db
       .select({ value: count() })
-      .from(agentRun)
-      .where(eq(agentRun.threadId, thread.id));
+      .from(this.t.agentRun)
+      .where(eq(this.t.agentRun.threadId, thread.id));
     const runs = await this.db
       .select()
-      .from(agentRun)
-      .where(eq(agentRun.threadId, thread.id))
-      .orderBy(desc(agentRun.startedAt), desc(agentRun.id))
+      .from(this.t.agentRun)
+      .where(eq(this.t.agentRun.threadId, thread.id))
+      .orderBy(desc(this.t.agentRun.startedAt), desc(this.t.agentRun.id))
       .limit(query.runLimit);
     return {
       thread: {
@@ -866,10 +915,10 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       return counts;
     }
     const rows = await this.db
-      .select({ messageId: agentToolCall.messageId, value: count() })
-      .from(agentToolCall)
-      .where(inArray(agentToolCall.messageId, messageIds))
-      .groupBy(agentToolCall.messageId);
+      .select({ messageId: this.t.agentToolCall.messageId, value: count() })
+      .from(this.t.agentToolCall)
+      .where(inArray(this.t.agentToolCall.messageId, messageIds))
+      .groupBy(this.t.agentToolCall.messageId);
     for (const row of rows) {
       counts.set(row.messageId, row.value);
     }

@@ -1,4 +1,5 @@
 import { BigIntType, EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { identityCollation } from './column-types';
 
 /**
  * A spent confirm token (`defineConfirmedTool`), keyed by its SHA-256 — the primary key is the lock
@@ -22,6 +23,7 @@ export class AgentConfirmTokenRepository extends EntityRepository<AgentConfirmTo
 /** Builds the `agent_confirm_token` schema. */
 export function agentConfirmTokenSchema(collation?: string): EntitySchema<AgentConfirmToken> {
   const str = collation !== undefined ? { collation } : {};
+  const identity = identityCollation(collation);
   return new EntitySchema<AgentConfirmToken>({
     class: AgentConfirmToken,
     tableName: 'agent_confirm_token',
@@ -29,7 +31,7 @@ export function agentConfirmTokenSchema(collation?: string): EntitySchema<AgentC
     indexes: [{ name: 'agent_confirm_token_expires_idx', properties: ['expiresAt'] }],
     properties: {
       hash: { type: 'string', primary: true, length: 64, ...str },
-      actorRef: { type: 'string', fieldName: 'actor_ref', ...str },
+      actorRef: { type: 'string', fieldName: 'actor_ref', ...identity },
       tool: { type: 'string', ...str },
       expiresAt: { type: new BigIntType('number'), fieldName: 'expires_at' },
       createdAt: { type: new BigIntType('number'), fieldName: 'created_at' },

@@ -7,7 +7,18 @@ import {
   actorScope,
 } from '@dudousxd/nestjs-agent-core';
 import { and, eq, inArray } from 'drizzle-orm';
-import { type AgentDrizzleDb, type AgentMemoryRow, agentMemory } from './schema.js';
+import {
+  type AgentDialect,
+  type AgentDrizzleDb,
+  type AgentSqliteDb,
+  type AgentTables,
+  affectedRows,
+  agentDialectOf,
+  agentTablesFor,
+  asBuilder,
+  upsert,
+} from './dialect.js';
+import { type AgentMemoryRow, agentMemory } from './schema.js';
 
 /** One row as the library reads it. The origin travels so a person can ask "says who?". */
 function toRecord(row: AgentMemoryRow): MemoryRecord {
@@ -45,7 +56,15 @@ function toRecord(row: AgentMemoryRow): MemoryRecord {
  * its own index and passes it as the provider, or wraps this one.
  */
 export class DrizzleMemoryProvider implements MemoryProvider {
-  constructor(private readonly db: AgentDrizzleDb) {}
+  private readonly db: AgentSqliteDb;
+  private readonly dialect: AgentDialect;
+  private readonly t: AgentTables;
+
+  constructor(db: AgentDrizzleDb) {
+    this.dialect = agentDialectOf(db);
+    this.t = agentTablesFor(this.dialect);
+    this.db = asBuilder(db);
+  }
 
   /**
    * Every memory visible at `scopes` — asked on EVERY turn, so it is one indexed `scope in (…)`
@@ -61,8 +80,8 @@ export class DrizzleMemoryProvider implements MemoryProvider {
     }
     const rows = await this.db
       .select()
-      .from(agentMemory)
-      .where(inArray(agentMemory.scope, [...scopes]));
+      .from(this.t.agentMemory)
+      .where(inArray(this.t.agentMemory.scope, [...scopes]));
     return rows.map(toRecord);
   }
 
@@ -77,11 +96,16 @@ export class DrizzleMemoryProvider implements MemoryProvider {
    * answer cannot be used to find out which memories exist about other people.
    */
   async forget({ id, ctx }: ForgetMemoryInput): Promise<boolean> {
-    const deleted = await this.db
-      .delete(agentMemory)
-      .where(and(eq(agentMemory.id, id), eq(agentMemory.scope, actorScope(ctx.actor))))
-      .returning({ id: agentMemory.id });
-    return deleted.length > 0;
+    const deleted = await affectedRows(
+      this.dialect,
+      this.db
+        .delete(this.t.agentMemory)
+        .where(
+          and(eq(this.t.agentMemory.id, id), eq(this.t.agentMemory.scope, actorScope(ctx.actor))),
+        ),
+      this.t.agentMemory.id,
+    );
+    return deleted > 0;
   }
 
   /**
@@ -104,23 +128,31 @@ export class DrizzleMemoryProvider implements MemoryProvider {
       originRunId: origin.runId ?? null,
       originActorRef: origin.actorRef ?? null,
     };
-    const [row] = await this.db
-      .insert(agentMemory)
-      .values({
-        id: crypto.randomUUID(),
-        scope,
-        key,
-        text,
-        ...columns,
-        pinned: false,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [agentMemory.scope, agentMemory.key],
-        set: { text, ...columns, updatedAt: now },
-      })
-      .returning();
+    const memory = this.t.agentMemory;
+    const set = { text, ...columns, updatedAt: now };
+    const insert = this.db.insert(memory).values({
+      id: crypto.randomUUID(),
+      scope,
+      key,
+      text,
+      ...columns,
+      pinned: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    let row: AgentMemoryRow | undefined;
+    if (this.dialect === 'mysql') {
+      // No `RETURNING` on MySQL: upsert, then read the row back by the key it was upserted on.
+      await upsert(this.dialect, insert, [memory.scope, memory.key], set);
+      [row] = await this.db
+        .select()
+        .from(memory)
+        .where(and(eq(memory.scope, scope), eq(memory.key, key)));
+    } else {
+      [row] = await insert
+        .onConflictDoUpdate({ target: [memory.scope, memory.key], set })
+        .returning();
+    }
     if (row === undefined) {
       throw new Error(
         `DrizzleMemoryProvider: the upsert of "${key}" at "${scope}" returned no row; the driver does not support RETURNING on conflict.`,
@@ -138,12 +170,15 @@ export class DrizzleMemoryProvider implements MemoryProvider {
    * `false` where there is no such id.
    */
   async pin({ id, pinned }: { id: string; pinned: boolean }): Promise<boolean> {
-    const updated = await this.db
-      .update(agentMemory)
-      .set({ pinned, updatedAt: new Date() })
-      .where(eq(agentMemory.id, id))
-      .returning({ id: agentMemory.id });
-    return updated.length > 0;
+    const updated = await affectedRows(
+      this.dialect,
+      this.db
+        .update(this.t.agentMemory)
+        .set({ pinned, updatedAt: new Date() })
+        .where(eq(this.t.agentMemory.id, id)),
+      this.t.agentMemory.id,
+    );
+    return updated > 0;
   }
 }
 

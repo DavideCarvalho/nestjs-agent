@@ -1,4 +1,5 @@
 import { BigIntType, EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { LongTextType } from './column-types';
 
 /**
  * One frame of a run's live stream (`MikroOrmTokenStreamSink`), numbered per run from 1 with no
@@ -28,8 +29,8 @@ export function agentStreamFrameSchema(collation?: string): EntitySchema<AgentSt
     properties: {
       runId: { type: 'string', primary: true, fieldName: 'run_id', ...str },
       seq: { type: 'integer', primary: true },
-      frame: { type: 'text', nullable: true, ...str },
-      error: { type: 'text', nullable: true, ...str },
+      frame: { type: LongTextType, nullable: true, ...str },
+      error: { type: LongTextType, nullable: true, ...str },
       createdAt: { type: new BigIntType('number'), fieldName: 'created_at' },
     },
   });

@@ -1,5 +1,6 @@
 import type { MemoryOrigin } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
+import { DATETIME, LongTextType, identityCollation } from './column-types';
 
 /**
  * One thing the assistant believes, held at one scope — the row behind
@@ -49,6 +50,7 @@ export class AgentMemoryRepository extends EntityRepository<AgentMemory> {}
  */
 export function agentMemorySchema(collation?: string): EntitySchema<AgentMemory> {
   const str = collation !== undefined ? { collation } : {};
+  const identity = identityCollation(collation);
   return new EntitySchema<AgentMemory>({
     class: AgentMemory,
     tableName: 'agent_memory',
@@ -56,9 +58,9 @@ export function agentMemorySchema(collation?: string): EntitySchema<AgentMemory>
     uniques: [{ name: 'agent_memory_scope_key_uq', properties: ['scope', 'key'] }],
     properties: {
       id: { type: 'string', primary: true, ...str },
-      scope: { type: 'string', length: 120, ...str },
+      scope: { type: 'string', length: 120, ...identity },
       key: { type: 'string', length: 120, ...str },
-      text: { type: 'text' },
+      text: { type: LongTextType },
       originAuthor: { type: 'string', length: 16, fieldName: 'origin_author', ...str },
       originThreadId: {
         type: 'string',
@@ -67,10 +69,15 @@ export function agentMemorySchema(collation?: string): EntitySchema<AgentMemory>
         ...str,
       },
       originRunId: { type: 'string', nullable: true, fieldName: 'origin_run_id', ...str },
-      originActorRef: { type: 'string', nullable: true, fieldName: 'origin_actor_ref', ...str },
+      originActorRef: {
+        type: 'string',
+        nullable: true,
+        fieldName: 'origin_actor_ref',
+        ...identity,
+      },
       pinned: { type: 'boolean', default: false },
-      createdAt: { type: 'datetime', fieldName: 'created_at' },
-      updatedAt: { type: 'datetime', fieldName: 'updated_at' },
+      createdAt: { ...DATETIME, fieldName: 'created_at' },
+      updatedAt: { ...DATETIME, fieldName: 'updated_at' },
     },
   });
 }

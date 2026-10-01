@@ -1,302 +1,240 @@
-import { sql } from 'drizzle-orm';
-import type { AgentDrizzleDb } from './schema.js';
+import { type Column, type SQL, getTableName, sql } from 'drizzle-orm';
+import { getTableConfig as mysqlTableConfig } from 'drizzle-orm/mysql-core';
+import { getTableConfig as pgTableConfig } from 'drizzle-orm/pg-core';
+import { getTableConfig as sqliteTableConfig } from 'drizzle-orm/sqlite-core';
+import {
+  type AgentDialect,
+  type AgentDrizzleDb,
+  type AgentMySqlDb,
+  type AgentPgDb,
+  agentDialectOf,
+  agentTablesFor,
+  querySql,
+  runSql,
+} from './dialect.js';
 
 /**
- * Idempotent `CREATE TABLE IF NOT EXISTS` DDL for the tables in
- * {@link import('./schema.js').agentSchema}. SQLite dialect (the db-test driver); kept here rather
- * than relying on drizzle-kit so the package can stand up its schema with no migration files. Safe
- * to run on boot against a shared database — it never drops or alters existing columns.
- */
-const statements: string[] = [
-  `CREATE TABLE IF NOT EXISTS agent_thread (
-    id TEXT PRIMARY KEY NOT NULL,
-    actor_ref TEXT NOT NULL,
-    tenant_ref TEXT,
-    title TEXT NOT NULL,
-    transient INTEGER NOT NULL DEFAULT 0,
-    active_stream_id TEXT,
-    default_agent TEXT,
-    model TEXT,
-    persona TEXT,
-    queue_pause TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    deleted_at INTEGER
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_thread_actor_updated_idx
-    ON agent_thread (actor_ref, updated_at)`,
-  `CREATE TABLE IF NOT EXISTS agent_message (
-    id TEXT PRIMARY KEY NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tool_calls TEXT,
-    tool_results TEXT,
-    attachments TEXT,
-    follow_ups TEXT,
-    usage TEXT,
-    agent_name TEXT,
-    persona TEXT,
-    run_id TEXT,
-    reasoning TEXT,
-    reasoning_ms INTEGER,
-    ui TEXT,
-    feedback TEXT,
-    created_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_message_thread_created_idx
-    ON agent_message (thread_id, created_at)`,
-  `CREATE TABLE IF NOT EXISTS agent_queued_message (
-    id TEXT PRIMARY KEY NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
-    actor TEXT NOT NULL,
-    content TEXT NOT NULL,
-    attachments TEXT,
-    agent_name TEXT,
-    persona TEXT,
-    model TEXT,
-    page_context TEXT,
-    interrupt INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_queued_message_thread_position_idx
-    ON agent_queued_message (thread_id, position)`,
-  `CREATE TABLE IF NOT EXISTS agent_tool_call (
-    id TEXT PRIMARY KEY NOT NULL,
-    message_id TEXT NOT NULL REFERENCES agent_message(id) ON DELETE CASCADE,
-    tool_name TEXT NOT NULL,
-    tool_type TEXT NOT NULL,
-    input TEXT,
-    output TEXT,
-    status TEXT NOT NULL,
-    executed_by_ref TEXT,
-    execution_ms INTEGER,
-    error TEXT,
-    created_at INTEGER NOT NULL,
-    executed_at INTEGER,
-    run_id TEXT,
-    approver TEXT,
-    expires_at INTEGER,
-    remember INTEGER,
-    decided_via TEXT
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_tool_call_message_idx
-    ON agent_tool_call (message_id)`,
-  `CREATE TABLE IF NOT EXISTS agent_token_usage (
-    id TEXT PRIMARY KEY NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
-    actor_ref TEXT NOT NULL,
-    message_id TEXT,
-    model_id TEXT NOT NULL,
-    purpose TEXT NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    cache_write_tokens INTEGER,
-    cache_read_tokens INTEGER,
-    cost_usd REAL,
-    created_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_token_usage_actor_created_idx
-    ON agent_token_usage (actor_ref, created_at)`,
-  `CREATE TABLE IF NOT EXISTS agent_model_pricing (
-    id TEXT PRIMARY KEY NOT NULL,
-    model_id TEXT NOT NULL,
-    input_price_per_1m REAL NOT NULL,
-    output_price_per_1m REAL NOT NULL,
-    cache_write_price_per_1m REAL,
-    cache_read_price_per_1m REAL,
-    effective_from INTEGER NOT NULL,
-    is_current INTEGER NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS agent_run (
-    id TEXT PRIMARY KEY NOT NULL,
-    thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
-    actor_ref TEXT NOT NULL,
-    agent_name TEXT,
-    status TEXT NOT NULL,
-    duration_ms INTEGER,
-    error_code TEXT,
-    error_message TEXT,
-    retries INTEGER NOT NULL DEFAULT 0,
-    started_at INTEGER NOT NULL,
-    settled_at INTEGER,
-    prompt_hash TEXT,
-    parent_run_id TEXT
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_run_started_idx
-    ON agent_run (started_at)`,
-  // `key` and `text` are quoted: both are keywords in at least one engine this DDL is read by, and
-  // they are the SPI's own field names, which is worth more here than dodging the quoting.
-  `CREATE TABLE IF NOT EXISTS agent_memory (
-    id TEXT PRIMARY KEY NOT NULL,
-    scope TEXT NOT NULL,
-    "key" TEXT NOT NULL,
-    "text" TEXT NOT NULL,
-    origin_author TEXT NOT NULL,
-    origin_thread_id TEXT,
-    origin_run_id TEXT,
-    origin_actor_ref TEXT,
-    pinned INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS agent_memory_scope_key_uq
-    ON agent_memory (scope, "key")`,
-  `CREATE TABLE IF NOT EXISTS rag_ingestion_log (
-    document_id TEXT PRIMARY KEY NOT NULL,
-    status TEXT NOT NULL,
-    collection TEXT,
-    owner_type TEXT,
-    owner_id TEXT,
-    source TEXT,
-    mime_type TEXT,
-    size INTEGER,
-    chunks INTEGER,
-    reason TEXT,
-    error TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS rag_ingestion_log_collection_idx
-    ON rag_ingestion_log (collection, updated_at)`,
-  `CREATE TABLE IF NOT EXISTS agent_stream_frame (
-    run_id TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    frame TEXT,
-    error TEXT,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (run_id, seq)
-  )`,
-  `CREATE TABLE IF NOT EXISTS agent_confirm_token (
-    hash TEXT PRIMARY KEY NOT NULL,
-    actor_ref TEXT NOT NULL,
-    tool TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS agent_confirm_token_expires_idx
-    ON agent_confirm_token (expires_at)`,
-];
-
-/**
- * Columns added to a table this package already shipped. `CREATE TABLE IF NOT EXISTS` above is inert
- * against a database that already has the table, so a column introduced later would land on fresh
- * databases only and be missing everywhere the store is actually running. The MikroORM adapter has
- * no such gap — its `ensureAgentSchema` applies `getUpdateSchemaSQL({ safe: true })`, which is
- * add-column-capable — so without this list the two adapters would disagree about what the schema is
- * after an upgrade.
+ * Creates the agent tables a database lacks, adds the columns and indexes an existing one lacks, and
+ * never drops or alters anything — safe to run on every boot against a shared database. SQLite,
+ * Postgres and MySQL alike, with no drizzle-kit and no migration files.
  *
- * A whole new *table* belongs in {@link statements} and not here: the create guard is only inert
- * against a database that already has the table, so a table nothing has ever created is created in
- * full — every column and index — on a database of any age.
+ * The DDL is rendered from the dialect's Drizzle schema ({@link import('./schema.js').agentSchema},
+ * {@link import('./schema-pg.js').pgAgentSchema}, {@link import('./schema-mysql.js').mysqlAgentSchema})
+ * rather than written out by hand, so the tables this creates are the tables the stores query, column
+ * for column, and a column added to a schema later reaches every database that is already running
+ * without a list of `ALTER`s to keep in step. A column added later must therefore be nullable or
+ * carry a default — an existing table cannot take a `NOT NULL` column without one.
  *
- * Add-column only, never a type change or a drop: `safe` in the same sense as the sibling adapter.
- */
-const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
-  {
-    table: 'agent_message',
-    column: 'run_id',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN run_id TEXT',
-  },
-  {
-    table: 'agent_message',
-    column: 'attachments',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN attachments TEXT',
-  },
-  {
-    table: 'agent_thread',
-    column: 'default_agent',
-    ddl: 'ALTER TABLE agent_thread ADD COLUMN default_agent TEXT',
-  },
-  {
-    table: 'agent_run',
-    column: 'parent_run_id',
-    ddl: 'ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT',
-  },
-  {
-    table: 'agent_message',
-    column: 'reasoning',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN reasoning TEXT',
-  },
-  {
-    table: 'agent_message',
-    column: 'reasoning_ms',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN reasoning_ms INTEGER',
-  },
-  {
-    table: 'agent_message',
-    column: 'ui',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN ui TEXT',
-  },
-  {
-    table: 'agent_message',
-    column: 'feedback',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN feedback TEXT',
-  },
-  {
-    table: 'agent_thread',
-    column: 'model',
-    ddl: 'ALTER TABLE agent_thread ADD COLUMN model TEXT',
-  },
-  {
-    table: 'agent_tool_call',
-    column: 'approver',
-    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN approver TEXT',
-  },
-  {
-    table: 'agent_tool_call',
-    column: 'expires_at',
-    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER',
-  },
-  {
-    table: 'agent_tool_call',
-    column: 'remember',
-    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER',
-  },
-  {
-    table: 'agent_thread',
-    column: 'queue_pause',
-    ddl: 'ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT',
-  },
-  {
-    table: 'agent_tool_call',
-    column: 'decided_via',
-    ddl: 'ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT',
-  },
-  {
-    table: 'agent_thread',
-    column: 'persona',
-    ddl: 'ALTER TABLE agent_thread ADD COLUMN persona TEXT',
-  },
-  {
-    table: 'agent_message',
-    column: 'persona',
-    ddl: 'ALTER TABLE agent_message ADD COLUMN persona TEXT',
-  },
-  {
-    table: 'agent_queued_message',
-    column: 'persona',
-    ddl: 'ALTER TABLE agent_queued_message ADD COLUMN persona TEXT',
-  },
-];
-
-/**
- * Runs the `CREATE TABLE IF NOT EXISTS` DDL above against the supplied Drizzle SQLite db, then adds
- * any column missing from a table that already existed.
+ * On Postgres and MySQL it runs under a cross-replica lock (`pg_advisory_xact_lock`, `get_lock`),
+ * held on one connection for the whole run: several replicas booting an empty database at once would
+ * otherwise race their `CREATE TABLE IF NOT EXISTS` — which Postgres does not make race-safe — and
+ * all but one fail. On Postgres the whole heal is also one transaction, so it lands entirely or not
+ * at all.
  */
 export async function ensureAgentSchema(db: AgentDrizzleDb): Promise<void> {
-  for (const statement of statements) {
-    await db.run(sql.raw(statement));
+  const dialect = agentDialectOf(db);
+  if (dialect === 'postgres') {
+    await (db as AgentPgDb).transaction(async (tx) => {
+      await tx.execute(sql.raw(`select pg_advisory_xact_lock(hashtext('${LOCK_NAME}'))`));
+      await heal(tx as unknown as AgentDrizzleDb, dialect);
+    });
+    return;
   }
-  for (const { table, column, ddl } of additiveColumns) {
-    // Asking the table what it has, rather than running the ALTER and swallowing the failure: a
-    // swallowed error cannot tell "the column is already there" apart from "the ALTER is malformed",
-    // and the second one would then go unnoticed until a query hit the missing column.
-    const existing = await db.all<{ name: string }>(sql.raw(`PRAGMA table_info(${table})`));
-    if (!existing.some((row) => row.name === column)) {
-      await db.run(sql.raw(ddl));
+  if (dialect === 'mysql') {
+    await (db as AgentMySqlDb).transaction(async (tx) => {
+      // A session lock: taken and released on the transaction's one connection. MySQL's DDL commits
+      // implicitly, so this is a pinned connection rather than an atomic heal.
+      await tx.execute(sql.raw(`select get_lock('${LOCK_NAME}', 30)`));
+      try {
+        await heal(tx as unknown as AgentDrizzleDb, dialect);
+      } finally {
+        await tx.execute(sql.raw(`select release_lock('${LOCK_NAME}')`));
+      }
+    });
+    return;
+  }
+  await heal(db, dialect);
+}
+
+const LOCK_NAME = 'nestjs_agent_schema';
+
+/** Table options MySQL needs spelled out: InnoDB for the foreign keys, a case-sensitive collation. */
+const MYSQL_TABLE_OPTIONS = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin';
+
+interface IndexSpec {
+  name: string;
+  unique: boolean;
+  columns: string[];
+}
+
+interface TableSpec {
+  name: string;
+  columns: Column[];
+  primaryKey: string[];
+  foreignKeys: { columns: string[]; table: string; foreignColumns: string[]; onDelete?: string }[];
+  indexes: IndexSpec[];
+}
+
+/** One agent table, read off its Drizzle definition in `dialect`. */
+function tableSpec(dialect: AgentDialect, table: unknown): TableSpec {
+  const config =
+    dialect === 'postgres'
+      ? pgTableConfig(table as Parameters<typeof pgTableConfig>[0])
+      : dialect === 'mysql'
+        ? mysqlTableConfig(table as Parameters<typeof mysqlTableConfig>[0])
+        : sqliteTableConfig(table as Parameters<typeof sqliteTableConfig>[0]);
+  const columns = config.columns as unknown as Column[];
+  const compositeKey = config.primaryKeys[0]?.columns.map((column) => column.name);
+  return {
+    name: config.name,
+    columns,
+    primaryKey: compositeKey ?? columns.filter((column) => column.primary).map((c) => c.name),
+    foreignKeys: config.foreignKeys.map((foreignKey) => {
+      const reference = foreignKey.reference();
+      return {
+        columns: reference.columns.map((column) => column.name),
+        table: getTableName(reference.foreignTable),
+        foreignColumns: reference.foreignColumns.map((column) => column.name),
+        ...(foreignKey.onDelete !== undefined ? { onDelete: foreignKey.onDelete } : {}),
+      };
+    }),
+    indexes: config.indexes.map((index) => ({
+      name: String(index.config.name),
+      unique: index.config.unique === true,
+      columns: (index.config.columns as { name?: string }[]).map((column) => String(column.name)),
+    })),
+  };
+}
+
+function quote(dialect: AgentDialect, identifier: string): string {
+  return dialect === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`;
+}
+
+function literal(dialect: AgentDialect, value: unknown): string {
+  if (typeof value === 'boolean') {
+    return dialect === 'sqlite' ? (value ? '1' : '0') : value ? 'true' : 'false';
+  }
+  if (typeof value === 'number') return String(value);
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/** `name TYPE [NOT NULL] [DEFAULT …]` — no key or reference, which the table states separately. */
+function columnDefinition(dialect: AgentDialect, column: Column): string {
+  const parts = [quote(dialect, column.name), column.getSQLType()];
+  if (column.notNull) parts.push('NOT NULL');
+  if (column.hasDefault && column.default !== undefined) {
+    parts.push(`DEFAULT ${literal(dialect, column.default)}`);
+  }
+  return parts.join(' ');
+}
+
+function createTableSql(dialect: AgentDialect, spec: TableSpec): string {
+  const q = (identifier: string) => quote(dialect, identifier);
+  const lines = spec.columns.map((column) => columnDefinition(dialect, column));
+  lines.push(`PRIMARY KEY (${spec.primaryKey.map(q).join(', ')})`);
+  for (const foreignKey of spec.foreignKeys) {
+    lines.push(
+      `FOREIGN KEY (${foreignKey.columns.map(q).join(', ')}) REFERENCES ${q(foreignKey.table)} (${foreignKey.foreignColumns.map(q).join(', ')})${foreignKey.onDelete !== undefined ? ` ON DELETE ${foreignKey.onDelete.toUpperCase()}` : ''}`,
+    );
+  }
+  const options = dialect === 'mysql' ? ` ${MYSQL_TABLE_OPTIONS}` : '';
+  return `CREATE TABLE IF NOT EXISTS ${q(spec.name)} (\n  ${lines.join(',\n  ')}\n)${options}`;
+}
+
+/** The DDL that creates the agent tables in `dialect`, in dependency order. Indexes included. */
+export function agentSchemaDdl(dialect: AgentDialect): string[] {
+  const statements: string[] = [];
+  for (const spec of specs(dialect)) {
+    statements.push(createTableSql(dialect, spec));
+    for (const index of spec.indexes) {
+      statements.push(createIndexSql(dialect, spec.name, index));
+    }
+  }
+  return statements;
+}
+
+function createIndexSql(dialect: AgentDialect, table: string, index: IndexSpec): string {
+  const q = (identifier: string) => quote(dialect, identifier);
+  // MySQL has no `IF NOT EXISTS` on an index; `heal` asks first there.
+  const guard = dialect === 'mysql' ? '' : 'IF NOT EXISTS ';
+  return `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${guard}${q(index.name)} ON ${q(table)} (${index.columns.map(q).join(', ')})`;
+}
+
+/** Every agent table in `dialect`, parents before the children that reference them. */
+function specs(dialect: AgentDialect): TableSpec[] {
+  const all = Object.values(agentTablesFor(dialect)).map((table) => tableSpec(dialect, table));
+  const ordered: TableSpec[] = [];
+  const placed = new Set<string>();
+  while (ordered.length < all.length) {
+    const ready = all.filter(
+      (spec) =>
+        !placed.has(spec.name) &&
+        spec.foreignKeys.every((key) => key.table === spec.name || placed.has(key.table)),
+    );
+    if (ready.length === 0) throw new Error('agent schema: circular foreign keys');
+    for (const spec of ready) {
+      ordered.push(spec);
+      placed.add(spec.name);
+    }
+  }
+  return ordered;
+}
+
+async function existingColumns(
+  db: AgentDrizzleDb,
+  dialect: AgentDialect,
+  table: string,
+): Promise<Set<string>> {
+  const rows =
+    dialect === 'sqlite'
+      ? await querySql<{ name: string }>(db, dialect, sql.raw(`PRAGMA table_info("${table}")`))
+      : await querySql<{ name: string }>(
+          db,
+          dialect,
+          sql`select column_name as name from information_schema.columns where table_schema = ${sql.raw(dialect === 'mysql' ? 'database()' : 'current_schema()')} and table_name = ${table}`,
+        );
+  return new Set(rows.map((row) => String(row.name)));
+}
+
+async function indexExists(
+  db: AgentDrizzleDb,
+  dialect: AgentDialect,
+  table: string,
+  index: string,
+): Promise<boolean> {
+  let query: SQL;
+  if (dialect === 'sqlite') {
+    query = sql`select name from sqlite_master where type = 'index' and name = ${index}`;
+  } else if (dialect === 'postgres') {
+    query = sql`select indexname as name from pg_indexes where schemaname = current_schema() and indexname = ${index}`;
+  } else {
+    query = sql`select index_name as name from information_schema.statistics where table_schema = database() and table_name = ${table} and index_name = ${index}`;
+  }
+  return (await querySql(db, dialect, query)).length > 0;
+}
+
+async function heal(db: AgentDrizzleDb, dialect: AgentDialect): Promise<void> {
+  for (const spec of specs(dialect)) {
+    await runSql(db, dialect, sql.raw(createTableSql(dialect, spec)));
+    // `CREATE TABLE IF NOT EXISTS` is inert against a table that is already there, so a column the
+    // schema gained since is added here. Asked, not attempted-and-swallowed: a swallowed error cannot
+    // tell "already there" from "the ALTER is malformed".
+    const present = await existingColumns(db, dialect, spec.name);
+    for (const column of spec.columns) {
+      if (!present.has(column.name)) {
+        await runSql(
+          db,
+          dialect,
+          sql.raw(
+            `ALTER TABLE ${quote(dialect, spec.name)} ADD COLUMN ${columnDefinition(dialect, column)}`,
+          ),
+        );
+      }
+    }
+    for (const index of spec.indexes) {
+      if (!(await indexExists(db, dialect, spec.name, index.name))) {
+        await runSql(db, dialect, sql.raw(createIndexSql(dialect, spec.name, index)));
+      }
     }
   }
 }

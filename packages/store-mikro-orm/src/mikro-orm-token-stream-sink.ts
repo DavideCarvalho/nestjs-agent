@@ -4,7 +4,11 @@ import {
   type StreamFrameRow,
   type StreamFrameTable,
 } from '@dudousxd/nestjs-agent-core';
-import { type EntityManager, UniqueConstraintViolationException } from '@mikro-orm/core';
+import {
+  DeadlockException,
+  type EntityManager,
+  UniqueConstraintViolationException,
+} from '@mikro-orm/core';
 
 /** The table {@link import('./entities/agent-stream-frame.entity').AgentStreamFrame} maps. */
 const TABLE = 'agent_stream_frame';
@@ -14,6 +18,35 @@ function toInt(value: unknown): number {
   if (typeof value === 'bigint') return Number(value);
   if (typeof value === 'string') return Number.parseInt(value, 10) || 0;
   return 0;
+}
+
+/**
+ * Did this insert lose the race for a `(run_id, seq)`? `connection.execute` hands back the DRIVER's
+ * error, not MikroORM's translated {@link UniqueConstraintViolationException} (that translation only
+ * happens on entity operations), so the driver's own codes are what a raw insert surfaces: Postgres
+ * `23505`, MySQL `ER_DUP_ENTRY` (1062), SQLite's primary-key/unique constraint codes — and MySQL's
+ * deadlock victim (`ER_LOCK_DEADLOCK`, 1213), which is how InnoDB settles two `INSERT … SELECT
+ * MAX(seq) + 1` into one run that took gap locks on the same range: rolled back, safe to retry.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  for (let current = error; current !== null && typeof current === 'object'; ) {
+    if (current instanceof UniqueConstraintViolationException) return true;
+    if (current instanceof DeadlockException) return true;
+    const { code, errno } = current as { code?: unknown; errno?: unknown };
+    if (
+      code === '23505' ||
+      code === 'ER_DUP_ENTRY' ||
+      errno === 1062 ||
+      code === 'ER_LOCK_DEADLOCK' ||
+      errno === 1213 ||
+      code === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+      code === 'SQLITE_CONSTRAINT_UNIQUE'
+    ) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** {@link StreamFrameTable} over `agent_stream_frame`, through a MikroORM {@link EntityManager}. */
@@ -75,7 +108,7 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
   }
 
   isUniqueViolation(error: unknown): boolean {
-    return error instanceof UniqueConstraintViolationException;
+    return isUniqueViolation(error);
   }
 }
 

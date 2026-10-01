@@ -1,24 +1,34 @@
-// Integration: DrizzleConfirmTokenStore against an in-memory SQLite. Runs only under `pnpm test:db`.
+// Integration: DrizzleConfirmTokenStore on SQLite, Postgres and MySQL. Runs only under `pnpm test:db`.
 import { AGENT_CONFIRM_TOKEN_STORE } from '@dudousxd/nestjs-agent-core';
 import { CONFIRM_TOKEN_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DrizzleAgentStoreModule } from './drizzle-agent-store.module.js';
 import { DrizzleConfirmTokenStore } from './drizzle-confirm-token-store.js';
-import { ensureAgentSchema } from './ensure-schema.js';
-import { agentConfirmToken, agentSchema } from './schema.js';
+import { agentSchema } from './schema.js';
+import { type AgentDbHandle, describeEachDialect, openAgentDb } from './testing/real-db.js';
 
-async function fresh() {
-  const db = drizzle(new Database(':memory:'), { schema: agentSchema });
-  await ensureAgentSchema(db);
-  return {
-    store: new DrizzleConfirmTokenStore(db),
-    rows: async () => (await db.select().from(agentConfirmToken)) as Record<string, unknown>[],
-  };
-}
+describeEachDialect('DrizzleConfirmTokenStore — the confirm-token store contract', (dialect) => {
+  let handle: AgentDbHandle;
 
-describe('DrizzleConfirmTokenStore — the confirm-token store contract', () => {
+  beforeAll(async () => {
+    handle = await openAgentDb(dialect);
+  });
+
+  afterAll(async () => {
+    await handle?.close();
+  });
+
+  async function fresh() {
+    await handle.run('delete from agent_confirm_token');
+    return {
+      store: new DrizzleConfirmTokenStore(handle.db),
+      rows: async () =>
+        (await handle.q.select().from(handle.t.agentConfirmToken)) as Record<string, unknown>[],
+    };
+  }
+
   for (const contractCase of CONFIRM_TOKEN_STORE_CONTRACT) {
     it(contractCase.name, async () => contractCase.run(await fresh()));
   }
