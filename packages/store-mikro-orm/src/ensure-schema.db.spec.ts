@@ -386,11 +386,12 @@ const ADDED_LATER: Record<string, string[]> = {
     'active_stream_id',
     'default_agent',
     'model',
+    'persona',
     'queue_pause',
     'deleted_at',
   ],
   agent_run: ['parent_run_id'],
-  agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'attachments', 'seq'],
+  agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'attachments', 'seq', 'persona'],
   agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
 };
 

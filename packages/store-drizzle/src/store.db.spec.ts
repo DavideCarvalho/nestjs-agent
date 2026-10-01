@@ -1263,9 +1263,9 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
       const aged = await openAgentDb(dialect);
       try {
         const later: Record<string, string[]> = {
-          agent_thread: ['default_agent', 'model', 'queue_pause'],
+          agent_thread: ['default_agent', 'model', 'persona', 'queue_pause'],
           agent_run: ['parent_run_id'],
-          agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'seq'],
+          agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'seq', 'persona'],
           agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
         };
         const agedStore = new DrizzleAgentStore(aged.db);

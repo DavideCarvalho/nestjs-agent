@@ -709,9 +709,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   /** The thread's pinned persona, projected like {@link defaultAgentForThread}. */
   async personaForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
-      .select({ persona: agentThread.persona })
+      .select({ persona: this.t.agentThread.persona })
       .from(agentThread)
-      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+      .where(and(eq(this.t.agentThread.id, threadId), isNull(this.t.agentThread.deletedAt)));
     return thread?.persona ?? null;
   }
 

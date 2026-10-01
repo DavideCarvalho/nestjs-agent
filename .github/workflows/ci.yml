@@ -28,4 +28,7 @@ jobs:
       # the packages that are clean. Opting a package in: docs/typechecking-specs.md
       - run: pnpm typecheck:specs
       - run: pnpm test
+      # Every store suite on SQLite, Postgres 16 and MySQL 8.4 (testcontainers, one container per
+      # dialect for the run). Required: with `CI` set, a runner without Docker fails here rather
+      # than quietly skipping the real databases.
       - run: pnpm test:db
