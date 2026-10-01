@@ -11,6 +11,7 @@ import {
   type LlmStepEnvelope,
   type RecordUsageInput,
   ToolRegistry,
+  decodeStreamEvent,
   findCatalogModel,
   runAgentLoop,
   staticModelCatalog,
@@ -75,7 +76,20 @@ async function run(model: string | undefined, dispatch = false) {
     },
     hooks,
   );
-  return { seen, usage: store.usageInputs, envelopes };
+  return { seen, usage: store.usageInputs, envelopes, frames: await frames(sink) };
+}
+
+/** Every stream frame the run wrote (the fake model also writes bare text chunks, skipped). */
+async function frames(sink: InMemoryTokenStreamSink): Promise<Record<string, unknown>[]> {
+  const decoder = new TextDecoder();
+  const out: Record<string, unknown>[] = [];
+  for await (const chunk of sink.subscribe('run-1')) {
+    const event = decodeStreamEvent(decoder.decode(chunk).trim());
+    if (event !== null) {
+      out.push(event as unknown as Record<string, unknown>);
+    }
+  }
+  return out;
 }
 
 describe('agent loop — the selected model', () => {
@@ -91,6 +105,17 @@ describe('agent loop — the selected model', () => {
     const { seen, usage } = await run(undefined);
     expect(new Set(seen)).toEqual(new Set([undefined]));
     expect(usage[0]?.modelId).toBe('agent-label');
+  });
+
+  it('names the model on every step-finish frame — the selected one, else the configured label', async () => {
+    const selected = await run('gpt-fast');
+    const finishes = selected.frames.filter((frame) => frame.kind === 'step-finish');
+    expect(finishes.length).toBeGreaterThan(0);
+    expect(finishes.map((frame) => frame.model)).toEqual(finishes.map(() => 'gpt-fast'));
+    const fallback = await run(undefined);
+    expect(fallback.frames.find((frame) => frame.kind === 'step-finish')?.model).toBe(
+      'agent-label',
+    );
   });
 
   it('carries the selected model on a dispatched step envelope', async () => {

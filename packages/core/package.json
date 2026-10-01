@@ -64,6 +64,16 @@
         "types": "./dist/genui/builtins.d.cts",
         "default": "./dist/genui/builtins.cjs"
       }
+    },
+    "./ag-ui": {
+      "import": {
+        "types": "./dist/ag-ui/index.d.ts",
+        "default": "./dist/ag-ui/index.js"
+      },
+      "require": {
+        "types": "./dist/ag-ui/index.d.cts",
+        "default": "./dist/ag-ui/index.cjs"
+      }
     }
   },
   "files": [
@@ -79,7 +89,10 @@
     "@standard-schema/spec": "1.1.0"
   },
   "devDependencies": {
+    "@ag-ui/client": "1.0.1",
+    "@ag-ui/core": "1.0.1",
     "ajv": "8.20.0",
+    "rxjs": "7.8.2",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "zod": "3.25.76"

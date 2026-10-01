@@ -14,6 +14,9 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-core/genui/builtins': fileURLToPath(
     new URL('./packages/core/src/genui/builtins.ts', import.meta.url),
   ),
+  '@dudousxd/nestjs-agent-core/ag-ui': fileURLToPath(
+    new URL('./packages/core/src/ag-ui/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core/genui': fileURLToPath(
     new URL('./packages/core/src/genui/index.ts', import.meta.url),
   ),

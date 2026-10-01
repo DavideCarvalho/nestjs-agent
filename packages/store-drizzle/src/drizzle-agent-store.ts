@@ -88,7 +88,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
     const now = new Date();
     const thread: AgentThreadRow = {
-      id: crypto.randomUUID(),
+      id: input.id ?? crypto.randomUUID(),
       actorRef: input.actor.id,
       tenantRef: input.actor.tenantRef ?? null,
       title: input.title ?? 'New chat',

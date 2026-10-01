@@ -50,7 +50,8 @@ function toolCallId(claimed: unknown): string {
   return claimed;
 }
 
-function rejectReason(claimed: unknown): string | undefined {
+/** A rejection reason, bounded — it is read back by the model as the tool's result. */
+export function rejectReason(claimed: unknown): string | undefined {
   if (claimed === undefined) {
     return undefined;
   }
@@ -83,7 +84,8 @@ function via(claimed: unknown): string {
   return claimed;
 }
 
-function answers(claimed: unknown): Record<string, string[]> | undefined {
+/** A reply's answers, bounded and shape-checked before anything is signalled (`400` otherwise). */
+export function answers(claimed: unknown): Record<string, string[]> | undefined {
   if (claimed === undefined) {
     return undefined;
   }

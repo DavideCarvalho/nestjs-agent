@@ -669,6 +669,32 @@ AgentMcpServerModule.forRoot({
 
 See [`packages/mcp-server`](./packages/mcp-server) for the full option surface.
 
+## Over AG-UI (`adapters: [agUiAdapter()]`)
+
+The same agent can also answer [AG-UI 1.0](https://docs.ag-ui.com/spec/1.0), the open
+agent-to-application protocol, so any AG-UI client (`@ag-ui/client`'s `HttpAgent`, CopilotKit, a
+client in another language) drives it without knowing this library:
+
+```ts
+import { AgentModule, agUiAdapter } from '@dudousxd/nestjs-agent';
+
+AgentModule.forRoot({ model, adapters: [agUiAdapter()] }); // POST /agent/ag-ui
+```
+
+- **A `RunAgentInput` in, AG-UI events out**, behind the same `actorResolver`, `guards` and
+  ownership checks as `POST /agent/chat`. The consumer's `threadId` names the conversation: one the
+  caller owns is continued, an unknown one is created under that id.
+- **An approval or a question set ends the run** with `outcome: { type: 'interrupt' }`; the next
+  request answers it in `resume` and re-attaches to the parked run. The interrupt id carries the
+  whole address, so any replica can serve the resume (given a shared sink).
+- **Inline media** (`source.type: 'data'`) is staged through the bound attachment store; a part by
+  `url` or provider `file` handle is dropped with an `agora.warning`. Raise the JSON body limit
+  (`app.useBodyParser('json', { limit: '25mb' })`) if clients send files this way.
+- **`RUN_FINISHED.usage` is per model**, from the `model` each `step-finish` frame names.
+
+The encoder is framework-free in `@dudousxd/nestjs-agent-core/ag-ui` (shared with
+`@adonis-agora/agent`); `agUiChatStream` in `-react` is the matching consumer for `useAgentChat`.
+
 ## Frontend (`-react`)
 
 `useAgentChat` wraps the Vercel AI SDK v7 `useChat` with a transport for the `/agent/chat` SSE,

@@ -40,6 +40,14 @@ afterAll(async () => {
 });
 
 describe('MikroOrmAgentStore (sqlite)', () => {
+  it('creates a thread under the id the caller names, and refuses one already taken', async () => {
+    const actor = { id: 'named-actor' };
+    const named = await store.createThread({ actor, id: 'thread-from-client' });
+    expect(named.id).toBe('thread-from-client');
+    expect(await store.ownerOfThread('thread-from-client')).toBe('named-actor');
+    await expect(store.createThread({ actor, id: 'thread-from-client' })).rejects.toThrow();
+  });
+
   it('persists threads, messages, tool calls, usage and honours fork/truncate/soft-delete', async () => {
     const today = new Date().toISOString().slice(0, 10);
 

@@ -141,7 +141,7 @@ original stream.
 | `kind` | Fields | Client effect (AI SDK v7 chunk) |
 |---|---|---|
 | `step-start` | — | `start-step` |
-| `step-finish` | `usage?: { inputTokens, outputTokens, … }`, `costUsd?: number \| null`, `reasoningMs?: number` | closes open text/reasoning, `finish-step`; `costUsd` → `message-metadata` `{ costUsd }` (`null` = unpriced, never a fabricated `0`); `reasoningMs` → the closing reasoning part's `providerMetadata.agent.reasoningMs` (without it the client stamps the time it watched the reasoning stream, which reads ~0 on a replay — send it) |
+| `step-finish` | `usage?: { inputTokens, outputTokens, … }`, `costUsd?: number \| null`, `reasoningMs?: number`, `model?: string` | closes open text/reasoning, `finish-step`; `model` names the model the step ran on (the provider's, else the configured `modelId`) — what a per-model usage report keys on, e.g. AG-UI's `RUN_FINISHED.usage`; `costUsd` → `message-metadata` `{ costUsd }` (`null` = unpriced, never a fabricated `0`); `reasoningMs` → the closing reasoning part's `providerMetadata.agent.reasoningMs` (without it the client stamps the time it watched the reasoning stream, which reads ~0 on a replay — send it) |
 | `text` | `text: string` (a delta) | `text-start` once per run of prose, then `text-delta` |
 | `reasoning` | `text: string` (a delta) | `reasoning-start` once, then `reasoning-delta` |
 | `tool-input-start` | `id`, `name`, `toolKind: 'read' \| 'action'`, `parentId?` | `tool-input-start` with `toolMetadata: { toolKind, parentId? }` |

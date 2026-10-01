@@ -27,6 +27,7 @@ import type {
 } from '@nestjs/common';
 import type { FunctionalTool } from './functional-tool.js';
 import type { QuotaLimits } from './ledger-quota-provider.js';
+import type { AgentProtocolAdapter } from './protocol-adapter.js';
 
 /**
  * Which half of the module this process mounts — the split that lets an API pod and a WORKER pod
@@ -335,6 +336,13 @@ export interface AgentModuleOptions {
    * which controllers exist at module-build time, not something a request can flip.
    */
   surface?: AgentSurface;
+
+  /**
+   * Wire protocols served alongside the native one, over the same runs — e.g. `[agUiAdapter()]`
+   * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `guards`,
+   * and not at all on `surface: 'engine'`. STATIC, like `surface`.
+   */
+  adapters?: AgentProtocolAdapter[];
 }
 
 export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
@@ -367,4 +375,6 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * which controllers exist. Omit → `'both'`, today's behavior with zero change.
    */
   surface?: AgentSurface;
+  /** Wire protocols served alongside the native one — see `AgentModuleOptions.adapters`. STATIC. */
+  adapters?: AgentProtocolAdapter[];
 }
