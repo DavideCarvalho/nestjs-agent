@@ -103,6 +103,12 @@ export type AgentStreamEvent =
        * Absent when the step had no reasoning.
        */
       reasoningMs?: number;
+      /**
+       * The model the step ran on: the one the provider reported, else the configured `modelId`.
+       * What a per-model usage report keys on (the AG-UI producer's `RUN_FINISHED.usage`). Absent
+       * when neither is known; a reader that does not know the field ignores it.
+       */
+      model?: string;
     }
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }

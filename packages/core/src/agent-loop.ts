@@ -3022,6 +3022,8 @@ export async function runAgentLoop<TOutput = unknown>(
     }
     // provider-reported model wins over the configured fallback, so cost can't misattribute
     const resolvedModelId = turn.modelId ?? deps.modelId ?? 'unknown';
+    // The same model, for the stream: absent rather than a made-up `'unknown'`.
+    const stepModel = turn.modelId ?? deps.modelId;
     // Provider-reported spend wins; else an estimate from the (once-per-run cached) price list; else
     // `null` — surfaced on the stream's step-finish frame and the persisted assistant message below.
     const costUsd = resolveCostUsd(turn.usage, turn.costUsd, priceByModel.get(resolvedModelId));
@@ -3242,6 +3244,7 @@ export async function runAgentLoop<TOutput = unknown>(
             usage: turn.usage,
             costUsd,
             ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+            ...(stepModel !== undefined ? { model: stepModel } : {}),
           }),
         );
       });
@@ -3347,6 +3350,7 @@ export async function runAgentLoop<TOutput = unknown>(
           usage: turn.usage,
           costUsd,
           ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+          ...(stepModel !== undefined ? { model: stepModel } : {}),
         }),
       );
     });

@@ -109,6 +109,12 @@ export interface ChatParams {
   transient?: boolean;
   /** What to do when the thread already has a turn running — see {@link ChatSendMode}. */
   mode?: ChatSendMode;
+  /**
+   * When creating a thread (no `threadId`), ask the store to create it under this id — the id an
+   * AG-UI consumer named the conversation with. A store may ignore it (`CreateThreadInput.id`); the
+   * thread's real id is always the one on the result.
+   */
+  newThreadId?: string;
 }
 
 /**
@@ -321,6 +327,7 @@ export class AgentService {
       const created = await this.store.createThread({
         actor: params.actor,
         ...(params.transient === true ? { transient: true } : {}),
+        ...(params.newThreadId !== undefined ? { id: params.newThreadId } : {}),
       });
       threadId = created.id;
     } else {
@@ -747,6 +754,46 @@ export class AgentService {
     }
     await settleDeadRun(this.store, { runId });
     throw new RunNotActiveException(runId);
+  }
+
+  /** Who owns the thread, or `null` when there is no such (live) thread. */
+  async threadOwner(threadId: string): Promise<string | null> {
+    return this.store.ownerOfThread(threadId);
+  }
+
+  /**
+   * May `actor` continue the run whose stream is `runId` — the AG-UI resume? Only the actor whose
+   * thread is streaming it (`403` otherwise), and only while it still is: a run that is over is
+   * waiting on no one (`409 run_not_active`), whatever an old interrupt id says.
+   */
+  async assertResumable(actor: Actor, runId: string): Promise<void> {
+    const owner = await this.store.ownerOfActiveStream(runId);
+    if (owner === null) {
+      throw new RunNotActiveException(runId);
+    }
+    if (owner !== actor.id) {
+      throw new ForbiddenException('run belongs to another actor');
+    }
+  }
+
+  /**
+   * Everything {@link approve} / {@link reject} check before they signal — who may decide, and
+   * that the request has not lapsed — without signalling. For a caller that settles several
+   * decisions at once and must refuse all of them if one is refused (an AG-UI resume).
+   */
+  async checkDecision(actor: Actor, toolCallId: string): Promise<void> {
+    await this.assertMayDecide(actor, toolCallId);
+    await this.assertNotExpired(toolCallId);
+  }
+
+  /** Everything {@link answer} checks before it signals, without signalling — see {@link checkDecision}. */
+  async checkAnswer(
+    actor: Actor,
+    toolCallId: string,
+    answers: Record<string, string[]>,
+  ): Promise<void> {
+    await this.assertOwnsToolCall(actor, toolCallId);
+    await this.assertAnswersFit(toolCallId, answers);
   }
 
   async cancel(actor: Actor, runId: string): Promise<void> {

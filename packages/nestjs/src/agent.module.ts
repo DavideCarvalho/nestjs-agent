@@ -59,6 +59,7 @@ import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import type { AgentProtocolAdapter } from './protocol-adapter.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
 import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
@@ -299,12 +300,25 @@ const BASE_CONTROLLERS = [
   AttachmentsController,
 ];
 
-/** Every controller class `guards` targets. */
-const GUARDABLE_CONTROLLERS = BASE_CONTROLLERS;
+/** The controllers the configured protocol adapters contribute. */
+function adapterControllers(adapters: AgentProtocolAdapter[] | undefined): Type<object>[] {
+  return (adapters ?? []).flatMap((adapter) => adapter.controllers);
+}
 
-/** `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic. */
-function controllersForSurface(surface: AgentSurface | undefined): Type<object>[] {
-  return surface === 'engine' ? [] : BASE_CONTROLLERS;
+/** The providers the configured protocol adapters contribute. */
+function adapterProviders(adapters: AgentProtocolAdapter[] | undefined): Provider[] {
+  return (adapters ?? []).flatMap((adapter) => adapter.providers ?? []);
+}
+
+/**
+ * `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic. Otherwise
+ * the native ones and whatever the protocol adapters contribute.
+ */
+function controllersForSurface(
+  surface: AgentSurface | undefined,
+  adapters: AgentProtocolAdapter[] | undefined,
+): Type<object>[] {
+  return surface === 'engine' ? [] : [...BASE_CONTROLLERS, ...adapterControllers(adapters)];
 }
 
 /**
@@ -329,9 +343,12 @@ const GUARDS_METADATA = '__guards__';
  * `GuardsConsumer` reads this metadata per-request via `Reflector`, not once at boot, so the LAST call
  * to stamp it before a request is served wins for that controller class in this process.
  */
-function applyGuards(guards: Type<CanActivate>[] | undefined): void {
+function applyGuards(
+  guards: Type<CanActivate>[] | undefined,
+  adapters: AgentProtocolAdapter[] | undefined,
+): void {
   const resolved = guards ?? [];
-  for (const controller of GUARDABLE_CONTROLLERS) {
+  for (const controller of [...BASE_CONTROLLERS, ...adapterControllers(adapters)]) {
     Reflect.defineMetadata(GUARDS_METADATA, resolved, controller);
   }
 }
@@ -351,16 +368,17 @@ function routerFor(path: string): DynamicModule {
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
-    applyGuards(options.guards);
+    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersForSurface(options.surface),
+      controllers: controllersForSurface(options.surface, options.adapters),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false),
         ...guardProviders(options.guards),
+        ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(),
     };
@@ -368,12 +386,12 @@ export class AgentModule {
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
-    applyGuards(options.guards);
+    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersForSurface(options.surface),
+      controllers: controllersForSurface(options.surface, options.adapters),
       providers: [
         {
           provide: AGENT_OPTIONS,
@@ -392,6 +410,7 @@ export class AgentModule {
         },
         ...sharedProviders(options.durable ?? false),
         ...guardProviders(options.guards),
+        ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(),
     };

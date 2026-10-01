@@ -18,6 +18,14 @@ export interface CreateThreadInput {
   actor: Actor;
   transient?: boolean;
   title?: string;
+  /**
+   * Create the thread under THIS id instead of a generated one — for a caller whose protocol names
+   * the conversation itself (AG-UI's `threadId`, at most 255 characters). OPTIONAL to honour: a
+   * store that ignores it still creates a thread, under an id of its own, and the caller reads the
+   * id off the result. A store that honours it rejects an id already taken (soft-deleted threads
+   * included).
+   */
+  id?: string;
 }
 
 export interface AppendMessageInput {

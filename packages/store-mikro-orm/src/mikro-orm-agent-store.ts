@@ -77,7 +77,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
     const em = this.em.fork();
     const now = new Date();
     const thread = em.create(AgentThread, {
-      id: crypto.randomUUID(),
+      id: input.id ?? crypto.randomUUID(),
       actorRef: input.actor.id,
       title: input.title ?? 'New chat',
       transient: input.transient ?? false,
