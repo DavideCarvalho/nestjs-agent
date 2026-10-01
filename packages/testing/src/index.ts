@@ -55,3 +55,8 @@ export {
   type SqlSinkContractCase,
   type SqlSinkContractSubject,
 } from './sql-token-stream-sink-contract.js';
+export {
+  ACTION_PROPOSAL_STORE_CONTRACT,
+  type ActionProposalContractCase,
+  type ActionProposalContractSubject,
+} from './action-proposal-store-contract.js';

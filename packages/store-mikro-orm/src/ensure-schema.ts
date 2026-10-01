@@ -6,6 +6,7 @@ import type { Connection, EntityManager, MikroORM } from '@mikro-orm/core';
  * `ensureAgentSchema` never touches (or diffs) the host app's own tables on a shared database.
  */
 const AGENT_TABLE_NAMES = new Set([
+  'agent_action_proposal',
   'agent_thread',
   'agent_message',
   'agent_queued_message',

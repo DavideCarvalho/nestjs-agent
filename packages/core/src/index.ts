@@ -146,3 +146,6 @@ export {
   type StreamFrameRow,
   type StreamFrameTable,
 } from './sql-token-stream-sink.js';
+export * from './spi/action-proposal-store.js';
+export * from './action-proposal-transitions.js';
+export { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';

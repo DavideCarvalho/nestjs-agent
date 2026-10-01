@@ -1,3 +1,4 @@
+import type { ActionProposalStore, ActionProposalStoreOptions } from '@dudousxd/nestjs-agent-core';
 import {
   type AgentStore,
   type AgentUiComponent,
@@ -34,6 +35,7 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MESSAGE_ORDER, MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
+import { MikroOrmActionProposals } from './mikro-orm-action-proposals';
 
 /**
  * Re-exported from the core SPI so a consumer can name this store's window read without importing a
@@ -71,8 +73,37 @@ type TurnMessage = Pick<AgentMessage, TurnMessageKey> & {
  * concurrent turns. Behaviour mirrors the in-memory reference store (fork/truncate/quota/
  * active-stream/soft-delete semantics) so the two are interchangeable in tests.
  */
-export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQueueStore {
-  constructor(private readonly em: EntityManager) {}
+export class MikroOrmAgentStore
+  implements AgentStore, ThreadTurnReader, ChatQueueStore, ActionProposalStore
+{
+  private readonly proposals: MikroOrmActionProposals;
+  constructor(
+    private readonly em: EntityManager,
+    options: ActionProposalStoreOptions = {},
+  ) {
+    this.proposals = new MikroOrmActionProposals(em, options);
+  }
+  createActionProposal(...args: Parameters<ActionProposalStore['createActionProposal']>) {
+    return this.proposals.createActionProposal(...args);
+  }
+  getActionProposal(...args: Parameters<ActionProposalStore['getActionProposal']>) {
+    return this.proposals.getActionProposal(...args);
+  }
+  listActionProposals(...args: Parameters<ActionProposalStore['listActionProposals']>) {
+    return this.proposals.listActionProposals(...args);
+  }
+  decideActionProposal(...args: Parameters<ActionProposalStore['decideActionProposal']>) {
+    return this.proposals.decideActionProposal(...args);
+  }
+  claimActionProposal(...args: Parameters<ActionProposalStore['claimActionProposal']>) {
+    return this.proposals.claimActionProposal(...args);
+  }
+  extendActionProposalLease(...args: Parameters<ActionProposalStore['extendActionProposalLease']>) {
+    return this.proposals.extendActionProposalLease(...args);
+  }
+  settleActionProposal(...args: Parameters<ActionProposalStore['settleActionProposal']>) {
+    return this.proposals.settleActionProposal(...args);
+  }
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
     const em = this.em.fork();

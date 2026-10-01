@@ -1,4 +1,6 @@
+import { canonicalActionProposalJson } from '@dudousxd/nestjs-agent-core';
 import type {
+  ActionProposal,
   Actor,
   AgentUiComponent,
   MemoryOrigin,
@@ -18,6 +20,7 @@ import type {
 import {
   bigint,
   boolean,
+  customType,
   datetime,
   double,
   index,
@@ -260,8 +263,34 @@ export const agentStreamFrame = mysqlTable(
   (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );
 
+/** JSON text preserves valid JSON strings that a native JSON column cannot represent. */
+const proposalJson = customType<{ data: ActionProposal; driverData: string }>({
+  dataType: () => 'longtext',
+  toDriver: (value) => canonicalActionProposalJson(value),
+  fromDriver: (value) => JSON.parse(value) as ActionProposal,
+});
+
+/** Independent action proposals; decision and execution work commit in one fenced row. */
+export const agentActionProposal = mysqlTable(
+  'agent_action_proposal',
+  {
+    id: key('id').primaryKey(),
+    scopeKey: key('scope_key').notNull(),
+    decision: key('decision').$type<ActionProposal['decision']>().notNull(),
+    logicalSort: varchar('logical_sort', { length: 1020 }).notNull(),
+    createFingerprint: longtext('create_fingerprint').notNull(),
+    proposal: proposalJson('proposal').notNull(),
+    version: bigint('version', { mode: 'number' }).notNull().default(0),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
+  ],
+);
+
 /** Every agent table, for `drizzle(pool, { schema: mysqlAgentSchema, mode: 'default' })` on MySQL. */
 export const mysqlAgentSchema = {
+  agentActionProposal,
   agentThread,
   agentMessage,
   agentQueuedMessage,

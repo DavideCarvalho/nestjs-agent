@@ -1,4 +1,6 @@
+import { canonicalActionProposalJson } from '@dudousxd/nestjs-agent-core';
 import type {
+  ActionProposal,
   Actor,
   AgentUiComponent,
   MemoryOrigin,
@@ -18,6 +20,7 @@ import type {
 import {
   bigint,
   boolean,
+  customType,
   doublePrecision,
   index,
   integer,
@@ -254,8 +257,34 @@ export const agentStreamFrame = pgTable(
   (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );
 
+/** JSON text preserves valid JSON strings that a native JSON column cannot represent. */
+const proposalJson = customType<{ data: ActionProposal; driverData: string }>({
+  dataType: () => 'text',
+  toDriver: (value) => canonicalActionProposalJson(value),
+  fromDriver: (value) => JSON.parse(value) as ActionProposal,
+});
+
+/** Independent action proposals; decision and execution work commit in one fenced row. */
+export const agentActionProposal = pgTable(
+  'agent_action_proposal',
+  {
+    id: text('id').primaryKey(),
+    scopeKey: text('scope_key').notNull(),
+    decision: text('decision').$type<ActionProposal['decision']>().notNull(),
+    logicalSort: text('logical_sort').notNull(),
+    createFingerprint: text('create_fingerprint').notNull(),
+    proposal: proposalJson('proposal').notNull(),
+    version: bigint('version', { mode: 'number' }).notNull().default(0),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
+  ],
+);
+
 /** Every agent table, for `drizzle(pool, { schema: pgAgentSchema })` on Postgres. */
 export const pgAgentSchema = {
+  agentActionProposal,
   agentThread,
   agentMessage,
   agentQueuedMessage,

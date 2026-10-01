@@ -434,6 +434,50 @@ describeEachDialect('ensureAgentSchema on a real database', (dialect) => {
     expect((await store.getThread(thread.id))?.title).toBe('boot');
   });
 
+  it('adds independent proposals to an older install and preserves data on repeated provision', async () => {
+    const instance = await fresh();
+    for (const statement of await agentSchemaSql(instance, { ifNotExists: false })) {
+      if (!statement.includes('agent_action_proposal')) await rawSql(instance, statement);
+    }
+    const store = new MikroOrmAgentStore(instance.em, { clock: () => 1000 });
+    const thread = await store.createThread({ actor: { id: 'owner' }, title: 'Existing chat' });
+    await store.appendMessage({ threadId: thread.id, role: 'user', content: 'Keep this message' });
+    await ensureAgentSchema(instance);
+    const input = {
+      id: 'old-install-proposal',
+      tenantRef: null,
+      actorRef: 'owner',
+      threadId: thread.id,
+      originRunId: 'run',
+      originMessageId: 'message',
+      originToolCallId: 'call',
+      toolName: 'refund',
+      input: { amount: 5 },
+      confirmation: { title: 'Refund?', verb: 'Refund' },
+      approver: 'requester',
+      expiresAt: 2000,
+      idempotencyKey: 'stable-key',
+    };
+    expect((await store.createActionProposal(input)).status).toBe('created');
+    await ensureAgentSchema(instance);
+    expect(await store.getActionProposal(input, input.id)).toMatchObject({
+      decision: 'pending',
+      execution: null,
+      idempotencyKey: 'stable-key',
+    });
+    expect((await store.getThread(thread.id))?.messages.map((message) => message.content)).toEqual([
+      'Keep this message',
+    ]);
+    expect((await indexesOf(instance, 'agent_action_proposal')).map((index) => index.name)).toEqual(
+      expect.arrayContaining([
+        'agent_proposal_scope_created_idx',
+        'agent_proposal_scope_decision_idx',
+        'agent_proposal_work_lease_idx',
+      ]),
+    );
+    expect(await pendingAgentDdl(instance)).toEqual([]);
+  });
+
   it('adds every later column back to tables that hold rows, and keeps the rows', async () => {
     const instance = await fresh();
     for (const statement of await agentSchemaSql(instance, { ifNotExists: false })) {

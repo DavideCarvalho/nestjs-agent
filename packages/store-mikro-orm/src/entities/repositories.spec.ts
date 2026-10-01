@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as rootBarrel from '../index';
 
 const REPOSITORY_NAMES = [
+  'AgentActionProposalRepository',
   'AgentThreadRepository',
   'AgentMessageRepository',
   'AgentToolCallRepository',
