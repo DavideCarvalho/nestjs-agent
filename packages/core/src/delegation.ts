@@ -102,6 +102,11 @@ export function detachedUnsettled(args: {
  *
  * Called by the RUNNER, never the loop — a run that crashed or was stopped cannot record its own
  * ending. Skipped entirely when the thread is gone, for the same reason delivery is.
+ *
+ * Settles ONCE: a thread that already holds a message from this run (its answer, or an earlier
+ * settlement) is left alone. A Stop can be settled from two places — the run's own body when it
+ * observes the cancel, and the runner for a run parked where its body never runs again — and a
+ * Stop on a run that already answered must not write "stopped" under its answer.
  */
 export async function settleUnsettledDelegation(args: {
   store: AgentStore;
@@ -112,7 +117,8 @@ export async function settleUnsettledDelegation(args: {
   error?: string;
 }): Promise<void> {
   const { store, delivery, agent, runId, status } = args;
-  if ((await store.getThread(delivery.threadId)) === null) {
+  const thread = await store.getThread(delivery.threadId);
+  if (thread === null || thread.messages.some((message) => message.runId === runId)) {
     return;
   }
   await store.appendMessage({

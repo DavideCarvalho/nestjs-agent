@@ -6,13 +6,19 @@ import {
   type AgentRunStartOptions,
   type AgentRunner,
   type AgentStore,
+  type DetachedDelivery,
   type HumanReply,
   type TokenStreamSink,
   encodeStreamEvent,
   releaseThreadRun,
+  settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
 import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
-import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
+import {
+  type RunDetail,
+  type RunGateway,
+  isWorkflowControlFlowSignal,
+} from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { utcDay } from '../agent-deps.js';
 import { InProcessTokenStreamSink } from '../in-process-sink.js';
@@ -40,6 +46,26 @@ function isThreadTurn(input: unknown): boolean {
     (input as { sinkRunId?: unknown }).sinkRunId === undefined &&
     (input as { deliverTo?: unknown }).deliverTo === undefined
   );
+}
+
+/** Where a DETACHED run delivers, read structurally off a recorded input; `undefined` for any other run. */
+function deliveryOf(input: unknown): { delivery: DetachedDelivery; agent: string } | undefined {
+  if (typeof input !== 'object' || input === null) {
+    return undefined;
+  }
+  const { deliverTo, agentName } = input as { deliverTo?: unknown; agentName?: unknown };
+  if (
+    typeof deliverTo !== 'object' ||
+    deliverTo === null ||
+    typeof (deliverTo as { threadId?: unknown }).threadId !== 'string' ||
+    typeof (deliverTo as { toolCallId?: unknown }).toolCallId !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    delivery: deliverTo as DetachedDelivery,
+    agent: typeof agentName === 'string' ? agentName : 'default',
+  };
 }
 
 /**
@@ -155,9 +181,17 @@ export class DurableAgentRunner implements AgentRunner {
    */
   async cancel(runId: string): Promise<void> {
     this.logger.log(`cancelling agent run ${runId}`);
-    const input = await this.inputOf(runId);
+    const detail = await this.detailOf(runId);
+    const input = detail?.run.input;
     const threadId = threadOfRun(input);
     await this.runs.cancel(runId, { compensate: true });
+    await this.settleCancelledDelegation(runId, input);
+    // The runtime cascades a Stop to every run this one SPAWNED. A detached delegation is no longer
+    // started that way, but a turn that journaled its `spawn:` before it was still owns that child in
+    // the runtime's eyes — and the cascade cancels it from outside, where nothing of ours runs.
+    for (const childId of detail?.children ?? []) {
+      await this.settleCascadedDetached(childId);
+    }
     const writer = await this.sink.open(runId);
     if (threadId !== undefined) {
       // A thread's own turn hands the thread on first: an interrupt's message starts now, anything
@@ -188,7 +222,62 @@ export class DurableAgentRunner implements AgentRunner {
   }
 
   /**
-   * The input a run was started with (which thread it was streaming), or `undefined` where the gateway cannot say.
+   * Settle the delegation a DETACHED run was started for, once it has been stopped. A run parked on
+   * a human never runs its body again — the runtime settles it from outside — so the body's own
+   * `deliver:detached:unsettled` is not reached, and without this the card in the calling thread says
+   * "started" for ever. Settles once (see `settleUnsettledDelegation`), so a body that did observe
+   * the Stop and a run that had already answered are both left as they are. A no-op for any run
+   * that does not deliver into another thread.
+   */
+  private async settleCancelledDelegation(runId: string, input: unknown): Promise<void> {
+    const target = deliveryOf(input);
+    if (target === undefined) {
+      return;
+    }
+    try {
+      await settleUnsettledDelegation({
+        store: this.store,
+        delivery: target.delivery,
+        agent: target.agent,
+        runId,
+        status: 'cancelled',
+      });
+    } catch (error) {
+      this.logger.error(
+        `could not settle the delegation of cancelled run ${runId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * A detached child the runtime cancelled along with its parent (a `spawn:` journaled before
+   * detached runs were started on their own): end it the way a Stop on its own id would have.
+   */
+  private async settleCascadedDetached(childId: string): Promise<void> {
+    const child = await this.detailOf(childId);
+    const status = child?.run.status;
+    if (
+      child === undefined ||
+      deliveryOf(child.run.input) === undefined ||
+      (status !== 'cancelled' && status !== 'cancelling')
+    ) {
+      return;
+    }
+    const subThreadId = threadOfRun(child.run.input);
+    if (subThreadId !== undefined) {
+      await releaseThreadRun(this.store, subThreadId, childId);
+    }
+    await this.settleCancelledDelegation(childId, child.run.input);
+    const writer = await this.sink.open(childId);
+    await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
+    await writer.end();
+    await this.store.recordRunEnd?.({ runId: childId, status: 'cancelled' });
+  }
+
+  /**
+   * What the runtime recorded for a run — the input it was started with (which thread it was streaming), its status and the runs it spawned — or `undefined` where the gateway cannot say.
    *
    * A read failure answers `undefined` instead of propagating, the same posture `AgentRunWorkflow`
    * takes for its own cancel observation: failing to ask is not an answer worth failing a cancel
@@ -197,9 +286,9 @@ export class DurableAgentRunner implements AgentRunner {
    * with a subscriber holding a stream that never settles, from the one call whose entire job is to
    * make a run stop.
    */
-  private async inputOf(runId: string): Promise<unknown> {
+  private async detailOf(runId: string): Promise<RunDetail | undefined> {
     try {
-      return (await this.runs.getRunDetail(runId))?.run.input;
+      return (await this.runs.getRunDetail(runId)) ?? undefined;
     } catch {
       return undefined;
     }

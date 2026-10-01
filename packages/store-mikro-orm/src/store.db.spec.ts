@@ -743,6 +743,54 @@ describe('MikroOrmAgentStore — which media a live message still references', (
     const [copied] = (await store.getThread(fork.id))?.messages ?? [];
     expect(copied).toMatchObject(EVERY_MESSAGE_FIELD);
   });
+
+  it('counts a message waiting in the thread’s queue — sent, just not run yet', async () => {
+    const mine = await store.createThread({ actor: { id: 'ref-q-1' } });
+    const theirs = await store.createThread({ actor: { id: 'ref-q-2' } });
+    await store.enqueueMessage({
+      threadId: mine.id,
+      actor: { id: 'ref-q-1' },
+      content: 'look at this next',
+      attachments: [{ mediaId: 'ref-queued', ...IMAGE }],
+    });
+    await store.enqueueMessage({
+      threadId: theirs.id,
+      actor: { id: 'ref-q-2' },
+      content: 'theirs, waiting',
+      attachments: [{ mediaId: 'ref-queued-theirs', ...IMAGE }],
+    });
+
+    // Collecting it now would fail the turn it is waiting to start; another actor's queue stays
+    // invisible, exactly like another actor's transcript.
+    expect(await store.referencedMediaIds('ref-q-1', ['ref-queued', 'ref-queued-theirs'])).toEqual([
+      'ref-queued',
+    ]);
+  });
+
+  it('re-derives from the queue too: a removed or edited queued message frees its media', async () => {
+    const thread = await store.createThread({ actor: { id: 'ref-q-3' } });
+    const removed = await store.enqueueMessage({
+      threadId: thread.id,
+      actor: { id: 'ref-q-3' },
+      content: 'never mind',
+      attachments: [{ mediaId: 'ref-removed', ...IMAGE }],
+    });
+    const edited = await store.enqueueMessage({
+      threadId: thread.id,
+      actor: { id: 'ref-q-3' },
+      content: 'with a picture',
+      attachments: [{ mediaId: 'ref-dropped', ...IMAGE }],
+    });
+    expect(await store.referencedMediaIds('ref-q-3', ['ref-removed', 'ref-dropped'])).toEqual([
+      'ref-removed',
+      'ref-dropped',
+    ]);
+
+    await store.removeQueuedMessage(removed.id);
+    await store.updateQueuedMessage(edited.id, { attachments: null });
+
+    expect(await store.referencedMediaIds('ref-q-3', ['ref-removed', 'ref-dropped'])).toEqual([]);
+  });
 });
 
 /**

@@ -150,7 +150,7 @@ reader's `IN (…)` and `truncateFrom`'s delete) filter on it.
 ## Attachment housekeeping
 
 `referencedMediaIds(actorRef, mediaIds)` answers which of a set of media ids a message that still
-exists carries, for one actor — the inverse of the host's own staged-media inventory, and the half a
+exists — or one still waiting in a thread's queue (`agent_queued_message`) — carries, for one actor — the inverse of the host's own staged-media inventory, and the half a
 sweep cannot work out for itself. It needs **no schema change**: it reads the `attachments` JSON
 column messages have carried since attachments shipped, so an existing database answers correctly
 the moment you upgrade, with nothing to backfill.
