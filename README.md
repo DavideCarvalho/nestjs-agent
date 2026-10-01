@@ -154,6 +154,32 @@ real durable suspend: the run is checkpointed to the state store on `ctx.waitFor
 on approval — surviving restarts, replay-safe. Without durable, an in-process runner holds the turn
 open. Either way the wire protocol is identical.
 
+### Several replicas: the live stream
+
+The default sink holds a run's stream in the process running it, so a reconnect that lands on
+another replica finds nothing. With several replicas, share it — Redis
+(`@dudousxd/nestjs-agent-transport-redis`), or, with no Redis, the database you already have:
+
+```ts
+import { DrizzleTokenStreamSink } from '@dudousxd/nestjs-agent-store-drizzle';
+AgentModule.forRoot({ model, sink: new DrizzleTokenStreamSink(db) });
+
+// or MikroORM
+AgentModule.forRootAsync({
+  inject: [EntityManager],
+  useFactory: (em: EntityManager) => ({ model, sink: new MikroOrmTokenStreamSink(em) }),
+});
+```
+
+One row per frame in `agent_stream_frame`, numbered per run; any replica serves the SSE by polling
+the rows past its cursor (`pollIntervalMs`, 250 ms; 1 s once the run has been quiet for 5 s).
+Consecutive `text` frames are coalesced at WRITE time (`flushMs`, 50 ms), so every replica reads the
+same rows and `?after=` cursors stay exact. Rows lapse `ttlSeconds` (1 h) after the run's LAST write
+— a run parked longer than that loses its buffered frames (the persisted thread is the record) —
+and `purgeExpired()` runs on its own after a run ends, at most once a minute. Polling only: no
+`LISTEN`/`NOTIFY`. `SqlTokenStreamSink` in core is the logic over a five-method `StreamFrameTable`,
+for a database these two do not cover.
+
 ### A turn that dies mid-step
 
 A run that fails — the durable runtime refused a checkpoint position, a store write threw, the

@@ -15,6 +15,7 @@ const AGENT_TABLE_NAMES = new Set([
   'agent_run',
   'agent_memory',
   'rag_ingestion_log',
+  'agent_stream_frame',
   'agent_confirm_token',
 ]);
 

@@ -137,3 +137,9 @@ export {
   schemaExtensionOf,
   withConfirmFields,
 } from './confirmed-tool.js';
+export {
+  SqlTokenStreamSink,
+  type SqlTokenStreamSinkOptions,
+  type StreamFrameRow,
+  type StreamFrameTable,
+} from './sql-token-stream-sink.js';

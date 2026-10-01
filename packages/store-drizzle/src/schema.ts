@@ -19,6 +19,7 @@ import {
   type BaseSQLiteDatabase,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -343,6 +344,23 @@ export const agentConfirmToken = sqliteTable(
     createdAt: integer('created_at').notNull(),
   },
   (table) => [index('agent_confirm_token_expires_idx').on(table.expiresAt)],
+);
+
+/**
+ * One row per frame of a run's live stream (`DrizzleTokenStreamSink`), numbered per run from 1 with
+ * no gaps. `frame` is one NDJSON line; `null` marks the end, with `error` set when the run failed.
+ * `created_at` (epoch-ms) is what the TTL counts from — a run's LAST row.
+ */
+export const agentStreamFrame = sqliteTable(
+  'agent_stream_frame',
+  {
+    runId: text('run_id').notNull(),
+    seq: integer('seq').notNull(),
+    frame: text('frame'),
+    error: text('error'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );
 
 /** The tables this store owns, as one schema object, ready for `drizzle(client, { schema })`. */

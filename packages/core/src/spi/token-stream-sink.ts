@@ -16,6 +16,13 @@ export interface SinkWriter {
    * — so the transport can surface a typed failure frame instead of leaking it as assistant text.
    */
   fail(error: StreamError): void | Promise<void>;
+  /**
+   * OPTIONAL: write out anything this writer is still holding back, without ending the stream. Only
+   * a sink that gathers frames before writing them (the SQL sink coalesces text) has anything to do
+   * here; a delegated run's child writer calls it where it would have ended the stream, so nothing
+   * of the delegate's is still held back when its parent — possibly on another replica — writes next.
+   */
+  flush?(): void | Promise<void>;
 }
 
 /** A machine-readable stream failure. `code` is a stable slug; `message` is human-facing. */

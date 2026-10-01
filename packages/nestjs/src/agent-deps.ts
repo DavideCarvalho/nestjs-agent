@@ -92,12 +92,22 @@ export function utcDay(date = new Date()): string {
  * Wraps a parent run's sink writer for a sub-agent: `write` forwards (so the sub-agent's tokens and
  * pending action-tool frames reach the human's live stream), but `end` / `fail` are swallowed — the
  * top-level run owns the stream's lifecycle, so a finished/failed child must not close or error the
- * shared stream out from under the parent that is still running.
+ * shared stream out from under the parent that is still running. They do `flush` it: a sink that
+ * gathers frames (the SQL sink) writes out what the child left, so the parent's next frame —
+ * possibly written on another replica — lands after it.
  */
 export function childSinkWriter(writer: SinkWriter): SinkWriter {
   return {
     write: (chunk) => writer.write(chunk),
-    end: async () => {},
-    fail: async () => {},
+    // The top-level run owns end/fail — but what the child wrote must not be held back past it.
+    end: async () => {
+      await writer.flush?.();
+    },
+    fail: async () => {
+      await writer.flush?.();
+    },
+    flush: async () => {
+      await writer.flush?.();
+    },
   };
 }
