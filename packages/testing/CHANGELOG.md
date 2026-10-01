@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.25.1
+
+### Patch Changes
+
+- [#277](https://github.com/DavideCarvalho/nestjs-agent/pull/277) [`aabc27e`](https://github.com/DavideCarvalho/nestjs-agent/commit/aabc27e544beda62c5b28849effa00edaa93608d) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `CHAT_QUEUE_STORE_CONTRACT` compares the JSON a store hands back (actor, attachments, page context,
+  queue pause) as values, not as serialized strings. Postgres `jsonb` and MySQL `JSON` return object
+  keys in their own order, so a store on either failed the contract while round-tripping every field.
+
 ## 0.25.0
 
 ### Minor Changes
