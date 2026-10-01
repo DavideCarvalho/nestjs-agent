@@ -1,12 +1,17 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ActionProposalStore, CreateActionProposal } from '@dudousxd/nestjs-agent-core';
-import { ACTION_PROPOSAL_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
+import type { CreateActionProposal } from '@dudousxd/nestjs-agent-core';
+import {
+  ACTION_PROPOSAL_STORE_CONTRACT,
+  ACTION_PROPOSAL_WORKER_STORE_CONTRACT,
+} from '@dudousxd/nestjs-agent-testing';
 import { IsolationLevel } from '@mikro-orm/core';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
+import { MikroOrmActionProposals } from './mikro-orm-action-proposals';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { type AgentOrmHandle, describeEachDialect, openAgentOrm, rawSql } from './testing/real-db';
 
@@ -31,8 +36,8 @@ describeEachDialect('MikroOrmAgentStore action proposals', (dialect) => {
   let replica: MikroORM;
   let directory: string | undefined;
   let now = 1000;
-  let store: ActionProposalStore;
-  let peer: ActionProposalStore;
+  let store: MikroOrmAgentStore;
+  let peer: MikroOrmAgentStore;
   beforeAll(async () => {
     directory =
       dialect === 'sqlite' ? await mkdtemp(join(tmpdir(), 'agent-proposals-')) : undefined;
@@ -69,6 +74,247 @@ describeEachDialect('MikroOrmAgentStore action proposals', (dialect) => {
   for (const contract of ACTION_PROPOSAL_STORE_CONTRACT) {
     it(contract.name, async () => contract.run(await fresh()));
   }
+  for (const contract of ACTION_PROPOSAL_WORKER_STORE_CONTRACT) {
+    it(contract.name, async () => contract.run(await fresh()));
+  }
+  it('claims queued work across scopes through independent connections and returns each winning fence', async () => {
+    await fresh();
+    for (const data of [
+      proposal('a'),
+      { ...proposal('b'), actorRef: 'other', tenantRef: 'tenant', threadId: 'other-thread' },
+    ]) {
+      await store.createActionProposal(data);
+      await store.decideActionProposal(data, data.id, approve);
+    }
+    const rows = await Promise.all([
+      store.claimNextActionProposal({ workerId: 'a', leaseMs: 100 }),
+      peer.claimNextActionProposal({ workerId: 'b', leaseMs: 100 }),
+    ]);
+    expect(
+      rows
+        .filter(Boolean)
+        .map((row) => row?.id)
+        .sort(),
+    ).toEqual(['a', 'b']);
+    expect(rows[0]?.execution?.lease?.workerId).toBe('a');
+    expect(rows[1]?.execution?.lease?.workerId).toBe('b');
+    expect(await store.claimNextActionProposal({ workerId: 'third', leaseMs: 100 })).toBeNull();
+    expect(await store.getActionProposal(scope, 'b')).toBeNull();
+  });
+  it('uses current indexed lease metadata for renewal, boundary recovery and settlement', async () => {
+    await fresh();
+    await store.createActionProposal(proposal());
+    await store.decideActionProposal(scope, 'proposal', approve);
+    const first = await store.claimNextActionProposal({ workerId: 'first', leaseMs: 100 });
+    const firstLease = first?.execution?.lease;
+    if (!firstLease) throw new Error('Expected lease');
+    now = 1050;
+    await peer.extendActionProposalLease(scope, 'proposal', { ...firstLease, leaseMs: 200 });
+    now = 1100;
+    expect(await store.claimNextActionProposal({ workerId: 'early', leaseMs: 100 })).toBeNull();
+    now = 1250;
+    const winners = await Promise.all([
+      store.claimNextActionProposal({ workerId: 'recovery-a', leaseMs: 100 }),
+      peer.claimNextActionProposal({ workerId: 'recovery-b', leaseMs: 100 }),
+    ]);
+    expect(winners.filter(Boolean)).toHaveLength(1);
+    const recovered = winners.find(Boolean);
+    expect(recovered?.idempotencyKey).toBe(first?.idempotencyKey);
+    expect(recovered?.execution?.generation).toBe(2);
+    const lease = recovered?.execution?.lease;
+    if (!lease) throw new Error('Expected recovery lease');
+    expect(
+      (await peer.settleActionProposal(scope, 'proposal', { ...firstLease, status: 'succeeded' }))
+        .status,
+    ).toBe('conflict');
+    await store.settleActionProposal(scope, 'proposal', { ...lease, status: 'succeeded' });
+    now = 2000;
+    expect(await peer.claimNextActionProposal({ workerId: 'settled', leaseMs: 100 })).toBeNull();
+  });
+  it('expires due pending rows in SQL-bounded batches with one cross-connection winner', async () => {
+    await fresh();
+    for (const id of ['a', 'b', 'approved']) await store.createActionProposal(proposal(id));
+    await store.decideActionProposal(scope, 'approved', approve);
+    expect(await store.expireActionProposals({ limit: 1 })).toBe(0);
+    now = 2000;
+    const results = await Promise.all([
+      store.expireActionProposals({ limit: 1 }),
+      peer.expireActionProposals({ limit: 1 }),
+    ]);
+    expect(results.reduce((sum, count) => sum + count, 0)).toBeGreaterThanOrEqual(1);
+    expect(results.every((count) => count <= 1)).toBe(true);
+    await store.expireActionProposals({ limit: 100 });
+    expect((await store.getActionProposal(scope, 'a'))?.decisionAudit).toEqual({
+      actorRef: 'system',
+      via: 'expiry',
+      at: 2000,
+    });
+    expect((await store.getActionProposal(scope, 'b'))?.decision).toBe('expired');
+    expect((await store.getActionProposal(scope, 'approved'))?.decision).toBe('approved');
+  });
+  it('bounds the indexed candidate query and failed claim attempts to 32', async () => {
+    await fresh();
+    for (let index = 0; index < 40; index++) {
+      const data = proposal(`candidate-${index.toString().padStart(2, '0')}`);
+      await store.createActionProposal(data);
+      await store.decideActionProposal(data, data.id, approve);
+    }
+    const candidates = vi.spyOn(handle.orm.em.getDriver(), 'find');
+    const claims = vi
+      .spyOn(MikroOrmActionProposals.prototype, 'claimActionProposal')
+      .mockResolvedValue({ status: 'conflict' });
+    try {
+      expect(await store.claimNextActionProposal({ workerId: 'racing', leaseMs: 100 })).toBeNull();
+      expect(claims).toHaveBeenCalledTimes(32);
+      expect(candidates.mock.calls.some((call) => call[2]?.limit === 32)).toBe(true);
+      expect(candidates.mock.calls[0]?.[1]).toMatchObject({
+        discoveryIndexVersion: 1,
+        decision: 'approved',
+      });
+    } finally {
+      claims.mockRestore();
+      candidates.mockRestore();
+    }
+  });
+  it('validates worker commands and clock before an empty candidate query', async () => {
+    await fresh();
+    for (const leaseMs of [0, -1, 0.5, Number.MAX_SAFE_INTEGER])
+      await expect(
+        store.claimNextActionProposal({ workerId: 'worker', leaseMs }),
+      ).rejects.toThrow();
+    await expect(peer.claimNextActionProposal({ workerId: '', leaseMs: 100 })).rejects.toThrow();
+    for (const limit of [0, -1, 0.5, 1001, Number.NaN]) {
+      await expect(store.expireActionProposals({ limit })).rejects.toThrow();
+      await expect(store.backfillActionProposalDiscoveryIndex({ limit })).rejects.toThrow();
+    }
+    now = Number.NaN;
+    await expect(
+      peer.claimNextActionProposal({ workerId: 'worker', leaseMs: 100 }),
+    ).rejects.toThrow('clock');
+    await expect(store.expireActionProposals({ limit: 1 })).rejects.toThrow('clock');
+    expect(await store.backfillActionProposalDiscoveryIndex({ limit: 1 })).toBe(0);
+  });
+  it('backfills legacy projections in bounded fenced batches while preserving payload and audit', async () => {
+    await fresh();
+    for (const id of ['a', 'b', 'pending']) await store.createActionProposal(proposal(id));
+    for (const id of ['a', 'b']) await store.decideActionProposal(scope, id, approve);
+    const before = await store.listActionProposals(scope);
+    await rawSql(
+      handle.orm,
+      'update agent_action_proposal set discovery_index_version = 0, execution_status = null, lease_expires_at = null, proposal_expires_at = null',
+    );
+    expect(
+      await store.claimNextActionProposal({ workerId: 'before-backfill', leaseMs: 100 }),
+    ).toBeNull();
+    const results = await Promise.all([
+      store.backfillActionProposalDiscoveryIndex({ limit: 1 }),
+      peer.backfillActionProposalDiscoveryIndex({ limit: 1 }),
+    ]);
+    expect(results.every((count) => count <= 1)).toBe(true);
+    while (await store.backfillActionProposalDiscoveryIndex({ limit: 1 })) {}
+    expect(await store.listActionProposals(scope)).toEqual(before);
+    expect(
+      (await peer.claimNextActionProposal({ workerId: 'after-backfill', leaseMs: 100 }))?.id,
+    ).toBe('a');
+    now = 2000;
+    expect(await store.expireActionProposals({ limit: 1 })).toBe(1);
+    expect((await peer.getActionProposal(scope, 'pending'))?.decision).toBe('expired');
+  });
+  it('fences a stale backfill against a concurrently acquired lease', async () => {
+    await fresh();
+    await store.createActionProposal(proposal());
+    await store.decideActionProposal(scope, 'proposal', approve);
+    await rawSql(
+      handle.orm,
+      'update agent_action_proposal set discovery_index_version = 0, execution_status = null',
+    );
+    const driver = handle.orm.em.getDriver();
+    const original = driver.nativeUpdate.bind(driver);
+    const updates = vi.spyOn(driver, 'nativeUpdate').mockImplementationOnce(async (...args) => {
+      expect(
+        (
+          await peer.claimActionProposal(scope, 'proposal', {
+            workerId: 'current-writer',
+            leaseMs: 100,
+          })
+        ).status,
+      ).toBe('applied');
+      return original(...args);
+    });
+    try {
+      expect(await store.backfillActionProposalDiscoveryIndex({ limit: 1 })).toBe(0);
+      const rows = await rawSql<
+        {
+          execution_status: string;
+          lease_expires_at: number | string;
+          discovery_index_version: number;
+        }[]
+      >(
+        handle.orm,
+        'select execution_status, lease_expires_at, discovery_index_version from agent_action_proposal',
+      );
+      expect(rows[0]?.execution_status).toBe('executing');
+      expect(Number(rows[0]?.lease_expires_at)).toBe(1100);
+      expect(rows[0]?.discovery_index_version).toBe(1);
+      expect(
+        await store.claimNextActionProposal({ workerId: 'too-early', leaseMs: 100 }),
+      ).toBeNull();
+    } finally {
+      updates.mockRestore();
+    }
+  });
+  it('adds discovery columns and indexes to legacy proposal tables without changing payloads', async () => {
+    await fresh();
+    for (const id of ['queued', 'executing', 'pending'])
+      await store.createActionProposal(proposal(id));
+    for (const id of ['queued', 'executing']) await store.decideActionProposal(scope, id, approve);
+    await store.claimActionProposal(scope, 'executing', {
+      workerId: 'legacy-worker',
+      leaseMs: 100,
+    });
+    const before = await store.listActionProposals(scope);
+    for (const index of [
+      'agent_proposal_work_lease_idx',
+      'agent_proposal_pending_expiry_idx',
+      'agent_proposal_discovery_version_idx',
+    ]) {
+      await rawSql(
+        handle.orm,
+        dialect === 'mysql'
+          ? `drop index ${index} on agent_action_proposal`
+          : `drop index ${index}`,
+      );
+    }
+    for (const column of ['proposal_expires_at', 'discovery_index_version'])
+      await rawSql(handle.orm, `alter table agent_action_proposal drop column ${column}`);
+    await rawSql(
+      handle.orm,
+      "update agent_schema_meta set fingerprint = 'legacy-worker-proposals'",
+    );
+    await ensureAgentSchema(handle.orm);
+    await ensureAgentSchema(handle.orm);
+    expect(await store.listActionProposals(scope)).toEqual(before);
+    expect(
+      await store.claimNextActionProposal({ workerId: 'before-backfill', leaseMs: 100 }),
+    ).toBeNull();
+    expect(await store.backfillActionProposalDiscoveryIndex({ limit: 2 })).toBe(2);
+    expect(await peer.backfillActionProposalDiscoveryIndex({ limit: 2 })).toBe(1);
+    expect(await store.backfillActionProposalDiscoveryIndex({ limit: 2 })).toBe(0);
+    expect(await store.listActionProposals(scope)).toEqual(before);
+    now = 2000;
+    expect(await store.expireActionProposals({ limit: 1 })).toBe(1);
+    const recovered = await Promise.all([
+      store.claimNextActionProposal({ workerId: 'new-a', leaseMs: 100 }),
+      peer.claimNextActionProposal({ workerId: 'new-b', leaseMs: 100 }),
+    ]);
+    expect(
+      recovered
+        .filter(Boolean)
+        .map((row) => row?.id)
+        .sort(),
+    ).toEqual(['executing', 'queued']);
+    expect(recovered.find((row) => row?.id === 'executing')?.execution?.generation).toBe(2);
+  });
   it('reports one creator across independent connections at the same clock instant', async () => {
     await fresh();
     const results = await Promise.all([

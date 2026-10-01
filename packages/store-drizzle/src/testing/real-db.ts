@@ -26,6 +26,7 @@ import { ensureAgentSchema } from '../ensure-schema.js';
 import { mysqlAgentSchema } from '../schema-mysql.js';
 import { pgAgentSchema } from '../schema-pg.js';
 import { agentSchema } from '../schema.js';
+import { trackPostgresPoolShutdown } from './postgres-pool-close.js';
 
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -166,14 +167,14 @@ export async function openAgentDb(
       adminRun(
         dialect,
         dialect === 'postgres'
-          ? `drop database if exists "${name}" with (force)`
+          ? `drop database if exists "${name}"`
           : `drop database if exists \`${name}\``,
       ),
     );
     connect = async () => {
       if (dialect === 'postgres') {
         const pool = new pg.Pool({ connectionString: url.toString(), max: 5 });
-        closers.unshift(() => pool.end());
+        closers.unshift(trackPostgresPoolShutdown(pool));
         return drizzlePg(pool, {
           schema: pgAgentSchema,
           ...(options.logger !== undefined ? { logger: options.logger } : {}),

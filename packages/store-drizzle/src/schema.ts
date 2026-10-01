@@ -388,9 +388,26 @@ export const agentActionProposal = sqliteTable(
     createFingerprint: text('create_fingerprint').notNull(),
     proposal: text('proposal', { mode: 'json' }).$type<ActionProposal>().notNull(),
     version: integer('version').notNull().default(0),
+    executionStatus:
+      text('execution_status').$type<NonNullable<ActionProposal['execution']>['status']>(),
+    leaseExpiresAt: integer('lease_expires_at'),
+    proposalExpiresAt: integer('proposal_expires_at'),
+    discoveryIndexVersion: integer('discovery_index_version').notNull().default(0),
     createdAt: integer('created_at').notNull(),
   },
   (table) => [
+    index('agent_action_proposal_execution_idx').on(
+      table.discoveryIndexVersion,
+      table.executionStatus,
+      table.leaseExpiresAt,
+      table.createdAt,
+    ),
+    index('agent_action_proposal_expiry_idx').on(
+      table.discoveryIndexVersion,
+      table.decision,
+      table.proposalExpiresAt,
+      table.createdAt,
+    ),
     index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
   ],
 );

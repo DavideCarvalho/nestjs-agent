@@ -280,3 +280,30 @@ containing NUL or lone surrogates on every dialect. Decision audit and execution
 work share
 the snapshot column, fenced by the numeric `version` column. Existing table schemas
 and fixture callers remain compatible.
+
+Worker discovery is available on `DrizzleAgentStore` and `DrizzleActionProposalStore`
+through the privileged `claimNextActionProposal({ workerId, leaseMs })` and
+`expireActionProposals({ limit })` methods. Do not expose these unscoped methods on
+public routes. Discovery selects at most 32 queued or expired-lease candidates;
+expiry selects at most `limit` (1–1000) pending proposals due at the trusted store
+clock. Existing scoped, version-fenced mutations decide which worker wins.
+
+Upgrading an existing proposal table requires the additive nullable
+`execution_status`, `lease_expires_at`, and `proposal_expires_at` columns, the
+`discovery_index_version` column with default 0, and the execution/expiry indexes
+from the exported schema. `ensureAgentSchema` adds these definitions; hosts using
+Drizzle migrations must include them in their forward migration. Stop old writers,
+apply the DDL, then repeat the bounded backfill before starting new workers:
+
+```ts
+while (await store.backfillActionProposalDiscoveryIndex({ limit: 1000 })) {
+  // Each batch derives metadata from the canonical payload under its row version.
+}
+```
+
+New writes maintain index version 1 and all discovery metadata atomically with the
+proposal snapshot. Backfill increments the row version without changing the
+proposal payload, timestamps, or audit. It does not invoke transitions or execute
+tools. This upgrade does not support mixed old and new writers: old writers cannot
+maintain the new indexes. Discovery deliberately excludes rows awaiting backfill;
+it never performs an implicit, unbounded migration.

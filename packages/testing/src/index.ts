@@ -60,3 +60,8 @@ export {
   type ActionProposalContractCase,
   type ActionProposalContractSubject,
 } from './action-proposal-store-contract.js';
+export {
+  ACTION_PROPOSAL_WORKER_STORE_CONTRACT,
+  type ActionProposalWorkerContractSubject,
+  type ActionProposalWorkerContractCase,
+} from './action-proposal-worker-store-contract.js';

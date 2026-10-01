@@ -1,6 +1,8 @@
 import {
+  type ActionProposalDiscoveryIndexStore,
   type ActionProposalStore,
   type ActionProposalStoreOptions,
+  type ActionProposalWorkerStore,
   type AgentStore,
   type AgentUiComponent,
   type AppendMessageInput,
@@ -98,7 +100,13 @@ type TurnMessageRow = { [K in keyof ReturnType<typeof turnMessageColumns>]: Agen
  * exactly (fork/truncate/quota/active-stream/soft-delete semantics) so the two are interchangeable.
  */
 export class DrizzleAgentStore
-  implements AgentStore, ThreadTurnReader, ChatQueueStore, ActionProposalStore
+  implements
+    AgentStore,
+    ThreadTurnReader,
+    ChatQueueStore,
+    ActionProposalStore,
+    ActionProposalWorkerStore,
+    ActionProposalDiscoveryIndexStore
 {
   private readonly db: AgentSqliteDb;
   private readonly dialect: AgentDialect;
@@ -147,6 +155,22 @@ export class DrizzleAgentStore
     ...args: Parameters<ActionProposalStore['extendActionProposalLease']>
   ): ReturnType<ActionProposalStore['extendActionProposalLease']> {
     return this.proposals.extendActionProposalLease(...args);
+  }
+
+  claimNextActionProposal(
+    ...args: Parameters<ActionProposalWorkerStore['claimNextActionProposal']>
+  ): ReturnType<ActionProposalWorkerStore['claimNextActionProposal']> {
+    return this.proposals.claimNextActionProposal(...args);
+  }
+
+  expireActionProposals(
+    ...args: Parameters<ActionProposalWorkerStore['expireActionProposals']>
+  ): ReturnType<ActionProposalWorkerStore['expireActionProposals']> {
+    return this.proposals.expireActionProposals(...args);
+  }
+
+  backfillActionProposalDiscoveryIndex(command: { limit: number }): Promise<number> {
+    return this.proposals.backfillActionProposalDiscoveryIndex(command);
   }
 
   settleActionProposal(

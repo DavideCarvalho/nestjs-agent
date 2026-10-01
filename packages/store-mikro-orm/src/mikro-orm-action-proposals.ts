@@ -2,10 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   type ActionProposal,
   type ActionProposalDecisionCommand,
+  type ActionProposalDiscoveryIndexStore,
   type ActionProposalMutationResult,
   type ActionProposalScope,
   type ActionProposalStore,
   type ActionProposalStoreOptions,
+  type ActionProposalWorkerStore,
   type ClaimActionProposal,
   type CreateActionProposal,
   type CreateActionProposalResult,
@@ -21,7 +23,10 @@ import {
   transitionActionProposalDecision,
   transitionActionProposalLease,
   transitionActionProposalSettlement,
+  validateActionProposalDiscoveryIndexBatch,
+  validateActionProposalExpiryBatch,
   validateActionProposalListQuery,
+  validateActionProposalWorkerClaim,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentActionProposal } from './entities/agent-action-proposal.entity';
@@ -36,7 +41,9 @@ const sortKey = (id: string) =>
   ).join('');
 
 /** Internal adapter delegated to by MikroOrmAgentStore; no second DI provider or AgentStore SPI. */
-export class MikroOrmActionProposals implements ActionProposalStore {
+export class MikroOrmActionProposals
+  implements ActionProposalStore, ActionProposalWorkerStore, ActionProposalDiscoveryIndexStore
+{
   private readonly clock: () => number;
   constructor(
     private readonly em: EntityManager,
@@ -70,7 +77,7 @@ export class MikroOrmActionProposals implements ActionProposalStore {
     await em
       .getConnection()
       .execute(
-        `insert into agent_action_proposal (id, scope_key, insertion_token, sort_key, payload, revision, decision, execution_status, lease_expires_at, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${duplicate}`,
+        `insert into agent_action_proposal (id, scope_key, insertion_token, sort_key, payload, revision, decision, execution_status, lease_expires_at, proposal_expires_at, discovery_index_version, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${duplicate}`,
         [
           data.id,
           data.scopeKey,
@@ -81,6 +88,8 @@ export class MikroOrmActionProposals implements ActionProposalStore {
           'pending',
           null,
           null,
+          proposal.expiresAt,
+          1,
           proposal.createdAt,
         ],
         'run',
@@ -156,6 +165,83 @@ export class MikroOrmActionProposals implements ActionProposalStore {
       transitionActionProposalSettlement(row, command, now),
     );
   }
+  async claimNextActionProposal(command: ClaimActionProposal): Promise<ActionProposal | null> {
+    const now = this.clock();
+    validateActionProposalWorkerClaim(command, now);
+    const candidates = await this.em.fork({ keepTransactionContext: true }).find(
+      AgentActionProposal,
+      {
+        discoveryIndexVersion: 1,
+        decision: 'approved',
+        $or: [
+          { executionStatus: 'queued' },
+          { executionStatus: 'executing', leaseExpiresAt: { $lte: now } },
+        ],
+      },
+      { limit: 32, orderBy: { createdAt: 'asc', sortKey: 'asc' } },
+    );
+    for (const candidate of candidates) {
+      const outcome = await this.claimActionProposal(
+        candidate.payload,
+        candidate.payload.id,
+        command,
+      );
+      if (outcome.status === 'applied' && outcome.proposal) return outcome.proposal;
+    }
+    return null;
+  }
+
+  async expireActionProposals(command: { limit: number }): Promise<number> {
+    const now = this.clock();
+    validateActionProposalExpiryBatch(command, now);
+    const candidates = await this.em.fork({ keepTransactionContext: true }).find(
+      AgentActionProposal,
+      {
+        discoveryIndexVersion: 1,
+        decision: 'pending',
+        proposalExpiresAt: { $lte: now },
+      },
+      { limit: command.limit, orderBy: { createdAt: 'asc', sortKey: 'asc' } },
+    );
+    let expired = 0;
+    for (const candidate of candidates) {
+      const outcome = await this.decideActionProposal(candidate.payload, candidate.payload.id, {
+        decision: 'expired',
+        actorRef: 'system',
+        via: 'expiry',
+      });
+      if (outcome.status === 'applied') expired++;
+    }
+    return expired;
+  }
+
+  /** Explicit bounded deployment maintenance; never changes the proposal snapshot or audit. */
+  async backfillActionProposalDiscoveryIndex(command: { limit: number }): Promise<number> {
+    validateActionProposalDiscoveryIndexBatch(command);
+    const candidates = await this.em
+      .fork({ keepTransactionContext: true })
+      .find(
+        AgentActionProposal,
+        { discoveryIndexVersion: 0 },
+        { limit: command.limit, orderBy: { createdAt: 'asc', sortKey: 'asc' } },
+      );
+    let updated = 0;
+    for (const candidate of candidates) {
+      const touched = await this.em.fork({ keepTransactionContext: true }).nativeUpdate(
+        AgentActionProposal,
+        {
+          id: candidate.id,
+          scopeKey: candidate.scopeKey,
+          revision: candidate.revision,
+          discoveryIndexVersion: 0,
+        },
+        { ...discoveryProjection(candidate.payload), revision: candidate.revision + 1 },
+      );
+      if (touched === 1) updated++;
+    }
+    return updated;
+  }
+
   private async load(scope: ActionProposalScope, id: string): Promise<AgentActionProposal | null> {
     const row = await this.em
       .fork({ keepTransactionContext: true })
@@ -189,9 +275,7 @@ export class MikroOrmActionProposals implements ActionProposalStore {
         {
           payload: next,
           revision: row.revision + 1,
-          decision: next.decision,
-          executionStatus: next.execution?.status ?? null,
-          leaseExpiresAt: next.execution?.lease?.expiresAt ?? null,
+          ...discoveryProjection(next),
         },
       );
       if (touched === 1) return outcome;
@@ -203,4 +287,14 @@ export class MikroOrmActionProposals implements ActionProposalStore {
       ...(lastObserved === undefined ? {} : { proposal: snapshotActionProposal(lastObserved) }),
     };
   }
+}
+
+function discoveryProjection(proposal: ActionProposal) {
+  return {
+    decision: proposal.decision,
+    executionStatus: proposal.execution?.status ?? null,
+    leaseExpiresAt: proposal.execution?.lease?.expiresAt ?? null,
+    proposalExpiresAt: proposal.expiresAt,
+    discoveryIndexVersion: 1,
+  };
 }
