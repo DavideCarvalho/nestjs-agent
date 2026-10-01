@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import type { AgentHistoryWindow, AgentIntake } from '@dudousxd/nestjs-agent-core';
+import type { AgentHistoryWindow, AgentIntake, Persona } from '@dudousxd/nestjs-agent-core';
 import type { Type } from '@nestjs/common';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
@@ -94,6 +94,20 @@ export interface AgentOptions {
    * module-wide setting.
    */
   ask?: boolean;
+  /**
+   * Named variants of THIS agent — a prompt and, optionally, a narrower tool allow-list — that a
+   * caller picks per send (`POST <base>/chat { persona }`) and that pin onto the thread. Everything
+   * else (model, access rules, handoffs, history) stays this agent's; a variant that needs those to
+   * differ is another `@Agent`.
+   *
+   * A persona's `systemPrompt` is static data. For a prompt built from injected services, leave it
+   * out and branch on `ctx.persona` in this class's `@SystemPrompt()` method instead.
+   *
+   * Omit → no personas, and nothing about a turn changes.
+   */
+  personas?: Persona[];
+  /** The persona a send runs under when neither it nor its thread names one. Omit → none. */
+  defaultPersona?: string;
 }
 
 export const AGENT_METADATA = Symbol.for('@dudousxd/nestjs-agent:agent-metadata');

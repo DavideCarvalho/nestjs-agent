@@ -45,6 +45,10 @@ const EVERY_AGENT_OPTION: Required<AgentOptions> = {
     when: 'thread-start',
   },
   ask: true,
+  personas: [
+    { id: 'terse', label: 'Terse', systemPrompt: 'Be terse.', allowedTools: ['getWeather'] },
+  ],
+  defaultPersona: 'terse',
 };
 
 @Agent(EVERY_AGENT_OPTION)
@@ -93,6 +97,10 @@ describe('@Agent options reaching the registered definition', () => {
         when: 'thread-start',
       },
       ask: true,
+      personas: [
+        { id: 'terse', label: 'Terse', systemPrompt: 'Be terse.', allowedTools: ['getWeather'] },
+      ],
+      defaultPersona: 'terse',
     });
     expect(definition?.systemPrompt).toBe('You are fully specified.');
     expect(definition?.outputSchema).toBeDefined();

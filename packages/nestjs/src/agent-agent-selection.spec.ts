@@ -10,7 +10,12 @@ const runner: AgentRunner = {
   cancel: async () => undefined,
 };
 
-const deps = { defaultAgentName: () => 'module-default' } as unknown as AgentDepsFactory;
+const deps = {
+  defaultAgentName: () => 'module-default',
+  resolveAgent: (agentName: string) => ({ agentName }),
+  personaCatalog: () => [],
+  resolvePersona: () => undefined,
+} as unknown as AgentDepsFactory;
 
 function buildService(store: AgentStore): AgentService {
   return new AgentService(runner, store, deps);

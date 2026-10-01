@@ -9,6 +9,7 @@ import {
   createFrameBuffer,
   createUiCollector,
   encodeStreamEvent,
+  intersectAllowLists,
   invokeWithTransientRetry,
   observeTurnFrames,
   publishAgentToolRetry,
@@ -118,7 +119,9 @@ export class AgentRunSteps {
           tools: await deps.registry.definitionsFor(
             input.actor,
             deps.rolesPolicy,
-            deps.toolAllowList,
+            // The persona narrowing the loop journaled in `persona:resolve` rides the envelope:
+            // this worker's own persona config may already say something else.
+            intersectAllowLists(deps.toolAllowList, input.personaAllowedTools),
             {
               ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
               ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
@@ -252,6 +255,7 @@ export class AgentRunSteps {
               input.input,
               ctx,
               deps.rolesPolicy,
+              input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {},
             );
             return input.timeoutMs !== undefined
               ? withToolTimeout(invocation, input.timeoutMs, input.toolName)

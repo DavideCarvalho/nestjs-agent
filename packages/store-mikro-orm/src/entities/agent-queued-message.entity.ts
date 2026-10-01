@@ -16,6 +16,8 @@ export class AgentQueuedMessage {
   content!: string;
   attachments?: MessageAttachment[] | null;
   agentName?: string | null;
+  /** The persona the send resolved — what the message starts under. */
+  persona?: string | null;
   model?: string | null;
   pageContext?: PageContext | null;
   interrupt!: boolean;
@@ -51,6 +53,7 @@ export function agentQueuedMessageSchema(collation?: string): EntitySchema<Agent
       content: { type: 'text', ...str },
       attachments: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
+      persona: { type: 'string', nullable: true, ...str },
       model: { type: 'string', nullable: true, ...str },
       pageContext: { type: 'json', nullable: true, fieldName: 'page_context' },
       interrupt: { type: 'boolean', default: false },

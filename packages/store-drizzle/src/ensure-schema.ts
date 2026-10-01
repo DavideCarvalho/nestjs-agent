@@ -17,6 +17,7 @@ const statements: string[] = [
     active_stream_id TEXT,
     default_agent TEXT,
     model TEXT,
+    persona TEXT,
     queue_pause TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -35,6 +36,7 @@ const statements: string[] = [
     follow_ups TEXT,
     usage TEXT,
     agent_name TEXT,
+    persona TEXT,
     run_id TEXT,
     reasoning TEXT,
     reasoning_ms INTEGER,
@@ -51,6 +53,7 @@ const statements: string[] = [
     content TEXT NOT NULL,
     attachments TEXT,
     agent_name TEXT,
+    persona TEXT,
     model TEXT,
     page_context TEXT,
     interrupt INTEGER NOT NULL DEFAULT 0,
@@ -261,6 +264,21 @@ const additiveColumns: Array<{ table: string; column: string; ddl: string }> = [
     table: 'agent_tool_call',
     column: 'decided_via',
     ddl: 'ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT',
+  },
+  {
+    table: 'agent_thread',
+    column: 'persona',
+    ddl: 'ALTER TABLE agent_thread ADD COLUMN persona TEXT',
+  },
+  {
+    table: 'agent_message',
+    column: 'persona',
+    ddl: 'ALTER TABLE agent_message ADD COLUMN persona TEXT',
+  },
+  {
+    table: 'agent_queued_message',
+    column: 'persona',
+    ddl: 'ALTER TABLE agent_queued_message ADD COLUMN persona TEXT',
   },
 ];
 

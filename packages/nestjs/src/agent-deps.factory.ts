@@ -17,17 +17,25 @@ import {
   type HistoryPolicy,
   type MemoryConfig,
   type ModelProvider,
+  type Persona,
+  type PersonaCatalogEntry,
+  type PromptBuilder,
+  type PromptContext,
   type PromptContributor,
   type RolesPolicy,
   type SkillsConfig,
   type TokenStreamSink,
   ToolRegistry,
+  findPersona,
+  intersectAllowLists,
   normalizeDelegation,
+  personaCatalogEntry,
+  resolvePersonaAlias,
   summarizeWithModel,
   windowHistory,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 
@@ -109,8 +117,68 @@ export class AgentDepsFactory {
     return [...(definition.tools ?? []), ...delegated];
   }
 
+  /**
+   * The agent a name stands for: itself when it is a registered agent (or unknown — the bare
+   * assistant), else the agent whose persona took the name over (`Persona.aliases`) and that persona.
+   */
+  resolveAgent(name: string): { agentName: string; persona?: string } {
+    if (this.agents.has(name)) {
+      return { agentName: name };
+    }
+    const alias = resolvePersonaAlias(this.agents.list(), name);
+    return alias === undefined
+      ? { agentName: name }
+      : { agentName: alias.agent, persona: alias.persona };
+  }
+
+  /** `agentName`'s personas as a picker reads them. Empty when it declares none. */
+  personaCatalog(agentName: string): PersonaCatalogEntry[] {
+    return (this.agents.get(agentName)?.personas ?? []).map(personaCatalogEntry);
+  }
+
+  /** The persona `agentName` runs under when nothing names one. Undefined → none. */
+  defaultPersona(agentName: string): string | undefined {
+    return this.agents.get(agentName)?.defaultPersona;
+  }
+
+  /**
+   * The persona a turn of `agentName` runs under, most specific first: the one the send names
+   * (refused with `400 persona_not_found` when the agent does not declare it), else the thread's
+   * pinned one when this agent declares it, else the agent's default. Undefined → none.
+   */
+  resolvePersona(args: {
+    agentName: string;
+    requested?: string;
+    threadPersona?: string | null;
+  }): string | undefined {
+    const definition = this.agents.get(args.agentName);
+    if (args.requested !== undefined) {
+      if (findPersona(definition, args.requested) === undefined) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'persona_not_found',
+          message: `agent "${args.agentName}" has no persona "${args.requested}"`,
+        });
+      }
+      return args.requested;
+    }
+    const pinned = args.threadPersona ?? undefined;
+    if (pinned !== undefined && findPersona(definition, pinned) !== undefined) {
+      return pinned;
+    }
+    return definition?.defaultPersona;
+  }
+
   forAgent(agentName?: string): AgentDeps {
     const name = agentName ?? this.defaultAgentName();
+    if (agentName !== undefined && !this.agents.has(agentName)) {
+      const alias = resolvePersonaAlias(this.agents.list(), agentName);
+      const persona =
+        alias === undefined ? undefined : findPersona(this.agents.get(alias.agent), alias.persona);
+      if (alias !== undefined && persona !== undefined) {
+        return this.withPersona(this.forAgent(alias.agent), persona);
+      }
+    }
     const definition = this.agents.get(name);
     const toolAllowList = this.effectiveTools(definition);
     const followUpsCount = this.followUpsCount();
@@ -158,6 +226,7 @@ export class AgentDepsFactory {
       // tool list would disagree with the loop about whether `remember` was offered.
       ...(this.memory !== undefined ? { memory: this.memory } : {}),
       ...(toolAllowList !== undefined ? { toolAllowList } : {}),
+      ...(definition?.personas !== undefined ? { personas: definition.personas } : {}),
       ...(this.options.toolTimeoutMs !== undefined
         ? { toolTimeoutMs: this.options.toolTimeoutMs }
         : {}),
@@ -172,6 +241,30 @@ export class AgentDepsFactory {
           }
         : {}),
     };
+  }
+
+  /**
+   * A persona baked into an agent's deps — how a run journaled under an agent name that a persona
+   * has since taken over (`Persona.aliases`) is served. That run names no persona of its own (it
+   * predates them, and its input cannot change), so the persona applies the way the old agent's own
+   * config did: as config, re-read on every replay, with no checkpoint of its own.
+   */
+  private withPersona(deps: AgentDeps, persona: Persona): AgentDeps {
+    const base = deps.systemPrompt;
+    const ref = { id: persona.id, label: persona.label };
+    const resolve = async (prompt: string | PromptBuilder, ctx: PromptContext) =>
+      typeof prompt === 'function' ? prompt(ctx) : prompt;
+    const own = persona.systemPrompt;
+    const systemPrompt: PromptBuilder = async (ctx) => {
+      const scoped: PromptContext = { ...ctx, persona: ref };
+      if (own === undefined) {
+        return resolve(base, scoped);
+      }
+      const basePrompt = typeof own === 'function' ? await resolve(base, scoped) : undefined;
+      return resolve(own, { ...scoped, ...(basePrompt !== undefined ? { basePrompt } : {}) });
+    };
+    const toolAllowList = intersectAllowLists(deps.toolAllowList, persona.allowedTools);
+    return { ...deps, systemPrompt, ...(toolAllowList !== undefined ? { toolAllowList } : {}) };
   }
 
   /**

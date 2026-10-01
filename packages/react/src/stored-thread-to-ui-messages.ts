@@ -36,6 +36,10 @@ export interface AgentMessageMetadata extends Partial<StoredTurnMetadata> {
   costUsd?: number | null;
   /** ISO timestamp: the stored row's `createdAt` (a merged turn: its first row's), or when a live turn started streaming. */
   createdAt?: string;
+  /** The agent that wrote a replayed message, when the row names one (`StoredMessage.agentName`). */
+  agentName?: string;
+  /** The persona the turn that wrote a replayed message ran under (`StoredMessage.persona`). */
+  persona?: string;
   /** Host-defined keys: `StoredMessage.metadata` and the stream's `message-metadata` frames. */
   [key: string]: unknown;
 }
@@ -132,6 +136,8 @@ function mergeTurn(rows: StoredMessage[]): UIMessage {
     ...(usage !== undefined ? { usage } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(createdAt ? { createdAt } : {}),
+    ...(lastRow.agentName !== undefined ? { agentName: lastRow.agentName } : {}),
+    ...(lastRow.persona !== undefined ? { persona: lastRow.persona } : {}),
   };
 
   return {

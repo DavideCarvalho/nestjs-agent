@@ -28,6 +28,7 @@ export * from './spi/approval-port.js';
 export * from './spi/approval-policy.js';
 export * from './governance/compute.js';
 export * from './tool-filters.js';
+export * from './personas.js';
 export * from './history.js';
 export * from './processors.js';
 export * from './structured-output.js';
@@ -73,6 +74,7 @@ export {
   ToolForbiddenError,
   ToolNotFoundError,
   ToolInputInvalidError,
+  type InvokeOptions,
 } from './tool-registry.js';
 export {
   runAgentLoop,

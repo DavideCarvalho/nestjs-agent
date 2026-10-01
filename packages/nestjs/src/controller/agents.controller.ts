@@ -7,7 +7,10 @@ import {
 import { Controller, Get, Inject } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 
-/** Lists the registered `@Agent`s so a host can render a persona picker instead of hardcoding one. */
+/**
+ * Lists the registered `@Agent`s — and each one's personas — so a host can render an agent or
+ * persona picker instead of hardcoding one.
+ */
 @Controller('agents')
 export class AgentsController {
   constructor(
@@ -18,10 +21,17 @@ export class AgentsController {
   @Get()
   list(): AgentCatalogEntry[] {
     const defaultAgentName = this.depsFactory.defaultAgentName();
-    return this.agents.list().map((definition) => ({
-      name: definition.name,
-      description: definition.description ?? '',
-      ...(definition.name === defaultAgentName ? { isDefault: true } : {}),
-    }));
+    return this.agents.list().map((definition) => {
+      const personas = this.depsFactory.personaCatalog(definition.name);
+      return {
+        name: definition.name,
+        description: definition.description ?? '',
+        ...(definition.name === defaultAgentName ? { isDefault: true } : {}),
+        ...(personas.length > 0 ? { personas } : {}),
+        ...(definition.defaultPersona !== undefined
+          ? { defaultPersona: definition.defaultPersona }
+          : {}),
+      };
+    });
   }
 }

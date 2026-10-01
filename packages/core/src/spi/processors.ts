@@ -23,6 +23,8 @@ export interface ProcessorContext {
   actor: Actor;
   /** The agent running this turn. Undefined → the default agent. */
   agentName?: string;
+  /** The persona the turn runs under, when it runs under one. */
+  persona?: string;
   /** 0-based model step within the run — the same index the `llm:<step>` checkpoint carries. */
   step: number;
 }

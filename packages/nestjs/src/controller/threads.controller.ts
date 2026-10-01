@@ -9,6 +9,8 @@ interface UpdateThreadBody {
   defaultAgent?: string | null;
   /** `null` unpins the thread's model. Omitted → left untouched. Must be offered by the catalog. */
   model?: string | null;
+  /** `null` clears the thread's persona. Omitted → left untouched. Must be one the agent declares. */
+  persona?: string | null;
 }
 
 @Controller('threads')
@@ -59,6 +61,7 @@ export class ThreadsController {
       ...(body.title !== undefined ? { title: body.title } : {}),
       ...('defaultAgent' in body ? { defaultAgent: body.defaultAgent ?? null } : {}),
       ...('model' in body ? { model: body.model ?? null } : {}),
+      ...('persona' in body ? { persona: body.persona ?? null } : {}),
     });
     return { ok: true };
   }

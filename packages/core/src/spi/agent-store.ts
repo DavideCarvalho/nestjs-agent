@@ -26,6 +26,8 @@ export interface CreateThreadInput {
    * included).
    */
   id?: string;
+  /** The persona the thread's turns run under when a send names none. See {@link ThreadSummary.persona}. */
+  persona?: string;
 }
 
 export interface AppendMessageInput {
@@ -34,6 +36,8 @@ export interface AppendMessageInput {
   content: string;
   /** Which agent produced this message (assistant messages) — provenance. */
   agentName?: string;
+  /** The persona the turn ran under. See {@link StoredMessage.persona}. */
+  persona?: string;
   toolCalls?: ToolCallRequest[];
   toolResults?: ToolResult[];
   /** Files the user attached to this message (image/PDF). Persisted verbatim. */
@@ -107,6 +111,8 @@ export interface UpdateThreadInput {
   defaultAgent?: string | null;
   /** `null` unpins the thread's model (turns run on the provider default). */
   model?: string | null;
+  /** `null` clears the thread's persona (sends fall back to the agent's default persona). */
+  persona?: string | null;
 }
 
 export interface RecordUsageInput {

@@ -84,6 +84,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       createdAt: now,
       updatedAt: now,
       ...(input.actor.tenantRef !== undefined ? { tenantRef: input.actor.tenantRef } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
     });
     em.persist(thread);
     await em.flush();
@@ -338,6 +339,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       ...(source.tenantRef != null ? { tenantRef: source.tenantRef } : {}),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
       ...(source.model != null ? { model: source.model } : {}),
+      ...(source.persona != null ? { persona: source.persona } : {}),
     });
     em.persist(fork);
     for (const message of kept) {
@@ -354,6 +356,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
           ...(message.followUps != null ? { followUps: message.followUps } : {}),
           ...(message.usage != null ? { usage: message.usage } : {}),
           ...(message.agentName != null ? { agentName: message.agentName } : {}),
+          ...(message.persona != null ? { persona: message.persona } : {}),
           // The copy is the same message, so it keeps the run that wrote it. A reader asking which
           // turn produced this text gets the truthful answer; the run's own thread is still the
           // original, so a run-scoped read never picks the fork's rows up.
@@ -482,6 +485,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       attachments:
         input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
       agentName: input.agentName ?? null,
+      persona: input.persona ?? null,
       model: input.model ?? null,
       pageContext: input.pageContext ?? null,
       interrupt: input.interrupt === true,
@@ -589,6 +593,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
         ? { attachments: row.attachments }
         : {}),
       ...(row.agentName != null ? { agentName: row.agentName } : {}),
+      ...(row.persona != null ? { persona: row.persona } : {}),
       ...(row.model != null ? { model: row.model } : {}),
       ...(row.pageContext != null ? { pageContext: row.pageContext } : {}),
       ...(row.interrupt ? { interrupt: true } : {}),
@@ -631,6 +636,10 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       thread.model = patch.model;
       touched = true;
     }
+    if (patch.persona !== undefined) {
+      thread.persona = patch.persona;
+      touched = true;
+    }
     if (touched) {
       thread.updatedAt = new Date();
       await em.flush();
@@ -652,6 +661,17 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       { fields: ['model'] },
     );
     return thread?.model ?? null;
+  }
+
+  /** The thread's pinned persona, projected like {@link defaultAgentForThread}. */
+  async personaForThread(threadId: string): Promise<string | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: threadId, deletedAt: null },
+      { fields: ['persona'] },
+    );
+    return thread?.persona ?? null;
   }
 
   async defaultAgentForThread(threadId: string): Promise<string | null> {
@@ -755,6 +775,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.runId !== undefined ? { runId: input.runId } : {}),
       ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
       ...(input.reasoningMs !== undefined ? { reasoningMs: input.reasoningMs } : {}),
@@ -996,6 +1017,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       updatedAt: thread.updatedAt.toISOString(),
       defaultAgent: thread.defaultAgent ?? null,
       ...(thread.model != null ? { model: thread.model } : {}),
+      persona: thread.persona ?? null,
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }
@@ -1012,6 +1034,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       content: message.content,
       createdAt: message.createdAt.toISOString(),
       ...(message.agentName != null ? { agentName: message.agentName } : {}),
+      ...(message.persona != null ? { persona: message.persona } : {}),
       ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
       ...(resolvedResults != null ? { toolResults: resolvedResults } : {}),
       ...(message.attachments != null ? { attachments: message.attachments } : {}),

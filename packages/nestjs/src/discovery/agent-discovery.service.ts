@@ -45,6 +45,7 @@ export class AgentDiscoveryService implements OnModuleInit {
       }
       this.collectContributors(instance);
     }
+    this.assertPersonas(this.registry.list());
   }
 
   /** Build the internal {@link AgentDefinition} from an `@Agent` instance and its options. */
@@ -75,7 +76,46 @@ export class AgentDiscoveryService implements OnModuleInit {
         ? { outputRepairAttempts: meta.outputRepairAttempts }
         : {}),
       ...(meta.handoff !== undefined ? { delegatesTo: this.handoffEdges(meta) } : {}),
+      ...(meta.personas !== undefined ? { personas: meta.personas } : {}),
+      ...(meta.defaultPersona !== undefined ? { defaultPersona: meta.defaultPersona } : {}),
     };
+  }
+
+  /**
+   * Refuse to boot on a persona declaration that could only fail later, per request: a default that
+   * names no persona, an id declared twice, an alias two personas claim, or an alias that is a real
+   * agent's name (which would never be reached — a registered agent always wins).
+   */
+  private assertPersonas(definitions: AgentDefinition[]): void {
+    const agentNames = new Set(definitions.map((definition) => definition.name));
+    const aliasOwner = new Map<string, string>();
+    for (const definition of definitions) {
+      const ids = new Set<string>();
+      for (const persona of definition.personas ?? []) {
+        if (ids.has(persona.id)) {
+          throw new Error(`Agent "${definition.name}" declares persona "${persona.id}" twice.`);
+        }
+        ids.add(persona.id);
+        for (const alias of persona.aliases ?? []) {
+          const owner = `${definition.name}/${persona.id}`;
+          if (agentNames.has(alias)) {
+            throw new Error(
+              `Persona ${owner} claims the alias "${alias}", which is a registered agent's name.`,
+            );
+          }
+          const previous = aliasOwner.get(alias);
+          if (previous !== undefined) {
+            throw new Error(`Personas ${previous} and ${owner} both claim the alias "${alias}".`);
+          }
+          aliasOwner.set(alias, owner);
+        }
+      }
+      if (definition.defaultPersona !== undefined && !ids.has(definition.defaultPersona)) {
+        throw new Error(
+          `Agent "${definition.name}" names "${definition.defaultPersona}" as its default persona, but declares no persona with that id.`,
+        );
+      }
+    }
   }
 
   /**

@@ -51,6 +51,7 @@ import {
   withMemoryTool,
   writeMemory,
 } from './memory.js';
+import { findPersona, intersectAllowLists } from './personas.js';
 import {
   createFrameBuffer,
   createIncrementalGate,
@@ -133,6 +134,7 @@ import type {
   LlmStepEnvelope,
   MessageUsage,
   ModelMessage,
+  Persona,
   PromptBuilder,
   PromptContext,
   PromptContributor,
@@ -144,6 +146,7 @@ import type {
   ToolSpec,
   ToolStepCtx,
   ToolStepEnvelope,
+  TurnPersona,
 } from './types.js';
 
 export interface AgentLoopDeps<TOutput = unknown> {
@@ -197,6 +200,12 @@ export interface AgentLoopDeps<TOutput = unknown> {
   host?: unknown;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
+  /**
+   * The agent's personas. Read ONLY when the run names one (`AgentRunInput.persona`), and then only
+   * once, inside the `persona:resolve` checkpoint — so a replay runs under the persona the turn
+   * started with even after this list changed. Undefined → no personas.
+   */
+  personas?: Persona[];
   /**
    * Per-tool execution timeout in ms. A tool that runs longer is aborted and recorded as failed
    * (the model gets the timeout as its result and can adapt) rather than hanging the turn.
@@ -741,13 +750,15 @@ async function resolvePrompt(prompt: string | PromptBuilder, ctx: PromptContext)
  * resolved from stable inputs (actor / agent / pageContext) once per turn; contributors should be
  * derived from those rather than from uncached I/O so it stays replay-safe.
  */
-async function resolveSystemPrompt(deps: AgentLoopDeps, input: AgentRunInput): Promise<string> {
-  const ctx: PromptContext = {
-    actor: input.actor,
-    agentName: input.agentName ?? 'default',
-    ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
-  };
-  const sections = [await resolvePrompt(deps.systemPrompt, ctx)];
+async function resolveSystemPrompt(
+  deps: AgentLoopDeps,
+  input: AgentRunInput,
+  persona: TurnPersona | undefined,
+): Promise<string> {
+  const ctx = promptContext(input, persona);
+  // A persona that carries a prompt stands in for the base — resolved, with the base it may wrap,
+  // inside `persona:resolve`, so a replay reads back the exact text the turn started with.
+  const sections = [persona?.prompt ?? (await resolvePrompt(deps.systemPrompt, ctx))];
   for (const contribute of deps.promptContributors ?? []) {
     const section = await contribute(ctx);
     if (section !== null && section.length > 0) {
@@ -755,6 +766,70 @@ async function resolveSystemPrompt(deps: AgentLoopDeps, input: AgentRunInput): P
     }
   }
   return sections.join('\n\n');
+}
+
+/** The run's input with no persona — what a turn whose persona did not resolve runs as. */
+function withoutPersona(input: AgentRunInput): AgentRunInput {
+  const { persona: _dropped, ...rest } = input;
+  return rest;
+}
+
+/** What every prompt builder of a turn is handed. */
+function promptContext(input: AgentRunInput, persona: TurnPersona | undefined): PromptContext {
+  return {
+    actor: input.actor,
+    agentName: input.agentName ?? 'default',
+    ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+    ...(persona !== undefined ? { persona: { id: persona.id, label: persona.label } } : {}),
+  };
+}
+
+/**
+ * The `persona:resolve` checkpoint's body: the persona the run names, looked up in this process's
+ * config and FROZEN — its id, label and allow-list, and its prompt resolved against the agent's base
+ * prompt. `null` when the agent no longer declares it, which the turn runs as no persona at all.
+ *
+ * Reached only for a run whose input names a persona, and every such run was started by a release
+ * that has this checkpoint; a run started before personas existed names none, spends no position
+ * here, and replays on the sequence it recorded.
+ */
+async function resolveTurnPersona(
+  deps: AgentLoopDeps,
+  input: AgentRunInput,
+): Promise<TurnPersona | null> {
+  const persona = findPersona(deps, input.persona);
+  if (persona === undefined) {
+    return null;
+  }
+  const ref = { id: persona.id, label: persona.label };
+  let prompt: string | undefined;
+  if (persona.systemPrompt !== undefined) {
+    const ctx = promptContext(input, ref);
+    const basePrompt =
+      typeof persona.systemPrompt === 'function'
+        ? await resolvePrompt(deps.systemPrompt, ctx)
+        : undefined;
+    prompt = await resolvePrompt(persona.systemPrompt, {
+      ...ctx,
+      ...(basePrompt !== undefined ? { basePrompt } : {}),
+    });
+  }
+  return {
+    ...ref,
+    ...(persona.allowedTools !== undefined ? { allowedTools: [...persona.allowedTools] } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
+  };
+}
+
+/**
+ * Why a delegation must not happen under this persona, or `null`. A delegate tool is a tool like any
+ * other to the persona's allow-list: one it was not offered is refused, even if the model names it.
+ */
+function personaRefusal(persona: TurnPersona | undefined, toolName: string): string | null {
+  if (persona?.allowedTools === undefined || persona.allowedTools.includes(toolName)) {
+    return null;
+  }
+  return `(tool "${toolName}" is not available to the "${persona.id}" persona)`;
 }
 
 /** An `agent`-kind tool's input is `{ task }` by convention; fall back to a JSON dump. */
@@ -1146,6 +1221,7 @@ function processorContext(input: AgentRunInput, step: number): ProcessorContext 
     actor: input.actor,
     step,
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    ...(input.persona !== undefined ? { persona: input.persona } : {}),
   };
 }
 
@@ -1410,6 +1486,7 @@ function toolContext(deps: AgentLoopDeps, input: AgentRunInput, hooks: AgentLoop
     runId: hooks.runId,
     requestId: hooks.runId,
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    ...(input.persona !== undefined ? { persona: input.persona } : {}),
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
     ...(deps.host !== undefined ? { host: deps.host } : {}),
     // Replaced per tool call by the call's own collector (see the tool step); this one only serves
@@ -1480,6 +1557,7 @@ async function runIntake(
       runId: hooks.runId,
       toolCalls: [call],
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
     });
     await deps.store.recordToolCall({
       toolCallId: request.id,
@@ -1705,6 +1783,8 @@ interface ToolTurnContext {
    * {@link writeMemory}.
    */
   memory?: MemoryDigest;
+  /** What `persona:resolve` recorded, or undefined where the turn runs under no persona. */
+  persona?: TurnPersona;
 }
 
 /** A tool call whose kind has been settled by its `persist:toolcall` checkpoint. */
@@ -2072,6 +2152,12 @@ async function invokeClaimedTool(
     if (claimed.toolType === 'memory') {
       return await rememberIntoTurn(turn, claimed, startedAt);
     }
+    // Under a persona with an allow-list, the same narrowing the offer had — agent ∩ persona — is
+    // what `invoke` holds the call to. Without one, nothing new is checked.
+    const invokeAllowList =
+      turn.persona?.allowedTools === undefined
+        ? undefined
+        : intersectAllowLists(deps.toolAllowList, turn.persona.allowedTools);
     let raw: unknown;
     if (hooks.dispatchTool) {
       const stepCtx: ToolStepCtx = {
@@ -2080,12 +2166,14 @@ async function invokeClaimedTool(
         runId: hooks.runId,
         requestId: hooks.runId,
         ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.persona !== undefined ? { persona: input.persona } : {}),
         ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
       };
       const envelope: ToolStepEnvelope = {
         toolName: call.name,
         input: call.input,
         ctx: stepCtx,
+        ...(invokeAllowList !== undefined ? { allowedTools: invokeAllowList } : {}),
         ...(deps.toolTimeoutMs !== undefined ? { timeoutMs: deps.toolTimeoutMs } : {}),
         // Numeric-only: the handler applies withToolTimeout AND its own local `classify` — see
         // ToolStepEnvelope.transientRetry.
@@ -2115,6 +2203,7 @@ async function invokeClaimedTool(
                   call.input,
                   { ...toolCallContext(ctx, call.id), emitUi: ui.emit },
                   deps.rolesPolicy,
+                  invokeAllowList !== undefined ? { allowedTools: invokeAllowList } : {},
                 );
               },
               deps.toolTransientRetry ?? {},
@@ -2261,7 +2350,8 @@ async function delegateToolCall(
   const { call, targetAgent = call.name } = claimed;
   const task = extractTask(call.input);
   // A detached hop counts like any other: a cycle is cheaper to start that way, not less unbounded.
-  const refusal = delegationRefusal({ deps, input, targetAgent });
+  const refusal =
+    personaRefusal(turn.persona, call.name) ?? delegationRefusal({ deps, input, targetAgent });
   const start = claimed.detached === true && refusal === null ? hooks.startAgent : undefined;
   publishAgentDelegated({
     runId: hooks.runId,
@@ -2608,9 +2698,24 @@ export interface AgentLoopResult<TOutput = unknown> {
  */
 export async function runAgentLoop<TOutput = unknown>(
   boundDeps: AgentLoopDeps<TOutput>,
-  input: AgentRunInput,
+  requested: AgentRunInput,
   hooks: AgentLoopHooks,
 ): Promise<AgentLoopResult<TOutput>> {
+  // The persona, FIRST and only when the run names one: its definition is read from config once and
+  // frozen in this checkpoint, so a run resumed after the persona was edited or removed keeps the
+  // prompt and allow-list it started with. A run that names none spends no position here — which is
+  // every run started before personas existed, so those replay on the sequence they recorded.
+  const persona =
+    requested.persona === undefined
+      ? undefined
+      : ((await hooks.step('persona:resolve', () => resolveTurnPersona(boundDeps, requested))) ??
+        undefined);
+  // From here on the input names the persona the turn actually runs under — none, when the one it
+  // asked for is no longer declared — so provenance and tool context never claim one that did not apply.
+  const input: AgentRunInput =
+    persona === undefined || persona.id !== requested.persona
+      ? withoutPersona(requested)
+      : requested;
   // A turn with a selected model runs EVERY call it makes on it — the answer, a structured-output
   // pass, the follow-ups — and labels its usage with it when the provider reports no model id.
   const deps: AgentLoopDeps<TOutput> =
@@ -2622,7 +2727,7 @@ export async function runAgentLoop<TOutput = unknown>(
           modelId: input.model,
         };
   const maxSteps = deps.maxSteps ?? 8;
-  let system = await resolveSystemPrompt(deps, input);
+  let system = await resolveSystemPrompt(deps, input, persona);
   const inputProcessors = deps.inputProcessors ?? [];
   const outputProcessors = deps.outputProcessors ?? [];
   // An output gate and the run's own sink are mutually exclusive, so the presence of a processor —
@@ -2672,6 +2777,7 @@ export async function runAgentLoop<TOutput = unknown>(
         role: 'user',
         content: input.userText,
         runId: hooks.runId,
+        ...(input.persona !== undefined ? { persona: input.persona } : {}),
         ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       }),
     );
@@ -2697,6 +2803,7 @@ export async function runAgentLoop<TOutput = unknown>(
     threadId: input.threadId,
     actorId: input.actor.id,
     ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+    ...(input.persona !== undefined ? { persona: input.persona } : {}),
   });
 
   // Which of the three optional prompt stages below this run takes a position for, decided ONCE and
@@ -2912,6 +3019,9 @@ export async function runAgentLoop<TOutput = unknown>(
         threadId: input.threadId,
         ...(gated ? { bufferOutput: true } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(persona?.allowedTools !== undefined
+          ? { personaAllowedTools: persona.allowedTools }
+          : {}),
       });
     } else {
       const tools = withMemoryTool({
@@ -2920,7 +3030,7 @@ export async function runAgentLoop<TOutput = unknown>(
             tools: await deps.registry.definitionsFor(
               input.actor,
               deps.rolesPolicy,
-              deps.toolAllowList,
+              intersectAllowLists(deps.toolAllowList, persona?.allowedTools),
               {
                 threadId: input.threadId,
                 ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
@@ -3182,6 +3292,7 @@ export async function runAgentLoop<TOutput = unknown>(
         runId: hooks.runId,
         usage: { ...turn.usage, costUsd },
         ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.persona !== undefined ? { persona: input.persona } : {}),
         ...(turn.reasoning !== undefined ? { reasoning: turn.reasoning } : {}),
         ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
         ...(turn.ui !== undefined && turn.ui.length > 0 ? { ui: turn.ui } : {}),
@@ -3269,6 +3380,7 @@ export async function runAgentLoop<TOutput = unknown>(
       halt: { terminal: false },
       ...(skillOffer !== undefined ? { skills: skillOffer } : {}),
       ...(memoryDigest !== undefined ? { memory: memoryDigest } : {}),
+      ...(persona !== undefined ? { persona } : {}),
     };
     // A model routinely asks for several tools at once, and running them back to back makes the turn
     // cost their sum. Overlapping them is safe here because a checkpoint position is handed out on

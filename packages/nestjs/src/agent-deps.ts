@@ -8,6 +8,7 @@ import type {
   MemoryConfig,
   ModelProvider,
   OutputProcessor,
+  Persona,
   PromptBuilder,
   PromptContributor,
   QuotaStore,
@@ -43,6 +44,8 @@ export interface AgentDeps {
   maxAgentAppearances?: number;
   /** Agent-level tool allow-list. Undefined → all tools (after role filtering). */
   toolAllowList?: string[];
+  /** The agent's personas (`@Agent({ personas })`) — read by the loop only for a run that names one. */
+  personas?: Persona[];
   /** Per-tool execution timeout in ms (from module options). Undefined → no timeout. */
   toolTimeoutMs?: number;
   /**

@@ -53,6 +53,8 @@ export const agentThread = sqliteTable(
     defaultAgent: text('default_agent'),
     /** The model every turn on this thread runs on unless the send names one; `null` → default. */
     model: text('model'),
+    /** The persona a send on this thread runs under when it names none; `null` → the agent's default. */
+    persona: text('persona'),
     /** Why the thread's message queue stopped draining; `null` → it drains. */
     queuePause: text('queue_pause', { mode: 'json' }).$type<QueuePause>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
@@ -82,6 +84,8 @@ export const agentMessage = sqliteTable(
     followUps: text('follow_ups', { mode: 'json' }).$type<string[]>(),
     usage: text('usage', { mode: 'json' }).$type<MessageUsage>(),
     agentName: text('agent_name'),
+    /** The persona the turn that wrote this message ran under; `null` → none. */
+    persona: text('persona'),
     runId: text('run_id'),
     /** The step's streamed thinking; `null` when the model produced none. */
     reasoning: text('reasoning'),
@@ -151,6 +155,8 @@ export const agentQueuedMessage = sqliteTable(
     content: text('content').notNull(),
     attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),
     agentName: text('agent_name'),
+    /** The persona the send resolved — what the message starts under. */
+    persona: text('persona'),
     model: text('model'),
     pageContext: text('page_context', { mode: 'json' }).$type<PageContext>(),
     interrupt: integer('interrupt', { mode: 'boolean' }).notNull().default(false),

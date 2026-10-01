@@ -151,6 +151,7 @@ export class AgUiRunHandler {
       message: turn.text,
       ...(owner !== null ? { threadId: input.threadId } : { newThreadId: input.threadId }),
       ...(forwarded.agent !== undefined ? { agentName: forwarded.agent } : {}),
+      ...(forwarded.persona !== undefined ? { personaId: forwarded.persona } : {}),
       ...(forwarded.model !== undefined ? { model: forwarded.model } : {}),
       ...(pageContext !== undefined ? { pageContext } : {}),
       ...(refs.length > 0 ? { attachments: refs } : {}),

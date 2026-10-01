@@ -55,6 +55,7 @@ import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { RunNotActiveException } from './run-not-active.exception.js';
+import { threadPersona } from './thread-persona.js';
 
 /**
  * What a send does when its thread already has a turn running:
@@ -88,6 +89,12 @@ export interface ChatParams {
   message: string;
   threadId?: string;
   agentName?: string;
+  /**
+   * Run this turn under one of the agent's personas (`@Agent({ personas })`), and pin it on the
+   * thread so later sends that name none keep it. Refused (400 `persona_not_found`) unless the agent
+   * declares it. Omitted → the thread's pinned persona, else the agent's `defaultPersona`, else none.
+   */
+  personaId?: string;
   /**
    * Files attached to this message (image/PDF) for a vision-capable model, named by the `mediaId`
    * the upload returned. Only the id is read: the url, content type and name are resolved from the
@@ -314,7 +321,16 @@ export class AgentService {
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
     await this.assertWithinQuota(params.actor);
-    const agentName = await this.resolveAgentName(params.agentName, params.threadId);
+    // A name a persona took over (`Persona.aliases`) runs as the agent that owns it, under it.
+    const target = this.deps.resolveAgent(
+      await this.resolveAgentName(params.agentName, params.threadId),
+    );
+    const agentName = target.agentName;
+    const persona = await this.resolvePersona(
+      agentName,
+      params.personaId ?? target.persona,
+      params.threadId,
+    );
     const model = await this.resolveModel(params.actor, agentName, params.model, params.threadId);
     // Before the thread exists, so a turn that names an attachment it may not have leaves nothing
     // behind.
@@ -328,12 +344,18 @@ export class AgentService {
         actor: params.actor,
         ...(params.transient === true ? { transient: true } : {}),
         ...(params.newThreadId !== undefined ? { id: params.newThreadId } : {}),
+        ...(params.personaId !== undefined ? { persona: params.personaId } : {}),
       });
       threadId = created.id;
     } else {
       // Every send onto an existing thread is gated by ownership: a regenerate rewinds the thread,
       // and a queued message would otherwise land in someone else's conversation.
       await this.assertOwnsThread(params.actor, threadId);
+      // A persona a send NAMES is the person's pick for this conversation: pinned, so the next send
+      // (and a reopened thread's picker) keeps it. One the send fell back to is not pinned.
+      if (params.personaId !== undefined) {
+        await this.pinThreadPersona(threadId, params.personaId);
+      }
     }
 
     const input: AgentRunInput = {
@@ -342,6 +364,7 @@ export class AgentService {
       userText: params.message,
       day: utcDay(),
       agentName,
+      ...(persona !== undefined ? { persona } : {}),
       ...(params.regenerate === true ? { regenerate: true } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
@@ -421,6 +444,7 @@ export class AgentService {
       content: input.userText,
       ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
       ...(interrupting !== undefined ? { interrupt: true, at: 'head' as const } : {}),
@@ -836,7 +860,11 @@ export class AgentService {
   async updateThread(actor: Actor, threadId: string, patch: UpdateThreadInput): Promise<void> {
     const title = patch.title !== undefined ? this.validateTitle(patch.title) : undefined;
     await this.assertOwnsThread(actor, threadId);
-    if (patch.defaultAgent === undefined && patch.model === undefined) {
+    if (
+      patch.defaultAgent === undefined &&
+      patch.model === undefined &&
+      patch.persona === undefined
+    ) {
       if (title !== undefined) {
         await this.store.setTitle(threadId, title);
       }
@@ -844,7 +872,7 @@ export class AgentService {
     }
     if (this.store.updateThread === undefined) {
       throw new NotImplementedException(
-        "Setting a thread's defaultAgent or model requires an AgentStore that implements " +
+        "Setting a thread's defaultAgent, model or persona requires an AgentStore that implements " +
           'updateThread(); the bound store does not support it.',
       );
     }
@@ -858,11 +886,51 @@ export class AgentService {
             patch.defaultAgent ?? (await this.resolveAgentName(undefined, threadId)),
             patch.model,
           );
+    // Validated against the agent the thread's next turn will run as, like the model above.
+    if (patch.persona !== undefined && patch.persona !== null) {
+      this.deps.resolvePersona({
+        agentName: this.deps.resolveAgent(
+          patch.defaultAgent ?? (await this.resolveAgentName(undefined, threadId)),
+        ).agentName,
+        requested: patch.persona,
+      });
+    }
     await this.store.updateThread(threadId, {
       ...(title !== undefined ? { title } : {}),
       ...(patch.defaultAgent !== undefined ? { defaultAgent: patch.defaultAgent } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(patch.persona !== undefined ? { persona: patch.persona } : {}),
     });
+  }
+
+  /**
+   * The persona this send runs under — see {@link AgentDepsFactory.resolvePersona}. The thread's
+   * pinned persona is read only when the send names none AND the agent has personas to pick from.
+   */
+  private async resolvePersona(
+    agentName: string,
+    requested: string | undefined,
+    threadId: string | undefined,
+  ): Promise<string | undefined> {
+    const needsThread =
+      requested === undefined &&
+      threadId !== undefined &&
+      this.deps.personaCatalog(agentName).length > 0;
+    return this.deps.resolvePersona({
+      agentName,
+      ...(requested !== undefined ? { requested } : {}),
+      ...(needsThread ? { threadPersona: await threadPersona(this.store, threadId) } : {}),
+    });
+  }
+
+  /** Pin `persona` on the thread when it is not already — a no-op on a store that cannot. */
+  private async pinThreadPersona(threadId: string, persona: string): Promise<void> {
+    if (this.store.updateThread === undefined) {
+      return;
+    }
+    if ((await threadPersona(this.store, threadId)) !== persona) {
+      await this.store.updateThread(threadId, { persona });
+    }
   }
 
   private validateTitle(title: string): string {
@@ -916,6 +984,7 @@ export class AgentService {
       ...thread,
       defaultAgent: thread.defaultAgent ?? null,
       model: thread.model ?? null,
+      persona: thread.persona ?? null,
       activeRunId: (await this.store.activeRunForThread?.(thread.id)) ?? thread.activeRunId ?? null,
     };
   }

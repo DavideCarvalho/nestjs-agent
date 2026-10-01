@@ -96,6 +96,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       activeStreamId: null,
       defaultAgent: null,
       model: null,
+      persona: input.persona ?? null,
       queuePause: null,
       createdAt: now,
       updatedAt: now,
@@ -241,6 +242,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       activeStreamId: null,
       defaultAgent: source.defaultAgent,
       model: source.model,
+      persona: source.persona,
       // A fork is a new conversation: nothing is waiting on it, and nothing is paused.
       queuePause: null,
       createdAt: now,
@@ -261,6 +263,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
           followUps: message.followUps,
           usage: message.usage,
           agentName: message.agentName,
+          persona: message.persona,
           // The copy is the same message, so it keeps the run that wrote it. A reader asking which
           // turn produced this text gets the truthful answer; the run's own thread is still the
           // original, so a run-scoped read never picks the fork's rows up.
@@ -459,6 +462,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       attachments:
         input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
       agentName: input.agentName ?? null,
+      persona: input.persona ?? null,
       model: input.model ?? null,
       pageContext: input.pageContext ?? null,
       interrupt: input.interrupt === true,
@@ -576,6 +580,9 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
     if (patch.model !== undefined) {
       updates.model = patch.model;
     }
+    if (patch.persona !== undefined) {
+      updates.persona = patch.persona;
+    }
     if (Object.keys(updates).length === 0) {
       return;
     }
@@ -595,6 +602,15 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       .from(agentThread)
       .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
     return thread?.model ?? null;
+  }
+
+  /** The thread's pinned persona, projected like {@link defaultAgentForThread}. */
+  async personaForThread(threadId: string): Promise<string | null> {
+    const [thread] = await this.db
+      .select({ persona: agentThread.persona })
+      .from(agentThread)
+      .where(and(eq(agentThread.id, threadId), isNull(agentThread.deletedAt)));
+    return thread?.persona ?? null;
   }
 
   async defaultAgentForThread(threadId: string): Promise<string | null> {
@@ -682,6 +698,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       followUps: input.followUps ?? null,
       usage: input.usage ?? null,
       agentName: input.agentName ?? null,
+      persona: input.persona ?? null,
       runId: input.runId ?? null,
       reasoning: input.reasoning ?? null,
       reasoningMs: input.reasoningMs ?? null,
@@ -919,6 +936,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       updatedAt: thread.updatedAt.toISOString(),
       defaultAgent: thread.defaultAgent,
       ...(thread.model != null ? { model: thread.model } : {}),
+      persona: thread.persona ?? null,
       ...(lastContent !== undefined ? { lastMessagePreview: lastContent.slice(0, 120) } : {}),
     };
   }
@@ -935,6 +953,7 @@ export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueu
       ...(message.followUps != null ? { followUps: message.followUps } : {}),
       ...(message.usage != null ? { usage: message.usage } : {}),
       ...(message.agentName != null ? { agentName: message.agentName } : {}),
+      ...(message.persona != null ? { persona: message.persona } : {}),
       ...(message.runId != null ? { runId: message.runId } : {}),
       ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
       ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
@@ -954,6 +973,7 @@ function toQueuedMessage(row: AgentQueuedMessageRow): QueuedMessage {
       ? { attachments: row.attachments }
       : {}),
     ...(row.agentName !== null ? { agentName: row.agentName } : {}),
+    ...(row.persona !== null ? { persona: row.persona } : {}),
     ...(row.model !== null ? { model: row.model } : {}),
     ...(row.pageContext !== null ? { pageContext: row.pageContext } : {}),
     ...(row.interrupt ? { interrupt: true } : {}),

@@ -145,6 +145,7 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
         'active_stream_id',
         'default_agent',
         'model',
+        'persona',
         'queue_pause',
         'created_at',
         'updated_at',
@@ -152,8 +153,9 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
       ]);
       const store = new MikroOrmAgentStore(instance.em);
       expect((await store.getThread('t1'))?.title).toBe('Old chat');
-      await store.updateThread('t1', { defaultAgent: 'researcher' });
+      await store.updateThread('t1', { defaultAgent: 'researcher', persona: 'sql-focused' });
       expect(await store.defaultAgentForThread('t1')).toBe('researcher');
+      expect(await store.personaForThread('t1')).toBe('sql-focused');
       expect(await storedFingerprint(instance)).toMatch(/^[a-f0-9]{64}$/);
     } finally {
       await instance.close(true);

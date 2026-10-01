@@ -26,6 +26,8 @@ export class AgentMessage {
   followUps?: string[] | null;
   usage?: MessageUsage | null;
   agentName?: string | null;
+  /** The persona the turn that wrote this message ran under; `null` → none. */
+  persona?: string | null;
   /** The run (turn) that produced this message; `null` for a pre-rollout row. */
   runId?: string | null;
   /** The step's streamed thinking; `null` when the model produced none. */
@@ -67,6 +69,7 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       followUps: { type: 'json', nullable: true, fieldName: 'follow_ups' },
       usage: { type: 'json', nullable: true },
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
+      persona: { type: 'string', nullable: true, ...str },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
       reasoning: { type: 'text', nullable: true, ...str },
       reasoningMs: { type: 'integer', nullable: true, fieldName: 'reasoning_ms' },

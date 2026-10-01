@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { AgentModule } from '../agent.module.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
+import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { agUiAdapter } from './ag-ui.adapter.js';
@@ -81,6 +82,18 @@ class RefundTool {
   }
 }
 
+@Agent({ name: 'base', systemPrompt: 'Base prompt.' })
+@Injectable()
+class BaseAgent {}
+
+@Agent({
+  name: 'helper',
+  systemPrompt: 'Helper prompt.',
+  personas: [{ id: 'terse', label: 'Terse', systemPrompt: 'Answer tersely.' }],
+})
+@Injectable()
+class PersonaAgent {}
+
 function globalStagingModule(staging: AttachmentStagingStore): DynamicModule {
   @Global()
   @Module({
@@ -106,9 +119,12 @@ afterEach(async () => {
 
 async function boot(
   script: Script,
-  extra: Partial<AgentModuleOptions> & { staging?: AttachmentStagingStore } = {},
+  extra: Partial<AgentModuleOptions> & {
+    staging?: AttachmentStagingStore;
+    agents?: boolean;
+  } = {},
 ): Promise<Booted> {
-  const { staging, ...options } = extra;
+  const { staging, agents, ...options } = extra;
   const moduleRef = await Test.createTestingModule({
     imports: [
       ...(staging !== undefined ? [globalStagingModule(staging)] : []),
@@ -121,7 +137,7 @@ async function boot(
         ...options,
       }),
     ],
-    providers: [RefundTool],
+    providers: [RefundTool, ...(agents === true ? [BaseAgent, PersonaAgent] : [])],
   }).compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>();
   await app.listen(0, '127.0.0.1');
@@ -239,6 +255,26 @@ describe('POST /agent/ag-ui', () => {
     expect(client.messages.map((message) => [message.role, message.content])).toEqual([
       ['user', 'hi'],
       ['assistant', 'Hello there'],
+    ]);
+  });
+
+  it('runs the agent and persona the consumer forwarded', async () => {
+    const prompts: string[] = [];
+    const { url, service } = await boot(
+      (args) => {
+        prompts.push(args.system);
+        return { text: 'ok' };
+      },
+      { agents: true, defaultAgent: 'base' },
+    );
+    const client = agent(url);
+    await run(client, 'hi', { forwardedProps: { agent: 'helper', persona: 'terse' } });
+    expect(prompts[0]).toBe('Answer tersely.');
+    const thread = await service.getThread({ id: 'u1' }, client.threadId);
+    expect(thread?.persona).toBe('terse');
+    expect(thread?.messages.map((message) => [message.agentName, message.persona])).toEqual([
+      [undefined, 'terse'],
+      ['helper', 'terse'],
     ]);
   });
 
