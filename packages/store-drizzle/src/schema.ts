@@ -1,4 +1,5 @@
 import type {
+  ActionProposal,
   Actor,
   AgentUiComponent,
   MemoryOrigin,
@@ -376,8 +377,27 @@ export const agentStreamFrame = sqliteTable(
   (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );
 
+/** Independent action proposals; decision and execution work commit in one fenced row. */
+export const agentActionProposal = sqliteTable(
+  'agent_action_proposal',
+  {
+    id: text('id').primaryKey(),
+    scopeKey: text('scope_key').notNull(),
+    decision: text('decision').$type<ActionProposal['decision']>().notNull(),
+    logicalSort: text('logical_sort').notNull(),
+    createFingerprint: text('create_fingerprint').notNull(),
+    proposal: text('proposal', { mode: 'json' }).$type<ActionProposal>().notNull(),
+    version: integer('version').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
+  ],
+);
+
 /** The tables this store owns, as one schema object, ready for `drizzle(client, { schema })`. */
 export const agentSchema = {
+  agentActionProposal,
   agentThread,
   agentMessage,
   agentQueuedMessage,

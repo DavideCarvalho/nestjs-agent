@@ -1,4 +1,6 @@
 import {
+  type ActionProposalStore,
+  type ActionProposalStoreOptions,
   type AgentStore,
   type AgentUiComponent,
   type AppendMessageInput,
@@ -52,6 +54,7 @@ import {
   agentTablesFor,
   asBuilder,
 } from './dialect.js';
+import { DrizzleActionProposalStore } from './drizzle-action-proposal-store.js';
 import {
   type AgentMessageRow,
   type AgentQueuedMessageRow,
@@ -94,15 +97,62 @@ type TurnMessageRow = { [K in keyof ReturnType<typeof turnMessageColumns>]: Agen
  * owns the connection). Behaviour mirrors {@link import('@dudousxd/nestjs-agent-store-mikro-orm')}
  * exactly (fork/truncate/quota/active-stream/soft-delete semantics) so the two are interchangeable.
  */
-export class DrizzleAgentStore implements AgentStore, ThreadTurnReader, ChatQueueStore {
+export class DrizzleAgentStore
+  implements AgentStore, ThreadTurnReader, ChatQueueStore, ActionProposalStore
+{
   private readonly db: AgentSqliteDb;
   private readonly dialect: AgentDialect;
   private readonly t: AgentTables;
 
-  constructor(db: AgentDrizzleDb) {
+  private readonly proposals: DrizzleActionProposalStore;
+
+  constructor(db: AgentDrizzleDb, options: ActionProposalStoreOptions = {}) {
+    this.proposals = new DrizzleActionProposalStore(db, options);
     this.dialect = agentDialectOf(db);
     this.t = agentTablesFor(this.dialect);
     this.db = asBuilder(db);
+  }
+
+  createActionProposal(
+    ...args: Parameters<ActionProposalStore['createActionProposal']>
+  ): ReturnType<ActionProposalStore['createActionProposal']> {
+    return this.proposals.createActionProposal(...args);
+  }
+
+  getActionProposal(
+    ...args: Parameters<ActionProposalStore['getActionProposal']>
+  ): ReturnType<ActionProposalStore['getActionProposal']> {
+    return this.proposals.getActionProposal(...args);
+  }
+
+  listActionProposals(
+    ...args: Parameters<ActionProposalStore['listActionProposals']>
+  ): ReturnType<ActionProposalStore['listActionProposals']> {
+    return this.proposals.listActionProposals(...args);
+  }
+
+  decideActionProposal(
+    ...args: Parameters<ActionProposalStore['decideActionProposal']>
+  ): ReturnType<ActionProposalStore['decideActionProposal']> {
+    return this.proposals.decideActionProposal(...args);
+  }
+
+  claimActionProposal(
+    ...args: Parameters<ActionProposalStore['claimActionProposal']>
+  ): ReturnType<ActionProposalStore['claimActionProposal']> {
+    return this.proposals.claimActionProposal(...args);
+  }
+
+  extendActionProposalLease(
+    ...args: Parameters<ActionProposalStore['extendActionProposalLease']>
+  ): ReturnType<ActionProposalStore['extendActionProposalLease']> {
+    return this.proposals.extendActionProposalLease(...args);
+  }
+
+  settleActionProposal(
+    ...args: Parameters<ActionProposalStore['settleActionProposal']>
+  ): ReturnType<ActionProposalStore['settleActionProposal']> {
+    return this.proposals.settleActionProposal(...args);
   }
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {

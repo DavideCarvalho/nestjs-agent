@@ -84,6 +84,7 @@ async function adminRun(dialect: 'postgres' | 'mysql', statement: string): Promi
 
 /** Every agent table, each before the tables it references. */
 const RESET_ORDER = [
+  'agent_action_proposal',
   'agent_tool_call',
   'agent_message',
   'agent_queued_message',
@@ -125,6 +126,8 @@ export async function openAgentDb(
   dialect: Dialect,
   options: {
     ensureSchema?: boolean;
+    /** Optional file-backed SQLite database for truly independent replica connections. */
+    sqlitePath?: string;
     mysqlFlags?: string[];
     logger?: { logQuery(query: string, params: unknown[]): void };
   } = {},
@@ -132,16 +135,25 @@ export async function openAgentDb(
   const closers: Array<() => Promise<void>> = [];
   let connect: () => Promise<AgentDrizzleDb>;
   if (dialect === 'sqlite') {
-    const sqlite = new Database(':memory:');
-    sqlite.pragma('foreign_keys = ON');
-    const db = drizzleSqlite(sqlite, {
-      schema: agentSchema,
-      ...(options.logger !== undefined ? { logger: options.logger } : {}),
-    }) as unknown as AgentDrizzleDb;
-    closers.push(async () => {
-      sqlite.close();
-    });
-    connect = async () => db;
+    const connectSqlite = async (): Promise<AgentDrizzleDb> => {
+      const sqlite = new Database(options.sqlitePath ?? ':memory:');
+      sqlite.pragma('foreign_keys = ON');
+      sqlite.pragma('busy_timeout = 5000');
+      if (options.sqlitePath !== undefined) sqlite.pragma('journal_mode = WAL');
+      const db = drizzleSqlite(sqlite, {
+        schema: agentSchema,
+        ...(options.logger !== undefined ? { logger: options.logger } : {}),
+      }) as unknown as AgentDrizzleDb;
+      closers.push(async () => {
+        sqlite.close();
+      });
+      return db;
+    };
+    if (options.sqlitePath !== undefined) connect = connectSqlite;
+    else {
+      const db = await connectSqlite();
+      connect = async () => db;
+    }
   } else {
     const name = `agent_${crypto.randomUUID().replaceAll('-', '').slice(0, 20)}`;
     const url = new URL(adminUrl(dialect) as string);
@@ -196,7 +208,7 @@ export async function openAgentDb(
     reset: async () => {
       for (const table of RESET_ORDER) await runSql(db, dialect, sql.raw(`DELETE FROM ${table}`));
     },
-    replica: () => (dialect === 'sqlite' ? Promise.resolve(db) : connect()),
+    replica: () => connect(),
     close: async () => {
       for (const close of closers) await close();
     },

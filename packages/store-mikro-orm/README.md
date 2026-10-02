@@ -184,6 +184,40 @@ is what keeps consecutive pages disjoint when a bulk upload stamps a whole batch
 Writes are best-effort: the recorder runs detached on a diagnostics channel, so a failed write is
 reported and dropped rather than taking down the ingestion that triggered it.
 
+## Independent action proposals
+
+`MikroOrmAgentStore` also implements the optional core `ActionProposalStore` capability. Its seven
+prefixed proposal methods work independently of chat runs; this release adds storage, not a worker
+or approval endpoint. The existing module provider needs no additional registration.
+
+`agent_action_proposal` keeps the decision, decision audit and execution snapshot in one row. An
+approval and its queued execution are one compare-and-swap update. Passing a transactional entity
+manager keeps proposal operations inside the caller transaction, including creation replay. A stale
+transaction snapshot returns `conflict` after bounded CAS retries; retry in a new transaction. Claims, renewals and settlements
+check a lease token and generation; an expired lease can be recovered with a new generation while
+the proposal's `idempotencyKey` stays stable. Hosts must pass that key to their domain operation to
+handle a crash after an effect but before settlement.
+
+All reads and mutations require the exact tenant (`null` is explicit), actor and thread scope.
+The proposal snapshot uses canonical JSON in `TEXT` (`LONGTEXT` on MySQL), preserving escaped NULs
+and lone UTF-16 surrogates. Proposal ids are globally unique; reusing an id in another scope returns a conflict without
+revealing its proposal. SHA-256 physical keys preserve case and trailing-space distinctions on
+MySQL as well as SQLite and PostgreSQL. Lists apply scope, optional decision, ordering and the
+1–1000 limit in SQL; tied creation times use the logical id's UTF-16 order.
+
+Times are numeric epoch milliseconds from the store's trusted clock. The optional second
+constructor argument is useful for controlled clocks in hosts and tests:
+
+```ts
+const store = new MikroOrmAgentStore(entityManager, { clock: () => Date.now() });
+```
+
+`agentEntities()` includes `AgentActionProposal` and its custom repository. `ensureAgentSchema`
+creates the new table and indexes additively on an existing database, and repeated calls preserve
+existing data. If `autoSchema` is disabled, generate and apply a MikroORM migration from the updated
+entities before calling the proposal methods. The new table has no foreign keys to chat rows, so
+origin ids remain provenance even after a chat thread is removed.
+
 ## License
 
 MIT © Davide Carvalho

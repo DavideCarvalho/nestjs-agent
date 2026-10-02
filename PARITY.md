@@ -30,6 +30,7 @@ not a completed delivery. Silence is not a status.
 
 | Capability | `nestjs-agent` | `adonis-agent` | Notes |
 |---|---|---|---|
+| Independent proposal persistence | paired delivery — memory/Drizzle/MikroORM | paired delivery — memory/Lucid | Same optional `ActionProposalStore`: scoped immutable snapshots, first-wins decision audit, atomic approved/queued work, fenced leases/recovery and bounded SQL reads. Persistence foundation only; the loop still awaits approval until the next paired delivery. |
 | Per-call action domain preflight | paired delivery | paired delivery | Same `ToolHandler.preflight(input, ctx, { phase })`: prepare before ask/auto/remember; execute rechecks current gates and domain state. Denied and already-completed calls do not create effects. Domain refusals are final, not transient retries. |
 | Resolved confirmation per action call | paired delivery + shared React | paired delivery + same React/native client | `confirmation` overrides static templates with literal strings, persists across reload and replay; native approval frames retain approver, expiry and reason. SQL stores and in-memory stores preserve the metadata. |
 | Tool kind resolved inside the journal | yes | yes | The branch that decides HITL-vs-execute must not read a process-local registry. |

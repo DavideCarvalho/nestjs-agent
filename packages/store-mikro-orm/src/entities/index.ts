@@ -1,4 +1,5 @@
 import type { EntitySchema } from '@mikro-orm/core';
+import { agentActionProposalSchema } from './agent-action-proposal.entity';
 import { agentConfirmTokenSchema } from './agent-confirm-token.entity';
 import { agentMemorySchema } from './agent-memory.entity';
 import { agentMessageSchema } from './agent-message.entity';
@@ -22,6 +23,7 @@ export * from './agent-model-pricing.entity';
 export * from './agent-run.entity';
 export * from './agent-stream-frame.entity';
 export * from './agent-confirm-token.entity';
+export * from './agent-action-proposal.entity';
 
 /** Default string collation baked into {@link AGENT_ENTITIES} for MySQL parity (§5). */
 export const AGENT_COLLATION = 'utf8mb4_unicode_ci';
@@ -32,6 +34,7 @@ export const AGENT_COLLATION = 'utf8mb4_unicode_ci';
  */
 export function agentEntities(options: { collation?: string } = {}): EntitySchema[] {
   return [
+    agentActionProposalSchema(options.collation),
     agentThreadSchema(options.collation),
     agentMessageSchema(options.collation),
     agentQueuedMessageSchema(options.collation),

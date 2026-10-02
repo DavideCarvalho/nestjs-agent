@@ -243,3 +243,40 @@ Action preflight confirmations persist in the nullable `agent_tool_call.confirma
 The schema helper adds this column to existing databases. Hosts managing their own migrations must
 add it before upgrading (`JSONB` on PostgreSQL, `JSON` on MySQL, JSON text on SQLite). The stored
 confirmation is returned in `StoredMessage.approvals` so a reload uses the same wording.
+
+### Durable action proposals
+
+`DrizzleAgentStore` also implements the optional core `ActionProposalStore` capability.
+Its `createActionProposal`, scoped get/list, immutable decision, lease claim/renewal,
+and settlement methods persist to the independent `agent_action_proposal` table;
+no persisted thread, message, or run is required. The standalone
+`DrizzleActionProposalStore` exposes the same methods when only this capability is needed.
+Both accept an optional second constructor argument `{ clock: () => number }` for a
+trusted server clock (default `Date.now`); never pass a request timestamp as that clock.
+
+Creation is replay-safe against the original canonical JSON snapshot. A proposal ID
+is globally unique, and every read or mutation checks tenant, actor, and thread scope.
+Approval and queued execution commit together in one version-fenced SQL update.
+Claims/recovery increment a generation and issue a new token; renewal and settlement
+require both and an unexpired lease. Expiry is inclusive (`now >= expiresAt`).
+A contended caller transaction can return `conflict` after bounded CAS retries;
+retry from a fresh transaction when its repeatable-read snapshot is stale.
+The stable `idempotencyKey` survives recovery: delivery is at least once, so the tool
+must enforce idempotency for its external effect. This storage capability does not
+start a worker or change the agent loop.
+
+For existing databases, run `ensureAgentSchema(db)` to add the new table and its
+scope/creation-order index without altering existing data. Lists filter and limit in
+SQL (default 100, maximum 1000), with UTF16 lexical ID ordering for equal creation
+times. Logical proposal IDs are limited to 255 UTF16 code units by the core contract.
+If you own migrations,
+include `agent_action_proposal` from `agentSchema`, `pgAgentSchema`, or
+`mysqlAgentSchema` (or the corresponding `agentSchemaDdl(dialect)` statements).
+The physical primary key and scope key are SHA-256 digests; original identifiers
+remain in the canonical JSON text snapshot and are matched exactly, including
+trailing spaces,
+independently of MySQL collation padding. Text storage preserves valid JSON strings
+containing NUL or lone surrogates on every dialect. Decision audit and execution
+work share
+the snapshot column, fenced by the numeric `version` column. Existing table schemas
+and fixture callers remain compatible.

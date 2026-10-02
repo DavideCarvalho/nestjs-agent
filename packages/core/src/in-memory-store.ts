@@ -1,4 +1,5 @@
 import type { ToolCallOutcome } from './dangling-tool-calls.js';
+import { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
 import {
   type AgentStore,
   type AppendMessageInput,
@@ -180,7 +181,10 @@ export interface GovernanceRunRow {
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
-export class InMemoryAgentStore implements AgentStore, ChatQueueStore {
+export class InMemoryAgentStore
+  extends InMemoryActionProposalStore
+  implements AgentStore, ChatQueueStore
+{
   private readonly threads = new Map<string, ThreadRow>();
   /** Each thread's waiting messages, in run order. */
   private readonly queues = new Map<string, QueuedMessage[]>();
