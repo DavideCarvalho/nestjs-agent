@@ -1,5 +1,38 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.26.0
+
+### Minor Changes
+
+- [#284](https://github.com/DavideCarvalho/nestjs-agent/pull/284) [`cb8b15a`](https://github.com/DavideCarvalho/nestjs-agent/commit/cb8b15aa26bd5d7f68af40d41b4ddeba3d9b71dd) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add the optional ActionProposalStore capability with scoped replay-safe snapshots, atomic decisions and queued execution work, and fenced recoverable leases in memory, Drizzle and MikroORM. This is the persistence foundation; independent conversation execution is not enabled yet.
+
+- [#287](https://github.com/DavideCarvalho/nestjs-agent/pull/287) [`b233a41`](https://github.com/DavideCarvalho/nestjs-agent/commit/b233a418b411215e03e8bb02c32e13d685089f53) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add indexed worker-only proposal discovery to SQL stores: claim queued or expired-lease work across
+  scopes and expire due pending cards in bounded batches. Every proposal mutation keeps discovery
+  metadata in the same fenced write. Add a shared worker-store conformance contract and bounded,
+  version-fenced backfill for existing proposals after additive schema migration.
+
+  Stop old writers before applying the migration and repeating backfill batches, then start the new
+  workers. This capability does not itself enable the independent conversation runtime.
+
+- [#288](https://github.com/DavideCarvalho/nestjs-agent/pull/288) [`db48ea8`](https://github.com/DavideCarvalho/nestjs-agent/commit/db48ea8a7c281a111f4079a8e4ba9036244068c5) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add opt-in independent action approvals: pending cards release the chat turn, scoped channel/text
+  decisions queue work under fresh requester authorization, pending replacement is atomic, and
+  fenced workers admit terminal result facts/UI into history without a model continuation.
+  Remembered approvals derive from terminal proposal state. Preserve blocking durable journals.
+
+  Negotiate the authorized component catalog against client renderer capabilities across native
+  HTTP, queued turns and AG-UI; persist complete text fallbacks for unsupported and historical UI.
+  SQL adapters add runtime metadata/indexes and atomic delivery on their transaction authority.
+  Apply additive schema upgrades before enabling workers; external effects remain at least once
+  and require the stable tool-context idempotency key. See docs/independent-approvals.md.
+
+### Patch Changes
+
+- [#285](https://github.com/DavideCarvalho/nestjs-agent/pull/285) [`133975e`](https://github.com/DavideCarvalho/nestjs-agent/commit/133975e7b9aa9da44f708ce4a95940fb6f6440e4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add opt-in trusted preparation for independent action proposals. Preserve original JSON separately
+  from the approved normalized input and immutable execution context, and reject schema or hook
+  input drift before effects. Existing blocking preparation and invocation retain their behavior.
+  Expose privileged worker discovery with a reference implementation in memory; SQL discovery and
+  the independent conversation runtime are separate follow-up work.
+
 ## 0.25.1
 
 ### Patch Changes

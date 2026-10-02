@@ -1,5 +1,32 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.33.0
+
+### Minor Changes
+
+- [#283](https://github.com/DavideCarvalho/nestjs-agent/pull/283) [`7136543`](https://github.com/DavideCarvalho/nestjs-agent/commit/71365431cd5afd16e937ab39bdcf886a71d7c5ae) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add read-only action preflight checks before approval and before execution, with ready, denied,
+  and completed outcomes. Journal preparation and execution refusals so replay cannot change the
+  approval branch or rerun a denied mutation. Direct registry and MCP invocation also checks state.
+
+  Persist and stream per-call confirmation wording and render it through the existing React
+  transcript. Add a nullable confirmation JSON column to both SQL stores.
+
+- [#288](https://github.com/DavideCarvalho/nestjs-agent/pull/288) [`db48ea8`](https://github.com/DavideCarvalho/nestjs-agent/commit/db48ea8a7c281a111f4079a8e4ba9036244068c5) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add opt-in independent action approvals: pending cards release the chat turn, scoped channel/text
+  decisions queue work under fresh requester authorization, pending replacement is atomic, and
+  fenced workers admit terminal result facts/UI into history without a model continuation.
+  Remembered approvals derive from terminal proposal state. Preserve blocking durable journals.
+
+  Negotiate the authorized component catalog against client renderer capabilities across native
+  HTTP, queued turns and AG-UI; persist complete text fallbacks for unsupported and historical UI.
+  SQL adapters add runtime metadata/indexes and atomic delivery on their transaction authority.
+  Apply additive schema upgrades before enabling workers; external effects remain at least once
+  and require the stable tool-context idempotency key. See docs/independent-approvals.md.
+
+### Patch Changes
+
+- Updated dependencies [[`7136543`](https://github.com/DavideCarvalho/nestjs-agent/commit/71365431cd5afd16e937ab39bdcf886a71d7c5ae), [`cb8b15a`](https://github.com/DavideCarvalho/nestjs-agent/commit/cb8b15aa26bd5d7f68af40d41b4ddeba3d9b71dd), [`b233a41`](https://github.com/DavideCarvalho/nestjs-agent/commit/b233a418b411215e03e8bb02c32e13d685089f53), [`db48ea8`](https://github.com/DavideCarvalho/nestjs-agent/commit/db48ea8a7c281a111f4079a8e4ba9036244068c5), [`133975e`](https://github.com/DavideCarvalho/nestjs-agent/commit/133975e7b9aa9da44f708ce4a95940fb6f6440e4)]:
+  - @dudousxd/nestjs-agent-core@0.40.0
+
 ## 0.32.0
 
 ### Minor Changes
