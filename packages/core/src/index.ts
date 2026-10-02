@@ -75,6 +75,9 @@ export {
   ToolNotFoundError,
   ToolInputInvalidError,
   ToolPreflightDeniedError,
+  ToolInputDriftError,
+  type PrepareOptions,
+  type ToolPreparationResult,
   type InvokeOptions,
 } from './tool-registry.js';
 export {
@@ -149,3 +152,7 @@ export {
 export * from './spi/action-proposal-store.js';
 export * from './action-proposal-transitions.js';
 export { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
+
+export { prepareActionProposal } from './action-proposal-preparation.js';
+export * from './spi/action-proposal-worker-store.js';
+export * from './action-proposal-discovery.js';
