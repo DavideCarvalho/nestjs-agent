@@ -1,4 +1,9 @@
 import {
+  type ActionProposal,
+  type Actor,
+  assertIndependentActionCapabilities,
+} from '@dudousxd/nestjs-agent-core';
+import {
   AGENT_MEMORY,
   AGENT_MODEL,
   AGENT_PRICING_STORE,
@@ -35,9 +40,11 @@ import {
   windowHistory,
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
+import type { Catalog } from '@dudousxd/nestjs-agent-core/genui';
 import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
+import { GENUI_CATALOG, GenuiCatalogResolver } from './genui/agent-genui.module.js';
 
 /**
  * The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`.
@@ -79,7 +86,12 @@ export class AgentDepsFactory {
     @Optional()
     @Inject(AGENT_MEMORY)
     private readonly memory: MemoryConfig | undefined,
-  ) {}
+    @Optional() @Inject(GENUI_CATALOG) private readonly uiCatalog?: Catalog,
+    @Optional() private readonly uiCatalogResolver?: GenuiCatalogResolver,
+  ) {
+    if (options.actionApprovalMode === 'independent')
+      assertIndependentActionCapabilities(store, options.backgroundActorResolver);
+  }
 
   /** The turn's memory seam, shared with the read-back endpoint. Undefined → memory is not configured. */
   memoryConfig(): MemoryConfig | undefined {
@@ -169,6 +181,27 @@ export class AgentDepsFactory {
     return definition?.defaultPersona;
   }
 
+  forProposal(proposal: ActionProposal, _actor: Actor): AgentDeps {
+    const name = proposal.executionContext?.agentName;
+    if (
+      name !== undefined &&
+      !this.agents.has(name) &&
+      !(
+        name === 'default' &&
+        this.defaultAgentName() === 'default' &&
+        this.agents.list().length === 0
+      )
+    )
+      throw new Error(`Recorded agent ${name} no longer exists`);
+    const deps = this.forAgent(name);
+    const id = proposal.executionContext?.persona;
+    if (id !== undefined) {
+      const persona = deps.personas?.find((persona) => persona.id === id);
+      if (!persona) throw new Error(`Recorded persona ${id} no longer exists`);
+      return this.withPersona(deps, persona);
+    }
+    return deps;
+  }
   forAgent(agentName?: string): AgentDeps {
     const name = agentName ?? this.defaultAgentName();
     if (agentName !== undefined && !this.agents.has(agentName)) {
@@ -188,12 +221,28 @@ export class AgentDepsFactory {
     return {
       model: this.model,
       store: this.store,
+      ...(this.options.actionApprovalMode !== undefined
+        ? { actionApprovalMode: this.options.actionApprovalMode }
+        : {}),
       sink: this.sink,
       rolesPolicy: this.rolesPolicy,
       ...(this.options.approvalPolicy !== undefined
         ? { approvalPolicy: this.options.approvalPolicy }
         : {}),
       registry: this.registry,
+      ...(this.uiCatalog !== undefined || this.uiCatalogResolver !== undefined
+        ? {
+            resolveUiCatalog: (scope: import('@dudousxd/nestjs-agent-core').ToolDescribeScope) => {
+              const catalog =
+                this.uiCatalogResolver?.resolve({
+                  ...scope,
+                  ...(scope.actor.tenantRef !== undefined ? { tenant: scope.actor.tenantRef } : {}),
+                }) ?? this.uiCatalog;
+              if (!catalog) throw new Error('UI catalog unavailable');
+              return catalog;
+            },
+          }
+        : {}),
       promptContributors: this.promptContributors,
       systemPrompt:
         definition?.systemPrompt ?? this.options.systemPrompt ?? 'You are a helpful assistant.',

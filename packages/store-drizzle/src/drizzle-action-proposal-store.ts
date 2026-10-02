@@ -4,9 +4,12 @@ import {
   type ActionProposalDecisionCommand,
   type ActionProposalDiscoveryIndexStore,
   type ActionProposalMutationResult,
+  type ActionProposalOutcomeLease,
+  type ActionProposalOutcomeStore,
   type ActionProposalScope,
   type ActionProposalStore,
   type ActionProposalStoreOptions,
+  type ActionProposalSupersessionStore,
   type ActionProposalWorkerStore,
   type ClaimActionProposal,
   type CreateActionProposal,
@@ -14,19 +17,24 @@ import {
   type ExtendActionProposalLease,
   type ListActionProposals,
   type SettleActionProposal,
+  actionProposalOutcomeFenceValid,
+  actionProposalOutcomeText,
   actionProposalScopeMatches,
   canonicalActionProposalJson,
+  claimActionProposalOutcome,
   initialActionProposal,
   transitionActionProposalClaim,
   transitionActionProposalDecision,
   transitionActionProposalLease,
   transitionActionProposalSettlement,
+  transitionActionProposalSupersession,
   validateActionProposalDiscoveryIndexBatch,
   validateActionProposalExpiryBatch,
   validateActionProposalListQuery,
   validateActionProposalWorkerClaim,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, eq, lte, or } from 'drizzle-orm';
+import { and, asc, entityKind, eq, gt, isNull, lte, max, or, sql } from 'drizzle-orm';
+import { actionProposalTransactionMode } from './action-proposal-transaction-mode.js';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
@@ -50,14 +58,26 @@ type ProposalRow = AgentTables['agentActionProposal']['$inferSelect'];
  * a version predicate fences every read/modify/write across connections and store instances.
  */
 export class DrizzleActionProposalStore
-  implements ActionProposalStore, ActionProposalWorkerStore, ActionProposalDiscoveryIndexStore
+  implements
+    ActionProposalStore,
+    ActionProposalWorkerStore,
+    ActionProposalDiscoveryIndexStore,
+    ActionProposalSupersessionStore
 {
   private readonly db: AgentSqliteDb;
+  private readonly rawDb: AgentDrizzleDb;
+  readonly actionProposalAdmissionSupported: boolean;
+  private readonly synchronousSqlite: boolean;
   private readonly dialect: AgentDialect;
   private readonly table: AgentTables['agentActionProposal'];
   private readonly clock: () => number;
 
   constructor(db: AgentDrizzleDb, options: ActionProposalStoreOptions = {}) {
+    this.rawDb = db;
+    const kind = (db.constructor as unknown as Record<symbol, string>)[entityKind];
+    const transactionMode = actionProposalTransactionMode(kind);
+    this.synchronousSqlite = transactionMode === 'sync';
+    this.actionProposalAdmissionSupported = transactionMode !== 'unsupported';
     this.dialect = agentDialectOf(db);
     this.table = agentTablesFor(this.dialect).agentActionProposal;
     this.db = asBuilder(db);
@@ -94,6 +114,154 @@ export class DrizzleActionProposalStore
     };
   }
 
+  createReplacingActionProposal(input: CreateActionProposal): Promise<CreateActionProposalResult> {
+    if (!input.replacementKey) return this.createActionProposal(input);
+    const proposal = initialActionProposal(input, this.clock());
+    return this.transactionSteps((db) => this.replacementSteps(db, input, proposal));
+  }
+
+  async supersedeActionProposal(
+    scope: ActionProposalScope,
+    id: string,
+    command: { replacementProposalId: string; actorRef: string; via: string },
+  ): Promise<ActionProposalMutationResult> {
+    const replacement = await this.getActionProposal(scope, command.replacementProposalId);
+    if (!replacement) return { status: 'not_found' };
+    return this.mutate(scope, id, (row, now) =>
+      transitionActionProposalSupersession(row, replacement, command, now),
+    );
+  }
+
+  private *replacementSteps(
+    db: AgentSqliteDb,
+    input: CreateActionProposal,
+    proposal: ActionProposal,
+  ): Generator<AdmissionQuery, CreateActionProposalResult, unknown> {
+    const table = this.table;
+    const thread = agentTablesFor(this.dialect).agentThread;
+    // The shared conversation admission row serializes new replacements within this scope.
+    if (this.dialect === 'sqlite')
+      yield {
+        kind: 'write',
+        query: db
+          .update(thread)
+          .set({ updatedAt: sql`${thread.updatedAt}` })
+          .where(eq(thread.id, input.threadId)),
+      };
+    const threads = (yield {
+      kind: 'read',
+      query: lockQuery(
+        db.select().from(thread).where(eq(thread.id, input.threadId)).limit(1),
+        this.dialect,
+      ),
+    }) as Array<AgentTables['agentThread']['$inferSelect']>;
+    const owner = threads[0];
+    if (
+      !owner ||
+      owner.id !== input.threadId ||
+      owner.deletedAt ||
+      owner.actorRef !== input.actorRef ||
+      owner.tenantRef !== input.tenantRef
+    )
+      return { status: 'conflict' };
+    const existingRows = (yield {
+      kind: 'read',
+      query: db
+        .select()
+        .from(table)
+        .where(eq(table.id, physicalId(input.id)))
+        .limit(1),
+    }) as ProposalRow[];
+    const existing = existingRows[0];
+    if (existing) {
+      if (
+        existing.proposal.id !== input.id ||
+        !actionProposalScopeMatches(existing.proposal, input)
+      )
+        return { status: 'conflict' };
+      return {
+        status:
+          existing.createFingerprint === canonicalActionProposalJson(input)
+            ? 'unchanged'
+            : 'conflict',
+        proposal: existing.proposal,
+      };
+    }
+    const groupKey = replacementGroupKey(input);
+    if (groupKey === null) throw new Error('Missing explicit replacement identity');
+    const pending = (yield {
+      kind: 'read',
+      query: lockQuery(
+        db
+          .select()
+          .from(table)
+          .where(
+            and(
+              eq(table.scopeKey, scopeKey(input)),
+              eq(table.replacementGroupKey, groupKey),
+              eq(table.decision, 'pending'),
+            ),
+          ),
+        this.dialect,
+      ),
+    }) as ProposalRow[];
+    const row = {
+      id: physicalId(input.id),
+      scopeKey: scopeKey(input),
+      decision: proposal.decision,
+      logicalSort: logicalSort(input.id),
+      createFingerprint: canonicalActionProposalJson(input),
+      proposal,
+      ...discoveryMetadata(proposal),
+      version: 0,
+      createdAt: proposal.createdAt,
+    };
+    const insert = db.insert(table);
+    const inserted = yield {
+      kind: 'read',
+      query:
+        this.dialect === 'mysql'
+          ? (insert as unknown as MySqlInsertIgnore<typeof row>).ignore().values(row)
+          : insert.values(row).onConflictDoNothing().returning({ id: table.id }),
+    };
+    const count =
+      this.dialect === 'mysql' ? mysqlAffectedRows(inserted) : (inserted as unknown[]).length;
+    if (count !== 1) return { status: 'conflict' };
+    for (const old of pending) {
+      const result = transitionActionProposalSupersession(
+        old.proposal,
+        proposal,
+        { replacementProposalId: proposal.id, actorRef: proposal.actorRef, via: 'replacement' },
+        this.clock(),
+      );
+      if (
+        !result.proposal ||
+        canonicalActionProposalJson(result.proposal) === canonicalActionProposalJson(old.proposal)
+      )
+        continue;
+      const next = result.proposal;
+      const update = db
+        .update(table)
+        .set({
+          proposal: next,
+          decision: next.decision,
+          ...discoveryMetadata(next),
+          version: old.version + 1,
+        })
+        .where(and(eq(table.id, old.id), eq(table.version, old.version)));
+      const updated = yield {
+        kind: 'read',
+        query: this.dialect === 'mysql' ? update : update.returning({ id: table.id }),
+      };
+      if (
+        (this.dialect === 'mysql' ? mysqlAffectedRows(updated) : (updated as unknown[]).length) !==
+        1
+      )
+        throw new Error('Replacement lost its locked proposal fence');
+    }
+    return { status: 'created', proposal };
+  }
+
   async getActionProposal(scope: ActionProposalScope, id: string): Promise<ActionProposal | null> {
     return (await this.read(scope, id))?.proposal ?? null;
   }
@@ -109,6 +277,15 @@ export class DrizzleActionProposalStore
       .where(
         and(
           eq(this.table.scopeKey, scopeKey(scope)),
+          query.after === undefined
+            ? undefined
+            : or(
+                gt(this.table.createdAt, query.after.createdAt),
+                and(
+                  eq(this.table.createdAt, query.after.createdAt),
+                  gt(this.table.logicalSort, logicalSort(query.after.id)),
+                ),
+              ),
           query.decision === undefined ? undefined : eq(this.table.decision, query.decision),
         ),
       )
@@ -248,6 +425,238 @@ export class DrizzleActionProposalStore
     return changed;
   }
 
+  async rememberedActionProposalApprovals(scope: ActionProposalScope): Promise<string[]> {
+    const table = this.table;
+    const rows = await this.db
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.scopeKey, scopeKey(scope)),
+          eq(table.decision, 'approved'),
+          or(eq(table.executionStatus, 'succeeded'), eq(table.executionStatus, 'failed')),
+        ),
+      );
+    return [
+      ...new Set(
+        rows
+          .filter(
+            (row) =>
+              actionProposalScopeMatches(row.proposal, scope) &&
+              row.proposal.decisionAudit?.remember === true,
+          )
+          .map((row) => row.proposal.toolName),
+      ),
+    ];
+  }
+
+  async getThreadActionProposalScope(threadId: string) {
+    const thread = agentTablesFor(this.dialect).agentThread;
+    const [row] = await this.db
+      .select()
+      .from(thread)
+      .where(and(eq(thread.id, threadId), isNull(thread.deletedAt)))
+      .limit(1);
+    return row?.id === threadId
+      ? { actorRef: row.actorRef, tenantRef: row.tenantRef, threadId: row.id }
+      : null;
+  }
+
+  async claimNextActionProposalOutcome(command: ClaimActionProposal) {
+    const now = this.clock();
+    validateActionProposalWorkerClaim(command, now);
+    const table = this.table;
+    const candidates = await this.db
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.deliveryStatus, 'pending'),
+          or(isNull(table.deliveryLeaseExpiresAt), lte(table.deliveryLeaseExpiresAt, now)),
+        ),
+      )
+      .orderBy(asc(table.createdAt), asc(table.logicalSort))
+      .limit(32);
+    for (const row of candidates) {
+      const result = await this.mutate(row.proposal, row.proposal.id, (proposal, time) => {
+        const claimed = claimActionProposalOutcome(proposal, command, time, randomUUID());
+        return claimed
+          ? { status: 'applied', proposal: claimed }
+          : { status: 'conflict', proposal };
+      });
+      const claimed = result.proposal;
+      if (result.status === 'applied' && claimed?.outcome && claimed.outcomeDelivery?.lease) {
+        return {
+          outcome: claimed.outcome,
+          lease: {
+            outcomeId: claimed.outcome.id,
+            token: claimed.outcomeDelivery.lease.token,
+            generation: claimed.outcomeDelivery.generation,
+          },
+        };
+      }
+    }
+    return null;
+  }
+
+  async admitActionProposalOutcome(
+    command: ActionProposalOutcomeLease,
+  ): ReturnType<ActionProposalOutcomeStore['admitActionProposalOutcome']> {
+    return this.transactionSteps((db) => this.admissionSteps(db, command));
+  }
+
+  private async transactionSteps<T>(
+    factory: (db: AgentSqliteDb) => Generator<AdmissionQuery, T, unknown>,
+  ): Promise<T> {
+    if (!this.actionProposalAdmissionSupported)
+      throw new Error(
+        'Independent actions require a certified transactional Drizzle driver (better-sqlite3, node-postgres, mysql2 or libsql)',
+      );
+    if (this.synchronousSqlite) {
+      const database = this.rawDb as unknown as {
+        transaction<R>(callback: (tx: AgentDrizzleDb) => R, config?: { behavior: 'immediate' }): R;
+      };
+      return database.transaction((tx) => runSync(factory(asBuilder(tx))), {
+        behavior: 'immediate',
+      });
+    }
+    const database = this.rawDb as unknown as {
+      transaction<R>(callback: (tx: AgentDrizzleDb) => Promise<R>): Promise<R>;
+    };
+    return database.transaction(async (tx) => runAsync(factory(asBuilder(tx))));
+  }
+
+  private *admissionSteps(
+    db: AgentSqliteDb,
+    command: ActionProposalOutcomeLease,
+  ): Generator<
+    AdmissionQuery,
+    Awaited<ReturnType<ActionProposalOutcomeStore['admitActionProposalOutcome']>>,
+    unknown
+  > {
+    if (
+      typeof command.outcomeId !== 'string' ||
+      !command.outcomeId ||
+      typeof command.token !== 'string' ||
+      !command.token ||
+      !Number.isSafeInteger(command.generation) ||
+      command.generation < 1
+    )
+      throw new TypeError('Invalid outcome fence');
+    const table = this.table;
+    const tables = agentTablesFor(this.dialect);
+    // Write first on asynchronous SQLite too; serialize before reading the proposal or thread.
+    if (this.dialect === 'sqlite')
+      yield {
+        kind: 'write',
+        query: db
+          .update(table)
+          .set({ version: sql`${table.version}` })
+          .where(eq(table.outcomeIdKey, physicalId(command.outcomeId))),
+      };
+    const query = db
+      .select()
+      .from(table)
+      .where(eq(table.outcomeIdKey, physicalId(command.outcomeId)))
+      .limit(1);
+    const rows = (yield { kind: 'read', query: lockQuery(query, this.dialect) }) as ProposalRow[];
+    const row = rows[0];
+    if (!row || row.proposal.outcome?.id !== command.outcomeId) return { status: 'not_found' };
+    const proposal = row.proposal;
+    const outcome = proposal.outcome;
+    const delivery = proposal.outcomeDelivery;
+    if (!outcome || !delivery) return { status: 'not_found' };
+    if (proposal.outcomeDelivery?.status === 'admitted')
+      return {
+        status: 'unchanged',
+        ...(proposal.outcomeDelivery.messageId !== undefined
+          ? { messageId: proposal.outcomeDelivery.messageId }
+          : {}),
+      };
+    if (proposal.outcomeDelivery?.status === 'discarded') return { status: 'discarded' };
+    if (!actionProposalOutcomeFenceValid(proposal, command, this.clock()))
+      return { status: 'conflict' };
+    const threadQuery = db
+      .select()
+      .from(tables.agentThread)
+      .where(eq(tables.agentThread.id, proposal.threadId))
+      .limit(1);
+    const threads = (yield { kind: 'read', query: lockQuery(threadQuery, this.dialect) }) as Array<
+      AgentTables['agentThread']['$inferSelect']
+    >;
+    const thread = threads[0];
+    // Locks may have waited beyond the lease; never use the earlier timestamp to admit.
+    const now = this.clock();
+    if (!actionProposalOutcomeFenceValid(proposal, command, now)) return { status: 'conflict' };
+    if (
+      !thread ||
+      thread.id !== proposal.threadId ||
+      thread.deletedAt ||
+      thread.actorRef !== proposal.actorRef ||
+      thread.tenantRef !== proposal.tenantRef
+    ) {
+      const discarded: ActionProposal = {
+        ...proposal,
+        outcomeDelivery: { ...delivery, status: 'discarded', lease: null },
+        updatedAt: now,
+      };
+      yield {
+        kind: 'write',
+        query: db
+          .update(table)
+          .set({ proposal: discarded, ...discoveryMetadata(discarded), version: row.version + 1 })
+          .where(and(eq(table.id, row.id), eq(table.version, row.version))),
+      };
+      return { status: 'discarded' };
+    }
+    if (thread.activeStreamId !== null) return { status: 'busy' };
+    const seqRows = (yield {
+      kind: 'read',
+      query: db
+        .select({ last: max(tables.agentMessage.seq) })
+        .from(tables.agentMessage)
+        .where(eq(tables.agentMessage.threadId, thread.id)),
+    }) as Array<{ last: number | null }>;
+    const messageId = physicalId(command.outcomeId);
+    yield {
+      kind: 'write',
+      query: db.insert(tables.agentMessage).values({
+        id: messageId,
+        threadId: thread.id,
+        role: 'assistant',
+        content: actionProposalOutcomeText(outcome),
+        actionProposalOutcome: canonicalActionProposalJson(outcome),
+        ui: null,
+        seq: Number(seqRows[0]?.last ?? 0) + 1,
+        createdAt: new Date(now),
+      }),
+    };
+    yield {
+      kind: 'write',
+      query: db
+        .update(tables.agentThread)
+        .set({ updatedAt: new Date(now) })
+        .where(eq(tables.agentThread.id, thread.id)),
+    };
+    const admitted: ActionProposal = {
+      ...proposal,
+      outcomeDelivery: { ...delivery, status: 'admitted', lease: null, messageId },
+      updatedAt: now,
+    };
+    const update = db
+      .update(table)
+      .set({ proposal: admitted, ...discoveryMetadata(admitted), version: row.version + 1 })
+      .where(and(eq(table.id, row.id), eq(table.version, row.version)));
+    const changed = yield {
+      kind: 'read',
+      query: this.dialect === 'mysql' ? update : update.returning({ id: table.id }),
+    };
+    const count =
+      this.dialect === 'mysql' ? mysqlAffectedRows(changed) : (changed as unknown[]).length;
+    if (count !== 1) throw new Error('Outcome admission lost its locked proposal fence');
+    return { status: 'applied', messageId };
+  }
+
   private async read(scope: ActionProposalScope, id: string): Promise<ProposalRow | undefined> {
     const [row] = await this.db
       .select()
@@ -324,9 +733,45 @@ function logicalSort(id: string): string {
 
 function discoveryMetadata(proposal: ActionProposal) {
   return {
+    replacementGroupKey: replacementGroupKey(proposal),
+    deliveryStatus: proposal.outcomeDelivery?.status ?? null,
+    deliveryLeaseExpiresAt: proposal.outcomeDelivery?.lease?.expiresAt ?? null,
+    outcomeIdKey: proposal.outcome ? physicalId(proposal.outcome.id) : null,
     executionStatus: proposal.execution?.status ?? null,
     leaseExpiresAt: proposal.execution?.lease?.expiresAt ?? null,
     proposalExpiresAt: proposal.expiresAt,
     discoveryIndexVersion: 1,
   };
+}
+
+interface AdmissionQuery {
+  kind: 'read' | 'write';
+  query: PromiseLike<unknown>;
+}
+function lockQuery(query: PromiseLike<unknown>, dialect: AgentDialect): PromiseLike<unknown> {
+  return dialect === 'sqlite'
+    ? query
+    : (query as unknown as { for(mode: 'update'): PromiseLike<unknown> }).for('update');
+}
+function runSync<T>(steps: Generator<AdmissionQuery, T, unknown>): T {
+  let next = steps.next();
+  while (!next.done) {
+    const { kind, query } = next.value;
+    const statement = query as unknown as { all(): unknown; run(): unknown };
+    next = steps.next(kind === 'read' ? statement.all() : statement.run());
+  }
+  return next.value;
+}
+async function runAsync<T>(steps: Generator<AdmissionQuery, T, unknown>): Promise<T> {
+  let next = steps.next();
+  while (!next.done) next = steps.next(await next.value.query);
+  return next.value;
+}
+
+function replacementGroupKey(
+  proposal: Pick<CreateActionProposal, 'toolName' | 'replacementKey'>,
+): string | null {
+  return proposal.replacementKey
+    ? physicalId(canonicalActionProposalJson([proposal.toolName, proposal.replacementKey]))
+    : null;
 }

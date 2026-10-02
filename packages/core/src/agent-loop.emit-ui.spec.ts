@@ -124,7 +124,14 @@ async function harness(
   };
 }
 
-async function run(h: Harness, options: { dispatched?: boolean } = {}): Promise<string> {
+async function run(
+  h: Harness,
+  options: {
+    dispatched?: boolean;
+    resolveUiCatalog?: AgentLoopDeps['resolveUiCatalog'];
+    uiCapabilities?: AiToolCtx['uiCapabilities'];
+  } = {},
+): Promise<string> {
   const deps: AgentLoopDeps = {
     model: h.model,
     store: h.store,
@@ -133,6 +140,9 @@ async function run(h: Harness, options: { dispatched?: boolean } = {}): Promise<
     modelId: 'fake-1',
     day: '2026-09-29',
     systemPrompt: 'test',
+    ...(options.resolveUiCatalog !== undefined
+      ? { resolveUiCatalog: options.resolveUiCatalog }
+      : {}),
   };
   const hooks: AgentLoopHooks = {
     runId: RUN_ID,
@@ -162,7 +172,12 @@ async function run(h: Harness, options: { dispatched?: boolean } = {}): Promise<
   h.journal.rewind();
   const result = await runAgentLoop(
     deps,
-    { threadId: h.threadId, actor: ACTOR, userText: 'hi' },
+    {
+      threadId: h.threadId,
+      actor: ACTOR,
+      userText: 'hi',
+      ...(options.uiCapabilities !== undefined ? { uiCapabilities: options.uiCapabilities } : {}),
+    },
     hooks,
   );
   return result.text;
@@ -385,4 +400,39 @@ describe('ToolSpec.terminal', () => {
     const claim = h.journal.entries.find((entry) => entry.name === 'persist:toolcall:c1');
     expect(JSON.parse(claim?.output ?? '{}')).toEqual({ kind: 'read' });
   });
+});
+
+it('persists safe active fallback text while retaining readable terminal output', async () => {
+  const { defineCatalog } = await import('./genui/catalog.js');
+  const catalog = defineCatalog([
+    {
+      name: 'Note',
+      title: 'Note',
+      description: 'Note',
+      props: z.object({ text: z.string() }),
+      fallbackText: (props) => String(props.text),
+    },
+  ]);
+  const raw = 'nul\u0000 lone\ud800 emoji😀';
+  const h = await harness(
+    {
+      show: {
+        terminal: true,
+        execute: async (_input, ctx) => {
+          await ctx.emitUi('Note', { text: raw });
+          return { shown: true };
+        },
+      },
+    },
+    [{ id: 'c1', name: 'show' }],
+  );
+  const result = await run(h, {
+    resolveUiCatalog: () => catalog,
+    uiCapabilities: { components: [] },
+  });
+  const expected = 'nul\\u0000 lone\\ud800 emoji😀';
+  expect(result).toContain(expected);
+  expect(
+    (await h.store.getThread(h.threadId))?.messages.some((message) => message.content === expected),
+  ).toBe(true);
 });

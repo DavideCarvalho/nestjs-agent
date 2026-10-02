@@ -19,16 +19,26 @@ interface ToolStepOutputWithUi {
   output: unknown;
   ui: AgentUiComponent[];
   preflightDenied?: string;
+  text?: string;
 }
 
 /** The tool step's journaled result: the bare output, or the output plus the components it pushed. */
-export function wrapToolStepOutput(output: unknown, ui: readonly AgentUiComponent[]): unknown {
+export function wrapToolStepOutput(
+  output: unknown,
+  ui: readonly AgentUiComponent[],
+  text?: string,
+): unknown {
   // Escape ordinary output that happens to match our envelope: unwrap exactly one layer.
   const reserved = typeof output === 'object' && output !== null && TOOL_STEP_UI in output;
-  if (ui.length === 0 && !reserved) {
+  if (ui.length === 0 && !reserved && !text) {
     return output;
   }
-  const wrapped: ToolStepOutputWithUi = { [TOOL_STEP_UI]: 1, output, ui: [...ui] };
+  const wrapped: ToolStepOutputWithUi = {
+    [TOOL_STEP_UI]: 1,
+    output,
+    ui: [...ui],
+    ...(text ? { text } : {}),
+  };
   return wrapped;
 }
 
@@ -48,6 +58,7 @@ export function unwrapToolStepOutput(raw: unknown): {
   output: unknown;
   ui: AgentUiComponent[];
   preflightDenied?: string;
+  text?: string;
 } {
   if (
     typeof raw === 'object' &&
@@ -58,6 +69,7 @@ export function unwrapToolStepOutput(raw: unknown): {
     return {
       output: wrapped.output,
       ui: Array.isArray(wrapped.ui) ? wrapped.ui : [],
+      ...(typeof wrapped.text === 'string' ? { text: wrapped.text } : {}),
       ...(typeof wrapped.preflightDenied === 'string'
         ? { preflightDenied: wrapped.preflightDenied }
         : {}),
@@ -126,6 +138,10 @@ export function createUiCollector(
       // whatever the object it handed over looks like when the step settles.
       props: JSON.parse(JSON.stringify(props)) as Record<string, unknown>,
       ...(options.version !== undefined ? { version: options.version } : {}),
+      ...(options.fallbackText !== undefined ? { fallbackText: options.fallbackText } : {}),
+      ...(options.componentVersions !== undefined
+        ? { componentVersions: { ...options.componentVersions } }
+        : {}),
       toolCallId,
     };
     // Delete-then-set would move it; a repeat id keeps its first position, like the client's part.
@@ -153,4 +169,14 @@ export function mergeUi(
     }
   }
   return [...merged.values()];
+}
+
+/** Escape code units native PostgreSQL/MySQL TEXT cannot store; retain ordinary prose and emoji. */
+export function escapeUnsafeToolUiText(text: string): string {
+  return text
+    .replaceAll('\u0000', '\\u0000')
+    .replace(
+      /[\uD800-\uDFFF]/gu,
+      (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    );
 }

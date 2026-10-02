@@ -129,6 +129,8 @@ async function drain(service: AgentService, runId: string) {
 
 function started(result: ChatSendResult): string {
   if (result.queued === true) throw new Error('expected the send to start a turn');
+  if ('proposalDecision' in result)
+    throw new Error('expected a model turn, not a proposal decision');
   return result.runId;
 }
 

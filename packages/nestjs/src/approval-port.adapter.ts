@@ -1,6 +1,7 @@
-import type { AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
-import { Injectable } from '@nestjs/common';
+import type { Actor, AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
+import { Injectable, NotImplementedException, Optional } from '@nestjs/common';
 import { AgentService } from './agent.service.js';
+import { ActionProposalService } from './proposals/action-proposal.service.js';
 
 /**
  * Binds `AGENT_APPROVAL_PORT` for the console's cross-thread approvals inbox to the SAME decision
@@ -17,7 +18,34 @@ import { AgentService } from './agent.service.js';
  */
 @Injectable()
 export class AgentApprovalPortAdapter implements AgentApprovalPort {
-  constructor(private readonly agent: AgentService) {}
+  constructor(
+    private readonly agent: AgentService,
+    @Optional() private readonly proposals?: ActionProposalService,
+  ) {}
+  async approveActionProposal(
+    actor: Actor,
+    target: { kind: 'proposal'; threadId: string; proposalId: string },
+    opts?: { remember?: boolean; decidedVia?: string },
+  ) {
+    if (!this.proposals) throw new NotImplementedException('Action proposals unavailable');
+    return this.proposals.decide(target.threadId, target.proposalId, actor, {
+      decision: 'approved',
+      ...(opts?.remember !== undefined ? { remember: opts.remember } : {}),
+      via: opts?.decidedVia ?? 'console',
+    });
+  }
+  async rejectActionProposal(
+    actor: Actor,
+    target: { kind: 'proposal'; threadId: string; proposalId: string },
+    opts?: { reason?: string; decidedVia?: string },
+  ) {
+    if (!this.proposals) throw new NotImplementedException('Action proposals unavailable');
+    return this.proposals.decide(target.threadId, target.proposalId, actor, {
+      decision: 'rejected',
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+      via: opts?.decidedVia ?? 'console',
+    });
+  }
 
   async approve(
     toolCallId: string,

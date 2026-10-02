@@ -23,3 +23,5 @@ export {
 export { decodeInterruptId, encodeInterruptId, type InterruptAddress } from './interrupt-id.js';
 export { type AgUiStreamOptions, agUiEvents, agUiFramesFromNdjson, agUiSse } from './stream.js';
 export * from './types.js';
+
+export { actionProposalDecisionEvents } from './proposal-decision.js';

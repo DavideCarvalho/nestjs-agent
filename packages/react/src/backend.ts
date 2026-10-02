@@ -1,4 +1,6 @@
 import type {
+  ActionProposal,
+  ActionProposalMutationResult,
   AgentCatalogEntry,
   AgentClientConfig,
   ChatQueueState,
@@ -57,6 +59,11 @@ export interface ResumeStreamRequest {
  * headers). The body's own `event: meta` frame supplies them otherwise.
  */
 export interface ChatStreamResponse {
+  proposalDecision?: {
+    threadId: string;
+    proposalDecision: ActionProposalMutationResult | { status: 'ambiguous'; proposalIds: string[] };
+    text?: string;
+  };
   body: ReadableStream<Uint8Array>;
   runId?: string;
   threadId?: string;
@@ -188,6 +195,18 @@ export interface AgentBackend {
   forkFromMessage?(threadId: string, messageId: string): Promise<ThreadSummary>;
   promoteThread?(id: string): Promise<unknown>;
   truncateFromMessage?(threadId: string, messageId: string): Promise<unknown>;
+
+  listActionProposals?(input: { threadId: string }): Promise<ActionProposal[]>;
+  approveActionProposal?(input: {
+    threadId: string;
+    proposalId: string;
+    remember?: boolean;
+  }): Promise<ActionProposalMutationResult>;
+  rejectActionProposal?(input: {
+    threadId: string;
+    proposalId: string;
+    reason?: string;
+  }): Promise<ActionProposalMutationResult>;
 
   approveToolCall?(input: {
     toolCallId: string;

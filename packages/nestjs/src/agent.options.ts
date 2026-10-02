@@ -1,3 +1,4 @@
+import type { ActionApprovalMode, BackgroundActorResolver } from '@dudousxd/nestjs-agent-core';
 import type {
   ActorResolver,
   AgentHistoryWindow,
@@ -124,6 +125,9 @@ export interface AgentMemoryOptions {
 }
 
 export interface AgentModuleOptions {
+  actionApprovalMode?: ActionApprovalMode;
+  backgroundActorResolver?: BackgroundActorResolver;
+  actionProposalWorker?: { pollIntervalMs?: number; leaseMs?: number; maxConcurrency?: number };
   // --- infrastructure ---
   /**
    * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model

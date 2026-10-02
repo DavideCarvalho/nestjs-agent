@@ -6,6 +6,7 @@ import {
   type ModelProvider,
   type ModelTurnArgs,
   type ModelTurnResult,
+  type ToolDescribeScope,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
 import { type AgUiEvent, decodeInterruptId } from '@dudousxd/nestjs-agent-core/ag-ui';
@@ -77,6 +78,15 @@ class EventModel implements ModelProvider {
 })
 @Injectable()
 class RefundTool {
+  describe(scope: ToolDescribeScope) {
+    return {
+      available:
+        scope.uiCapabilities === undefined ||
+        scope.uiCapabilities.components.some(
+          (component) => component.name === 'Note' && component.version === 1,
+        ),
+    };
+  }
   async execute() {
     return { refunded: true };
   }
@@ -146,7 +156,7 @@ async function boot(
   return booted;
 }
 
-function agent(url: string, actor = 'u1', threadId = crypto.randomUUID()): HttpAgent {
+function agent(url: string, actor = 'u1', threadId: string = crypto.randomUUID()): HttpAgent {
   return new HttpAgent({ url: `${url}/agent/ag-ui`, headers: { 'x-actor-id': actor }, threadId });
 }
 
@@ -202,6 +212,35 @@ const refundScript: Script = (_args, turn) =>
   turn === 0 ? { text: '', toolCall: { name: 'refund', input: { id: 7 } } } : { text: 'Done.' };
 
 describe('POST /agent/ag-ui', () => {
+  it('forwards renderer capabilities into the current model tool catalog', async () => {
+    let names: string[] = [];
+    const { url } = await boot((args) => {
+      names = args.tools.map((tool) => tool.name);
+      return { text: 'Ready' };
+    });
+    const invalidCapabilities = await post(
+      url,
+      input({
+        forwardedProps: { uiCapabilities: { components: [{ name: 'Note', version: -1 }] } },
+      }),
+    );
+    expect(invalidCapabilities.status).toBe(400);
+    const response = await post(
+      url,
+      input({ forwardedProps: { uiCapabilities: { components: [] } } }),
+    );
+    expect(response.status).toBe(200);
+    await readEvents(response);
+    expect(names).not.toContain('refund');
+    const supported = await post(
+      url,
+      input({ forwardedProps: { uiCapabilities: { components: [{ name: 'Note', version: 1 }] } } }),
+    );
+    expect(supported.status).toBe(200);
+    await readEvents(supported);
+    expect(names).toContain('refund');
+  });
+
   it('mounts where the adapter says', async () => {
     const { url } = await boot(() => ({ text: 'hi' }), {
       adapters: [agUiAdapter({ path: 'copilot' })],
@@ -478,4 +517,55 @@ describe('POST /agent/ag-ui', () => {
       toolCallId: 'call-0-refund',
     });
   });
+});
+
+it('acknowledges an independent text decision over AG-UI without starting a model run', async () => {
+  const store = new InMemoryAgentStore();
+  const actor = { id: 'u1', roles: ['ADMIN'] };
+  const thread = await store.createThread({ id: 'proposal-thread', actor });
+  await store.createActionProposal({
+    id: 'proposal-control',
+    threadId: thread.id,
+    actorRef: actor.id,
+    tenantRef: null,
+    originRunId: 'completed-origin',
+    originMessageId: 'origin-message',
+    originToolCallId: 'origin-call',
+    toolName: 'refund',
+    input: { id: 11 },
+    confirmation: { title: 'Refund?', verb: 'Refund' },
+    approver: 'requester',
+    expiresAt: null,
+    idempotencyKey: 'control',
+  });
+  let modelCalls = 0;
+  const app = await boot(
+    () => {
+      modelCalls++;
+      return { text: 'Unexpected model run' };
+    },
+    {
+      store,
+      actionApprovalMode: 'independent',
+      backgroundActorResolver: { resolve: async () => actor },
+    },
+  );
+  const client = agent(app.url, actor.id, thread.id);
+  const result = await run(client, 'confirmar #proposal-control');
+  expect(modelCalls).toBe(0);
+  expect(result.events.map((event) => event.type)).toContain('RUN_FINISHED');
+  expect(
+    result.events.some(
+      (event) => event.type === 'CUSTOM' && event.name === 'aviary.action-proposal-decision',
+    ),
+  ).toBe(true);
+  expect(
+    (
+      await store.getActionProposal(
+        { threadId: thread.id, actorRef: actor.id, tenantRef: null },
+        'proposal-control',
+      )
+    )?.decisionAudit?.via,
+  ).toBe('text');
+  assertConforms(result.events);
 });

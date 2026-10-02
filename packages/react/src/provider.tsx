@@ -1,3 +1,4 @@
+import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import { type Context, type ReactNode, useContext, useMemo, useRef } from 'react';
 import type { AgentBackend, AttachmentUploadStrategy } from './backend.js';
 import { AgentClient } from './client.js';
@@ -11,6 +12,8 @@ const AgentBackendContext: Context<AgentBackend | null> = sharedContext<AgentBac
 );
 
 export interface AgentProviderProps {
+  /** Advertise exact supported component versions; omission keeps legacy support, [] is text only. */
+  uiCapabilities?: UiCapabilities;
   /**
    * A backend of your own — see {@link AgentBackend}. Omitted → an {@link AgentClient} over this
    * library's REST routes, built from the connection props below (which are ignored when a backend
@@ -66,6 +69,7 @@ export interface AgentProviderProps {
  */
 export function AgentProvider({
   backend,
+  uiCapabilities,
   baseUrl,
   path,
   headers,
@@ -101,7 +105,11 @@ export function AgentProvider({
   );
   const content =
     genui !== undefined ? <GenuiProvider {...genui}>{children}</GenuiProvider> : children;
-  return <AgentBackendContext.Provider value={value}>{content}</AgentBackendContext.Provider>;
+  return (
+    <AgentUiCapabilitiesContext.Provider value={uiCapabilities ?? null}>
+      <AgentBackendContext.Provider value={value}>{content}</AgentBackendContext.Provider>
+    </AgentUiCapabilitiesContext.Provider>
+  );
 }
 
 let fallback: AgentClient | undefined;
@@ -119,4 +127,11 @@ function defaultBackend(): AgentClient {
 export function useAgentBackend<B extends AgentBackend = AgentBackend>(own?: B): B {
   const provided = useContext(AgentBackendContext);
   return (own ?? provided ?? defaultBackend()) as B;
+}
+
+const AgentUiCapabilitiesContext = sharedContext<UiCapabilities>(
+  '@dudousxd/nestjs-agent-react:ui-capabilities',
+);
+export function useAgentUiCapabilities(): UiCapabilities | undefined {
+  return useContext(AgentUiCapabilitiesContext) ?? undefined;
 }

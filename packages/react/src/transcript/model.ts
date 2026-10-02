@@ -17,6 +17,7 @@ import {
   isTextUIPart,
   isToolUIPart,
 } from 'ai';
+import type { ApprovalTarget } from '../approvals/proposals.js';
 import { type RawAnswer, coerceAnswer } from '../elicitation/answers.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import {
@@ -110,7 +111,12 @@ export interface TranscriptSettleState {
 }
 
 /** How an approval stands. */
-export type TranscriptApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+export type TranscriptApprovalStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'superseded';
 
 /**
  * Who has to settle a parked call, until when, and — once it settled — how. From the stream's
@@ -118,6 +124,8 @@ export type TranscriptApprovalStatus = 'pending' | 'approved' | 'rejected' | 'ex
  * `null` on a call whose runner never said (the call can still be awaiting approval).
  */
 export interface TranscriptApproval {
+  target?: ApprovalTarget;
+  executionStatus?: 'queued' | 'executing' | 'succeeded' | 'failed' | null;
   confirmation?: ToolConfirmation;
   /** Open vocabulary the host defines: `'requester'`, `'admin'`, a role… */
   approver: string;
@@ -222,6 +230,8 @@ export interface TranscriptUiBlock {
   props: Record<string, unknown>;
   /** Schema version of `props`; `null` when the server did not stamp one. */
   version: number | null;
+  fallbackText?: string;
+  componentVersions?: Record<string, number>;
   /** The tool call that pushed it (`ctx.emitUi`); `null` for a component pushed outside a tool. */
   toolCallId: string | null;
 }
@@ -384,8 +394,8 @@ export interface ElicitationBlockOptions {
 export interface ApprovalBlockOptions {
   canApprove: boolean;
   canReject: boolean;
-  approve: (toolCallId: string, options?: ApproveOptions) => void;
-  reject: (toolCallId: string) => void;
+  approve: (toolCallId: string, options?: ApproveOptions, target?: ApprovalTarget) => void;
+  reject: (toolCallId: string, target?: ApprovalTarget) => void;
   /** Which decision this call is sending, or `null` for none. */
   submitting: (toolCallId: string) => SettleAction | null;
   errorOf: (toolCallId: string) => string | null;
@@ -679,7 +689,10 @@ function buildToolCall(
   catalog: ToolCatalog | undefined,
 ): TranscriptToolCall {
   const toolCallId = part.toolCallId;
-  const awaiting = isAwaitingApproval(part);
+  const awaiting =
+    approval?.target?.kind === 'proposal'
+      ? approval.status === 'pending'
+      : isAwaitingApproval(part);
   // Per decision, not per call: the two are never in flight together, and a surface that read one
   // flag for both would report the refusal it is carrying out as an approval in progress.
   const sending = awaiting ? (options?.submitting(toolCallId) ?? null) : null;
@@ -691,10 +704,13 @@ function buildToolCall(
     parentId: toolParentId(part),
     children: [],
     approval,
-    description: describeToolCall(
-      part,
-      catalog,
-      approval?.confirmation === undefined ? {} : { confirmation: approval.confirmation },
+    description: proposalDescription(
+      describeToolCall(
+        part,
+        catalog,
+        approval?.confirmation === undefined ? {} : { confirmation: approval.confirmation },
+      ),
+      approval,
     ),
     isAwaitingApproval: awaiting,
     approve: {
@@ -703,14 +719,23 @@ function buildToolCall(
       // Read by field, not passed through: `onClick={call.approve.run}` hands this a click event,
       // and a host's handler must not receive that as its options.
       run: (approveOptions?: ApproveOptions) =>
-        approveOptions?.remember === true
-          ? options?.approve(toolCallId, { remember: true })
-          : options?.approve(toolCallId),
+        approval?.target === undefined
+          ? approveOptions?.remember === true
+            ? options?.approve(toolCallId, { remember: true })
+            : options?.approve(toolCallId)
+          : options?.approve(
+              toolCallId,
+              approveOptions?.remember === true ? { remember: true } : undefined,
+              approval.target,
+            ),
     },
     reject: {
       available: awaiting && options?.canReject === true,
       isSubmitting: sending === 'reject',
-      run: () => options?.reject(toolCallId),
+      run: () =>
+        approval?.target === undefined
+          ? options?.reject(toolCallId)
+          : options?.reject(toolCallId, approval.target),
     },
     error: options?.errorOf(toolCallId) ?? null,
     errorCode: options?.errorCodeOf?.(toolCallId) ?? null,
@@ -915,6 +940,8 @@ const SETTLED_PART = 'data-approval-settled';
 
 /** What the approval parts of a message say about one call, before its own state is consulted. */
 interface ApprovalParts {
+  target?: ApprovalTarget;
+  executionStatus?: TranscriptApproval['executionStatus'];
   confirmation?: ToolConfirmation;
   approver: string | null;
   expiresAt: string | null;
@@ -926,7 +953,7 @@ interface ApprovalParts {
   decisionReason: string | null;
 }
 
-const SETTLED_STATUSES: readonly string[] = ['approved', 'rejected', 'expired'];
+const SETTLED_STATUSES: readonly string[] = ['approved', 'rejected', 'expired', 'superseded'];
 
 /** The approval metadata on a message, by call id. The latest frame of each kind for a call wins. */
 function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
@@ -949,7 +976,11 @@ function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
     return found;
   };
   for (const part of parts) {
-    if (part.type !== APPROVAL_PART && part.type !== SETTLED_PART) {
+    if (
+      part.type !== APPROVAL_PART &&
+      part.type !== SETTLED_PART &&
+      part.type !== 'data-action-proposal'
+    ) {
       continue;
     }
     const data = (part as DataUIPart<Record<string, unknown>>).data;
@@ -957,7 +988,39 @@ function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
       continue;
     }
     const approval = entry(data.id);
-    if (part.type === APPROVAL_PART) {
+    if (part.type === APPROVAL_PART || part.type === 'data-action-proposal') {
+      if (
+        isRecord(data.target) &&
+        data.target.kind === 'proposal' &&
+        typeof data.target.proposalId === 'string'
+      ) {
+        approval.target = {
+          kind: 'proposal',
+          proposalId: data.target.proposalId,
+          ...(typeof data.target.threadId === 'string' ? { threadId: data.target.threadId } : {}),
+        };
+      }
+      if (part.type === 'data-action-proposal') {
+        if (
+          typeof data.status === 'string' &&
+          ['pending', 'approved', 'rejected', 'expired', 'superseded'].includes(data.status)
+        )
+          approval.status =
+            data.status === 'pending'
+              ? null
+              : (data.status as Exclude<TranscriptApprovalStatus, 'pending'>);
+        if (
+          data.executionStatus === null ||
+          data.executionStatus === 'queued' ||
+          data.executionStatus === 'executing' ||
+          data.executionStatus === 'succeeded' ||
+          data.executionStatus === 'failed'
+        )
+          approval.executionStatus = data.executionStatus;
+        approval.remember = data.remember === true;
+        approval.decidedBy = typeof data.decidedBy === 'string' ? data.decidedBy : null;
+        approval.decidedVia = typeof data.decidedVia === 'string' ? data.decidedVia : null;
+      }
       if (typeof data.approver !== 'string') {
         continue;
       }
@@ -1008,10 +1071,12 @@ function approvalOf(
   }
   return {
     approver: parts.approver,
+    ...(parts.target === undefined ? {} : { target: parts.target }),
+    ...(parts.executionStatus === undefined ? {} : { executionStatus: parts.executionStatus }),
     ...(parts.confirmation !== undefined ? { confirmation: parts.confirmation } : {}),
     expiresAt: parts.expiresAt,
     reason: parts.reason,
-    status: parts.status ?? statusFromPart(call),
+    status: parts.status ?? (parts.target?.kind === 'proposal' ? 'pending' : statusFromPart(call)),
     remember: parts.remember,
     decidedBy: parts.decidedBy,
     decidedVia: parts.decidedVia,
@@ -1046,6 +1111,13 @@ function readUiComponent(
     component: data.component,
     props: isRecord(data.props) ? data.props : {},
     version: typeof data.version === 'number' ? data.version : null,
+    ...(isRecord(data.componentVersions) &&
+    Object.values(data.componentVersions).every(
+      (version) => typeof version === 'number' && Number.isSafeInteger(version) && version > 0,
+    )
+      ? { componentVersions: { ...data.componentVersions } as Record<string, number> }
+      : {}),
+    ...(typeof data.fallbackText === 'string' ? { fallbackText: data.fallbackText } : {}),
     toolCallId: typeof data.toolCallId === 'string' ? data.toolCallId : null,
   };
 }
@@ -1195,4 +1267,34 @@ function formatCostUsd(cost: number | null): string {
     return `$${cost.toFixed(3)}`;
   }
   return `$${cost.toFixed(2)}`;
+}
+
+function proposalDescription(
+  description: TranscriptToolCall['description'],
+  approval: TranscriptApproval | null,
+): TranscriptToolCall['description'] {
+  if (approval?.target?.kind !== 'proposal') return description;
+  const status =
+    approval.status === 'pending'
+      ? 'awaiting-approval'
+      : approval.status === 'approved'
+        ? (approval.executionStatus ?? 'queued')
+        : 'denied';
+  const phrase =
+    status === 'awaiting-approval'
+      ? 'Awaiting approval'
+      : status === 'queued'
+        ? 'Queued'
+        : status === 'executing'
+          ? 'Executing'
+          : status === 'succeeded'
+            ? 'Succeeded'
+            : status === 'failed'
+              ? 'Failed'
+              : approval.status === 'expired'
+                ? 'Expired'
+                : approval.status === 'superseded'
+                  ? 'Replaced'
+                  : 'Rejected';
+  return { ...description, status, phrase, result: null };
 }

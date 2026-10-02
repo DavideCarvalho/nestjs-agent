@@ -2,6 +2,7 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/sp
 import type { AiToolCtx, ToolDescribeScope, ToolDescription, ToolHandler } from '../spi/tool.js';
 import type { ToolPresentation } from '../tool-presentation.js';
 import type { Actor, ToolSpec } from '../types.js';
+import { negotiateCatalog } from './capabilities.js';
 import { type Catalog, type ComponentDefinition, toolNameFor } from './catalog.js';
 import {
   type GenuiIssue,
@@ -180,21 +181,23 @@ function componentTool(
       );
     },
   };
-  if (dynamic) {
-    handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
-      const resolved = await catalogFor(catalog, options, scopeOf(scope));
-      const definition = modelComponent(resolved, component.name);
-      if (definition === undefined) {
-        return {
-          description: `Not available in this conversation — do not call this tool. (${component.name})`,
-        };
-      }
+  handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
+    const resolved = negotiateCatalog(
+      await catalogFor(catalog, options, scopeOf(scope)),
+      scope.uiCapabilities,
+    );
+    const definition = modelComponent(resolved, component.name);
+    if (definition === undefined) {
       return {
-        description: describeFor(definition),
-        inputSchema: permissiveSchema(toJsonSchema(definition.props) ?? { type: 'object' }),
+        available: false,
+        description: `Not available in this conversation — do not call this tool. (${component.name})`,
       };
+    }
+    return {
+      description: describeFor(definition),
+      inputSchema: permissiveSchema(toJsonSchema(definition.props) ?? { type: 'object' }),
     };
-  }
+  };
   return {
     spec: {
       name: toolNameFor(component.name, options.namePrefix),
@@ -233,15 +236,17 @@ function treeTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
       return push(ctx, GENUI_TREE_COMPONENT, { root });
     },
   };
-  if (dynamic) {
-    handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
-      const resolved = await catalogFor(catalog, options, scopeOf(scope));
-      return {
-        description: describeFor(resolved),
-        inputSchema: permissiveSchema(treeJsonSchema(resolved)),
-      };
+  handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
+    const resolved = negotiateCatalog(
+      await catalogFor(catalog, options, scopeOf(scope)),
+      scope.uiCapabilities,
+    );
+    return {
+      available: resolved.modelComponents().length > 0,
+      description: describeFor(resolved),
+      inputSchema: permissiveSchema(treeJsonSchema(resolved)),
     };
-  }
+  };
   return {
     spec: {
       name,
@@ -340,15 +345,17 @@ function showTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
       return push(ctx, result.definition.name, result.props, result.definition.version);
     },
   };
-  if (dynamic) {
-    handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
-      const resolved = await catalogFor(catalog, options, scopeOf(scope));
-      return {
-        description: describeFor(resolved),
-        inputSchema: permissiveSchema(showToolJsonSchema(resolved)),
-      };
+  handler.describe = async (scope: ToolDescribeScope): Promise<ToolDescription> => {
+    const resolved = negotiateCatalog(
+      await catalogFor(catalog, options, scopeOf(scope)),
+      scope.uiCapabilities,
+    );
+    return {
+      available: resolved.modelComponents().length > 0,
+      description: describeFor(resolved),
+      inputSchema: permissiveSchema(showToolJsonSchema(resolved)),
     };
-  }
+  };
   return {
     spec: {
       name,

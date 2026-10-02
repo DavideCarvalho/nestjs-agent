@@ -2,8 +2,9 @@ import type { QueuePause } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ApprovalTarget } from '../approvals/proposals.js';
 import { type MessageFile, attachmentFile } from '../attachments/files.js';
-import type { AgentBackend } from '../backend.js';
+import { type AgentBackend, requireBackendMethod } from '../backend.js';
 import type { ToolCatalog } from '../presentation/phrasing.js';
 import { useAgentBackend } from '../provider.js';
 import type { QueuedChatMessage } from '../queue/model.js';
@@ -109,6 +110,7 @@ export interface SkipInput {
 
 /** Approving a tool call parked on a human. */
 export interface ApproveInput extends ApproveOptions {
+  target?: ApprovalTarget;
   toolCallId: string;
   /** The surface the decision came through; the server records `'web'` when omitted. */
   via?: string;
@@ -116,6 +118,7 @@ export interface ApproveInput extends ApproveOptions {
 
 /** Rejecting a tool call parked on a human. */
 export interface RejectInput {
+  target?: ApprovalTarget;
   toolCallId: string;
   reason?: string;
   via?: string;
@@ -591,11 +594,15 @@ function useTranscriptItems({
   );
 
   const approve = useCallback(
-    (toolCallId: string, options?: ApproveOptions) => {
+    (toolCallId: string, options?: ApproveOptions, target?: ApprovalTarget) => {
       const onApprove = latest.current.handlers.onApprove;
       if (onApprove) {
         settle(toolCallId, 'approve', () =>
-          onApprove({ toolCallId, ...(options?.remember === true ? { remember: true } : {}) }),
+          onApprove({
+            toolCallId,
+            ...(target === undefined ? {} : { target }),
+            ...(options?.remember === true ? { remember: true } : {}),
+          }),
         );
       }
     },
@@ -603,10 +610,12 @@ function useTranscriptItems({
   );
 
   const reject = useCallback(
-    (toolCallId: string) => {
+    (toolCallId: string, target?: ApprovalTarget) => {
       const onReject = latest.current.handlers.onReject;
       if (onReject) {
-        settle(toolCallId, 'reject', () => onReject({ toolCallId }));
+        settle(toolCallId, 'reject', () =>
+          onReject({ toolCallId, ...(target === undefined ? {} : { target }) }),
+        );
       }
     },
     [settle],
@@ -859,17 +868,39 @@ function settleHandlers(options: TranscriptItemOptions, backend: AgentBackend): 
     ),
     onApprove: pick(
       options.onApprove,
-      backend.approveToolCall
+      backend.approveToolCall || backend.approveActionProposal
         ? async (input) => {
-            await backend.approveToolCall?.(input);
+            if (input.target?.kind === 'proposal') {
+              if (input.target.threadId === undefined)
+                throw new Error('A proposal decision requires its thread scope');
+              await requireBackendMethod(
+                backend,
+                'approveActionProposal',
+              )({
+                threadId: input.target.threadId,
+                proposalId: input.target.proposalId,
+                ...(input.remember === undefined ? {} : { remember: input.remember }),
+              });
+            } else await requireBackendMethod(backend, 'approveToolCall')(input);
           }
         : undefined,
     ),
     onReject: pick(
       options.onReject,
-      backend.rejectToolCall
+      backend.rejectToolCall || backend.rejectActionProposal
         ? async (input) => {
-            await backend.rejectToolCall?.(input);
+            if (input.target?.kind === 'proposal') {
+              if (input.target.threadId === undefined)
+                throw new Error('A proposal decision requires its thread scope');
+              await requireBackendMethod(
+                backend,
+                'rejectActionProposal',
+              )({
+                threadId: input.target.threadId,
+                proposalId: input.target.proposalId,
+                ...(input.reason === undefined ? {} : { reason: input.reason }),
+              });
+            } else await requireBackendMethod(backend, 'rejectToolCall')(input);
           }
         : undefined,
     ),

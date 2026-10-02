@@ -6,6 +6,7 @@ import {
   type PageContext,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
+import { type UiCapabilities, validateUiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   BadRequestException,
   Body,
@@ -23,6 +24,7 @@ import { AgentService, type ChatSendMode } from '../agent.service.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachment-limits.js';
 
 interface ChatBody {
+  uiCapabilities?: unknown;
   message: string;
   threadId?: string;
   /** Name of the agent to run (orchestrator or a sub-agent). Defaults to the module's default. */
@@ -120,9 +122,17 @@ export class ChatController {
     const actor = await this.actorResolver.resolve(req);
     const attachments = attachmentRefs(body.attachments);
     const mode = sendMode(body);
+    let uiCapabilities: UiCapabilities | undefined;
+    try {
+      uiCapabilities =
+        body.uiCapabilities === undefined ? undefined : validateUiCapabilities(body.uiCapabilities);
+    } catch {
+      throw new BadRequestException('Invalid UI capabilities');
+    }
     const result = await this.agent.send({
       actor,
       message: body.message,
+      ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       ...(body.agent !== undefined ? { agentName: body.agent } : {}),
       ...(typeof body.persona === 'string' && body.persona.length > 0
@@ -135,6 +145,10 @@ export class ChatController {
       ...(typeof body.model === 'string' && body.model.length > 0 ? { model: body.model } : {}),
       mode,
     });
+    if ('proposalDecision' in result) {
+      res.status(200).json(result);
+      return;
+    }
     if (result.queued === true) {
       res.status(202).json(result);
       return;

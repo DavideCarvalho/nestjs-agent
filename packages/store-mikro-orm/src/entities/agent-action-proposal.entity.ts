@@ -44,6 +44,10 @@ export class AgentActionProposal {
   proposalExpiresAt!: number | null;
   /** Zero marks legacy projections pending an explicit deployment backfill. */
   discoveryIndexVersion!: number;
+  deliveryStatus!: string | null;
+  deliveryLeaseExpiresAt!: number | null;
+  outcomeIdKey!: string | null;
+  replacementGroupKey!: string | null;
   createdAt!: number;
   declare [EntityRepositoryType]?: AgentActionProposalRepository;
 }
@@ -57,7 +61,17 @@ export function agentActionProposalSchema(collation?: string): EntitySchema<Agen
     class: AgentActionProposal,
     tableName: 'agent_action_proposal',
     repository: () => AgentActionProposalRepository,
+    uniques: [{ name: 'agent_proposal_outcome_idx', properties: ['outcomeIdKey'] }],
     indexes: [
+      {
+        name: 'agent_proposal_replacement_idx',
+        properties: ['scopeKey', 'replacementGroupKey', 'decision'],
+      },
+      {
+        name: 'agent_proposal_delivery_idx',
+        properties: ['deliveryStatus', 'deliveryLeaseExpiresAt', 'createdAt'],
+      },
+
       { name: 'agent_proposal_scope_created_idx', properties: ['scopeKey', 'createdAt'] },
       {
         name: 'agent_proposal_scope_decision_idx',
@@ -99,6 +113,26 @@ export function agentActionProposalSchema(collation?: string): EntitySchema<Agen
       leaseExpiresAt: { type: epoch(), fieldName: 'lease_expires_at', nullable: true },
       proposalExpiresAt: { type: epoch(), fieldName: 'proposal_expires_at', nullable: true },
       discoveryIndexVersion: { type: 'integer', fieldName: 'discovery_index_version', default: 0 },
+      deliveryStatus: { type: 'string', fieldName: 'delivery_status', nullable: true },
+      deliveryLeaseExpiresAt: {
+        type: epoch(),
+        fieldName: 'delivery_lease_expires_at',
+        nullable: true,
+      },
+      outcomeIdKey: {
+        type: 'string',
+        length: 64,
+        fieldName: 'outcome_id_key',
+        nullable: true,
+        ...identity,
+      },
+      replacementGroupKey: {
+        type: 'string',
+        length: 64,
+        fieldName: 'replacement_group_key',
+        nullable: true,
+        ...identity,
+      },
       createdAt: { type: epoch(), fieldName: 'created_at' },
     },
   });

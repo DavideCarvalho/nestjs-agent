@@ -110,3 +110,6 @@ export {
 // Re-export the core surface so consumers import tools/types from one place.
 export * from '@dudousxd/nestjs-agent-core';
 export { RunNotActiveException } from './run-not-active.exception.js';
+export { ActionProposalService } from './proposals/action-proposal.service.js';
+export { ActionProposalController } from './proposals/action-proposal.controller.js';
+export { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';

@@ -6,6 +6,7 @@ import { DATETIME, LongTextType } from './column-types';
 /** A tool call requested during an assistant turn. The pk is the model-supplied `toolCallId`. */
 export class AgentToolCall {
   id!: string;
+  proposalId?: string | null;
   message!: AgentMessage;
   toolName!: string;
   toolType!: ToolKind;
@@ -61,6 +62,7 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
       toolType: { type: 'string', fieldName: 'tool_type', ...str },
       input: { type: 'json', nullable: true },
       output: { type: 'json', nullable: true },
+      proposalId: { type: 'string', nullable: true, fieldName: 'proposal_id' },
       status: { type: 'string', ...str },
       executedByRef: { type: 'string', nullable: true, fieldName: 'executed_by_ref', ...str },
       executionMs: { type: 'integer', nullable: true, fieldName: 'execution_ms' },

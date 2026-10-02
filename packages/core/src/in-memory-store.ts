@@ -1,5 +1,15 @@
+import {
+  actionProposalOutcomeFenceValid,
+  actionProposalOutcomeText,
+} from './action-proposal-outcome.js';
+import { snapshotActionProposal } from './action-proposal-transitions.js';
 import type { ToolCallOutcome } from './dangling-tool-calls.js';
 import { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
+import type {
+  ActionProposalOutcomeLease,
+  ActionProposalOutcomeStore,
+} from './spi/action-proposal-outcome-store.js';
+import type { ActionProposalScope } from './spi/action-proposal-store.js';
 import {
   type AgentStore,
   type AppendMessageInput,
@@ -33,11 +43,13 @@ import {
 
 interface ThreadRow extends ThreadSummary {
   actorRef: string;
+  tenantRef: string | null;
   activeStreamId?: string;
   messages: StoredMessage[];
 }
 
 interface ToolCallRow {
+  proposalId?: string;
   toolCallId: string;
   messageId: string;
   threadId: string;
@@ -183,7 +195,7 @@ export interface GovernanceRunRow {
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
 export class InMemoryAgentStore
   extends InMemoryActionProposalStore
-  implements AgentStore, ChatQueueStore
+  implements AgentStore, ChatQueueStore, ActionProposalOutcomeStore
 {
   private readonly threads = new Map<string, ThreadRow>();
   /** Each thread's waiting messages, in run order. */
@@ -206,6 +218,7 @@ export class InMemoryAgentStore
     const row: ThreadRow = {
       id,
       actorRef: input.actor.id,
+      tenantRef: input.actor.tenantRef ?? null,
       title: input.title ?? 'New chat',
       transient: input.transient ?? false,
       createdAt: ts,
@@ -239,6 +252,7 @@ export class InMemoryAgentStore
       }
       const approval = toolCallApprovalFromRow({
         toolCallId: call.toolCallId,
+        ...(call.proposalId !== undefined ? { proposalId: call.proposalId } : {}),
         status: call.status,
         approver: call.approver,
         confirmation: call.confirmation,
@@ -262,6 +276,17 @@ export class InMemoryAgentStore
         names.add(call.toolName);
       }
     }
+    const thread = this.threads.get(threadId);
+    if (thread)
+      for (const proposal of this.rows.values())
+        if (
+          proposal.threadId === threadId &&
+          proposal.actorRef === thread.actorRef &&
+          proposal.tenantRef === thread.tenantRef &&
+          proposal.decisionAudit?.remember === true &&
+          (proposal.execution?.status === 'succeeded' || proposal.execution?.status === 'failed')
+        )
+          names.add(proposal.toolName);
     return [...names];
   }
 
@@ -305,6 +330,7 @@ export class InMemoryAgentStore
     const row: ThreadRow = {
       id,
       actorRef: source.actorRef,
+      tenantRef: source.tenantRef,
       title: source.title,
       transient: false,
       createdAt: ts,
@@ -513,6 +539,7 @@ export class InMemoryAgentStore
       ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+      ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
       ...(input.interrupt === true ? { interrupt: true } : {}),
       createdAt: ts,
       updatedAt: ts,
@@ -617,6 +644,61 @@ export class InMemoryAgentStore
     return undefined;
   }
 
+  async getThreadActionProposalScope(threadId: string): Promise<ActionProposalScope | null> {
+    const row = this.threads.get(threadId);
+    return row ? { threadId, actorRef: row.actorRef, tenantRef: row.tenantRef } : null;
+  }
+  async admitActionProposalOutcome(
+    command: ActionProposalOutcomeLease,
+  ): ReturnType<ActionProposalOutcomeStore['admitActionProposalOutcome']> {
+    const row = [...this.rows.values()].find((row) => row.outcome?.id === command.outcomeId);
+    if (!row?.outcome || !row.outcomeDelivery) return { status: 'not_found' };
+    if (row.outcomeDelivery.status === 'admitted')
+      return {
+        status: 'unchanged',
+        ...(row.outcomeDelivery.messageId !== undefined
+          ? { messageId: row.outcomeDelivery.messageId }
+          : {}),
+      };
+    if (row.outcomeDelivery.status === 'discarded') return { status: 'discarded' };
+    if (!actionProposalOutcomeFenceValid(row, command, this.clock())) return { status: 'conflict' };
+    const thread = this.threads.get(row.threadId);
+    if (!thread) {
+      this.rows.set(
+        row.id,
+        snapshotActionProposal({
+          ...row,
+          outcomeDelivery: { ...row.outcomeDelivery, status: 'discarded', lease: null },
+        }),
+      );
+      return { status: 'discarded' };
+    }
+    if (thread.actorRef !== row.actorRef || thread.tenantRef !== row.tenantRef)
+      return { status: 'conflict' };
+    if (thread.activeStreamId) return { status: 'busy' };
+    // No await between checking the thread holder and committing both in-memory mutations.
+    const message: StoredMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: actionProposalOutcomeText(row.outcome),
+      createdAt: this.now(),
+      actionProposalOutcome: snapshotActionProposal(row.outcome),
+      ui: snapshotActionProposal(row.outcome.ui),
+    };
+    const next = snapshotActionProposal({
+      ...row,
+      outcomeDelivery: {
+        ...row.outcomeDelivery,
+        status: 'admitted' as const,
+        lease: null,
+        messageId: message.id,
+      },
+    });
+    thread.messages.push(message);
+    thread.updatedAt = message.createdAt;
+    this.rows.set(row.id, next);
+    return { status: 'applied', messageId: message.id };
+  }
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {
     const row = this.threads.get(input.threadId);
     if (row === undefined) {
@@ -638,6 +720,9 @@ export class InMemoryAgentStore
       ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
       ...(input.reasoningMs !== undefined ? { reasoningMs: input.reasoningMs } : {}),
       ...(input.ui !== undefined ? { ui: input.ui } : {}),
+      ...(input.actionProposalOutcome !== undefined
+        ? { actionProposalOutcome: input.actionProposalOutcome }
+        : {}),
     };
     row.messages.push(message);
     row.updatedAt = message.createdAt;
@@ -726,6 +811,7 @@ export class InMemoryAgentStore
   async recordToolCall(input: RecordToolCallInput): Promise<void> {
     this.toolCalls.set(input.toolCallId, {
       toolCallId: input.toolCallId,
+      ...(input.proposalId !== undefined ? { proposalId: input.proposalId } : {}),
       messageId: input.messageId,
       threadId: this.threadIdForMessage(input.messageId) ?? '',
       toolName: input.toolName,

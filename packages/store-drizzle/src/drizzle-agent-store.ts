@@ -1,7 +1,9 @@
 import {
   type ActionProposalDiscoveryIndexStore,
+  type ActionProposalOutcomeStore,
   type ActionProposalStore,
   type ActionProposalStoreOptions,
+  type ActionProposalSupersessionStore,
   type ActionProposalWorkerStore,
   type AgentStore,
   type AgentUiComponent,
@@ -28,6 +30,7 @@ import {
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
+  canonicalActionProposalJson,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -106,7 +109,8 @@ export class DrizzleAgentStore
     ChatQueueStore,
     ActionProposalStore,
     ActionProposalWorkerStore,
-    ActionProposalDiscoveryIndexStore
+    ActionProposalDiscoveryIndexStore,
+    ActionProposalOutcomeStore
 {
   private readonly db: AgentSqliteDb;
   private readonly dialect: AgentDialect;
@@ -177,6 +181,34 @@ export class DrizzleAgentStore
     ...args: Parameters<ActionProposalStore['settleActionProposal']>
   ): ReturnType<ActionProposalStore['settleActionProposal']> {
     return this.proposals.settleActionProposal(...args);
+  }
+
+  createReplacingActionProposal(
+    ...args: Parameters<ActionProposalSupersessionStore['createReplacingActionProposal']>
+  ) {
+    return this.proposals.createReplacingActionProposal(...args);
+  }
+  supersedeActionProposal(
+    ...args: Parameters<ActionProposalSupersessionStore['supersedeActionProposal']>
+  ) {
+    return this.proposals.supersedeActionProposal(...args);
+  }
+
+  get actionProposalAdmissionSupported(): boolean {
+    return this.proposals.actionProposalAdmissionSupported;
+  }
+  getThreadActionProposalScope(threadId: string) {
+    return this.proposals.getThreadActionProposalScope(threadId);
+  }
+  claimNextActionProposalOutcome(
+    ...args: Parameters<ActionProposalOutcomeStore['claimNextActionProposalOutcome']>
+  ) {
+    return this.proposals.claimNextActionProposalOutcome(...args);
+  }
+  admitActionProposalOutcome(
+    ...args: Parameters<ActionProposalOutcomeStore['admitActionProposalOutcome']>
+  ) {
+    return this.proposals.admitActionProposalOutcome(...args);
   }
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
@@ -375,6 +407,7 @@ export class DrizzleAgentStore
           reasoning: message.reasoning,
           reasoningMs: message.reasoningMs,
           ui: message.ui,
+          actionProposalOutcome: message.actionProposalOutcome,
           createdAt: message.createdAt,
         })),
       );
@@ -465,7 +498,11 @@ export class DrizzleAgentStore
       .where(
         and(eq(this.t.agentMessage.threadId, threadId), eq(this.t.agentToolCall.remember, true)),
       );
-    return rows.map((row) => row.toolName);
+    const scope = await this.getThreadActionProposalScope(threadId);
+    const proposalNames = scope
+      ? await this.proposals.rememberedActionProposalApprovals(scope)
+      : [];
+    return [...new Set([...rows.map((row) => row.toolName), ...proposalNames])];
   }
 
   async toolCallInput(toolCallId: string): Promise<unknown> {
@@ -627,6 +664,7 @@ export class DrizzleAgentStore
       threadId: input.threadId,
       actor: input.actor,
       content: input.content,
+      uiCapabilities: input.uiCapabilities ?? null,
       attachments:
         input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
       agentName: input.agentName ?? null,
@@ -869,6 +907,9 @@ export class DrizzleAgentStore
       threadId: input.threadId,
       role: input.role,
       content: input.content,
+      actionProposalOutcome: input.actionProposalOutcome
+        ? canonicalActionProposalJson(input.actionProposalOutcome)
+        : null,
       toolCalls: input.toolCalls ?? null,
       toolResults: input.toolResults ?? null,
       attachments: input.attachments ?? null,
@@ -942,6 +983,7 @@ export class DrizzleAgentStore
   async recordToolCall(input: RecordToolCallInput): Promise<void> {
     await this.db.insert(this.t.agentToolCall).values({
       id: input.toolCallId,
+      proposalId: input.proposalId ?? null,
       messageId: input.messageId,
       toolName: input.toolName,
       toolType: input.toolType,
@@ -1139,7 +1181,13 @@ export class DrizzleAgentStore
   }
 
   private toStoredMessage(message: TurnMessageRow & Partial<AgentMessageRow>): StoredMessage {
+    const outcome = message.actionProposalOutcome
+      ? (JSON.parse(message.actionProposalOutcome) as NonNullable<
+          StoredMessage['actionProposalOutcome']
+        >)
+      : undefined;
     return {
+      ...(outcome ? { actionProposalOutcome: outcome, ui: outcome.ui } : {}),
       id: message.id,
       role: message.role,
       content: message.content,
@@ -1162,6 +1210,7 @@ export class DrizzleAgentStore
 
 function toQueuedMessage(row: AgentQueuedMessageRow): QueuedMessage {
   return {
+    ...(row.uiCapabilities !== null ? { uiCapabilities: row.uiCapabilities } : {}),
     id: row.id,
     threadId: row.threadId,
     actor: row.actor,

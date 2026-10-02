@@ -21,6 +21,7 @@ export class AgentMessage {
   thread!: AgentThread;
   role!: MessageRole;
   content!: string;
+  actionProposalOutcome?: string | null;
   toolCalls?: ToolCallRequest[] | null;
   toolResults?: ToolResult[] | null;
   attachments?: MessageAttachment[] | null;
@@ -82,6 +83,11 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
       reasoning: { type: LongTextType, nullable: true, ...str },
       reasoningMs: { type: 'integer', nullable: true, fieldName: 'reasoning_ms' },
       ui: { type: 'json', nullable: true },
+      actionProposalOutcome: {
+        type: LongTextType,
+        nullable: true,
+        fieldName: 'action_proposal_outcome',
+      },
       feedback: { type: 'json', nullable: true },
       seq: { type: 'integer', nullable: true },
       createdAt: { ...DATETIME, fieldName: 'created_at' },

@@ -60,3 +60,11 @@ export {
   treeToFlatSpec,
   validateTree,
 } from './tree.js';
+
+export {
+  type UiCapabilities,
+  type PreparedUiEmission,
+  negotiateCatalog,
+  prepareUiEmission,
+  validateUiCapabilities,
+} from './capabilities.js';

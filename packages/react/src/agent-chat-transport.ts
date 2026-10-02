@@ -229,6 +229,10 @@ export class AgentChatTransport implements ChatTransport<UIMessage> {
         return queuedChunkStream(response.queued);
       }
       this.captureHeaderMeta(response);
+      if (response.proposalDecision !== undefined) {
+        this.attemptLive = false;
+        return proposalDecisionChunkStream(response.proposalDecision);
+      }
       return this.toChunkStream(response, {
         ...(headers !== undefined ? { headers } : {}),
         ...(options.abortSignal ? { signal: options.abortSignal } : {}),
@@ -887,5 +891,23 @@ function delay(ms: number, signal: AbortSignal | undefined): Promise<void> {
       resolve();
     }
     signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+function proposalDecisionChunkStream(
+  decision: NonNullable<ChatStreamResponse['proposalDecision']>,
+): ReadableStream<UIMessageChunk> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue({ type: 'start', messageId: `decision:${crypto.randomUUID()}` });
+      controller.enqueue({ type: 'data-proposal-decision', data: decision, transient: true });
+      if (decision.text !== undefined && decision.text.length > 0) {
+        controller.enqueue({ type: 'text-start', id: 'decision' });
+        controller.enqueue({ type: 'text-delta', id: 'decision', delta: decision.text });
+        controller.enqueue({ type: 'text-end', id: 'decision' });
+      }
+      controller.enqueue({ type: 'finish', finishReason: 'stop' });
+      controller.close();
+    },
   });
 }

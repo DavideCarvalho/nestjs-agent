@@ -15,6 +15,22 @@ import type { AppendMessageInput } from '@dudousxd/nestjs-agent-core';
 export type EveryMessageField = Required<Omit<AppendMessageInput, 'threadId' | 'role' | 'content'>>;
 
 export const EVERY_MESSAGE_FIELD: EveryMessageField = {
+  actionProposalOutcome: {
+    id: 'outcome-1',
+    proposalId: 'proposal-1',
+    outcomeVersion: 1,
+    tenantRef: null,
+    actorRef: 'actor-1',
+    threadId: 'thread-1',
+    originRunId: 'run-1',
+    originToolCallId: 'call-1',
+    toolName: 'executeSql',
+    decision: 'approved',
+    executionStatus: 'succeeded',
+    text: 'Done',
+    ui: [],
+    createdAt: 1,
+  },
   agentName: 'analyst',
   persona: 'sql-focused',
   runId: 'run-1',

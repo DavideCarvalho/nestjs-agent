@@ -1,8 +1,11 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ClaimedActionApproval } from './action-proposal-approval.js';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
+import type { UiCapabilities } from './genui/capabilities.js';
+import type { ActionProposalOutcome } from './spi/action-proposal-outcome-store.js';
 import type { ChatQueueState } from './spi/chat-queue.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
-import type { ToolPreflightResult } from './spi/tool.js';
+import type { AiToolCtx, ToolPreflightResult } from './spi/tool.js';
 import type { AgentUiComponent } from './stream-events.js';
 import type { ToolConfirmation, ToolPresentation } from './tool-presentation.js';
 import type { ToolTransientRetryNumbers } from './tool-retry.js';
@@ -55,6 +58,10 @@ export interface DetachedDelivery {
  *             remedy is the read-back that lets them delete it.
  */
 export interface ToolSpec {
+  /** Explicit domain identity for pending-only replacement; evaluated on approved normalized input. */
+  replacementKey?:
+    | string
+    | ((input: unknown, ctx: AiToolCtx) => string | undefined | Promise<string | undefined>);
   name: string;
   kind: ToolKind;
   description: string;
@@ -126,6 +133,13 @@ export interface ToolDefinition {
 
 /** A tool call the model asked for during a turn. */
 export interface ToolCallRequest {
+  actionApproval?: ClaimedActionApproval;
+  prepared?: {
+    preparationInput: unknown;
+    input: unknown;
+    preflight: ToolPreflightResult;
+    replacementKey?: string;
+  };
   /** Trusted action preparation from the dispatched model worker, journaled with its turn.
    * Model-provider supplied values are overwritten by the worker. Absent on legacy turns. */
   preflight?: ToolPreflightResult | { status: 'failed'; error: string };
@@ -310,6 +324,7 @@ export interface PromptContext {
   /** The selected agent's name. */
   agentName: string;
   pageContext?: PageContext;
+  uiCapabilities?: UiCapabilities;
   /**
    * The persona this turn runs under, when it runs under one — so an agent's own `@SystemPrompt`
    * (or a contributor) can vary by persona without the persona carrying a prompt of its own.
@@ -404,6 +419,7 @@ export interface AgentRunInput {
   /** Files attached to the latest user message (image/PDF). Persisted with it and sent to the model. */
   attachments?: MessageAttachment[];
   pageContext?: PageContext;
+  uiCapabilities?: UiCapabilities;
   /** YYYY-MM-DD stamped by the runner so quota/day stays deterministic under durable replay. */
   day?: string;
   /** Which named agent runs this turn. Omitted → the default/single agent. */
@@ -583,6 +599,7 @@ export interface ThreadSummary {
 }
 
 export interface StoredMessage {
+  actionProposalOutcome?: ActionProposalOutcome;
   id: string;
   role: MessageRole;
   content: string;
@@ -652,6 +669,8 @@ export type ToolCallApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expi
 
 /** The persisted approval metadata of one action tool call. See {@link StoredMessage.approvals}. */
 export interface ToolCallApproval {
+  target?: { kind: 'proposal'; proposalId: string; threadId?: string };
+  proposalId?: string;
   /** Resolved confirmation from the action preflight; overrides presentation templates. */
   confirmation?: ToolConfirmation;
   toolCallId: string;
@@ -681,6 +700,7 @@ export interface ThreadDetail extends ThreadSummary {
 }
 
 export type ToolCallStatus =
+  | 'proposed'
   | 'auto_executed'
   | 'pending_approval'
   | 'executed'
@@ -694,6 +714,7 @@ export type ToolCallStatus =
  * re-resolves the model/sink/registry from its own DI via AGENT_DEPS_FACTORY.forAgent(agentName).
  */
 export interface LlmStepEnvelope {
+  actionApprovalMode?: 'blocking' | 'independent';
   /** Full invocation identity for action preparation at the worker. Optional for old envelopes. */
   preflightContext?: ToolStepCtx;
   /** Undefined = default agent (same semantics as {@link AgentRunInput.agentName}). */
@@ -736,6 +757,7 @@ export interface ToolStepCtx {
   /** The persona the turn runs under ({@link AiToolCtx.persona}). */
   persona?: string;
   pageContext?: PageContext;
+  uiCapabilities?: UiCapabilities;
 }
 
 /** Serializable input for a dispatched tool-execution step. */
