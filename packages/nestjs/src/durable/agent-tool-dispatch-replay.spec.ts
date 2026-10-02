@@ -1,3 +1,4 @@
+import type { ToolHandler } from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
@@ -56,6 +57,14 @@ const executions: Record<string, number> = {};
 })
 @Injectable()
 class SaveExamTool {
+  check?: ToolHandler<{ examId: string }>['preflight'];
+  preflight(
+    input: { examId: string },
+    ctx: Parameters<NonNullable<ToolHandler['preflight']>>[1],
+    options: Parameters<NonNullable<ToolHandler['preflight']>>[2],
+  ) {
+    return this.check?.(input, ctx, options) ?? { status: 'ready' as const };
+  }
   async execute(input: { examId: string }) {
     executions.saveExam = (executions.saveExam ?? 0) + 1;
     const { runId } = await IngestWorkflow.start(
@@ -165,4 +174,103 @@ describe('a tool that starts a workflow, replayed (durable runner)', () => {
       await moduleRef.close();
     }
   });
+});
+
+it('journals completed preparation across a later approval replay without rerunning the hook', async () => {
+  const { moduleRef, store, journal, service, engine } = await buildApp();
+  try {
+    let preparations = 0;
+    moduleRef.get(SaveExamTool).check = () => {
+      preparations++;
+      return { status: 'completed', output: { existing: 'e1' } };
+    };
+    const before = executions.saveExam ?? 0;
+    const { runId } = await service.chat({ actor: ACTOR, message: 'keep this exam' });
+    await until(
+      () =>
+        store
+          .toolCallRows()
+          .some((row) => row.toolName === 'recordMeasure' && row.status === 'pending_approval') &&
+        store
+          .toolCallRows()
+          .some((row) => row.toolName === 'saveExam' && row.status === 'executed'),
+    );
+    await until(async () => (await engine.getRun(runId))?.status === 'suspended');
+    const rows = store.toolCallRows();
+    expect(
+      rows.filter((row) => row.status === 'pending_approval').map((row) => row.toolName),
+    ).toEqual(['recordMeasure']);
+    expect(rows.find((row) => row.toolName === 'saveExam')?.output).toEqual({ existing: 'e1' });
+    moduleRef.get(SaveExamTool).check = () => {
+      preparations++;
+      return { status: 'denied', reason: 'changed' };
+    };
+    await service.approve(
+      ACTOR,
+      rows.find((row) => row.toolName === 'recordMeasure')?.toolCallId ?? '',
+    );
+    const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+    expect(result.status).toBe('completed');
+    expect(preparations).toBe(1);
+    expect(executions.saveExam ?? 0).toBe(before);
+    const names = (await journal.listCheckpoints(runId)).map((checkpoint) => checkpoint.name);
+    expect(names.filter((name) => name.startsWith('tool:') || name.startsWith('spawn:'))).toEqual(
+      [],
+    );
+  } finally {
+    await moduleRef.close();
+  }
+});
+
+it('keeps the prepared confirmation during replay and blocks a changed state inside execution', async () => {
+  const { moduleRef, store, service, engine } = await buildApp();
+  try {
+    const phases: string[] = [];
+    const confirmation = { title: 'Save exam e1?', verb: 'Save', detail: 'Includes 3 measures' };
+    moduleRef.get(SaveExamTool).check = (_input, ctx, { phase }) => {
+      phases.push(phase);
+      expect(ctx.idempotencyKey).toBe(`${ctx.runId}:${ctx.toolCallId}`);
+      return { status: 'ready', confirmation };
+    };
+    const before = executions.saveExam ?? 0;
+    const { runId, threadId } = await service.chat({ actor: ACTOR, message: 'keep this exam' });
+    await until(
+      () => store.toolCallRows().filter((row) => row.status === 'pending_approval').length === 2,
+    );
+    await until(async () => (await engine.getRun(runId))?.status === 'suspended');
+    expect(
+      (await store.getThread(threadId))?.messages.flatMap((message) => message.approvals ?? [])[0]
+        ?.confirmation,
+    ).toEqual(confirmation);
+    moduleRef.get(SaveExamTool).check = (_input, _ctx, { phase }) => {
+      phases.push(phase);
+      return { status: 'denied', reason: 'exam became locked' };
+    };
+    const rows = store.toolCallRows();
+    await service.approve(ACTOR, rows.find((row) => row.toolName === 'saveExam')?.toolCallId ?? '');
+    await until(() =>
+      store.toolCallRows().some((row) => row.toolName === 'saveExam' && row.status === 'failed'),
+    );
+    await until(async () => (await engine.getRun(runId))?.status === 'suspended');
+    await service.approve(
+      ACTOR,
+      rows.find((row) => row.toolName === 'recordMeasure')?.toolCallId ?? '',
+    );
+    const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+    expect(result.status).toBe('completed');
+    expect(phases).toEqual(['prepare', 'execute']);
+    expect(executions.saveExam ?? 0).toBe(before);
+    const detail = await store.getThread(threadId);
+    expect(detail?.messages.flatMap((message) => message.approvals ?? [])[0]).toMatchObject({
+      confirmation,
+      status: 'approved',
+    });
+    expect(
+      detail?.messages
+        .flatMap((message) => message.toolResults ?? [])
+        .find((result) => result.name === 'saveExam'),
+    ).toMatchObject({ denied: true, output: { reason: 'exam became locked' } });
+  } finally {
+    await moduleRef.close();
+  }
 });

@@ -20,6 +20,7 @@
  */
 import type { ElicitationRequest } from './elicitation.js';
 import type { ChatQueueState } from './spi/chat-queue.js';
+import type { ToolConfirmation } from './tool-presentation.js';
 import type { MessageUsage } from './types.js';
 
 /**
@@ -52,6 +53,8 @@ export interface AgentUiComponent {
  * settled through the tool-call approve/reject routes, by its `toolCallId`.
  */
 export interface AgentApprovalRequest {
+  /** Resolved confirmation from the action preflight; overrides presentation templates. */
+  confirmation?: ToolConfirmation;
   /** The tool call awaiting the decision — the `id` of a call already announced on this stream. */
   id: string;
   /**

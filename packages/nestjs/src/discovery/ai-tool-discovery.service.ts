@@ -84,6 +84,12 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
         },
         {
           execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),
+          ...(typeof handler.preflight === 'function'
+            ? {
+                preflight: (input, ctx, options) =>
+                  (instance as Required<ToolHandler>).preflight(input, ctx, options),
+              }
+            : {}),
           // Forwarded, not copied: the registry holds this wrapper rather than the provider, so an
           // `isEnabled()`/`canUse()` left behind here would be a gate that silently never applies.
           // Called through `instance` so each keeps its `this` (and its injected deps).

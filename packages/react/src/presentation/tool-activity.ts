@@ -1,4 +1,8 @@
-import type { ToolPresentation, ToolPresentationTone } from '@dudousxd/nestjs-agent-core';
+import type {
+  ToolConfirmation,
+  ToolPresentation,
+  ToolPresentationTone,
+} from '@dudousxd/nestjs-agent-core';
 import { getToolName } from 'ai';
 import type { AnyToolUIPart, TranscriptToolCall } from '../transcript/model.js';
 import { type ToolCatalog, fillTemplate, phraseFor } from './phrasing.js';
@@ -104,6 +108,8 @@ export interface ToolCallDescription {
 }
 
 export interface DescribeToolCallOptions {
+  /** Resolved strings from the call preflight override the tool catalog templates. */
+  confirmation?: ToolConfirmation;
   /** Words for a tool the catalog does not describe. Default `Working` / `Done`. */
   fallback?: { running: string; done: string };
   /** Infer a result view from the output's shape when the tool declared none. Default `false`. */
@@ -127,13 +133,19 @@ export function describeToolCall(
     tone: presentation?.tone ?? 'neutral',
     detail: presentation?.detail ?? null,
     confirm:
-      confirm === undefined
-        ? null
-        : {
-            title: fillTemplate(confirm.title, input),
-            verb: confirm.verb,
-            detail: confirm.detail !== undefined ? fillTemplate(confirm.detail, input) : null,
-          },
+      options.confirmation !== undefined
+        ? {
+            title: options.confirmation.title,
+            verb: options.confirmation.verb,
+            detail: options.confirmation.detail ?? null,
+          }
+        : confirm === undefined
+          ? null
+          : {
+              title: fillTemplate(confirm.title, input),
+              verb: confirm.verb,
+              detail: confirm.detail !== undefined ? fillTemplate(confirm.detail, input) : null,
+            },
     result:
       state.status === 'done'
         ? resolveResultView(state.output, presentation?.result, {

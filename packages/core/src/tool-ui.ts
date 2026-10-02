@@ -18,26 +18,50 @@ interface ToolStepOutputWithUi {
   [TOOL_STEP_UI]: 1;
   output: unknown;
   ui: AgentUiComponent[];
+  preflightDenied?: string;
 }
 
 /** The tool step's journaled result: the bare output, or the output plus the components it pushed. */
 export function wrapToolStepOutput(output: unknown, ui: readonly AgentUiComponent[]): unknown {
-  if (ui.length === 0) {
+  // Escape ordinary output that happens to match our envelope: unwrap exactly one layer.
+  const reserved = typeof output === 'object' && output !== null && TOOL_STEP_UI in output;
+  if (ui.length === 0 && !reserved) {
     return output;
   }
   const wrapped: ToolStepOutputWithUi = { [TOOL_STEP_UI]: 1, output, ui: [...ui] };
   return wrapped;
 }
 
+/** Carry domain refusal across a remote step without losing its type in error serialization. */
+export function wrapToolPreflightDenied(reason: string): unknown {
+  const wrapped: ToolStepOutputWithUi = {
+    [TOOL_STEP_UI]: 1,
+    output: null,
+    ui: [],
+    preflightDenied: reason,
+  };
+  return wrapped;
+}
+
 /** Read a tool step's result back — either shape. */
-export function unwrapToolStepOutput(raw: unknown): { output: unknown; ui: AgentUiComponent[] } {
+export function unwrapToolStepOutput(raw: unknown): {
+  output: unknown;
+  ui: AgentUiComponent[];
+  preflightDenied?: string;
+} {
   if (
     typeof raw === 'object' &&
     raw !== null &&
     (raw as Partial<ToolStepOutputWithUi>)[TOOL_STEP_UI] === 1
   ) {
     const wrapped = raw as ToolStepOutputWithUi;
-    return { output: wrapped.output, ui: Array.isArray(wrapped.ui) ? wrapped.ui : [] };
+    return {
+      output: wrapped.output,
+      ui: Array.isArray(wrapped.ui) ? wrapped.ui : [],
+      ...(typeof wrapped.preflightDenied === 'string'
+        ? { preflightDenied: wrapped.preflightDenied }
+        : {}),
+    };
   }
   return { output: raw, ui: [] };
 }

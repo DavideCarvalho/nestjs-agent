@@ -10,28 +10,28 @@ exists: divergence should be a line in a table, not something a reader discovers
 
 ## Where a capability is built
 
-**This repo is the reference implementation.** New capabilities land here first and reach
-`adonis-agent` in consolidated catch-up passes, not feature by feature. That is a deliberate trade:
-porting a design that is still moving means porting it twice, and the second port is the one that
-has to reconcile whatever changed in between.
+**Aviary and Agora must ship the same capabilities.** A new capability or a shared bug fix is
+implemented and verified on both frameworks as one delivery. Either repo can originate it, but
+its counterpart is part of the same feature, not a later consolidated catch-up pass. Pair the PRs
+and make release dependencies explicit, including shared core/React package versions.
 
-The cost is that `adonis-agent` is *expected* to trail. A `not ported` row is therefore a normal
-state, not a defect — what would be a defect is a row that is missing, because then nobody knows the
-gap exists. The one thing that does not trail is a fix for a bug that exists in both: those port
-immediately, because the bug is already running in production on both sides.
-
-A capability that originates in `adonis-agent` (the MCP server) still gets built here before it
-counts as shared, so the reference stays the superset.
+Framework-free code belongs in the shared core or React packages; framework-specific providers,
+runners and stores still need their own implementation and equivalent behaviour tests. A
+re-export alone does not establish parity. Framework idioms can differ without changing what a
+consumer can do.
 
 ## The rule
 
 Adding a capability to either repo means adding its row here, with a status for the other side.
-`not applicable` is a fine status; `not ported` is a fine status. Silence is not.
+`not applicable` must state the framework-specific reason. `not ported` records outstanding work,
+not a completed delivery. Silence is not a status.
 
 ## Ledger
 
 | Capability | `nestjs-agent` | `adonis-agent` | Notes |
 |---|---|---|---|
+| Per-call action domain preflight | paired delivery | paired delivery | Same `ToolHandler.preflight(input, ctx, { phase })`: prepare before ask/auto/remember; execute rechecks current gates and domain state. Denied and already-completed calls do not create effects. Domain refusals are final, not transient retries. |
+| Resolved confirmation per action call | paired delivery + shared React | paired delivery + same React/native client | `confirmation` overrides static templates with literal strings, persists across reload and replay; native approval frames retain approver, expiry and reason. SQL stores and in-memory stores preserve the metadata. |
 | Tool kind resolved inside the journal | yes | yes | The branch that decides HITL-vs-execute must not read a process-local registry. |
 | Replay-integrity errors propagate untouched | yes | yes | Adonis matches three spellings of the runtime's error class; NestJS two. |
 | Control-flow signal detected by marker | yes | local predicate | Adonis carries its own predicate in the workflow rather than one in core. Same effect, different home. |

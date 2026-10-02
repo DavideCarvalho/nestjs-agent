@@ -198,7 +198,13 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
         childSink: false,
       });
       expect(turn.toolCalls).toEqual([
-        { id: 'call-commit', name: 'commit', input: {}, kind: 'action' },
+        {
+          id: 'call-commit',
+          name: 'commit',
+          input: {},
+          kind: 'action',
+          preflight: { status: 'ready' },
+        },
       ]);
     } finally {
       await moduleRef.close();

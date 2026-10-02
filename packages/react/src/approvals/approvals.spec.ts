@@ -216,3 +216,22 @@ describe('useApprovalCountdown', () => {
     expect(result.current).toEqual({ remainingMs: 0, isExpired: true });
   });
 });
+
+it('restores resolved confirmation after loading a stored approval', () => {
+  const confirmation = {
+    title: 'Remove 3 {literal} sessions?',
+    verb: 'Remove',
+    detail: 'Account A',
+  };
+  const stored: StoredMessage = {
+    id: 'm',
+    role: 'assistant',
+    content: '',
+    createdAt: new Date().toISOString(),
+    toolCalls: [{ id: 'c1', name: 'purge', input: {}, kind: 'action' }],
+    approvals: [{ toolCallId: 'c1', approver: 'requester', status: 'pending', confirmation }],
+  };
+  const call = toolsBlock(storedMessageToUiMessage(stored).parts).calls[0];
+  expect(call?.approval?.confirmation).toEqual(confirmation);
+  expect(call?.description.confirm).toEqual(confirmation);
+});

@@ -1,4 +1,4 @@
-import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
+import type { ToolCallStatus, ToolConfirmation, ToolKind } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentMessage } from './agent-message.entity';
 import { DATETIME, LongTextType } from './column-types';
@@ -21,6 +21,8 @@ export class AgentToolCall {
   runId?: string | null;
   /** Who had to approve it (`requester` or a role); `null` for a call no policy put to anyone. */
   approver?: string | null;
+  /** Resolved per-call confirmation; null falls back to presentation templates. */
+  confirmation?: ToolConfirmation | null;
   /** When the approval request lapses; `null` → never. */
   expiresAt?: Date | null;
   /** The approval covers later calls of this tool in this thread. */
@@ -66,6 +68,7 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
       createdAt: { ...DATETIME, fieldName: 'created_at' },
       executedAt: { ...DATETIME, nullable: true, fieldName: 'executed_at' },
       runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
+      confirmation: { type: 'json', nullable: true },
       approver: { type: 'string', nullable: true, ...str },
       expiresAt: { ...DATETIME, nullable: true, fieldName: 'expires_at' },
       remember: { type: 'boolean', nullable: true },

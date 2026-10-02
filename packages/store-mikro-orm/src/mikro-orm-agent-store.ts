@@ -238,6 +238,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
         toolCallId: call.id,
         status: call.status,
         approver: call.approver,
+        confirmation: call.confirmation,
         expiresAt: call.expiresAt,
         remember: call.remember,
         executedByRef: call.executedByRef,
@@ -866,6 +867,7 @@ export class MikroOrmAgentStore implements AgentStore, ThreadTurnReader, ChatQue
       createdAt: new Date(),
       runId: input.runId ?? null,
       approver: input.approver ?? null,
+      confirmation: input.confirmation ?? null,
       expiresAt: input.expiresAt !== undefined ? new Date(input.expiresAt) : null,
     });
     em.persist(toolCall);

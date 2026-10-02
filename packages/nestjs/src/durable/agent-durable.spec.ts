@@ -475,7 +475,7 @@ describe('AgentDurableModule (llm/tool as the routed remote steps every turn dis
       });
       const collected = collect(service.subscribe(runId));
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await pendingApproval(store);
       await service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
 
       const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
@@ -631,14 +631,14 @@ describe('dispatched-step span emission (traceLlmTurn / traceToolExecution from 
       turnIndex === 0
         ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
         : { text: 'purged durably' };
-    const { moduleRef, service, engine } = await buildDurableApp(script);
+    const { moduleRef, service, engine, store } = await buildDurableApp(script);
     try {
       const { runId } = await service.chat({
         actor: { id: 'u1', roles: ['ADMIN'] },
         message: 'purge it',
       });
       const collected = collect(service.subscribe(runId));
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await pendingApproval(store);
       await service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
       const result = await engine.waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
       await collected;

@@ -1,5 +1,6 @@
 import {
   type ElicitationInput,
+  type ToolConfirmation,
   readElicitationInput,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
@@ -117,6 +118,7 @@ export type TranscriptApprovalStatus = 'pending' | 'approved' | 'rejected' | 'ex
  * `null` on a call whose runner never said (the call can still be awaiting approval).
  */
 export interface TranscriptApproval {
+  confirmation?: ToolConfirmation;
   /** Open vocabulary the host defines: `'requester'`, `'admin'`, a role… */
   approver: string;
   /** ISO-8601; `null` when the request never lapses. Pair with `useApprovalCountdown`. */
@@ -689,7 +691,11 @@ function buildToolCall(
     parentId: toolParentId(part),
     children: [],
     approval,
-    description: describeToolCall(part, catalog),
+    description: describeToolCall(
+      part,
+      catalog,
+      approval?.confirmation === undefined ? {} : { confirmation: approval.confirmation },
+    ),
     isAwaitingApproval: awaiting,
     approve: {
       available: awaiting && options?.canApprove === true,
@@ -909,6 +915,7 @@ const SETTLED_PART = 'data-approval-settled';
 
 /** What the approval parts of a message say about one call, before its own state is consulted. */
 interface ApprovalParts {
+  confirmation?: ToolConfirmation;
   approver: string | null;
   expiresAt: string | null;
   reason: string | null;
@@ -956,6 +963,20 @@ function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
       }
       approval.approver = data.approver;
       approval.expiresAt = typeof data.expiresAt === 'string' ? data.expiresAt : null;
+      if (
+        isRecord(data.confirmation) &&
+        typeof data.confirmation.title === 'string' &&
+        typeof data.confirmation.verb === 'string' &&
+        (data.confirmation.detail === undefined || typeof data.confirmation.detail === 'string')
+      ) {
+        approval.confirmation = {
+          title: data.confirmation.title,
+          verb: data.confirmation.verb,
+          ...(typeof data.confirmation.detail === 'string'
+            ? { detail: data.confirmation.detail }
+            : {}),
+        };
+      }
       approval.reason = typeof data.reason === 'string' ? data.reason : null;
       continue;
     }
@@ -987,6 +1008,7 @@ function approvalOf(
   }
   return {
     approver: parts.approver,
+    ...(parts.confirmation !== undefined ? { confirmation: parts.confirmation } : {}),
     expiresAt: parts.expiresAt,
     reason: parts.reason,
     status: parts.status ?? statusFromPart(call),

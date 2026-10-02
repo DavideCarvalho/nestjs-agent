@@ -124,6 +124,7 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
       data: {
         id: approval.toolCallId,
         approver: approval.approver,
+        ...(approval.confirmation !== undefined ? { confirmation: approval.confirmation } : {}),
         ...(approval.expiresAt !== undefined ? { expiresAt: approval.expiresAt } : {}),
       },
     });

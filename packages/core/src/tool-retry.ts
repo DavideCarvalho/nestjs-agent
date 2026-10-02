@@ -9,6 +9,7 @@
  */
 
 import { isControlFlowSignal } from './control-flow.js';
+import { ToolPreflightDeniedError } from './tool-registry.js';
 
 /** Narrow, structural check for a MySQL/Postgres/SQLite transient error shape — no casts. */
 function hasTransientShape(error: unknown): boolean {
@@ -43,6 +44,7 @@ function hasTransientShape(error: unknown): boolean {
  * `Error` with none of these markers — any other business failure — is `false`.
  */
 export function isTransientToolError(error: unknown): boolean {
+  if (error instanceof ToolPreflightDeniedError) return false;
   if (hasTransientShape(error)) {
     return true;
   }
@@ -145,7 +147,11 @@ export async function invokeWithTransientRetry<T>(
     try {
       return await fn();
     } catch (error) {
-      if (isControlFlowSignal(error) || options?.isControlFlowError?.(error) === true) {
+      if (
+        error instanceof ToolPreflightDeniedError ||
+        isControlFlowSignal(error) ||
+        options?.isControlFlowError?.(error) === true
+      ) {
         throw error;
       }
       const attemptsRemain = attempt < attempts;

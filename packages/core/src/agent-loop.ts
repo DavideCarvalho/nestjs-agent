@@ -104,7 +104,7 @@ import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter, StreamError } from './spi/token-stream-sink.js';
-import type { AiToolCtx } from './spi/tool.js';
+import type { AiToolCtx, ToolPreflightResult } from './spi/tool.js';
 import {
   type AgentStreamEvent,
   type AgentUiComponent,
@@ -124,6 +124,7 @@ import {
   createUiCollector,
   mergeUi,
   unwrapToolStepOutput,
+  wrapToolPreflightDenied,
   wrapToolStepOutput,
 } from './tool-ui.js';
 import { observeTurnFrames, withTurnFrames } from './turn-frames.js';
@@ -1387,9 +1388,13 @@ export function stampToolKinds<T extends { toolCalls: ToolCallRequest[] }>(
 ): T {
   return {
     ...result,
-    toolCalls: result.toolCalls.map((call) =>
-      call.kind === undefined ? { ...call, kind: declaredKind(deps, call.name) } : call,
-    ),
+    toolCalls: result.toolCalls.map((call) => {
+      // Preflight is a worker fact, never a field the model may supply.
+      const { preflight: _untrusted, ...trusted } = call;
+      return trusted.kind === undefined
+        ? { ...trusted, kind: declaredKind(deps, trusted.name) }
+        : trusted;
+    }),
   };
 }
 
@@ -1804,6 +1809,7 @@ interface ClaimedToolCall {
    * approval policies existed, which waits on the requester with no expiry, as it always did.
    */
   approval?: ClaimedApproval;
+  preflight?: ToolPreflightResult | { status: 'failed'; error: string };
   ctx: AiToolCtx;
 }
 
@@ -1834,7 +1840,8 @@ interface ApprovalMeta {
 /** One invocation's result, already reduced to what the persist checkpoint writes. */
 type ToolOutcome =
   | { status: 'executed'; output: unknown; executionMs: number }
-  | { status: 'failed'; error: string; executionMs: number };
+  | { status: 'failed'; error: string; executionMs: number }
+  | { status: 'denied'; reason: string; executionMs: number };
 
 /**
  * Record the call and settle its KIND, which decides this call's control flow: an `action` suspends
@@ -1877,7 +1884,44 @@ async function claimToolCall(
     // can both change while a run is parked, and the branch below (park or run) has to be the one
     // the journal recorded. A run claimed before this existed reads `approval` back as undefined and
     // waits on the requester, exactly as it did.
-    const approval = kind === 'action' ? await claimApproval(turn, call, spec) : undefined;
+    let preflight: ClaimedToolCall['preflight'];
+    if (kind === 'action' && hooks.dispatchLlm !== undefined && call.preflight !== undefined) {
+      preflight = call.preflight;
+    } else if (kind === 'action' && hooks.dispatchLlm !== undefined && spec === undefined) {
+      // A legacy remote journal has no prepared stamp. Keep its original approval branch;
+      // every new worker stamps preparation before returning the turn.
+      preflight = { status: 'ready' };
+    } else if (kind === 'action') {
+      try {
+        const allowedTools =
+          turn.persona?.allowedTools === undefined
+            ? deps.toolAllowList
+            : intersectAllowLists(deps.toolAllowList, turn.persona.allowedTools);
+        preflight = await deps.registry.prepare(
+          call.name,
+          call.input,
+          toolCallContext(toolContext(deps, input, hooks), call.id),
+          deps.rolesPolicy,
+          allowedTools === undefined ? {} : { allowedTools },
+        );
+      } catch (error) {
+        if (
+          hooks.isControlFlowError?.(error) === true ||
+          isControlFlowSignal(error) ||
+          isReplayIntegrityError(error)
+        )
+          throw error;
+        preflight = {
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    const confirmation = preflight?.status === 'ready' ? preflight.confirmation : undefined;
+    const approval =
+      kind === 'action' && preflight?.status === 'ready'
+        ? await claimApproval(turn, call, spec)
+        : undefined;
     const parks = kind === 'ask' || approval?.mode === 'ask';
     await deps.store.recordToolCall({
       toolCallId: call.id,
@@ -1887,6 +1931,7 @@ async function claimToolCall(
       input: call.input,
       status: parks ? 'pending_approval' : 'auto_executed',
       runId: hooks.runId,
+      ...(confirmation !== undefined ? { confirmation } : {}),
       ...(approval !== undefined && approval.mode !== 'auto'
         ? { approver: approval.approver }
         : {}),
@@ -1902,6 +1947,7 @@ async function claimToolCall(
           kind: 'approval-requested',
           id: call.id,
           approver: approval.approver,
+          ...(confirmation !== undefined ? { confirmation } : {}),
           ...(approval.expiresAt !== undefined ? { expiresAt: approval.expiresAt } : {}),
         }),
       );
@@ -1916,6 +1962,7 @@ async function claimToolCall(
       // the bytes it always has, and a replay reads the branch back instead of re-deciding it.
       ...(spec?.terminal === true ? { terminal: true } : {}),
       ...(approval !== undefined ? { approval } : {}),
+      ...(preflight !== undefined ? { preflight } : {}),
     };
   })) as
     | {
@@ -1924,6 +1971,7 @@ async function claimToolCall(
         detached?: boolean;
         terminal?: boolean;
         approval?: ClaimedApproval;
+        preflight?: ClaimedToolCall['preflight'];
       }
     | undefined;
   const toolType: ToolKind = persisted?.kind ?? call.kind ?? 'read';
@@ -1939,6 +1987,7 @@ async function claimToolCall(
     ...(toolType === 'action' && persisted?.approval !== undefined
       ? { approval: persisted.approval }
       : {}),
+    ...(persisted?.preflight !== undefined ? { preflight: persisted.preflight } : {}),
     ctx: toolContext(deps, input, hooks),
   };
 }
@@ -2156,7 +2205,7 @@ async function invokeClaimedTool(
     // what `invoke` holds the call to. Without one, nothing new is checked.
     const invokeAllowList =
       turn.persona?.allowedTools === undefined
-        ? undefined
+        ? deps.toolAllowList
         : intersectAllowLists(deps.toolAllowList, turn.persona.allowedTools);
     let raw: unknown;
     if (hooks.dispatchTool) {
@@ -2191,37 +2240,45 @@ async function invokeClaimedTool(
         const ui = createUiCollector(call.id, (event) =>
           turn.writer.write(encodeStreamEvent(event)),
         );
-        const output = await traceToolExecution(
-          hooks.runId,
-          { toolCallId: call.id, toolName: call.name, toolType },
-          () =>
-            invokeWithTransientRetry(
-              () => {
-                ui.restart();
-                return deps.registry.invoke(
-                  call.name,
-                  call.input,
-                  { ...toolCallContext(ctx, call.id), emitUi: ui.emit },
-                  deps.rolesPolicy,
-                  invokeAllowList !== undefined ? { allowedTools: invokeAllowList } : {},
-                );
-              },
-              deps.toolTransientRetry ?? {},
-              {
-                ...(hooks.isControlFlowError !== undefined
-                  ? { isControlFlowError: hooks.isControlFlowError }
-                  : {}),
-                onRetry: (attempt, retryError) => {
-                  publishAgentToolRetry({
-                    toolName: call.name,
-                    toolCallId: call.id,
-                    attempt,
-                    message: retryError instanceof Error ? retryError.message : String(retryError),
-                  });
+        let output: unknown;
+        try {
+          output = await traceToolExecution(
+            hooks.runId,
+            { toolCallId: call.id, toolName: call.name, toolType },
+            () =>
+              invokeWithTransientRetry(
+                () => {
+                  ui.restart();
+                  return deps.registry.invoke(
+                    call.name,
+                    call.input,
+                    { ...toolCallContext(ctx, call.id), emitUi: ui.emit },
+                    deps.rolesPolicy,
+                    invokeAllowList !== undefined ? { allowedTools: invokeAllowList } : {},
+                  );
                 },
-              },
-            ),
-        );
+                deps.toolTransientRetry ?? {},
+                {
+                  ...(hooks.isControlFlowError !== undefined
+                    ? { isControlFlowError: hooks.isControlFlowError }
+                    : {}),
+                  onRetry: (attempt, retryError) => {
+                    publishAgentToolRetry({
+                      toolName: call.name,
+                      toolCallId: call.id,
+                      attempt,
+                      message:
+                        retryError instanceof Error ? retryError.message : String(retryError),
+                    });
+                  },
+                },
+              ),
+          );
+        } catch (error) {
+          if (error instanceof Error && error.name === 'ToolPreflightDeniedError')
+            return wrapToolPreflightDenied(error.message);
+          throw error;
+        }
         return wrapToolStepOutput(output, ui.components());
       });
       raw =
@@ -2229,7 +2286,9 @@ async function invokeClaimedTool(
           ? await withToolTimeout(invocation, deps.toolTimeoutMs, call.name)
           : await invocation;
     }
-    const { output, ui } = unwrapToolStepOutput(raw);
+    const { output, ui, preflightDenied } = unwrapToolStepOutput(raw);
+    if (preflightDenied !== undefined)
+      return { status: 'denied', reason: preflightDenied, executionMs: Date.now() - startedAt };
     if (ui.length > 0) {
       turn.toolUi.set(call.id, ui);
     }
@@ -2244,6 +2303,9 @@ async function invokeClaimedTool(
       isReplayIntegrityError(error)
     ) {
       throw error;
+    }
+    if (error instanceof Error && error.name === 'ToolPreflightDeniedError') {
+      return { status: 'denied', reason: error.message, executionMs: Date.now() - startedAt };
     }
     return {
       status: 'failed',
@@ -2290,6 +2352,24 @@ async function recordToolOutcome(
       }),
     );
   };
+  if (outcome.status === 'denied') {
+    await hooks.step(`persist:toolreject:${call.id}`, async () => {
+      await deps.store.updateToolCall({
+        toolCallId: call.id,
+        status: meta === undefined ? 'rejected' : 'failed',
+        error: outcome.reason,
+        ...decided,
+      });
+      await settle();
+    });
+    return {
+      id: call.id,
+      name: call.name,
+      output: { rejected: true, reason: outcome.reason },
+      denied: true,
+      error: `This action was denied by its preflight check: ${outcome.reason}. The requested mutation did not run.`,
+    };
+  }
   if (outcome.status === 'failed') {
     await hooks.step(`persist:toolfail:${call.id}`, async () => {
       await deps.store.updateToolCall({
@@ -2455,6 +2535,17 @@ async function runClaimedToolCall(
   // An `ask` never reaches a handler: it is settled by a person, not executed.
   if (toolType === 'ask') {
     return elicitToolCall(turn, claimed);
+  }
+  if (claimed.preflight !== undefined && claimed.preflight.status !== 'ready') {
+    const result = claimed.preflight;
+    if (result.status === 'completed' && claimed.terminal === true) turn.halt.terminal = true;
+    const outcome: ToolOutcome =
+      result.status === 'completed'
+        ? { status: 'executed', output: result.output, executionMs: 0 }
+        : result.status === 'denied'
+          ? { status: 'denied', reason: result.reason, executionMs: 0 }
+          : { status: 'failed', error: result.error, executionMs: 0 };
+    return recordToolOutcome(turn, claimed, outcome, input.actor.id);
   }
   // WHO settled an action tool: the Decision's ref (a console admin) when it carries one, else
   // the run's own actor (the chat flow). Stamped on both the executed and rejected persists.
@@ -3017,6 +3108,15 @@ export async function runAgentLoop<TOutput = unknown>(
         messages: prompt.messages,
         actor: input.actor,
         threadId: input.threadId,
+        preflightContext: {
+          actor: input.actor,
+          threadId: input.threadId,
+          runId: hooks.runId,
+          requestId: hooks.runId,
+          ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+          ...(input.persona !== undefined ? { persona: input.persona } : {}),
+          ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+        },
         ...(gated ? { bufferOutput: true } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(persona?.allowedTools !== undefined

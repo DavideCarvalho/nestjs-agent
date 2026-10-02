@@ -1,4 +1,5 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ToolConfirmation } from '../tool-presentation.js';
 import type { Actor, PageContext } from '../types.js';
 
 /**
@@ -62,9 +63,26 @@ export interface AiToolCtx {
   ): Promise<{ id: string }>;
 }
 
-/** A tool implementation. `I` is the parsed (Zod-validated) input. */
-export interface ToolHandler<I = unknown> {
-  execute(input: I, ctx: AiToolCtx): Promise<unknown>;
+/** When the action state is being checked. */
+export interface ToolPreflightOptions {
+  phase: 'prepare' | 'execute';
+}
+
+export type ToolPreflightResult<O = unknown> =
+  | { status: 'ready'; confirmation?: ToolConfirmation }
+  | { status: 'denied'; reason: string }
+  | { status: 'completed'; output: O };
+
+/** A tool implementation. `I` is the input parsed by its registered Standard Schema. */
+export interface ToolHandler<I = unknown, O = unknown> {
+  execute(input: I, ctx: AiToolCtx): Promise<O>;
+  /** Read-only action check. Runs after authorization and validation, before approval and again
+   * immediately before execution. Confirmation strings are resolved, never templates. */
+  preflight?(
+    input: I,
+    ctx: AiToolCtx,
+    options: ToolPreflightOptions,
+  ): ToolPreflightResult<O> | Promise<ToolPreflightResult<O>>;
   /**
    * Whether this tool exists in this deployment at all — evaluated per turn, BEFORE the roles
    * policy, so a `false` here means the model is never shown the tool rather than being shown one
