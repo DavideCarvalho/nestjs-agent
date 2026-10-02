@@ -281,9 +281,28 @@ export const agentActionProposal = mysqlTable(
     createFingerprint: longtext('create_fingerprint').notNull(),
     proposal: proposalJson('proposal').notNull(),
     version: bigint('version', { mode: 'number' }).notNull().default(0),
+    executionStatus:
+      key('execution_status').$type<NonNullable<ActionProposal['execution']>['status']>(),
+    leaseExpiresAt: bigint('lease_expires_at', { mode: 'number' }),
+    proposalExpiresAt: bigint('proposal_expires_at', { mode: 'number' }),
+    discoveryIndexVersion: bigint('discovery_index_version', { mode: 'number' })
+      .notNull()
+      .default(0),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
   },
   (table) => [
+    index('agent_action_proposal_execution_idx').on(
+      table.discoveryIndexVersion,
+      table.executionStatus,
+      table.leaseExpiresAt,
+      table.createdAt,
+    ),
+    index('agent_action_proposal_expiry_idx').on(
+      table.discoveryIndexVersion,
+      table.decision,
+      table.proposalExpiresAt,
+      table.createdAt,
+    ),
     index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
   ],
 );

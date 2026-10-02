@@ -41,6 +41,9 @@ export class AgentActionProposal {
   decision!: ActionProposal['decision'];
   executionStatus!: NonNullable<ActionProposal['execution']>['status'] | null;
   leaseExpiresAt!: number | null;
+  proposalExpiresAt!: number | null;
+  /** Zero marks legacy projections pending an explicit deployment backfill. */
+  discoveryIndexVersion!: number;
   createdAt!: number;
   declare [EntityRepositoryType]?: AgentActionProposalRepository;
 }
@@ -60,7 +63,24 @@ export function agentActionProposalSchema(collation?: string): EntitySchema<Agen
         name: 'agent_proposal_scope_decision_idx',
         properties: ['scopeKey', 'decision', 'createdAt'],
       },
-      { name: 'agent_proposal_work_lease_idx', properties: ['executionStatus', 'leaseExpiresAt'] },
+      {
+        name: 'agent_proposal_work_lease_idx',
+        properties: [
+          'discoveryIndexVersion',
+          'decision',
+          'executionStatus',
+          'leaseExpiresAt',
+          'createdAt',
+        ],
+      },
+      {
+        name: 'agent_proposal_pending_expiry_idx',
+        properties: ['discoveryIndexVersion', 'decision', 'proposalExpiresAt', 'createdAt'],
+      },
+      {
+        name: 'agent_proposal_discovery_version_idx',
+        properties: ['discoveryIndexVersion', 'createdAt'],
+      },
     ],
     properties: {
       id: { type: 'string', length: 64, primary: true, ...identity },
@@ -77,6 +97,8 @@ export function agentActionProposalSchema(collation?: string): EntitySchema<Agen
         ...identity,
       },
       leaseExpiresAt: { type: epoch(), fieldName: 'lease_expires_at', nullable: true },
+      proposalExpiresAt: { type: epoch(), fieldName: 'proposal_expires_at', nullable: true },
+      discoveryIndexVersion: { type: 'integer', fieldName: 'discovery_index_version', default: 0 },
       createdAt: { type: epoch(), fieldName: 'created_at' },
     },
   });

@@ -2,10 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   type ActionProposal,
   type ActionProposalDecisionCommand,
+  type ActionProposalDiscoveryIndexStore,
   type ActionProposalMutationResult,
   type ActionProposalScope,
   type ActionProposalStore,
   type ActionProposalStoreOptions,
+  type ActionProposalWorkerStore,
   type ClaimActionProposal,
   type CreateActionProposal,
   type CreateActionProposalResult,
@@ -19,9 +21,12 @@ import {
   transitionActionProposalDecision,
   transitionActionProposalLease,
   transitionActionProposalSettlement,
+  validateActionProposalDiscoveryIndexBatch,
+  validateActionProposalExpiryBatch,
   validateActionProposalListQuery,
+  validateActionProposalWorkerClaim,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, lte, or } from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
@@ -44,7 +49,9 @@ type ProposalRow = AgentTables['agentActionProposal']['$inferSelect'];
  * Independent persisted proposals. Each decision and its durable execution work live in one row;
  * a version predicate fences every read/modify/write across connections and store instances.
  */
-export class DrizzleActionProposalStore implements ActionProposalStore {
+export class DrizzleActionProposalStore
+  implements ActionProposalStore, ActionProposalWorkerStore, ActionProposalDiscoveryIndexStore
+{
   private readonly db: AgentSqliteDb;
   private readonly dialect: AgentDialect;
   private readonly table: AgentTables['agentActionProposal'];
@@ -66,6 +73,7 @@ export class DrizzleActionProposalStore implements ActionProposalStore {
       logicalSort: logicalSort(input.id),
       createFingerprint: canonicalActionProposalJson(input),
       proposal,
+      ...discoveryMetadata(proposal),
       version: 0,
       createdAt: proposal.createdAt,
     };
@@ -149,6 +157,97 @@ export class DrizzleActionProposalStore implements ActionProposalStore {
     );
   }
 
+  async claimNextActionProposal(command: ClaimActionProposal): Promise<ActionProposal | null> {
+    const now = this.clock();
+    validateActionProposalWorkerClaim(command, now);
+    const table = this.table;
+    const candidates = await this.db
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.discoveryIndexVersion, 1),
+          eq(table.decision, 'approved'),
+          or(
+            eq(table.executionStatus, 'queued'),
+            and(eq(table.executionStatus, 'executing'), lte(table.leaseExpiresAt, now)),
+          ),
+        ),
+      )
+      .orderBy(asc(table.createdAt), asc(table.logicalSort))
+      .limit(32);
+    for (const candidate of candidates) {
+      const result = await this.claimActionProposal(
+        candidate.proposal,
+        candidate.proposal.id,
+        command,
+      );
+      if (result.status === 'applied' && result.proposal) return result.proposal;
+    }
+    return null;
+  }
+
+  async expireActionProposals(command: { limit: number }): Promise<number> {
+    const now = this.clock();
+    validateActionProposalExpiryBatch(command, now);
+    const table = this.table;
+    const candidates = await this.db
+      .select()
+      .from(table)
+      .where(
+        and(
+          eq(table.discoveryIndexVersion, 1),
+          eq(table.decision, 'pending'),
+          lte(table.proposalExpiresAt, now),
+        ),
+      )
+      .orderBy(asc(table.createdAt), asc(table.logicalSort))
+      .limit(command.limit);
+    let expired = 0;
+    for (const candidate of candidates) {
+      const result = await this.decideActionProposal(candidate.proposal, candidate.proposal.id, {
+        decision: 'expired',
+        actorRef: 'system',
+        via: 'expiry',
+      });
+      if (result.status === 'applied') expired++;
+    }
+    return expired;
+  }
+
+  async backfillActionProposalDiscoveryIndex(command: { limit: number }): Promise<number> {
+    validateActionProposalDiscoveryIndexBatch(command);
+    const table = this.table;
+    const candidates = await this.db
+      .select()
+      .from(table)
+      .where(eq(table.discoveryIndexVersion, 0))
+      .orderBy(asc(table.createdAt), asc(table.logicalSort))
+      .limit(command.limit);
+    let changed = 0;
+    for (const row of candidates) {
+      changed += await affectedRows(
+        this.dialect,
+        this.db
+          .update(table)
+          .set({
+            ...discoveryMetadata(row.proposal),
+            version: row.version + 1,
+          })
+          .where(
+            and(
+              eq(table.id, row.id),
+              eq(table.scopeKey, row.scopeKey),
+              eq(table.version, row.version),
+              eq(table.discoveryIndexVersion, 0),
+            ),
+          ),
+        table.id,
+      );
+    }
+    return changed;
+  }
+
   private async read(scope: ActionProposalScope, id: string): Promise<ProposalRow | undefined> {
     const [row] = await this.db
       .select()
@@ -185,6 +284,7 @@ export class DrizzleActionProposalStore implements ActionProposalStore {
           .set({
             proposal: result.proposal,
             decision: result.proposal.decision,
+            ...discoveryMetadata(result.proposal),
             version: row.version + 1,
           })
           .where(
@@ -220,4 +320,13 @@ function logicalSort(id: string): string {
   for (let index = 0; index < id.length; index++)
     sort += id.charCodeAt(index).toString(16).padStart(4, '0');
   return sort;
+}
+
+function discoveryMetadata(proposal: ActionProposal) {
+  return {
+    executionStatus: proposal.execution?.status ?? null,
+    leaseExpiresAt: proposal.execution?.lease?.expiresAt ?? null,
+    proposalExpiresAt: proposal.expiresAt,
+    discoveryIndexVersion: 1,
+  };
 }

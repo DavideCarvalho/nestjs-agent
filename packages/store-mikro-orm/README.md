@@ -218,6 +218,37 @@ existing data. If `autoSchema` is disabled, generate and apply a MikroORM migrat
 entities before calling the proposal methods. The new table has no foreign keys to chat rows, so
 origin ids remain provenance even after a chat thread is removed.
 
+## Worker discovery and upgrade backfill
+
+The same `MikroOrmAgentStore` implements the privileged `ActionProposalWorkerStore` capability.
+`claimNextActionProposal({ workerId, leaseMs })` selects at most 32 queued or expired-lease
+candidates across scopes in SQL, ordered by creation time and logical id, then claims through the
+existing fenced CAS. It returns the winning execution snapshot or `null`. This API belongs to a
+trusted worker; expose scoped proposal reads and decisions on user routes.
+
+`expireActionProposals({ limit })` selects at most `limit` due pending proposals using the configured
+server clock and records `system` / `expiry` audit decisions. The integer limit must be 1–1000.
+An approved proposal remains approved after its proposal deadline; its execution lease controls
+recovery. Execution status, lease expiry, proposal expiry and discovery index version are maintained
+in the same row update as every state transition.
+
+Existing proposal rows receive `discovery_index_version = 0` when the additive schema upgrade adds
+that column. Workers only discover version 1 rows. Run an explicit upgrade before starting workers:
+
+1. Quiesce writers running older package versions.
+2. Apply the updated entity migration, or run `ensureAgentSchema` to add the columns and indexes.
+3. Repeat `await store.backfillActionProposalDiscoveryIndex({ limit: 1000 })` until it returns `0`.
+4. Start the updated writers and workers.
+
+The backfill is an optional `ActionProposalDiscoveryIndexStore` capability on this concrete store.
+Each call reads a bounded indexed batch and updates projections under the row's observed revision
+and version-zero fence. It increments the revision and preserves the JSON payload, decision audit,
+idempotency key and timestamps. A competing new writer wins safely and writes current projections
+itself. Run maintenance batches outside long-lived snapshot transactions. Mixing legacy writers
+with active discovery is unsupported because older writers do not maintain the new projections.
+Discovery never performs a hidden backfill. This package supplies storage operations; scheduling
+and tool execution remain the host's responsibility.
+
 ## License
 
 MIT © Davide Carvalho

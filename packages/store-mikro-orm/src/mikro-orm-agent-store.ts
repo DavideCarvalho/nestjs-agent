@@ -1,4 +1,9 @@
-import type { ActionProposalStore, ActionProposalStoreOptions } from '@dudousxd/nestjs-agent-core';
+import type {
+  ActionProposalDiscoveryIndexStore,
+  ActionProposalStore,
+  ActionProposalStoreOptions,
+  ActionProposalWorkerStore,
+} from '@dudousxd/nestjs-agent-core';
 import {
   type AgentStore,
   type AgentUiComponent,
@@ -74,7 +79,13 @@ type TurnMessage = Pick<AgentMessage, TurnMessageKey> & {
  * active-stream/soft-delete semantics) so the two are interchangeable in tests.
  */
 export class MikroOrmAgentStore
-  implements AgentStore, ThreadTurnReader, ChatQueueStore, ActionProposalStore
+  implements
+    AgentStore,
+    ThreadTurnReader,
+    ChatQueueStore,
+    ActionProposalStore,
+    ActionProposalWorkerStore,
+    ActionProposalDiscoveryIndexStore
 {
   private readonly proposals: MikroOrmActionProposals;
   constructor(
@@ -82,6 +93,19 @@ export class MikroOrmAgentStore
     options: ActionProposalStoreOptions = {},
   ) {
     this.proposals = new MikroOrmActionProposals(em, options);
+  }
+  claimNextActionProposal(
+    ...args: Parameters<ActionProposalWorkerStore['claimNextActionProposal']>
+  ) {
+    return this.proposals.claimNextActionProposal(...args);
+  }
+  expireActionProposals(...args: Parameters<ActionProposalWorkerStore['expireActionProposals']>) {
+    return this.proposals.expireActionProposals(...args);
+  }
+  backfillActionProposalDiscoveryIndex(
+    ...args: Parameters<ActionProposalDiscoveryIndexStore['backfillActionProposalDiscoveryIndex']>
+  ) {
+    return this.proposals.backfillActionProposalDiscoveryIndex(...args);
   }
   createActionProposal(...args: Parameters<ActionProposalStore['createActionProposal']>) {
     return this.proposals.createActionProposal(...args);
