@@ -1,3 +1,4 @@
+import type { ResolveToolUiCatalog } from '@dudousxd/nestjs-agent-core';
 import type {
   AgentIntake,
   AgentPricingStore,
@@ -24,6 +25,8 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
 export interface AgentDeps {
+  resolveUiCatalog?: ResolveToolUiCatalog;
+  actionApprovalMode?: 'blocking' | 'independent';
   model: ModelProvider;
   store: AgentStore;
   registry: ToolRegistry;

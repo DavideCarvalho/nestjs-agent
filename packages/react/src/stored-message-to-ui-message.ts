@@ -104,6 +104,10 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
         id: component.id,
         component: component.component,
         props: component.props,
+        ...(component.componentVersions !== undefined
+          ? { componentVersions: component.componentVersions }
+          : {}),
+        ...(component.fallbackText !== undefined ? { fallbackText: component.fallbackText } : {}),
         ...(component.version !== undefined ? { version: component.version } : {}),
         ...(component.toolCallId !== undefined ? { toolCallId: component.toolCallId } : {}),
       },
@@ -124,6 +128,11 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
       data: {
         id: approval.toolCallId,
         approver: approval.approver,
+        ...(approval.target !== undefined
+          ? { target: approval.target }
+          : approval.proposalId !== undefined
+            ? { target: { kind: 'proposal', proposalId: approval.proposalId } }
+            : {}),
         ...(approval.confirmation !== undefined ? { confirmation: approval.confirmation } : {}),
         ...(approval.expiresAt !== undefined ? { expiresAt: approval.expiresAt } : {}),
       },
@@ -194,6 +203,9 @@ export function storedMessageToUiMessage(message: StoredMessage): UIMessage {
   const metadata: AgentMessageMetadata = {
     // The host's own facts first: the library's keys win on a clash.
     ...message.metadata,
+    ...(message.actionProposalOutcome === undefined
+      ? {}
+      : { actionProposalOutcomeId: message.actionProposalOutcome.id }),
     ...(message.feedback !== undefined ? { feedback: message.feedback } : {}),
     ...(message.createdAt ? { createdAt: message.createdAt } : {}),
     ...(message.agentName !== undefined ? { agentName: message.agentName } : {}),

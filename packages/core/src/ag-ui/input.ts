@@ -1,3 +1,4 @@
+import { type UiCapabilities, validateUiCapabilities } from '../genui/capabilities.js';
 import { type InterruptAddress, decodeInterruptId } from './interrupt-id.js';
 import type {
   AgUiContentPart,
@@ -47,6 +48,13 @@ export function parseRunInput(body: unknown): AgUiRunInput | string {
   }
   if (body.context !== undefined && !Array.isArray(body.context)) {
     return 'context must be an array';
+  }
+  if (isRecord(body.forwardedProps) && Object.hasOwn(body.forwardedProps, 'uiCapabilities')) {
+    try {
+      validateUiCapabilities(body.forwardedProps.uiCapabilities);
+    } catch {
+      return 'forwardedProps.uiCapabilities must be valid UI capabilities';
+    }
   }
   return body as unknown as AgUiRunInput;
 }
@@ -173,6 +181,7 @@ export function readContext(
  * model: which agent, which model, which persona, and the page context the tools see.
  */
 export interface ForwardedOptions {
+  uiCapabilities?: UiCapabilities;
   agent?: string;
   model?: string;
   persona?: string;
@@ -189,6 +198,9 @@ export function readForwardedProps(forwarded: unknown): ForwardedOptions {
   const model = pick('model');
   const persona = pick('persona');
   return {
+    ...(Object.hasOwn(forwarded, 'uiCapabilities')
+      ? { uiCapabilities: validateUiCapabilities(forwarded.uiCapabilities) }
+      : {}),
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(persona !== undefined ? { persona } : {}),

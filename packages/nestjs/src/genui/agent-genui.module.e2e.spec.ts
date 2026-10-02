@@ -3,8 +3,10 @@ import {
   type Catalog,
   GENUI_TREE_COMPONENT,
   type GenuiCatalogScope,
+  componentToText,
   defineCatalog,
   defineComponent,
+  treeToText,
 } from '@dudousxd/nestjs-agent-core/genui';
 import { InMemoryAgentStore, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
 import { Injectable, Module } from '@nestjs/common';
@@ -119,7 +121,15 @@ describe('AgentGenuiModule', () => {
     expect(model.tools.map((tool) => tool.name)).toContain('ui__render');
     expect(model.turns).toBe(1);
     expect(assistants[0]?.ui).toEqual([
-      { id: 'c1:ui:0', component: GENUI_TREE_COMPONENT, props: { root }, toolCallId: 'c1' },
+      {
+        id: 'c1:ui:0',
+        component: GENUI_TREE_COMPONENT,
+        props: { root },
+        version: 1,
+        fallbackText: treeToText(catalog, root),
+        componentVersions: { Stack: 1, Callout: 1 },
+        toolCallId: 'c1',
+      },
     ]);
   });
 
@@ -229,6 +239,9 @@ describe('AgentGenuiModule', () => {
           component: 'LeadCard',
           props: { lead: 'Ada' },
           version: 7,
+          fallbackText: componentToText(defineCatalog([Callout, LeadCard]), 'LeadCard', {
+            lead: 'Ada',
+          }),
           toolCallId: 'c1',
         },
       ]);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +12,7 @@ import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { ensureAgentSchema } from './ensure-schema';
 import { agentEntities } from './entities';
+import { AgentActionProposal } from './entities/agent-action-proposal.entity';
 import { MikroOrmActionProposals } from './mikro-orm-action-proposals';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { type AgentOrmHandle, describeEachDialect, openAgentOrm, rawSql } from './testing/real-db';
@@ -77,6 +79,174 @@ describeEachDialect('MikroOrmAgentStore action proposals', (dialect) => {
   for (const contract of ACTION_PROPOSAL_WORKER_STORE_CONTRACT) {
     it(contract.name, async () => contract.run(await fresh()));
   }
+  it('paginates creation ties by the indexed exact Unicode logical id', async () => {
+    await fresh();
+    for (const id of ['z', '😀', '\uE000']) await store.createActionProposal(proposal(id));
+    const first = await store.listActionProposals(scope, { limit: 2 });
+    expect(first.map((row) => row.id)).toEqual(['z', '😀']);
+    const last = required(first.at(-1));
+    expect(
+      (
+        await peer.listActionProposals(scope, {
+          limit: 2,
+          after: { createdAt: last.createdAt, id: last.id },
+        })
+      ).map((row) => row.id),
+    ).toEqual(['\uE000']);
+  });
+  it('rejects collation aliases of the persisted logical thread identity', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const alias = `${thread.id} `;
+    expect(await store.getThreadActionProposalScope(alias)).toBeNull();
+    const data = { ...proposal(), threadId: alias, replacementKey: 'same' };
+    expect(await store.createReplacingActionProposal(data)).toEqual({ status: 'conflict' });
+    await store.createActionProposal(data);
+    await store.decideActionProposal(data, data.id, {
+      decision: 'rejected',
+      actorRef: 'owner',
+      via: 'button',
+    });
+    const work = await store.claimNextActionProposalOutcome({ workerId: 'w', leaseMs: 100 });
+    const admitted = await store.admitActionProposalOutcome(required(work?.lease));
+    expect(['conflict', 'discarded']).toContain(admitted.status);
+    expect((await store.getThread(thread.id))?.messages).toHaveLength(0);
+  });
+  it('retains remembered terminal grants beyond the public listing limit', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const target = { ...proposal('remembered-latest'), threadId: thread.id, expiresAt: null };
+    await store.createActionProposal(target);
+    await store.decideActionProposal(target, target.id, { ...approve, remember: true });
+    const claimed = await store.claimActionProposal(target, target.id, {
+      workerId: 'worker',
+      leaseMs: 100,
+    });
+    const fence = required(claimed.proposal?.execution?.lease);
+    await store.settleActionProposal(target, target.id, {
+      token: fence.token,
+      generation: fence.generation,
+      status: 'succeeded',
+      result: null,
+    });
+    const persisted = required(await store.getActionProposal(target, target.id));
+    const em = handle.orm.em.fork();
+    const original = required(await em.findOne(AgentActionProposal, { decision: 'approved' }));
+    for (let index = 0; index < 1000; index++)
+      em.persist(
+        em.create(AgentActionProposal, {
+          ...original,
+          id: createHash('sha256').update(`old:${index}`).digest('hex'),
+          sortKey: `0${index}`,
+          payload: {
+            ...persisted,
+            id: `old:${index}`,
+            createdAt: 0,
+            decisionAudit: { ...required(persisted.decisionAudit), remember: false },
+          },
+          createdAt: 0,
+          outcomeIdKey: null,
+        }),
+      );
+    await em.flush();
+    expect(await store.rememberedApprovals(thread.id)).toContain(target.toolName);
+  });
+  it('atomically admits a fenced terminal fact only while the actual thread is idle', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const data = { ...proposal(), threadId: thread.id };
+    await store.createActionProposal(data);
+    await store.decideActionProposal(data, data.id, {
+      decision: 'rejected',
+      actorRef: 'owner',
+      via: 'button',
+    });
+    const work = await store.claimNextActionProposalOutcome({ workerId: 'w', leaseMs: 100 });
+    expect(work).not.toBeNull();
+    await store.claimActiveStream(thread.id, 'active');
+    expect(await peer.admitActionProposalOutcome(required(work?.lease))).toEqual({
+      status: 'busy',
+    });
+    await store.releaseActiveStream(thread.id, 'active');
+    const results = await Promise.all([
+      store.admitActionProposalOutcome(required(work?.lease)),
+      peer.admitActionProposalOutcome(required(work?.lease)),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual(['applied', 'unchanged']);
+    const messages = required((await store.getThread(thread.id))?.messages);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.actionProposalOutcome).toEqual(work?.outcome);
+  });
+  it('rolls back assistant fact and delivery state in a caller transaction', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const data = { ...proposal(), threadId: thread.id };
+    await store.createActionProposal(data);
+    await store.decideActionProposal(data, data.id, {
+      decision: 'rejected',
+      actorRef: 'owner',
+      via: 'button',
+    });
+    const work = await store.claimNextActionProposalOutcome({ workerId: 'w', leaseMs: 100 });
+    await expect(
+      handle.orm.em.fork().transactional(async (em) => {
+        const transactional = new MikroOrmAgentStore(em, { clock: () => now });
+        expect((await transactional.admitActionProposalOutcome(required(work?.lease))).status).toBe(
+          'applied',
+        );
+        throw new Error('rollback');
+      }),
+    ).rejects.toThrow('rollback');
+    expect((await store.getThread(thread.id))?.messages).toHaveLength(0);
+    expect((await store.getActionProposal(data, data.id))?.outcomeDelivery?.status).toBe('pending');
+    expect((await peer.admitActionProposalOutcome(required(work?.lease))).status).toBe('applied');
+  });
+  it('creates replacement and supersedes pending work atomically without replay cancelling newer work', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const first = { ...proposal('first'), threadId: thread.id, replacementKey: 'recipient' };
+    const second = { ...first, id: 'second', input: { amount: 8 } };
+    expect((await store.createReplacingActionProposal(first)).status).toBe('created');
+    await expect(
+      handle.orm.em.fork().transactional(async (em) => {
+        await new MikroOrmAgentStore(em, { clock: () => now }).createReplacingActionProposal(
+          second,
+        );
+        throw new Error('rollback');
+      }),
+    ).rejects.toThrow('rollback');
+    expect(await store.getActionProposal(first, 'second')).toBeNull();
+    expect((await store.getActionProposal(first, 'first'))?.decision).toBe('pending');
+    expect((await store.createReplacingActionProposal(second)).status).toBe('created');
+    expect((await store.getActionProposal(first, 'first'))?.decision).toBe('superseded');
+    expect((await store.createReplacingActionProposal(first)).status).toBe('unchanged');
+    expect((await store.getActionProposal(first, 'second'))?.decision).toBe('pending');
+  });
+  it('persists late UI and escaped JSON data in outcome metadata without native JSON corruption', async () => {
+    await fresh();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    const data = { ...proposal(), threadId: thread.id };
+    await store.createActionProposal(data);
+    await store.decideActionProposal(data, data.id, approve);
+    const claim = await store.claimNextActionProposal({ workerId: 'w', leaseMs: 100 });
+    const lease = required(claim?.execution?.lease);
+    const result = { value: 'nul\u0000 lone\ud800' };
+    const ui = [{ id: 'ui', component: 'Note', props: { text: result.value } }];
+    await store.settleActionProposal(data, data.id, {
+      ...lease,
+      status: 'succeeded',
+      result,
+      ui,
+      text: 'Fallback\u0000 lone\ud800',
+    });
+    const work = await store.claimNextActionProposalOutcome({ workerId: 'w', leaseMs: 100 });
+    expect((await peer.admitActionProposalOutcome(required(work?.lease))).status).toBe('applied');
+    const message = required((await store.getThread(thread.id))?.messages[0]);
+    expect(message.actionProposalOutcome?.result).toEqual(result);
+    expect(message.ui).toEqual(ui);
+    expect(message.content).toContain('\\u0000');
+    expect(message.content).toContain('\\ud800');
+  });
   it('claims queued work across scopes through independent connections and returns each winning fence', async () => {
     await fresh();
     for (const data of [
@@ -495,3 +665,8 @@ describeEachDialect('MikroOrmAgentStore action proposals', (dialect) => {
     ).toBe('conflict');
   });
 });
+
+function required<T>(value: T | null | undefined): T {
+  if (value == null) throw new Error('Expected fixture value');
+  return value;
+}

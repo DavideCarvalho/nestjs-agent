@@ -156,3 +156,14 @@ export { InMemoryActionProposalStore } from './in-memory-action-proposal-store.j
 export { prepareActionProposal } from './action-proposal-preparation.js';
 export * from './spi/action-proposal-worker-store.js';
 export * from './action-proposal-discovery.js';
+export * from './spi/background-actor-resolver.js';
+export * from './spi/action-proposal-outcome-store.js';
+export * from './action-proposal-outcome.js';
+export * from './action-proposal-text.js';
+export * from './action-proposal-receipt.js';
+export * from './action-proposal-executor.js';
+export * from './action-proposal-worker.js';
+export * from './action-proposal-capabilities.js';
+
+export * from './action-proposal-approval.js';
+export * from './negotiated-tool-ui.js';

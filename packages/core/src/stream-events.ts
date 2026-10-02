@@ -40,6 +40,10 @@ export interface AgentUiComponent {
   props: Record<string, unknown>;
   /** Schema version of `props`, so a client can keep rendering components persisted by an older server. */
   version?: number;
+  /** Validated readable fallback retained for clients without this renderer. */
+  fallbackText?: string;
+  /** Trusted schema versions for every component in a persisted tree. */
+  componentVersions?: Record<string, number>;
   /**
    * The tool call that pushed the component (`ctx.emitUi`), when one did. Lets a client place it
    * with that call — a reloaded message puts it right after the call's tool part, where the live
@@ -53,6 +57,7 @@ export interface AgentUiComponent {
  * settled through the tool-call approve/reject routes, by its `toolCallId`.
  */
 export interface AgentApprovalRequest {
+  target?: { kind: 'proposal'; proposalId: string };
   /** Resolved confirmation from the action preflight; overrides presentation templates. */
   confirmation?: ToolConfirmation;
   /** The tool call awaiting the decision — the `id` of a call already announced on this stream. */

@@ -214,7 +214,12 @@ describe('agUiChatStream', () => {
     );
     const response = await agUiChatStream(
       {
-        body: { message: 'Quanto gastei?', pageContext: { readingId: 'r-1' } },
+        body: {
+          message: 'Quanto gastei?',
+          pageContext: { readingId: 'r-1' },
+          persona: 'reviewer',
+          uiCapabilities: { components: [] },
+        },
         headers: { 'x-csrf-token': 'tok' },
       },
       {
@@ -234,7 +239,11 @@ describe('agUiChatStream', () => {
     expect(input).toMatchObject({
       protocolVersion: '1.0',
       messages: [{ role: 'user', content: 'Quanto gastei?' }],
-      forwardedProps: { pageContext: { readingId: 'r-1' } },
+      forwardedProps: {
+        pageContext: { readingId: 'r-1' },
+        persona: 'reviewer',
+        uiCapabilities: { components: [] },
+      },
     });
     expect(response.threadId).toBe(input.threadId);
     expect(response.runId).toBe('lib-run');

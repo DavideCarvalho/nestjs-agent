@@ -1,0 +1,148 @@
+import {
+  AGENT_OPTIONS,
+  AGENT_STORE,
+  type ActionProposalMutationResult,
+  type ActionProposalOutcomeStore,
+  type ActionProposalScope,
+  type ActionProposalStore,
+  type Actor,
+  type AgentStore,
+  type ListActionProposals,
+  mayDecideApproval,
+  parseTextActionProposalCommand,
+  resolveTextActionProposalDecision,
+} from '@dudousxd/nestjs-agent-core';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  NotImplementedException,
+} from '@nestjs/common';
+import type { AgentModuleOptions } from '../agent.options.js';
+
+@Injectable()
+export class ActionProposalService {
+  constructor(
+    @Inject(AGENT_STORE) private readonly store: AgentStore,
+    @Inject(AGENT_OPTIONS) private readonly options: Pick<AgentModuleOptions, 'approvalPolicy'>,
+  ) {}
+  private capability(): AgentStore & ActionProposalStore & ActionProposalOutcomeStore {
+    const store = this.store as AgentStore & ActionProposalStore & ActionProposalOutcomeStore;
+    if (
+      typeof store.getThreadActionProposalScope !== 'function' ||
+      typeof store.listActionProposals !== 'function'
+    )
+      throw new NotImplementedException('Action proposals are unavailable');
+    return store;
+  }
+  private async scope(threadId: string, actor: Actor): Promise<ActionProposalScope> {
+    const scope = await this.capability().getThreadActionProposalScope(threadId);
+    if (!scope) throw new NotFoundException('Thread not found');
+    if (scope.tenantRef !== (actor.tenantRef ?? null))
+      throw new ForbiddenException('Wrong proposal tenant');
+    return scope;
+  }
+  private mayDecide(
+    actor: Actor,
+    proposal: { originToolCallId: string; approver: string; actorRef: string },
+  ) {
+    return mayDecideApproval(this.options.approvalPolicy, actor, {
+      toolCallId: proposal.originToolCallId,
+      approver: proposal.approver,
+      requesterRef: proposal.actorRef,
+    });
+  }
+  async listPage(threadId: string, actor: Actor, query: Pick<ListActionProposals, 'after'> = {}) {
+    const scope = await this.scope(threadId, actor);
+    const rows = await this.capability().listActionProposals(scope, { limit: 1000, ...query });
+    const visible = [];
+    for (const row of rows)
+      if (scope.actorRef === actor.id || (await this.mayDecide(actor, row))) visible.push(row);
+    const last = rows.at(-1);
+    return {
+      items: visible,
+      ...(rows.length === 1000 && last ? { next: { createdAt: last.createdAt, id: last.id } } : {}),
+    };
+  }
+  async list(threadId: string, actor: Actor) {
+    return (await this.listPage(threadId, actor)).items;
+  }
+  async decide(
+    threadId: string,
+    proposalId: string,
+    actor: Actor,
+    command: {
+      decision: 'approved' | 'rejected';
+      remember?: boolean;
+      reason?: string;
+      via?: string;
+    },
+  ): Promise<ActionProposalMutationResult> {
+    const scope = await this.scope(threadId, actor);
+    const proposal = await this.capability().getActionProposal(scope, proposalId);
+    if (!proposal) throw new NotFoundException('Proposal not found');
+    if (!(await this.mayDecide(actor, proposal)))
+      throw new ForbiddenException('May not decide this proposal');
+    return this.capability().decideActionProposal(scope, proposalId, {
+      decision: command.decision,
+      actorRef: actor.id,
+      via: command.via ?? 'web',
+      ...(command.remember !== undefined ? { remember: command.remember } : {}),
+      ...(command.reason !== undefined ? { reason: command.reason } : {}),
+    });
+  }
+  async handleTextDecision(threadId: string, actor: Actor, text: string) {
+    const command = parseTextActionProposalCommand(text);
+    if (command.status === 'unmatched') return command;
+    if (command.proposalId !== undefined) {
+      const result = await this.decide(threadId, command.proposalId, actor, {
+        decision: command.decision,
+        remember: command.remember,
+        via: 'text',
+      });
+      return this.textReceipt(threadId, result);
+    }
+    const candidates = [];
+    const scope = await this.scope(threadId, actor);
+    const pending = await this.capability().listActionProposals(scope, {
+      decision: 'pending',
+      limit: 1000,
+    });
+    for (const proposal of pending)
+      if (await this.mayDecide(actor, proposal)) candidates.push(proposal);
+    const resolution = resolveTextActionProposalDecision(text, candidates);
+    if (resolution.status === 'unmatched') return resolution;
+    if (
+      resolution.status === 'ambiguous' ||
+      (resolution.status === 'decision' && pending.length === 1000 && !text.includes('#'))
+    )
+      return {
+        threadId,
+        proposalDecision: {
+          status: 'ambiguous' as const,
+          proposalIds: candidates.map(({ id }) => id),
+        },
+        text: `Choose the action to decide: ${candidates
+          .map(({ id }) => id)
+          .map((id) => `#${id}`)
+          .join(', ')}`,
+      };
+    const result = await this.decide(threadId, resolution.proposalId, actor, {
+      decision: resolution.decision,
+      remember: resolution.remember,
+      via: 'text',
+    });
+    return this.textReceipt(threadId, result);
+  }
+  private textReceipt(threadId: string, result: ActionProposalMutationResult) {
+    return {
+      threadId,
+      proposalDecision: result,
+      text:
+        result.proposal?.decision === 'approved'
+          ? 'Action approved and queued for execution.'
+          : `Action ${result.proposal?.decision ?? result.status}; no execution was performed by this decision.`,
+    };
+  }
+}

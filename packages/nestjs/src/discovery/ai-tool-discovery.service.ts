@@ -81,6 +81,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           ...(meta.enabled !== undefined ? { enabled: meta.enabled } : {}),
           ...(meta.presentation !== undefined ? { presentation: meta.presentation } : {}),
           ...(meta.terminal === true ? { terminal: true } : {}),
+          ...(meta.replacementKey !== undefined ? { replacementKey: meta.replacementKey } : {}),
         },
         {
           execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),

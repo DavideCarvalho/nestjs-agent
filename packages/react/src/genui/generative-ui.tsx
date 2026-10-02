@@ -29,6 +29,8 @@ import {
 export type GenerativeUIFallback = ReactNode | ((problem: GenerativeUIProblem) => ReactNode);
 
 interface TreeScope {
+  fallbackText?: string;
+  componentVersions?: Record<string, number>;
   options: GenerativeUIOptions;
   fallback: GenerativeUIFallback | undefined;
   loading: ReactNode;
@@ -39,7 +41,10 @@ const TreeScopeContext = createContext<TreeScope | null>(null);
 
 function renderFallback(fallback: GenerativeUIFallback | undefined, problem: GenerativeUIProblem) {
   if (typeof fallback === 'function') return fallback(problem);
-  return fallback ?? null;
+  if (fallback !== undefined) return fallback;
+  return problem.item.fallbackText !== undefined ? (
+    <span style={{ whiteSpace: 'pre-wrap' }}>{problem.item.fallbackText}</span>
+  ) : null;
 }
 
 interface BoundaryProps {
@@ -88,22 +93,37 @@ function nodeItem(node: GenerativeUIElement, id: string): GenerativeUIItem {
 function TreeNode({ node, id }: { node: GenerativeUIElement; id: string }) {
   const scope = useContext(TreeScopeContext);
   const item = useMemo(() => nodeItem(node, id), [node, id]);
+  const storedVersion = scope?.componentVersions?.[node.type];
+  const definition = scope?.options.catalog?.get?.(node.type);
+  const incompatible =
+    storedVersion !== undefined &&
+    definition !== undefined &&
+    storedVersion !== (definition.version ?? 1);
   const resolution = useResolvedComponent(
     node.type,
-    null,
-    scope?.options.registry ?? {},
+    storedVersion ?? null,
+    incompatible ? {} : (scope?.options.registry ?? {}),
     scope?.options.resolveComponent,
   );
-  const validation = useValidatedProps(scope?.options.catalog, node.type, item.props);
+  const validation = useValidatedProps(
+    incompatible ? undefined : scope?.options.catalog,
+    node.type,
+    item.props,
+  );
   if (scope === null) return null;
   if (resolution.status === 'loading' || validation.status === 'pending') return scope.loading;
   if (resolution.status === 'unknown') {
+    if (scope.fallback === undefined && scope.fallbackText !== undefined)
+      throw new Error('Unknown tree component');
     return renderFallback(scope.fallback, { reason: 'unknown', item });
   }
   if (resolution.status === 'error') {
+    if (scope.fallback === undefined && scope.fallbackText !== undefined) throw resolution.error;
     return renderFallback(scope.fallback, { reason: 'error', item, error: resolution.error });
   }
   if (validation.status === 'invalid') {
+    if (scope.fallback === undefined && scope.fallbackText !== undefined)
+      throw new Error('Invalid tree component');
     return renderFallback(scope.fallback, { reason: 'invalid', item, issues: validation.issues });
   }
   const Renderer = resolution.Component;
@@ -113,6 +133,8 @@ function TreeNode({ node, id }: { node: GenerativeUIElement; id: string }) {
       {children.length > 0
         ? children.map((child, index) => {
             const childId = `${id}.${index}`;
+            if (scope.fallback === undefined && scope.fallbackText !== undefined)
+              return <TreeNode key={childId} node={child} id={childId} />;
             return (
               <ItemBoundary
                 key={childId}
@@ -140,6 +162,8 @@ export function GenuiTree({ root }: { root?: GenerativeUIElement }) {
 }
 
 export interface GenerativeUIScopeProps extends GenerativeUIOptions {
+  fallbackText?: string;
+  componentVersions?: Record<string, number>;
   fallback?: GenerativeUIFallback;
   loading?: ReactNode;
   onError?: (error: unknown, item: GenerativeUIItem) => void;
@@ -155,6 +179,8 @@ export function GenerativeUIScope({
   catalog,
   resolveComponent,
   fallback,
+  fallbackText,
+  componentVersions,
   loading = null,
   onError,
   children,
@@ -167,10 +193,21 @@ export function GenerativeUIScope({
         ...(resolveComponent !== undefined ? { resolveComponent } : {}),
       },
       fallback,
+      ...(componentVersions !== undefined ? { componentVersions } : {}),
+      ...(fallbackText !== undefined ? { fallbackText } : {}),
       loading,
       onError,
     }),
-    [registry, catalog, resolveComponent, fallback, loading, onError],
+    [
+      registry,
+      catalog,
+      resolveComponent,
+      fallback,
+      fallbackText,
+      componentVersions,
+      loading,
+      onError,
+    ],
   );
   return <TreeScopeContext.Provider value={scope}>{children}</TreeScopeContext.Provider>;
 }
@@ -274,7 +311,7 @@ export function useGenerativeUI(
 export interface GenerativeUIProps extends Partial<GenerativeUIOptions> {
   /** A transcript `ui` block, a `data-ui` message part, or a stored `{ id, component, props, version? }`. */
   part: TranscriptUiBlock | GenerativeUIItem | unknown;
-  /** Drawn for an unknown component, invalid props, or a renderer that threw. Default: the provider's, else nothing. */
+  /** Drawn for an unknown component, invalid props, or a renderer that threw. Default: the provider's, then the item's persisted text. */
   fallback?: GenerativeUIFallback;
   /** Drawn while a resolver or an async validation is pending. Default: the provider's, else nothing. */
   loading?: ReactNode;
@@ -302,7 +339,7 @@ export function GenerativeUI({
   onError: ownOnError,
 }: GenerativeUIProps) {
   const provided = useContext(GenuiContext);
-  const fallback = ownFallback ?? provided?.fallback;
+  const fallback = ownFallback !== undefined ? ownFallback : provided?.fallback;
   const loading = ownLoading ?? provided?.loading ?? null;
   const onError = ownOnError ?? provided?.onError;
   const options = useMergedOptions({
@@ -326,6 +363,10 @@ export function GenerativeUI({
   return (
     <GenerativeUIScope
       {...options}
+      {...(state.item.componentVersions !== undefined
+        ? { componentVersions: state.item.componentVersions }
+        : {})}
+      {...(state.item.fallbackText !== undefined ? { fallbackText: state.item.fallbackText } : {})}
       fallback={fallback}
       loading={loading}
       {...(onError !== undefined ? { onError } : {})}

@@ -7,6 +7,7 @@ import type {
   ThreadDetail,
   ThreadSummary,
 } from '@dudousxd/nestjs-agent-core';
+import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import type { DataUIPart, UIDataTypes, UIMessage } from 'ai';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -15,6 +16,7 @@ import {
   type ReconnectOptions,
   type StreamConnectionState,
 } from './agent-chat-transport.js';
+import { useActionProposals } from './approvals/use-action-proposals.js';
 import { attachmentFile } from './attachments/files.js';
 import {
   type AttachmentsState,
@@ -30,7 +32,7 @@ import {
 import { type BackgroundRun, backgroundRunsFromThread } from './background-runs.js';
 import { type ModelOption, type ModelsState, useModels } from './catalog/use-models.js';
 import { useToolCatalog } from './presentation/use-tool-catalog.js';
-import { useAgentBackend } from './provider.js';
+import { useAgentBackend, useAgentUiCapabilities } from './provider.js';
 import type {
   ChatQueue,
   QueuedChatMessage,
@@ -58,6 +60,10 @@ import {
 } from './transcript/use-chat-transcript.js';
 
 export interface UseAgentChatOptions<B extends AgentBackend = AgentBackend> {
+  uiCapabilities?: UiCapabilities;
+  proposalPollMs?: number;
+  /** Enable proposal reads even when history and resume are both disabled. */
+  proposals?: boolean;
   /**
    * What the chat talks to — see {@link AgentBackend}. Omitted → the enclosing `<AgentProvider>`'s,
    * else a same-origin client on `/agent`. Must be stable across renders.
@@ -352,6 +358,9 @@ function localChatId(): string {
 export function useAgentChat<B extends AgentBackend = AgentBackend>(
   options: UseAgentChatOptions<B> = {},
 ) {
+  const providerCapabilities = useAgentUiCapabilities();
+  const capabilitiesRef = useRef(providerCapabilities);
+  capabilitiesRef.current = providerCapabilities;
   const latest = useRef(options);
   latest.current = options;
 
@@ -434,6 +443,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const handoff = useRef<StartedQueuedTurn | undefined>(undefined);
   // A plain send the server queued instead of starting (another tab's turn was running).
   const queuedSend = useRef<QueuedSendResult | undefined>(undefined);
+  const proposalRefreshRef = useRef<() => Promise<void>>(async () => {});
   // Queue sends made before a new chat's first turn named its thread.
   const threadWaiters = useRef<Array<(threadId: string) => void>>([]);
 
@@ -454,6 +464,9 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
       ...(threadId !== undefined ? { threadId } : {}),
       ...(model !== undefined ? { model } : {}),
       ...(pageContext ? { pageContext } : {}),
+      ...((current.uiCapabilities ?? capabilitiesRef.current) === undefined
+        ? {}
+        : { uiCapabilities: current.uiCapabilities ?? capabilitiesRef.current }),
     };
   }, [currentThreadId]);
 
@@ -531,6 +544,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     ...(options.initialMessages !== undefined ? { messages: options.initialMessages } : {}),
     onData: (part) => {
       latest.current.onData?.(part);
+      if (part.type === 'data-proposal-decision') void proposalRefreshRef.current();
       if (part.type === 'data-queue') {
         onQueueData(part.data);
       }
@@ -1087,6 +1101,19 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     return () => clearInterval(timer);
   }, [isWorking, refreshBackground]);
 
+  const proposals = useActionProposals(
+    client,
+    options.proposals === false ||
+      (options.proposals !== true && options.history === false && options.resume === false)
+      ? undefined
+      : currentThreadId(),
+    (update) => chatRef.current.setMessages(update),
+    `${chat.status}:${connection.status}`,
+    options.proposalPollMs,
+  );
+
+  proposalRefreshRef.current = proposals.refresh;
+
   // ---- actions -------------------------------------------------------------------------------
   const cancel = useCallback(async (): Promise<void> => {
     // Close the SSE on the client first so the UI flips out of streaming, then hard-abort
@@ -1119,7 +1146,22 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   // Approve / reject / answer / skip route by tool-call id alone — the server derives the run
   // awaiting it (a sub-agent's own run when the call belongs to a delegated agent).
   const approve = useCallback(
-    async ({ toolCallId, remember, via }: ApproveInput): Promise<void> => {
+    async ({ toolCallId, target, remember, via }: ApproveInput): Promise<void> => {
+      if (target?.kind === 'proposal') {
+        const threadId = target.threadId ?? currentThreadId();
+        if (threadId === undefined)
+          throw new Error('A proposal decision requires its thread scope');
+        await requireBackendMethod(
+          client,
+          'approveActionProposal',
+        )({
+          threadId,
+          proposalId: target.proposalId,
+          ...(remember === true ? { remember: true } : {}),
+        });
+        await proposals.refresh();
+        return;
+      }
       await requireBackendMethod(
         client,
         'approveToolCall',
@@ -1129,11 +1171,26 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         ...(via !== undefined ? { via } : {}),
       });
     },
-    [client],
+    [client, currentThreadId, proposals.refresh],
   );
 
   const reject = useCallback(
-    async ({ toolCallId, reason, via }: RejectInput): Promise<void> => {
+    async ({ toolCallId, target, reason, via }: RejectInput): Promise<void> => {
+      if (target?.kind === 'proposal') {
+        const threadId = target.threadId ?? currentThreadId();
+        if (threadId === undefined)
+          throw new Error('A proposal decision requires its thread scope');
+        await requireBackendMethod(
+          client,
+          'rejectActionProposal',
+        )({
+          threadId,
+          proposalId: target.proposalId,
+          ...(reason === undefined ? {} : { reason }),
+        });
+        await proposals.refresh();
+        return;
+      }
       await requireBackendMethod(
         client,
         'rejectToolCall',
@@ -1143,7 +1200,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
         ...(via !== undefined ? { via } : {}),
       });
     },
-    [client],
+    [client, currentThreadId, proposals.refresh],
   );
 
   const answer = useCallback(
@@ -1426,6 +1483,7 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
     addToolResult,
     /** Sub-agents this conversation started and did not wait for. */
     background,
+    proposals,
     runId,
     /** The loaded thread's running turn, or `null` once read with none. */
     activeRunId,

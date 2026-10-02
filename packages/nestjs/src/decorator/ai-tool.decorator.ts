@@ -1,10 +1,11 @@
 import 'reflect-metadata';
-import type { ToolPresentation } from '@dudousxd/nestjs-agent-core';
+import type { ToolPresentation, ToolSpec } from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 export const AI_TOOL_METADATA = Symbol('nestjs-agent:ai-tool');
 
 export interface AiToolOptions {
+  replacementKey?: ToolSpec['replacementKey'];
   /**
    * What the model calls it. Omit → the class name, camelCased, with a trailing `Tool` dropped
    * (`GetWeatherTool` → `getWeather`).

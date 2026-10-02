@@ -1,4 +1,9 @@
 import type {
+  ActionProposalOutcome,
+  ActionProposalOutcomeStore,
+  ActionProposalSupersessionStore,
+} from '@dudousxd/nestjs-agent-core';
+import type {
   ActionProposalDiscoveryIndexStore,
   ActionProposalStore,
   ActionProposalStoreOptions,
@@ -30,6 +35,8 @@ import {
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
+  canonicalActionProposalJson,
+  mergeUi,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import { type EntityManager, QueryOrder, raw } from '@mikro-orm/core';
@@ -41,6 +48,7 @@ import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MESSAGE_ORDER, MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
 import { MikroOrmActionProposals } from './mikro-orm-action-proposals';
+import { coordinateSqliteWrite } from './sqlite-write-coordinator';
 
 /**
  * Re-exported from the core SPI so a consumer can name this store's window read without importing a
@@ -57,6 +65,7 @@ const TURN_MESSAGE_FIELDS = [
   'toolCalls',
   'toolResults',
   'attachments',
+  'actionProposalOutcome',
   'createdAt',
 ] as const;
 
@@ -93,6 +102,31 @@ export class MikroOrmAgentStore
     options: ActionProposalStoreOptions = {},
   ) {
     this.proposals = new MikroOrmActionProposals(em, options);
+  }
+  getThreadActionProposalScope(
+    ...args: Parameters<ActionProposalOutcomeStore['getThreadActionProposalScope']>
+  ) {
+    return this.proposals.getThreadActionProposalScope(...args);
+  }
+  claimNextActionProposalOutcome(
+    ...args: Parameters<ActionProposalOutcomeStore['claimNextActionProposalOutcome']>
+  ) {
+    return this.proposals.claimNextActionProposalOutcome(...args);
+  }
+  admitActionProposalOutcome(
+    ...args: Parameters<ActionProposalOutcomeStore['admitActionProposalOutcome']>
+  ) {
+    return this.proposals.admitActionProposalOutcome(...args);
+  }
+  createReplacingActionProposal(
+    ...args: Parameters<ActionProposalSupersessionStore['createReplacingActionProposal']>
+  ) {
+    return this.proposals.createReplacingActionProposal(...args);
+  }
+  supersedeActionProposal(
+    ...args: Parameters<ActionProposalSupersessionStore['supersedeActionProposal']>
+  ) {
+    return this.proposals.supersedeActionProposal(...args);
   }
   claimNextActionProposal(
     ...args: Parameters<ActionProposalWorkerStore['claimNextActionProposal']>
@@ -291,6 +325,7 @@ export class MikroOrmAgentStore
     for (const call of calls) {
       const approval = toolCallApprovalFromRow({
         toolCallId: call.id,
+        proposalId: call.proposalId ?? null,
         status: call.status,
         approver: call.approver,
         confirmation: call.confirmation,
@@ -318,7 +353,16 @@ export class MikroOrmAgentStore
       { message: { thread: threadId }, remember: true },
       { fields: ['toolName'] },
     );
-    return [...new Set(calls.map((call) => call.toolName))];
+    const scope = await this.proposals.getThreadActionProposalScope(threadId);
+    const names = new Set(calls.map((call) => call.toolName));
+    if (scope)
+      for (const proposal of await this.proposals.rememberedActionProposals(scope))
+        if (
+          proposal.decisionAudit?.remember === true &&
+          (proposal.execution?.status === 'succeeded' || proposal.execution?.status === 'failed')
+        )
+          names.add(proposal.toolName);
+    return [...names];
   }
 
   async toolCallInput(toolCallId: string): Promise<unknown> {
@@ -403,6 +447,9 @@ export class MikroOrmAgentStore
           createdAt: message.createdAt,
           ...(message.toolCalls != null ? { toolCalls: message.toolCalls } : {}),
           ...(message.toolResults != null ? { toolResults: message.toolResults } : {}),
+          ...(message.actionProposalOutcome != null
+            ? { actionProposalOutcome: message.actionProposalOutcome }
+            : {}),
           ...(message.attachments != null ? { attachments: message.attachments } : {}),
           ...(message.followUps != null ? { followUps: message.followUps } : {}),
           ...(message.usage != null ? { usage: message.usage } : {}),
@@ -494,34 +541,42 @@ export class MikroOrmAgentStore
     runId: string,
     options: { replacing?: string } = {},
   ): Promise<boolean> {
-    const em = this.em.fork();
-    const holders: Array<{ activeStreamId: string | null }> = [
-      { activeStreamId: null },
-      { activeStreamId: runId },
-      ...(options.replacing !== undefined ? [{ activeStreamId: options.replacing }] : []),
-    ];
-    const changed = await em.nativeUpdate(
-      AgentThread,
-      { id: threadId, $or: holders },
-      { activeStreamId: runId },
-    );
-    if (changed > 0) {
-      return true;
-    }
-    // Zero can still be a win: a MySQL connection without FOUND_ROWS reports CHANGED rows, and
-    // re-claiming a thread this run already holds changes nothing. The row says who holds it now.
-    const thread = await em.findOne(AgentThread, { id: threadId }, { fields: ['activeStreamId'] });
-    return thread?.activeStreamId === runId;
+    return coordinateSqliteWrite(this.em, async () => {
+      const em = this.em.fork({ keepTransactionContext: true });
+      const holders: Array<{ activeStreamId: string | null }> = [
+        { activeStreamId: null },
+        { activeStreamId: runId },
+        ...(options.replacing !== undefined ? [{ activeStreamId: options.replacing }] : []),
+      ];
+      const changed = await em.nativeUpdate(
+        AgentThread,
+        { id: threadId, $or: holders },
+        { activeStreamId: runId },
+      );
+      if (changed > 0) {
+        return true;
+      }
+      // Zero can still be a win: a MySQL connection without FOUND_ROWS reports CHANGED rows, and
+      // re-claiming a thread this run already holds changes nothing. The row says who holds it now.
+      const thread = await em.findOne(
+        AgentThread,
+        { id: threadId },
+        { fields: ['activeStreamId'] },
+      );
+      return thread?.activeStreamId === runId;
+    });
   }
 
   async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
-    const em = this.em.fork();
-    const changed = await em.nativeUpdate(
-      AgentThread,
-      { id: threadId, activeStreamId: runId },
-      { activeStreamId: null },
-    );
-    return changed > 0;
+    return coordinateSqliteWrite(this.em, async () => {
+      const em = this.em.fork({ keepTransactionContext: true });
+      const changed = await em.nativeUpdate(
+        AgentThread,
+        { id: threadId, activeStreamId: runId },
+        { activeStreamId: null },
+      );
+      return changed > 0;
+    });
   }
 
   async enqueueMessage(input: EnqueueMessageInput): Promise<QueuedMessage> {
@@ -653,6 +708,7 @@ export class MikroOrmAgentStore
       ...(row.persona != null ? { persona: row.persona } : {}),
       ...(row.model != null ? { model: row.model } : {}),
       ...(row.pageContext != null ? { pageContext: row.pageContext } : {}),
+      ...(row.uiCapabilities != null ? { uiCapabilities: row.uiCapabilities } : {}),
       ...(row.interrupt ? { interrupt: true } : {}),
       createdAt: new Date(row.createdAt).toISOString(),
       updatedAt: new Date(row.updatedAt).toISOString(),
@@ -829,6 +885,9 @@ export class MikroOrmAgentStore
       createdAt: now,
       ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
       ...(input.toolResults !== undefined ? { toolResults: input.toolResults } : {}),
+      ...(input.actionProposalOutcome !== undefined
+        ? { actionProposalOutcome: canonicalActionProposalJson(input.actionProposalOutcome) }
+        : {}),
       ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
       ...(input.followUps !== undefined ? { followUps: input.followUps } : {}),
       ...(input.usage !== undefined ? { usage: input.usage } : {}),
@@ -922,6 +981,7 @@ export class MikroOrmAgentStore
       createdAt: new Date(),
       runId: input.runId ?? null,
       approver: input.approver ?? null,
+      proposalId: input.proposalId ?? null,
       confirmation: input.confirmation ?? null,
       expiresAt: input.expiresAt !== undefined ? new Date(input.expiresAt) : null,
     });
@@ -1096,7 +1156,13 @@ export class MikroOrmAgentStore
     const resolvedResults =
       message.toolResults ??
       (toolResults !== undefined && toolResults.length > 0 ? toolResults : undefined);
+    const outcome = message.actionProposalOutcome
+      ? (JSON.parse(message.actionProposalOutcome) as ActionProposalOutcome)
+      : undefined;
     return {
+      ...(outcome
+        ? { actionProposalOutcome: outcome, ui: mergeUi(message.ui ?? [], outcome.ui) }
+        : {}),
       id: message.id,
       role: message.role,
       content: message.content,
@@ -1111,7 +1177,7 @@ export class MikroOrmAgentStore
       ...(message.runId != null ? { runId: message.runId } : {}),
       ...(message.reasoning != null ? { reasoning: message.reasoning } : {}),
       ...(message.reasoningMs != null ? { reasoningMs: message.reasoningMs } : {}),
-      ...(message.ui != null ? { ui: message.ui } : {}),
+      ...(outcome === undefined && message.ui != null ? { ui: message.ui } : {}),
       ...(message.feedback != null ? { feedback: message.feedback } : {}),
     };
   }

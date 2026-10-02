@@ -1,4 +1,6 @@
 import type {
+  ActionProposal,
+  ActionProposalMutationResult,
   AgentCatalogEntry,
   AgentClientConfig,
   ChatQueueState,
@@ -160,6 +162,14 @@ export class AgentClient implements AgentBackend {
     if (response.status === 202) {
       // Queued behind a turn already running on the thread: JSON, not a stream.
       return { body: emptyStream(), queued: (await response.json()) as QueuedSendResult };
+    }
+    if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
+      const decision = (await response.json()) as NonNullable<
+        ChatStreamResponse['proposalDecision']
+      >;
+      if (decision.proposalDecision !== undefined && typeof decision.threadId === 'string')
+        return { body: emptyStream(), threadId: decision.threadId, proposalDecision: decision };
+      throw new Error('Unexpected JSON chat response');
     }
     if (!response.ok || !response.body) {
       throw await this.failure(response, 'POST', `${this.agentPath()}/chat`);
@@ -437,6 +447,78 @@ export class AgentClient implements AgentBackend {
    * `remember` approves later calls of the same tool in the same thread; `via` names the surface
    * the decision came through (the server records `'web'` when omitted).
    */
+  async listActionProposals({ threadId }: { threadId: string }): Promise<ActionProposal[]> {
+    const proposals = new Map<string, ActionProposal>();
+    let after: { createdAt: number; id: string } | undefined;
+    for (;;) {
+      const route = `/threads/${encodeURIComponent(threadId)}/action-proposals${
+        after === undefined ? '' : `?after=${encodeURIComponent(JSON.stringify(after))}`
+      }`;
+      const response = await this.requestResponse('GET', route);
+      const page = await this.handleResponse<unknown>(
+        response,
+        'GET',
+        `${this.agentPath()}${route}`,
+      );
+      if (!Array.isArray(page)) throw new TypeError('Invalid action proposal page');
+      for (const proposal of page) proposals.set(proposal.id, proposal);
+      const header = response.headers.get('X-Action-Proposals-Next');
+      if (header === null) return [...proposals.values()];
+      let next: unknown;
+      try {
+        next = JSON.parse(decodeURIComponent(header));
+      } catch {
+        throw new TypeError('Invalid action proposal cursor');
+      }
+      if (
+        typeof next !== 'object' ||
+        next === null ||
+        !('createdAt' in next) ||
+        typeof next.createdAt !== 'number' ||
+        !Number.isSafeInteger(next.createdAt) ||
+        !('id' in next) ||
+        typeof next.id !== 'string' ||
+        next.id.length === 0 ||
+        next.id.length > 255 ||
+        (after !== undefined &&
+          (next.createdAt < after.createdAt ||
+            (next.createdAt === after.createdAt && next.id <= after.id)))
+      )
+        throw new TypeError('Invalid or non-advancing action proposal cursor');
+      after = { createdAt: next.createdAt, id: next.id };
+    }
+  }
+  approveActionProposal({
+    threadId,
+    proposalId,
+    remember,
+  }: {
+    threadId: string;
+    proposalId: string;
+    remember?: boolean;
+  }): Promise<ActionProposalMutationResult> {
+    return this.request(
+      'POST',
+      `/threads/${encodeURIComponent(threadId)}/action-proposals/${encodeURIComponent(proposalId)}/approve`,
+      remember === undefined ? {} : { remember },
+    );
+  }
+  rejectActionProposal({
+    threadId,
+    proposalId,
+    reason,
+  }: {
+    threadId: string;
+    proposalId: string;
+    reason?: string;
+  }): Promise<ActionProposalMutationResult> {
+    return this.request(
+      'POST',
+      `/threads/${encodeURIComponent(threadId)}/action-proposals/${encodeURIComponent(proposalId)}/reject`,
+      reason === undefined ? {} : { reason },
+    );
+  }
+
   approveToolCall(input: { toolCallId: string; remember?: boolean; via?: string }): Promise<void> {
     return this.request<void>('POST', '/tool-call/approve', input);
   }
@@ -508,6 +590,11 @@ export class AgentClient implements AgentBackend {
   }
 
   private async request<T>(method: string, route: string, body?: unknown): Promise<T> {
+    const response = await this.requestResponse(method, route, body);
+    return this.handleResponse<T>(response, method, `${this.agentPath()}${route}`);
+  }
+
+  private async requestResponse(method: string, route: string, body?: unknown): Promise<Response> {
     const path = `${this.agentPath()}${route}`;
     const response = await this.fetchImpl()(`${this.baseUrl()}${path}`, {
       method,
@@ -519,7 +606,7 @@ export class AgentClient implements AgentBackend {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       ...this.credentials(),
     });
-    return this.handleResponse<T>(response, method, path);
+    return response;
   }
 
   /** The error for a refused `response`, already reported to `onHttpError`. */

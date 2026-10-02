@@ -17,6 +17,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
   boolean,
@@ -77,6 +78,7 @@ export const agentMessage = mysqlTable(
       .notNull()
       .references(() => agentThread.id, { onDelete: 'cascade' }),
     role: key('role').$type<MessageRole>().notNull(),
+    actionProposalOutcome: longtext('action_proposal_outcome'),
     content: longtext('content').notNull(),
     toolCalls: json('tool_calls').$type<ToolCallRequest[]>(),
     toolResults: json('tool_results').$type<ToolResult[]>(),
@@ -100,6 +102,7 @@ export const agentMessage = mysqlTable(
 export const agentToolCall = mysqlTable(
   'agent_tool_call',
   {
+    proposalId: key('proposal_id'),
     id: key('id').primaryKey(),
     messageId: key('message_id')
       .notNull()
@@ -127,6 +130,7 @@ export const agentToolCall = mysqlTable(
 export const agentQueuedMessage = mysqlTable(
   'agent_queued_message',
   {
+    uiCapabilities: json('ui_capabilities').$type<UiCapabilities>(),
     id: key('id').primaryKey(),
     threadId: key('thread_id')
       .notNull()
@@ -284,6 +288,10 @@ export const agentActionProposal = mysqlTable(
     executionStatus:
       key('execution_status').$type<NonNullable<ActionProposal['execution']>['status']>(),
     leaseExpiresAt: bigint('lease_expires_at', { mode: 'number' }),
+    deliveryStatus: key('delivery_status'),
+    deliveryLeaseExpiresAt: bigint('delivery_lease_expires_at', { mode: 'number' }),
+    replacementGroupKey: key('replacement_group_key'),
+    outcomeIdKey: key('outcome_id_key'),
     proposalExpiresAt: bigint('proposal_expires_at', { mode: 'number' }),
     discoveryIndexVersion: bigint('discovery_index_version', { mode: 'number' })
       .notNull()
@@ -303,6 +311,17 @@ export const agentActionProposal = mysqlTable(
       table.proposalExpiresAt,
       table.createdAt,
     ),
+    index('agent_action_proposal_replacement_idx').on(
+      table.scopeKey,
+      table.replacementGroupKey,
+      table.decision,
+    ),
+    index('agent_action_proposal_delivery_idx').on(
+      table.deliveryStatus,
+      table.deliveryLeaseExpiresAt,
+      table.createdAt,
+    ),
+    uniqueIndex('agent_action_proposal_outcome_idx').on(table.outcomeIdKey),
     index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
   ],
 );

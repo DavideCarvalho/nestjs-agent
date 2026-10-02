@@ -307,3 +307,30 @@ proposal payload, timestamps, or audit. It does not invoke transitions or execut
 tools. This upgrade does not support mixed old and new writers: old writers cannot
 maintain the new indexes. Discovery deliberately excludes rows awaiting backfill;
 it never performs an implicit, unbounded migration.
+
+### Independent approval runtime
+
+`actionApprovalMode: 'independent'` requires proposal discovery, atomic replacement,
+terminal outcome admission and the thread queue on the same database. This adapter
+advertises admission support for better-sqlite3, node-postgres, mysql2 and libSQL;
+other Drizzle drivers retain blocking behavior and fail independent configuration.
+Synchronous SQLite transaction callbacks complete synchronously, including both
+assistant insertion and the delivery compare-and-set. PostgreSQL/MySQL admission
+locks the proposal and conversation before checking the delivery lease again.
+
+The updated schemas add nullable `delivery_status`, `delivery_lease_expires_at`,
+`replacement_group_key`, `outcome_id_key` and their indexes to proposals,
+`action_proposal_outcome` to messages, `proposal_id` to tool calls and
+`ui_capabilities` to queued messages. `ensureAgentSchema` adds missing columns and
+indexes; applications owning drizzle-kit migrations must include the same additions.
+Outcomes use escaped TEXT/LONGTEXT metadata to preserve JSON strings exactly.
+
+Delivery writes one assistant fact and its UI together with its admitted marker,
+waits while a user turn owns the conversation and deduplicates retries. Replacement
+only closes pending proposals in the same exact scope, tool and replacement group.
+An existing transaction passed as the database handle remains the transaction
+owner: a caller rollback also rolls back replacement or admission. External side
+effects remain at least once; use the stable tool-context idempotency key.
+
+See [the shared setup and rollout guide](../../docs/independent-approvals.md) for
+policies, text/channel decisions, remembered approvals and component capabilities.

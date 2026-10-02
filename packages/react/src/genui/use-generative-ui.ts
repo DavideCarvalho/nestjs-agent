@@ -30,6 +30,13 @@ export function toGenerativeUIItem(part: unknown): GenerativeUIItem | null {
   return {
     id,
     component: source.component,
+    ...(isRecord(source.componentVersions) &&
+    Object.values(source.componentVersions).every(
+      (version) => typeof version === 'number' && Number.isSafeInteger(version) && version > 0,
+    )
+      ? { componentVersions: { ...source.componentVersions } as Record<string, number> }
+      : {}),
+    ...(typeof source.fallbackText === 'string' ? { fallbackText: source.fallbackText } : {}),
     props: isRecord(source.props) ? source.props : {},
     version: typeof source.version === 'number' ? source.version : null,
     toolCallId: typeof source.toolCallId === 'string' ? source.toolCallId : null,
@@ -189,21 +196,38 @@ export function useGenerativeUIState(
 ): GenerativeUIState | null {
   const item = useMemo(() => toGenerativeUIItem(part), [part]);
   const name = item?.component ?? '';
+  const definition = options.catalog?.get?.(name);
+  const incompatible =
+    item?.fallbackText !== undefined &&
+    item.version !== null &&
+    definition !== undefined &&
+    item.version !== (definition.version ?? 1);
   const resolution = useResolvedComponent(
     name,
     item?.version ?? null,
-    options.registry,
+    incompatible ? {} : options.registry,
     item === null ? undefined : options.resolveComponent,
     fallbackTree,
   );
   const empty = useMemo<Record<string, unknown>>(() => ({}), []);
   // A tree is validated node by node as it renders, not as one component.
   const validation = useValidatedProps(
-    item === null || name === GENUI_TREE_COMPONENT ? undefined : options.catalog,
+    item === null || name === GENUI_TREE_COMPONENT || incompatible ? undefined : options.catalog,
     name,
     item?.props ?? empty,
   );
   if (item === null) return null;
+  if (
+    name === GENUI_TREE_COMPONENT &&
+    item.fallbackText !== undefined &&
+    (!isRecord(item.props.root) || typeof item.props.root.type !== 'string')
+  )
+    return {
+      status: 'problem',
+      reason: 'invalid',
+      item,
+      issues: [{ path: ['root'], message: 'Invalid UI tree root' }],
+    };
   if (resolution.status === 'loading') return { status: 'loading', item };
   if (resolution.status === 'unknown') return { status: 'problem', reason: 'unknown', item };
   if (resolution.status === 'error') {

@@ -14,6 +14,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '../types.js';
+import type { ActionProposalOutcome } from './action-proposal-outcome-store.js';
 
 export interface CreateThreadInput {
   actor: Actor;
@@ -32,6 +33,7 @@ export interface CreateThreadInput {
 }
 
 export interface AppendMessageInput {
+  actionProposalOutcome?: ActionProposalOutcome;
   threadId: string;
   role: StoredMessage['role'];
   content: string;
@@ -62,6 +64,7 @@ export interface AppendMessageInput {
 }
 
 export interface RecordToolCallInput {
+  proposalId?: string;
   /** Resolved confirmation from the action preflight; overrides presentation templates. */
   confirmation?: ToolConfirmation;
   toolCallId: string;

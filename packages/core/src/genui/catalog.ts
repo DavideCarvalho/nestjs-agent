@@ -58,6 +58,13 @@ export function defineComponent<P = Record<string, unknown>>(
       `genui: component name "${definition.name}" must be letters and digits, starting with a letter (e.g. DataTable)`,
     );
   }
+  if (
+    definition.version !== undefined &&
+    (!Number.isSafeInteger(definition.version) || definition.version <= 0)
+  )
+    throw new RangeError('genui: component version must be a positive safe integer');
+  if (definition.fallbackText !== undefined && typeof definition.fallbackText !== 'function')
+    throw new TypeError('genui: fallbackText must be a function');
   return definition;
 }
 

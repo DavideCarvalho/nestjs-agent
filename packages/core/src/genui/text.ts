@@ -20,7 +20,8 @@ export function componentToText(
   const fallback = catalog.get(component)?.fallbackText;
   if (fallback !== undefined) {
     try {
-      return fallback(props);
+      const text = fallback(props);
+      if (typeof text === 'string' && text.trim().length > 0) return text;
     } catch {
       /* fall through to the generic rendering */
     }
@@ -36,7 +37,8 @@ export function treeToText(catalog: Catalog, root: GenuiElement): string {
     const definition = catalog.get(node.type);
     if (definition?.fallbackText !== undefined) {
       try {
-        out.push(definition.fallbackText(node.props));
+        const text = definition.fallbackText(node.props);
+        out.push(typeof text === 'string' && text.trim().length > 0 ? text : jsonBlock(node.props));
       } catch {
         out.push(jsonBlock(node.props));
       }
@@ -52,7 +54,7 @@ export function treeToText(catalog: Catalog, root: GenuiElement): string {
 function jsonBlock(props: Record<string, unknown>): string {
   const title =
     typeof props.title === 'string' && props.title.length > 0 ? `*${props.title}*\n` : '';
-  return `${title}\`\`\`\n${JSON.stringify(props, null, 2).slice(0, 2500)}\n\`\`\``;
+  return `${title}\`\`\`\n${JSON.stringify(props, null, 2)}\n\`\`\``;
 }
 
 export interface CatalogTextOptions {

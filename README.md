@@ -939,6 +939,14 @@ no API key or Redis. `pnpm --filter agent-demo start` boots the full NestJS app 
 console mounted at `/ai-gateway`. See `docs/superpowers/specs/` for the API and governance-console
 design specs.
 
+## Independent approvals
+
+Pending actions can release the chat turn, accept authenticated decisions by button, text or
+operator channel, and deliver their durable results into history. Approval policy, per-call
+preflight, expiration, remembered approval and pending replacement share the same runtime.
+The component catalog negotiates client renderer support and preserves text fallbacks.
+See [setup, behavior and database rollout](docs/independent-approvals.md).
+
 ## Testing against real databases
 
 `pnpm test` is the unit suite. `pnpm test:db` runs every store suite — both ORMs, every contract

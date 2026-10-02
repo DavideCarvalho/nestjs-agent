@@ -274,3 +274,11 @@ export {
   RUN_NOT_ACTIVE_CODE,
   isRunNotActiveError,
 } from './run-errors.js';
+
+export {
+  type ApprovalTarget,
+  proposalNeedsPolling,
+  reconcileProposalMessages,
+} from './approvals/proposals.js';
+export { type ActionProposalsState, useActionProposals } from './approvals/use-action-proposals.js';
+export type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';

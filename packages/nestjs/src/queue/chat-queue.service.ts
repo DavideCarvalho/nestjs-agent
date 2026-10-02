@@ -350,6 +350,7 @@ export class ChatQueueService {
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+      ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
     });
     await store.setQueuePause(threadId, { reason, message, at: new Date().toISOString() });
     await store.releaseActiveStream(threadId, next.runId);
@@ -419,6 +420,7 @@ export class ChatQueueService {
       ...(persona !== undefined ? { persona } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(message.pageContext !== undefined ? { pageContext: message.pageContext } : {}),
+      ...(message.uiCapabilities !== undefined ? { uiCapabilities: message.uiCapabilities } : {}),
       ...(message.model !== undefined ? { model: message.model } : {}),
     };
   }

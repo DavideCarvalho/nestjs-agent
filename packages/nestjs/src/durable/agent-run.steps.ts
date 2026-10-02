@@ -1,3 +1,5 @@
+import { createNegotiatedUiCollector } from '@dudousxd/nestjs-agent-core';
+import { prepareActionProposal, resolveActionProposalApproval } from '@dudousxd/nestjs-agent-core';
 import {
   AGENT_DEPS_FACTORY,
   type AiToolCtx,
@@ -128,6 +130,9 @@ export class AgentRunSteps {
             intersectAllowLists(deps.toolAllowList, input.personaAllowedTools),
             {
               ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              ...(input.preflightContext?.uiCapabilities !== undefined
+                ? { uiCapabilities: input.preflightContext.uiCapabilities }
+                : {}),
               ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
             },
           ),
@@ -189,13 +194,39 @@ export class AgentRunSteps {
           requestId: input.runId,
           ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         };
-        call.preflight = await deps.registry.prepare(
-          call.name,
-          call.input,
-          { ...toolCallContext(context, call.id), emitUi: createNoopEmitUi(call.id) },
-          deps.rolesPolicy,
-          allowedTools === undefined ? {} : { allowedTools },
-        );
+        if (input.actionApprovalMode === 'independent') {
+          const spec = deps.registry.spec(call.name);
+          call.actionApproval = await resolveActionProposalApproval({
+            actor: input.actor,
+            store: deps.store,
+            tool: { name: call.name, kind: 'action', ...(spec !== undefined ? { spec } : {}) },
+            thread: {
+              threadId: context.threadId,
+              runId: input.runId,
+              ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            },
+            ...(deps.approvalPolicy !== undefined ? { policy: deps.approvalPolicy } : {}),
+          });
+        }
+        if (call.actionApproval?.mode === 'ask') {
+          call.prepared = await prepareActionProposal(
+            deps.registry,
+            call.name,
+            call.input,
+            { ...toolCallContext(context, call.id), emitUi: createNoopEmitUi(call.id) },
+            deps.rolesPolicy,
+            allowedTools === undefined ? {} : { allowedTools },
+          );
+          call.preflight = call.prepared.preflight;
+        } else {
+          call.preflight = await deps.registry.prepare(
+            call.name,
+            call.input,
+            { ...toolCallContext(context, call.id), emitUi: createNoopEmitUi(call.id) },
+            deps.rolesPolicy,
+            allowedTools === undefined ? {} : { allowedTools },
+          );
+        }
       } catch (error) {
         if (isControlFlowSignal(error) || isReplayIntegrityError(error)) throw error;
         call.preflight = {
@@ -243,8 +274,10 @@ export class AgentRunSteps {
     // how the pushes reach the message: the dispatching loop persists them from its own checkpoint.
     const sinkRunId = input.sinkRunId;
     let opened: Promise<SinkWriter> | undefined;
-    const ui = createUiCollector(
+    const ui = createNegotiatedUiCollector(
       input.toolCallId,
+      input.ctx,
+      deps.resolveUiCatalog,
       sinkRunId === undefined
         ? undefined
         : async (event) => {
@@ -320,6 +353,8 @@ export class AgentRunSteps {
     }
     // Wrapped only when the dispatching loop asked for it (`collectUi`) AND something was pushed, so
     // a loop that predates this always reads the bare output it expects.
-    return input.collectUi === true ? wrapToolStepOutput(output, ui.components()) : output;
+    return input.collectUi === true
+      ? wrapToolStepOutput(output, ui.components(), ui.text())
+      : output;
   }
 }

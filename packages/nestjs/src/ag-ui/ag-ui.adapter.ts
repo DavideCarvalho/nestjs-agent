@@ -14,6 +14,7 @@ import {
   type AgUiStreamOptions,
   type InlineMedia,
   type ResumeDecision,
+  actionProposalDecisionEvents,
   agUiEvents,
   agUiFramesFromNdjson,
   agUiSse,
@@ -134,6 +135,27 @@ export class AgUiRunHandler {
     if (owner !== null && owner !== actor.id) {
       throw new ForbiddenException('thread belongs to another actor');
     }
+    if (owner !== null && turn.media.length === 0) {
+      const decision = await this.agent.handleTextDecision(input.threadId, actor, turn.text);
+      if ('proposalDecision' in decision) {
+        res.status(200);
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.flushHeaders();
+        for (const event of [
+          ...warningEvents(warnings),
+          ...actionProposalDecisionEvents({
+            threadId: input.threadId,
+            runId: input.runId,
+            text: decision.text,
+            proposalDecision: decision.proposalDecision,
+          }),
+        ])
+          res.write(agUiSse(event));
+        res.end();
+        return;
+      }
+    }
     const refs = await this.stage(actor, turn.media, warnings);
     if (turn.text.trim().length === 0 && refs.length === 0) {
       throw invalid('no_user_message', 'the user message to answer is empty');
@@ -153,6 +175,9 @@ export class AgUiRunHandler {
       ...(forwarded.agent !== undefined ? { agentName: forwarded.agent } : {}),
       ...(forwarded.persona !== undefined ? { personaId: forwarded.persona } : {}),
       ...(forwarded.model !== undefined ? { model: forwarded.model } : {}),
+      ...(forwarded.uiCapabilities !== undefined
+        ? { uiCapabilities: forwarded.uiCapabilities }
+        : {}),
       ...(pageContext !== undefined ? { pageContext } : {}),
       ...(refs.length > 0 ? { attachments: refs } : {}),
     });

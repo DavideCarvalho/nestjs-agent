@@ -243,8 +243,24 @@ describe('genuiTools with a per-request catalog', () => {
     );
   });
 
-  it('has no describe hook without a resolver', () => {
+  it('describes renderer support even without a dynamic resolver', () => {
     const [tree] = genuiTools(catalog, { mode: 'tree' });
-    expect(tree?.handler.describe).toBeUndefined();
+    expect(tree?.handler.describe).toBeTypeOf('function');
   });
+});
+
+it('hides unavailable components and empty tree catalogs using trusted renderer capabilities', async () => {
+  const catalog = defineCatalog([
+    defineComponent({
+      name: 'Text',
+      title: 'Text',
+      description: 'Text',
+      props: { type: 'object' },
+    }),
+  ]);
+  const scope = { actor: { id: 'user' }, uiCapabilities: { components: [] } };
+  for (const tool of genuiTools(catalog, { showTool: true }))
+    expect((await tool.handler.describe?.(scope))?.available).toBe(false);
+  const [tree] = genuiTools(catalog, { mode: 'tree' });
+  expect((await tree?.handler.describe?.(scope))?.available).toBe(false);
 });

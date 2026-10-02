@@ -60,6 +60,9 @@ import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
+import { ActionProposalController } from './proposals/action-proposal.controller.js';
+import { ActionProposalService } from './proposals/action-proposal.service.js';
 import type { AgentProtocolAdapter } from './protocol-adapter.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
@@ -230,6 +233,8 @@ function sharedProviders(durable: boolean): Provider[] {
     { provide: AGENT_CHAT_QUEUE, useExisting: ChatQueueService },
     InlineAgentRunner,
     AgentService,
+    ActionProposalService,
+    ActionProposalWorkerService,
     // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
     // through AgentService.signalToolCall, which reaches whichever AGENT_RUNNER is bound above.
     AgentApprovalPortAdapter,
@@ -281,6 +286,8 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
     AGENT_DEPS_FACTORY,
     AgentDepsFactory,
     AgentService,
+    ActionProposalService,
+    ActionProposalWorkerService,
     ChatQueueService,
     AGENT_CHAT_QUEUE,
     InlineAgentRunner,
@@ -289,6 +296,7 @@ function exportsFor(): NonNullable<DynamicModule['exports']> {
 }
 
 const BASE_CONTROLLERS = [
+  ActionProposalController,
   ChatController,
   QueueController,
   ThreadsController,

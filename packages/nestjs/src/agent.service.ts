@@ -37,6 +37,7 @@ import {
   settleDeadRun,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
+import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   BadRequestException,
   ConflictException,
@@ -53,6 +54,7 @@ import {
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
+import { ActionProposalService } from './proposals/action-proposal.service.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { RunNotActiveException } from './run-not-active.exception.js';
 import { threadPersona } from './thread-persona.js';
@@ -82,9 +84,13 @@ export interface QueuedSend {
 }
 
 /** What {@link AgentService.send} did: started a turn, or queued the message. */
-export type ChatSendResult = { runId: string; threadId: string; queued?: undefined } | QueuedSend;
+export type ChatSendResult =
+  | { runId: string; threadId: string; queued?: undefined }
+  | QueuedSend
+  | { threadId: string; proposalDecision: unknown; text: string; queued?: undefined };
 
 export interface ChatParams {
+  uiCapabilities?: UiCapabilities;
   actor: Actor;
   message: string;
   threadId?: string;
@@ -158,10 +164,16 @@ export class AgentService {
     private readonly quotaProvider?: QuotaProvider,
     @Optional()
     @Inject(AGENT_OPTIONS)
-    private readonly options?: Pick<AgentModuleOptions, 'quota'>,
+    private readonly options?: Pick<AgentModuleOptions, 'quota' | 'actionApprovalMode'>,
     @Optional() private readonly queue?: ChatQueueService,
+    @Optional() private readonly proposals?: ActionProposalService,
   ) {}
 
+  async handleTextDecision(threadId: string, actor: Actor, text: string) {
+    if (this.options?.actionApprovalMode !== 'independent' || !this.proposals)
+      return { status: 'unmatched' as const };
+    return this.proposals.handleTextDecision(threadId, actor, text);
+  }
   /** The queue service when the bound store can hold a queue, else `undefined`. */
   private queueing(): ChatQueueService | undefined {
     return this.queue?.supported === true ? this.queue : undefined;
@@ -291,7 +303,8 @@ export class AgentService {
    * that queues it.
    */
   async chat(params: ChatParams): Promise<{ runId: string; threadId: string }> {
-    const result = await this.send({ ...params, mode: 'auto' });
+    const result = await this.send({ ...params, mode: 'auto' }, { textDecisions: false });
+    if ('proposalDecision' in result) throw new Error('Unexpected text decision in run-only API');
     if (result.queued !== true) {
       return result;
     }
@@ -316,7 +329,24 @@ export class AgentService {
    * Send a message: start a turn, or — when its thread already has one running — queue the message
    * to run after it (see {@link ChatSendMode}). What `POST <base>/chat` calls.
    */
-  async send(params: ChatParams): Promise<ChatSendResult> {
+  async send(
+    params: ChatParams,
+    sendOptions: { textDecisions?: boolean } = {},
+  ): Promise<ChatSendResult> {
+    if (
+      sendOptions.textDecisions !== false &&
+      this.options?.actionApprovalMode === 'independent' &&
+      params.threadId !== undefined &&
+      params.regenerate !== true &&
+      this.proposals
+    ) {
+      const decision = await this.proposals.handleTextDecision(
+        params.threadId,
+        params.actor,
+        params.message,
+      );
+      if ('proposalDecision' in decision) return decision;
+    }
     // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
@@ -368,11 +398,14 @@ export class AgentService {
       ...(params.regenerate === true ? { regenerate: true } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
+      ...(params.uiCapabilities !== undefined ? { uiCapabilities: params.uiCapabilities } : {}),
       ...(model !== undefined ? { model } : {}),
     };
 
     const queue = this.queueing();
     if (queue === undefined) {
+      if (this.options?.actionApprovalMode === 'independent')
+        throw new Error('Independent actions require queued thread admission');
       // No admission to take: a store that predates the queue starts every send at once.
       const { runId } = await this.runner.start(input);
       await this.store.setActiveStream(threadId, runId);
@@ -447,6 +480,7 @@ export class AgentService {
       ...(input.persona !== undefined ? { persona: input.persona } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
+      ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
       ...(interrupting !== undefined ? { interrupt: true, at: 'head' as const } : {}),
     });
     let runId: string | undefined;
@@ -755,6 +789,10 @@ export class AgentService {
    * not the thread's own actor).
    */
   async signalToolCall(toolCallId: string, reply: HumanReply): Promise<void> {
+    if ((await this.store.toolCallApproval?.(toolCallId))?.status === 'proposed')
+      throw new ConflictException(
+        'Independent proposals require the scoped proposal decision route',
+      );
     await this.assertNotExpired(toolCallId);
     const runId = await this.resolveRunForToolCall(toolCallId);
     await this.assertRunWaiting(runId);

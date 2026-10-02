@@ -249,6 +249,24 @@ with active discovery is unsupported because older writers do not maintain the n
 Discovery never performs a hidden backfill. This package supplies storage operations; scheduling
 and tool execution remain the host's responsibility.
 
+## Independent execution and outcome admission
+
+Independent mode uses the same proposal row for a terminal outcome and its fenced delivery lease.
+Apply the additive schema update before enabling the worker: proposal delivery status, lease expiry,
+hashed outcome identity and scope/replacement-group/decision indexes, nullable `agent_message.action_proposal_outcome` escaped JSON
+text, `agent_tool_call.proposal_id`, and queued-message renderer capabilities. Existing proposals
+remain readable; completed outcomes are created by current transitions.
+
+Outcome admission locks the persisted proposal and thread, checks the current delivery fence and
+thread owner/tenant, and inserts one assistant fact together with the admitted state in one transaction.
+An active chat holder postpones delivery; a deleted thread discards it. Ambient caller transactions
+are retained, so rollback removes both the fact and delivery update. Atomic replacement creation
+locks the same thread and supersedes only matching pending proposals; replay creates no new replacement.
+
+SQLite also serializes this process's writes to the same database file to avoid blocking its event
+loop while an asynchronous transaction awaits another statement. Database locks, exact scope checks,
+and version CAS remain the authority across replicas and restarts; the local queue stores no durable state.
+
 ## License
 
 MIT © Davide Carvalho

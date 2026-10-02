@@ -15,7 +15,15 @@ import { type ResolvedResultView, resolveResultView } from './result-view.js';
  *  - `done` / `failed` / `denied` — settled. A tool that RETURNS `{ error }` has failed just as much
  *    as one that threw; the two arrive differently and read the same to a person.
  */
-export type ToolCallStatus = 'running' | 'awaiting-approval' | 'done' | 'failed' | 'denied';
+export type ToolCallStatus =
+  | 'running'
+  | 'awaiting-approval'
+  | 'done'
+  | 'failed'
+  | 'denied'
+  | 'queued'
+  | 'executing'
+  | 'succeeded';
 
 export interface ToolCallState {
   status: ToolCallStatus;
@@ -38,6 +46,21 @@ export function isActionCall(part: AnyToolUIPart): boolean {
 
 export function toolCallState(part: AnyToolUIPart): ToolCallState {
   const output = 'output' in part ? part.output : undefined;
+  if (
+    output !== null &&
+    typeof output === 'object' &&
+    'proposalId' in output &&
+    'executed' in output &&
+    output.executed === false
+  )
+    return {
+      status: 'awaiting-approval',
+      isSettled: false,
+      isFailed: false,
+      isDenied: false,
+      output,
+      error: null,
+    };
   const errorText = 'errorText' in part ? part.errorText : undefined;
   const outputError =
     output !== null && typeof output === 'object' && 'error' in output
@@ -195,6 +218,9 @@ export interface GroupToolActivityOptions {
 
 const STATUS_WEIGHT: Record<ToolCallStatus, number> = {
   running: 4,
+  queued: 4,
+  executing: 4,
+  succeeded: 0,
   'awaiting-approval': 3,
   failed: 2,
   denied: 1,
@@ -228,7 +254,7 @@ export function groupToolActivity(
     if (corrected.has(call.toolCallId)) continue;
     const presentation = options.catalog?.[call.name];
     const key = options.keyOf?.(call, presentation) ?? presentation?.label ?? call.name;
-    const status = toolCallState(call.part).status;
+    const status = call.description.status;
     const phrase = phraseFor(
       presentation,
       (call.part as { input?: unknown }).input,

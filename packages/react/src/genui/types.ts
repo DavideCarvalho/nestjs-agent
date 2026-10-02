@@ -5,6 +5,8 @@ export const GENUI_TREE_COMPONENT = 'genui:tree';
 
 /** One pushed component, normalized from whatever carried it (a transcript block, a `data-ui` part, a stored entry). */
 export interface GenerativeUIItem {
+  fallbackText?: string;
+  componentVersions?: Record<string, number>;
   id: string;
   component: string;
   props: Record<string, unknown>;
@@ -53,6 +55,7 @@ type ValidationLike =
  * object does too.
  */
 export interface GenuiCatalogLike {
+  get?(name: string): { version?: number } | undefined;
   has(name: string): boolean;
   validate(name: string, props: unknown): Promise<ValidationLike>;
   validateSync?(name: string, props: unknown): ValidationLike | undefined;

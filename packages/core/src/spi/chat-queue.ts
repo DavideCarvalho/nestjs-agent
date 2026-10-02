@@ -1,3 +1,4 @@
+import type { UiCapabilities } from '../genui/capabilities.js';
 import type { Actor, MessageAttachment, PageContext } from '../types.js';
 import type { AgentStore } from './agent-store.js';
 
@@ -40,6 +41,7 @@ export interface QueuedMessage {
   persona?: string;
   model?: string;
   pageContext?: PageContext;
+  uiCapabilities?: UiCapabilities;
   /**
    * Queued by an interrupt (`POST chat { mode: 'interrupt' }`): the running turn was cancelled to
    * make room for it, so the cancel starts it instead of pausing the queue.
@@ -81,6 +83,7 @@ export interface EnqueueMessageInput {
   persona?: string;
   model?: string;
   pageContext?: PageContext;
+  uiCapabilities?: UiCapabilities;
   interrupt?: boolean;
   /** `'tail'` (default) runs it after everything already waiting; `'head'` runs it next. */
   at?: 'tail' | 'head';

@@ -112,6 +112,8 @@ export function storedThreadToUiMessages(messages: StoredMessage[]): UIMessage[]
  * un-merge every old thread.
  */
 function sameRun(previous: StoredMessage, next: StoredMessage): boolean {
+  if (previous.actionProposalOutcome !== undefined || next.actionProposalOutcome !== undefined)
+    return false;
   return previous.runId === undefined || next.runId === undefined || previous.runId === next.runId;
 }
 

@@ -39,7 +39,7 @@ export interface AgUiChatStreamOptions {
   /** Defaults to the global `fetch`, with `credentials: 'same-origin'`. */
   fetch?: typeof fetch;
   /**
-   * Shape `forwardedProps` from the send's body. Default: `{ pageContext, agent, model }` from the
+   * Shape `forwardedProps` from the send's body. Default: `{ pageContext, agent, model, persona, uiCapabilities }` from the
    * body, whichever are present.
    */
   forwardedProps?: (body: Record<string, unknown>) => unknown;
@@ -86,7 +86,7 @@ async function defaultRefusal(response: Response): Promise<Error> {
 
 function defaultForwardedProps(body: Record<string, unknown>): unknown {
   const out: Record<string, unknown> = {};
-  for (const key of ['pageContext', 'agent', 'model']) {
+  for (const key of ['pageContext', 'agent', 'model', 'persona', 'uiCapabilities']) {
     if (body[key] !== undefined && body[key] !== null) out[key] = body[key];
   }
   return Object.keys(out).length > 0 ? out : undefined;
