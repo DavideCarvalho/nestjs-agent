@@ -162,8 +162,8 @@ importers:
   packages/codegen:
     devDependencies:
       '@dudousxd/nestjs-codegen':
-        specifier: 0.25.2
-        version: 0.25.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)
+        specifier: 0.27.2
+        version: 0.27.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)
       tsup:
         specifier: 8.5.1
         version: 8.5.1(@swc/core@1.16.12)(jiti@1.21.7)(postcss@8.5.28)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.0)
@@ -1265,8 +1265,8 @@ packages:
       '@dudousxd/nestjs-context':
         optional: true
 
-  '@dudousxd/nestjs-codegen@0.25.2':
-    resolution: {integrity: sha512-ufNVD22rgIJVU0CoC7+FXvJEGWB179vstpKWBr1y63EqtN7+8x+OWQbTQy86YTw3g1hesrFO63170HECRvoHgQ==}
+  '@dudousxd/nestjs-codegen@0.27.2':
+    resolution: {integrity: sha512-jTYryq1D+UDLuI5S4hwcVKWdfbHzq6IRKLVL11ZZXG1+BKDdMjpxX2lX6oC2p/x1B5MBupYGWGLdgtzW/GDsMg==}
     engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
@@ -6313,7 +6313,7 @@ snapshots:
     optionalDependencies:
       '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
 
-  '@dudousxd/nestjs-codegen@0.25.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)':
+  '@dudousxd/nestjs-codegen@0.27.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(tsx@4.23.15)(typescript@5.9.3)':
     dependencies:
       cac: 6.7.14
       chokidar: 3.6.0
