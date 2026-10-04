@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.3.1
+
+### Patch Changes
+
+- fix(deps): update dependency @modelcontextprotocol/sdk to v1.31.0 ([#297](https://github.com/DavideCarvalho/nestjs-agent/issues/297))
+
 ## 0.3.0
 
 ### Minor Changes
