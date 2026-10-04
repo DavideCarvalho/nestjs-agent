@@ -59,7 +59,7 @@
     "better-sqlite3": "12.11.1",
     "drizzle-orm": "0.45.3",
     "mysql2": "3.24.5",
-    "pg": "8.23.0",
+    "pg": "8.23.1",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
