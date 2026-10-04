@@ -56,7 +56,7 @@
     "@testcontainers/postgresql": "12.2.0",
     "@types/pg": "8.23.1",
     "drizzle-orm": "0.45.3",
-    "pg": "8.23.0",
+    "pg": "8.23.1",
     "redis": "6.2.1",
     "testcontainers": "12.2.0",
     "tsup": "8.5.1",
