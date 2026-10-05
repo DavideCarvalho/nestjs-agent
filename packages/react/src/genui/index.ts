@@ -25,3 +25,9 @@ export {
   type ResolveComponent,
 } from './types.js';
 export { toGenerativeUIItem } from './use-generative-ui.js';
+
+export {
+  createReactComponentRegistry,
+  type ReactComponentRegistry,
+  type ReactComponentRenderers,
+} from './react-registry.js';

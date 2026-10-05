@@ -1,4 +1,9 @@
-import type { ToolHandler, ToolSpec } from '@dudousxd/nestjs-agent-core';
+import {
+  type FunctionalToolDefinition,
+  type ToolHandler,
+  type ToolSpec,
+  createFunctionalTool,
+} from '@dudousxd/nestjs-agent-core';
 import type { FactoryProvider, Provider } from '@nestjs/common';
 
 /**
@@ -70,3 +75,7 @@ export function provideAgentTools(
     inject: inject ?? [],
   };
 }
+
+/** Author a functional tool with inferred Standard Schema input and domain output. */
+export const defineTool = createFunctionalTool;
+export type { FunctionalToolDefinition };

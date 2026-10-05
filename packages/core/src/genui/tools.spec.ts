@@ -264,3 +264,96 @@ it('hides unavailable components and empty tree catalogs using trusted renderer 
   const [tree] = genuiTools(catalog, { mode: 'tree' });
   expect((await tree?.handler.describe?.(scope))?.available).toBe(false);
 });
+
+describe('transformed portable props through tool registry', () => {
+  it.each([false, true])(
+    'transforms once through per-component and generic tools (dynamic=%s)',
+    async (dynamic) => {
+      const { ToolRegistry, DefaultRolesPolicy } = await import('../tool-registry.js');
+      let transforms = 0;
+      const transformed = defineComponent<{ label: string }>({
+        name: 'Portable',
+        title: 'Portable',
+        description: 'Portable',
+        version: 1,
+        props: z.object({ source: z.string() }).transform(({ source }) => {
+          transforms++;
+          return { label: `${source}!` };
+        }),
+        outputProps: z.object({ label: z.string() }),
+      });
+      const resolved = defineCatalog([transformed]);
+      const options = { showTool: true, ...(dynamic ? { resolveCatalog: () => resolved } : {}) };
+      const tools = genuiTools(resolved, options);
+      const registry = new ToolRegistry();
+      for (const tool of tools) registry.register(tool.spec, tool.handler);
+      const { ctx, emitUi } = ctxWithEmit();
+      await registry.invoke('ui__show_portable', { source: 'x' }, ctx, new DefaultRolesPolicy());
+      await registry.invoke(
+        'ui__show',
+        { component: 'Portable', props: { source: 'x' } },
+        ctx,
+        new DefaultRolesPolicy(),
+      );
+      expect(transforms).toBe(2);
+      expect(emitUi).toHaveBeenNthCalledWith(1, 'Portable', { label: 'x!' }, { version: 1 });
+      expect(emitUi).toHaveBeenNthCalledWith(2, 'Portable', { label: 'x!' }, { version: 1 });
+    },
+  );
+  it('describes author input schema rather than portable output schema', async () => {
+    const component = defineComponent({
+      name: 'Labels',
+      title: 'Labels',
+      description: 'Labels',
+      props: { type: 'object', properties: { source: { type: 'string' } }, required: ['source'] },
+      outputProps: {
+        type: 'object',
+        properties: { label: { type: 'string' } },
+        required: ['label'],
+      },
+    });
+    const tools = genuiTools(defineCatalog([component]), { showTool: true });
+    const show = tools.find((tool) => tool.spec.name === 'ui__show');
+    expect(show?.spec.description).toContain('source');
+    expect(show?.spec.description).not.toContain('label:');
+  });
+});
+
+it.each([false, true])(
+  'uses author input and portable output schemas for tree tools (dynamic=%s)',
+  async (dynamic) => {
+    const { ToolRegistry, DefaultRolesPolicy } = await import('../tool-registry.js');
+    let transforms = 0;
+    const component = defineComponent({
+      name: 'TreeLabel',
+      title: 'TreeLabel',
+      description: 'TreeLabel',
+      props: z.object({ source: z.string() }).transform(({ source }) => {
+        transforms++;
+        return { label: `${source}!` };
+      }),
+      outputProps: z.object({ label: z.string() }),
+    });
+    const catalog = defineCatalog([component]);
+    const [tool] = genuiTools(catalog, {
+      mode: 'tree',
+      ...(dynamic ? { resolveCatalog: () => catalog } : {}),
+    });
+    if (!tool) throw new Error('tree tool missing');
+    const registry = new ToolRegistry();
+    registry.register(tool.spec, tool.handler);
+    const { ctx, emitUi } = ctxWithEmit();
+    await registry.invoke(
+      'ui__render',
+      { type: 'TreeLabel', props: { source: 'x' } },
+      ctx,
+      new DefaultRolesPolicy(),
+    );
+    expect(transforms).toBe(1);
+    expect(emitUi).toHaveBeenCalledWith(
+      GENUI_TREE_COMPONENT,
+      { root: { type: 'TreeLabel', props: { label: 'x!' } } },
+      {},
+    );
+  },
+);

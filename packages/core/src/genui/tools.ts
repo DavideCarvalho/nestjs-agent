@@ -166,10 +166,13 @@ function componentTool(
       if (definition === undefined) {
         throw new Error(`component "${component.name}" is not available here`);
       }
-      // The registry already ran `inputSchema`; validating again here is what a resolved catalog
-      // needs, what a host that calls the handler directly gets for free, and applies the schema's
-      // own output (defaults) for a Standard Schema.
-      const validated = await validateProps(definition.props, input, resolved.validator);
+      // Static handlers receive the registry's parsed output; dynamic handlers parse the
+      // request-specific input here. Never run an input transformation on portable output.
+      const validated = await validateProps(
+        dynamic ? definition.props : (definition.outputProps ?? definition.props),
+        input,
+        resolved.validator,
+      );
       if (!validated.ok) {
         throw new Error(`invalid ${component.name} props: ${formatIssues(validated.issues)}`);
       }
@@ -228,7 +231,12 @@ function treeTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
   const handler: ToolHandler = {
     async execute(input: unknown, ctx: AiToolCtx): Promise<GenuiToolOutput> {
       const resolved = await catalogFor(catalog, options, scopeOf(ctx));
-      const result = await validateTree(resolved, input, options.treeLimits);
+      const result = await validateTree(
+        resolved,
+        input,
+        options.treeLimits,
+        dynamic ? 'input' : 'output',
+      );
       if (!result.ok) {
         throw new Error(`invalid UI tree: ${formatIssues(result.issues)}`);
       }
@@ -255,7 +263,7 @@ function treeTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
       inputSchema: dynamic
         ? permissiveSchema(treeJsonSchema(catalog))
         : asyncJsonStandardSchema(treeJsonSchema(catalog), async (value) => {
-            const result = await validateTree(catalog, value, options.treeLimits);
+            const result = await validateTree(catalog, value, options.treeLimits, 'input');
             return result.ok ? { value: result.value } : { issues: result.issues };
           }),
       presentation,
@@ -287,6 +295,7 @@ export function showToolJsonSchema(catalog: Catalog): JsonSchema {
 async function validateShow(
   catalog: Catalog,
   input: unknown,
+  phase: 'input' | 'output' = 'input',
 ): Promise<
   | { ok: true; definition: ComponentDefinition<any>; props: Record<string, unknown> }
   | { ok: false; issues: GenuiIssue[] }
@@ -311,7 +320,11 @@ async function validateShow(
       ],
     };
   }
-  const validated = await validateProps(definition.props, props ?? {}, catalog.validator);
+  const validated = await validateProps(
+    phase === 'input' ? definition.props : (definition.outputProps ?? definition.props),
+    props ?? {},
+    catalog.validator,
+  );
   if (!validated.ok) {
     return {
       ok: false,
@@ -338,7 +351,7 @@ function showTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
   const handler: ToolHandler = {
     async execute(input: unknown, ctx: AiToolCtx): Promise<GenuiToolOutput> {
       const resolved = await catalogFor(catalog, options, scopeOf(ctx));
-      const result = await validateShow(resolved, input);
+      const result = await validateShow(resolved, input, dynamic ? 'input' : 'output');
       if (!result.ok) {
         throw new Error(`invalid ${name} call: ${formatIssues(result.issues)}`);
       }

@@ -10,6 +10,7 @@ import {
   type ModelProvider,
   type ModelTurnArgs,
   type ModelTurnResult,
+  type ToolHandler,
   ToolRegistry,
   createUiCollector,
   decodeStreamEvent,
@@ -25,6 +26,7 @@ const ACTOR = { id: 'u1', roles: ['ADMIN'] };
 /** Replay journal: positions on the call, JSON round-trip of every output, name checks. */
 class Journal {
   readonly entries: Array<{ name: string; output: string | undefined }> = [];
+  interruptAfter?: string;
   private seq = 0;
 
   rewind(): void {
@@ -48,6 +50,7 @@ class Journal {
     const output = await produce();
     const serialized = output === undefined ? undefined : JSON.stringify(output);
     this.entries[position] = { name, output: serialized };
+    if (this.interruptAfter === name) throw new Error('interrupted after checkpoint');
     return (serialized === undefined ? undefined : JSON.parse(serialized)) as T;
   }
 }
@@ -201,6 +204,122 @@ async function firstAssistant(h: Harness) {
 }
 
 describe('ctx.emitUi', () => {
+  const presentation = () => ({
+    component: 'Banner',
+    props: { text: 'Already complete' },
+    version: 1,
+    fallbackText: 'Already complete',
+  });
+
+  async function completedHarness(withPresentation: boolean) {
+    const h = await harness({}, [{ id: 'c1', name: 'completed' }]);
+    const execute = async () => {
+      throw new Error('Completed preflight must not execute');
+    };
+    const handler: ToolHandler = {
+      execute,
+      preflight: () => ({ status: 'completed', output: { completed: true } }),
+      ...(withPresentation ? { present: presentation } : {}),
+    };
+    h.registry.register(
+      { name: 'completed', kind: 'action', description: 'completed', inputSchema: z.object({}) },
+      handler,
+    );
+    return { h, handler };
+  }
+
+  it('does not add a presentation checkpoint when a hook is added after the claim', async () => {
+    const { h, handler } = await completedHarness(false);
+    await run(h);
+    const names = h.journal.names();
+    handler.present = presentation;
+    await run(h);
+    expect(h.journal.names()).toEqual(names);
+    expect(names).not.toContain('present:c1');
+  });
+
+  it('retains journaled presentation when its hook is removed after completion', async () => {
+    const { h, handler } = await completedHarness(true);
+    await run(h);
+    const names = h.journal.names();
+    Reflect.deleteProperty(handler, 'present');
+    await run(h);
+    expect(h.journal.names()).toEqual(names);
+    expect((await firstAssistant(h))?.ui).toEqual([
+      expect.objectContaining({ component: 'Banner' }),
+    ]);
+  });
+
+  it.each([false, true])(
+    'keeps the claim decision after interruption with initial presentation=%s',
+    async (initialPresentation) => {
+      const { h, handler } = await completedHarness(initialPresentation);
+      h.journal.interruptAfter = 'persist:toolcall:c1';
+      await expect(run(h)).rejects.toThrow('interrupted after checkpoint');
+      Reflect.deleteProperty(h.journal, 'interruptAfter');
+      if (initialPresentation) Reflect.deleteProperty(handler, 'present');
+      else handler.present = presentation;
+      await run(h);
+      expect(h.journal.names().includes('present:c1')).toBe(initialPresentation);
+      const claim = h.journal.entries.find((entry) => entry.name === 'persist:toolcall:c1');
+      expect(JSON.parse(claim?.output ?? '{}').presentCompletedPreflight).toBe(
+        initialPresentation ? true : undefined,
+      );
+    },
+  );
+
+  it('treats an absent historical presentation flag as disabled', async () => {
+    const { h, handler } = await completedHarness(true);
+    await run(h);
+    const claim = h.journal.entries.find((entry) => entry.name === 'persist:toolcall:c1');
+    if (!claim?.output) throw new Error('Missing claim');
+    const historical = JSON.parse(claim.output);
+    Reflect.deleteProperty(historical, 'presentCompletedPreflight');
+    claim.output = JSON.stringify(historical);
+    h.journal.entries.splice(
+      h.journal.entries.findIndex((entry) => entry.name === 'present:c1'),
+      1,
+    );
+    handler.present = () => {
+      throw new Error('Historical calls must not present');
+    };
+    await run(h);
+    expect(h.journal.names()).not.toContain('present:c1');
+  });
+
+  it('journals completed-preflight presentations without executing or duplicating them on replay', async () => {
+    const h = await harness({}, [{ id: 'c1', name: 'completed' }]);
+    let executions = 0;
+    let presentations = 0;
+    h.registry.register(
+      { name: 'completed', kind: 'action', description: 'completed', inputSchema: z.object({}) },
+      {
+        execute: async () => {
+          executions++;
+          return { completed: false };
+        },
+        preflight: () => ({ status: 'completed', output: { completed: true } }),
+        present: () => {
+          presentations++;
+          return {
+            component: 'Banner',
+            props: { text: 'Already complete' },
+            version: 1,
+            fallbackText: 'Already complete',
+          };
+        },
+      },
+    );
+    await run(h);
+    expect(executions).toBe(0);
+    expect(presentations).toBe(1);
+    expect((await firstAssistant(h))?.ui).toEqual([
+      expect.objectContaining({ component: 'Banner', props: { text: 'Already complete' } }),
+    ]);
+    await run(h);
+    expect(executions).toBe(0);
+    expect(presentations).toBe(1);
+  });
   it('streams the component live, between the call and its output, and persists it on the message', async () => {
     const h = await harness(
       {

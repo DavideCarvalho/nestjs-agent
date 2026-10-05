@@ -68,3 +68,20 @@ export {
   prepareUiEmission,
   validateUiCapabilities,
 } from './capabilities.js';
+
+export {
+  type ComponentPresentation,
+  type ComponentFactory,
+  type ComponentRenderer,
+  type ComponentManifest,
+  type ComponentRegistry,
+  type TableCell,
+  type TableProps,
+  type ChartProps,
+  createComponent,
+  createComponentRegistry,
+  snapshotComponentPresentation,
+  table,
+  chart,
+} from './registry.js';
+export { validatePresentationBatch } from './registry.js';

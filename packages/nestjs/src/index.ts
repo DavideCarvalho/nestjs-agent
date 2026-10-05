@@ -73,6 +73,8 @@ export { ToolsController } from './controller/tools.controller.js';
 export { MemoriesController } from './controller/memories.controller.js';
 export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';
 export {
+  defineTool,
+  type FunctionalToolDefinition,
   provideAgentTool,
   provideAgentTools,
   AGENT_TOOL_BRAND,

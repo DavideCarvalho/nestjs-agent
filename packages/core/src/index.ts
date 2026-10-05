@@ -167,3 +167,9 @@ export * from './action-proposal-capabilities.js';
 
 export * from './action-proposal-approval.js';
 export * from './negotiated-tool-ui.js';
+export {
+  createFunctionalTool,
+  type FunctionalToolDefinition,
+  type FunctionalTool,
+} from './functional-tool.js';
+export { emitToolPresentations } from './tool-presentations.js';

@@ -1,5 +1,5 @@
 import { type Catalog, toolNameFor } from './catalog.js';
-import type { JsonSchema } from './schema.js';
+import { type JsonSchema, toJsonSchema } from './schema.js';
 import { GENUI_TREE_COMPONENT, type GenuiElement } from './tree.js';
 
 /**
@@ -88,7 +88,7 @@ export function catalogToModelText(catalog: Catalog, options: CatalogTextOptions
     lines.push('Components you can show (one tool each):');
   }
   for (const component of catalog.modelComponents()) {
-    const schema = catalog.jsonSchemaFor(component.name);
+    const schema = toJsonSchema(component.props);
     const head =
       mode === 'per-component'
         ? `- ${component.name} (tool \`${toolNameFor(component.name, options.namePrefix)}\`)`
