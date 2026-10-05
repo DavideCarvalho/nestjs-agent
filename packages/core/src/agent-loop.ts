@@ -2675,6 +2675,22 @@ async function runClaimedToolCall(
   }
   if (claimed.preflight !== undefined && claimed.preflight.status !== 'ready') {
     const result = claimed.preflight;
+    if (result.status === 'completed' && deps.registry.hasPresentation(call.name)) {
+      // Journal presentation separately: a completed preflight never enters the execution step.
+      const raw = await hooks.step(`present:${call.id}`, async () => {
+        const ui = createNegotiatedUiCollector(call.id, ctx, deps.resolveUiCatalog, (event) =>
+          turn.writer.write(encodeStreamEvent(event)),
+        );
+        await deps.registry.presentOutput(call.name, result.output, {
+          ...toolCallContext(ctx, call.id),
+          emitUi: ui.emit,
+        });
+        return wrapToolStepOutput(result.output, ui.components(), ui.text());
+      });
+      const presented = unwrapToolStepOutput(raw);
+      if (presented.ui.length > 0) turn.toolUi.set(call.id, presented.ui);
+      if (presented.text) turn.toolText.set(call.id, presented.text);
+    }
     if (result.status === 'completed' && claimed.terminal === true) turn.halt.terminal = true;
     const outcome: ToolOutcome =
       result.status === 'completed'

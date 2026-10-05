@@ -1,5 +1,5 @@
 import type { Catalog } from './catalog.js';
-import type { GenuiIssue, GenuiValidation, JsonSchema } from './schema.js';
+import { type GenuiIssue, type GenuiValidation, type JsonSchema, validateProps } from './schema.js';
 
 /**
  * One node of a composed UI: a catalog component, its props, and — for components declared with
@@ -43,6 +43,7 @@ export async function validateTree(
   catalog: Catalog,
   tree: unknown,
   limits: TreeLimits = {},
+  phase: 'input' | 'output' = 'output',
 ): Promise<GenuiValidation<GenuiElement>> {
   const maxDepth = limits.maxDepth ?? 12;
   const maxNodes = limits.maxNodes ?? 200;
@@ -85,7 +86,14 @@ export async function validateTree(
       });
       return undefined;
     }
-    const validated = await catalog.validate(element.type, element.props ?? {});
+    const validated =
+      phase === 'input'
+        ? ((await validateProps(
+            definition.props,
+            element.props ?? {},
+            catalog.validator,
+          )) as GenuiValidation<Record<string, unknown>>)
+        : await catalog.validate(element.type, element.props ?? {});
     let props: Record<string, unknown> = {};
     if (!validated.ok) {
       for (const issue of validated.issues) {

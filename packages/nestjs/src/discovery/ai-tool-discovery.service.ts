@@ -85,6 +85,9 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
         },
         {
           execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),
+          ...(typeof handler.present === 'function'
+            ? { present: (output, ctx) => (instance as Required<ToolHandler>).present(output, ctx) }
+            : {}),
           ...(typeof handler.preflight === 'function'
             ? {
                 preflight: (input, ctx, options) =>

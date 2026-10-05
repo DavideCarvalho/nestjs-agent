@@ -24,6 +24,8 @@ export interface ComponentDefinition<P = Record<string, unknown>> {
   description: string;
   /** The props schema: a Standard Schema (Zod, Valibot, ArkType) or a JSON Schema object. */
   props: PropsSchema;
+  /** Portable normalized props schema. Required when input transformations are not idempotent. */
+  outputProps?: PropsSchema;
   /**
    * The component takes nested elements (a layout: `Stack`, `Card`). Only meaningful in tree mode,
    * where a node's `children` are validated against the catalog too.
@@ -135,7 +137,11 @@ function buildCatalog(
           issues: [{ path: [], message: `unknown component "${component}"` }],
         };
       }
-      const result = await validateProps(definition.props, props, validator);
+      const result = await validateProps(
+        definition.outputProps ?? definition.props,
+        props,
+        validator,
+      );
       return result as GenuiValidation<Record<string, unknown>>;
     },
     validateSync(component, props) {
@@ -146,13 +152,15 @@ function buildCatalog(
           issues: [{ path: [], message: `unknown component "${component}"` }],
         };
       }
-      return validatePropsSync(definition.props, props, validator) as
+      return validatePropsSync(definition.outputProps ?? definition.props, props, validator) as
         | GenuiValidation<Record<string, unknown>>
         | undefined;
     },
     jsonSchemaFor(component) {
       const definition = byName.get(component);
-      return definition === undefined ? undefined : toJsonSchema(definition.props);
+      return definition === undefined
+        ? undefined
+        : toJsonSchema(definition.outputProps ?? definition.props);
     },
     extend(more) {
       const next = new Map(byName);

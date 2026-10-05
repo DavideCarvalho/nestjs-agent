@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { UiCapabilities } from '../genui/capabilities.js';
+import type { ComponentPresentation } from '../genui/registry.js';
 import type { ToolConfirmation } from '../tool-presentation.js';
 import type { Actor, PageContext } from '../types.js';
 
@@ -9,6 +10,8 @@ import type { Actor, PageContext } from '../types.js';
  * no denormalized copies).
  */
 export interface AiToolCtx {
+  /** Reports presentation failures separately from successful domain execution. */
+  onPresentationError?(error: unknown, details: { toolName: string }): void | Promise<void>;
   uiCapabilities?: UiCapabilities;
   actor: Actor;
   threadId: string;
@@ -78,6 +81,15 @@ export type ToolPreflightResult<O = unknown> =
 /** A tool implementation. `I` is the input parsed by its registered Standard Schema. */
 export interface ToolHandler<I = unknown, O = unknown> {
   execute(input: I, ctx: AiToolCtx): Promise<O>;
+  /** Optional UI derived from successful domain output; errors never fail the domain action. */
+  present?(
+    output: O,
+    ctx: AiToolCtx,
+  ):
+    | ComponentPresentation<object>
+    | readonly ComponentPresentation<object>[]
+    | undefined
+    | Promise<ComponentPresentation<object> | readonly ComponentPresentation<object>[] | undefined>;
   /** Read-only action check. Runs after authorization and validation, before approval and again
    * immediately before execution. Confirmation strings are resolved, never templates. */
   preflight?(

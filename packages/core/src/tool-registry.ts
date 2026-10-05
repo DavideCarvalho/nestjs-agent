@@ -13,6 +13,7 @@ import {
   filterToolsByRole,
   isToolEnabled,
 } from './tool-filters.js';
+import { emitToolPresentations } from './tool-presentations.js';
 import { createNoopEmitUi } from './tool-ui.js';
 import type { Actor, ToolDefinition, ToolSpec } from './types.js';
 
@@ -107,6 +108,17 @@ export class ToolRegistry {
 
   register(spec: ToolSpec, handler: ToolHandler): void {
     this.entries.set(spec.name, { spec, handler });
+  }
+
+  /** Whether a successful preflight shortcut has UI to journal. */
+  hasPresentation(name: string): boolean {
+    return typeof this.entries.get(name)?.handler.present === 'function';
+  }
+
+  /** Present an already authorized successful domain result without executing its action again. */
+  async presentOutput(name: string, output: unknown, ctx: AiToolCtx): Promise<void> {
+    const entry = this.entries.get(name);
+    if (entry !== undefined) await emitToolPresentations(entry.handler, output, ctx, name);
   }
 
   has(name: string): boolean {
@@ -229,8 +241,12 @@ export class ToolRegistry {
     // The hook receives its own snapshot, so retained references cannot alter later execution.
     if (trusted) assertTrustedInput(name, hookInput, executionInput);
     if (result?.status === 'denied') throw new ToolPreflightDeniedError(name, result.reason);
-    if (result?.status === 'completed') return result.output;
-    return entry.handler.execute(executionInput, withEmit);
+    const output =
+      result?.status === 'completed'
+        ? result.output
+        : await entry.handler.execute(executionInput, withEmit);
+    await emitToolPresentations(entry.handler, output, withEmit, name);
+    return output;
   }
 
   /** Authorize and validate without executing. The caller journals this result before approval. */

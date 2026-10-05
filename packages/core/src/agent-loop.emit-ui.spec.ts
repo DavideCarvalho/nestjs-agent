@@ -201,6 +201,39 @@ async function firstAssistant(h: Harness) {
 }
 
 describe('ctx.emitUi', () => {
+  it('journals completed-preflight presentations without executing or duplicating them on replay', async () => {
+    const h = await harness({}, [{ id: 'c1', name: 'completed' }]);
+    let executions = 0;
+    let presentations = 0;
+    h.registry.register(
+      { name: 'completed', kind: 'action', description: 'completed', inputSchema: z.object({}) },
+      {
+        execute: async () => {
+          executions++;
+          return { completed: false };
+        },
+        preflight: () => ({ status: 'completed', output: { completed: true } }),
+        present: () => {
+          presentations++;
+          return {
+            component: 'Banner',
+            props: { text: 'Already complete' },
+            version: 1,
+            fallbackText: 'Already complete',
+          };
+        },
+      },
+    );
+    await run(h);
+    expect(executions).toBe(0);
+    expect(presentations).toBe(1);
+    expect((await firstAssistant(h))?.ui).toEqual([
+      expect.objectContaining({ component: 'Banner', props: { text: 'Already complete' } }),
+    ]);
+    await run(h);
+    expect(executions).toBe(0);
+    expect(presentations).toBe(1);
+  });
   it('streams the component live, between the call and its output, and persists it on the message', async () => {
     const h = await harness(
       {
