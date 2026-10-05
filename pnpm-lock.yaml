@@ -51,8 +51,8 @@ importers:
   examples/agent-demo:
     dependencies:
       '@dudousxd/durable-worker':
-        specifier: 0.10.0
-        version: 0.10.0(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
+        specifier: 0.10.1
+        version: 0.10.1(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
       '@dudousxd/nestjs-agent':
         specifier: workspace:*
         version: link:../../packages/nestjs
@@ -73,7 +73,7 @@ importers:
         version: 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@dudousxd/nestjs-durable':
         specifier: 0.45.0
-        version: 0.45.0(@dudousxd/durable-worker@0.10.0(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)
+        version: 0.45.0(@dudousxd/durable-worker@0.10.1(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-durable-core':
         specifier: 0.72.0
         version: 0.72.0(reflect-metadata@0.2.2)(zod@3.25.76)
@@ -1210,18 +1210,6 @@ packages:
   '@csstools/css-tokenizer@3.0.4':
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
-
-  '@dudousxd/durable-worker@0.10.0':
-    resolution: {integrity: sha512-vam01VCvcsgwiC4r3qsChUGSQsdPV18wskWTmRL1IcSggcvZvANoWl0VYIW7taIDXTqKjNJ7ERdWokI62IvnlQ==}
-    peerDependencies:
-      '@dudousxd/nestjs-durable-core': '>=0.1.0 <1.0.0'
-      bullmq: ^5.0.0
-      ioredis: ^5.0.0
-    peerDependenciesMeta:
-      bullmq:
-        optional: true
-      ioredis:
-        optional: true
 
   '@dudousxd/durable-worker@0.10.1':
     resolution: {integrity: sha512-/Ar3VjLgKdJykBQ8L/qHQHRkAT9lu2mPL29Kq+ngQCyRsPm/411AMuxyBjm99gYGtzLhn4Xi9TK/DN8wRieZxA==}
@@ -6301,7 +6289,7 @@ snapshots:
 
   '@csstools/css-tokenizer@3.0.4': {}
 
-  '@dudousxd/durable-worker@0.10.0(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)':
+  '@dudousxd/durable-worker@0.10.1(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.72.0(reflect-metadata@0.2.2)(zod@3.25.76)
     optionalDependencies:
@@ -6397,14 +6385,14 @@ snapshots:
       '@dudousxd/nestjs-durable-core': 0.72.1(reflect-metadata@0.2.2)(zod@3.25.76)
       '@nestjs/event-emitter': 12.0.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
 
-  '@dudousxd/nestjs-durable@0.45.0(@dudousxd/durable-worker@0.10.0(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)':
+  '@dudousxd/nestjs-durable@0.45.0(@dudousxd/durable-worker@0.10.1(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1))(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(zod@3.25.76)':
     dependencies:
       '@dudousxd/nestjs-durable-core': 0.72.0(reflect-metadata@0.2.2)(zod@3.25.76)
       '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
     optionalDependencies:
-      '@dudousxd/durable-worker': 0.10.0(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
+      '@dudousxd/durable-worker': 0.10.1(@dudousxd/nestjs-durable-core@0.72.0(reflect-metadata@0.2.2)(zod@3.25.76))(ioredis@5.11.1)
       '@dudousxd/nestjs-context': 0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       zod: 3.25.76
 
