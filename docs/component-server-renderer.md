@@ -1,5 +1,7 @@
 # React server rendering
 
+For the complete consumer walkthrough, including decorated classes, app-specific UI, and WhatsApp table/chart exports, see [Component registries and server rendering](./component-rendering.md).
+
 Register your application's existing React components once. The browser-compatible mapping serves `GenuiProvider`; the server uses the same components, definitions, and authoritative validation. No default UI styles are imposed.
 
 ```tsx
@@ -49,7 +51,7 @@ const pdf = await renderer.pdf(presentation, { capture, rowsPerPage: 25 })
 
 `images` returns one PNG per logical page; `pdf` combines the logical pages. DataTable pagination slices rows before React rendering, preserves every record, and retains columns and other props on each page. Custom components can register `paginate(props, rowsPerPage)` returning complete page props; each custom page is revalidated. Hooks should return schema-compatible props and preserve all user records.
 
-Dimensions are bounded: width 320–4096 pixels, height 200–16384 pixels, rowsPerPage 1–500, timeoutMs 100–60000, and 1–100 logical pages. Defaults are 1200×1600, 30 rows, and 15000 ms. Content taller than the chosen height rejects rather than silently clipping; reduce rowsPerPage, increase height, or paginate custom content. Font and image readiness is awaited. Capture runs in isolated contexts with page scripts and service workers disabled. Network requests abort by default; explicitly permit trusted fonts/images/styles via `allowAsset(url)` when needed. Pages and contexts close on success or failure. Caller-supplied browsers remain open; browsers launched by the adapter close after capture.
+Dimensions are bounded: width 320–4096 pixels, height 200–16384 pixels, rowsPerPage 1–500, timeoutMs 100–60000, and 1–100 logical pages. Defaults are 1200×1600, 30 rows, and 15000 ms. Content taller than the chosen height rejects rather than silently clipping; reduce rowsPerPage, increase height, or paginate custom content. Font and image readiness is awaited. Capture runs in isolated contexts with page scripts and service workers disabled. Network requests abort by default, including iframe requests; explicitly permit trusted fonts/images/styles via `allowAsset(url)` when needed. HTTP redirects always abort, even from an allowed asset URL; use direct asset URLs. Pages and contexts close on success or failure. Caller-supplied browsers remain open; browsers launched by the adapter close after capture.
 
 Binary pages are attachment data, never component-frame data. Persist the presentation and send resulting attachments through your transport only when your application authorizes it.
 

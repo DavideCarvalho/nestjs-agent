@@ -7,6 +7,13 @@ SSE, plus threads, personas, quota, cancel, and human-in-the-loop approve/reject
 turns the streamed messages into a renderable model — grouped parts, derived values, actions as state
 machines — and the chat components are one rendering of it. Optional rich-markdown subpath.
 
+## Component registries and server rendering
+
+Tools support a `present` hook in both functional and decorated class forms. Register custom components per app, share React renderers between web screens and static exports, and generate paginated PNG/PDF tables and charts for your own delivery adapters.
+
+See the [component rendering guide](../../docs/component-rendering.md) for complete examples, schemas, text fallbacks, and capture configuration.
+
+
 ## Install
 
 ```bash
