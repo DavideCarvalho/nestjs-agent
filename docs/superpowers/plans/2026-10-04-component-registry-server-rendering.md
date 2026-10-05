@@ -2,15 +2,15 @@
 
 > **For agentic workers:** Use subagent-driven-development for independently owned packages and review completed work against the approved spec.
 
-**Goal:** Ship one typed component/presentation contract for Adonis and Aviary, with per-app registries and optional React server rendering.
+**Goal:** Ship compatible typed component/presentation contracts for Agora and Aviary, with independently owned implementations, per-app registries and optional React server rendering.
 
-**Architecture:** Extend Aviary core GenUI and React adapters. Adonis re-exports the shared implementation and adds its own tool authoring integration. Tool presentations travel through existing journaled UI emissions, and server capture is a separate optional transport-independent module.
+**Architecture:** Extend Aviary core GenUI and React adapters within Aviary. Agora owns its GenUI, React/SSR, AG-UI and media implementations within its repository. Preserve compatible public APIs and the existing wire protocol without cross-ecosystem imports, re-exports, dependencies, shared source packages or symlinks. Each library builds, tests and releases independently. Tool presentations travel through existing journaled UI emissions, and server capture is a separate optional transport-independent module.
 
 **Tech Stack:** TypeScript, Standard Schema, existing GenUI JSON Schema validation, ReactDOM server, optional Playwright capture, Vitest, pnpm.
 
-## Task 1: Shared registry and authoring
+## Task 1: Aviary registry and authoring
 
-Files: `packages/core/src/genui/presentation.ts`, `registry.ts`, `index.ts`, `packages/core/src/spi/tool.ts`, `tool-registry.ts`, `packages/nestjs/src/functional-tool.ts`, and adjacent specs.
+Files: `packages/core/src/genui/registry.ts`, `index.ts`, `packages/core/src/spi/tool.ts`, `tool-registry.ts`, `packages/nestjs/src/functional-tool.ts`, and adjacent specs.
 
 - [x] Write failing consumer tests: `const Custom=createComponent({...}); const result=await Custom(props); await registry.register(Custom.definition,{text:props=>props.label}).render(result,'text')`.
 - [x] Run `pnpm exec vitest run packages/core/src/genui packages/core/src/tool-registry.spec.ts packages/nestjs/src/functional-tool.spec.ts`; establish missing API failures.
@@ -30,13 +30,15 @@ Files: `packages/react/src/genui/server/*`, `packages/react/package.json`, `tsup
 - [x] Verify PNG/PDF signatures with a real local browser and all records present in paginated HTML; inspect PNG.
 - [x] Add package exports/optional peers, documentation and changeset; run React typecheck/build.
 
-## Task 3: Adonis integration
+## Task 3: Independent Agora implementation
 
-Files: `packages/adonis/src/spi/tool.ts`, `tool-registry.ts`, `ai-tool-ref.ts`, `src/react/genui/server.ts`, `package.json`, `test/tool-present.spec.ts`, docs.
+Files in the Agora repository: `packages/adonis/src/genui/*`, `src/react/core/*`, `src/react/genui/*`, `src/ag-ui/core/*`, `src/spi/tool.ts`, `src/tool-registry.ts`, `src/ai-tool-ref.ts`, `package.json`, consumer and independence tests, docs.
 
 - [x] Write failing class and functional-tool tests for `present`; run Vitest and establish missing emissions.
-- [x] Implement equivalent hooks/object form without mandatory core imports in the root entry; shared helpers live in existing optional GenUI entry.
-- [x] Re-export the shared server renderer in `@adonis-agora/agent/react/genui/server`; validate against freshly built local Aviary packages without publishing unreviewed code.
+- [x] Implement equivalent hooks/object form using Agora’s own contracts and journaled emissions.
+- [x] Replace former Aviary re-exports with owned GenUI, React/SSR, AG-UI and media implementations; retain the existing Agora export paths and configuration APIs.
+- [x] Remove Aviary peers and dependencies from Agora; no linked Aviary checkout is needed to run consumers.
+- [ ] Validate all affected exports using an isolated consumer without any Aviary package installed.
 - [x] Add docs and changeset; run focused tests, typechecks and production build.
 
 ## Task 4: Review and publication
@@ -45,8 +47,17 @@ Files: `packages/adonis/src/spi/tool.ts`, `tool-registry.ts`, `ai-tool-ref.ts`, 
 - [x] Fix findings, rerun affected checks and record evidence.
 - [x] Commit both branches and create/link draft PRs in the two library repositories. Do not claim npm release or app deployment until it actually occurs.
 
-## Verification evidence
+## Independence validation
 
-Core/Nest: 145 files / 1301 tests passed. React GenUI: 32 tests passed, including Chromium PNG/PDF capture and a two-page PDF. Adonis: 109 focused tests passed; production and test TypeScript checks, repository lint, and production build passed against the freshly built local Aviary peers. Independent final review: 48 additional focused tests passed with no unresolved critical issues. Adonis draft PR publication must follow the Aviary core/React release because its SSR re-export requires the new peer exports. Existing Adonis lint warnings in unrelated files were left unchanged.
+- [x] Verify Aviary manifests and production source declare no Agora dependencies or imports/re-exports; add an AST-based regression guard.
+- [x] Verify local Agora GenUI definitions, registry, transformations, generated tools and browser-safe imports using 78 focused tests.
+- [ ] Complete Agora React/AG-UI/media architecture guards, consumer checks, typechecks, lint and production build after the full independent port.
+- [ ] Run final affected suites and real-browser PNG/PDF capture for both libraries, and record final independent-release evidence.
+
+## Historical verification before the independence correction
+
+The following evidence predates the user’s correction requiring fully independent libraries. It records the former implementation and does not certify the current independent Agora port.
+
+Core/Nest: 145 files / 1301 tests passed. React GenUI: 32 tests passed, including Chromium PNG/PDF capture and a two-page PDF. Adonis: 109 focused tests passed; production and test TypeScript checks, repository lint, and production build passed against the freshly built local Aviary peers. Independent final review: 48 additional focused tests passed with no unresolved critical issues. The former Adonis implementation used Aviary peer re-exports; that architecture has been removed. There is no release ordering requirement between the corrected independent libraries. Existing Adonis lint warnings in unrelated files were left unchanged.
 
 PRs: Aviary https://github.com/DavideCarvalho/nestjs-agent/pull/307; Adonis https://github.com/DavideCarvalho/adonis-agora-agent/pull/300. Both registered with the T3 thread; no npm release or application deployment performed.
