@@ -38,7 +38,7 @@ Files in the Agora repository: `packages/adonis/src/genui/*`, `src/react/core/*`
 - [x] Implement equivalent hooks/object form using Agora’s own contracts and journaled emissions.
 - [x] Replace former Aviary re-exports with owned GenUI, React/SSR, AG-UI and media implementations; retain the existing Agora export paths and configuration APIs.
 - [x] Remove Aviary peers and dependencies from Agora; no linked Aviary checkout is needed to run consumers.
-- [ ] Validate all affected exports using an isolated consumer without any Aviary package installed.
+- [x] Validate all affected exports using an isolated consumer without any Aviary package installed.
 - [x] Add docs and changeset; run focused tests, typechecks and production build.
 
 ## Task 4: Review and publication
@@ -51,8 +51,8 @@ Files in the Agora repository: `packages/adonis/src/genui/*`, `src/react/core/*`
 
 - [x] Verify Aviary manifests and production source declare no Agora dependencies or imports/re-exports; add an AST-based regression guard.
 - [x] Verify local Agora GenUI definitions, registry, transformations, generated tools and browser-safe imports using 78 focused tests.
-- [ ] Complete Agora React/AG-UI/media architecture guards, consumer checks, typechecks, lint and production build after the full independent port.
-- [ ] Run final affected suites and real-browser PNG/PDF capture for both libraries, and record final independent-release evidence.
+- [x] Complete Agora React/AG-UI/media architecture guards, consumer checks, typechecks, lint and production build after the full independent port.
+- [x] Run final affected suites and real-browser PNG/PDF capture for both libraries, and record final independent-release evidence.
 
 ## Historical verification before the independence correction
 
@@ -61,3 +61,11 @@ The following evidence predates the user’s correction requiring fully independ
 Core/Nest: 145 files / 1301 tests passed. React GenUI: 32 tests passed, including Chromium PNG/PDF capture and a two-page PDF. Adonis: 109 focused tests passed; production and test TypeScript checks, repository lint, and production build passed against the freshly built local Aviary peers. Independent final review: 48 additional focused tests passed with no unresolved critical issues. The former Adonis implementation used Aviary peer re-exports; that architecture has been removed. There is no release ordering requirement between the corrected independent libraries. Existing Adonis lint warnings in unrelated files were left unchanged.
 
 PRs: Aviary https://github.com/DavideCarvalho/nestjs-agent/pull/307; Adonis https://github.com/DavideCarvalho/adonis-agora-agent/pull/300. Both registered with the T3 thread; no npm release or application deployment performed.
+
+## Final independent verification
+
+Agora: the complete SQLite project passed 205 files / 2,180 tests, with 4 files / 89 cases skipped by existing environment/compatibility gates. Production and test typechecks, frozen lockfile installation, repository lint (three pre-existing warnings) and the three-task monorepo production build passed. Real Chromium capture verified PNG, a two-page PDF and caller browser cleanup. Its packed package installed in a new consumer directory with no Aviary package in the lockfile; React, GenUI, SSR, capture, media and AG-UI imports worked, and SSR escaping plus AG-UI encoding passed. A browser build resolved 164 modules with no server root or Aviary dependency.
+
+Aviary: 109 focused GenUI/registry/React/independence tests passed, followed by a passing real Chromium PNG/PDF capture. Core production/spec and React production typechecks and React ESM/CJS/declaration builds passed. The independent architecture guard covers every production package and dependency manifest. Final independent review ran another 35 focused cases and the packed-consumer smoke test, with no new blockers.
+
+The existing optional skills-maintenance CI job failed because its external OpenCode provider requires an active subscription. This is unrelated to package compilation; shipped consumer skills were updated and validated locally. No npm release or application deployment was performed.
