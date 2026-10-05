@@ -1,0 +1,21 @@
+# Component registry and server rendering
+
+The approved consumer API supports functional tools and `@AiTool` classes with a `present(result, ctx)` hook. Execution returns ordinary domain data; presentation returns one or more validated component emissions. REST/MCP consumers keep receiving the domain result. The existing journaled `emitUi` path carries presentations through streaming, persistence and durable replay.
+
+## Shared contract
+
+Extend the existing framework-independent core GenUI catalog rather than creating an incompatible protocol. Existing `defineComponent`, `defineCatalog`, catalogs and persisted UI frames remain supported. Add `createComponent(definition)`: a callable typed factory accepting component props, validating them asynchronously against Standard Schema/JSON Schema and returning a JSON-safe `ComponentPresentation` (`component`, `props`, `version`, `fallbackText`). Its `.definition` remains usable in an existing catalog. Add typed `table` and `chart` factories using the existing DataTable/Chart component definitions.
+
+`createComponentRegistry()` registers a definition and a map of channel renderers. It exposes a catalog, plain client manifest (names, versions and schemas when derivable; never renderer functions), and async `render(presentation, channel, context?)`. Validation and version checks happen before a renderer. An absent channel renderer uses trusted text fallback; renderer failures propagate so applications decide whether to retry or downgrade. Duplicate names fail. Registries belong to an app/tenant; never a mutable global singleton.
+
+## Tool integration
+
+Add an optional typed `present(output, ctx)` method to ToolHandler. ToolRegistry invokes it after successful execution and domain preflight completion, emits each component through ctx.emitUi and returns the unmodified execution output. Denied/failed actions do not present. Existing functional registration must preserve a handler's `this` and its new hook. Add the ergonomic object form `defineTool({name, input, execute, present, ...})` without removing existing forms. Adonis and Aviary must behave alike. A presentation is not an external send: transport adapters consume the existing UI stream. Presentation failures must not classify successful domain execution as failed or trigger a second domain side effect; provide a host-visible presentation error hook, otherwise log/diagnose distinctly.
+
+## React renderer
+
+Expose an optional `genui/server` React entry independent of the browser chat hook. A registry can register a React component renderer, used both by its web mapping and SSR. `createReactServerRenderer({registry, stylesheet?, theme?})` produces validated static HTML with an explicit app stylesheet/theme, plus PNG pages/PDF through a supplied browser-capture adapter. The adapter is optional: HTML needs only React and ReactDOM; capture needs a host browser or the optional Playwright adapter. Provide actual Playwright capture implementation, close pages in finally, wait for fonts/images, disable scripts and unsolicited network by default. User content is escaped by React. Filesystem stylesheets are read only on the server; CSS is trusted app-owned input. Bound width, height, page counts and timeout. Pagination splits DataTable records before React rendering, preserving every row. Custom components may provide pagination. Binary output is never persisted in component frames. A supplied browser is owned by the caller and must not be closed by the renderer.
+
+## Delivery and validation
+
+Both libraries export the same shared APIs; Adonis re-exports Aviary core/react APIs through its established optional-peer pattern. Add package exports, optional peers, builds, changesets and consumer documentation. Test real schema transformations, invalid props, versions, fallback, custom components, functional/class presentations, permissions, preflight, domain-output preservation, presentation-error side-effect safety, SSR escaping/style/theme, all-row pagination, image/PDF bytes and browser cleanup. Run affected suites, typechecks, lint and production builds; inspect a real generated table PNG. Preserve unrelated app worktrees and do not send real WhatsApp messages during tests.
