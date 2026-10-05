@@ -43,8 +43,10 @@ Files: `packages/adonis/src/spi/tool.ts`, `tool-registry.ts`, `ai-tool-ref.ts`, 
 
 - [x] Review spec compliance, then code quality, especially execution replay safety and SSR/browser separation.
 - [x] Fix findings, rerun affected checks and record evidence.
-- [ ] Commit both branches and create/link draft PRs in the two library repositories. Do not claim npm release or app deployment until it actually occurs.
+- [x] Commit both branches and create/link draft PRs in the two library repositories. Do not claim npm release or app deployment until it actually occurs.
 
 ## Verification evidence
 
 Core/Nest: 145 files / 1301 tests passed. React GenUI: 32 tests passed, including Chromium PNG/PDF capture and a two-page PDF. Adonis: 109 focused tests passed; production and test TypeScript checks, repository lint, and production build passed against the freshly built local Aviary peers. Independent final review: 48 additional focused tests passed with no unresolved critical issues. Adonis draft PR publication must follow the Aviary core/React release because its SSR re-export requires the new peer exports. Existing Adonis lint warnings in unrelated files were left unchanged.
+
+PRs: Aviary https://github.com/DavideCarvalho/nestjs-agent/pull/307; Adonis https://github.com/DavideCarvalho/adonis-agora-agent/pull/300. Both registered with the T3 thread; no npm release or application deployment performed.
