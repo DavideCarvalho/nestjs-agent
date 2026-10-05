@@ -1826,6 +1826,8 @@ interface ClaimedToolCall {
   detached?: boolean;
   /** The journal says a successful call ends the turn (`ToolSpec.terminal`). */
   terminal?: boolean;
+  /** Opt in to the completed-preflight presentation checkpoint from the journaled claim. */
+  presentCompletedPreflight?: true;
   /**
    * For an `action` call — how the journal says it is approved. Undefined for a call claimed before
    * approval policies existed, which waits on the requester with no expiry, as it always did.
@@ -2088,6 +2090,10 @@ async function claimToolCall(
       // Same for `terminal`: absent unless declared, so a deployment with no terminal tool writes
       // the bytes it always has, and a replay reads the branch back instead of re-deciding it.
       ...(spec?.terminal === true ? { terminal: true } : {}),
+      // Journal this extra checkpoint's opt-in; historical claims without it keep their sequence.
+      ...(preflight?.status === 'completed' && deps.registry.hasPresentation(call.name)
+        ? { presentCompletedPreflight: true }
+        : {}),
       ...(approval !== undefined ? { approval } : {}),
       ...(preflight !== undefined ? { preflight } : {}),
       ...(proposalId !== undefined ? { proposalId } : {}),
@@ -2098,6 +2104,7 @@ async function claimToolCall(
         targetAgent?: string;
         detached?: boolean;
         terminal?: boolean;
+        presentCompletedPreflight?: true;
         approval?: ClaimedApproval;
         preflight?: ClaimedToolCall['preflight'];
         proposalId?: string;
@@ -2113,6 +2120,7 @@ async function claimToolCall(
     ...(persisted?.targetAgent !== undefined ? { targetAgent: persisted.targetAgent } : {}),
     ...(persisted?.detached === true ? { detached: true } : {}),
     ...(persisted?.terminal === true ? { terminal: true } : {}),
+    ...(persisted?.presentCompletedPreflight === true ? { presentCompletedPreflight: true } : {}),
     ...(toolType === 'action' && persisted?.approval !== undefined
       ? { approval: persisted.approval }
       : {}),
@@ -2675,7 +2683,7 @@ async function runClaimedToolCall(
   }
   if (claimed.preflight !== undefined && claimed.preflight.status !== 'ready') {
     const result = claimed.preflight;
-    if (result.status === 'completed' && deps.registry.hasPresentation(call.name)) {
+    if (result.status === 'completed' && claimed.presentCompletedPreflight === true) {
       // Journal presentation separately: a completed preflight never enters the execution step.
       const raw = await hooks.step(`present:${call.id}`, async () => {
         const ui = createNegotiatedUiCollector(call.id, ctx, deps.resolveUiCatalog, (event) =>
