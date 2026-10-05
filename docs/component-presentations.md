@@ -1,5 +1,7 @@
 # Component presentations and tool authoring
 
+For the complete consumer walkthrough, including decorated classes, app-specific UI, and WhatsApp table/chart exports, see [Component registries and server rendering](./component-rendering.md).
+
 Component definitions stay compatible with `defineComponent` and `defineCatalog`. A presentation is plain JSON (`component`, `props`, `version`, `fallbackText`); renderer functions and image/PDF bytes never belong in persisted frames.
 
 ```ts

@@ -30,6 +30,13 @@ in-process when you don't need durability. The **mechanism** is the library; you
 
 Extracted and generalized from the flip-nestjs admin assistant.
 
+## Component registries and server rendering
+
+Tools support a `present` hook in both functional and decorated class forms. Register custom components per app, share React renderers between web screens and static exports, and generate paginated PNG/PDF tables and charts for your own delivery adapters.
+
+See the [component rendering guide](docs/component-rendering.md) for complete examples, schemas, text fallbacks, and capture configuration.
+
+
 ## Packages
 
 | Package | What it is |

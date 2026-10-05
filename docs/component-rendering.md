@@ -1,0 +1,229 @@
+# Component registries and server rendering
+
+A tool returns domain data. Its optional `present` hook describes how to show that result using a validated component contract. Each application registers its own renderers for that contract. React web UI and server exports can share the same component and stylesheet; a WhatsApp transport sends the exported PNG or PDF as an attachment.
+
+The libraries provide contracts and rendering adapters. They do not impose a table UI, a charting library, a theme, or a WhatsApp client. Agora and Aviary implement these APIs independently; neither ecosystem needs packages from the other.
+
+## What each layer owns
+
+| Layer | Responsibility |
+| --- | --- |
+| Tool `execute` | Read or change domain data, subject to the existing authorization and approval gates. |
+| Tool `present` | Turn a successful result into one component presentation, an array, or `undefined`. |
+| Component definition | Name, version, props schema, description, and trusted text fallback. |
+| Application registry | Associate trusted component definitions with app-owned renderers. |
+| React server renderer | Validate and render static HTML, or capture paginated PNG/PDF output. |
+| Transport adapter in your app | Upload attachments and send messages through WhatsApp, another chat channel, or HTTP. |
+
+`present` is different from the existing tool `presentation` metadata. `presentation` supplies labels, progress copy, and approval/result chrome; `present` creates component content from the execution result. Ordinary JSON tool output remains available to the model and REST/MCP consumers. An HTTP caller does not automatically receive HTML or an image: the application explicitly invokes a renderer when it wants that representation.
+
+## Tables and charts from a functional tool
+
+```ts
+import { defineTool } from '@dudousxd/nestjs-agent'
+import { table, chart } from '@dudousxd/nestjs-agent-core/genui'
+import { z } from 'zod'
+
+const sampleRows = [
+  { time: '22:08', side: 'Left', minutes: 10 },
+  { time: '20:46', side: 'Right', minutes: 8 },
+]
+
+export const feedingHistory = defineTool({
+  name: 'feedingHistory',
+  description: 'List recent feeding records',
+  input: z.object({ limit: z.number().int().min(1).max(100) }),
+  execute: async ({ limit }) => sampleRows.slice(0, limit),
+  present: (rows) => table({
+    title: 'Recent feedings',
+    columns: [
+      { key: 'time', label: 'Time' },
+      { key: 'side', label: 'Side' },
+      { key: 'minutes', label: 'Minutes', align: 'right' },
+    ],
+    rows,
+  }),
+})
+
+// The chart factory describes data, not a particular charting library.
+const durationChart = await chart({
+  title: 'Feeding duration',
+  type: 'bar',
+  xKey: 'time',
+  series: [{ key: 'minutes', label: 'Minutes' }],
+  data: sampleRows,
+  unit: 'min',
+})
+```
+
+Replace `sampleRows` with your repository or service. `table` uses the built-in `DataTable` contract: keyed columns and object rows with JSON scalar cells. `chart` uses `Chart`: `type` (`bar` or `line`), `xKey`, `series`, and `data`. Register their definitions in the server catalog and their renderers in your app. A factory returns plain JSON: `{ component, props, version, fallbackText }`. React elements, functions, dates, and attachment bytes do not belong in these persisted props.
+
+Register functional tools through `AgentModule.forRoot({ tools: [feedingHistory], ... })` with your existing module options, or `provideAgentTool(feedingHistory)` in Nest providers. Core-only hosts can use `createFunctionalTool` from `@dudousxd/nestjs-agent-core`.
+
+## The same API in a decorated class
+
+```ts
+import { AiTool } from '@dudousxd/nestjs-agent'
+import { table } from '@dudousxd/nestjs-agent-core/genui'
+import { z } from 'zod'
+
+@AiTool({
+  name: 'feedingHistory',
+  description: 'List recent feeding records',
+  input: z.object({ limit: z.number().int().min(1).max(100) }),
+})
+export class FeedingHistoryTool {
+  async execute({ limit }: { limit: number }) {
+    return [{ time: '22:08', side: 'Left', minutes: 10 }].slice(0, limit)
+  }
+
+  present(rows: { time: string; side: string; minutes: number }[]) {
+    return table({
+      columns: [
+        { key: 'time', label: 'Time' },
+        { key: 'side', label: 'Side' },
+        { key: 'minutes', label: 'Minutes' },
+      ],
+      rows,
+    })
+  }
+}
+```
+
+Register either the function or the class under this name. The class methods retain their receiver, so `execute` and `present` can use injected dependencies. Both forms accept async execution and presentation.
+
+## Custom components and renderers per channel
+
+```ts
+import { createComponent, createComponentRegistry } from '@dudousxd/nestjs-agent-core/genui'
+import { z } from 'zod'
+
+export const feedingSummary = createComponent({
+  name: 'FeedingSummary',
+  title: 'Feeding summary',
+  description: 'Count and duration for a recorded period',
+  version: 1,
+  props: z.object({ count: z.number().int(), minutes: z.number() }),
+  fallbackText: ({ count, minutes }) => `${count} feedings · ${minutes} min`,
+})
+
+export const channels = createComponentRegistry().register(feedingSummary.definition, {
+  text: ({ count, minutes }) => `${count} feedings · ${minutes} min`,
+  whatsapp: ({ count, minutes }) => `*${count} feedings*\nRecorded duration: ${minutes} min`,
+})
+
+const summary = await feedingSummary({ count: 2, minutes: 18 })
+const message = await channels.render(summary, 'whatsapp')
+```
+
+Channel names are application-defined. `render` validates the authoritative definition and version before invoking a renderer. A missing channel uses its registered `text` renderer or the definition's text fallback. A renderer error rejects; your delivery layer chooses whether to retry or use a fallback. The core registry also accepts a context argument for application-specific rendering needs.
+
+Create a registry per app or tenant, rather than mutating a process-wide registry. Duplicate component names reject. `registry.catalog` feeds the existing GenUI catalog; `registry.manifest` exposes names, versions, and available portable schemas, without renderer code. Client-supplied names never install or execute components.
+
+## Share the web component with server rendering
+
+```tsx
+import type { TableProps } from '@dudousxd/nestjs-agent-core/genui'
+import { table } from '@dudousxd/nestjs-agent-core/genui'
+import { createReactComponentRegistry, GenuiProvider } from '@dudousxd/nestjs-agent-react/genui'
+import type { ReactNode } from 'react'
+
+export function FeedingTable({ title, columns, rows }: TableProps) {
+  return (
+    <section className="feeding-report">
+      {title && <h2>{title}</h2>}
+      <table>
+        <thead><tr>{columns.map((column) => (
+          <th key={column.key}>{column.label}</th>
+        ))}</tr></thead>
+        <tbody>{rows.map((row, index) => (
+          <tr key={index}>{columns.map((column) => (
+            <td key={column.key}>{String(row[column.key] ?? '')}</td>
+          ))}</tr>
+        ))}</tbody>
+      </table>
+    </section>
+  )
+}
+
+export const components = createReactComponentRegistry()
+  .register(table.definition, { react: FeedingTable })
+
+export function ChatSurface({ children }: { children: ReactNode }) {
+  return (
+    <GenuiProvider registry={components.components} catalog={components.catalog}>
+      {children}
+    </GenuiProvider>
+  )
+}
+```
+
+Use `FeedingTable` in your normal platform screens as well. Load the same application CSS in the web bundle and in the server renderer. To reuse charts, register `chart.definition` with your application's chart component in the same way. Export components must render without browser APIs, effects, or user interaction. SVG or other statically rendered charts work; a chart that draws only into canvas after mounting needs an export component. CSS dimensions and pagination can differ for a narrow attachment while retaining the same visual design.
+
+Configure the authoritative server catalog with the same definitions:
+
+```ts
+import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui'
+import { components } from './components.js'
+
+// Add alongside your configured AgentModule in your Nest imports.
+const genuiModule = AgentGenuiModule.forRoot({ catalog: components.catalog })
+```
+
+Keep shared contracts and React component modules browser-safe. Import the Node-only server renderer only in server modules.
+
+## Render HTML, PNG, or PDF
+
+Install matching React and ReactDOM versions (18 or newer). HTML requires no browser. PNG/PDF require a capture adapter; the optional Playwright adapter uses `playwright-core` and an explicitly installed Chromium. Browser installation is your deployment's responsibility.
+
+```ts
+import { createReactServerRenderer } from '@dudousxd/nestjs-agent-react/genui/server'
+import { createPlaywrightCaptureAdapter } from '@dudousxd/nestjs-agent-react/genui/server/playwright'
+import { table } from '@dudousxd/nestjs-agent-core/genui'
+import { chromium } from 'playwright-core'
+import { components } from './components.js'
+
+const browser = await chromium.launch({ executablePath: '/usr/bin/chromium' })
+try {
+  const renderer = createReactServerRenderer({
+    registry: components,
+    stylesheet: { path: './dist/feeding-report.css' },
+    theme: 'light',
+    capture: createPlaywrightCaptureAdapter({ browser }),
+  })
+  const item = await table({
+    title: 'Recent feedings',
+    columns: [{ key: 'time', label: 'Time' }, { key: 'minutes', label: 'Minutes' }],
+    rows: [{ time: '22:08', minutes: 10 }, { time: '20:46', minutes: 8 }],
+  })
+  const html = await renderer.html(item)
+  const images = await renderer.images(item, { width: 960, height: 1600, rowsPerPage: 20 })
+  const pdf = await renderer.pdf(item, { rowsPerPage: 20 })
+  // html is a string; images is Uint8Array[]; pdf is Uint8Array.
+  // Your application uploads/sends these bytes through its own transport.
+} finally {
+  await browser.close()
+}
+```
+
+For WhatsApp, send each PNG as a normal image attachment; the table remains readable without Markdown table support. A long history produces multiple images, preserving every row. A PDF is an alternative downloadable attachment. Receiving a `present` frame alone does not send a WhatsApp attachment: your host must route the presentation through the renderer and its delivery adapter. The built-in text table fallback shows at most 15 rows and marks omissions; use image/PDF export when every row must be visible.
+
+`images` returns one PNG per logical page. `pdf` combines those pages. `DataTable` pagination preserves columns and slices rows before React rendering. A custom React registration can supply `paginate(props, rowsPerPage)`, returning complete props for each page; every page is validated. HTML export renders the complete component without this pagination.
+
+| Capture setting | Default | Allowed range |
+| --- | --- | --- |
+| `width` | 1200 px | 320–4096 px |
+| `height` | 1600 px | 200–16384 px |
+| `rowsPerPage` | 30 | 1–500 |
+| `timeoutMs` | 15000 ms | 100–60000 ms |
+| Logical pages | Derived from data | 1–100 |
+
+Overflow rejects instead of silently clipping content. Reduce rows per page, increase height, or add a custom paginator. Fonts and images are awaited. The adapter closes its own pages and contexts on success and failure; a supplied browser remains caller-owned. The server entry does not import browser chat hooks.
+
+## Validation, replay, and capture boundaries
+
+Props can use Standard Schema (for example Zod) or JSON Schema. `createComponent` snapshots JSON-safe props and creates trusted fallback text. If an input transform changes the shape, declare an `outputProps` schema that accepts the normalized portable props; renderers, catalog validation, and manifests use `outputProps ?? props`. This avoids repeatedly applying an input transformation during rendering or replay.
+
+Presentations use the existing `ctx.emitUi` path, so UI frames follow the normal streaming and durable message flow. Denied or failed tools do not present. Presentation/delivery failures retain the successful domain result and do not retry the action. Hosts can report those failures through `ctx.onPresentationError(error, { toolName })`. Completed-action shortcuts journal their presentation decision so changing a hook does not move replay checkpoints; historical claims without that decision retain their original checkpoint sequence.
+
+Stylesheets, React renderers, and filesystem paths are trusted application inputs. Capture disables page scripts and service workers and denies network traffic by default, including iframe requests. If your app needs remote fonts or images, pass an explicit `allowAsset(url)` predicate to the Playwright adapter. Even allowlisted requests cannot follow HTTP redirects; use a direct trusted asset URL. Binary attachments stay outside persisted component frames.

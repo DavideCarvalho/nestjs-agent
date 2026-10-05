@@ -16,6 +16,13 @@ provider, a store, a sink) against the SPIs.
 import type { ModelProvider, AgentStore, ToolSpec, RolesPolicy } from '@dudousxd/nestjs-agent-core';
 ```
 
+## Component registries and server rendering
+
+Tools support a `present` hook in both functional and decorated class forms. Register custom components per app, share React renderers between web screens and static exports, and generate paginated PNG/PDF tables and charts for your own delivery adapters.
+
+See the [component rendering guide](../../docs/component-rendering.md) for complete examples, schemas, text fallbacks, and capture configuration.
+
+
 ## Key types
 
 - `ToolSpec` — `{ name, kind: 'read' | 'action' | 'agent', description, inputSchema, roles?, ability?, targetAgent?, detached?, terminal? }`. (`ToolKind` has three further members — `'ask'`, `'skill'` and `'memory'` — which no `ToolSpec` carries: they belong to the built-in tools the loop serves itself rather than from a handler. `ask` settles against a person, `skill` against the turn's journaled catalog, `remember` against the turn's journaled memory digest.) `inputSchema` is a [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType); the loop validates via `~standard.validate`, throwing `ToolInputInvalidError` on failure.

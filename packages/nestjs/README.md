@@ -10,6 +10,13 @@ via signals).
 This is the NestJS module — it re-exports the entire `@dudousxd/nestjs-agent-core` surface, so you
 import tools, types, and the module from one place.
 
+## Component registries and server rendering
+
+Tools support a `present` hook in both functional and decorated class forms. Register custom components per app, share React renderers between web screens and static exports, and generate paginated PNG/PDF tables and charts for your own delivery adapters.
+
+See the [component rendering guide](../../docs/component-rendering.md) for complete examples, schemas, text fallbacks, and capture configuration.
+
+
 ## Install
 
 ```bash
