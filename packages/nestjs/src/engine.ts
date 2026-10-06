@@ -18,4 +18,6 @@ export interface AgentEngine {
   providers: Provider[];
   /** The token of the engine's `AgentRunner`, which `AGENT_RUNNER` is bound to. */
   runner: InjectionToken;
+  /** Providers the app may inject too (the module is global): e.g. what an MCP surface hooks into. */
+  exports?: InjectionToken[];
 }

@@ -273,8 +273,9 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
 }
 
 /** The module's public tokens. */
-function exportsFor(): NonNullable<DynamicModule['exports']> {
+function exportsFor(engine?: AgentEngine): NonNullable<DynamicModule['exports']> {
   return [
+    ...(engine?.exports ?? []),
     AGENT_OPTIONS,
     AGENT_TOOL_REGISTRY,
     AGENT_REGISTRY,
@@ -416,7 +417,7 @@ export class AgentModule {
         ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
-      exports: exportsFor(),
+      exports: exportsFor(options.engine),
     };
   }
 
@@ -456,7 +457,7 @@ export class AgentModule {
         ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
-      exports: exportsFor(),
+      exports: exportsFor(options.engine),
     };
   }
 }

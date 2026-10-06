@@ -88,8 +88,35 @@ same steps in memory (single replica). Several processes need a cross-process si
 | `approvalPolicy` | who approves each `permission.asked`, and its expiry; not required → answered at once |
 | `tools: { url, headers }` | the module's `@AiTool`s over MCP (`AgentMcpServerModule` with `actions: 'execute'`): reads allowed, actions asked |
 | `skills` / `@Skill` | `.opencode/skills/<name>/SKILL.md` in the session's directory |
-| `memory` | instructions `aviary.memory` (read-only) |
+| `memory` | instructions `aviary.memory`; with `tools`, a `remember` tool when the provider writes |
+| `ctx.emitUi` in a tool | the component lands in the turn's stream and message (see below) |
 | `regenerate` | the session is reverted to before the last user message |
+
+## Tools over MCP
+
+```ts
+AgentModule.forRoot({
+  engine: openCode({
+    host: MyOpenCodeHost,
+    tools: { url: 'https://app.internal/mcp', headers: (actor) => ({ Authorization: `Bearer ${mint(actor)}` }) },
+  }),
+  memory: { provider }, // a provider with `write` → OpenCode gets `remember`
+  ...
+}),
+AgentMcpServerModule.forRootAsync({
+  inject: [OpenCodeTurns],
+  useFactory: (turns: OpenCodeTurns) => ({
+    name: 'app', version: '1', auth: myBearerResolver,
+    actions: 'execute', // OpenCode's `ask` rules put the person in front of action tools
+    context: (input) => turns.toolContext(input), // ties each call to its turn (`_meta`)
+  }),
+}),
+```
+
+## Several processes
+
+Use `openCodeDurable()`, a cross-process sink, and a shared session store:
+`sessions: keyValueOpenCodeSessionStore(redis)`.
 
 ## Testing against a real OpenCode
 

@@ -31,6 +31,7 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-diagnostics': pkg('diagnostics'),
   '@dudousxd/nestjs-agent-client': pkg('client'),
   '@dudousxd/nestjs-agent-codegen': pkg('codegen'),
+  '@dudousxd/nestjs-agent-mcp-server': pkg('mcp-server'),
   '@dudousxd/nestjs-agent-mcp': pkg('mcp'),
   '@dudousxd/nestjs-agent-opencode': pkg('opencode'),
   '@dudousxd/nestjs-agent-react/genui/json-render': fileURLToPath(

@@ -65,9 +65,10 @@ A multi-process deployment needs a cross-process `TokenStreamSink` and a persist
 | `@Agent` / `@SystemPrompt` / contributors | instructions entry `aviary.system`, every turn |
 | `approvalPolicy` | consulted on every `permission.asked`: not required → answered at once; otherwise its approver and `ttlMs` (expiry → rejected, "nobody approved in time") |
 | remembered approvals | answered without asking |
-| `@AiTool`s (`tools: { url, headers }`) | served by `AgentMcpServerModule` (`actions: 'execute'`), registered in the session with `mcp.add`; `read` tools allowed, `action` tools `ask` → approval cards |
+| `@AiTool`s (`tools: { url, headers }`) | served by `AgentMcpServerModule` (`actions: 'execute'`), registered in the session with `mcp.add`; the server allowed as a whole (`aviary*`: OpenCode offers a server's tools only then), `action` tools `ask` → approval cards, tools outside the agent's allow-list denied |
 | `skills` / `@Skill` | written as `.opencode/skills/<name>/SKILL.md` in the session's directory, allowed for the `skill` tool |
-| `memory` | instructions entry `aviary.memory` (read-only: OpenCode has no `remember`) |
+| `memory` | instructions entry `aviary.memory`; with `tools` and a provider that writes, a `remember` tool over MCP (one fact, at the actor's own scope) |
+| `ctx.emitUi` in a tool | `AgentMcpServerModule`'s `context: (i) => turns.toolContext(i)` ties an MCP call to its turn through `_meta['ai.opencode/sessionID']`: the component is a `ui` frame on the turn's stream, persisted on its message (a session another process follows: found through `session.get` → `metadata.threadId` → the thread's running turn) |
 | regenerate | the store is rewound and the session reverted (`session.revert`) |
 
 ## What an engine does not get
@@ -77,11 +78,11 @@ Everything that lives inside the loop: input/output processors, `outputSchema`, 
 Under OpenCode these are OpenCode's (permission rules, its agents and subagents, compaction), or the
 host's gateway's.
 
-## Not yet
+## Several processes
 
-- **Writing memory.** The `remember` tool is the loop's; under OpenCode the block is read-only.
-- **Generative UI pushed by tools** (`ui` frames): arrives through the host today (Flippy's `ui` MCP
-  server pushes components out of band).
+`openCodeDurable()` plus a cross-process `TokenStreamSink` (Redis, SQL) and a shared
+`OpenCodeSessionStore` — `keyValueOpenCodeSessionStore(redis)` takes any client with `get`/`set`.
+A tool call is tied to its turn through OpenCode itself, so the MCP request may land on any process.
 
 ## Verified against OpenCode 2.0.18
 
@@ -89,9 +90,13 @@ host's gateway's.
 `OpenCodeClient`, so a drift in the client's types fails the typecheck. `src/live/opencode.live.spec.ts`
 runs the engine against a running `opencode serve` (skipped unless `OPENCODE_LIVE_URL` is set): a
 plain answer, a `webfetch` permission rejected through the reject route, a question form answered
-through the answer route, and a durable turn answered from a process that never followed it. What
+through the answer route, a durable turn answered from a process that never followed it, and the
+module's tools over MCP (`opencode-mcp.live.spec.ts`: a tool's component reaches the turn's stream
+and message, `remember` writes at the actor's scope). What
 the live run taught: a built-in tool's permission carries its arguments straight in `metadata`, and
-the `question` tool is the form (it is not streamed as a call of its own).
+the `question` tool is the form (it is not streamed as a call of its own), OpenCode names its
+session in every MCP call's `_meta`, and it only offers an MCP server's tools when the server
+itself is allowed.
 
 ## Consequences
 

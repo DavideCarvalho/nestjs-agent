@@ -18,6 +18,11 @@ export interface OpenCodeClient {
         put(args: { sessionID: string; key: string; value: string }): Promise<unknown>;
       };
     };
+    /** The session's info. Optional: finds the thread of a session (its `metadata.threadId`). */
+    get?(args: { sessionID: string }): Promise<{
+      id: string;
+      metadata?: { readonly [key: string]: OpenCodeJson };
+    }>;
     /** Resolves when the session goes idle. Optional: a safety net for a missed terminal event. */
     wait?(args: { sessionID: string }): Promise<unknown>;
     /** Rewind the session to before a message (regenerate). Optional. */

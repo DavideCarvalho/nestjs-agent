@@ -15,6 +15,8 @@ export { FormAnswerError, toElicitation, toFormAnswer, toQuestion } from './form
 export {
   InMemoryOpenCodeSessionStore,
   type OpenCodeHost,
+  type OpenCodeKeyValue,
+  keyValueOpenCodeSessionStore,
   type OpenCodeServer,
   type OpenCodeSessionRef,
   type OpenCodeSessionStore,

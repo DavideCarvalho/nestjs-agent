@@ -1,5 +1,6 @@
 import type { ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
+import type { McpToolContextResolver } from './agent-mcp-server.js';
 import type { McpActionPolicy } from './exposed-tools.js';
 import type { McpRoutePrincipalFactory } from './routes/mcp-route-dispatcher.js';
 
@@ -44,6 +45,12 @@ export interface AgentMcpServerModuleOptions {
   emptyRoles?: EmptyRoles;
   /** How `@Mcp()` controller routes behave on this surface. See {@link McpRouteExposureOptions}. */
   routes?: McpRouteExposureOptions;
+  /**
+   * Ties a call to the conversation it serves, from the request's `_meta` — e.g. an agent engine
+   * that knows which turn an OpenCode session is running (`OpenCodeTurns.toolContext`), so a tool's
+   * `ctx.emitUi` reaches that turn's stream. See {@link McpToolContextResolver}.
+   */
+  context?: McpToolContextResolver;
 }
 
 /** Settings for the tools derived from `@Mcp()` controller routes. */

@@ -46,6 +46,7 @@ export function openCode(options: OpenCodeEngineOptions): AgentEngine {
     name: 'opencode',
     providers: [...openCodeProviders(options), OpenCodeAgentRunner],
     runner: OpenCodeAgentRunner,
+    exports: [OpenCodeTurns],
   };
 }
 

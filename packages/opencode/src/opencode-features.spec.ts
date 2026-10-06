@@ -135,11 +135,15 @@ describe('openCode engine: the library seams', () => {
     const rules = h.fake.callsOf('session.create')[0]?.args.permissions;
     expect(rules).toEqual(
       expect.arrayContaining([
-        { action: 'aviary.lookup', resource: '*', effect: 'allow' },
-        { action: 'aviary_lookup', resource: '*', effect: 'allow' },
+        { action: 'aviary*', resource: '*', effect: 'allow' },
         { action: 'aviary.send', resource: '*', effect: 'ask' },
         { action: 'aviary_send', resource: '*', effect: 'ask' },
       ]),
+    );
+    // Reads ride the server-wide allow; the action's ask comes after it (last match wins).
+    const list = rules as Array<{ action: string }>;
+    expect(list.findIndex((r) => r.action === 'aviary*')).toBeLessThan(
+      list.findIndex((r) => r.action === 'aviary.send'),
     );
     // The host's own rules come first: OpenCode's last matching rule wins.
     expect((rules as unknown[])[0]).toEqual({ action: '*', resource: '*', effect: 'deny' });

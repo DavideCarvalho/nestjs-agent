@@ -546,6 +546,9 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
+      '@dudousxd/nestjs-agent-mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
       '@dudousxd/nestjs-agent-testing':
         specifier: workspace:*
         version: link:../testing

@@ -12,26 +12,42 @@ import {
   AGENT_TOOL_REGISTRY,
   type AgentRunInput,
   type AgentStore,
+  type AgentUiComponent,
+  type AiToolCtx,
   type ApprovalRequirement,
+  DEFAULT_MAX_FACT_CHARS,
   DefaultApprovalPolicy,
   type HumanReply,
   type MemoryConfig,
   type PromptContext,
+  REMEMBER_TOOL_DESCRIPTION,
+  REMEMBER_TOOL_NAME,
   RUN_ENDED_BEFORE_TOOL_CALL,
+  type RememberToolInput,
   type ScopeContext,
   type SkillsConfig,
   type StoredMessage,
   type TokenStreamSink,
   type ToolRegistry,
+  actorScope,
   buildMemoryBlock,
   defaultScopeResolver,
   encodeStreamEvent,
+  memoryWriteVerdict,
   publishAgentRunFailed,
   releaseThreadRun,
+  rememberInputSchema,
   resolveMemoryDigest,
   resolveSkillCatalog,
 } from '@dudousxd/nestjs-agent-core';
-import { Inject, Injectable, Logger, type OnApplicationShutdown, Optional } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnApplicationShutdown,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import type { OpenCodeClient, OpenCodePermissionRule } from './client.js';
 import { OpenCodeEventHub } from './event-hub.js';
 import type { OpenCodeHost, OpenCodeServer, OpenCodeSessionStore } from './host.js';
@@ -79,6 +95,7 @@ export interface SessionHandle {
 
 interface LiveTurn {
   turn: OpenCodeTurn;
+  input: AgentRunInput;
   handle: SessionHandle;
   client: OpenCodeClient;
   stop: () => void;
@@ -94,7 +111,7 @@ const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
  * the session, catching up on what OpenCode asked while nobody listened.
  */
 @Injectable()
-export class OpenCodeTurns implements OnApplicationShutdown {
+export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger('OpenCodeTurns');
   private readonly events = new OpenCodeEventHub();
   private readonly live = new Map<string, LiveTurn>();
@@ -111,6 +128,119 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     @Optional() @Inject(AGENT_MEMORY) private readonly memory?: MemoryConfig,
     @Optional() @Inject(AGENT_CHAT_QUEUE) private readonly queue?: ChatQueueService,
   ) {}
+
+  /**
+   * With the module's tools served over MCP and a memory provider that writes, OpenCode gets the
+   * `remember` tool the loop would have offered: one fact, at the actor's own scope only.
+   */
+  onModuleInit(): void {
+    if (!this.memoryWritable() || this.registry.has(REMEMBER_TOOL_NAME)) return;
+    this.registry.register(
+      {
+        name: REMEMBER_TOOL_NAME,
+        kind: 'read',
+        description: REMEMBER_TOOL_DESCRIPTION,
+        inputSchema: rememberInputSchema,
+        roles: [],
+      },
+      { execute: (input, ctx) => this.remember(input as RememberToolInput, ctx) },
+    );
+  }
+
+  private memoryWritable(): boolean {
+    return this.settings.tools !== undefined && this.memory?.provider.write !== undefined;
+  }
+
+  private async remember(input: RememberToolInput, ctx: AiToolCtx): Promise<string> {
+    const memory = this.memory;
+    const write = memory?.provider.write?.bind(memory.provider);
+    if (memory === undefined || write === undefined) return 'Memory is read-only here.';
+    const max = memory.maxFactChars ?? DEFAULT_MAX_FACT_CHARS;
+    if (input.fact.length > max) return `Not recorded: a fact is at most ${max} characters.`;
+    const scopeCtx = {
+      actor: ctx.actor,
+      threadId: ctx.threadId,
+      ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+    };
+    const scopes = await (memory.scopes ?? defaultScopeResolver).resolve(scopeCtx);
+    const scope = actorScope(ctx.actor);
+    const verdict = memoryWriteVerdict({
+      scope,
+      scopes,
+      actor: ctx.actor,
+      author: { kind: 'agent' },
+    });
+    if (!verdict.allowed) return `Not recorded: ${verdict.reason}`;
+    await write({
+      key: input.key,
+      text: input.fact,
+      scope,
+      origin: {
+        author: 'agent',
+        actorRef: ctx.actor.id,
+        ...(ctx.threadId.startsWith('mcp:') ? {} : { threadId: ctx.threadId, runId: ctx.runId }),
+      },
+      ctx: scopeCtx,
+    });
+    return `Recorded "${input.key}".`;
+  }
+
+  /**
+   * The context of a tool call made over MCP by one of this engine's sessions — for
+   * `AgentMcpServerModule`'s `context` option. OpenCode names its session in the call's `_meta`
+   * (`ai.opencode/sessionID`); the call is then the turn's: its thread and run, and `ctx.emitUi`
+   * pushes into the turn's stream and message. A session this process is not following is found
+   * through OpenCode (`session.get` → the thread it was created for → the thread's running turn):
+   * its components still reach the stream, as a message of their own.
+   */
+  async toolContext(input: {
+    actor: AiToolCtx['actor'];
+    meta: Readonly<Record<string, unknown>> | undefined;
+  }): Promise<Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'emitUi'>> | undefined> {
+    const sessionId = sessionOfMeta(input.meta);
+    if (sessionId === undefined) return undefined;
+    for (const [runId, live] of this.live) {
+      if (live.handle.sessionId !== sessionId) continue;
+      return {
+        threadId: live.input.threadId,
+        runId,
+        emitUi: uiEmitter(`${runId}:${sessionId}`, (component) => live.turn.pushUi(component)),
+      };
+    }
+    const threadId = await this.threadOfSession(input.actor, sessionId);
+    if (threadId === undefined) return undefined;
+    const runId = (await this.store.activeRunForThread?.(threadId)) ?? undefined;
+    if (runId === undefined || runId === null) return { threadId };
+    return {
+      threadId,
+      runId,
+      emitUi: uiEmitter(`${runId}:${sessionId}`, async (component) => {
+        const writer = await this.sink.open(runId);
+        await writer.write(encodeStreamEvent({ kind: 'ui', ...component }));
+        await this.store.appendMessage({
+          threadId,
+          role: 'assistant',
+          content: '',
+          runId,
+          ui: [component],
+        });
+      }),
+    };
+  }
+
+  private async threadOfSession(
+    actor: AiToolCtx['actor'],
+    sessionId: string,
+  ): Promise<string | undefined> {
+    try {
+      const server = await this.host.server(actor);
+      const info = await server.client.session.get?.({ sessionID: sessionId });
+      const threadId = info?.metadata?.threadId;
+      return typeof threadId === 'string' ? threadId : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   onApplicationShutdown(): void {
     for (const live of this.live.values()) live.stop();
@@ -281,7 +411,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     };
   }
 
-  /** What is on file about the actor (`forRoot({ memory })`), read-only: OpenCode has no `remember`. */
+  /** What is on file about the actor (`forRoot({ memory })`); writable when `remember` is served. */
   private async memoryBlock(input: AgentRunInput): Promise<string | undefined> {
     const memory = this.memory;
     if (memory === undefined) return undefined;
@@ -296,7 +426,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     if (digest.entries.length === 0) return undefined;
     return buildMemoryBlock({
       entries: digest.entries,
-      writable: false,
+      writable: this.memoryWritable(),
       partial: digest.omitted > 0,
     });
   }
@@ -332,25 +462,28 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     return written;
   }
 
-  /** Permission rules for the module's tools: `read` allowed, `action` asked (→ an approval card). */
+  /**
+   * Permission rules for the module's tools: the MCP server allowed as a whole (OpenCode offers a
+   * server's tools only when the server itself is allowed), then each `action` tool asked — the last
+   * matching rule wins, so an action still lands on an approval card. Tools outside the agent's
+   * allow-list are denied.
+   */
   private toolRules(input: AgentRunInput): OpenCodePermissionRule[] {
     const tools = this.settings.tools;
     if (tools === undefined) return [];
     const server = tools.server ?? 'aviary';
     const allow = this.deps.forAgent(input.agentName).toolAllowList;
-    return this.registry
-      .allSpecs()
-      .filter((spec) => spec.kind === 'read' || spec.kind === 'action')
-      .filter((spec) => allow === undefined || allow.includes(spec.name))
-      .flatMap((spec) =>
-        [`${server}.${spec.name}`, `${server}_${spec.name}`].map(
-          (action): OpenCodePermissionRule => ({
-            action,
-            resource: '*',
-            effect: spec.kind === 'action' ? 'ask' : 'allow',
-          }),
-        ),
-      );
+    const both = (name: string) => [`${server}.${name}`, `${server}_${name}`];
+    const rules: OpenCodePermissionRule[] = [
+      { action: `${server}*`, resource: '*', effect: 'allow' },
+    ];
+    for (const spec of this.registry.allSpecs()) {
+      const offered = allow === undefined || allow.includes(spec.name);
+      if (offered && spec.kind === 'read') continue;
+      const effect = offered && spec.kind === 'action' ? 'ask' : 'deny';
+      for (const action of both(spec.name)) rules.push({ action, resource: '*', effect });
+    }
+    return rules;
   }
 
   private async addTools(
@@ -526,7 +659,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const stop = await this.events.listen(server.key, server.client, handle.sessionId, (event) =>
       turn.handle(event),
     );
-    const live: LiveTurn = { turn, handle, client: server.client, stop };
+    const live: LiveTurn = { turn, input, handle, client: server.client, stop };
     this.live.set(runId, live);
     if (catchUp && current === undefined) await turn.catchUp().catch(() => undefined);
     return live;
@@ -627,4 +760,39 @@ function transcriptOf(messages: StoredMessage[], limit: number): string {
     .slice(-limit)
     .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 2000)}`)
     .join('\n');
+}
+
+/** `_meta` keys MCP clients name their session with (OpenCode sends `ai.opencode/sessionID`). */
+const SESSION_META_KEYS = ['ai.opencode/sessionID', 'sessionId', 'session_id'];
+
+function sessionOfMeta(meta: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  for (const key of SESSION_META_KEYS) {
+    const value = meta?.[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/** `ctx.emitUi` over `push`, with the library's id and snapshot rules. */
+function uiEmitter(
+  scope: string,
+  push: (component: AgentUiComponent) => Promise<void>,
+): AiToolCtx['emitUi'] {
+  let next = 0;
+  return async (component, props, options = {}) => {
+    if (typeof component !== 'string' || component.length === 0) {
+      throw new Error('emitUi: component must be a non-empty string');
+    }
+    if (typeof props !== 'object' || props === null || Array.isArray(props)) {
+      throw new Error('emitUi: props must be a JSON object');
+    }
+    const id = options.id ?? `${scope}:ui:${next++}`;
+    await push({
+      id,
+      component,
+      props: JSON.parse(JSON.stringify(props)) as Record<string, unknown>,
+      ...(options.version !== undefined ? { version: options.version } : {}),
+    });
+    return { id };
+  };
 }

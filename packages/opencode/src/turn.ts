@@ -2,6 +2,7 @@ import {
   type AgentRunInput,
   type AgentStore,
   type AgentStreamEvent,
+  type AgentUiComponent,
   type ApprovalRequirement,
   type Decision,
   type ElicitationReply,
@@ -91,10 +92,12 @@ interface Segment {
   reasoningMs: number;
   calls: ToolCallRequest[];
   results: ToolResult[];
+  /** Components tools pushed (`ctx.emitUi`), last props per id. */
+  ui: AgentUiComponent[];
 }
 
 function emptySegment(): Segment {
-  return { text: '', reasoning: '', reasoningMs: 0, calls: [], results: [] };
+  return { text: '', reasoning: '', reasoningMs: 0, calls: [], results: [], ui: [] };
 }
 
 function isDecision(reply: HumanReply): reply is Decision {
@@ -177,6 +180,26 @@ export class OpenCodeTurn {
   /** End the turn as failed without an event (the prompt was refused, the stream is gone). */
   fail(error: string): void {
     this.enqueue(() => this.end({ status: 'failed', error }));
+  }
+
+  /**
+   * A component a tool pushed (`ctx.emitUi`, through the MCP surface): streamed as a `ui` frame and
+   * persisted on the message being written, in the order it arrived. Pushing the same id again
+   * replaces it.
+   */
+  pushUi(component: AgentUiComponent): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.chain = this.chain
+        .then(async () => {
+          await this.step();
+          const ui = this.segment.ui;
+          const at = ui.findIndex((c) => c.id === component.id);
+          if (at >= 0) ui[at] = component;
+          else ui.push(component);
+          await this.write({ kind: 'ui', ...component });
+        })
+        .then(resolve, reject);
+    });
   }
 
   /** The next milestone: one already reached, or the next one to come. */
@@ -521,7 +544,7 @@ export class OpenCodeTurn {
   private async flush(final: boolean): Promise<string | undefined> {
     this.endReasoning();
     const s = this.segment;
-    const empty = !s.text && !s.reasoning && s.calls.length === 0;
+    const empty = !s.text && !s.reasoning && s.calls.length === 0 && s.ui.length === 0;
     // A turn always leaves an answer behind, even an empty one, so the thread reads as answered.
     if (empty && !(final && !this.wroteMessage)) return undefined;
     this.segment = emptySegment();
@@ -543,6 +566,7 @@ export class OpenCodeTurn {
       ...(s.reasoning ? { reasoning: s.reasoning, reasoningMs: s.reasoningMs } : {}),
       ...(s.calls.length > 0 ? { toolCalls: s.calls } : {}),
       ...(s.results.length > 0 ? { toolResults: s.results } : {}),
+      ...(s.ui.length > 0 ? { ui: s.ui } : {}),
     });
     this.wroteMessage = true;
     this.messageResults.set(message.id, [...s.results]);
@@ -816,7 +840,12 @@ export class OpenCodeTurn {
   private async end(outcome: TurnOutcome): Promise<void> {
     if (this.ended) return;
     this.ended = true;
-    if (outcome.status !== 'failed' || this.segment.text || this.segment.calls.length > 0) {
+    if (
+      outcome.status !== 'failed' ||
+      this.segment.text ||
+      this.segment.calls.length > 0 ||
+      this.segment.ui.length > 0
+    ) {
       await this.flush(true);
     }
     if (this.stepOpen) {

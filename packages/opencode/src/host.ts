@@ -88,3 +88,35 @@ export class InMemoryOpenCodeSessionStore implements OpenCodeSessionStore {
     this.refs.set(threadId, ref);
   }
 }
+
+/** The two calls of a key-value store a session store needs — an ioredis or node-redis client fits. */
+export interface OpenCodeKeyValue {
+  get(key: string): Promise<string | null | undefined>;
+  set(key: string, value: string): Promise<unknown>;
+}
+
+/**
+ * Sessions kept in a shared key-value store (Redis…), so every process of a deployment finds the
+ * session a thread already has — what running more than one process needs, alongside a
+ * cross-process `TokenStreamSink`. Keys are `<prefix><threadId>`.
+ */
+export function keyValueOpenCodeSessionStore(
+  kv: OpenCodeKeyValue,
+  prefix = 'aviary:opencode:session:',
+): OpenCodeSessionStore {
+  return {
+    async get(threadId) {
+      const raw = await kv.get(`${prefix}${threadId}`);
+      if (raw === null || raw === undefined) return null;
+      try {
+        const ref = JSON.parse(raw) as OpenCodeSessionRef;
+        return typeof ref.sessionId === 'string' && typeof ref.serverKey === 'string' ? ref : null;
+      } catch {
+        return null;
+      }
+    },
+    async set(threadId, ref) {
+      await kv.set(`${prefix}${threadId}`, JSON.stringify(ref));
+    },
+  };
+}

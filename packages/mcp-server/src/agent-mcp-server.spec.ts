@@ -345,3 +345,61 @@ describe('a confirmed write over MCP', () => {
     expect(written).toEqual([{ orderId: 'o-1' }]);
   });
 });
+
+describe('createAgentMcpServer context', () => {
+  it("hands the host the call's _meta, and the tool the context it returns", async () => {
+    const registry = new ToolRegistry();
+    const pushed: unknown[] = [];
+    registry.register(
+      {
+        name: 'whoami',
+        kind: 'read',
+        description: 'Which conversation is this?',
+        inputSchema: z.object({}),
+        roles: ['ANALYST'],
+      },
+      {
+        execute: async (_input, ctx) => {
+          await ctx.emitUi('Card', { title: 'hi' });
+          return `${ctx.threadId} ${ctx.runId}`;
+        },
+      },
+    );
+    const seen: unknown[] = [];
+    const server = createAgentMcpServer({
+      name: 'spec-server',
+      version: '1.0.0',
+      registry,
+      policy: new DefaultRolesPolicy(),
+      context: ({ meta, toolName, actor }) => {
+        seen.push({ meta, toolName, actor: actor.id });
+        return meta?.['ai.opencode/sessionID'] === 'ses_1'
+          ? {
+              threadId: 'thread-1',
+              runId: 'run-1',
+              emitUi: async (component, props) => {
+                pushed.push({ component, props });
+                return { id: 'ui-1' };
+              },
+            }
+          : undefined;
+      },
+    });
+    const client = await connect({ server, actor: ANALYST });
+
+    const result = await client.callTool({
+      name: 'whoami',
+      arguments: {},
+      _meta: { 'ai.opencode/sessionID': 'ses_1' },
+    });
+    expect(textOf(result.content)).toBe('thread-1 run-1');
+    expect(pushed).toEqual([{ component: 'Card', props: { title: 'hi' } }]);
+    expect(seen).toEqual([
+      { meta: { 'ai.opencode/sessionID': 'ses_1' }, toolName: 'whoami', actor: 'u-analyst' },
+    ]);
+
+    // Nothing the host recognises: the call stands on its own, as before.
+    const alone = await client.callTool({ name: 'whoami', arguments: {} });
+    expect(textOf(alone.content)).toMatch(/^mcp:/);
+  });
+});

@@ -39,6 +39,7 @@ export class FakeOpenCode implements OpenCodeClient {
     resolve: (c: FakeCall) => void;
   }> = [];
   private sessions = 0;
+  private readonly metadata = new Map<string, OpenCodeSessionCreate['metadata']>();
   /** Permission requests and forms asked and not answered yet (what `list` reports). */
   readonly openPermissions = new Map<string, OpenCodePermissionRequest>();
   readonly openForms = new Map<string, OpenCodeForm>();
@@ -99,7 +100,13 @@ export class FakeOpenCode implements OpenCodeClient {
     create: async (args: OpenCodeSessionCreate) => {
       this.record('session.create', args as Record<string, unknown>);
       this.sessions += 1;
-      return { id: `ses_${this.sessions}` };
+      const id = `ses_${this.sessions}`;
+      this.metadata.set(id, args.metadata ?? {});
+      return { id };
+    },
+    get: async (args: { sessionID: string }) => {
+      this.record('session.get', args);
+      return { id: args.sessionID, metadata: this.metadata.get(args.sessionID) ?? {} };
     },
     prompt: async (args: { sessionID: string; text: string; files?: OpenCodePromptFile[] }) => {
       this.record('session.prompt', args);
