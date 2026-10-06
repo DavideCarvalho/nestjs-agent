@@ -82,8 +82,16 @@ host's gateway's.
 - **Writing memory.** The `remember` tool is the loop's; under OpenCode the block is read-only.
 - **Generative UI pushed by tools** (`ui` frames): arrives through the host today (Flippy's `ui` MCP
   server pushes components out of band).
-- **A real OpenCode server.** Event and call shapes follow Flippy's production use of OpenCode 2;
-  the specs run against `testing/fake-opencode.ts`.
+
+## Verified against OpenCode 2.0.18
+
+`src/live/client-shape.ts` assigns the real `@opencode/client` to the engine's structural
+`OpenCodeClient`, so a drift in the client's types fails the typecheck. `src/live/opencode.live.spec.ts`
+runs the engine against a running `opencode serve` (skipped unless `OPENCODE_LIVE_URL` is set): a
+plain answer, a `webfetch` permission rejected through the reject route, a question form answered
+through the answer route, and a durable turn answered from a process that never followed it. What
+the live run taught: a built-in tool's permission carries its arguments straight in `metadata`, and
+the `question` tool is the form (it is not streamed as a call of its own).
 
 ## Consequences
 

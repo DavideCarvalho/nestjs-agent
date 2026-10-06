@@ -91,4 +91,15 @@ same steps in memory (single replica). Several processes need a cross-process si
 | `memory` | instructions `aviary.memory` (read-only) |
 | `regenerate` | the session is reverted to before the last user message |
 
+## Testing against a real OpenCode
+
+```sh
+OPENCODE_LIVE_URL=http://127.0.0.1:4096 OPENCODE_LIVE_PASSWORD=… \
+OPENCODE_LIVE_MODEL=opencode-go/longcat-2.5-preview-free OPENCODE_LIVE_DIR=/tmp/work \
+pnpm vitest run packages/opencode/src/live
+```
+
+The server (`opencode serve`, 2.x, `OPENCODE_SERVER_PASSWORD` set) needs a key for the model's
+provider (`integration.connect.key`). Without `OPENCODE_LIVE_URL` the live specs are skipped.
+
 See `docs/design/2026-10-06-opencode-engine.md` for what is not wired yet.

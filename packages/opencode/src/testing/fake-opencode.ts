@@ -3,6 +3,7 @@ import type {
   OpenCodeEvent,
   OpenCodeForm,
   OpenCodePermissionRequest,
+  OpenCodePromptFile,
   OpenCodeSessionCreate,
 } from '../client.js';
 
@@ -100,7 +101,7 @@ export class FakeOpenCode implements OpenCodeClient {
       this.sessions += 1;
       return { id: `ses_${this.sessions}` };
     },
-    prompt: async (args: { sessionID: string; text: string; files?: unknown[] }) => {
+    prompt: async (args: { sessionID: string; text: string; files?: OpenCodePromptFile[] }) => {
       this.record('session.prompt', args);
       this.idle = false;
       const sessionId = args.sessionID;

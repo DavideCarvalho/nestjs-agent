@@ -1,5 +1,5 @@
 import type { Actor, AgentRunInput } from '@dudousxd/nestjs-agent-core';
-import type { OpenCodeClient, OpenCodeSessionCreate } from './client.js';
+import type { OpenCodeClient, OpenCodePromptFile, OpenCodeSessionCreate } from './client.js';
 
 /**
  * Where a turn runs and how its OpenCode session is set up — the part only the host knows. The
@@ -33,7 +33,7 @@ export interface OpenCodeHost {
    * The user message's attachments (`input.attachments`) in the form `session.prompt` takes them.
    * Omit → attachments are not sent to OpenCode.
    */
-  files?(context: OpenCodeTurnContext): Promise<unknown[]>;
+  files?(context: OpenCodeTurnContext): Promise<OpenCodePromptFile[]>;
 
   /**
    * Anything else to do on a NEW session before its first prompt — register MCP servers

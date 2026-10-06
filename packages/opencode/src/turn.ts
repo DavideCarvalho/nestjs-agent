@@ -101,6 +101,24 @@ function isDecision(reply: HumanReply): reply is Decision {
   return typeof (reply as Decision).approved === 'boolean';
 }
 
+/**
+ * The arguments of the call a permission is about. OpenCode puts a built-in tool's arguments
+ * straight in `metadata` (`webfetch` → `{ url, format }`); calls that wrap others nest them under
+ * `input` or `args`.
+ */
+function permissionArgs(req: OpenCodePermissionRequest): Record<string, unknown> {
+  const metadata = req.metadata ?? {};
+  const nested = metadata.input ?? metadata.args;
+  if (nested !== null && typeof nested === 'object') return nested as Record<string, unknown>;
+  return metadata;
+}
+
+/**
+ * OpenCode tools the stream does not show as calls: the question tool IS the form, which streams as
+ * an `elicitation` of its own.
+ */
+const HIDDEN_TOOLS = new Set(['question']);
+
 export function errorText(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.length > 0) return error;
   const message = (error as { message?: unknown } | undefined)?.message;
@@ -127,6 +145,8 @@ export class OpenCodeTurn {
   /** Results already persisted per message, so a late settlement adds to them rather than replacing. */
   private readonly messageResults = new Map<string, ToolResult[]>();
   private readonly asked = new Set<string>();
+  /** Calls of {@link HIDDEN_TOOLS}, by id. */
+  private readonly hidden = new Set<string>();
   private readonly milestones: Milestone[] = [];
   private waiting: ((m: Milestone) => void) | undefined;
   private readonly usage: MessageUsage = { inputTokens: 0, outputTokens: 0 };
@@ -372,10 +392,15 @@ export class OpenCodeTurn {
       }
       case 'session.tool.input.started':
         this.endReasoning();
+        if (HIDDEN_TOOLS.has(String(d.name))) {
+          this.hidden.add(String(d.id));
+          return;
+        }
         await this.step();
         await this.announce(String(d.id), String(d.name ?? 'tool'));
         return;
       case 'session.tool.called':
+        if (this.hidden.has(String(d.id))) return;
         await this.step();
         this.setInput(String(d.id), d.input, typeof d.name === 'string' ? d.name : undefined);
         await this.makeAvailable(String(d.id));
@@ -391,6 +416,7 @@ export class OpenCodeTurn {
         return;
       }
       case 'session.tool.progress':
+        if (this.hidden.has(String(d.id))) return;
         await this.step();
         await this.makeAvailable(String(d.id));
         await this.innerCalls(String(d.id), d.metadata?.toolCalls);
@@ -398,6 +424,7 @@ export class OpenCodeTurn {
       case 'session.tool.success':
       case 'session.tool.failed': {
         const id = String(d.id);
+        if (this.hidden.has(id)) return;
         await this.step();
         await this.makeAvailable(id);
         await this.innerCalls(id, d.metadata?.toolCalls);
@@ -538,9 +565,7 @@ export class OpenCodeTurn {
     this.asked.add(req.id);
     const { client, sessionId, input, store } = this.a;
     const action = String(req.action);
-    const metadata = req.metadata ?? {};
-    const raw = metadata.input ?? metadata.args;
-    const args = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const args = permissionArgs(req);
 
     if (recovering && (await this.alreadyRecorded(req.id))) {
       const state = await store.toolCallApproval?.(req.id);

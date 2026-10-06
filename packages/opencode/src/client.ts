@@ -6,7 +6,11 @@
 export interface OpenCodeClient {
   session: {
     create(args: OpenCodeSessionCreate): Promise<{ id: string }>;
-    prompt(args: { sessionID: string; text: string; files?: unknown[] }): Promise<unknown>;
+    prompt(args: {
+      sessionID: string;
+      text: string;
+      files?: OpenCodePromptFile[];
+    }): Promise<unknown>;
     /** Stops the running execution; OpenCode answers with `session.execution.interrupted`. */
     interrupt(args: { sessionID: string }): Promise<unknown>;
     instructions: {
@@ -59,7 +63,8 @@ export interface OpenCodeClient {
         type: 'remote';
         url: string;
         headers?: Record<string, string>;
-        oauth?: boolean;
+        /** `false`: never start OAuth for this server (the headers authenticate it). */
+        oauth?: false;
       };
     }): Promise<unknown>;
   };
@@ -77,6 +82,22 @@ export interface OpenCodeClient {
   };
 }
 
+/** A file attached to a prompt: a URI OpenCode can read (`file://…`, `data:…`, `https://…`). */
+export interface OpenCodePromptFile {
+  uri: string;
+  name?: string;
+  description?: string;
+}
+
+/** A JSON value — what OpenCode stores as metadata. */
+export type OpenCodeJson =
+  | string
+  | number
+  | boolean
+  | null
+  | OpenCodeJson[]
+  | { readonly [key: string]: OpenCodeJson };
+
 export interface OpenCodeSessionCreate {
   /** A named OpenCode agent (`.opencode/agents/<name>`), when the location defines one. */
   agent?: string;
@@ -84,7 +105,7 @@ export interface OpenCodeSessionCreate {
   location?: { directory: string };
   /** OpenCode permission rules (`{ action, resource, effect: 'allow' | 'deny' | 'ask' }`). */
   permissions?: OpenCodePermissionRule[];
-  metadata?: Record<string, unknown>;
+  metadata?: { readonly [key: string]: OpenCodeJson };
 }
 
 export interface OpenCodeModelRef {
