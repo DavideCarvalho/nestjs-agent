@@ -58,6 +58,7 @@ import { ToolsController } from './controller/tools.controller.js';
 import { AgentDiscoveryService } from './discovery/agent-discovery.service.js';
 import { AiToolDiscoveryService } from './discovery/ai-tool-discovery.service.js';
 import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-discovery.service.js';
+import type { AgentEngine } from './engine.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
 import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
@@ -134,7 +135,8 @@ function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProv
 /** The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`). */
 function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
   if (options.models !== undefined) return options.models;
-  const carried = (options.model as ModelProvider & { catalog?: ModelCatalog }).catalog;
+  const carried = (options.model as (ModelProvider & { catalog?: ModelCatalog }) | undefined)
+    ?.catalog;
   return carried !== undefined && typeof carried.list === 'function' ? carried : undefined;
 }
 
@@ -143,7 +145,7 @@ function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
  * `AGENT_STORE` locally: when the host omits `options.store` we leave it unbound so a globally-bound
  * store module (which binds `AGENT_STORE` app-wide) satisfies the dependency instead.
  */
-function sharedProviders(durable: boolean): Provider[] {
+function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Provider[] {
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
     // Starts empty; AgentDiscoveryService populates it from `@Agent`-decorated providers at boot.
@@ -245,7 +247,10 @@ function sharedProviders(durable: boolean): Provider[] {
     useFactory: (o: AgentModuleOptions, modules: ModulesContainer) => resolveStore(o, modules),
     inject: [AGENT_OPTIONS, ModulesContainer],
   });
-  if (durable) {
+  if (engine !== undefined) {
+    // The engine runs the turns; its providers bring the runner AGENT_RUNNER points at.
+    providers.push(...engine.providers, { provide: AGENT_RUNNER, useExisting: engine.runner });
+  } else if (durable) {
     // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
     // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
     providers.push({
@@ -375,11 +380,30 @@ function routerFor(path: string): DynamicModule {
   return RouterModule.register([{ path, module: AgentModule }]);
 }
 
+/**
+ * Refuse a wiring that cannot run a turn, at boot rather than on the first message: no `model` and
+ * no `engine` leaves the loop nothing to call, and `durable` names the loop's own durable runner,
+ * which an engine replaces (an engine that wants durability brings it).
+ */
+function assertRunnable(options: Pick<AgentModuleOptions, 'model' | 'engine' | 'durable'>): void {
+  if (options.engine !== undefined && options.durable === true) {
+    throw new Error(
+      `AgentModule: \`durable: true\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
+    );
+  }
+  if (options.engine === undefined && options.model === undefined) {
+    throw new Error(
+      'AgentModule: set `model` (the loop runs the turns) or `engine` (something else does).',
+    );
+  }
+}
+
 @Global()
 @Module({})
 export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
+    assertRunnable(options);
     applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
@@ -388,7 +412,7 @@ export class AgentModule {
       controllers: controllersForSurface(options.surface, options.adapters),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
-        ...sharedProviders(options.durable ?? false),
+        ...sharedProviders(options.durable ?? false, options.engine),
         ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
@@ -398,6 +422,9 @@ export class AgentModule {
 
   static forRootAsync(options: AgentModuleAsyncOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
+    if (options.engine !== undefined) {
+      assertRunnable({ engine: options.engine, durable: options.durable ?? false });
+    }
     applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
@@ -413,14 +440,19 @@ export class AgentModule {
           // anything today (AgentDurableModule takes its own mirror option — see its doc for why),
           // but it's stamped here too so the EFFECTIVE value is always observable off
           // AGENT_OPTIONS, sync or async alike.
-          useFactory: async (...args: never[]) => ({
-            ...(await options.useFactory(...args)),
-            durable: options.durable ?? false,
-            surface: options.surface ?? 'both',
-          }),
+          useFactory: async (...args: never[]) => {
+            const resolved: AgentModuleOptions = {
+              ...(await options.useFactory(...args)),
+              durable: options.durable ?? false,
+              surface: options.surface ?? 'both',
+              ...(options.engine !== undefined ? { engine: options.engine } : {}),
+            };
+            assertRunnable(resolved);
+            return resolved;
+          },
           inject: options.inject ?? [],
         },
-        ...sharedProviders(options.durable ?? false),
+        ...sharedProviders(options.durable ?? false, options.engine),
         ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
