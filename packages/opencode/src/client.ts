@@ -141,7 +141,10 @@ export interface OpenCodePermissionRequest {
   /** The rule's action, e.g. `company.send_email` or `webfetch`. */
   action: string;
   resources?: string[];
-  /** The call's arguments, where OpenCode reports them (`metadata.input` / `metadata.args`). */
+  /**
+   * About the call. A built-in tool's arguments sit straight here (`webfetch` → `{ url, format }`);
+   * calls that wrap others nest them under `input` or `args`.
+   */
   metadata?: Record<string, unknown>;
 }
 

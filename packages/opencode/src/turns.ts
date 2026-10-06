@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   AGENT_CHAT_QUEUE,
   type AgentDepsFactory,
@@ -178,7 +179,9 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       origin: {
         author: 'agent',
         actorRef: ctx.actor.id,
-        ...(ctx.threadId.startsWith('mcp:') ? {} : { threadId: ctx.threadId, runId: ctx.runId }),
+        // An MCP call no turn claimed carries synthetic `mcp:` ids: provenance names real ones only.
+        ...(ctx.threadId.startsWith('mcp:') ? {} : { threadId: ctx.threadId }),
+        ...(ctx.runId.startsWith('mcp:') ? {} : { runId: ctx.runId }),
       },
       ctx: scopeCtx,
     });
@@ -195,26 +198,32 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
    */
   async toolContext(input: {
     actor: AiToolCtx['actor'];
+    requestId?: string;
     meta: Readonly<Record<string, unknown>> | undefined;
   }): Promise<Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'emitUi'>> | undefined> {
     const sessionId = sessionOfMeta(input.meta);
     if (sessionId === undefined) return undefined;
+    // `_meta` is the client's to write: a session id ties the call to a turn only when the caller is
+    // the person that turn runs for.
+    const scope = (runId: string) => `${runId}:${input.requestId ?? randomUUID()}`;
     for (const [runId, live] of this.live) {
       if (live.handle.sessionId !== sessionId) continue;
+      if (live.input.actor.id !== input.actor.id) return undefined;
       return {
         threadId: live.input.threadId,
         runId,
-        emitUi: uiEmitter(`${runId}:${sessionId}`, (component) => live.turn.pushUi(component)),
+        emitUi: uiEmitter(scope(runId), (component) => live.turn.pushUi(component)),
       };
     }
     const threadId = await this.threadOfSession(input.actor, sessionId);
     if (threadId === undefined) return undefined;
-    const runId = (await this.store.activeRunForThread?.(threadId)) ?? undefined;
-    if (runId === undefined || runId === null) return { threadId };
+    if ((await this.store.ownerOfThread(threadId)) !== input.actor.id) return undefined;
+    const runId = (await this.store.activeRunForThread?.(threadId)) ?? null;
+    if (runId === null) return { threadId };
     return {
       threadId,
       runId,
-      emitUi: uiEmitter(`${runId}:${sessionId}`, async (component) => {
+      emitUi: uiEmitter(scope(runId), async (component) => {
         const writer = await this.sink.open(runId);
         await writer.write(encodeStreamEvent({ kind: 'ui', ...component }));
         await this.store.appendMessage({
@@ -762,15 +771,12 @@ function transcriptOf(messages: StoredMessage[], limit: number): string {
     .join('\n');
 }
 
-/** `_meta` keys MCP clients name their session with (OpenCode sends `ai.opencode/sessionID`). */
-const SESSION_META_KEYS = ['ai.opencode/sessionID', 'sessionId', 'session_id'];
+/** The `_meta` key OpenCode names its session with on every MCP call. */
+const SESSION_META_KEY = 'ai.opencode/sessionID';
 
 function sessionOfMeta(meta: Readonly<Record<string, unknown>> | undefined): string | undefined {
-  for (const key of SESSION_META_KEYS) {
-    const value = meta?.[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
+  const value = meta?.[SESSION_META_KEY];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /** `ctx.emitUi` over `push`, with the library's id and snapshot rules. */

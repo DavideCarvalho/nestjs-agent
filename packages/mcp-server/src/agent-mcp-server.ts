@@ -34,6 +34,8 @@ import { toMcpInputSchema } from './tool-json-schema.js';
 export type McpToolContextResolver = (input: {
   actor: Actor;
   toolName: string;
+  /** This call's id on the MCP surface (`mcp:<session>:<request>`) — unique per call. */
+  requestId: string;
   meta: Readonly<Record<string, unknown>> | undefined;
 }) =>
   | Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'requestId' | 'emitUi' | 'agentName'>>
@@ -182,7 +184,8 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
       const meta = request.params._meta as Readonly<Record<string, unknown>> | undefined;
       const ctx: AiToolCtx = {
         ...base,
-        ...((await options.context?.({ actor, toolName: name, meta })) ?? {}),
+        ...((await options.context?.({ actor, toolName: name, requestId: base.requestId, meta })) ??
+          {}),
       };
       const output = await source.invoke(name, args ?? {}, ctx, policy);
       return { content: [{ type: 'text', text: asText(output) }] };

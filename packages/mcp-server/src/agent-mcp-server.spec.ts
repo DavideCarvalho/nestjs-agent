@@ -366,13 +366,15 @@ describe('createAgentMcpServer context', () => {
       },
     );
     const seen: unknown[] = [];
+    const requestIds: string[] = [];
     const server = createAgentMcpServer({
       name: 'spec-server',
       version: '1.0.0',
       registry,
       policy: new DefaultRolesPolicy(),
-      context: ({ meta, toolName, actor }) => {
+      context: ({ meta, toolName, actor, requestId }) => {
         seen.push({ meta, toolName, actor: actor.id });
+        requestIds.push(requestId);
         return meta?.['ai.opencode/sessionID'] === 'ses_1'
           ? {
               threadId: 'thread-1',
@@ -397,6 +399,7 @@ describe('createAgentMcpServer context', () => {
     expect(seen).toEqual([
       { meta: { 'ai.opencode/sessionID': 'ses_1' }, toolName: 'whoami', actor: 'u-analyst' },
     ]);
+    expect(requestIds[0]).toMatch(/^mcp:/);
 
     // Nothing the host recognises: the call stands on its own, as before.
     const alone = await client.callTool({ name: 'whoami', arguments: {} });

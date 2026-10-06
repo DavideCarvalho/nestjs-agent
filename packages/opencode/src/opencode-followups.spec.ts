@@ -89,6 +89,44 @@ describe('openCode engine: follow-ups', () => {
     expect(fs).toContainEqual(expect.objectContaining({ kind: 'ui', id: 'chart-2' }));
   });
 
+  it('gives a session to no one but the person whose turn it is', async () => {
+    const { gate, script } = holdOpen();
+    h = await bootEngine({ engine: (host) => openCode({ host }), script });
+    const { runId } = await h.service.chat({ actor, message: 'chart it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'text');
+    const turns = h.app.get(OpenCodeTurns);
+    const stranger: Actor = { id: 'u2', roles: ['ADMIN'] };
+    expect(await turns.toolContext({ actor: stranger, meta: meta('ses_1') })).toBeUndefined();
+
+    // Through OpenCode too (a session this process does not follow).
+    const live = (turns as unknown as { live: Map<string, unknown> }).live;
+    const saved = new Map(live);
+    live.clear();
+    expect(await turns.toolContext({ actor: stranger, meta: meta('ses_1') })).toBeUndefined();
+    // Only OpenCode's own key names a session.
+    expect(await turns.toolContext({ actor, meta: { sessionId: 'ses_1' } })).toBeUndefined();
+    for (const [k, v] of saved) live.set(k, v);
+    gate.release?.();
+    await frames(h.service, runId);
+  });
+
+  it('keeps the components of two calls apart when neither names an id', async () => {
+    const { gate, script } = holdOpen();
+    h = await bootEngine({ engine: (host) => openCode({ host }), script });
+    const { runId, threadId } = await h.service.chat({ actor, message: 'two charts' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'text');
+    const turns = h.app.get(OpenCodeTurns);
+    const first = await turns.toolContext({ actor, requestId: 'mcp:s:1', meta: meta('ses_1') });
+    const second = await turns.toolContext({ actor, requestId: 'mcp:s:2', meta: meta('ses_1') });
+    await first?.emitUi?.('Chart', { n: 1 });
+    await second?.emitUi?.('Chart', { n: 2 });
+    gate.release?.();
+    await frames(h.service, runId);
+    const ui = (await h.store.getThread(threadId))?.messages.at(-1)?.ui ?? [];
+    expect(ui.map((c) => c.props)).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(new Set(ui.map((c) => c.id)).size).toBe(2);
+  });
+
   it('leaves a call from an unknown session standing on its own', async () => {
     h = await bootEngine({ engine: (host) => openCode({ host }) });
     const turns = h.app.get(OpenCodeTurns);
@@ -143,6 +181,14 @@ describe('openCode engine: follow-ups', () => {
         origin: { author: 'agent', actorRef: 'u1', threadId, runId },
       }),
     ]);
+    // A call no turn claimed: its synthetic ids are not provenance.
+    await registry.invoke(
+      'remember',
+      { key: 'k2', fact: 'Works in UTC' },
+      { ...ctx, threadId: 'mcp:s', runId: 'mcp:s:9' },
+      new DefaultRolesPolicy(),
+    );
+    expect(written[1]?.origin).toEqual({ author: 'agent', actorRef: 'u1' });
     const tooLong = await registry.invoke(
       'remember',
       { key: 'k', fact: 'x'.repeat(500) },
