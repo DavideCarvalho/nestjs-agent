@@ -527,6 +527,12 @@ export class OpenCodeTurn {
     return ((await this.a.store.toolCallApproval?.(id)) ?? null) !== null;
   }
 
+  /** The persisted assistant message carrying call `id`, so its result lands on the same message. */
+  private async messageOf(id: string): Promise<string | undefined> {
+    const thread = await this.a.store.getThread(this.a.input.threadId);
+    return thread?.messages.find((m) => m.toolCalls?.some((call) => call.id === id))?.id;
+  }
+
   private async onPermission(req: OpenCodePermissionRequest, recovering: boolean): Promise<void> {
     if (this.asked.has(req.id)) return;
     this.asked.add(req.id);
@@ -538,6 +544,7 @@ export class OpenCodeTurn {
 
     if (recovering && (await this.alreadyRecorded(req.id))) {
       const state = await store.toolCallApproval?.(req.id);
+      const messageId = await this.messageOf(req.id);
       this.reach({
         kind: 'ask',
         ask: {
@@ -546,6 +553,7 @@ export class OpenCodeTurn {
           action,
           approver: state?.approver ?? 'requester',
           ...(state?.expiresAt ? { expiresAt: state.expiresAt } : {}),
+          ...(messageId !== undefined ? { messageId } : {}),
         },
         ...(state?.expiresAt
           ? { timeoutMs: Math.max(0, Date.parse(state.expiresAt) - Date.now()) }
@@ -700,7 +708,17 @@ export class OpenCodeTurn {
     this.asked.add(form.id);
     const request = toElicitation(form.id, form);
     if (recovering && (await this.alreadyRecorded(form.id))) {
-      this.reach({ kind: 'ask', ask: { kind: 'form', id: form.id, form, request } });
+      const messageId = await this.messageOf(form.id);
+      this.reach({
+        kind: 'ask',
+        ask: {
+          kind: 'form',
+          id: form.id,
+          form,
+          request,
+          ...(messageId !== undefined ? { messageId } : {}),
+        },
+      });
       return;
     }
     const input = {

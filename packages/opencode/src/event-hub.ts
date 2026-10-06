@@ -4,6 +4,7 @@ import type { OpenCodeClient, OpenCodeEvent } from './client.js';
 type Listener = (event: OpenCodeEvent) => void;
 
 interface Stream {
+  client: OpenCodeClient;
   controller: AbortController;
   listeners: Map<string, Set<Listener>>;
   /** Resolves once the subscription is open, so a turn never prompts before it can hear the answer. */
@@ -40,11 +41,13 @@ export class OpenCodeEventHub {
     set.add(listener);
     await stream.ready;
     return () => {
-      const current = stream.listeners.get(sessionId);
+      // The server's stream now — it may have moved to a new client since this listener joined.
+      const live = this.streams.get(serverKey) ?? stream;
+      const current = live.listeners.get(sessionId);
       current?.delete(listener);
-      if (current?.size === 0) stream.listeners.delete(sessionId);
-      if (stream.listeners.size === 0 && this.streams.get(serverKey) === stream) {
-        stream.controller.abort();
+      if (current?.size === 0) live.listeners.delete(sessionId);
+      if (live.listeners.size === 0 && this.streams.get(serverKey) === live) {
+        live.controller.abort();
         this.streams.delete(serverKey);
       }
     };
@@ -55,15 +58,26 @@ export class OpenCodeEventHub {
     this.streams.clear();
   }
 
+  /**
+   * The server's stream, opened on `client`. A different client for a known key (the host
+   * replaced the connection, e.g. a new sandbox under the same key) moves every listener to a stream
+   * on the new one: the old connection may be dead, and its sessions would never hear back.
+   */
   private streamFor(serverKey: string, client: OpenCodeClient): Stream {
     const existing = this.streams.get(serverKey);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined && existing.client === client) return existing;
+    existing?.controller.abort();
     const controller = new AbortController();
     let opened!: () => void;
     const ready = new Promise<void>((resolve) => {
       opened = resolve;
     });
-    const stream: Stream = { controller, listeners: new Map(), ready };
+    const stream: Stream = {
+      client,
+      controller,
+      listeners: existing?.listeners ?? new Map(),
+      ready,
+    };
     this.streams.set(serverKey, stream);
     void this.pump(serverKey, stream, client, opened);
     return stream;
