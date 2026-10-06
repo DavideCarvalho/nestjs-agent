@@ -5,10 +5,11 @@ import {
   type OpenCodeHost,
   type OpenCodeSessionStore,
 } from './host.js';
-import { OpenCodeAgentRunner, type OpenCodeRunnerOptions } from './runner.js';
+import { OpenCodeAgentRunner } from './runner.js';
 import { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
+import { type OpenCodeEngineSettings, OpenCodeTurns } from './turns.js';
 
-export interface OpenCodeEngineOptions extends OpenCodeRunnerOptions {
+export interface OpenCodeEngineOptions extends OpenCodeEngineSettings {
   /**
    * The host: an {@link OpenCodeHost} instance, or a provider class / token resolved from DI (so it
    * can inject the services that know where the server is and how to set sessions up). A class is
@@ -41,19 +42,24 @@ function bind<T extends object>(
  * model, the tools, skills and the context, on the server and sessions the host provides.
  */
 export function openCode(options: OpenCodeEngineOptions): AgentEngine {
-  const { host, sessions, ...runner } = options;
   return {
     name: 'opencode',
-    providers: [
-      ...bind<OpenCodeHost>(OPENCODE_HOST, host, 'server'),
-      ...bind<OpenCodeSessionStore>(
-        OPENCODE_SESSIONS,
-        sessions ?? new InMemoryOpenCodeSessionStore(),
-        'get',
-      ),
-      { provide: OPENCODE_OPTIONS, useValue: runner },
-      OpenCodeAgentRunner,
-    ],
+    providers: [...openCodeProviders(options), OpenCodeAgentRunner],
     runner: OpenCodeAgentRunner,
   };
+}
+
+/** The providers every OpenCode engine needs: host, session store, settings and the turn steps. */
+export function openCodeProviders(options: OpenCodeEngineOptions): Provider[] {
+  const { host, sessions, ...settings } = options;
+  return [
+    ...bind<OpenCodeHost>(OPENCODE_HOST, host, 'server'),
+    ...bind<OpenCodeSessionStore>(
+      OPENCODE_SESSIONS,
+      sessions ?? new InMemoryOpenCodeSessionStore(),
+      'get',
+    ),
+    { provide: OPENCODE_OPTIONS, useValue: settings },
+    OpenCodeTurns,
+  ];
 }

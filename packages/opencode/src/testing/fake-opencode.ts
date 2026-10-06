@@ -1,4 +1,10 @@
-import type { OpenCodeClient, OpenCodeEvent, OpenCodeSessionCreate } from '../client.js';
+import type {
+  OpenCodeClient,
+  OpenCodeEvent,
+  OpenCodeForm,
+  OpenCodePermissionRequest,
+  OpenCodeSessionCreate,
+} from '../client.js';
 
 export interface FakeCall {
   method: string;
@@ -32,6 +38,19 @@ export class FakeOpenCode implements OpenCodeClient {
     resolve: (c: FakeCall) => void;
   }> = [];
   private sessions = 0;
+  /** Permission requests and forms asked and not answered yet (what `list` reports). */
+  readonly openPermissions = new Map<string, OpenCodePermissionRequest>();
+  readonly openForms = new Map<string, OpenCodeForm>();
+  /** User messages per session, for `message.list` (regenerate). */
+  private readonly userMessages = new Map<string, string[]>();
+  private readonly idleWaiters: Array<() => void> = [];
+  private idle = false;
+
+  /** The sessions go idle: `session.wait` resolves (until the next prompt). */
+  goIdle(): void {
+    this.idle = true;
+    for (const resolve of this.idleWaiters.splice(0)) resolve();
+  }
 
   constructor(
     public script: FakeScript = async (t) => {
@@ -57,7 +76,22 @@ export class FakeOpenCode implements OpenCodeClient {
   }
 
   emit(event: OpenCodeEvent): void {
+    if (event.type === 'permission.asked') {
+      this.openPermissions.set(String(event.data.id), event.data as OpenCodePermissionRequest);
+    }
+    if (event.type === 'form.created') {
+      const form = (event.data.form ?? event.data) as OpenCodeForm;
+      this.openForms.set(form.id, form);
+    }
     for (const listener of this.listeners) listener(event);
+  }
+
+  /** Raise an event without anyone hearing it — what OpenCode did while the API was down. */
+  emitUnheard(event: OpenCodeEvent): void {
+    const listeners = [...this.listeners];
+    this.listeners.clear();
+    this.emit(event);
+    for (const listener of listeners) this.listeners.add(listener);
   }
 
   session = {
@@ -68,7 +102,11 @@ export class FakeOpenCode implements OpenCodeClient {
     },
     prompt: async (args: { sessionID: string; text: string; files?: unknown[] }) => {
       this.record('session.prompt', args);
+      this.idle = false;
       const sessionId = args.sessionID;
+      const ids = this.userMessages.get(sessionId) ?? [];
+      ids.push(`msg_${sessionId}_${ids.length + 1}`);
+      this.userMessages.set(sessionId, ids);
       const turn: FakeTurn = {
         sessionId,
         text: args.text,
@@ -87,6 +125,21 @@ export class FakeOpenCode implements OpenCodeClient {
       this.emit({ type: 'session.execution.interrupted', data: { sessionID: args.sessionID } });
       return {};
     },
+    wait: async (args: { sessionID: string }) => {
+      this.record('session.wait', args);
+      if (!this.idle) await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+      return {};
+    },
+    revert: {
+      stage: async (args: { sessionID: string; messageID: string; files?: boolean }) => {
+        this.record('session.revert.stage', args);
+        return {};
+      },
+      commit: async (args: { sessionID: string }) => {
+        this.record('session.revert.commit', args);
+        return {};
+      },
+    },
     instructions: {
       entry: {
         put: async (args: { sessionID: string; key: string; value: string }) => {
@@ -96,15 +149,19 @@ export class FakeOpenCode implements OpenCodeClient {
       },
     },
     form: {
+      list: async (args: { sessionID: string }) =>
+        [...this.openForms.values()].filter((f) => f.sessionID === args.sessionID),
       reply: async (args: {
         sessionID: string;
         formID: string;
         answer: Record<string, unknown>;
       }) => {
+        this.openForms.delete(args.formID);
         this.record('session.form.reply', args);
         return {};
       },
       cancel: async (args: { sessionID: string; formID: string }) => {
+        this.openForms.delete(args.formID);
         this.record('session.form.cancel', args);
         return {};
       },
@@ -112,13 +169,47 @@ export class FakeOpenCode implements OpenCodeClient {
   };
 
   permission = {
+    list: async (args: { sessionID: string }) =>
+      [...this.openPermissions.values()].filter((p) => p.sessionID === args.sessionID),
     reply: async (args: {
       sessionID: string;
       requestID: string;
       decision: 'once' | 'reject';
       message?: string;
     }) => {
+      this.openPermissions.delete(args.requestID);
       this.record('permission.reply', args);
+      return {};
+    },
+  };
+
+  message = {
+    list: async (args: { sessionID: string; order?: 'asc' | 'desc'; limit?: number }) => {
+      this.record('message.list', args);
+      const ids = [...(this.userMessages.get(args.sessionID) ?? [])];
+      if (args.order === 'desc') ids.reverse();
+      return { data: ids.map((id) => ({ id, type: 'user' })) };
+    },
+  };
+
+  mcp = {
+    add: async (args: Parameters<NonNullable<OpenCodeClient['mcp']>['add']>[0]) => {
+      this.record('mcp.add', args as unknown as Record<string, unknown>);
+      return {};
+    },
+  };
+
+  /** Files written, by path. */
+  readonly files = new Map<string, string>();
+
+  file = {
+    write: async (args: {
+      location?: { directory: string };
+      path: string;
+      payload: Uint8Array;
+    }) => {
+      this.record('file.write', { path: args.path, location: args.location });
+      this.files.set(args.path, new TextDecoder().decode(args.payload));
       return {};
     },
   };

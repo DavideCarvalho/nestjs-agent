@@ -14,7 +14,16 @@ export interface OpenCodeClient {
         put(args: { sessionID: string; key: string; value: string }): Promise<unknown>;
       };
     };
+    /** Resolves when the session goes idle. Optional: a safety net for a missed terminal event. */
+    wait?(args: { sessionID: string }): Promise<unknown>;
+    /** Rewind the session to before a message (regenerate). Optional. */
+    revert?: {
+      stage(args: { sessionID: string; messageID: string; files?: boolean }): Promise<unknown>;
+      commit(args: { sessionID: string }): Promise<unknown>;
+    };
     form: {
+      /** The session's open forms. Optional: lets a resumed turn find questions asked while nobody listened. */
+      list?(args: { sessionID: string }): Promise<OpenCodeForm[]>;
       reply(args: {
         sessionID: string;
         formID: string;
@@ -24,11 +33,42 @@ export interface OpenCodeClient {
     };
   };
   permission: {
+    /** The session's open permission requests. Optional, like `session.form.list`. */
+    list?(args: { sessionID: string }): Promise<OpenCodePermissionRequest[]>;
     reply(args: {
       sessionID: string;
       requestID: string;
       decision: 'once' | 'reject';
       message?: string;
+    }): Promise<unknown>;
+  };
+  /** The session's messages, newest first with `order: 'desc'`. Optional (regenerate). */
+  message?: {
+    list(args: {
+      sessionID: string;
+      order?: 'asc' | 'desc';
+      limit?: number;
+    }): Promise<{ data: Array<{ id: string; type: string }> }>;
+  };
+  /** Register an MCP server at a location. Optional (exposing the module's tools). */
+  mcp?: {
+    add(args: {
+      server: string;
+      location?: { directory: string };
+      config: {
+        type: 'remote';
+        url: string;
+        headers?: Record<string, string>;
+        oauth?: boolean;
+      };
+    }): Promise<unknown>;
+  };
+  /** Write a file on the server. Optional (writing the module's skills where OpenCode finds them). */
+  file?: {
+    write(args: {
+      location?: { directory: string };
+      path: string;
+      payload: Uint8Array;
     }): Promise<unknown>;
   };
   event: {

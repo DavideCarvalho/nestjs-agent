@@ -64,5 +64,31 @@ export class AppModule {}
 Sessions: one per thread, kept by an `OpenCodeSessionStore` (in memory by default; persist it for
 several replicas) and recreated when the server's `bootId` changes, told the conversation so far.
 
-Runs parked on a person live in process memory (like `InlineAgentRunner`). See
-`docs/design/2026-10-06-opencode-engine.md` for what is not wired yet.
+## Durable turns
+
+```ts
+import { openCodeDurable } from '@dudousxd/nestjs-agent-opencode/durable';
+
+AgentModule.forRoot({ engine: openCodeDurable({ host: MyOpenCodeHost, sessions: MySessionStore }), store, sink, actorResolver })
+// next to a configured DurableModule
+```
+
+Every step of a turn is checkpointed (`begin → prompt → observe → [wait for a person → reply →
+observe]* → finish`) and a person's decision is a durable signal: a turn waiting on an approval
+survives restarts and is resumed by whichever process gets the decision. If OpenCode restarted
+meanwhile, a new session is opened with the conversation and the decision. `openCode()` runs the
+same steps in memory (single replica). Several processes need a cross-process sink and a persistent
+`OpenCodeSessionStore`.
+
+## What the session gets from the module
+
+| Option | In the session |
+| --- | --- |
+| `@Agent` / `@SystemPrompt` / contributors | instructions `aviary.system`, refreshed every turn |
+| `approvalPolicy` | who approves each `permission.asked`, and its expiry; not required → answered at once |
+| `tools: { url, headers }` | the module's `@AiTool`s over MCP (`AgentMcpServerModule` with `actions: 'execute'`): reads allowed, actions asked |
+| `skills` / `@Skill` | `.opencode/skills/<name>/SKILL.md` in the session's directory |
+| `memory` | instructions `aviary.memory` (read-only) |
+| `regenerate` | the session is reverted to before the last user message |
+
+See `docs/design/2026-10-06-opencode-engine.md` for what is not wired yet.

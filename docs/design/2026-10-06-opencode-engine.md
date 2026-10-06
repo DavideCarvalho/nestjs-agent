@@ -1,6 +1,6 @@
 # Engines: running turns on OpenCode
 
-Status: accepted (v1 shipped in `@dudousxd/nestjs-agent-opencode`)
+Status: accepted
 
 ## Context
 
@@ -40,32 +40,53 @@ the library's loop, and OpenCode has a loop of its own (tools, permissions, skil
 3. **The native protocol only.** The engine writes `AgentStreamEvent` frames; AG-UI stays an
    optional adapter over the same runs.
 
+## Durable runs
+
+`openCodeDurable({ host })` (`@dudousxd/nestjs-agent-opencode/durable`) runs each turn as the
+`agent.opencode.run` workflow: `begin → prompt → observe:0 → [waitForSignal tool:<run>:<call> →
+reply:n → observe:n+1]* → finish`. Both runners drive the same steps (`OpenCodeTurns`), and the turn
+(`OpenCodeTurn`) reports milestones instead of waiting on people itself, so:
+
+- a turn parked on a person is a suspended run: an API restart loses nothing, and the decision is
+  replied from whichever process takes it (the live turn is rebuilt from the session);
+- a process that dies while OpenCode works re-runs that `observe`, which first catches up on the
+  permissions and forms OpenCode raised while nobody listened (`permission.list`,
+  `session.form.list`); `session.wait` is the safety net for a terminal event that was missed;
+- when OpenCode itself restarted while the turn waited, the request is gone: the card settles as
+  decided, and a new session is opened with the conversation and the decision, and prompted to go on.
+
+A multi-process deployment needs a cross-process `TokenStreamSink` and a persistent
+`OpenCodeSessionStore` (the default keeps sessions in memory).
+
+## The library's seams under OpenCode
+
+| Seam | Under OpenCode |
+| --- | --- |
+| `@Agent` / `@SystemPrompt` / contributors | instructions entry `aviary.system`, every turn |
+| `approvalPolicy` | consulted on every `permission.asked`: not required → answered at once; otherwise its approver and `ttlMs` (expiry → rejected, "nobody approved in time") |
+| remembered approvals | answered without asking |
+| `@AiTool`s (`tools: { url, headers }`) | served by `AgentMcpServerModule` (`actions: 'execute'`), registered in the session with `mcp.add`; `read` tools allowed, `action` tools `ask` → approval cards |
+| `skills` / `@Skill` | written as `.opencode/skills/<name>/SKILL.md` in the session's directory, allowed for the `skill` tool |
+| `memory` | instructions entry `aviary.memory` (read-only: OpenCode has no `remember`) |
+| regenerate | the store is rewound and the session reverted (`session.revert`) |
+
 ## What an engine does not get
 
 Everything that lives inside the loop: input/output processors, `outputSchema`, `maxSteps`,
-`history` windows, inject-mode `retrieval`, delegation (`handoff`), the loop's own tool execution
-and governance gate per call. Under OpenCode these are OpenCode's (permission rules, its agents and
-subagents, compaction), or the host's gateway's.
+`history` windows, inject-mode `retrieval`, delegation (`handoff`), the loop's own tool execution.
+Under OpenCode these are OpenCode's (permission rules, its agents and subagents, compaction), or the
+host's gateway's.
 
-## Not yet (follow-ups)
+## Not yet
 
-- **Durable runs.** v1 parks a run on a person in process memory (single replica, like the inline
-  runner). Flippy's `TurnWorkflow` shape is the template: `prompt → observe → [waitForSignal →
-  reply → observe]* → finish` as a `@dudousxd/nestjs-durable` workflow, re-prompting a fresh session
-  with the decision when the server restarted while waiting.
-- **`@AiTool` over MCP.** Serve the module's tools to the session through `mcp-server` and register
-  them in `prepare`, with `kind: 'action'` tools turned into `ask` permission rules.
-- **Skills and memory** from the library's seams written into the session (skill files, a memory
-  entry and a `remember` tool).
-- **Approval policy.** `approver` is a fixed string; `ApprovalPolicy` (approver per tool, expiry) is
-  not consulted yet.
-- **Generative UI pushed by tools** (`ui` frames) arrives through the host today (Flippy's `ui` MCP
+- **Writing memory.** The `remember` tool is the loop's; under OpenCode the block is read-only.
+- **Generative UI pushed by tools** (`ui` frames): arrives through the host today (Flippy's `ui` MCP
   server pushes components out of band).
-- Regenerate rewinds the store but not the OpenCode session (Flippy uses `session.revert`).
+- **A real OpenCode server.** Event and call shapes follow Flippy's production use of OpenCode 2;
+  the specs run against `testing/fake-opencode.ts`.
 
 ## Consequences
 
 Flippy can replace `apps/api/src/chat/{event-hub,turn.workflow}.ts`, the event switch of
-`turns.service.ts` and `apps/api/src/agent/*` with `openCode({ host: FlippyOpenCodeHost })` once the
-durable runner lands; until then it keeps its own workflow. Other hosts get OpenCode behind the
-library's routes and React hooks with one class.
+`turns.service.ts` and `apps/api/src/agent/*` with `openCodeDurable({ host: FlippyOpenCodeHost })`.
+Other hosts get OpenCode behind the library's routes and React hooks with one class.

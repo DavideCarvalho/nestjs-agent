@@ -32,6 +32,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./durable": {
+      "import": {
+        "types": "./dist/durable/index.d.ts",
+        "default": "./dist/durable/index.js"
+      },
+      "require": {
+        "types": "./dist/durable/index.d.cts",
+        "default": "./dist/durable/index.cjs"
+      }
     }
   },
   "files": [
@@ -45,7 +55,9 @@
   "peerDependencies": {
     "@dudousxd/nestjs-agent": ">=1.21.0 <2.0.0",
     "@dudousxd/nestjs-agent-core": ">=0.40.0 <1.0.0",
-    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0"
+    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
+    "@dudousxd/nestjs-durable": ">=0.45.0",
+    "@dudousxd/nestjs-durable-core": ">=0.72.0"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",
@@ -61,6 +73,19 @@
     "supertest": "7.0.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
-    "vitest": "2.1.9"
+    "vitest": "2.1.9",
+    "@dudousxd/nestjs-durable": "0.45.1",
+    "@dudousxd/nestjs-durable-core": "0.72.1",
+    "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
+    "@nestjs/event-emitter": "12.0.1",
+    "zod": "3.25.76"
+  },
+  "peerDependenciesMeta": {
+    "@dudousxd/nestjs-durable": {
+      "optional": true
+    },
+    "@dudousxd/nestjs-durable-core": {
+      "optional": true
+    }
   }
 }

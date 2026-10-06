@@ -9,7 +9,7 @@ export type {
   OpenCodePermissionRule,
   OpenCodeSessionCreate,
 } from './client.js';
-export { type OpenCodeEngineOptions, openCode } from './engine.js';
+export { type OpenCodeEngineOptions, openCode, openCodeProviders } from './engine.js';
 export { OpenCodeEventHub, sessionOf } from './event-hub.js';
 export { FormAnswerError, toElicitation, toFormAnswer, toQuestion } from './forms.js';
 export {
@@ -20,6 +20,12 @@ export {
   type OpenCodeSessionStore,
   type OpenCodeTurnContext,
 } from './host.js';
-export { OpenCodeAgentRunner, type OpenCodeRunnerOptions } from './runner.js';
+export { OpenCodeAgentRunner } from './runner.js';
 export { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
-export { OpenCodeTurn, type TurnOutcome } from './turn.js';
+export { type Milestone, OpenCodeTurn, type PendingAsk, type TurnOutcome } from './turn.js';
+export {
+  type OpenCodeEngineSettings,
+  type OpenCodeToolsOptions,
+  OpenCodeTurns,
+  type SessionHandle,
+} from './turns.js';

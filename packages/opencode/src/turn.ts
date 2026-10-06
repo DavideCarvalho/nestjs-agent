@@ -2,6 +2,7 @@ import {
   type AgentRunInput,
   type AgentStore,
   type AgentStreamEvent,
+  type ApprovalRequirement,
   type Decision,
   type ElicitationReply,
   type ElicitationRequest,
@@ -28,6 +29,34 @@ export type TurnOutcome =
   | { status: 'failed'; error: string }
   | { status: 'interrupted' };
 
+/**
+ * Something the turn put to a person, with everything needed to hand the answer back to OpenCode
+ * later — serializable, so a durable run journals it and replies from another process.
+ */
+export type PendingAsk =
+  | {
+      kind: 'approval';
+      /** The OpenCode permission request id — also the tool-call id the decision is signalled under. */
+      id: string;
+      action: string;
+      approver: string;
+      expiresAt?: string;
+      /** The assistant message the call hangs on (absent for a request recovered after a restart). */
+      messageId?: string;
+    }
+  | {
+      kind: 'form';
+      id: string;
+      form: OpenCodeForm;
+      request: ElicitationRequest;
+      messageId?: string;
+    };
+
+/** Where a turn stands: it needs a person, or it is over. */
+export type Milestone =
+  | { kind: 'ask'; ask: PendingAsk; timeoutMs?: number }
+  | { kind: 'finished'; outcome: TurnOutcome };
+
 export interface OpenCodeTurnArgs {
   runId: string;
   input: AgentRunInput;
@@ -35,11 +64,9 @@ export interface OpenCodeTurnArgs {
   sessionId: string;
   writer: SinkWriter;
   store: AgentStore;
-  /** Parks until a person decides `toolCallId` (rejects when the run is cancelled). */
-  waitForHuman: (toolCallId: string) => Promise<HumanReply>;
-  /** Who approves an action (`approval-requested.approver`). */
-  approver: string;
-  /** The model label usage is recorded under when OpenCode reports none. */
+  /** What an action needs before it runs (the module's `ApprovalPolicy`). */
+  approvalFor: (action: string) => Promise<ApprovalRequirement>;
+  /** The model label usage is recorded under. */
   modelLabel: string;
   logger: Logger;
 }
@@ -53,7 +80,6 @@ interface ToolState {
   available: boolean;
   settled: boolean;
   input: Record<string, unknown>;
-  /** Code-mode inner calls already announced / settled, by index. */
   innerAnnounced: Set<number>;
   innerSettled: Set<number>;
 }
@@ -75,7 +101,7 @@ function isDecision(reply: HumanReply): reply is Decision {
   return typeof (reply as Decision).approved === 'boolean';
 }
 
-function errorText(error: unknown, fallback: string): string {
+export function errorText(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.length > 0) return error;
   const message = (error as { message?: unknown } | undefined)?.message;
   return typeof message === 'string' && message.length > 0 ? message : fallback;
@@ -83,20 +109,17 @@ function errorText(error: unknown, fallback: string): string {
 
 /**
  * One turn of an OpenCode session, as the library's stream and store see it. Fed the session's
- * events in order; writes the protocol's frames (`docs/stream-protocol.md`) and persists what the
- * loop would have: the assistant messages with their tool calls and results, the calls put to a
- * person (so the approve/answer routes find their run), usage per model step.
+ * events in order, it writes the protocol's frames (`docs/stream-protocol.md`) and persists what the
+ * loop would have — the assistant messages with their tool calls and results, the calls put to a
+ * person (so the approve/answer routes find their run), usage per model step — and reports
+ * {@link Milestone}s: a person was asked something, or the execution ended.
  *
- * - OpenCode's own tools (code-mode `execute`, web search, skills…) are `read` calls; the company
- *   tools a code-mode run calls are nested under it (`parentId`).
- * - `permission.asked` (an `ask` rule) becomes an `action` call parked on a person; `form.created`
- *   (the question tool) an `elicitation`. The run's decision goes back to OpenCode as the
- *   permission reply / form reply.
- * - Every OpenCode step is a `step-start` … `step-finish` pair with that step's usage.
+ * The turn does not wait for people itself. Whoever drives it (`OpenCodeTurns`, under an in-memory
+ * or a durable runner) takes the `ask` milestone, waits however it waits, and hands the answer back
+ * with {@link decide} — which is what lets a durable run wait across a restart and reply from
+ * another process, with a fresh turn object fed the journaled {@link PendingAsk}.
  */
 export class OpenCodeTurn {
-  readonly done: Promise<TurnOutcome>;
-  private finish!: (outcome: TurnOutcome) => void;
   /** Serializes the handling of events, so frames and rows land in the order OpenCode sent them. */
   private chain: Promise<void> = Promise.resolve();
   private segment = emptySegment();
@@ -104,6 +127,10 @@ export class OpenCodeTurn {
   /** Results already persisted per message, so a late settlement adds to them rather than replacing. */
   private readonly messageResults = new Map<string, ToolResult[]>();
   private readonly asked = new Set<string>();
+  private readonly milestones: Milestone[] = [];
+  private waiting: ((m: Milestone) => void) | undefined;
+  private readonly usage: MessageUsage = { inputTokens: 0, outputTokens: 0 };
+  private costUsd: number | undefined;
   private stepOpen = false;
   private sawText = false;
   private separator = false;
@@ -112,10 +139,14 @@ export class OpenCodeTurn {
   private ended = false;
   private stepError: string | undefined;
 
-  constructor(private readonly a: OpenCodeTurnArgs) {
-    this.done = new Promise((resolve) => {
-      this.finish = resolve;
-    });
+  constructor(private readonly a: OpenCodeTurnArgs) {}
+
+  get sessionId(): string {
+    return this.a.sessionId;
+  }
+
+  get finished(): boolean {
+    return this.ended;
   }
 
   /** Feed one of the session's events. */
@@ -128,13 +159,76 @@ export class OpenCodeTurn {
     this.enqueue(() => this.end({ status: 'failed', error }));
   }
 
+  /** The next milestone: one already reached, or the next one to come. */
+  next(): Promise<Milestone> {
+    const ready = this.milestones.shift();
+    if (ready !== undefined) return Promise.resolve(ready);
+    return new Promise((resolve) => {
+      this.waiting = resolve;
+    });
+  }
+
+  /** Whether a milestone is waiting to be taken. */
+  hasMilestone(): boolean {
+    return this.milestones.length > 0;
+  }
+
+  /**
+   * Requests OpenCode raised while nobody listened (this process started after them, or the event
+   * stream dropped): its open permissions and forms, handled as if their events had just arrived.
+   * One already recorded in the store is reported without being recorded or streamed again.
+   */
+  async catchUp(): Promise<void> {
+    const { client, sessionId } = this.a;
+    const permissions = (await client.permission.list?.({ sessionID: sessionId })) ?? [];
+    const forms = (await client.session.form.list?.({ sessionID: sessionId })) ?? [];
+    await new Promise<void>((resolve) => {
+      this.enqueue(async () => {
+        for (const p of permissions) await this.onPermission(p, true);
+        for (const f of forms) await this.onForm(f, true);
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Hand a person's answer to what the turn asked, and let OpenCode go on. `tellOpenCode: false`
+   * only settles the call (stream and store): the request died with a restarted server, and the
+   * new session is told the answer in its prompt instead.
+   */
+  decide(ask: PendingAsk, reply: HumanReply, opts: { tellOpenCode?: boolean } = {}): Promise<void> {
+    const tell = opts.tellOpenCode ?? true;
+    return new Promise((resolve, reject) => {
+      this.chain = this.chain
+        .then(() =>
+          ask.kind === 'approval'
+            ? this.decided(ask, reply, tell)
+            : this.answered(ask, reply, tell),
+        )
+        .then(resolve, reject);
+    });
+  }
+
+  private reach(milestone: Milestone): void {
+    const waiting = this.waiting;
+    if (waiting !== undefined) {
+      this.waiting = undefined;
+      waiting(milestone);
+    } else {
+      this.milestones.push(milestone);
+    }
+  }
+
   private enqueue(work: () => Promise<void>): void {
     this.chain = this.chain.then(work).catch((error: unknown) => {
       this.a.logger.error(`run ${this.a.runId}: ${errorText(error, 'event handling failed')}`);
       // A turn whose bookkeeping broke can't be trusted to finish on its own.
       if (!this.ended) {
         this.ended = true;
-        this.finish({ status: 'failed', error: errorText(error, 'event handling failed') });
+        this.reach({
+          kind: 'finished',
+          outcome: { status: 'failed', error: errorText(error, 'event handling failed') },
+        });
       }
     });
   }
@@ -328,10 +422,10 @@ export class OpenCodeTurn {
         }
         return;
       case 'permission.asked':
-        await this.onPermission(d as OpenCodePermissionRequest);
+        await this.onPermission(d as OpenCodePermissionRequest, false);
         return;
       case 'form.created':
-        await this.onForm((d.form ?? d) as OpenCodeForm);
+        await this.onForm((d.form ?? d) as OpenCodeForm, false);
         return;
       case 'session.execution.succeeded':
         await this.end({ status: 'succeeded' });
@@ -393,9 +487,6 @@ export class OpenCodeTurn {
     });
   }
 
-  private readonly usage: MessageUsage = { inputTokens: 0, outputTokens: 0 };
-  private costUsd: number | undefined;
-
   /**
    * Persist what the turn produced since the last flush as one assistant message — the message a
    * call put to a person hangs on, or the turn's last one. Returns its id.
@@ -431,7 +522,12 @@ export class OpenCodeTurn {
     return message.id;
   }
 
-  private async onPermission(req: OpenCodePermissionRequest): Promise<void> {
+  /** A request recorded by an earlier process (a turn resumed after a restart). */
+  private async alreadyRecorded(id: string): Promise<boolean> {
+    return ((await this.a.store.toolCallApproval?.(id)) ?? null) !== null;
+  }
+
+  private async onPermission(req: OpenCodePermissionRequest, recovering: boolean): Promise<void> {
     if (this.asked.has(req.id)) return;
     this.asked.add(req.id);
     const { client, sessionId, input, store } = this.a;
@@ -439,11 +535,33 @@ export class OpenCodeTurn {
     const metadata = req.metadata ?? {};
     const raw = metadata.input ?? metadata.args;
     const args = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-    await this.step();
 
-    // Approved "for this conversation" earlier: OpenCode asked again, the answer is the same.
-    const remembered = (await store.rememberedApprovals?.(input.threadId)) ?? [];
-    if (remembered.includes(action)) {
+    if (recovering && (await this.alreadyRecorded(req.id))) {
+      const state = await store.toolCallApproval?.(req.id);
+      this.reach({
+        kind: 'ask',
+        ask: {
+          kind: 'approval',
+          id: req.id,
+          action,
+          approver: state?.approver ?? 'requester',
+          ...(state?.expiresAt ? { expiresAt: state.expiresAt } : {}),
+        },
+        ...(state?.expiresAt
+          ? { timeoutMs: Math.max(0, Date.parse(state.expiresAt) - Date.now()) }
+          : {}),
+      });
+      return;
+    }
+
+    await this.step();
+    const requirement = await this.a.approvalFor(action);
+    const remembered = requirement.required
+      ? ((await store.rememberedApprovals?.(input.threadId)) ?? []).includes(action)
+      : false;
+    // No one needs to decide: the policy does not require it, or it was approved "for this
+    // conversation" earlier. OpenCode asked because a rule said `ask`; the answer is yes.
+    if (!requirement.required || remembered) {
       await client.permission.reply({ sessionID: sessionId, requestID: req.id, decision: 'once' });
       this.segment.calls.push({ id: req.id, name: action, input: args, kind: 'action' });
       this.segment.results.push({ id: req.id, name: action, output: { approved: true } });
@@ -458,14 +576,19 @@ export class OpenCodeTurn {
         kind: 'approval-settled',
         id: req.id,
         status: 'approved',
-        approver: this.a.approver,
-        decidedVia: 'remembered',
-        remember: true,
+        approver: requirement.approver,
+        decidedVia: remembered ? 'remembered' : 'policy',
+        ...(remembered ? { remember: true } : {}),
       });
       await this.write({ kind: 'tool-output', id: req.id, output: { approved: true } });
       return;
     }
 
+    const ttlMs =
+      requirement.ttlMs !== undefined && Number.isFinite(requirement.ttlMs) && requirement.ttlMs > 0
+        ? Math.floor(requirement.ttlMs)
+        : undefined;
+    const expiresAt = ttlMs !== undefined ? new Date(Date.now() + ttlMs).toISOString() : undefined;
     this.segment.calls.push({ id: req.id, name: action, input: args, kind: 'action' });
     const messageId = (await this.flush(false)) as string;
     await store.recordToolCall({
@@ -476,7 +599,8 @@ export class OpenCodeTurn {
       input: args,
       status: 'pending_approval',
       runId: this.a.runId,
-      approver: this.a.approver,
+      approver: requirement.approver,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
     });
     await this.write({
       kind: 'tool-input-available',
@@ -485,35 +609,48 @@ export class OpenCodeTurn {
       input: args,
       toolKind: 'action',
     });
-    await this.write({ kind: 'approval-requested', id: req.id, approver: this.a.approver });
-    // OpenCode holds the execution until it is answered; the events around it keep flowing.
-    void this.a.waitForHuman(req.id).then(
-      (reply) => this.enqueue(() => this.decided(req.id, action, messageId, reply)),
-      () => undefined,
-    );
+    await this.write({
+      kind: 'approval-requested',
+      id: req.id,
+      approver: requirement.approver,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    });
+    this.reach({
+      kind: 'ask',
+      ask: {
+        kind: 'approval',
+        id: req.id,
+        action,
+        approver: requirement.approver,
+        messageId,
+        ...(expiresAt !== undefined ? { expiresAt } : {}),
+      },
+      ...(ttlMs !== undefined ? { timeoutMs: ttlMs } : {}),
+    });
   }
 
   private async decided(
-    id: string,
-    action: string,
-    messageId: string,
+    ask: Extract<PendingAsk, { kind: 'approval' }>,
     reply: HumanReply,
-  ): Promise<void> {
+    tell: boolean,
+  ) {
     const decision: Decision = isDecision(reply) ? reply : { approved: false };
     const { client, sessionId, store } = this.a;
+    const { id, action } = ask;
     const status = decision.approved ? 'approved' : decision.expired ? 'expired' : 'rejected';
-    await client.permission.reply({
-      sessionID: sessionId,
-      requestID: id,
-      decision: decision.approved ? 'once' : 'reject',
-      ...(decision.approved
-        ? {}
-        : {
-            message: decision.expired
-              ? 'Nobody approved this action in time, so it was not run.'
-              : `The user denied this action${decision.reason ? `: ${decision.reason}` : ''}. Do not retry it; tell the user what you would have done.`,
-          }),
-    });
+    if (tell)
+      await client.permission.reply({
+        sessionID: sessionId,
+        requestID: id,
+        decision: decision.approved ? 'once' : 'reject',
+        ...(decision.approved
+          ? {}
+          : {
+              message: decision.expired
+                ? 'Nobody approved this action in time, so it was not run.'
+                : `The user denied this action${decision.reason ? `: ${decision.reason}` : ''}. Do not retry it; tell the user what you would have done.`,
+            }),
+      });
     const result: ToolResult = decision.approved
       ? { id, name: action, output: { approved: true } }
       : {
@@ -533,12 +670,12 @@ export class OpenCodeTurn {
       ...(decision.remember === true ? { remember: true } : {}),
       ...(decision.decidedVia !== undefined ? { decidedVia: decision.decidedVia } : {}),
     });
-    await this.addResult(messageId, result);
+    await this.addResult(ask.messageId, result);
     await this.write({
       kind: 'approval-settled',
       id,
       status,
-      approver: this.a.approver,
+      approver: ask.approver,
       ...(decision.executedByRef !== undefined ? { decidedBy: decision.executedByRef } : {}),
       ...(decision.decidedVia !== undefined ? { decidedVia: decision.decidedVia } : {}),
       ...(decision.remember === true ? { remember: true } : {}),
@@ -558,10 +695,14 @@ export class OpenCodeTurn {
       });
   }
 
-  private async onForm(form: OpenCodeForm): Promise<void> {
+  private async onForm(form: OpenCodeForm, recovering: boolean): Promise<void> {
     if (this.asked.has(form.id)) return;
     this.asked.add(form.id);
     const request = toElicitation(form.id, form);
+    if (recovering && (await this.alreadyRecorded(form.id))) {
+      this.reach({ kind: 'ask', ask: { kind: 'form', id: form.id, form, request } });
+      return;
+    }
     const input = {
       ...(request.preamble !== undefined ? { preamble: request.preamble } : {}),
       questions: request.questions,
@@ -581,21 +722,20 @@ export class OpenCodeTurn {
       runId: this.a.runId,
     });
     await this.write({ kind: 'elicitation', id: form.id, request });
-    void this.a.waitForHuman(form.id).then(
-      (reply) => this.enqueue(() => this.answered(form, request, messageId, reply)),
-      () => undefined,
-    );
+    this.reach({ kind: 'ask', ask: { kind: 'form', id: form.id, form, request, messageId } });
   }
 
   private async answered(
-    form: OpenCodeForm,
-    request: ElicitationRequest,
-    messageId: string,
+    ask: Extract<PendingAsk, { kind: 'form' }>,
     reply: HumanReply,
-  ): Promise<void> {
+    tell: boolean,
+  ) {
     const { client, sessionId } = this.a;
+    const { form, request } = ask;
     const answer: ElicitationReply = isDecision(reply) ? { answers: {}, skipped: true } : reply;
-    if (answer.skipped === true) {
+    if (!tell) {
+      // The form died with the server; the new session is told the answer.
+    } else if (answer.skipped === true) {
       await client.session.form.cancel({ sessionID: sessionId, formID: form.id });
     } else {
       await client.session.form.reply({
@@ -613,12 +753,19 @@ export class OpenCodeTurn {
       ...(answer.answeredByRef !== undefined ? { executedByRef: answer.answeredByRef } : {}),
       ...(answer.answeredVia !== undefined ? { decidedVia: answer.answeredVia } : {}),
     });
-    await this.addResult(messageId, { id: form.id, name: ASK_TOOL_NAME, output: result });
+    await this.addResult(ask.messageId, { id: form.id, name: ASK_TOOL_NAME, output: result });
     await this.write({ kind: 'tool-output', id: form.id, output: result });
   }
 
-  private async addResult(messageId: string, result: ToolResult): Promise<void> {
-    const results = [...(this.messageResults.get(messageId) ?? []), result];
+  private async addResult(messageId: string | undefined, result: ToolResult): Promise<void> {
+    if (messageId === undefined) return;
+    // A message persisted by an earlier process: its results are in the store, not in this map.
+    let known = this.messageResults.get(messageId);
+    if (known === undefined) {
+      const thread = await this.a.store.getThread(this.a.input.threadId);
+      known = [...(thread?.messages.find((m) => m.id === messageId)?.toolResults ?? [])];
+    }
+    const results = [...known.filter((r) => r.id !== result.id), result];
     this.messageResults.set(messageId, results);
     await this.a.store.setMessageToolResults(messageId, results);
   }
@@ -633,6 +780,6 @@ export class OpenCodeTurn {
       this.stepOpen = false;
       await this.write({ kind: 'step-finish' });
     }
-    this.finish(outcome);
+    this.reach({ kind: 'finished', outcome });
   }
 }
