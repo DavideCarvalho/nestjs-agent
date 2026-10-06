@@ -16,6 +16,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   index,
@@ -158,6 +159,7 @@ export const agentQueuedMessage = sqliteTable(
   'agent_queued_message',
   {
     uiCapabilities: text('ui_capabilities', { mode: 'json' }).$type<UiCapabilities>(),
+    hostContext: text('host_context', { mode: 'json' }).$type<AgentHostContext>(),
     id: text('id').primaryKey(),
     threadId: text('thread_id')
       .notNull()

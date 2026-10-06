@@ -51,9 +51,20 @@ import {
 } from '@nestjs/common';
 import type { OpenCodeClient, OpenCodePermissionRule } from './client.js';
 import { OpenCodeEventHub } from './event-hub.js';
-import type { OpenCodeHost, OpenCodeServer, OpenCodeSessionStore } from './host.js';
+import type {
+  OpenCodeHost,
+  OpenCodeRunResult,
+  OpenCodeServer,
+  OpenCodeSessionStore,
+} from './host.js';
 import { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
-import { type Milestone, OpenCodeTurn, type PendingAsk, type TurnOutcome } from './turn.js';
+import {
+  type Milestone,
+  OpenCodeTurn,
+  type PendingAsk,
+  type TurnOutcome,
+  errorText,
+} from './turn.js';
 
 /** The module's `@AiTool`s, served to sessions over MCP (`@dudousxd/nestjs-agent-mcp-server`). */
 export interface OpenCodeToolsOptions {
@@ -212,7 +223,10 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       return {
         threadId: live.input.threadId,
         runId,
-        emitUi: uiEmitter(scope(runId), (component) => live.turn.pushUi(component)),
+        emitUi: uiEmitter(scope(runId), async (component) => {
+          await live.turn.pushUi(component);
+          await this.uiPushed(live.input, runId, component);
+        }),
       };
     }
     const threadId = await this.threadOfSession(input.actor, sessionId);
@@ -233,8 +247,16 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
           runId,
           ui: [component],
         });
+        // Followed elsewhere: the host gets what this call knows of the run.
+        await this.uiPushed({ threadId, actor: input.actor, userText: '' }, runId, component);
       }),
     };
+  }
+
+  private async uiPushed(input: AgentRunInput, runId: string, component: AgentUiComponent) {
+    await this.host.onUi?.({ input, runId, component }).catch((error: unknown) => {
+      this.logger.warn(`onUi failed: ${errorText(error, 'error')}`);
+    });
   }
 
   private async threadOfSession(
@@ -544,7 +566,7 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
   async observe(runId: string, input: AgentRunInput, handle: SessionHandle): Promise<Milestone> {
     const live = await this.ensureLive(runId, input, handle, true);
     const { turn, client } = live;
-    if (turn.hasMilestone()) return turn.next();
+    if (turn.hasMilestone()) return this.reached(runId, input, handle, await turn.next());
     // Set once this observation has its milestone: the safety nets below only act while it waits.
     let done = false;
     const next = turn.next().then((milestone) => {
@@ -575,7 +597,7 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
         .catch(() => undefined);
     }
     try {
-      return await next;
+      return await this.reached(runId, input, handle, await next);
     } finally {
       clearTimeout(timer);
     }
@@ -682,14 +704,94 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
 
   // ---- settle --------------------------------------------------------------------------------
 
+  /** A person was asked something: tell the host (cards in other channels, wake-ups). */
+  private async reached(
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    milestone: Milestone,
+  ): Promise<Milestone> {
+    if (milestone.kind === 'ask' && this.host.onAsk !== undefined) {
+      await this.host
+        .onAsk({ input, runId, sessionId: handle.sessionId, ask: milestone.ask })
+        .catch((error: unknown) => this.logger.warn(`onAsk failed: ${errorText(error, 'error')}`));
+    }
+    return milestone;
+  }
+
+  /** What the run produced, as the host's settle hooks see it. */
+  private async runResult(
+    runId: string,
+    input: AgentRunInput,
+    outcome: TurnOutcome,
+    durationMs: number,
+  ): Promise<OpenCodeRunResult> {
+    const thread = await this.store.getThread(input.threadId);
+    const messages = (thread?.messages ?? []).filter(
+      (m) => m.role === 'assistant' && m.runId === runId,
+    );
+    const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    for (const m of messages) {
+      usage.inputTokens += m.usage?.inputTokens ?? 0;
+      usage.outputTokens += m.usage?.outputTokens ?? 0;
+      usage.costUsd += m.usage?.costUsd ?? 0;
+    }
+    return {
+      runId,
+      input,
+      outcome,
+      text: messages
+        .map((m) => m.content)
+        .filter(Boolean)
+        .join('\n\n'),
+      messages,
+      usage,
+      durationMs,
+    };
+  }
+
+  /**
+   * The host's last word on the answer before the stream ends: components to append (a guardrail
+   * notice), or, for a failed run, the error the person reads instead of OpenCode's.
+   */
+  private async amend(
+    writer: { write(chunk: Uint8Array): void | Promise<void> },
+    result: OpenCodeRunResult,
+  ) {
+    const hook = this.host.beforeSettle;
+    if (hook === undefined) return {};
+    const amendment =
+      (await hook(result).catch((error: unknown) => {
+        this.logger.warn(`beforeSettle failed: ${errorText(error, 'error')}`);
+        return undefined;
+      })) ?? {};
+    const ui = amendment.ui ?? [];
+    const last = result.messages.at(-1);
+    if (ui.length > 0) {
+      for (const component of ui)
+        await writer.write(encodeStreamEvent({ kind: 'ui', ...component }));
+      if (last !== undefined) await this.store.setMessageUi?.(last.id, [...(last.ui ?? []), ...ui]);
+    }
+    return amendment;
+  }
+
+  /** Delivery, telemetry, spend: after the run settled. Errors are the host's, never the run's. */
+  private async settled(result: OpenCodeRunResult): Promise<void> {
+    await this.host.onSettled?.(result).catch((error: unknown) => {
+      this.logger.warn(`onSettled failed: ${errorText(error, 'error')}`);
+    });
+  }
+
   /** End the run's stream and bookkeeping for how its execution ended. */
   async settle(runId: string, input: AgentRunInput, outcome: TurnOutcome, durationMs: number) {
-    this.drop(runId);
     if (outcome.status === 'failed') {
-      await this.settleFailed(runId, input, outcome.error);
+      await this.settleFailed(runId, input, outcome.error, durationMs);
       return;
     }
+    this.drop(runId);
     const writer = await this.sink.open(runId);
+    const result = await this.runResult(runId, input, outcome, durationMs);
+    await this.amend(writer, result);
     if (outcome.status === 'interrupted') {
       this.logger.log(`agent run ${runId} cancelled`);
       await Promise.resolve(
@@ -700,31 +802,40 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
       await writer.end();
       await this.store.recordRunEnd?.({ runId, status: 'cancelled', durationMs });
-      return;
+    } else {
+      await this.handoff(writer, input, runId, 'completed');
+      await releaseThreadRun(this.store, input.threadId, runId);
+      await writer.end();
+      await this.store.recordRunEnd?.({ runId, status: 'completed', durationMs });
     }
-    await this.handoff(writer, input, runId, 'completed');
-    await releaseThreadRun(this.store, input.threadId, runId);
-    await writer.end();
-    await this.store.recordRunEnd?.({ runId, status: 'completed', durationMs });
+    await this.settled(result);
   }
 
-  async settleFailed(runId: string, input: AgentRunInput, message: string): Promise<void> {
+  async settleFailed(
+    runId: string,
+    input: AgentRunInput,
+    error: string,
+    durationMs = 0,
+  ): Promise<void> {
     this.drop(runId);
-    this.logger.error(`agent run ${runId} failed: ${message}`);
-    publishAgentRunFailed({ runId, code: 'opencode_failed', message });
+    const writer = await this.sink.open(runId);
+    const result = await this.runResult(runId, input, { status: 'failed', error }, durationMs);
+    const message = (await this.amend(writer, result)).error ?? error;
+    this.logger.error(`agent run ${runId} failed: ${error}`);
+    publishAgentRunFailed({ runId, code: 'opencode_failed', message: error });
     await this.store.recordRunEnd?.({
       runId,
       status: 'failed',
       errorCode: 'opencode_failed',
-      errorMessage: message,
+      errorMessage: error,
     });
     await Promise.resolve(
       this.store.failUnsettledToolCalls?.(runId, RUN_ENDED_BEFORE_TOOL_CALL),
     ).catch(() => 0);
-    const writer = await this.sink.open(runId);
     await this.handoff(writer, input, runId, 'failed', message);
     await releaseThreadRun(this.store, input.threadId, runId);
     await writer.fail({ code: 'opencode_failed', message });
+    await this.settled({ ...result, outcome: { status: 'failed', error: message } });
   }
 
   /** Starts the next queued message of the thread; set by the runner (it owns `start`). */

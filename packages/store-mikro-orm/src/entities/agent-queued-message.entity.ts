@@ -1,4 +1,5 @@
 import type { Actor, MessageAttachment, PageContext } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
@@ -23,6 +24,7 @@ export class AgentQueuedMessage {
   model?: string | null;
   pageContext?: PageContext | null;
   uiCapabilities?: UiCapabilities | null;
+  hostContext?: AgentHostContext | null;
   interrupt!: boolean;
   position!: number;
   createdAt!: Date;
@@ -60,6 +62,7 @@ export function agentQueuedMessageSchema(collation?: string): EntitySchema<Agent
       model: { type: 'string', nullable: true, ...str },
       pageContext: { type: 'json', nullable: true, fieldName: 'page_context' },
       uiCapabilities: { type: 'json', nullable: true, fieldName: 'ui_capabilities' },
+      hostContext: { type: 'json', nullable: true, fieldName: 'host_context' },
       interrupt: { type: 'boolean', default: false },
       position: { type: 'integer' },
       createdAt: { ...DATETIME, fieldName: 'created_at' },

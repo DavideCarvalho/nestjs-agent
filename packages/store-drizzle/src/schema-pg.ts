@@ -17,6 +17,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
@@ -125,6 +126,7 @@ export const agentQueuedMessage = pgTable(
   'agent_queued_message',
   {
     uiCapabilities: jsonb('ui_capabilities').$type<UiCapabilities>(),
+    hostContext: jsonb('host_context').$type<AgentHostContext>(),
     id: text('id').primaryKey(),
     threadId: text('thread_id')
       .notNull()

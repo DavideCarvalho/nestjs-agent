@@ -14,6 +14,8 @@ export { OpenCodeEventHub, sessionOf } from './event-hub.js';
 export { FormAnswerError, toElicitation, toFormAnswer, toQuestion } from './forms.js';
 export {
   InMemoryOpenCodeSessionStore,
+  type OpenCodeAmendment,
+  type OpenCodeRunResult,
   type OpenCodeHost,
   type OpenCodeKeyValue,
   keyValueOpenCodeSessionStore,

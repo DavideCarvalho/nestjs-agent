@@ -411,6 +411,9 @@ export type PromptBuilder = (ctx: PromptContext) => string | Promise<string>;
 export type PromptContributor = (ctx: PromptContext) => string | null | Promise<string | null>;
 
 /** Everything needed to run one agent turn. */
+/** See {@link AgentRunInput.hostContext}. JSON only. */
+export type AgentHostContext = { readonly [key: string]: unknown };
+
 export interface AgentRunInput {
   threadId: string;
   actor: Actor;
@@ -477,6 +480,13 @@ export interface AgentRunInput {
    * label when the provider reports none. Omitted → the provider's default.
    */
   model?: string;
+  /**
+   * What the HOST knows about this turn that the library does not model — where it came from, where
+   * its answer goes, on whose behalf (e.g. `{ source: 'slack', delivery: { channel, ts } }`). Plain
+   * JSON: it travels through the queue and the durable journal untouched, and reaches the runner's
+   * hooks (an engine's host callbacks) as it was sent. Never shown to the model or to clients.
+   */
+  hostContext?: AgentHostContext;
 }
 
 /**

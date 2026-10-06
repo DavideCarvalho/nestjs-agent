@@ -89,6 +89,7 @@ export const CHAT_QUEUE_STORE_CONTRACT: readonly ChatQueueContractCase[] = [
         persona: 'sql-focused',
         model: 'fast-1',
         pageContext: { kind: 'invoice', id: 42 },
+        hostContext: { source: 'slack', delivery: { channel: 'C1', ts: '1.2' } },
         interrupt: true,
       });
       const read = await store.getQueuedMessage(queued.id);
@@ -107,6 +108,11 @@ export const CHAT_QUEUE_STORE_CONTRACT: readonly ChatQueueContractCase[] = [
           'pageContext',
           message?.pageContext,
         );
+        check(
+          same(message?.hostContext, { source: 'slack', delivery: { channel: 'C1', ts: '1.2' } }),
+          'hostContext',
+          message?.hostContext,
+        );
         check(message?.interrupt === true, 'interrupt', message?.interrupt);
         check(typeof message?.createdAt === 'string', 'createdAt is an ISO string');
       }
@@ -115,6 +121,7 @@ export const CHAT_QUEUE_STORE_CONTRACT: readonly ChatQueueContractCase[] = [
       check(plainRead?.attachments === undefined, 'no attachments → absent', plainRead);
       check(plainRead?.interrupt !== true, 'no interrupt → not an interrupt', plainRead);
       check(plainRead?.persona === undefined, 'no persona → absent', plainRead);
+      check(plainRead?.hostContext === undefined, 'no hostContext → absent', plainRead);
       check((await store.getQueuedMessage('missing')) === null, 'unknown id → null');
     },
   },

@@ -7,6 +7,7 @@ import {
   AGENT_RUNNER,
   AGENT_STORE,
   type Actor,
+  type AgentHostContext,
   type AgentRunInput,
   type AgentRunner,
   type AgentStore,
@@ -93,6 +94,8 @@ export interface ChatParams {
   uiCapabilities?: UiCapabilities;
   actor: Actor;
   message: string;
+  /** The host's own facts about this send — see `AgentRunInput.hostContext`. */
+  hostContext?: AgentHostContext;
   threadId?: string;
   agentName?: string;
   /**
@@ -399,6 +402,7 @@ export class AgentService {
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
       ...(params.uiCapabilities !== undefined ? { uiCapabilities: params.uiCapabilities } : {}),
+      ...(params.hostContext !== undefined ? { hostContext: params.hostContext } : {}),
       ...(model !== undefined ? { model } : {}),
     };
 
@@ -481,6 +485,7 @@ export class AgentService {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
       ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+      ...(input.hostContext !== undefined ? { hostContext: input.hostContext } : {}),
       ...(interrupting !== undefined ? { interrupt: true, at: 'head' as const } : {}),
     });
     let runId: string | undefined;
