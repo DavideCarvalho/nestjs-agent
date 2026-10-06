@@ -375,6 +375,7 @@ export class AgentService {
       }
       const created = await this.store.createThread({
         actor: params.actor,
+        ...(agentName !== undefined ? { agentName } : {}),
         ...(params.transient === true ? { transient: true } : {}),
         ...(params.newThreadId !== undefined ? { id: params.newThreadId } : {}),
         ...(params.personaId !== undefined ? { persona: params.personaId } : {}),
@@ -426,7 +427,7 @@ export class AgentService {
     // `queue` always answers as a queued send (202), so a client that asked for it handles one
     // shape; an idle thread starts it straight away all the same (`enqueue` kicks the queue).
     if (live === null && mode !== 'queue') {
-      const runId = crypto.randomUUID();
+      const runId = this.runner.runIdFor?.(input) ?? crypto.randomUUID();
       if (
         await queue
           .queueStore()

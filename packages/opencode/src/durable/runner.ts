@@ -8,7 +8,8 @@ import type {
 import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
 import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { OpenCodeTurns } from '../turns.js';
+import { OPENCODE_OPTIONS } from '../tokens.js';
+import { type OpenCodeEngineSettings, OpenCodeTurns } from '../turns.js';
 import { OpenCodeRunWorkflow, decisionToken } from './workflow.js';
 
 function isRunInput(value: unknown): value is AgentRunInput {
@@ -34,21 +35,34 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
     private readonly workflows: WorkflowService,
     @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
     private readonly turns: OpenCodeTurns,
+    @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
   ) {
     turns.startNext = (next, runId) => this.start(next, { runId });
+  }
+
+  runIdFor(input: AgentRunInput): string {
+    return this.settings.runId?.(input) ?? randomUUID();
   }
 
   async start(
     input: AgentRunInput,
     options: AgentRunStartOptions = {},
   ): Promise<{ runId: string }> {
-    const runId = options.runId ?? randomUUID();
+    const runId = options.runId ?? this.runIdFor(input);
+    const durable = this.settings.durable;
+    const startOptions = (await durable?.start?.(input, runId)) ?? {};
     try {
-      await this.workflows.start(OpenCodeRunWorkflow, input, runId);
+      await this.workflows.start(
+        OpenCodeRunWorkflow,
+        input,
+        runId,
+        startOptions as Parameters<WorkflowService['start']>[3],
+      );
     } catch (error) {
       // A run that suspends on its first step under a driving dispatcher surfaces the runtime's
       // suspend signal here: the run is persisted and will be resumed, not failed.
-      if (!isWorkflowControlFlowSignal(error)) throw error;
+      if (isWorkflowControlFlowSignal(error)) return { runId };
+      throw durable?.startError?.(error, input) ?? error;
     }
     return { runId };
   }

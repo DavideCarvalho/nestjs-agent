@@ -25,6 +25,12 @@ export interface AgentRunStartOptions {
 export interface AgentRunner {
   start(input: AgentRunInput, options?: AgentRunStartOptions): Promise<{ runId: string }>;
   /**
+   * OPTIONAL: the id a run of `input` should have, when the caller mints one before starting it (the
+   * chat queue claims a thread under the id first). A host whose ids carry meaning — a tenant
+   * prefix its durable store partitions by — answers here. Absent → a random UUID.
+   */
+  runIdFor?(input: AgentRunInput): string;
+  /**
    * OPTIONAL: whether `runId` is still running (or parked, or about to start) as far as this runner
    * can tell. Asked when a thread's admission is held by a run, to tell a live holder from a stale
    * one a crashed process left behind — a stale holder is replaced instead of queueing behind it

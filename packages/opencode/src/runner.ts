@@ -6,9 +6,10 @@ import {
   type HumanReply,
   RunCancelledError,
 } from '@dudousxd/nestjs-agent-core';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { OPENCODE_OPTIONS } from './tokens.js';
 import { errorText } from './turn.js';
-import { OpenCodeTurns } from './turns.js';
+import { type OpenCodeEngineSettings, OpenCodeTurns } from './turns.js';
 
 /**
  * Runs OpenCode turns in this process: `begin → prompt → [observe → wait for a person → reply]* →
@@ -26,8 +27,15 @@ export class OpenCodeAgentRunner implements AgentRunner {
     { resolve: (reply: HumanReply) => void; reject: (error: unknown) => void }
   >();
 
-  constructor(private readonly turns: OpenCodeTurns) {
+  constructor(
+    private readonly turns: OpenCodeTurns,
+    @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
+  ) {
     turns.startNext = (next, runId) => this.start(next, { runId });
+  }
+
+  runIdFor(input: AgentRunInput): string {
+    return this.settings.runId?.(input) ?? crypto.randomUUID();
   }
 
   async isRunActive(runId: string): Promise<boolean> {
@@ -40,7 +48,7 @@ export class OpenCodeAgentRunner implements AgentRunner {
     input: AgentRunInput,
     options: AgentRunStartOptions = {},
   ): Promise<{ runId: string }> {
-    const runId = options.runId ?? crypto.randomUUID();
+    const runId = options.runId ?? this.runIdFor(input);
     this.live.add(runId);
     void this.run(runId, input).finally(() => {
       this.live.delete(runId);

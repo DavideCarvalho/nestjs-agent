@@ -82,6 +82,20 @@ export interface OpenCodeToolsOptions {
 }
 
 export interface OpenCodeEngineSettings {
+  /** The id a run gets (e.g. a tenant prefix your durable store partitions by). Default: a random UUID. */
+  runId?: (input: AgentRunInput) => string;
+  /**
+   * `openCodeDurable()` only: how each turn's workflow run starts — tags, search attributes, a
+   * concurrency quota (`WorkflowService.start` options) — and what a refused start becomes (e.g. a
+   * concurrency limit → a 429 for the person sending).
+   */
+  durable?: {
+    start?: (
+      input: AgentRunInput,
+      runId: string,
+    ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+    startError?: (error: unknown, input: AgentRunInput) => unknown;
+  };
   /** How many earlier messages a NEW session is told about (a thread whose session was lost). Default 20. */
   historyMessages?: number;
   /** The instructions key the agent's own prompt is put under. Default `'aviary.system'`. */
