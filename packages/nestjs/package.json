@@ -126,7 +126,7 @@
     "@dudousxd/durable-worker": "0.10.1",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@dudousxd/nestjs-context": "0.2.1",
-    "@dudousxd/nestjs-durable": "0.45.0",
+    "@dudousxd/nestjs-durable": "0.45.1",
     "@dudousxd/nestjs-durable-core": "0.72.1",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
     "@dudousxd/nestjs-media": "0.9.3",
