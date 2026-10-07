@@ -171,6 +171,57 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
 
+  packages/channels:
+    devDependencies:
+      '@dudousxd/nestjs-agent':
+        specifier: workspace:*
+        version: link:../nestjs
+      '@dudousxd/nestjs-agent-core':
+        specifier: workspace:*
+        version: link:../core
+      '@dudousxd/nestjs-agent-testing':
+        specifier: workspace:*
+        version: link:../testing
+      '@nestjs/common':
+        specifier: 12.0.4
+        version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
+      '@nestjs/testing':
+        specifier: 12.0.4
+        version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@nestjs/platform-express@12.0.4)
+      '@types/express':
+        specifier: 5.0.6
+        version: 5.0.6
+      '@types/supertest':
+        specifier: 6.0.3
+        version: 6.0.3
+      reflect-metadata:
+        specifier: 0.2.2
+        version: 0.2.2
+      rxjs:
+        specifier: 7.8.2
+        version: 7.8.2
+      supertest:
+        specifier: 7.0.0
+        version: 7.0.0
+      tsup:
+        specifier: 8.5.1
+        version: 8.5.1(@swc/core@1.16.13)(jiti@1.21.7)(postcss@8.5.28)(tsx@4.23.15)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@22.20.5)(jsdom@26.1.0)
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+
   packages/codegen:
     devDependencies:
       '@dudousxd/nestjs-codegen':
@@ -909,6 +960,9 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
+      '@dudousxd/nestjs-agent-testing':
+        specifier: workspace:*
+        version: link:../testing
       '@testcontainers/redis':
         specifier: 12.2.0
         version: 12.2.0
@@ -2781,9 +2835,6 @@ packages:
 
   '@types/express-serve-static-core@5.1.1':
     resolution: {integrity: sha512-v4zIMr/cX7/d2BpAEX3KNKL/JrT1s43s96lLvvdTmza1oEvDudCqK9aF/djc/SWgy8Yh0h30TZx5VpzqFCxk5A==}
-
-  '@types/express@5.0.0':
-    resolution: {integrity: sha512-DvZriSMehGHL1ZNLzi6MidnsDhUZM/x2pRdDIKdwbUNqqwHxMlRdkxtn6/EPKyqKpHqTl/4nRZsRNLpZxZRpPQ==}
 
   '@types/express@5.0.6':
     resolution: {integrity: sha512-sKYVuV7Sv9fbPIt/442koC7+IIwK5olP1KWeD88e/idgoJqDm3JV/YUiPwkoKK92ylff2MGxSz1CSjsXelx0YA==}
@@ -7459,11 +7510,11 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/cookiejar@2.1.5': {}
 
@@ -7607,17 +7658,10 @@ snapshots:
 
   '@types/express-serve-static-core@5.1.1':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
       '@types/qs': 6.15.1
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
-
-  '@types/express@5.0.0':
-    dependencies:
-      '@types/body-parser': 1.19.6
-      '@types/express-serve-static-core': 5.1.1
-      '@types/qs': 6.15.1
-      '@types/serve-static': 2.2.0
 
   '@types/express@5.0.6':
     dependencies:
@@ -7645,7 +7689,7 @@ snapshots:
 
   '@types/multer@1.4.13':
     dependencies:
-      '@types/express': 5.0.0
+      '@types/express': 5.0.6
 
   '@types/node@12.20.55': {}
 
@@ -7685,16 +7729,16 @@ snapshots:
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/serve-static@2.2.0':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/ssh2-streams@0.1.13':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/ssh2@0.5.52':
     dependencies:
@@ -7709,7 +7753,7 @@ snapshots:
     dependencies:
       '@types/cookiejar': 2.1.5
       '@types/methods': 1.1.4
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
       form-data: 4.0.6
 
   '@types/supertest@6.0.3':

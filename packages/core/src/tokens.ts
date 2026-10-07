@@ -86,3 +86,10 @@ export const AGENT_SKILL_SOURCES = Symbol.for('@dudousxd/nestjs-agent:skill-sour
  * that builds the tool (`provideAgentTool(factory, [AGENT_CONFIRM_TOKEN_STORE])`).
  */
 export const AGENT_CONFIRM_TOKEN_STORE = Symbol.for('@dudousxd/nestjs-agent:confirm-token-store');
+/**
+ * The `ChannelStore` text channels (`@dudousxd/nestjs-agent-channels`) keep their short-lived state
+ * in: message ids already answered, questions waiting for an answer, outcomes already relayed. Bound
+ * by the store modules (`DrizzleAgentStoreModule`, `MikroOrmAgentStoreModule`) on the
+ * `agent_channel_state` table; unbound, `AgentChannelsModule` keeps it in memory.
+ */
+export const AGENT_CHANNEL_STORE = Symbol.for('@dudousxd/nestjs-agent:channel-store');

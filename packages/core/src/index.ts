@@ -125,6 +125,8 @@ export {
   verifyConfirmToken,
 } from './confirm-token.js';
 export type { ConfirmTokenClaim, ConfirmTokenStore } from './spi/confirm-token-store.js';
+export { InMemoryChannelStore } from './channel-store.js';
+export type { ChannelStore } from './spi/channel-store.js';
 export {
   CONFIRM_JSON_SCHEMA_PROPERTIES,
   type ConfirmedTool,

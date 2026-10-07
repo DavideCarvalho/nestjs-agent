@@ -49,6 +49,11 @@ export {
   type ConfirmTokenContractCase,
   type ConfirmTokenContractSubject,
 } from './confirm-token-store-contract.js';
+export {
+  CHANNEL_STORE_CONTRACT,
+  type ChannelStoreContractCase,
+  type ChannelStoreContractSubject,
+} from './channel-store-contract.js';
 export { InMemoryStreamFrameTable } from './in-memory-stream-frame-table.js';
 export {
   SQL_TOKEN_STREAM_SINK_CONTRACT,

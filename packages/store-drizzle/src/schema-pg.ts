@@ -239,6 +239,24 @@ export const ragIngestionLog = pgTable(
   (table) => [index('rag_ingestion_log_collection_idx').on(table.collection, table.updatedAt)],
 );
 
+/**
+ * Text channels' short-lived state (`@dudousxd/nestjs-agent-channels`), one row per key: the provider
+ * message ids already answered, a question waiting for the person's answer, an outcome already
+ * relayed. The primary key is the lock a claim takes; `expires_at` is epoch-ms, and past it the row
+ * is free again and dead weight for `DrizzleChannelStore.purgeExpired`. Keys longer than 255
+ * characters are stored by their SHA-256.
+ */
+export const agentChannelState = pgTable(
+  'agent_channel_state',
+  {
+    key: text('key').primaryKey(),
+    value: text('value'),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [index('agent_channel_state_expires_idx').on(table.expiresAt)],
+);
+
 export const agentConfirmToken = pgTable(
   'agent_confirm_token',
   {
@@ -335,5 +353,6 @@ export const pgAgentSchema = {
   agentMemory,
   ragIngestionLog,
   agentConfirmToken,
+  agentChannelState,
   agentStreamFrame,
 };

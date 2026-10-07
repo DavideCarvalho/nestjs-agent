@@ -5,6 +5,7 @@ export * from './mikro-orm-memory-provider';
 export * from './mikro-orm-pricing-store';
 export * from './mikro-orm-token-stream-sink';
 export * from './mikro-orm-confirm-token-store';
+export * from './mikro-orm-channel-store';
 export * from './mikro-orm-rag-ingestion-log';
 export * from './ensure-schema';
 export * from './agent-schema-sql';

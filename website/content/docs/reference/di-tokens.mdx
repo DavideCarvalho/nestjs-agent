@@ -34,6 +34,7 @@ All tokens live in `packages/core/src/tokens.ts` and are `Symbol.for(...)` (glob
 | `AGENT_SKILLS` | resolved skills config, or `undefined` | `AgentModule`, from `options.skills` | Your own surface lists the skills an actor can reach, resolved the way the loop resolves them. |
 | `AGENT_MEMORY` | resolved memory config, or `undefined` | `AgentModule`, from `options.memory` | Your own surface reads or edits memories, resolved the way the loop resolves them. |
 | `AGENT_CONFIRM_TOKEN_STORE` | `ConfirmTokenStore` | `DrizzleAgentStoreModule` / `MikroOrmAgentStoreModule` | Building a [confirmed tool](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool): `provideAgentTool(factory, [AGENT_CONFIRM_TOKEN_STORE])`. |
+| `AGENT_CHANNEL_STORE` | `ChannelStore` | `DrizzleAgentStoreModule` / `MikroOrmAgentStoreModule` | [Text channels](/docs/agent/guides/channels) keep their message ids, questions and relayed outcomes in it (`agent_channel_state`); `AgentChannelsModule` uses it when bound. |
 
 Tokens exported by `@dudousxd/nestjs-agent` subpaths rather than core:
 

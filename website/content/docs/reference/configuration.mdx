@@ -44,7 +44,7 @@ Every option below is passed to `AgentModule.forRoot({ … })`. `model` is the o
 |---|---|---|---|
 | `actionApprovalMode` | `'blocking' \| 'independent'` | `'blocking'` | `'independent'` turns an `action` call that needs approval into a proposal: the turn ends, the decision comes later (web, text message, AG-UI, console), and a background worker runs it. Boot fails unless the store supports proposals. See [Action proposals](/docs/agent/guides/action-proposals). |
 | `backgroundActorResolver` | `{ resolve({ actorRef, tenantRef }) → Promise<Actor \| null> }` | — (required for `'independent'`) | Re-resolves the requester's current identity and roles before the worker executes an approved proposal. |
-| `actionProposalWorker` | `{ pollIntervalMs?, leaseMs?, maxConcurrency? }` | `{ 1000, 30000, 1 }` | Positive integers; `pollIntervalMs` must be below `leaseMs / 3`. |
+| `actionProposalWorker` | `{ pollIntervalMs?, leaseMs?, maxConcurrency?, onSettled? }` | `{ 1000, 30000, 1 }` | Positive integers; `pollIntervalMs` must be below `leaseMs / 3`. `onSettled(proposal)` runs after each proposal the worker settles (modules subscribe with `ActionProposalWorkerService.onSettled`). |
 | `actionProposalText` | `{ vocabulary?: { approve?, reject?, remember? }; replies?: { approved?, rejected?, expired?, unchanged?, ambiguous?, tooMany? } }` | English (`yes`/`confirm`/`approve`/`approved`/`ok`, `no`/`cancel`/`reject`/`deny`, `always in this conversation`) | The whole-message words that decide a proposal by text, and the replies. Each part replaces the default it names, field by field. `ptBrActionProposalText` (from `@dudousxd/nestjs-agent-core`) is the Portuguese preset. See [Deciding by text](/docs/agent/guides/action-proposals#text). |
 
 ### Quota

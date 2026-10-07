@@ -133,7 +133,7 @@ ALTER TABLE agent_message ADD COLUMN action_proposal_outcome TEXT;
 ALTER TABLE agent_queued_message ADD COLUMN ui_capabilities TEXT;
 ```
 
-Whole tables added since (`agent_queued_message`, `agent_stream_frame`, `agent_confirm_token`,
+Whole tables added since (`agent_queued_message`, `agent_stream_frame`, `agent_confirm_token`, `agent_channel_state`,
 `agent_action_proposal`) come from `agentSchemaDdl(dialect)` or the schema object. On Postgres the
 JSON columns are `jsonb`, on MySQL `json`.
 </Callout>
@@ -151,6 +151,7 @@ JSON columns are `jsonb`, on MySQL `json`.
 | `DrizzlePricingStore` | class | `AgentPricingStore` implementation — `upsertModelPrice` / `listCurrentPrices`, the write side of model pricing (see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices)) |
 | `DrizzleTokenStreamSink` | class | A multi-replica `TokenStreamSink` over `agent_stream_frame` — several replicas with no Redis. `new DrizzleTokenStreamSink(db, options?)` (`SqlTokenStreamSinkOptions`); pass it as `AgentModule`'s `sink`. Not bound by the module. Polled, text coalesced at write time, TTL from the last write; see [the live stream across replicas](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink) |
 | `DrizzleConfirmTokenStore` | class | `ConfirmTokenStore` over `agent_confirm_token` — what makes a [confirmed write](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool) single use across replicas. `claim` is one insert that skips on a duplicate hash (the primary key is the lock), `release`, `purgeExpired(now?)`. Bound to `AGENT_CONFIRM_TOKEN_STORE` by `DrizzleAgentStoreModule` |
+| `DrizzleChannelStore` | class | `ChannelStore` over `agent_channel_state` — what [text channels](/docs/agent/guides/channels) keep their message ids, questions in progress and relayed outcomes in, shared by every replica. `claim(key, ttlMs)` is one insert that skips on a duplicate key (the primary key is the lock), `get`, `set`, `delete`, `purgeExpired(now?)`; `new DrizzleChannelStore(db, { purgeEveryMs? })`. Bound to `AGENT_CHANNEL_STORE` by `DrizzleAgentStoreModule` |
 | `DrizzleStreamFrameTable` | class | The `StreamFrameTable` behind `DrizzleTokenStreamSink`, for composing your own `SqlTokenStreamSink` |
 | `agentSchema` | Drizzle schema object | The SQLite tables this store owns — `agentActionProposal`, `agentThread`, `agentMessage`, `agentQueuedMessage`, `agentToolCall`, `agentTokenUsage`, `agentModelPricing`, `agentRun`, `agentMemory`, `ragIngestionLog`, `agentConfirmToken`, `agentStreamFrame`. Each table is also exported on its own |
 | `pgAgentSchema` / `mysqlAgentSchema` | Drizzle schema object | The same tables, keys and property names in Postgres / MySQL types |

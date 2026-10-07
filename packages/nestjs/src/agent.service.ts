@@ -6,7 +6,9 @@ import {
   AGENT_QUOTA_PROVIDER,
   AGENT_RUNNER,
   AGENT_STORE,
+  type ActionApprovalMode,
   type ActionProposalMutationView,
+  type ActionProposalView,
   type Actor,
   type AgentHostContext,
   type AgentRunInput,
@@ -15,6 +17,7 @@ import {
   type AttachmentRef,
   type AttachmentStagingStore,
   type ChatQueueState,
+  DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type Decision,
   type ElicitationReply,
   type HumanReply,
@@ -30,6 +33,7 @@ import {
   REQUESTER_APPROVER,
   type StagedAttachment,
   type StoredMessage,
+  type TextActionProposalVocabulary,
   type ThreadDetail,
   type ThreadSummary,
   type UpdateThreadInput,
@@ -37,6 +41,7 @@ import {
   mayDecideApproval,
   readElicitationQuestions,
   settleDeadRun,
+  textActionProposalReply,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
@@ -52,10 +57,13 @@ import {
   NotFoundException,
   NotImplementedException,
   Optional,
+  PayloadTooLargeException,
+  UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
+import { type AttachmentLimits, attachmentLimits } from './attachment-limits.js';
 import { ActionProposalService } from './proposals/action-proposal.service.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { publishQuotaBlocked } from './quota-exceeded.js';
@@ -175,7 +183,10 @@ export class AgentService {
     private readonly quotaProvider?: QuotaProvider,
     @Optional()
     @Inject(AGENT_OPTIONS)
-    private readonly options?: Pick<AgentModuleOptions, 'quota' | 'actionApprovalMode'>,
+    private readonly options?: Pick<
+      AgentModuleOptions,
+      'quota' | 'actionApprovalMode' | 'attachments'
+    >,
     @Optional() private readonly queue?: ChatQueueService,
     @Optional() private readonly proposals?: ActionProposalService,
   ) {}
@@ -207,6 +218,82 @@ export class AgentService {
     if (this.options?.actionApprovalMode !== 'independent' || !this.proposals)
       return { status: 'unmatched' as const };
     return this.proposals.handleTextDecision(threadId, actor, text);
+  }
+
+  /** How `action` tools wait for their approval here — `AgentModule.forRoot({ actionApprovalMode })`. */
+  actionApprovalMode(): ActionApprovalMode {
+    return this.options?.actionApprovalMode ?? 'blocking';
+  }
+
+  /**
+   * The words a text decision is made of (`actionProposalText.vocabulary`, English by default) — what
+   * a surface without buttons tells the person to reply.
+   */
+  actionProposalVocabulary(): TextActionProposalVocabulary {
+    return this.proposals?.textVocabulary() ?? DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY;
+  }
+
+  /** The configured reply (`actionProposalText.replies`) to a decision the store answered with `result`. */
+  actionProposalReply(
+    result: Pick<ActionProposalMutationView, 'status' | 'proposal'>,
+    decision: 'approved' | 'rejected',
+  ): string {
+    return this.proposals?.reply(result, decision) ?? textActionProposalReply(result, decision);
+  }
+
+  /**
+   * The proposals of a thread this actor may see — the thread's own actor, or one the policy lets
+   * decide them; what `GET <base>/threads/:threadId/action-proposals` serves (its first page). `404`
+   * when independent approvals are not on.
+   */
+  async listActionProposals(actor: Actor, threadId: string): Promise<ActionProposalView[]> {
+    if (this.options?.actionApprovalMode !== 'independent' || !this.proposals) {
+      throw new NotFoundException('Proposal not found');
+    }
+    return this.proposals.list(threadId, actor);
+  }
+
+  /**
+   * The attachment rules in force — what `GET <base>/config` serves and `POST <base>/attachments`
+   * enforces. `enabled: false` when no `AGENT_ATTACHMENT_STAGING` provider is bound.
+   */
+  attachmentLimits(): AttachmentLimits {
+    return attachmentLimits(this.options, this.staging);
+  }
+
+  /**
+   * Stage a file for a later turn, held to the same limits as `POST <base>/attachments` — for a
+   * surface that receives files itself (a messaging webhook). Refuses with `501` when attachments are
+   * off, `415` for a type outside the allowlist and `413` past the size cap; send the returned
+   * `mediaId` as `attachments: [{ mediaId }]`.
+   */
+  async stageAttachment(
+    actor: Actor,
+    file: { data: Buffer; contentType: string; filename: string },
+  ): Promise<MessageAttachment> {
+    if (this.staging === undefined) {
+      throw new NotImplementedException(
+        'Attachments are not configured on this server: bind AGENT_ATTACHMENT_STAGING ' +
+          '(e.g. import AgentMediaAttachmentsModule).',
+      );
+    }
+    const { allowedContentTypes, maxBytes } = this.attachmentLimits();
+    const contentType = file.contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+    if (!allowedContentTypes.includes(contentType)) {
+      throw new UnsupportedMediaTypeException(
+        `content type "${contentType}" is not allowed (allowed: ${allowedContentTypes.join(', ')})`,
+      );
+    }
+    if (file.data.byteLength > maxBytes) {
+      throw new PayloadTooLargeException(`file exceeds the ${maxBytes}-byte limit`);
+    }
+    return this.staging.stage({
+      data: file.data,
+      filename: file.filename,
+      contentType,
+      sizeBytes: file.data.byteLength,
+      actor,
+    });
   }
   /** The queue service when the bound store can hold a queue, else `undefined`. */
   private queueing(): ChatQueueService | undefined {

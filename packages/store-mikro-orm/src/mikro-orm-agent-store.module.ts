@@ -1,4 +1,5 @@
 import {
+  AGENT_CHANNEL_STORE,
   AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
@@ -15,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { ensureAgentSchema } from './ensure-schema';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
+import { MikroOrmChannelStore } from './mikro-orm-channel-store';
 import { MikroOrmConfirmTokenStore } from './mikro-orm-confirm-token-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmMemoryProvider } from './mikro-orm-memory-provider';
@@ -148,6 +150,13 @@ export class MikroOrmAgentStoreModule {
           inject: [EntityManager],
         },
         { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: MikroOrmConfirmTokenStore },
+        // Text channels' state (`@dudousxd/nestjs-agent-channels`), shared by every replica.
+        {
+          provide: MikroOrmChannelStore,
+          useFactory: (em: EntityManager) => new MikroOrmChannelStore(em),
+          inject: [EntityManager],
+        },
+        { provide: AGENT_CHANNEL_STORE, useExisting: MikroOrmChannelStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [MikroOrmRagIngestionLog]),
@@ -160,6 +169,8 @@ export class MikroOrmAgentStoreModule {
         AGENT_PRICING_STORE,
         MikroOrmConfirmTokenStore,
         AGENT_CONFIRM_TOKEN_STORE,
+        MikroOrmChannelStore,
+        AGENT_CHANNEL_STORE,
       ],
     };
   }

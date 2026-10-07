@@ -49,6 +49,7 @@ See the [component rendering guide](docs/component-rendering.md) for complete ex
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
 | `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
 | `@dudousxd/nestjs-agent-mcp-server` | MCP server — expose this deployment's tools to an external Model Context Protocol client, under the same registry and roles policy a turn runs through |
+| `@dudousxd/nestjs-agent-channels` | Text channels — WhatsApp (Evolution API, Cloud API) and Telegram webhooks: verified, deduplicated, answered in the background, with proposals as buttons, questions as text and media as attachments |
 | `@dudousxd/nestjs-agent-react` | `useAgentChat` + `AgentChatTransport` (Vercel AI SDK v7) + `useChatTranscript` (the headless transcript model) + styling-agnostic chat components; optional `/markdown` and `/genui` (headless generative-UI renderer) subpaths |
 | `@dudousxd/nestjs-agent-codegen` | A `@dudousxd/nestjs-codegen` extension emitting the `/agent` REST routes into your typed client |
 | `@dudousxd/nestjs-agent-telescope` | An "Agent" dashboard tab for `@dudousxd/nestjs-telescope` |

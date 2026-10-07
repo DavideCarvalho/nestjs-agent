@@ -1,5 +1,6 @@
 import type {
   ActionApprovalMode,
+  ActionProposal,
   BackgroundActorResolver,
   TextActionProposalConfig,
 } from '@dudousxd/nestjs-agent-core';
@@ -152,9 +153,17 @@ export interface AgentModuleOptions {
    * (started with the module unless `surface: 'http'`). `pollIntervalMs` — how often it looks for
    * queued work, default 1000; `leaseMs` — how long a claim holds before another worker may recover
    * it, default 30000; `maxConcurrency` — proposals claimed per poll, default 1. All positive
-   * integers, and `pollIntervalMs` must stay below a third of `leaseMs`.
+   * integers, and `pollIntervalMs` must stay below a third of `leaseMs`. `onSettled` runs after each
+   * proposal the worker settles (executed or failed), with the stored proposal — its `outcome` and
+   * `executionContext.pageContext` included; a module can subscribe the same way through
+   * `ActionProposalWorkerService.onSettled`.
    */
-  actionProposalWorker?: { pollIntervalMs?: number; leaseMs?: number; maxConcurrency?: number };
+  actionProposalWorker?: {
+    pollIntervalMs?: number;
+    leaseMs?: number;
+    maxConcurrency?: number;
+    onSettled?(proposal: ActionProposal): void | Promise<void>;
+  };
   /**
    * The words a chat message must consist of to approve or reject a proposal by text, and what the
    * agent answers. English by default (`yes`/`confirm`/`approve`, `no`/`cancel`/`reject`, …); pass

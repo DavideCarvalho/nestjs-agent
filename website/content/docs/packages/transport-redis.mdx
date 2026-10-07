@@ -131,6 +131,8 @@ from "the run failed" the same way it would against the in-process sink.
 | `RedisTokenStreamSink` | class (`TokenStreamSink`) | `new RedisTokenStreamSink(client, options?)`; `open` / `subscribe` / `close`, backed by the LIST + pub/sub + marker scheme above |
 | `RedisTokenStreamSinkOptions` | type | `{ keyPrefix?: string }` — default `agent:stream` |
 | `RedisStreamClient` | type | The eight-method seam your app implements over its own Redis driver |
+| `RedisChannelStore` | class (`ChannelStore`) | `new RedisChannelStore(client, { prefix? })` — the state of [text channels](/docs/agent/guides/channels) (message ids, questions, relayed outcomes) shared by every replica: `SET … PX … NX` claims, `GET`, `DEL`. Pass it as `AgentChannelsModule.forRoot({ store })` |
+| `RedisChannelClient` | type | The three commands it uses (`set` with `PX`/`NX`, `get`, `del`) — an `ioredis` client has them as is |
 
 ## When to use it
 

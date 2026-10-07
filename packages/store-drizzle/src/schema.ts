@@ -349,6 +349,24 @@ export const ragIngestionLog = sqliteTable(
 );
 
 /**
+ * Text channels' short-lived state (`@dudousxd/nestjs-agent-channels`), one row per key: the provider
+ * message ids already answered, a question waiting for the person's answer, an outcome already
+ * relayed. The primary key is the lock a claim takes; `expires_at` is epoch-ms, and past it the row
+ * is free again and dead weight for `DrizzleChannelStore.purgeExpired`. Keys longer than 255
+ * characters are stored by their SHA-256.
+ */
+export const agentChannelState = sqliteTable(
+  'agent_channel_state',
+  {
+    key: text('key').primaryKey(),
+    value: text('value'),
+    expiresAt: integer('expires_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [index('agent_channel_state_expires_idx').on(table.expiresAt)],
+);
+
+/**
  * Spent confirm tokens (`defineConfirmedTool`), one row per token, keyed by its SHA-256 — the
  * primary key is the lock that makes a confirmation single use across replicas. Only the hash, the
  * actor and the tool are kept, never an argument. `expires_at` is epoch-ms; past it the row is dead
@@ -446,6 +464,7 @@ export const agentSchema = {
   agentMemory,
   ragIngestionLog,
   agentConfirmToken,
+  agentChannelState,
   agentStreamFrame,
 };
 

@@ -34,6 +34,7 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-mcp-server': pkg('mcp-server'),
   '@dudousxd/nestjs-agent-mcp': pkg('mcp'),
   '@dudousxd/nestjs-agent-opencode': pkg('opencode'),
+  '@dudousxd/nestjs-agent-channels': pkg('channels'),
   '@dudousxd/nestjs-agent-react/genui/json-render': fileURLToPath(
     new URL('./packages/react/src/genui/json-render.tsx', import.meta.url),
   ),
