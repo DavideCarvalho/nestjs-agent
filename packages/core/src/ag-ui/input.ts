@@ -1,11 +1,12 @@
 import { type UiCapabilities, validateUiCapabilities } from '../genui/capabilities.js';
 import { type InterruptAddress, decodeInterruptId } from './interrupt-id.js';
-import type {
-  AgUiContentPart,
-  AgUiContext,
-  AgUiMessage,
-  AgUiResumeEntry,
-  AgUiRunInput,
+import {
+  AG_UI_MEDIA_PROVIDER,
+  type AgUiContentPart,
+  type AgUiContext,
+  type AgUiMessage,
+  type AgUiResumeEntry,
+  type AgUiRunInput,
 } from './types.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -71,6 +72,12 @@ export interface UserTurn {
   /** The text of the message the run answers. */
   text: string;
   media: InlineMedia[];
+  /**
+   * Attachments the consumer already staged with this library, by `mediaId` — `file` parts whose
+   * `provider` is {@link AG_UI_MEDIA_PROVIDER}. Resolved (and ownership-checked) like the native
+   * route's `attachments`.
+   */
+  staged: { mediaId: string }[];
   /** Why a part was not used, one sentence each — reported, never fatal. */
   dropped: string[];
 }
@@ -102,8 +109,10 @@ function filenameOf(part: AgUiContentPart, index: number, contentType: string): 
  * agent resumes from is what it stored.
  *
  * Multimodal parts: text parts are the message's text; a media part carried inline (`data`) becomes
- * an attachment. A part by `url` or by provider `file` handle is dropped and said so — this producer
- * hands the model only bytes it staged itself, never an address a caller supplied.
+ * an attachment, and a `file` part whose `provider` is {@link AG_UI_MEDIA_PROVIDER} names one this
+ * library already staged (its `mediaId`). A part by `url` or by another provider's `file` handle is
+ * dropped and said so — this producer hands the model only bytes it staged itself, never an address
+ * a caller supplied.
  */
 export function readUserTurn(messages: readonly AgUiMessage[]): UserTurn | null {
   let last: AgUiMessage | undefined;
@@ -114,11 +123,14 @@ export function readUserTurn(messages: readonly AgUiMessage[]): UserTurn | null 
     }
   }
   if (last === undefined) return null;
-  if (typeof last.content === 'string') return { text: last.content, media: [], dropped: [] };
-  if (!Array.isArray(last.content)) return { text: '', media: [], dropped: [] };
+  if (typeof last.content === 'string') {
+    return { text: last.content, media: [], staged: [], dropped: [] };
+  }
+  if (!Array.isArray(last.content)) return { text: '', media: [], staged: [], dropped: [] };
 
   const texts: string[] = [];
   const media: InlineMedia[] = [];
+  const staged: { mediaId: string }[] = [];
   const dropped: string[] = [];
   last.content.forEach((part, index) => {
     if (!isRecord(part)) return;
@@ -135,6 +147,16 @@ export function readUserTurn(messages: readonly AgUiMessage[]): UserTurn | null 
       return;
     }
     const source = part.source;
+    if (
+      isRecord(source) &&
+      source.type === 'file' &&
+      source.provider === AG_UI_MEDIA_PROVIDER &&
+      typeof source.value === 'string' &&
+      source.value.length > 0
+    ) {
+      staged.push({ mediaId: source.value });
+      return;
+    }
     if (!isRecord(source) || source.type !== 'data') {
       const how = isRecord(source) && typeof source.type === 'string' ? source.type : 'unknown';
       dropped.push(
@@ -161,7 +183,7 @@ export function readUserTurn(messages: readonly AgUiMessage[]): UserTurn | null 
       filename: filenameOf(part as AgUiContentPart, index, contentType),
     });
   });
-  return { text: texts.join('\n'), media, dropped };
+  return { text: texts.join('\n'), media, staged, dropped };
 }
 
 /** `context` entries as the library's page context carries them, or `undefined` for none. */
@@ -186,6 +208,11 @@ export interface ForwardedOptions {
   model?: string;
   persona?: string;
   pageContext?: Record<string, unknown>;
+  /**
+   * Re-run the thread's last exchange instead of appending a turn — what the native `chat` body's
+   * `regenerate: true` asks. The user message is the one being answered again.
+   */
+  regenerate?: boolean;
 }
 
 export function readForwardedProps(forwarded: unknown): ForwardedOptions {
@@ -205,6 +232,7 @@ export function readForwardedProps(forwarded: unknown): ForwardedOptions {
     ...(model !== undefined ? { model } : {}),
     ...(persona !== undefined ? { persona } : {}),
     ...(isRecord(forwarded.pageContext) ? { pageContext: forwarded.pageContext } : {}),
+    ...(forwarded.regenerate === true ? { regenerate: true } : {}),
   };
 }
 

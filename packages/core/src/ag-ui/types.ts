@@ -96,6 +96,14 @@ export type AgUiPartSource =
   | { type: 'url'; value: string; mimeType?: string }
   | { type: 'file'; value: string; provider?: string; mimeType?: string };
 
+/**
+ * The `provider` of a `file` content part whose `value` is a `mediaId` this library staged
+ * (`POST <path>/attachments`, or the media module's upload routes). The producer takes such a part as
+ * an attachment reference and resolves it for the caller exactly as the native `chat` route does —
+ * a mediaId the caller does not own is refused. Any other `file` part is dropped.
+ */
+export const AG_UI_MEDIA_PROVIDER = 'nestjs-agent';
+
 export type AgUiContentPart =
   | { type: 'text'; text: string; id?: string; metadata?: unknown }
   | {
@@ -152,7 +160,7 @@ export const AG_UI_CUSTOM = {
   /** The approval request as the native protocol carries it, for a consumer that renders it live. */
   approvalRequested: 'agora.approval-requested',
   approvalSettled: 'agora.approval-settled',
-  /** The whole question set of an elicitation (`ElicitationRequest`). */
+  /** `{ id, runId, request }` — the whole question set of an elicitation, under its tool-call id. */
   elicitation: 'agora.elicitation',
   /** `{ usage, costUsd, reasoningMs }` of one model step. */
   stepUsage: 'agora.step-usage',

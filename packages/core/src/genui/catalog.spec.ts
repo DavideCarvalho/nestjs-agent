@@ -154,4 +154,47 @@ describe('builtin definitions', () => {
       );
     }
   });
+
+  it('draws every Chart series in its text fallback, not only the first', () => {
+    const chart = catalog.get('Chart');
+    const data = [
+      { month: 'Jan', web: 10, mobile: 4 },
+      { month: 'Feb', web: 5, mobile: 8 },
+    ];
+    const series = [
+      { key: 'web', label: 'Web' },
+      { key: 'mobile', label: 'Mobile' },
+    ];
+    const bars = chart?.fallbackText?.({ type: 'bar', xKey: 'month', series, data }) ?? '';
+    // Every series of every point, all on one scale (10 is the longest bar of any series).
+    expect(bars).toBe(
+      [
+        '```',
+        'Jan',
+        `  Web    ${'█'.repeat(20)} 10`,
+        `  Mobile ${'█'.repeat(8)} 4`,
+        'Feb',
+        `  Web    ${'█'.repeat(10)} 5`,
+        `  Mobile ${'█'.repeat(16)} 8`,
+        '```',
+      ].join('\n'),
+    );
+
+    const line = chart?.fallbackText?.({ type: 'line', xKey: 'month', series, data }) ?? '';
+    expect(line).toContain('Web');
+    expect(line).toContain('Mobile');
+    expect(line).not.toContain('█');
+    expect(line).toMatch(/Jan\s+10\s+4/);
+  });
+
+  it('keeps a single-series Chart as one bar per point', () => {
+    const text =
+      catalog.get('Chart')?.fallbackText?.({
+        type: 'bar',
+        xKey: 'x',
+        series: [{ key: 'y' }],
+        data: [{ x: 'a', y: 2 }],
+      }) ?? '';
+    expect(text).toMatch(/^```\na\s+█+ 2\n```$/);
+  });
 });

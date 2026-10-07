@@ -154,21 +154,55 @@ export const Chart = defineComponent<Props>({
     },
     ['type', 'xKey', 'series', 'data'],
   ),
-  fallbackText: (props) => {
-    const series: { key: string }[] = props.series ?? [];
-    const data: Props[] = props.data ?? [];
-    const first = series[0]?.key ?? '';
-    const max = Math.max(0, ...data.map((point) => Math.abs(Number(point[first]) || 0)));
-    const unit = props.unit ? ` ${s(props.unit)}` : '';
-    const lines = data
-      .slice(0, 20)
-      .map(
-        (point) =>
-          `${s(point[props.xKey]).slice(0, 18).padEnd(18)} ${bar(Number(point[first]) || 0, max)} ${s(point[first])}${unit}`,
-      );
-    return `${heading(props)}\`\`\`\n${lines.join('\n')}\n\`\`\``;
-  },
+  fallbackText: (props) => chartText(props),
 });
+
+/**
+ * A chart as text. `line` → a table (x, then one column per series), which keeps every value
+ * readable; `bar` → one bar per point, and per series when there are several, all on one scale so
+ * bars of different series compare.
+ */
+function chartText(props: Props): string {
+  const series: { key: string; label?: string }[] = (props.series ?? []).filter(
+    (each: unknown) => typeof (each as { key?: unknown })?.key === 'string',
+  );
+  const data: Props[] = props.data ?? [];
+  const unit = props.unit ? ` ${s(props.unit)}` : '';
+  const labelOf = (each: { key: string; label?: string }) => s(each.label) || each.key;
+  if (props.type === 'line') {
+    const columns = [
+      { key: s(props.xKey), label: s(props.xKey) },
+      ...series.map((each) => ({ key: each.key, label: `${labelOf(each)}${unit}` })),
+    ];
+    return `${heading(props)}${textTable(columns, data, 20)}`;
+  }
+  const max = Math.max(
+    0,
+    ...data.flatMap((point) => series.map((each) => Math.abs(Number(point[each.key]) || 0))),
+  );
+  const shown = data.slice(0, 20);
+  const lines: string[] = [];
+  if (series.length <= 1) {
+    const key = series[0]?.key ?? '';
+    for (const point of shown) {
+      lines.push(
+        `${s(point[props.xKey]).slice(0, 18).padEnd(18)} ${bar(Number(point[key]) || 0, max)} ${s(point[key])}${unit}`,
+      );
+    }
+  } else {
+    const width = Math.min(18, Math.max(...series.map((each) => labelOf(each).length)));
+    for (const point of shown) {
+      lines.push(s(point[props.xKey]).slice(0, 18));
+      for (const each of series) {
+        lines.push(
+          `  ${labelOf(each).slice(0, width).padEnd(width)} ${bar(Number(point[each.key]) || 0, max)} ${s(point[each.key])}${unit}`,
+        );
+      }
+    }
+  }
+  if (data.length > shown.length) lines.push(`… ${data.length - shown.length} more points`);
+  return `${heading(props)}\`\`\`\n${lines.join('\n')}\n\`\`\``;
+}
 
 export const KpiCards = defineComponent<Props>({
   name: 'KpiCards',

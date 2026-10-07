@@ -4,6 +4,7 @@ import { encodeStreamEvent } from '../stream-events.js';
 import { assertConforms } from './conformance.spec-helper.js';
 import {
   AG_UI_CUSTOM,
+  AG_UI_MEDIA_PROVIDER,
   AgUiEncoder,
   type AgUiEvent,
   type AgUiSourceFrame,
@@ -14,6 +15,7 @@ import {
   planResume,
   readAnswersPayload,
   readApprovalPayload,
+  readForwardedProps,
   readUserTurn,
 } from './index.js';
 
@@ -173,6 +175,7 @@ describe('AgUiEncoder', () => {
       toolCallId: 'c1',
       toolCallName: 'search',
       parentMessageId: 'run-1:m1',
+      metadata: { 'agora.toolKind': 'read' },
     });
     const args = events.filter((event) => event.type === 'TOOL_CALL_ARGS');
     expect(args.map((event) => (event as { delta: string }).delta).join('')).toBe('{"q":"x"}');
@@ -642,6 +645,29 @@ describe('input', () => {
     expect(turn?.dropped).toHaveLength(2);
     expect(turn?.dropped[0]).toContain('url source');
   });
+
+  it('reads a file part this library staged (by mediaId) as an attachment reference', () => {
+    const turn = readUserTurn([
+      {
+        id: '1',
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Read this' },
+          {
+            type: 'document',
+            source: { type: 'file', value: 'media-1', provider: AG_UI_MEDIA_PROVIDER },
+          },
+          { type: 'image', source: { type: 'file', value: 'file-9', provider: 'openai' } },
+        ],
+      },
+    ]);
+    expect(turn?.text).toBe('Read this');
+    expect(turn?.staged).toEqual([{ mediaId: 'media-1' }]);
+    expect(turn?.media).toEqual([]);
+    expect(turn?.dropped).toHaveLength(1);
+    expect(readForwardedProps({ regenerate: true })).toEqual({ regenerate: true });
+    expect(readForwardedProps({ regenerate: 'yes' })).toEqual({});
+  });
 });
 
 describe('a sink that knows only the shared vocabulary', () => {
@@ -688,9 +714,40 @@ describe('a sink that knows only the shared vocabulary', () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         name: AG_UI_CUSTOM.elicitation,
-        value: expect.objectContaining({ runId: 'lib-run-1' }),
+        value: expect.objectContaining({ runId: 'lib-run-1', id: 'ask-1' }),
       }),
     );
+  });
+
+  it('says on TOOL_CALL_START whether a call is an action, and which call it runs under', async () => {
+    const events = await collect(
+      ended([
+        ev({ kind: 'tool-input-start', id: 'p', name: 'execute', toolKind: 'read' }),
+        ev({
+          kind: 'tool-input-available',
+          id: 'c',
+          name: 'refund',
+          input: { id: 7 },
+          toolKind: 'action',
+          parentId: 'p',
+        }),
+      ]),
+    );
+    await assertConforms(events);
+    expect(events.filter((event) => event.type === 'TOOL_CALL_START')).toEqual([
+      {
+        type: 'TOOL_CALL_START',
+        toolCallId: 'p',
+        toolCallName: 'execute',
+        metadata: { 'agora.toolKind': 'read' },
+      },
+      {
+        type: 'TOOL_CALL_START',
+        toolCallId: 'c',
+        toolCallName: 'refund',
+        metadata: { 'agora.toolKind': 'action', 'agora.parentId': 'p' },
+      },
+    ]);
   });
 
   it("carries a component's fallback text and component versions", async () => {

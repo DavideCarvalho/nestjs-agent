@@ -10,12 +10,20 @@ import {
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
 import {
+  AG_UI_MEDIA_PROVIDER,
   type AgUiEvent,
   decodeInterruptId,
   encodeInterruptId,
 } from '@dudousxd/nestjs-agent-core/ag-ui';
 import { InMemoryAgentStore, InMemoryAttachmentStagingStore } from '@dudousxd/nestjs-agent-testing';
-import { type CanActivate, type DynamicModule, Global, Injectable, Module } from '@nestjs/common';
+import {
+  type CanActivate,
+  type DynamicModule,
+  type ExecutionContext,
+  Global,
+  Injectable,
+  Module,
+} from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -26,6 +34,7 @@ import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
+import { requestUserActorResolver } from '../resolver/request-user-actor-resolver.js';
 import { agUiAdapter } from './ag-ui.adapter.js';
 import { assertConforms, assertInputSchema } from './conformance.spec-helper.js';
 
@@ -274,6 +283,42 @@ describe('POST /agent/ag-ui', () => {
     expect((await post(engine.url, input())).status).toBe(404);
   });
 
+  it('authenticates through a guard that sets req.user, read by requestUserActorResolver()', async () => {
+    // What Passport's AuthGuard does: the guard runs before the route, so the resolver finds the
+    // principal it put on the request.
+    @Injectable()
+    class SessionGuard implements CanActivate {
+      canActivate(context: ExecutionContext): boolean {
+        const req = context
+          .switchToHttp()
+          .getRequest<{ headers: Record<string, string>; user?: unknown }>();
+        const session = req.headers['x-session'];
+        if (session === undefined) return false;
+        req.user = { id: session, roles: ['member'] };
+        return true;
+      }
+    }
+    const { url, service } = await boot(() => ({ text: 'hi' }), {
+      guards: [SessionGuard],
+      actorResolver: requestUserActorResolver(),
+    });
+    const body = input();
+    const signedIn = await fetch(`${url}/agent/ag-ui`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session': 'alice' },
+      body: JSON.stringify(body),
+    });
+    expect(signedIn.status).toBe(200);
+    await assertConforms(await readEvents(signedIn));
+    expect(await service.threadOwner(body.threadId)).toBe('alice');
+    const threads = await fetch(`${url}/agent/threads`, { headers: { 'x-session': 'alice' } });
+    expect(threads.status).toBe(200);
+    expect(((await threads.json()) as { id: string }[]).map((thread) => thread.id)).toEqual([
+      body.threadId,
+    ]);
+    expect((await post(url, input(), null)).status).toBe(403);
+  });
+
   it('is not mounted unless the module asks for it', async () => {
     const { url } = await boot(() => ({ text: 'hi' }), { adapters: [] });
     expect((await post(url, input())).status).toBe(404);
@@ -482,6 +527,77 @@ describe('POST /agent/ag-ui', () => {
     );
     expect(warnings).toHaveLength(1);
     expect(JSON.stringify(warnings[0])).toContain('url source');
+  });
+
+  it('takes an attachment staged through this library by mediaId, for its owner only', async () => {
+    const attachments: unknown[] = [];
+    const staging = new InMemoryAttachmentStagingStore();
+    const { url } = await boot(
+      (args) => {
+        attachments.push(args.messages.at(-1)?.attachments);
+        return { text: 'A report.' };
+      },
+      { staging },
+    );
+    const { mediaId } = await staging.stage({
+      data: Buffer.from('%PDF-1.4'),
+      filename: 'report.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 8,
+      actor: { id: 'u1', roles: [] },
+    });
+    const body = (threadId: string) =>
+      input({
+        threadId,
+        messages: [
+          {
+            id: 'm1',
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Summarise this' },
+              {
+                type: 'document',
+                source: { type: 'file', value: mediaId, provider: AG_UI_MEDIA_PROVIDER },
+              },
+            ],
+          },
+        ],
+      } as Partial<RunAgentInput>);
+    assertInputSchema(body('t'));
+    const response = await post(url, body(crypto.randomUUID()));
+    expect(response.status).toBe(200);
+    await assertConforms(await readEvents(response));
+    expect(attachments[0]).toMatchObject([
+      { mediaId, contentType: 'application/pdf', name: 'report.pdf' },
+    ]);
+    // Another actor naming the same mediaId is refused, as on the native `chat` route.
+    expect((await post(url, body(crypto.randomUUID()), 'u2')).status).toBe(403);
+  });
+
+  it('regenerates the last exchange when the consumer forwards regenerate: true', async () => {
+    let turn = 0;
+    const { url, service } = await boot(() => ({ text: `answer ${++turn}` }));
+    const client = agent(url);
+    await run(client, 'hi');
+    const again = await post(
+      url,
+      input({
+        threadId: client.threadId,
+        messages: [{ id: 'm1', role: 'user', content: 'hi' }],
+        forwardedProps: { regenerate: true },
+      }),
+    );
+    expect(again.status).toBe(200);
+    await assertConforms(await readEvents(again));
+    const thread = await service.getThread({ id: 'u1' }, client.threadId);
+    // The answer was replaced, not appended to: one user message, one (new) answer.
+    expect(thread?.messages.map((message) => [message.role, message.content])).toEqual([
+      ['user', 'hi'],
+      ['assistant', 'answer 2'],
+    ]);
+    // A thread nobody has yet has nothing to regenerate.
+    const fresh = await post(url, input({ forwardedProps: { regenerate: true } }));
+    expect(fresh.status).toBe(400);
   });
 
   it('refuses malformed input before any run starts', async () => {

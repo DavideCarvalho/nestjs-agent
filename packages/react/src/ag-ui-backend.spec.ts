@@ -347,3 +347,103 @@ describe('activity and content parts', () => {
     ]);
   });
 });
+
+describe('parity with the native stream', () => {
+  it('reads question sets, per-step usage and tool kinds off the producer', async () => {
+    const request = { id: 'ask-1', source: 'ask', questions: [{ id: 'q', prompt: 'Which?' }] };
+    const out = frames(
+      await read(
+        reframeAgUiStream(
+          agUiBody([
+            { type: 'RUN_STARTED', threadId: 't1', runId: 'r1' },
+            { type: 'STEP_STARTED', stepName: 'step-1' },
+            {
+              type: 'TOOL_CALL_START',
+              toolCallId: 'p',
+              toolCallName: 'execute',
+              metadata: { 'agora.toolKind': 'read' },
+            },
+            {
+              type: 'TOOL_CALL_START',
+              toolCallId: 'c',
+              toolCallName: 'refund',
+              metadata: { 'agora.toolKind': 'action', 'agora.parentId': 'p' },
+            },
+            { type: 'TOOL_CALL_ARGS', toolCallId: 'c', delta: '{"id":7}' },
+            { type: 'TOOL_CALL_END', toolCallId: 'c' },
+            { type: 'STEP_FINISHED', stepName: 'step-1' },
+            {
+              type: 'CUSTOM',
+              name: 'agora.step-usage',
+              value: {
+                usage: { inputTokens: 10, outputTokens: 4 },
+                costUsd: 0.002,
+                reasoningMs: 120,
+              },
+            },
+            { type: 'STEP_STARTED', stepName: 'step-2' },
+            { type: 'STEP_FINISHED', stepName: 'step-2' },
+            {
+              type: 'CUSTOM',
+              name: 'agora.elicitation',
+              value: { id: 'ask-1', runId: 'lib-run', request },
+            },
+            { type: 'RUN_FINISHED', threadId: 't1', runId: 'r1' },
+          ]),
+          { threadId: 't1' },
+        ),
+      ),
+    );
+    const events = out.filter((frame) => frame.event === undefined).map((frame) => frame.data);
+    expect(events).toEqual([
+      { kind: 'step-start' },
+      { kind: 'tool-input-start', id: 'p', name: 'execute', toolKind: 'read' },
+      { kind: 'tool-input-start', id: 'c', name: 'refund', toolKind: 'action', parentId: 'p' },
+      { kind: 'tool-input-delta', id: 'c', delta: '{"id":7}' },
+      {
+        kind: 'tool-input-available',
+        id: 'c',
+        name: 'refund',
+        input: { id: 7 },
+        toolKind: 'action',
+        parentId: 'p',
+      },
+      {
+        kind: 'step-finish',
+        usage: { inputTokens: 10, outputTokens: 4 },
+        costUsd: 0.002,
+        reasoningMs: 120,
+      },
+      { kind: 'step-start' },
+      { kind: 'step-finish' },
+      { kind: 'elicitation', id: 'ask-1', request },
+    ]);
+  });
+
+  it('sends staged attachments as file parts and forwards a regenerate', async () => {
+    const fetch = vi.fn(async () => new Response(agUiBody(run), { status: 200 }));
+    await agUiChatStream(
+      {
+        body: {
+          message: 'Again, with the file',
+          threadId: 't1',
+          regenerate: true,
+          attachments: [{ mediaId: 'media-1' }, { mediaId: 'media-2', contentType: 'image/png' }],
+        },
+      },
+      { url: '/x', fetch: fetch as unknown as typeof globalThis.fetch },
+    );
+    const input = JSON.parse(
+      String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body),
+    );
+    expect(input.messages[0].content).toEqual([
+      { type: 'text', text: 'Again, with the file' },
+      { type: 'document', source: { type: 'file', value: 'media-1', provider: 'nestjs-agent' } },
+      {
+        type: 'image',
+        source: { type: 'file', value: 'media-2', provider: 'nestjs-agent', mimeType: 'image/png' },
+      },
+    ]);
+    expect(input.forwardedProps).toEqual({ regenerate: true });
+  });
+});

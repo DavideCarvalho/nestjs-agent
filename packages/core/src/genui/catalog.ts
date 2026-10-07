@@ -28,7 +28,9 @@ export interface ComponentDefinition<P = Record<string, unknown>> {
   outputProps?: PropsSchema;
   /**
    * The component takes nested elements (a layout: `Stack`, `Card`). Only meaningful in tree mode,
-   * where a node's `children` are validated against the catalog too.
+   * where a node's `children` are validated against the catalog too. Such a component gets no
+   * `ui__show_*` tool and is not offered by the show tool ({@link flatComponents}), and when its
+   * {@link fallbackText} comes out empty it writes no text of its own (its children still do).
    */
   children?: boolean;
   /**
@@ -97,6 +99,16 @@ export interface Catalog {
   jsonSchemaFor(component: string): JsonSchema | undefined;
   /** A new catalog with these components added (a later definition replaces an earlier one of the same name). */
   extend(components: readonly ComponentDefinition<any>[]): Catalog;
+}
+
+/**
+ * The model components a FLAT tool can offer — one whose input is the component's props alone
+ * (`ui__show_<name>`, the generic show tool). A layout component (`children: true`) is left out:
+ * those tools have no way to pass it children, so it would only ever draw an empty box. Tree mode
+ * offers every model component.
+ */
+export function flatComponents(catalog: Catalog): ComponentDefinition<any>[] {
+  return catalog.modelComponents().filter((component) => component.children !== true);
 }
 
 /**

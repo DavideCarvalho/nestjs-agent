@@ -3,7 +3,7 @@ import type { AiToolCtx, ToolDescribeScope, ToolDescription, ToolHandler } from 
 import type { ToolPresentation } from '../tool-presentation.js';
 import type { Actor, ToolSpec } from '../types.js';
 import { negotiateCatalog } from './capabilities.js';
-import { type Catalog, type ComponentDefinition, toolNameFor } from './catalog.js';
+import { type Catalog, type ComponentDefinition, flatComponents, toolNameFor } from './catalog.js';
 import {
   type GenuiIssue,
   type JsonSchema,
@@ -50,7 +50,8 @@ export type ResolveGenuiCatalog = (scope: GenuiCatalogScope) => Catalog | Promis
 export interface GenuiToolsOptions {
   /**
    * `per-component` (default): one tool per model-facing component, `ui__show_<snake>`, whose input
-   * IS the component's props. `tree`: a single tool whose input is a nested
+   * IS the component's props — except layout components (`children: true`), which a flat input
+   * cannot fill. `tree`: a single tool whose input is a nested
    * `{ type, props, children }` tree composed from the catalog (json-render's nested shape).
    */
   mode?: 'per-component' | 'tree';
@@ -101,7 +102,7 @@ export function genuiTools(catalog: Catalog, options: GenuiToolsOptions = {}): G
   const tools =
     options.mode === 'tree'
       ? [treeTool(catalog, options)]
-      : catalog.modelComponents().map((component) => componentTool(catalog, component, options));
+      : flatComponents(catalog).map((component) => componentTool(catalog, component, options));
   if (options.showTool !== undefined && options.showTool !== false) {
     tools.push(showTool(catalog, options));
   }
@@ -162,7 +163,7 @@ function componentTool(
   const handler: ToolHandler = {
     async execute(input: unknown, ctx: AiToolCtx): Promise<GenuiToolOutput> {
       const resolved = await catalogFor(catalog, options, scopeOf(ctx));
-      const definition = modelComponent(resolved, component.name);
+      const definition = flatComponent(resolved, component.name);
       if (definition === undefined) {
         throw new Error(`component "${component.name}" is not available here`);
       }
@@ -189,7 +190,7 @@ function componentTool(
       await catalogFor(catalog, options, scopeOf(scope)),
       scope.uiCapabilities,
     );
-    const definition = modelComponent(resolved, component.name);
+    const definition = flatComponent(resolved, component.name);
     if (definition === undefined) {
       return {
         available: false,
@@ -280,7 +281,7 @@ export function showToolJsonSchema(catalog: Catalog): JsonSchema {
     properties: {
       component: {
         type: 'string',
-        enum: catalog.modelComponents().map((component) => component.name),
+        enum: flatComponents(catalog).map((component) => component.name),
         description: 'Component name from the catalog',
       },
       props: {
@@ -307,10 +308,9 @@ async function validateShow(
   if (typeof component !== 'string') {
     return { ok: false, issues: [{ path: ['component'], message: 'must be a component name' }] };
   }
-  const definition = modelComponent(catalog, component);
+  const definition = flatComponent(catalog, component);
   if (definition === undefined) {
-    const allowed = catalog
-      .modelComponents()
+    const allowed = flatComponents(catalog)
       .map((each) => each.name)
       .join(', ');
     return {
@@ -364,7 +364,7 @@ function showTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
       scope.uiCapabilities,
     );
     return {
-      available: resolved.modelComponents().length > 0,
+      available: flatComponents(resolved).length > 0,
       description: describeFor(resolved),
       inputSchema: permissiveSchema(showToolJsonSchema(resolved)),
     };
@@ -389,9 +389,12 @@ function showTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
   };
 }
 
-function modelComponent(catalog: Catalog, name: string): ComponentDefinition<any> | undefined {
+/** A component a flat tool may push: offered to the model, and not a layout (see {@link flatComponents}). */
+function flatComponent(catalog: Catalog, name: string): ComponentDefinition<any> | undefined {
   const definition = catalog.get(name);
-  return definition === undefined || definition.internal === true ? undefined : definition;
+  return definition === undefined || definition.internal === true || definition.children === true
+    ? undefined
+    : definition;
 }
 
 async function push(

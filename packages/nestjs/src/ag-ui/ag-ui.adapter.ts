@@ -151,7 +151,16 @@ export class AgUiRunHandler {
     if (owner !== null && owner !== actor.id) {
       throw new ForbiddenException('thread belongs to another actor');
     }
-    if (owner !== null && turn.media.length === 0) {
+    if (forwarded.regenerate === true && owner === null) {
+      throw invalid('invalid_input', 'regenerate needs a thread that already has an exchange');
+    }
+    // A regenerate re-answers the last message: it is never a decision on a pending proposal.
+    if (
+      owner !== null &&
+      forwarded.regenerate !== true &&
+      turn.media.length === 0 &&
+      turn.staged.length === 0
+    ) {
       const decision = await this.agent.handleTextDecision(input.threadId, actor, turn.text);
       if ('proposalDecision' in decision) {
         this.writeEvents(res, [
@@ -166,7 +175,9 @@ export class AgUiRunHandler {
         return;
       }
     }
-    const refs = await this.stage(actor, turn.media, warnings);
+    // Attachments the consumer staged with this library already are named by mediaId; `chat`
+    // resolves them for this actor and refuses one it does not own, as the native route does.
+    const refs = await this.stage(actor, turn.media, warnings, turn.staged);
     if (turn.text.trim().length === 0 && refs.length === 0) {
       throw invalid('no_user_message', 'the user message to answer is empty');
     }
@@ -190,6 +201,7 @@ export class AgUiRunHandler {
         : {}),
       ...(pageContext !== undefined ? { pageContext } : {}),
       ...(refs.length > 0 ? { attachments: refs } : {}),
+      ...(forwarded.regenerate === true ? { regenerate: true } : {}),
     });
     await this.pipe(res, started.runId, {
       threadId: input.threadId,
@@ -201,14 +213,28 @@ export class AgUiRunHandler {
     });
   }
 
-  /** Stage the turn's inline media through the bound store, within its limits; say what was not used. */
+  /**
+   * The turn's attachments: the ones already staged (by mediaId), then its inline media staged
+   * through the bound store — all within the store's limits; say what was not used.
+   */
   private async stage(
     actor: Actor,
     media: readonly InlineMedia[],
     warnings: string[],
+    staged: readonly AttachmentRef[] = [],
   ): Promise<AttachmentRef[]> {
     const refs: AttachmentRef[] = [];
     const limits = attachmentLimits(this.options, this.staging);
+    for (const ref of staged) {
+      const label = `The attachment ${ref.mediaId} was not used`;
+      if (this.staging === undefined) {
+        warnings.push(`${label}: attachments are not enabled on this agent.`);
+      } else if (refs.length >= limits.maxPerMessage) {
+        warnings.push(`${label}: a message carries at most ${limits.maxPerMessage} attachments.`);
+      } else {
+        refs.push({ mediaId: ref.mediaId });
+      }
+    }
     for (const item of media) {
       const label = `The ${item.kind} "${item.filename}" was not used`;
       if (this.staging === undefined) {

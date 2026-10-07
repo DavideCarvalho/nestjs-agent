@@ -1,4 +1,4 @@
-import { type Catalog, toolNameFor } from './catalog.js';
+import { type Catalog, flatComponents, toolNameFor } from './catalog.js';
 import { type JsonSchema, toJsonSchema } from './schema.js';
 import { GENUI_TREE_COMPONENT, type GenuiElement } from './tree.js';
 
@@ -6,7 +6,8 @@ import { GENUI_TREE_COMPONENT, type GenuiElement } from './tree.js';
  * Plain text (Slack mrkdwn compatible) for a pushed component: its definition's `fallbackText`, or
  * the props as a JSON block when the catalog has no text for it. A tree frame
  * ({@link GENUI_TREE_COMPONENT}) renders node by node. Never throws — a fallback that fails prints
- * the JSON instead.
+ * the JSON instead. A layout component (`children: true`) whose text comes out empty writes
+ * nothing: it has nothing of its own to say, and its props (`direction`, `gap`) are not content.
  */
 export function componentToText(
   catalog: Catalog,
@@ -17,15 +18,30 @@ export function componentToText(
     const root = props.root as GenuiElement | undefined;
     return root === undefined ? '' : treeToText(catalog, root);
   }
-  const fallback = catalog.get(component)?.fallbackText;
+  return ownText(catalog, component, props) ?? '';
+}
+
+/**
+ * One component's own text, without its children: its fallback; `undefined` for a layout component
+ * with nothing to say; the props as JSON otherwise (no fallback, an empty one, or one that threw).
+ */
+function ownText(
+  catalog: Catalog,
+  component: string,
+  props: Record<string, unknown>,
+): string | undefined {
+  const definition = catalog.get(component);
+  const fallback = definition?.fallbackText;
+  let failed = false;
   if (fallback !== undefined) {
     try {
       const text = fallback(props);
       if (typeof text === 'string' && text.trim().length > 0) return text;
     } catch {
-      /* fall through to the generic rendering */
+      failed = true;
     }
   }
+  if (definition?.children === true && !failed) return undefined;
   return jsonBlock(props);
 }
 
@@ -34,17 +50,8 @@ export function treeToText(catalog: Catalog, root: GenuiElement): string {
   const out: string[] = [];
   const visit = (node: GenuiElement, depth: number) => {
     if (depth > 32) return;
-    const definition = catalog.get(node.type);
-    if (definition?.fallbackText !== undefined) {
-      try {
-        const text = definition.fallbackText(node.props);
-        out.push(typeof text === 'string' && text.trim().length > 0 ? text : jsonBlock(node.props));
-      } catch {
-        out.push(jsonBlock(node.props));
-      }
-    } else if (definition?.children !== true) {
-      out.push(jsonBlock(node.props));
-    }
+    const text = ownText(catalog, node.type, node.props);
+    if (text !== undefined) out.push(text);
     for (const child of node.children ?? []) visit(child, depth + 1);
   };
   visit(root, 0);
@@ -87,7 +94,9 @@ export function catalogToModelText(catalog: Catalog, options: CatalogTextOptions
   } else {
     lines.push('Components you can show (one tool each):');
   }
-  for (const component of catalog.modelComponents()) {
+  // Flat modes cannot pass children, so a layout component is not offered there.
+  const components = mode === 'tree' ? catalog.modelComponents() : flatComponents(catalog);
+  for (const component of components) {
     const schema = toJsonSchema(component.props);
     const head =
       mode === 'per-component'

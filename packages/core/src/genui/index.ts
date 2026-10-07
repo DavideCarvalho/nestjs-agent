@@ -12,6 +12,7 @@ export {
   type ComponentDefinition,
   defineCatalog,
   defineComponent,
+  flatComponents,
   toolNameFor,
   toSnakeCase,
 } from './catalog.js';

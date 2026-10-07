@@ -303,7 +303,13 @@ export class AgUiEncoder {
             metadata: { 'agora.request': event.request },
           },
         });
-        return [this.custom(AG_UI_CUSTOM.elicitation, { runId: parked, request: event.request })];
+        return [
+          this.custom(AG_UI_CUSTOM.elicitation, {
+            id: event.id,
+            runId: parked,
+            request: event.request,
+          }),
+        ];
       }
       case 'text':
         return event.text.length > 0 ? this.textDelta(event.text) : [];
@@ -342,7 +348,7 @@ export class AgUiEncoder {
           sawDelta: false,
           answered: false,
         });
-        out.push(this.callStart(event.id, event.name));
+        out.push(this.callStart(event.id, event.name, event.toolKind, event.parentId));
         return out;
       }
       case 'tool-input-delta': {
@@ -364,7 +370,7 @@ export class AgUiEncoder {
         };
         if (!call.started) {
           call.started = true;
-          out.push(this.callStart(event.id, event.name));
+          out.push(this.callStart(event.id, event.name, event.toolKind, event.parentId));
         }
         if (!call.sawDelta) {
           out.push({
@@ -520,12 +526,27 @@ export class AgUiEncoder {
     return [...this.closeReasoning(), ...this.closeText()];
   }
 
-  private callStart(id: string, name: string): AgUiEvent {
+  /**
+   * `metadata['agora.toolKind']` says whether the call is an `action` (it may park for approval) or
+   * a `read`, and `metadata['agora.parentId']` the call it runs under — what the native
+   * `tool-input-start` frame carries and AG-UI's event has no field for.
+   */
+  private callStart(
+    id: string,
+    name: string,
+    toolKind: string | undefined,
+    parentId: string | undefined,
+  ): AgUiEvent {
+    const metadata: Record<string, unknown> = {
+      ...(toolKind !== undefined ? { 'agora.toolKind': toolKind } : {}),
+      ...(parentId !== undefined ? { 'agora.parentId': parentId } : {}),
+    };
     return {
       type: 'TOOL_CALL_START',
       toolCallId: id,
       toolCallName: name,
       ...(this.stepMessage !== undefined ? { parentMessageId: this.stepMessage } : {}),
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     };
   }
 

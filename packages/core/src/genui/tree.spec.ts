@@ -129,6 +129,27 @@ describe('text', () => {
     expect(componentToText(custom, 'Unknown', { title: 'T' })).toMatch(/^\*T\*\n```/);
   });
 
+  it('writes nothing for a layout component with no text of its own (no JSON props block)', () => {
+    expect(componentToText(catalog, 'Stack', { direction: 'row', gap: 8 })).toBe('');
+    expect(componentToText(catalog, 'Card', {})).toBe('');
+    const nested = {
+      type: 'Stack',
+      props: { direction: 'row' },
+      children: [
+        { type: 'Card', props: {}, children: [{ type: 'Text', props: { text: 'inside' } }] },
+        { type: 'Callout', props: { text: 'careful', tone: 'warning' } },
+      ],
+    };
+    expect(treeToText(catalog, nested)).toBe(['inside', ':warning: careful'].join('\n'));
+  });
+
+  it('keeps the JSON block for a content component whose text comes out empty', () => {
+    const custom = catalog.extend([
+      { name: 'Quiet', title: 'q', description: 'q', props: {}, fallbackText: () => '' },
+    ]);
+    expect(componentToText(custom, 'Quiet', { a: 1 })).toContain('"a": 1');
+  });
+
   it('describes the catalog for a model', () => {
     const small = defineCatalog([...LAYOUT_COMPONENTS.slice(0, 2), KpiCards]);
     expect(catalogToModelText(small, { mode: 'tree' })).toMatchInlineSnapshot(`
@@ -147,5 +168,11 @@ describe('text', () => {
     expect(catalogToModelText(small, { mode: 'per-component' })).toContain(
       '- KpiCards (tool `ui__show_kpi_cards`)',
     );
+    // Flat modes cannot pass children, so a layout component is not offered there.
+    for (const mode of ['per-component', 'show'] as const) {
+      const text = catalogToModelText(small, { mode });
+      expect(text).not.toContain('Stack');
+      expect(text).not.toContain('Card:');
+    }
   });
 });
