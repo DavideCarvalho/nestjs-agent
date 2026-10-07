@@ -103,13 +103,37 @@ kept session's turns once half-way through). Use the same `secret` in every proc
 AgentModule.forRoot({
   engine: openCode({
     host: MyOpenCodeHost,
-    // Where OpenCode reaches the app — from where OpenCode runs.
-    tools: { url: 'http://app.internal:3000/agent/opencode/mcp', secret: process.env.OPENCODE_TOOLS_SECRET },
+    // Where the OpenCode server reaches this app's endpoint — see "The tools URL" below.
+    tools: { url: process.env.OPENCODE_TOOLS_URL!, secret: process.env.OPENCODE_TOOLS_SECRET },
   }),
   memory: { provider }, // a provider with `write` → OpenCode gets `remember`
   ...
 }),
 ```
+
+### The tools URL
+
+`tools.url` has no default and is not derived from anything: the engine passes it verbatim to
+OpenCode (`mcp.add` with `{ type: 'remote', url, headers: { Authorization: 'Bearer <token>' } }`),
+and it is the **OpenCode server** — a separate process, often in another container or sandbox — that
+calls it back. So it must be an address of this Nest app **as seen from the OpenCode server**, ending
+in `<path>/opencode/mcp` (`path` is `AgentModule`'s route prefix, `agent` by default; a global prefix
+is part of it too). There is no special hostname: `app.internal` in older examples was only a
+placeholder. Keep it in an env variable (`OPENCODE_TOOLS_URL`) so each deployment sets its own.
+
+| Where OpenCode runs | `OPENCODE_TOOLS_URL` |
+| --- | --- |
+| Same machine as the app | `http://127.0.0.1:3000/agent/opencode/mcp` |
+| Docker Compose | the app's service name: `http://api:3000/agent/opencode/mcp` |
+| Kubernetes | the app's Service DNS: `http://api.my-namespace.svc.cluster.local:3000/agent/opencode/mcp` |
+| Anywhere else | the app's public URL works (`https://app.example.com/agent/opencode/mcp`) |
+
+Prefer an internal network address: the endpoint only ever serves OpenCode, and a public URL puts it
+on the internet (it stays guarded by the token, below). It must reach a process that mounts
+controllers — `surface: 'engine'` mounts none. If several processes sit behind that address (or the
+turns run on engine workers and the endpoint on HTTP pods), give them all the same `tools.secret`, so
+a token signed by one is accepted by the others; without it each process signs with its own random
+secret and the engine logs a warning.
 
 The endpoint serves turns, nothing else. A token alone runs nothing:
 
