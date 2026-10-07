@@ -50,6 +50,21 @@ export interface OpenCodeHost {
   ): Promise<void>;
 
   /**
+   * May this turn keep the thread's session? Asked when the session is still on its server; `false`
+   * opens a new one (told the conversation so far) — e.g. the person the session's tools act for
+   * changed. Omit → always reuse.
+   */
+  reuse?(context: OpenCodeTurnContext & { session: OpenCodeSessionRef }): Promise<boolean>;
+
+  /**
+   * Every turn, once the session is known (`created`: opened for this turn) and before the prompt:
+   * bring it up to date — the turn's model, permission rules that changed, tools, skills.
+   */
+  beforePrompt?(
+    context: OpenCodeTurnContext & { sessionId: string; client: OpenCodeClient; created: boolean },
+  ): Promise<void>;
+
+  /**
    * A person was asked something (an approval or a question form): post it where else they are —
    * a Slack thread, a Teams chat — or wake whoever waits on the run. May run again for the same ask
    * after a restart: make it idempotent.

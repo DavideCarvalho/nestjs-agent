@@ -303,13 +303,27 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     const earlier = await this.prepareThread(runId, input);
     const server = await this.host.server(input.actor);
     const known = await this.sessions.get(input.threadId);
+    const reusable =
+      known !== null &&
+      known.serverKey === server.key &&
+      known.bootId === server.bootId &&
+      ((await this.host.reuse?.({ input, runId, session: known })) ?? true);
     let handle: SessionHandle;
-    if (known !== null && known.serverKey === server.key && known.bootId === server.bootId) {
+    let created = false;
+    if (known !== null && reusable) {
       handle = known;
       if (input.regenerate === true) await this.revertLastExchange(server.client, handle.sessionId);
     } else {
       handle = await this.createSession(runId, input, server, earlier);
+      created = true;
     }
+    await this.host.beforePrompt?.({
+      input,
+      runId,
+      sessionId: handle.sessionId,
+      client: server.client,
+      created,
+    });
     await this.refreshInstructions(runId, input, server.client, handle.sessionId);
     return handle;
   }

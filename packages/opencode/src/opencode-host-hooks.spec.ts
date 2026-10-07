@@ -157,3 +157,42 @@ describe('OpenCodeHost lifecycle hooks', () => {
     expect(seen.settled[0]?.input.hostContext).toEqual(slack);
   });
 });
+
+describe('OpenCodeHost session hooks', () => {
+  let h: Harness | undefined;
+  afterEach(async () => {
+    await h?.app.close();
+    h = undefined;
+  });
+
+  it('asks the host whether to keep the session, and lets it update the session every turn', async () => {
+    const calls: Array<{ sessionId: string; created: boolean }> = [];
+    let keep = true;
+    h = await bootEngine({
+      engine: (host) =>
+        openCode({
+          host: Object.assign(host, {
+            reuse: async () => keep,
+            beforePrompt: async ({
+              sessionId,
+              created,
+            }: { sessionId: string; created: boolean }) => {
+              calls.push({ sessionId, created });
+            },
+          }),
+        }),
+    });
+    const first = await h.service.chat({ actor, message: 'one' });
+    await frames(h.service, first.runId);
+    const second = await h.service.chat({ actor, message: 'two', threadId: first.threadId });
+    await frames(h.service, second.runId);
+    keep = false;
+    const third = await h.service.chat({ actor, message: 'three', threadId: first.threadId });
+    await frames(h.service, third.runId);
+    expect(calls).toEqual([
+      { sessionId: 'ses_1', created: true },
+      { sessionId: 'ses_1', created: false },
+      { sessionId: 'ses_2', created: true },
+    ]);
+  });
+});
