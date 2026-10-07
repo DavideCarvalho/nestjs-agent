@@ -1,6 +1,6 @@
 import type {
-  ActionProposal,
-  ActionProposalMutationResult,
+  ActionProposalMutationView,
+  ActionProposalView,
   AgentCatalogEntry,
   AgentClientConfig,
   ChatQueueState,
@@ -447,8 +447,8 @@ export class AgentClient implements AgentBackend {
    * `remember` approves later calls of the same tool in the same thread; `via` names the surface
    * the decision came through (the server records `'web'` when omitted).
    */
-  async listActionProposals({ threadId }: { threadId: string }): Promise<ActionProposal[]> {
-    const proposals = new Map<string, ActionProposal>();
+  async listActionProposals({ threadId }: { threadId: string }): Promise<ActionProposalView[]> {
+    const proposals = new Map<string, ActionProposalView>();
     let after: { createdAt: number; id: string } | undefined;
     for (;;) {
       const route = `/threads/${encodeURIComponent(threadId)}/action-proposals${
@@ -496,7 +496,7 @@ export class AgentClient implements AgentBackend {
     threadId: string;
     proposalId: string;
     remember?: boolean;
-  }): Promise<ActionProposalMutationResult> {
+  }): Promise<ActionProposalMutationView> {
     return this.request(
       'POST',
       `/threads/${encodeURIComponent(threadId)}/action-proposals/${encodeURIComponent(proposalId)}/approve`,
@@ -511,7 +511,7 @@ export class AgentClient implements AgentBackend {
     threadId: string;
     proposalId: string;
     reason?: string;
-  }): Promise<ActionProposalMutationResult> {
+  }): Promise<ActionProposalMutationView> {
     return this.request(
       'POST',
       `/threads/${encodeURIComponent(threadId)}/action-proposals/${encodeURIComponent(proposalId)}/reject`,

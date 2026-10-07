@@ -6,7 +6,7 @@ import {
   AGENT_QUOTA_PROVIDER,
   AGENT_RUNNER,
   AGENT_STORE,
-  type ActionProposalMutationResult,
+  type ActionProposalMutationView,
   type Actor,
   type AgentRunInput,
   type AgentRunner,
@@ -186,7 +186,7 @@ export class AgentService {
       reason?: string;
       via: string;
     },
-  ): Promise<{ proposalDecision: ActionProposalMutationResult; text: string }> {
+  ): Promise<{ proposalDecision: ActionProposalMutationView; text: string }> {
     if (this.options?.actionApprovalMode !== 'independent' || !this.proposals) {
       throw new NotFoundException('Proposal not found');
     }

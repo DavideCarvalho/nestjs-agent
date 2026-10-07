@@ -89,12 +89,12 @@ const STAGED_ATTACHMENT =
 /** Mirrors `ToolConfirmation` in core/src/tool-presentation.ts. */
 const TOOL_CONFIRMATION = '{ title: string; verb: string; detail?: string }';
 /**
- * `GET /agent/threads/:threadId/action-proposals` — mirrors `ActionProposal` in
- * core/src/spi/action-proposal-store.ts. The execution context, audit and outcome stay loose: what a
+ * `GET /agent/threads/:threadId/action-proposals` — mirrors `ActionProposalView` in
+ * core/src/action-proposal-view.ts. The audit and outcome stay loose: what a
  * frontend branches on is the decision and the execution status.
  */
-const ACTION_PROPOSAL = `{ id: string; tenantRef: string | null; actorRef: string; threadId: string; originRunId: string; originMessageId: string; originToolCallId: string; toolName: string; input: unknown; confirmation: ${TOOL_CONFIRMATION}; approver: string; expiresAt: number | null; idempotencyKey: string; replacementKey?: string; decision: 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded'; decisionAudit: Record<string, unknown> | null; execution: { status: 'queued' | 'executing' | 'succeeded' | 'failed'; generation: number; result?: unknown; error?: string } | null; supersededBy?: string; outcome?: Record<string, unknown>; createdAt: number; updatedAt: number }`;
-/** `POST …/action-proposals/:proposalId/approve|reject` — mirrors `ActionProposalMutationResult`. */
+const ACTION_PROPOSAL = `{ id: string; tenantRef: string | null; actorRef: string; threadId: string; originRunId: string; originMessageId: string; originToolCallId: string; toolName: string; input: unknown; confirmation: ${TOOL_CONFIRMATION}; approver: string; expiresAt: number | null; replacementKey?: string; decision: 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded'; decisionAudit: Record<string, unknown> | null; execution: { status: 'queued' | 'executing' | 'succeeded' | 'failed'; generation: number; result?: unknown; error?: string } | null; supersededBy?: string; outcome?: Record<string, unknown>; createdAt: number; updatedAt: number }`;
+/** `POST …/action-proposals/:proposalId/approve|reject` — mirrors `ActionProposalMutationView`. */
 const ACTION_PROPOSAL_MUTATION = `{ status: 'applied' | 'unchanged' | 'conflict' | 'not_found' | 'expired'; proposal?: ${ACTION_PROPOSAL} }`;
 
 function route(

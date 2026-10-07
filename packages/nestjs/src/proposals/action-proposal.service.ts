@@ -1,7 +1,7 @@
 import {
   AGENT_OPTIONS,
   AGENT_STORE,
-  type ActionProposalMutationResult,
+  type ActionProposalMutationView,
   type ActionProposalOutcomeStore,
   type ActionProposalScope,
   type ActionProposalStore,
@@ -16,6 +16,8 @@ import {
   parseTextActionProposalCommand,
   resolveTextActionProposalDecision,
   textActionProposalReply,
+  toActionProposalMutationView,
+  toActionProposalView,
 } from '@dudousxd/nestjs-agent-core';
 import {
   ForbiddenException,
@@ -74,7 +76,8 @@ export class ActionProposalService {
       if (scope.actorRef === actor.id || (await this.mayDecide(actor, row))) visible.push(row);
     const last = rows.at(-1);
     return {
-      items: visible,
+      // The public view: a row carries the worker's lease token and the tool's idempotency key.
+      items: visible.map(toActionProposalView),
       ...(rows.length === 1000 && last ? { next: { createdAt: last.createdAt, id: last.id } } : {}),
     };
   }
@@ -91,19 +94,20 @@ export class ActionProposalService {
       reason?: string;
       via?: string;
     },
-  ): Promise<ActionProposalMutationResult> {
+  ): Promise<ActionProposalMutationView> {
     const scope = await this.scope(threadId, actor);
     const proposal = await this.capability().getActionProposal(scope, proposalId);
     if (!proposal) throw new NotFoundException('Proposal not found');
     if (!(await this.mayDecide(actor, proposal)))
       throw new ForbiddenException('May not decide this proposal');
-    return this.capability().decideActionProposal(scope, proposalId, {
+    const result = await this.capability().decideActionProposal(scope, proposalId, {
       decision: command.decision,
       actorRef: actor.id,
       via: command.via ?? 'web',
       ...(command.remember !== undefined ? { remember: command.remember } : {}),
       ...(command.reason !== undefined ? { reason: command.reason } : {}),
     });
+    return toActionProposalMutationView(result);
   }
   async handleTextDecision(threadId: string, actor: Actor, text: string) {
     const command = parseTextActionProposalCommand(text, this.vocabulary);
@@ -145,13 +149,13 @@ export class ActionProposalService {
   }
   private textReceipt(
     threadId: string,
-    result: ActionProposalMutationResult,
+    result: ActionProposalMutationView,
     decision: 'approved' | 'rejected',
   ) {
     return { threadId, proposalDecision: result, text: this.reply(result, decision) };
   }
   /** The configured reply to a decision the store answered with `result`. */
-  reply(result: ActionProposalMutationResult, decision: 'approved' | 'rejected'): string {
+  reply(result: ActionProposalMutationView, decision: 'approved' | 'rejected'): string {
     return textActionProposalReply(result, decision, this.replies);
   }
 }

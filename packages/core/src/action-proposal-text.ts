@@ -105,7 +105,9 @@ export interface TextActionProposalConfig {
 
 /** The reply to a decision the store answered with `result`. */
 export function textActionProposalReply(
-  result: ActionProposalMutationResult,
+  result: Pick<ActionProposalMutationResult, 'status'> & {
+    proposal?: { decision: ActionProposalDecision };
+  },
   decision: 'approved' | 'rejected',
   replies: TextActionProposalReplies = DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES,
 ): string {
