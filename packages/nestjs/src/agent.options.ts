@@ -31,6 +31,7 @@ import type {
   OptionalFactoryDependency,
   Type,
 } from '@nestjs/common';
+import type { AgentEngine } from './engine.js';
 import type { FunctionalTool } from './functional-tool.js';
 import type { QuotaLimits } from './ledger-quota-provider.js';
 import type { AgentProtocolAdapter } from './protocol-adapter.js';
@@ -164,9 +165,16 @@ export interface AgentModuleOptions {
   // --- infrastructure ---
   /**
    * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model
-   * picker (its catalog is used when `models` is omitted). The only required option.
+   * picker (its catalog is used when `models` is omitted). Required unless an `engine` runs the
+   * turns instead.
    */
-  model: ModelProvider;
+  model?: ModelProvider;
+  /**
+   * Run turns on something other than this library's loop — e.g. `openCode({ host })`. The engine
+   * binds `AGENT_RUNNER`; the routes, store, sink, approvals and queue stay the library's. STATIC
+   * wiring, like `durable` (see {@link AgentEngine}). Omit → the loop, on `model`.
+   */
+  engine?: AgentEngine;
   /**
    * The base prompt of the default agent (and of any `@Agent` that declares none) — a string, or a
    * function of the turn's `{ actor, agentName, pageContext }`. Omit → `'You are a helpful
@@ -423,4 +431,9 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
   surface?: AgentSurface;
   /** Wire protocols served alongside the native one — see `AgentModuleOptions.adapters`. STATIC. */
   adapters?: AgentProtocolAdapter[];
+  /**
+   * What runs the turns instead of the loop — see `AgentModuleOptions.engine`. STATIC, like
+   * `durable`: it decides which runner `AGENT_RUNNER` binds, before `useFactory` has resolved.
+   */
+  engine?: AgentEngine;
 }

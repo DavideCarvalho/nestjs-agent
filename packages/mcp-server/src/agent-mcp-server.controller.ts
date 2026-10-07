@@ -166,6 +166,7 @@ export class AgentMcpServerController {
       ...(this.options.allowedTools !== undefined
         ? { allowedTools: this.options.allowedTools }
         : {}),
+      ...(this.options.context !== undefined ? { context: this.options.context } : {}),
     });
     // The SDK's own transports expose `onclose`/`sessionId` as `... | undefined` where the
     // `Transport` interface declares the property optional, which `exactOptionalPropertyTypes`

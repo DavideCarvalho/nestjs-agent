@@ -1,6 +1,7 @@
 export { AgentModule } from './agent.module.js';
 export { type AgUiAdapterOptions, AgUiRunHandler, agUiAdapter } from './ag-ui/index.js';
 export type { AgentProtocolAdapter } from './protocol-adapter.js';
+export type { AgentEngine } from './engine.js';
 export { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 export type {
   AgentModuleOptions,

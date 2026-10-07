@@ -25,6 +25,26 @@ import { actorFromAuthInfo } from './mcp-actor.js';
 import { McpRouteHttpError } from './routes/mcp-route-dispatcher.js';
 import { toMcpInputSchema } from './tool-json-schema.js';
 
+/**
+ * What a host can tell about one `tools/call` beyond its caller: the conversation it belongs to and
+ * where a component the tool pushes should go. Given the request's `_meta` (OpenCode sends its
+ * session as `ai.opencode/sessionID`), the caller and the tool's name; whatever it returns replaces
+ * those fields of the context the tool is handed. `undefined` → the MCP call stands on its own.
+ */
+export type McpToolContextResolver = (input: {
+  actor: Actor;
+  toolName: string;
+  /** This call's id on the MCP surface (`mcp:<session>:<request>`) — unique per call. */
+  requestId: string;
+  meta: Readonly<Record<string, unknown>> | undefined;
+}) =>
+  | Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'requestId' | 'emitUi' | 'agentName'>>
+  | undefined
+  | Promise<
+      | Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'requestId' | 'emitUi' | 'agentName'>>
+      | undefined
+    >;
+
 /** Options for {@link createAgentMcpServer}. */
 export interface CreateAgentMcpServerOptions {
   /** Server name reported to MCP clients in the initialize handshake. */
@@ -49,6 +69,8 @@ export interface CreateAgentMcpServerOptions {
    * `actorFromAuthInfo`, which refuses a request carrying no identity.
    */
   actorFromAuth?: (authInfo: AuthInfo | undefined) => Actor;
+  /** Ties a call to the conversation it serves — see {@link McpToolContextResolver}. */
+  context?: McpToolContextResolver;
 }
 
 /** The per-call context handed to a tool handler. No run exists, so the ids name the MCP call. */
@@ -165,7 +187,13 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
         ...(allowedTools !== undefined ? { allowedTools } : {}),
         ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
       });
-      const ctx = toolContext({ actor, sessionId: extra.sessionId, requestId: extra.requestId });
+      const base = toolContext({ actor, sessionId: extra.sessionId, requestId: extra.requestId });
+      const meta = request.params._meta as Readonly<Record<string, unknown>> | undefined;
+      const ctx: AiToolCtx = {
+        ...base,
+        ...((await options.context?.({ actor, toolName: name, requestId: base.requestId, meta })) ??
+          {}),
+      };
       const output = await source.invoke(name, args ?? {}, ctx, policy);
       return { content: [{ type: 'text', text: asText(output) }] };
     } catch (error) {

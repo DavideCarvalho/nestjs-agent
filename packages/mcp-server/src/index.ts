@@ -5,7 +5,11 @@ export type {
   AgentMcpServerModuleOptions,
   McpRouteExposureOptions,
 } from './agent-mcp-server.options.js';
-export { createAgentMcpServer, type CreateAgentMcpServerOptions } from './agent-mcp-server.js';
+export {
+  createAgentMcpServer,
+  type CreateAgentMcpServerOptions,
+  type McpToolContextResolver,
+} from './agent-mcp-server.js';
 export { authenticateMcpRequest } from './authenticate.js';
 export { BearerTokenActorResolver, type McpBearerGrant } from './bearer-token-actor-resolver.js';
 export {
