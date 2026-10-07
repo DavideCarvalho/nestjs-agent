@@ -27,6 +27,7 @@ import { Inject, Injectable, Logger, NotImplementedException, Optional } from '@
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
 import { utcDay } from '../agent-deps.js';
 import type { AgentModuleOptions } from '../agent.options.js';
+import { publishQuotaBlocked } from '../quota-exceeded.js';
 import { threadPersona } from '../thread-persona.js';
 
 /** How the run that held a thread ended. */
@@ -390,10 +391,12 @@ export class ChatQueueService {
       return null;
     }
     try {
-      const { blocked } = await this.quotaProvider.report({ actor });
+      const report = await this.quotaProvider.report({ actor });
+      const { blocked } = report;
       if (blocked === undefined) {
         return null;
       }
+      publishQuotaBlocked(actor, report, blocked);
       return (
         blocked.reason ?? `The ${blocked.period === 'day' ? 'daily' : 'monthly'} quota is used up`
       );

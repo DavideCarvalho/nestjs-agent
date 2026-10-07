@@ -61,7 +61,7 @@ export interface QuotaQuery {
 
 /**
  * The actor's budget across windows — the read behind `GET <base>/quota` and, when the host binds
- * one (`AgentModule.forRoot({ quotaProvider })`), the gate a send passes: a report with `blocked`
+ * one (`AgentModule.forRoot({ quota })`), the gate a send passes: a report with `blocked`
  * refuses the turn with `429` before it starts.
  *
  * The default reads the usage ledger (`LedgerQuotaProvider` in `@dudousxd/nestjs-agent`); a host

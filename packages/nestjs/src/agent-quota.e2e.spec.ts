@@ -1,3 +1,4 @@
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import type { AgentStore, QuotaProvider, QuotaReport } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Injectable } from '@nestjs/common';
@@ -125,6 +126,37 @@ describe('the send gate', () => {
     expect(refused.status).toBe(429);
     expect(refused.body.message).toBe('Monthly AI budget reached');
     expect(turns()).toBe(0);
+  });
+
+  it('publishes quota.exceeded when it refuses, so the dashboard and Telescope see it', async () => {
+    const seen: unknown[] = [];
+    const listener = (message: unknown) => void seen.push(message);
+    const name = 'aviary:agent:quota.exceeded';
+    subscribe(name, listener);
+    try {
+      const provider: QuotaProvider = {
+        report: async () => ({
+          windows: [
+            { period: 'month', usedTokens: 70, limitTokens: 50, usedUsd: 12, limitUsd: 10 },
+          ],
+          blocked: { period: 'month', reason: 'Monthly AI budget reached' },
+        }),
+      };
+      const { server } = await boot({ quota: provider });
+      expect((await chat(server)).status).toBe(429);
+    } finally {
+      unsubscribe(name, listener);
+    }
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as { payload: unknown }).payload).toEqual({
+      actorId: 'u1',
+      period: 'month',
+      reason: 'Monthly AI budget reached',
+      usedTokens: 70,
+      limitTokens: 50,
+      usedUsd: 12,
+      limitUsd: 10,
+    });
   });
 
   it('does not gate on the default report when nothing was configured', async () => {

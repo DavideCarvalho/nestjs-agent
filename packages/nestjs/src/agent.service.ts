@@ -56,6 +56,7 @@ import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { ActionProposalService } from './proposals/action-proposal.service.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
+import { publishQuotaBlocked } from './quota-exceeded.js';
 import { RunNotActiveException } from './run-not-active.exception.js';
 import { threadPersona } from './thread-persona.js';
 
@@ -211,8 +212,10 @@ export class AgentService {
     if (this.options?.quota === undefined || this.quotaProvider === undefined) {
       return;
     }
-    const { blocked } = await this.quotaProvider.report({ actor });
+    const report = await this.quotaProvider.report({ actor });
+    const { blocked } = report;
     if (blocked !== undefined) {
+      publishQuotaBlocked(actor, report, blocked);
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,

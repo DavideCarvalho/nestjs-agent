@@ -1,5 +1,6 @@
 import { emit } from '@dudousxd/nestjs-diagnostics';
 import type { ChannelRegistry } from '@dudousxd/nestjs-diagnostics';
+import type { QuotaPeriod } from './spi/quota-provider.js';
 
 /** Payloads carried on each `aviary:agent:*` channel. */
 export interface AgentRunStarted {
@@ -24,10 +25,22 @@ export interface AgentToolCallEvent {
   status: string;
   durationMs?: number;
 }
+/**
+ * A turn refused for budget. Published by the send gate (`429`) and the message queue when a
+ * `QuotaProvider` reports `blocked`, and by the loop's own per-day `QuotaStore` gate. The figures
+ * are the exhausted window's: a window that does not count tokens (a USD-only spend cap) carries no
+ * token figures, never a made-up `0`.
+ */
 export interface AgentQuotaExceeded {
   actorId: string;
-  usedTokens: number;
-  limitTokens: number;
+  /** The window that ran out. Absent from the loop's per-day `QuotaStore` gate. */
+  period?: QuotaPeriod;
+  /** The provider's words for the block, when it gave some. */
+  reason?: string;
+  usedTokens?: number;
+  limitTokens?: number;
+  usedUsd?: number;
+  limitUsd?: number;
 }
 export interface AgentRunFinished {
   runId: string;
