@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.13.1
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs only. The `DrizzleAgentStore` doc comment now says it takes a SQLite, Postgres or MySQL handle. The Drizzle README's upgrade `ALTER` list now matches the schema, and it points to drizzle-kit or `agentSchemaDdl` for the tables added later. Its sections that came after "License" now sit before it. The `@dudousxd/nestjs-agent-rag` package description now mentions the Redis vector store.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `KeywordRetriever` now tokenizes Unicode text. It uses the same `[\p{L}\p{N}_]+` term class as the Redis lexical path and folds accents, so "manutenção" is one term instead of "manuten" + "o", and a query typed without accents (`manutencao`) still matches. An in-memory index is rebuilt with the new tokenizer the next time you `add` documents.
+
 ## 0.13.0
 
 ### Minor Changes

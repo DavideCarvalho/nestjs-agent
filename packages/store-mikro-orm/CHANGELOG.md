@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.31.1
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - - `MikroOrmAgentStore` now declares `ActionProposalOutcomeStore` and `ActionProposalSupersessionStore` in its `implements` clause. It already had the methods.
+  - The MySQL schema lock now waits up to 30s (`get_lock(..., 30)`), the same as the Drizzle adapter. It was 10s.
+  - Docs: the `AGENT_ENTITIES` comment, the module JSDoc and the README no longer claim that `forFeature()` registers the entities. The host adds them to its MikroORM config. The README's sections that came after "License" now sit before it.
+
 ## 0.31.0
 
 ### Minor Changes

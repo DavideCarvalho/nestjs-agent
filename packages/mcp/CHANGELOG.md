@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp
 
+## 0.3.2
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `Guardrails.screenTool` is now bound to its instance, so `screen: guardrails.screenTool` works as the `McpToolScreen` docs describe. Passed detached before, it threw on `this`.
+
 ## 0.3.1
 
 ### Patch Changes

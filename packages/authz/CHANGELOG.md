@@ -1,5 +1,16 @@
 # @dudousxd/nestjs-agent-authz
 
+## 0.5.6
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Security:** `AgentAuthzModule.forRoot()` now actually reaches the agent. `AgentModule` bound its own `AGENT_ROLES_POLICY`, and Nest resolves a module's own provider before a global one, so the agent loop never saw the Gate-backed policy: the role-based default ran instead, ignored `ability`, and let every actor call an ability-gated tool that named no `roles`. `AgentModule` now forwards to an `AGENT_ROLES_POLICY` bound by another module (as it already did for `AGENT_STORE`), whatever the import order. An explicit `rolesPolicy` option still wins.
+
+  **Behavior change (fail closed):** `DefaultRolesPolicy` (and `ClosedRolesPolicy`) now refuse a tool that declares an `ability` and no `roles`, because they can't evaluate an ability. Before, such a tool was open to everyone unless `defaultRoles` said otherwise. A tool that declares both is still decided by its `roles`.
+
+- Updated dependencies [[`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da)]:
+  - @dudousxd/nestjs-agent-core@0.41.0
+
 ## 0.5.5
 
 ### Patch Changes

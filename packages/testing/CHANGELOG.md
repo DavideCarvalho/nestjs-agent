@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-testing
 
+## 0.26.1
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `FakeModelProvider` now writes its scripted text to the sink as a `text` stream event (`encodeStreamEvent({ kind: 'text', text })`), the same frame `aiSdkModel` writes. Before, it wrote raw bytes, which a client such as `@dudousxd/nestjs-agent-react` couldn't decode, so a UI running against the fake showed no live text.
+
 ## 0.26.0
 
 ### Minor Changes

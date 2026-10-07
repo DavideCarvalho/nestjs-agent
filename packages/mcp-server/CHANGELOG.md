@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.3.2
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The MCP server no longer lists or runs tools whose result is shown elsewhere (`presentation.result.kind === 'elsewhere'`), such as the generative-UI `ui__show_*`, `ui__show` and tree tools. They are `read` tools, so they used to be exposed. But all they do is push a component, an MCP client has no screen to show it on, and the model got nothing back.
+
 ## 0.3.1
 
 ### Patch Changes

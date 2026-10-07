@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.15.4
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `aviary:agent:quota.exceeded` is now published when the send gate refuses a turn with `429`, and when the message queue pauses on quota. Before, only the loop's legacy `deps.quota` path published it, and `AgentModule` never sets that path, so the dashboard and Telescope never saw a quota refusal.
+
+  `AgentQuotaExceeded` now has optional `period`, `reason`, `usedUsd` and `limitUsd`. `usedTokens` and `limitTokens` are now optional, because a USD-only spend cap has no token figures. The dashboard's live feed shows a USD ceiling when the window has no token ceiling. Also fixed the `QuotaProvider` JSDoc: the option is `AgentModule.forRoot({ quota })`, not `quotaProvider`.
+
 ## 0.15.3
 
 ### Patch Changes
