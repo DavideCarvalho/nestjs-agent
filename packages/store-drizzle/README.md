@@ -17,7 +17,8 @@ pnpm add @dudousxd/nestjs-agent-store-drizzle drizzle-orm
 
 The host app owns the connection and passes in an already-opened Drizzle handle — this module never
 opens one itself. **SQLite, Postgres and MySQL** all work — CI runs every store suite on
-better-sqlite3, node-postgres (Postgres 16) and mysql2 (MySQL 8.4), and the other Drizzle drivers of
+better-sqlite3, node-postgres (Postgres 16) and mysql2 (MySQL 8.4), the independent-approval suites
+also on postgres.js, and the other Drizzle drivers of
 each dialect speak the same query builder. Build the handle with the schema object for your dialect;
 every store reads the dialect off the handle.
 
@@ -316,7 +317,7 @@ it never performs an implicit, unbounded migration.
 
 `actionApprovalMode: 'independent'` requires proposal discovery, atomic replacement,
 terminal outcome admission and the thread queue on the same database. This adapter
-advertises admission support for better-sqlite3, node-postgres, mysql2 and libSQL;
+advertises admission support for better-sqlite3, node-postgres, postgres.js, mysql2 and libSQL;
 other Drizzle drivers retain blocking behavior and fail independent configuration.
 Synchronous SQLite transaction callbacks complete synchronously, including both
 assistant insertion and the delivery compare-and-set. PostgreSQL/MySQL admission

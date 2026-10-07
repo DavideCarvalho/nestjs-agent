@@ -9,9 +9,11 @@ import { type SQL, sql } from 'drizzle-orm';
 import { drizzle as drizzleSqlite } from 'drizzle-orm/better-sqlite3';
 import { drizzle as drizzleMysql } from 'drizzle-orm/mysql2';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
+import { drizzle as drizzlePostgresJs } from 'drizzle-orm/postgres-js';
 import mysql from 'mysql2/promise';
 import pg from 'pg';
-import { describe, inject } from 'vitest';
+import postgres from 'postgres';
+import { afterAll, beforeAll, describe, inject } from 'vitest';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
@@ -47,11 +49,22 @@ export function unavailable(dialect: Dialect): string | undefined {
   return inject('realDb')?.skipReason ?? `no ${dialect} server configured`;
 }
 
+/** The Postgres driver {@link openAgentDb} connects with: node-postgres unless a block says otherwise. */
+let postgresDriver: 'node-postgres' | 'postgres-js' = 'node-postgres';
+
 /**
  * `describe` once per dialect. A dialect without a server is still listed — skipped, its title saying
  * why — so a run without Docker reads as "skipped", never as "passed".
+ *
+ * `postgresJs: true` adds one more block: Postgres again, through postgres.js
+ * (`drizzle-orm/postgres-js`) instead of node-postgres, for a suite whose behavior depends on the
+ * driver (transaction callbacks, result shapes).
  */
-export function describeEachDialect(title: string, body: (dialect: Dialect) => void): void {
+export function describeEachDialect(
+  title: string,
+  body: (dialect: Dialect) => void,
+  options: { postgresJs?: boolean } = {},
+): void {
   for (const dialect of DIALECTS) {
     const reason = unavailable(dialect);
     if (reason === undefined) {
@@ -59,6 +72,21 @@ export function describeEachDialect(title: string, body: (dialect: Dialect) => v
     } else {
       describe.skip(`${title} [${dialect}] — skipped: ${reason}`, () => body(dialect));
     }
+  }
+  if (options.postgresJs === true) {
+    const reason = unavailable('postgres');
+    const block = () => {
+      // Registered before the body's own hooks, so every handle the body opens uses postgres.js.
+      beforeAll(() => {
+        postgresDriver = 'postgres-js';
+      });
+      afterAll(() => {
+        postgresDriver = 'node-postgres';
+      });
+      body('postgres');
+    };
+    if (reason === undefined) describe(`${title} [postgres.js]`, block);
+    else describe.skip(`${title} [postgres.js] — skipped: ${reason}`, block);
   }
 }
 
@@ -172,6 +200,14 @@ export async function openAgentDb(
       ),
     );
     connect = async () => {
+      if (dialect === 'postgres' && postgresDriver === 'postgres-js') {
+        const client = postgres(url.toString(), { max: 5, onnotice: () => {} });
+        closers.unshift(() => client.end({ timeout: 5 }));
+        return drizzlePostgresJs(client, {
+          schema: pgAgentSchema,
+          ...(options.logger !== undefined ? { logger: options.logger } : {}),
+        }) as unknown as AgentDrizzleDb;
+      }
       if (dialect === 'postgres') {
         const pool = new pg.Pool({ connectionString: url.toString(), max: 5 });
         closers.unshift(trackPostgresPoolShutdown(pool));

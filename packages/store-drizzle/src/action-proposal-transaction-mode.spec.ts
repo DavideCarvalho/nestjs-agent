@@ -24,6 +24,8 @@ it.each([
   'MySql2Transaction',
   'LibSQLDatabase',
   'LibSQLTransaction',
+  'PostgresJsDatabase',
+  'PostgresJsTransaction',
 ])('uses awaited transactional admission for %s', (kind) => {
   expect(actionProposalTransactionMode(kind)).toBe('async');
 });
