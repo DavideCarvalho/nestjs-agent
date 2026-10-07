@@ -45,7 +45,12 @@ export {
   agUiChatStream,
   reframeAgUiStream,
 } from './ag-ui-backend.js';
-export { AgentProvider, type AgentProviderProps, useAgentBackend } from './provider.js';
+export {
+  AgentProvider,
+  type AgentProviderProps,
+  useAgentBackend,
+  useAgentUiCapabilities,
+} from './provider.js';
 export {
   type AgentConfigState,
   useAgentConfig,

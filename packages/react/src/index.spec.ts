@@ -18,4 +18,9 @@ describe('package entry', () => {
     expect(typeof entry.MessageItemView).toBe('function');
     expect(typeof entry.MessageList).toBe('function');
   });
+
+  it('exposes the provider hooks a host builds its own hooks on', () => {
+    expect(typeof entry.useAgentBackend).toBe('function');
+    expect(typeof entry.useAgentUiCapabilities).toBe('function');
+  });
 });
