@@ -196,3 +196,31 @@ describe('OpenCodeHost session hooks', () => {
     ]);
   });
 });
+
+describe('OpenCodeHost prompt', () => {
+  let h: Harness | undefined;
+  afterEach(async () => {
+    await h?.app.close();
+    h = undefined;
+  });
+
+  it('prompts the session with what the host makes of the message', async () => {
+    h = await bootEngine({
+      engine: (host) =>
+        openCode({
+          host: Object.assign(host, {
+            promptFor: async ({ input }: { input: { userText: string } }) => ({
+              text: `${input.userText}\n\n[report.pdf]\nQ3 revenue grew 12%.`,
+              files: [{ uri: 'data:image/png;base64,AAAA', name: 'chart.png' }],
+            }),
+          }),
+        }),
+    });
+    const { runId } = await h.service.chat({ actor, message: 'summarize' });
+    await frames(h.service, runId);
+    expect(h.fake.callsOf('session.prompt')[0]?.args).toMatchObject({
+      text: 'summarize\n\n[report.pdf]\nQ3 revenue grew 12%.',
+      files: [{ uri: 'data:image/png;base64,AAAA', name: 'chart.png' }],
+    });
+  });
+});

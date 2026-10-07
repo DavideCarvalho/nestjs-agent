@@ -574,12 +574,20 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
   async prompt(runId: string, input: AgentRunInput, handle: SessionHandle): Promise<void> {
     const live = await this.ensureLive(runId, input, handle, false);
     try {
-      await live.client.session.prompt({
-        sessionID: handle.sessionId,
+      const prompt = (await this.host.promptFor?.({
+        input,
+        runId,
+        sessionId: handle.sessionId,
+      })) ?? {
         text: input.userText,
         ...(input.attachments?.length && this.host.files
           ? { files: await this.host.files({ input, runId }) }
           : {}),
+      };
+      await live.client.session.prompt({
+        sessionID: handle.sessionId,
+        text: prompt.text,
+        ...(prompt.files?.length ? { files: prompt.files } : {}),
       });
     } catch (error) {
       live.turn.fail(`OpenCode refused the message: ${(error as Error).message}`);

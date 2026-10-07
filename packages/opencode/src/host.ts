@@ -36,8 +36,16 @@ export interface OpenCodeHost {
   ): Promise<Record<string, string>>;
 
   /**
+   * What the session is prompted with, when it is more than the user message: documents read into
+   * the text, images as files the model can see. Omit → the user message, and `files`.
+   */
+  promptFor?(
+    context: OpenCodeTurnContext & { sessionId: string },
+  ): Promise<{ text: string; files?: OpenCodePromptFile[] }>;
+
+  /**
    * The user message's attachments (`input.attachments`) in the form `session.prompt` takes them.
-   * Omit → attachments are not sent to OpenCode.
+   * Omit → attachments are not sent to OpenCode. Not asked when `promptFor` answers.
    */
   files?(context: OpenCodeTurnContext): Promise<OpenCodePromptFile[]>;
 
