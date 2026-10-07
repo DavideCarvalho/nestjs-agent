@@ -15,7 +15,7 @@
     "agent",
     "rag"
   ],
-  "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory + pgvector stores, plus PageIndex-style tree navigation retrieval for long documents",
+  "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory, pgvector and Redis (RediSearch) vector stores with lexical/hybrid search, plus PageIndex-style tree navigation retrieval for long documents",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
