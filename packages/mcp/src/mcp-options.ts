@@ -59,7 +59,8 @@ export type McpToolScreenVerdict = { allowed: true } | { allowed: false; reason:
 /**
  * Inspects a tool definition before it is imported — the seam for tool-poisoning checks
  * (instructions hidden in a description or a parameter's description, which the model reads and
- * people rarely do). `createGuardrails({ toolPoisoning: true }).screenTool` has this shape.
+ * people rarely do). `createGuardrails({ toolPoisoning: true }).screenTool` has this shape, and is
+ * bound, so it can be passed as is: `screen: guardrails.screenTool`.
  */
 export type McpToolScreen = (
   tool: McpToolScreenInput,

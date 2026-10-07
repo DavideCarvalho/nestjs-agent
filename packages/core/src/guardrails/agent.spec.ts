@@ -356,6 +356,11 @@ describe('tool definition screening', () => {
     });
   });
 
+  it('works detached from its instance, as a screen hook receives it', async () => {
+    const { screenTool } = createGuardrails({ toolPoisoning: true });
+    expect((await screenTool(poisoned)).allowed).toBe(false);
+  });
+
   it('log-only mode reports without refusing, and the pure screen needs no instance', async () => {
     const guardrails = createGuardrails({ toolPoisoning: { action: 'log' } });
     expect(await guardrails.screenTool(poisoned)).toEqual({ allowed: true });
