@@ -96,6 +96,12 @@ export interface ChatParams {
   message: string;
   /** The host's own facts about this send — see `AgentRunInput.hostContext`. */
   hostContext?: AgentHostContext;
+  /**
+   * The HOST already decided this actor may write this thread — a chat-app thread several people
+   * share, where anyone in it may continue the conversation. Skips the thread-ownership check of a
+   * send; never set it from a request's own claim.
+   */
+  authorized?: boolean;
   threadId?: string;
   agentName?: string;
   /**
@@ -384,7 +390,7 @@ export class AgentService {
     } else {
       // Every send onto an existing thread is gated by ownership: a regenerate rewinds the thread,
       // and a queued message would otherwise land in someone else's conversation.
-      await this.assertOwnsThread(params.actor, threadId);
+      if (params.authorized !== true) await this.assertOwnsThread(params.actor, threadId);
       // A persona a send NAMES is the person's pick for this conversation: pinned, so the next send
       // (and a reopened thread's picker) keeps it. One the send fell back to is not pinned.
       if (params.personaId !== undefined) {

@@ -226,3 +226,59 @@ describe('openCode engine: follow-ups', () => {
     expect(JSON.parse([...shared.values()][0] ?? '{}')).toMatchObject({ sessionId: 'ses_1' });
   });
 });
+
+describe('openCode engine: host-side pushes and live runs', () => {
+  let h: Harness | undefined;
+  afterEach(async () => {
+    await h?.app.close();
+    h = undefined;
+  });
+
+  it('pushes into the run a session serves, and reports the runs it follows', async () => {
+    const { gate, script } = holdOpen();
+    h = await bootEngine({ engine: (host) => openCode({ host }), script });
+    const { runId, threadId } = await h.service.chat({ actor, message: 'go' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'text');
+    const turns = h.app.get(OpenCodeTurns);
+    expect(turns.liveRuns()).toEqual([runId]);
+    expect(
+      await turns.pushToSession('ses_1', {
+        id: 'card-1',
+        component: 'Artifact',
+        props: { id: 'a1' },
+      }),
+    ).toBe(true);
+    expect(await turns.pushToSession('ses_nope', { id: 'x', component: 'X', props: {} })).toBe(
+      false,
+    );
+    gate.release?.();
+    await frames(h.service, runId);
+    expect((await h.store.getThread(threadId))?.messages.at(-1)?.ui).toEqual([
+      { id: 'card-1', component: 'Artifact', props: { id: 'a1' } },
+    ]);
+    expect(turns.liveRuns()).toEqual([]);
+  });
+
+  it("lets an authorized send continue someone else's thread", async () => {
+    h = await bootEngine({ engine: (host) => openCode({ host }) });
+    const first = await h.service.chat({ actor, message: 'one' });
+    await frames(h.service, first.runId);
+    const colleague: Actor = { id: 'slack:T1:U2', roles: [] };
+    await expect(
+      h.service.chat({ actor: colleague, message: 'two', threadId: first.threadId }),
+    ).rejects.toThrow();
+    const second = await h.service.chat({
+      actor: colleague,
+      message: 'two',
+      threadId: first.threadId,
+      authorized: true,
+    });
+    await frames(h.service, second.runId);
+    expect((await h.store.getThread(first.threadId))?.messages.map((m) => m.content)).toEqual([
+      'one',
+      'echo: one',
+      'two',
+      'echo: two',
+    ]);
+  });
+});

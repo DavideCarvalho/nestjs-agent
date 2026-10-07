@@ -273,6 +273,26 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     });
   }
 
+  /**
+   * Push a component into the run an OpenCode session is serving, for the host's own trusted
+   * callers (no caller check — {@link toolContext} is the one for MCP requests). `false` when no run
+   * is live on that session.
+   */
+  async pushToSession(sessionId: string, component: AgentUiComponent): Promise<boolean> {
+    for (const [runId, live] of this.live) {
+      if (live.handle.sessionId !== sessionId) continue;
+      await live.turn.pushUi(component);
+      await this.uiPushed(live.input, runId, component);
+      return true;
+    }
+    return false;
+  }
+
+  /** The runs this process is following now (an updater drains on it). */
+  liveRuns(): string[] {
+    return [...this.live.keys()];
+  }
+
   private async threadOfSession(
     actor: AiToolCtx['actor'],
     sessionId: string,
