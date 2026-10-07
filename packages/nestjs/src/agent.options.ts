@@ -1,4 +1,8 @@
-import type { ActionApprovalMode, BackgroundActorResolver } from '@dudousxd/nestjs-agent-core';
+import type {
+  ActionApprovalMode,
+  BackgroundActorResolver,
+  TextActionProposalConfig,
+} from '@dudousxd/nestjs-agent-core';
 import type {
   ActorResolver,
   AgentHistoryWindow,
@@ -150,6 +154,13 @@ export interface AgentModuleOptions {
    * integers, and `pollIntervalMs` must stay below a third of `leaseMs`.
    */
   actionProposalWorker?: { pollIntervalMs?: number; leaseMs?: number; maxConcurrency?: number };
+  /**
+   * The words a chat message must consist of to approve or reject a proposal by text, and what the
+   * agent answers. English by default (`yes`/`confirm`/`approve`, `no`/`cancel`/`reject`, …); pass
+   * `ptBrActionProposalText` from `@dudousxd/nestjs-agent-core` for Portuguese, or your own — either
+   * part replaces the default it names, field by field.
+   */
+  actionProposalText?: TextActionProposalConfig;
   // --- infrastructure ---
   /**
    * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model

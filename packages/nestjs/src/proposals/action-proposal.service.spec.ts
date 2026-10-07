@@ -1,4 +1,4 @@
-import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-core';
+import { InMemoryAgentStore, ptBrActionProposalText } from '@dudousxd/nestjs-agent-core';
 import { expect, it } from 'vitest';
 import { ActionProposalService } from './action-proposal.service.js';
 it('authorizes scoped requester decisions after origin completion and never treats approval as execution success', async () => {
@@ -55,10 +55,11 @@ it('requires current reviewer authorization and consumes explicit text only thro
   await expect(
     service.decide('t', 'one', { id: 'reviewer', tenantRef: 'tenant' }, { decision: 'approved' }),
   ).rejects.toThrow();
-  expect(await service.handleTextDecision('t', reviewer, 'sim')).toMatchObject({
+  expect(await service.handleTextDecision('t', reviewer, 'yes')).toMatchObject({
     proposalDecision: { status: 'ambiguous', proposalIds: ['one', 'two'] },
+    text: 'Which proposal? Reply confirm #ID or cancel #ID: one, two',
   });
-  expect(await service.handleTextDecision('t', reviewer, 'sim #one')).toMatchObject({
+  expect(await service.handleTextDecision('t', reviewer, 'yes #one')).toMatchObject({
     proposalDecision: {
       proposal: { decision: 'approved', decisionAudit: { actorRef: 'reviewer', via: 'text' } },
     },
@@ -88,7 +89,7 @@ it('lets the requester read a role-gated proposal without treating their text as
   });
   const service = new ActionProposalService(store, {});
   expect(await service.list('t', { id: 'a' })).toHaveLength(1);
-  expect(await service.handleTextDecision('t', { id: 'a' }, 'sim')).toEqual({
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'yes')).toEqual({
     status: 'unmatched',
   });
 });
@@ -116,8 +117,9 @@ it('never infers bare consent from a truncated pending candidate set', async () 
       approver: i === 0 ? 'requester' : 'admin',
     });
   const service = new ActionProposalService(store, {});
-  expect(await service.handleTextDecision('t', { id: 'a' }, 'sim')).toMatchObject({
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'yes')).toMatchObject({
     proposalDecision: { status: 'ambiguous' },
+    text: 'There are several proposals. Confirm or reject one with an explicit #ID.',
   });
   expect((await store.getActionProposal(template, '0'))?.decision).toBe('pending');
 });
@@ -146,7 +148,7 @@ it('keeps an authenticated explicit text target available beyond the candidate p
     ),
   ).toBe(false);
   const service = new ActionProposalService(store, {});
-  expect(await service.handleTextDecision('t', { id: 'a' }, 'sim #zz-hidden')).toMatchObject({
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'yes #zz-hidden')).toMatchObject({
     proposalDecision: { status: 'applied', proposal: { id: 'zz-hidden', decision: 'approved' } },
   });
 });
@@ -178,4 +180,58 @@ it('advances a raw scoped cursor even when reviewer authorization hides an entir
   const second = await service.listPage('t', reviewer, { after: first.next });
   expect(second.items.map((row) => row.id)).toEqual(['zz-visible']);
   expect(second.next).toBeUndefined();
+});
+
+async function oneProposal() {
+  const store = new InMemoryAgentStore();
+  await store.createThread({ id: 't', actor: { id: 'a' } });
+  await store.createActionProposal({
+    id: 'p',
+    tenantRef: null,
+    actorRef: 'a',
+    threadId: 't',
+    originRunId: 'r',
+    originMessageId: 'm',
+    originToolCallId: 'c',
+    toolName: 'send',
+    input: null,
+    confirmation: { title: 'Send', verb: 'Send' },
+    approver: 'requester',
+    expiresAt: null,
+    idempotencyKey: 'key',
+  });
+  return store;
+}
+it('speaks English by default: English commands decide, Portuguese ones do not', async () => {
+  const service = new ActionProposalService(await oneProposal(), {});
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'sim')).toEqual({
+    status: 'unmatched',
+  });
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'approve')).toMatchObject({
+    proposalDecision: { status: 'applied' },
+    text: 'Proposal approved and queued to run.',
+  });
+});
+it('answers a rejection in English', async () => {
+  const service = new ActionProposalService(await oneProposal(), {});
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'deny')).toMatchObject({
+    text: 'Proposal rejected; nothing was run.',
+  });
+});
+it('takes Portuguese commands and answers in Portuguese under the ptBr preset', async () => {
+  const service = new ActionProposalService(await oneProposal(), {
+    actionProposalText: ptBrActionProposalText,
+  });
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'pode')).toMatchObject({
+    proposalDecision: { status: 'applied' },
+    text: 'Proposta aprovada e enfileirada para execução.',
+  });
+});
+it('keeps English working under the ptBr preset', async () => {
+  const service = new ActionProposalService(await oneProposal(), {
+    actionProposalText: ptBrActionProposalText,
+  });
+  expect(await service.handleTextDecision('t', { id: 'a' }, 'cancel')).toMatchObject({
+    text: 'Proposta rejeitada; nenhuma ação foi executada.',
+  });
 });

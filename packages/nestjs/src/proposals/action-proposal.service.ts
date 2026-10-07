@@ -7,10 +7,15 @@ import {
   type ActionProposalStore,
   type Actor,
   type AgentStore,
+  DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES,
+  DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type ListActionProposals,
+  type TextActionProposalReplies,
+  type TextActionProposalVocabulary,
   mayDecideApproval,
   parseTextActionProposalCommand,
   resolveTextActionProposalDecision,
+  textActionProposalReply,
 } from '@dudousxd/nestjs-agent-core';
 import {
   ForbiddenException,
@@ -25,8 +30,16 @@ import type { AgentModuleOptions } from '../agent.options.js';
 export class ActionProposalService {
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
-    @Inject(AGENT_OPTIONS) private readonly options: Pick<AgentModuleOptions, 'approvalPolicy'>,
-  ) {}
+    @Inject(AGENT_OPTIONS)
+    private readonly options: Pick<AgentModuleOptions, 'approvalPolicy' | 'actionProposalText'>,
+  ) {
+    const text = options.actionProposalText;
+    this.vocabulary = { ...DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY, ...text?.vocabulary };
+    this.replies = { ...DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES, ...text?.replies };
+  }
+  /** The words a text decision is made of, and what the agent answers — English unless configured. */
+  private readonly vocabulary: TextActionProposalVocabulary;
+  private readonly replies: TextActionProposalReplies;
   private capability(): AgentStore & ActionProposalStore & ActionProposalOutcomeStore {
     const store = this.store as AgentStore & ActionProposalStore & ActionProposalOutcomeStore;
     if (
@@ -93,7 +106,7 @@ export class ActionProposalService {
     });
   }
   async handleTextDecision(threadId: string, actor: Actor, text: string) {
-    const command = parseTextActionProposalCommand(text);
+    const command = parseTextActionProposalCommand(text, this.vocabulary);
     if (command.status === 'unmatched') return command;
     if (command.proposalId !== undefined) {
       const result = await this.decide(threadId, command.proposalId, actor, {
@@ -101,7 +114,7 @@ export class ActionProposalService {
         remember: command.remember,
         via: 'text',
       });
-      return this.textReceipt(threadId, result);
+      return this.textReceipt(threadId, result, command.decision);
     }
     const candidates = [];
     const scope = await this.scope(threadId, actor);
@@ -111,38 +124,34 @@ export class ActionProposalService {
     });
     for (const proposal of pending)
       if (await this.mayDecide(actor, proposal)) candidates.push(proposal);
-    const resolution = resolveTextActionProposalDecision(text, candidates);
+    const resolution = resolveTextActionProposalDecision(text, candidates, this.vocabulary);
     if (resolution.status === 'unmatched') return resolution;
-    if (
-      resolution.status === 'ambiguous' ||
-      (resolution.status === 'decision' && pending.length === 1000 && !text.includes('#'))
-    )
+    // A saturated page may hide other candidates: a bare command cannot safely pick one.
+    const saturated = pending.length === 1000 && !text.includes('#');
+    if (resolution.status === 'ambiguous' || saturated) {
+      const proposalIds = candidates.map(({ id }) => id);
       return {
         threadId,
-        proposalDecision: {
-          status: 'ambiguous' as const,
-          proposalIds: candidates.map(({ id }) => id),
-        },
-        text: `Choose the action to decide: ${candidates
-          .map(({ id }) => id)
-          .map((id) => `#${id}`)
-          .join(', ')}`,
+        proposalDecision: { status: 'ambiguous' as const, proposalIds },
+        text: saturated ? this.replies.tooMany : this.replies.ambiguous(proposalIds),
       };
+    }
     const result = await this.decide(threadId, resolution.proposalId, actor, {
       decision: resolution.decision,
       remember: resolution.remember,
       via: 'text',
     });
-    return this.textReceipt(threadId, result);
+    return this.textReceipt(threadId, result, resolution.decision);
   }
-  private textReceipt(threadId: string, result: ActionProposalMutationResult) {
+  private textReceipt(
+    threadId: string,
+    result: ActionProposalMutationResult,
+    decision: 'approved' | 'rejected',
+  ) {
     return {
       threadId,
       proposalDecision: result,
-      text:
-        result.proposal?.decision === 'approved'
-          ? 'Action approved and queued for execution.'
-          : `Action ${result.proposal?.decision ?? result.status}; no execution was performed by this decision.`,
+      text: textActionProposalReply(result, decision, this.replies),
     };
   }
 }

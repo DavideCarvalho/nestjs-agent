@@ -551,7 +551,7 @@ it('acknowledges an independent text decision over AG-UI without starting a mode
     },
   );
   const client = agent(app.url, actor.id, thread.id);
-  const result = await run(client, 'confirmar #proposal-control');
+  const result = await run(client, 'confirm #proposal-control');
   expect(modelCalls).toBe(0);
   expect(result.events.map((event) => event.type)).toContain('RUN_FINISHED');
   expect(
