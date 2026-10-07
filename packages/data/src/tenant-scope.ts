@@ -7,6 +7,13 @@ export interface TenantScopeConfig {
   tenantColumn: string;
   /** Tables that must be constrained to the caller's tenant when referenced. */
   scopedTables: string[];
+  /**
+   * What a query on a scoped table does when the caller has no `tenantRef`: `'reject'` (default)
+   * refuses it; `'passthrough'` runs it unscoped — the privileged path, for an app where a missing
+   * tenant means "sees every tenant" (an internal admin). A query that touches no scoped table runs
+   * either way.
+   */
+  onMissingTenant?: 'reject' | 'passthrough';
 }
 
 interface FromEntry {
@@ -46,28 +53,38 @@ const STRING_LITERAL_TYPES = new Set(['string', 'single_quote_string', 'double_q
 
 /**
  * Rewrites a SELECT so every reference to a scoped table is constrained to a
- * single tenant: `<tenantColumn> = '<tenantRef>'` is AND-ed into the WHERE for
- * each scoped table in the FROM. An existing predicate for a different tenant
- * is rejected (no cross-tenant reads). `tenantRef === undefined` is the
- * privileged path and passes the SQL through unchanged.
+ * single tenant: `<tenantColumn> = '<tenantRef>'` is AND-ed into the WHERE of
+ * each SELECT that reads a scoped table in its FROM — the top-level one and every
+ * subquery (in the select list, WHERE, HAVING, a JOIN's ON …). An existing
+ * predicate for a different tenant is rejected (no cross-tenant reads).
  *
- * Scoped mode rejects CTEs, UNION/INTERSECT/EXCEPT, and subqueries in FROM:
- * those make it impossible to statically guarantee every tenant-bearing source
- * is constrained, so we fail closed and ask the caller to rephrase.
+ * `tenantRef === undefined` on a query that reads a scoped table is refused,
+ * unless `onMissingTenant: 'passthrough'` makes it the privileged path that runs
+ * the SQL unchanged.
+ *
+ * Scoped mode rejects CTEs, UNION/INTERSECT/EXCEPT, and subqueries in FROM, at
+ * any depth: those make it impossible to statically guarantee every
+ * tenant-bearing source is constrained, so we fail closed and ask the caller to
+ * rephrase.
  */
 export class TenantScopeRewriter {
   private readonly parser = new Parser();
   private readonly tenantColumn: string;
   private readonly scopedTables: Set<string>;
+  private readonly onMissingTenant: 'reject' | 'passthrough';
 
   constructor(config: TenantScopeConfig) {
     this.tenantColumn = config.tenantColumn;
     this.scopedTables = new Set(config.scopedTables);
+    this.onMissingTenant = config.onMissingTenant ?? 'reject';
   }
 
-  /** Rewrite `sql` to constrain scoped tables to `tenantRef`. Undefined → pass through. */
+  /**
+   * Rewrite `sql` to constrain scoped tables to `tenantRef`. Undefined → refused when the query
+   * reads a scoped table, unless `onMissingTenant: 'passthrough'`.
+   */
   rewrite(sql: string, tenantRef: string | undefined): string {
-    if (tenantRef === undefined) return sql;
+    if (tenantRef === undefined && this.onMissingTenant === 'passthrough') return sql;
 
     const parsed = this.parser.astify(sql, { database: 'MySQL' });
     const ast = (Array.isArray(parsed) ? parsed[0] : parsed) as SelectAst;
@@ -75,6 +92,26 @@ export class TenantScopeRewriter {
     if (ast.type !== 'select') {
       throw new Error('tenant scope: only SELECT is supported');
     }
+
+    const selects = collectSelects(ast);
+    const readsScoped = selects.some((select) =>
+      (select.from ?? []).some(
+        (entry) => typeof entry.table === 'string' && this.scopedTables.has(entry.table),
+      ),
+    );
+    if (!readsScoped) return sql;
+    if (tenantRef === undefined) {
+      throw new Error(
+        'tenant scope: no tenant for this session — a query on a tenant-scoped table needs one',
+      );
+    }
+
+    for (const select of selects) this.scopeSelect(select, tenantRef);
+    return this.parser.sqlify(ast as unknown as AST, { database: 'MySQL' });
+  }
+
+  /** Constrain one SELECT's own FROM — its subqueries are scoped on their own. */
+  private scopeSelect(ast: SelectAst, tenantRef: string): void {
     if (ast.with) {
       throw new Error(
         'tenant scope: WITH (CTE) is not supported in scoped mode — rewrite using JOINs/subqueries in FROM',
@@ -97,7 +134,7 @@ export class TenantScopeRewriter {
       (entry): entry is FromEntry & { table: string } =>
         typeof entry.table === 'string' && this.scopedTables.has(entry.table),
     );
-    if (scopedFrom.length === 0) return sql;
+    if (scopedFrom.length === 0) return;
 
     const existing = this.collectTenantPredicates(ast.where);
     for (const predicate of existing) {
@@ -119,8 +156,6 @@ export class TenantScopeRewriter {
         this.buildTenantEquality(isAmbiguous ? alias : null, tenantRef),
       );
     }
-
-    return this.parser.sqlify(ast as unknown as AST, { database: 'MySQL' });
   }
 
   private collectTenantPredicates(where: unknown): ExtractedPredicate[] {
@@ -157,6 +192,25 @@ export class TenantScopeRewriter {
       right: added,
     };
   }
+}
+
+/**
+ * Every SELECT in the tree, the root first: the statement itself and each subquery wherever it
+ * sits — the select list, WHERE, HAVING, a JOIN's ON, a FROM (which `scopeSelect` then refuses).
+ */
+function collectSelects(root: SelectAst): SelectAst[] {
+  const found: SelectAst[] = [];
+  const walk = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if ((node as { type?: unknown }).type === 'select') found.push(node as SelectAst);
+    for (const value of Object.values(node)) walk(value);
+  };
+  walk(root);
+  return found;
 }
 
 function isBinaryExpr(value: unknown): value is BinaryExpr {
