@@ -28,7 +28,7 @@ The whole setup is four pieces of consumer code:
 
 <Callout type="info" title="The default push path">
 Two ways a component reaches the answer, and they are the defaults: the model calls a
-**per-component tool** (`ui__show_<component>`, one per catalog entry, input = the props — what
+**per-component tool** (`ui__show_<component>`, one per model-facing component that takes no children, input = the props — what
 `AgentGenuiModule.forRoot({ catalog })` gives you), and **your own tools** call
 `ctx.emitUi(component, props)` when they already hold the data. Start there. The tree tool, the
 generic `ui__show` tool and per-request resolvers below are for composed layouts and per-tenant
@@ -68,6 +68,11 @@ export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENT
 `@dudousxd/nestjs-agent-core/genui` is **isomorphic**: it imports nothing server-only, so the React
 app imports this same file to validate props before drawing them.
 
+`BUILTIN_COMPONENTS` and `LAYOUT_COMPONENTS` are optional, ready-made definitions (no visuals): a
+table, a chart, KPI cards, sources, a checklist, a timeline, code, a diff and a callout, plus
+`Stack`, `Card`, `Heading`, `Text`, `Badge`, `Link` and `Image`. Their props, text fallbacks, tools,
+and how to pick or override them are in [Builtin components](/docs/agent/guides/genui-builtins).
+
 Props may be any [Standard Schema](https://standardschema.dev) or a **JSON Schema object**. JSON
 Schema is plain data, so components can come from a database, for example components each tenant
 defines and versions for itself (see [per-request catalogs](#per-request-catalogs)). JSON Schema
@@ -101,7 +106,9 @@ catalog. A refused call reaches the model as a tool error naming each problem, a
 fix it. There are two shapes.
 
 **Per component** (the default), one tool per component, whose input *is* the props:
-`ui__show_data_table`, `ui__show_deal_card`, …
+`ui__show_data_table`, `ui__show_deal_card`, … `internal` components and layout components
+(`children: true`, e.g. `Stack`, `Card`) get no tool — flat props cannot carry children; they are
+reached through the tree tool. The generic `ui__show` tool leaves them out too.
 
 **Tree**, one tool whose input is a nested layout composed from the catalog:
 

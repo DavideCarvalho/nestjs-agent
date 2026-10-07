@@ -25,6 +25,7 @@
     "file-uploads",
     "chat-components",
     "generative-ui",
+    "genui-builtins",
     "component-rendering",
     "rendering-everywhere",
     "governed-sql"
