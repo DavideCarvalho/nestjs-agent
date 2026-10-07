@@ -137,14 +137,15 @@ async function run(): Promise<void> {
   );
   process.stdout.write('\n');
 
-  const quota = (await (await fetch(`${BASE}/agent/quota/today`, { headers: HEADERS })).json()) as {
-    usedTokens: number;
+  const quota = (await (await fetch(`${BASE}/agent/quota`, { headers: HEADERS })).json()) as {
+    windows: { period: string; usedTokens?: number }[];
   };
+  const today = quota.windows.find((window) => window.period === 'day');
   const threads = (await (
     await fetch(`${BASE}/agent/threads`, { headers: HEADERS })
   ).json()) as unknown[];
   console.log('\n──────────────────────────────────────────────────────────────');
-  console.log(` quota today: ${quota.usedTokens} tokens · threads: ${threads.length}`);
+  console.log(` quota today: ${today?.usedTokens ?? 0} tokens · threads: ${threads.length}`);
   console.log(' (the 📡 lines above are the aviary:agent:* diagnostics channel)');
   console.log('──────────────────────────────────────────────────────────────\n');
 }

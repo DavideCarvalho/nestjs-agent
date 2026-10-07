@@ -43,7 +43,7 @@ DurableModule.forRoot({ store: new InMemoryStateStore() }),   // durable engine,
 AgentModule.forRoot({
   model: demoModel,                  // deterministic offline fake (swap for a Vercel AI SDK provider)
   store: new InMemoryAgentStore(),   // swap for @dudousxd/nestjs-agent-store-mikro-orm
-  quota: new InMemoryQuotaStore(200_000),
+  quota: { limits: { day: { tokens: 200_000 } } }, // daily token ceiling
   modelId: 'fake-demo-1',
   durable: true,                     // run each turn as the `agent.run` durable workflow
 }),

@@ -7,11 +7,7 @@ import {
   SystemPrompt,
 } from '@dudousxd/nestjs-agent';
 import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
-import {
-  InMemoryAgentStore,
-  InMemoryGovernanceQueries,
-  InMemoryQuotaStore,
-} from '@dudousxd/nestjs-agent-testing';
+import { InMemoryAgentStore, InMemoryGovernanceQueries } from '@dudousxd/nestjs-agent-testing';
 import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 import { DurableModule } from '@dudousxd/nestjs-durable';
 import { InMemoryStateStore } from '@dudousxd/nestjs-durable-core';
@@ -87,7 +83,8 @@ class OpsOrchestratorAgent {}
       // --- infrastructure ---
       model: demoModel,
       store: demoStore,
-      quota: new InMemoryQuotaStore(200_000),
+      // A 200k-token daily ceiling, enforced by the built-in ledger provider.
+      quota: { limits: { day: { tokens: 200_000 } } },
       // Demo/gateway identity: trust x-actor-id / x-actor-role headers. Never fabricates a caller.
       actorResolver: new HeaderActorResolver(),
       durable: true,
