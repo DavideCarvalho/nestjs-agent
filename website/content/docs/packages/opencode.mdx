@@ -1,0 +1,236 @@
+---
+title: '@dudousxd/nestjs-agent-opencode'
+icon: Terminal
+description: Run the agent's turns on OpenCode 2 — the library keeps the routes, threads, stream protocol, approvals, questions and queue; OpenCode runs the model, the tools, skills and the context. Includes the tools endpoint OpenCode calls back, and what its URL must point at.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-opencode @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-opencode @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+</Tabs>
+
+An **engine** for `AgentModule`: instead of the library's own loop calling a `model`, each turn runs
+in an [OpenCode 2](https://opencode.ai) session. The library keeps everything around the turn — the
+`/agent` routes, threads, the stream protocol, approvals, questions and the queue — so
+`@dudousxd/nestjs-agent-react` works unchanged. OpenCode runs the model, the tools, skills and the
+context.
+
+## Wiring it
+
+You write one provider, the **host**: it says which OpenCode server runs an actor's turns and how a
+thread's session is created.
+
+```ts title="src/agent/opencode-host.ts"
+import type { Actor } from '@dudousxd/nestjs-agent-core';
+import type { OpenCodeHost, OpenCodeTurnContext } from '@dudousxd/nestjs-agent-opencode';
+import { Injectable } from '@nestjs/common';
+
+@Injectable()
+export class MyOpenCodeHost implements OpenCodeHost {
+  constructor(private readonly sandboxes: SandboxService) {}
+
+  /** Which OpenCode server runs this actor's turns. */
+  async server(actor: Actor) {
+    const rt = await this.sandboxes.runtimeFor(actor.tenantRef);
+    return { client: rt.client, key: actor.tenantRef, bootId: rt.bootId };
+  }
+
+  /** How a thread's session is created (only when it has none on this server). */
+  async session({ input }: OpenCodeTurnContext) {
+    return {
+      location: { directory: `/work/${input.actor.id}` },
+      permissions: [
+        { action: '*', resource: '*', effect: 'deny' },
+        { action: 'execute', resource: '*', effect: 'allow' },
+        { action: 'company.*send*', resource: '*', effect: 'ask' }, // → approval card
+        { action: 'question', resource: '*', effect: 'allow' }, // → elicitation form
+      ],
+    };
+  }
+}
+```
+
+```ts title="src/app.module.ts"
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { openCode } from '@dudousxd/nestjs-agent-opencode';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      // No `model`: the engine runs the turns.
+      engine: openCode({ host: MyOpenCodeHost }),
+      store, // any AgentStore
+      actorResolver,
+    }),
+  ],
+  providers: [MyAgent], // @Agent({ systemPrompt }) / @SystemPrompt() → instructions `aviary.system`
+})
+export class AppModule {}
+```
+
+| OpenCode | The library's protocol and store |
+| --- | --- |
+| `session.text.delta` / `session.reasoning.delta` | `text` / `reasoning` |
+| a step (`session.step.ended`) | `step-start` … `step-finish` with usage; usage recorded per step |
+| tools (`session.tool.*`) | `tool-input-*` / `tool-output*`, code-mode inner calls nested by `parentId` |
+| `permission.asked` | an `action` call + `approval-requested`, recorded `pending_approval`; `approve` / `reject` → `permission.reply` |
+| `form.created` | `elicitation`; `answer` / `skip` → `session.form.reply` / `cancel` |
+| `session.renamed` | `title` |
+| `session.execution.*` | the run settles: queue handoff, `cancelled`, or a typed stream failure |
+| `cancel` | `session.interrupt` |
+
+Sessions: one per thread, kept by an `OpenCodeSessionStore` (in memory by default; persist it for
+several replicas) and recreated when the server's `bootId` changes, told the conversation so far.
+
+## What the session gets from the module
+
+| Option | In the session |
+| --- | --- |
+| `@Agent` / `@SystemPrompt` / contributors | instructions `aviary.system`, refreshed every turn |
+| `approvalPolicy` | who approves each `permission.asked`, and its expiry; not required → answered at once |
+| `tools: { url, secret }` | the module's `@AiTool`s over the engine's own MCP endpoint ([below](#tools-over-mcp)): reads allowed, actions asked, and run only against an approval |
+| `skills` / `@Skill` | `.opencode/skills/<name>/SKILL.md` in the session's directory |
+| `memory` | instructions `aviary.memory`; with `tools`, a `remember` tool when the provider writes (on the engine's endpoint only) |
+| `ctx.emitUi` in a tool | the component lands in the turn's stream and message |
+| `regenerate` | the session is reverted to before the last user message |
+
+## Tools over MCP
+
+With `tools` set, the engine mounts its own MCP endpoint at `POST <path>/opencode/mcp` (`path` is
+`AgentModule`'s route prefix, `agent` by default) and registers it in every session with a bearer
+token it mints.
+
+```ts title="src/app.module.ts"
+AgentModule.forRoot({
+  engine: openCode({
+    host: MyOpenCodeHost,
+    tools: {
+      // Where the OpenCode server reaches this app's endpoint — see "The tools URL" below.
+      url: process.env.OPENCODE_TOOLS_URL!,
+      // The same in every process — see "Several processes" below.
+      secret: process.env.OPENCODE_TOOLS_SECRET,
+    },
+  }),
+  memory: { provider }, // a provider with `write` → OpenCode gets `remember`
+  // …
+});
+```
+
+### The tools URL
+
+`tools.url` has no default and is not derived from anything — not from the request, not from
+`path`, not from the port the app listens on. The engine passes it **verbatim** to OpenCode when it
+adds the MCP server to a session:
+
+```ts
+client.mcp.add({
+  server: 'aviary', // `tools.server`
+  config: {
+    type: 'remote',
+    url: tools.url,
+    headers: { Authorization: 'Bearer <token>' },
+    oauth: false,
+  },
+});
+```
+
+It is the **OpenCode server** — a separate process, usually in another container or sandbox — that
+then calls that URL, every time the model lists or calls a tool. So it must be an address of this
+Nest app **as seen from the OpenCode server**, ending in `<path>/opencode/mcp`. If the app sets a
+global prefix (`app.setGlobalPrefix('api')`), it is part of the URL too. There is no special
+hostname: `app.internal` in older examples was only a placeholder. Keep it in an environment
+variable (`OPENCODE_TOOLS_URL`) so each deployment sets its own.
+
+| Where OpenCode runs | `OPENCODE_TOOLS_URL` |
+| --- | --- |
+| Same machine as the app | `http://127.0.0.1:3000/agent/opencode/mcp` |
+| Docker Compose | the app's service name: `http://api:3000/agent/opencode/mcp` |
+| Kubernetes | the app's Service DNS: `http://api.my-namespace.svc.cluster.local:3000/agent/opencode/mcp` |
+| Anywhere else | the app's public URL works: `https://app.example.com/agent/opencode/mcp` |
+
+`127.0.0.1` means "this machine" to whoever resolves it: it works only when OpenCode runs on the
+same host (and network namespace) as the app, not when OpenCode is in a container of its own. Prefer
+an internal network address over a public one: the endpoint only ever serves OpenCode, and a public
+URL puts it on the internet (it stays guarded by the token, below).
+
+<Callout type="warn" title="Point it at a process that serves HTTP">
+The endpoint is a controller, and `surface: 'engine'` mounts no controllers. In a split deployment
+(HTTP pods with `surface: 'http'`, workers with `surface: 'engine'`), `tools.url` must reach the
+HTTP pods — the worker running the turn mints the token, an HTTP pod verifies it. That is why the
+secret below must be shared.
+</Callout>
+
+### What guards the endpoint
+
+The module's `guards` are **not** applied to it — its callers are OpenCode sessions, not the app's
+users — and a global guard of your own must let `<path>/opencode/mcp` through. It authenticates
+callers itself, and a token alone runs nothing:
+
+- **The token** names an actor and an OpenCode server, expires after `tools.ttlMs` (7 days; re-issued
+  on a kept session's turns once half-way through), and is HMAC-signed with a key derived from
+  `tools.secret`.
+- **A call runs only inside a turn**: OpenCode names its session in every call's `_meta`; the call
+  runs only while the token's actor has a turn running on that session, on the token's server.
+- **The agent's gates apply**: the agent's (and persona's) allow-list, `enabled`, the roles policy and
+  `canUse`, on `tools/list` and on `tools/call`; the kinds only the loop serves are never offered.
+- **An `action` runs only against an approval** granted in that turn (a person's, or the approval
+  policy saying none is needed): one call per approval. OpenCode's `ask` rules put the approval card
+  in front of the call; the endpoint checks it again, so a caller that skips OpenCode's rules (a model
+  in code mode that read the endpoint's headers) is refused.
+- `remember` is served here only — it is not added to the module's registry, so it is not on
+  `AgentMcpServerModule` or the `/tools` catalog.
+
+### Several processes
+
+If more than one process sits behind `tools.url` — replicas behind a load balancer, or HTTP pods next
+to engine workers — give them all the **same `tools.secret`**, so a token signed by one is accepted by
+the others. Without a `secret`, each process signs with its own random one and the engine logs a
+warning: tokens then only verify on the process that minted them, and after a restart a session
+loses its tools until its next turn re-registers them. There is no app-wide key it falls back on, so
+set it explicitly, from your secret store.
+
+A call that reaches a process other than the one running the turn still finds it, through the store
+and the session store — so use a persistent `OpenCodeSessionStore` there too
+(`keyValueOpenCodeSessionStore(redis)`).
+
+## Durable turns
+
+```ts title="src/app.module.ts"
+import { openCodeDurable } from '@dudousxd/nestjs-agent-opencode/durable';
+
+AgentModule.forRoot({
+  engine: openCodeDurable({
+    host: MyOpenCodeHost,
+    sessions: MySessionStore,
+    tools: { url: process.env.OPENCODE_TOOLS_URL!, secret: process.env.OPENCODE_TOOLS_SECRET },
+  }),
+  store,
+  sink,
+  actorResolver,
+});
+// next to a configured DurableModule
+```
+
+Every step of a turn is checkpointed (`begin → prompt → observe → [wait for a person → reply →
+observe]* → finish`) and a person's decision is a durable signal: a turn waiting on an approval
+survives restarts and is resumed by whichever process gets the decision. If OpenCode restarted
+meanwhile, a new session is opened with the conversation and the decision. `openCode()` runs the
+same steps in memory (single replica). Several processes need a cross-process sink, a persistent
+`OpenCodeSessionStore` and a shared `tools.secret`.
+
+## Related
+
+- [Tools](/docs/agent/guides/tools) — the `@AiTool`s the endpoint serves.
+- [`-mcp-server`](/docs/agent/packages/mcp-server) — a separate MCP server for external clients, with its own auth.
+- [Human-in-the-loop and durability](/docs/agent/guides/human-in-the-loop-and-durability)

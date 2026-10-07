@@ -34,9 +34,10 @@ browser.
 | `table(props)` / `chart(props)` | Factories for the built-in DataTable and Chart contracts; definitions, not themed visuals. |
 | `defineComponent(def)` | Declares one component: `{ name, title, description, props, children?, fallbackText?, internal?, version? }`. |
 | `defineCatalog(defs, { jsonSchemaValidator? })` | A `Catalog`: `get`, `has`, `modelComponents()`, `validate(name, props)`, `validateSync`, `jsonSchemaFor(name)`, `extend(defs)`. |
+| `flatComponents(catalog)` | The model components a flat tool (`ui__show_<snake>`, `ui__show`) offers: every non-`internal` one without `children: true`. |
 | `ajvValidator(ajv)` / `builtinJsonSchemaValidator` | JSON Schema checking: bring your Ajv for the full spec, or use the dependency-free subset. |
 | `catalogToModelText(catalog, { mode, namePrefix })` | The catalog as model text (`mode`: `tree`, `per-component` or `show`). |
-| `componentToText(catalog, component, props)` | A pushed component as plain text / Slack mrkdwn (`fallbackText`, else JSON). Handles `genui:tree`. |
+| `componentToText(catalog, component, props)` | A pushed component as plain text / Slack mrkdwn (`fallbackText`, else JSON; a layout component — `children: true` — whose fallback is empty writes nothing). Handles `genui:tree`. |
 | `genuiTools(catalog, options)` | Lib tools (`{ spec, handler }`) that validate and push `ui` frames — what `AgentGenuiModule` registers. |
 | `validateTree`, `treeJsonSchema`, `treeToText`, `treeToFlatSpec` | Tree mode: validation, the tool's input schema, text, json-render flat spec. |
 | `showToolJsonSchema`, `GENUI_SHOW_TOOL` | The generic show tool's input schema and default name (`ui__show`). |
@@ -45,13 +46,13 @@ browser.
 | `negotiateCatalog(catalog, capabilities?)` | The catalog narrowed to the declared components, matched by name and exact version. `undefined` returns the catalog unchanged. |
 | `prepareUiEmission(catalog, capabilities, component, props, version?)` | Validates one emission against the trusted catalog and returns `{ kind: 'ui', …, fallbackText }` or `{ kind: 'text', text }`. What `ctx.emitUi` uses. See [One answer, every surface](/docs/agent/guides/rendering-everywhere). |
 | `validatePresentationBatch`, `snapshotComponentPresentation` | Check what a `present` hook returned; snapshot a presentation to plain JSON. |
-| `/builtins` | `BUILTIN_COMPONENTS` (DataTable, Chart, KpiCards, SourceCards, Checklist, Timeline, CodeBlock, Diff, Callout) and `LAYOUT_COMPONENTS` (Stack, Card, Heading, Text, Badge, Link, Image) — definitions only. |
+| `/builtins` | `BUILTIN_COMPONENTS` (DataTable, Chart, KpiCards, SourceCards, Checklist, Timeline, CodeBlock, Diff, Callout) and `LAYOUT_COMPONENTS` (Stack, Card, Heading, Text, Badge, Link, Image) — definitions only. See [Builtin components](/docs/agent/guides/genui-builtins). |
 
 ### `genuiTools` / `AgentGenuiModule` options
 
 | Option | Default | |
 |---|---|---|
-| `mode` | `'per-component'` | One `ui__show_<snake>` tool per component, or `'tree'`: one tool taking `{ type, props, children? }`. |
+| `mode` | `'per-component'` | One `ui__show_<snake>` tool per model-facing component except layout ones (`children: true`), or `'tree'`: one tool taking `{ type, props, children? }`. |
 | `terminal` | `false` | The turn ends once a call succeeds. |
 | `showTool` | off | Also one generic tool taking `{ component, props }`. `true` names it `ui__show`; a string names it. |
 | `showInstructions` | | Prepended to the show tool's description. |

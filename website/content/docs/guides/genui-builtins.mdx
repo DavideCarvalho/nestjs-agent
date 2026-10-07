@@ -1,0 +1,395 @@
+---
+title: Builtin components
+icon: Shapes
+description: The ready-made component definitions in @dudousxd/nestjs-agent-core/genui/builtins — BUILTIN_COMPONENTS (DataTable, Chart, KpiCards, …) and LAYOUT_COMPONENTS (Stack, Card, Text, …). What each one is for, its props and text fallback, which tools it becomes, and how to pick or override them.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@dudousxd/nestjs-agent-core/genui/builtins` ships **component definitions** for what most chat apps
+end up showing: a table, a chart, a few KPIs, sources, a checklist. Each one is an ordinary
+`ComponentDefinition` (see [Generative UI](/docs/agent/guides/generative-ui#1-a-catalog)): a name, a
+title, a description the model reads, a JSON Schema for its props, and a `fallbackText` for channels
+that cannot draw it.
+
+<Callout type="info" title="Definitions only, no visuals">
+The library does not ship a React `DataTable` or `Chart`. The NestJS backend puts the definitions in
+its catalog; the React frontend draws each one with **your own** component, registered under the
+same name. A builtin you have no renderer for is drawn as its stored `fallbackText` (or as your
+`fallback`, when you pass one).
+</Callout>
+
+## The two lists
+
+The subpath exports two arrays, plus every definition on its own:
+
+| Export | Contents | For |
+|---|---|---|
+| `BUILTIN_COMPONENTS` | `DataTable`, `Chart`, `KpiCards`, `SourceCards`, `Checklist`, `Timeline`, `CodeBlock`, `Diff`, `Callout` | Content: data the model shows. |
+| `LAYOUT_COMPONENTS` | `Stack`, `Card`, `Heading`, `Text`, `Badge`, `Link`, `Image` | Layout and text primitives, mostly for composing trees. `Stack` and `Card` take children. |
+| `DataTable`, `Chart`, `Stack`, … | Each definition individually | Pick only the ones you want. |
+
+Both lists are optional and nothing is added for you: a catalog holds exactly what you pass to
+`defineCatalog`. No builtin is `internal` and none sets a `version`, so each is offered to the model
+and stamped as version `1`.
+
+## Backend: put them in the catalog
+
+Spread them next to your own components. The catalog file is isomorphic, so the React app imports
+the same file.
+
+```ts title="Backend — src/agent/catalog.ts"
+import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
+import { z } from 'zod';
+
+const DealCard = defineComponent({
+  name: 'DealCard',
+  title: 'Deal',
+  description: 'One deal in the pipeline: name, stage, amount.',
+  props: z.object({ name: z.string(), stage: z.string(), amount: z.number() }),
+  fallbackText: (p) => `*${p.name}* — ${p.stage} (${p.amount})`,
+});
+
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS, DealCard]);
+```
+
+```ts title="Backend — src/app.module.ts"
+import { Module } from '@nestjs/common';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
+import { catalog } from './catalog';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({ /* … */ }),
+    AgentGenuiModule.forRoot({ catalog }), // or { catalog, mode: 'tree' }
+  ],
+})
+export class AppModule {}
+```
+
+`AgentGenuiModule.forRootAsync({ imports, inject, useFactory, resolver })` takes the same options from
+a factory, and the catalog is injectable as `@InjectGenuiCatalog()` (token `GENUI_CATALOG`).
+
+### Picking, excluding and overriding
+
+There is no switch to turn builtins on or off. You choose what goes in the array:
+
+```ts title="Backend — src/agent/catalog.ts"
+import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, Callout, Chart, DataTable } from '@dudousxd/nestjs-agent-core/genui/builtins';
+
+// Only some of them
+export const small = defineCatalog([DataTable, Chart, Callout]);
+
+// All but one
+export const noDiff = defineCatalog(BUILTIN_COMPONENTS.filter((c) => c.name !== 'Diff'));
+```
+
+`defineCatalog` refuses two definitions with the same name: it throws
+`genui: component "DataTable" is defined twice in one catalog`. To **replace** a builtin with your
+own definition of that name (a stricter schema, another description, a `version`), use
+`catalog.extend(...)`, where a later definition replaces an earlier one of the same name:
+
+```ts title="Backend — src/agent/catalog.ts"
+import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, DataTable } from '@dudousxd/nestjs-agent-core/genui/builtins';
+
+export const catalog = defineCatalog(BUILTIN_COMPONENTS).extend([
+  defineComponent({
+    ...DataTable,
+    description: 'Orders, invoices or customers as a table. Always include the id column.',
+    version: 2,
+  }),
+]);
+```
+
+A definition is a plain object, so spreading it keeps the builtin's schema and `fallbackText` while
+you change the rest. A [`GenuiCatalogResolver`](/docs/agent/guides/generative-ui#per-request-catalogs)
+can do the same per tenant with `catalog.extend(...)`.
+
+## How they become tools
+
+What the model gets depends on `mode` (and `showTool`) on `AgentGenuiModule`:
+
+| | Content builtins, `Heading`, `Text`, `Badge`, `Link`, `Image` | `Stack`, `Card` (`children: true`) |
+|---|---|---|
+| `mode: 'per-component'` (default) | One tool each, `ui__show_<snake_case name>`: `ui__show_data_table`, `ui__show_kpi_cards`, `ui__show_heading`, … Input = the props. | **No tool.** |
+| `showTool: true` (`ui__show`) | Offered: `{ component, props }`, `component` is one of them. | **Not offered** (not in the `component` enum; refused if sent). |
+| `mode: 'tree'` (`ui__render`) | Listed in the tool's description with a one-line props signature. | Listed and marked "takes children". |
+
+A per-component tool's description is `Show the user a <title> (<name>). <description>`, and its
+input schema is the props schema below. A flat input (a per-component tool or `ui__show`) has no way
+to carry children, so a layout component would only ever draw an empty box: it is left out of both.
+`Stack` and `Card` are usable only in tree mode, where `ui__render` takes one nested
+`{ type, props, children? }` element. Giving `children` to any other component is refused
+(`Callout does not take children`) and reaches the model as a tool error it can fix.
+
+Spreading `LAYOUT_COMPONENTS` into a per-component catalog is harmless: `Stack` and `Card` simply get
+no tool, and the leaf primitives (`Heading`, `Text`, `Badge`, `Link`, `Image`) get one each. If you
+do not want those five as tools either, leave the list out or pick them individually.
+
+Your own tools can push any catalog component, builtins included, with
+`ctx.emitUi('Chart', props)`, validated against the catalog.
+
+## Frontend: render them
+
+Register a renderer under each builtin's name, as for any other component. Each receives the
+validated props spread, and `children` when it is a layout node in a tree.
+
+```tsx title="Frontend — src/main.tsx"
+import { AgentProvider } from '@dudousxd/nestjs-agent-react';
+import type { GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
+import { catalog } from './catalog';
+import { MyCallout, MyCard, MyChart, MyKpiCards, MyStack, MyTable } from './components/genui';
+
+const registry: GenuiRegistry = {
+  DataTable: MyTable,
+  Chart: MyChart,
+  KpiCards: MyKpiCards,
+  Callout: MyCallout,
+  Stack: MyStack, // ({ direction, gap, children }) => …
+  Card: MyCard,   // ({ title, subtitle, children }) => …
+};
+
+<AgentProvider
+  genui={{ registry, catalog }}
+  uiCapabilities={{
+    components: ['DataTable', 'Chart', 'KpiCards', 'Callout', 'Stack', 'Card'].map((name) => ({
+      name,
+      version: 1,
+    })),
+  }}
+>
+  <App />
+</AgentProvider>;
+```
+
+- Passing the same `catalog` validates props before drawing.
+- A pushed component with no renderer in `registry` (and no `resolveComponent` answer), invalid
+  props, or a renderer that throws shows your `fallback` when you pass one; otherwise the item's
+  stored `fallbackText`, as plain text. In a tree without a custom `fallback`, one such node makes
+  the whole tree show the tree's stored text, so the answer is never half drawn.
+- `uiCapabilities` is optional, and is not derived from `registry`. When you send it, list only the
+  builtins you actually render, at version `1` (or your override's `version`). The rest are hidden
+  from the model for that turn and streamed as their text fallback. A tree is drawn only when
+  **every** node is declared, so in tree mode declare `Stack` and `Card` too. See
+  [Declaring what a client can draw](/docs/agent/guides/rendering-everywhere#declaring-what-a-client-can-draw).
+
+The `table` and `chart` factories from `@dudousxd/nestjs-agent-core/genui` produce presentations of
+the builtin `DataTable` and `Chart` (see
+[Component registries and server rendering](/docs/agent/guides/component-rendering)), so a tool that
+`present`s with them needs those two definitions in the catalog and renderers under those names.
+`createReactComponentRegistry`'s default pagination splits `DataTable` rows across pages.
+
+## Content components: `BUILTIN_COMPONENTS`
+
+Every props object is closed (`additionalProperties: false`), so a prop not listed is refused.
+"Row" means an object whose values are each a string, number, boolean or `null`. Fallbacks use Slack
+mrkdwn (`*bold*`, `_italic_`, `<url|text>`); a `title`, when set, comes first in bold.
+
+### `DataTable`
+
+Tabular data (records with the same fields) as a sortable table. The model is told to prefer it over
+markdown tables for more than 3 rows.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | Short caption. |
+| `columns` | `{ key, label, align?, format? }[]` | yes | 1–12 columns. `key`: field name in each row. `label`: header. `align`: `'left' \| 'right' \| 'center'`. `format`: `'text' \| 'number' \| 'currency' \| 'percent' \| 'date' \| 'link'`. |
+| `rows` | row`[]` | yes | Up to 500 rows. |
+
+Fallback: a fixed-width text table in a code block (each column at most 28 characters wide, at most
+15 rows, then `… N more rows`).
+
+### `Chart`
+
+A `bar` chart to compare categories, or a `line` chart for a trend over time. `data` is a list of
+points; `xKey` names the category/time field and each series names a numeric field.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `type` | `'bar' \| 'line'` | yes | |
+| `title` | `string` | no | |
+| `xKey` | `string` | yes | Field of each point used for the x axis. |
+| `series` | `{ key, label? }[]` | yes | 1–6 series. `key` names a numeric field of each point. |
+| `data` | row`[]` | yes | 1–200 points. |
+| `unit` | `string` | no | Shown after values, e.g. `KB` or `%`. |
+
+Fallback, in a code block, drawing **every** series (labels fall back to the key):
+
+- `line`: a table, the x field and then one column per series (`label unit`), at most 20 rows.
+- `bar`: one text bar per point. With several series, each point is a line followed by one indented
+  bar per series. All bars share one scale, so series compare. At most 20 points, then
+  `… N more points`.
+
+### `KpiCards`
+
+A few key numbers (metrics, totals, counts) as cards.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `items` | `{ label, value, delta?, trend?, hint? }[]` | yes | 1–8 items. `label`: `string`. `value`: `string \| number`. `delta`: change, e.g. `+12%`. `trend`: `'up' \| 'down' \| 'flat'`. `hint`: `string`. |
+
+Fallback: one bullet per item, `• *label:* value (delta)`.
+
+### `SourceCards`
+
+The documents, pages or links an answer is based on, as cards.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `items` | `{ title, url?, snippet?, source? }[]` | yes | 1–12 items. `source`: where it came from, e.g. `Wiki`, `GitHub`. `url` has no pattern. |
+
+Fallback: one bullet per item, the title linked to `url` (`<url|title>`) when there is one, then
+`— source`.
+
+### `Checklist`
+
+Steps or a to-do list with done/not-done state.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `items` | `{ label, done?, note? }[]` | yes | 1–50 items. `done`: `boolean`. |
+
+Fallback: `☑` / `☐` and the label per item, then `— _note_`.
+
+### `Timeline`
+
+Events in chronological order: the history of a project, an incident, a deal.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `events` | `{ date?, title, description? }[]` | yes | 1–50 events. `date` is a free-form string. |
+
+Fallback: one bullet per event, the date in bold, then the title and `— description`.
+
+### `CodeBlock`
+
+A code snippet or file excerpt with syntax highlighting.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `language` | `string` | no | |
+| `code` | `string` | yes | |
+
+Fallback: the code in a code block.
+
+### `Diff`
+
+A before/after change to a text or code file, as a line diff. The model sends both versions, not a
+patch.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `title` | `string` | no | |
+| `language` | `string` | no | |
+| `before` | `string` | yes | |
+| `after` | `string` | yes | |
+
+Fallback: a `+` / `-` line diff in a code block. The diff function is exported as
+`lineDiff(before, after)`, returning `{ op: 'same' | 'add' | 'del', text }[]`, so your renderer can
+draw the same diff.
+
+### `Callout`
+
+A short note, warning or success message, emphasized.
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `tone` | `'info' \| 'success' \| 'warning' \| 'danger'` | no | |
+| `title` | `string` | no | |
+| `text` | `string` | yes | |
+
+Fallback: `:warning:` for `warning` / `danger`, `:information_source:` otherwise, then the title in
+bold and the text.
+
+## Layout components: `LAYOUT_COMPONENTS`
+
+| Component | Purpose | Props (required in **bold**) | Children | Tool in flat modes |
+|---|---|---|---|---|
+| `Stack` | Lays its children out vertically, or horizontally with `direction: 'row'`. | `direction?: 'column' \| 'row'`, `gap?: number` | yes | none (tree only) |
+| `Card` | A box with an optional title around its children. | `title?: string`, `subtitle?: string` | yes | none (tree only) |
+| `Heading` | A heading. | **`text: string`** | no | `ui__show_heading` |
+| `Text` | A paragraph of plain text (no markdown). | **`text: string`**, `muted?: boolean` | no | `ui__show_text` |
+| `Badge` | A small label. | **`text: string`**, `tone?: 'neutral' \| 'brand' \| 'success' \| 'warning' \| 'danger'` | no | `ui__show_badge` |
+| `Link` | A link to an http(s) URL. | **`text: string`**, **`url: string`** (must match `^https?://`) | no | `ui__show_link` |
+| `Image` | An image from an https URL. | **`url: string`** (must match `^https://`), `alt?: string` | no | `ui__show_image` |
+
+Text fallbacks: `Heading` prints `*text*`, `Text` the text, `Badge` `[text]`, `Link` `<url|text>`,
+`Image` the URL. `Card` prints `*title*` (and `— subtitle`), then its children's text. `Stack`, and a
+`Card` without a title, have nothing of their own to say: they write **no text** (no JSON block of
+their props), and their children's text still follows.
+
+## What the model sends
+
+A per-component call takes the props directly. `ui__show_kpi_cards`:
+
+```json
+{
+  "title": "This month",
+  "items": [
+    { "label": "Revenue", "value": "$48.2k", "delta": "+12%", "trend": "up" },
+    { "label": "New customers", "value": 132 }
+  ]
+}
+```
+
+Your `KpiCards` renderer gets those props. A text-only channel gets:
+
+```text
+*This month*
+• *Revenue:* $48.2k (+12%)
+• *New customers:* 132
+```
+
+In tree mode, `ui__render` takes one nested element mixing content and layout builtins:
+
+```json
+{
+  "type": "Stack",
+  "props": { "gap": 12 },
+  "children": [
+    { "type": "Heading", "props": { "text": "Deploy 1.4.0" } },
+    { "type": "Callout", "props": { "tone": "warning", "text": "Migrations run before the switch-over." } },
+    {
+      "type": "Checklist",
+      "props": { "items": [{ "label": "Build image", "done": true }, { "label": "Run migrations" }] }
+    }
+  ]
+}
+```
+
+It is pushed as one `genui:tree` frame. Its text, node by node, depth-first, is (the `Stack` writes
+nothing):
+
+```text
+*Deploy 1.4.0*
+:warning: Migrations run before the switch-over.
+☑ Build image
+☐ Run migrations
+```
+
+## Text helpers
+
+The subpath also exports the helpers the fallbacks use, for your own `fallbackText` or renderer:
+
+- `textTable(columns, rows, max = 15)`: the fixed-width code-block table `DataTable` falls back to.
+- `lineDiff(before, after)`: the LCS line diff behind `Diff`. Inputs over 250,000 line pairs degrade
+  to "all removed, then all added".
+
+## Related
+
+- [Generative UI](/docs/agent/guides/generative-ui): the catalog, `AgentGenuiModule`, `ctx.emitUi`
+  and React rendering.
+- [One answer, every surface](/docs/agent/guides/rendering-everywhere): `uiCapabilities` and where
+  `fallbackText` is used.
+- [Component registries and server rendering](/docs/agent/guides/component-rendering): the `table`
+  and `chart` factories built on `DataTable` and `Chart`.
+- [Generative UI (/genui)](/docs/agent/packages/genui): the API reference.

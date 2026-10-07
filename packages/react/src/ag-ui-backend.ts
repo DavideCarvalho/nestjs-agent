@@ -1,4 +1,4 @@
-import type { AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
+import type { AgentStreamEvent, ElicitationRequest } from '@dudousxd/nestjs-agent-core';
 import type { ChatStreamRequest, ChatStreamResponse } from './backend.js';
 
 /**
@@ -18,18 +18,33 @@ import type { ChatStreamRequest, ChatStreamResponse } from './backend.js';
  * What maps where (the inverse of the producer in `@adonis-agora/agent/ag-ui`):
  *  - `TEXT_MESSAGE_*` → `text`; `REASONING_MESSAGE_*` → `reasoning`; `STEP_*` → `step-start` /
  *    `step-finish`;
- *  - `TOOL_CALL_START` / `ARGS` / `END` → `tool-input-start` / `-delta` / `-available`;
- *    `TOOL_CALL_RESULT` → `tool-output` (or `tool-output-error` / `-denied`, from
- *    `metadata['agora.outcome']`);
+ *  - `TOOL_CALL_START` / `ARGS` / `END` → `tool-input-start` / `-delta` / `-available`, with the
+ *    `toolKind` and `parentId` from `metadata['agora.toolKind']` / `['agora.parentId']` (a call
+ *    without them is a `read`); `TOOL_CALL_RESULT` → `tool-output` (or `tool-output-error` /
+ *    `-denied`, from `metadata['agora.outcome']`);
  *  - `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` → a `ui` part named `AgUiActivity`, id
  *    `activity:<messageId>`, props `{ activityType, content }` — the whole content each time (the
  *    delta's JSON Patch applied here), so a repeat replaces the widget in place;
  *  - `RUN_ERROR` → the stream's `event: error`; `RUN_FINISHED` → `event: done` (a cancelled
- *    outcome writes `cancelled` first; an interrupt outcome writes a `ui` part named
- *    `AgUiInterrupt` carrying the interrupts, for the app to render);
+ *    outcome writes `cancelled` first). An interrupt outcome whose every interrupt this stream
+ *    already showed (`agora.approval-requested` / `agora.elicitation`) ends the stream WITHOUT
+ *    `done`: the run is parked, not over, so the transport re-attaches to it on the native route
+ *    (`chat/:runId/stream?after=`) and the rest of the run — after the person decides through the
+ *    native `tool-call` routes — streams into the same message. An interrupt nothing showed (another
+ *    producer's) becomes a `ui` part named `AgUiInterrupt` carrying it, for the app to render;
+ *  - the producer's SSE `id:` (the run's own sequence number, which this library's producer writes)
+ *    is passed on as the cursor the transport re-attaches with; frames of a producer that numbers
+ *    nothing carry no id, and the transport then does not try to re-attach;
  *  - `CUSTOM` events a producer of this family writes (`agora.ui`, `agora.title`, `agora.queue`,
- *    `agora.approval-requested` / `-settled`, `agora.run`) → the frames they stand for. Any other
- *    `CUSTOM` is ignored, as the protocol requires of a consumer that does not know it.
+ *    `agora.approval-requested` / `-settled`, `agora.elicitation`, `agora.run`) → the frames they
+ *    stand for; `agora.step-usage` (right after a `STEP_FINISHED`) → that step's `usage`, `costUsd`
+ *    and `reasoningMs` on its `step-finish`; `agora.action-proposal-decision` → the
+ *    `data-proposal-decision` part a native decision answers with (`{ threadId, proposalDecision,
+ *    text }`). Any other `CUSTOM` is ignored, as the protocol requires of a consumer that does not
+ *    know it.
+ *
+ * And on the way in: the send's staged `attachments` (`{ mediaId }`) become `file` content parts
+ * the producer resolves for the caller, and `regenerate: true` rides `forwardedProps`.
  */
 export interface AgUiChatStreamOptions {
   /** The producer's endpoint (`POST`, `RunAgentInput` in, `text/event-stream` out). */
@@ -39,16 +54,20 @@ export interface AgUiChatStreamOptions {
   /** Defaults to the global `fetch`, with `credentials: 'same-origin'`. */
   fetch?: typeof fetch;
   /**
-   * Shape `forwardedProps` from the send's body. Default: `{ pageContext, agent, model, persona, uiCapabilities }` from the
-   * body, whichever are present.
+   * Shape `forwardedProps` from the send's body. Default: `{ pageContext, agent, model, persona,
+   * uiCapabilities, regenerate }` from the body, whichever are present.
    */
   forwardedProps?: (body: Record<string, unknown>) => unknown;
   /** Read the refusal of a non-2xx answer. Default: the JSON body's `message`, else the status. */
   refusal?: (response: Response) => Promise<Error>;
   /**
-   * The user message's `content` for the send. Default: the body's `message` as a string. Return
-   * a list of AG-UI content parts to send a file with it — `{ type: 'image' | 'document' | …,
-   * source: { type: 'data', value: <base64>, mimeType } }` — and the text as a `text` part.
+   * The user message's `content` for the send. Default: the body's `message` as a string — or,
+   * when the send carries staged `attachments` (`{ mediaId, contentType? }`, what the composer
+   * uploads), a `text` part followed by one `file` part per attachment
+   * (`source: { type: 'file', value: <mediaId>, provider: 'nestjs-agent' }`), which this library's
+   * producer resolves for the caller. Return your own list of AG-UI content parts to send inline
+   * bytes instead — `{ type: 'image' | 'document' | …, source: { type: 'data', value: <base64>,
+   * mimeType } }`.
    */
   content?: (body: Record<string, unknown>) => string | AgUiContentPart[];
 }
@@ -89,7 +108,45 @@ function defaultForwardedProps(body: Record<string, unknown>): unknown {
   for (const key of ['pageContext', 'agent', 'model', 'persona', 'uiCapabilities']) {
     if (body[key] !== undefined && body[key] !== null) out[key] = body[key];
   }
+  // Re-run the last exchange instead of appending one (`useAgentChat`'s regenerate).
+  if (body.regenerate === true) out.regenerate = true;
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The `provider` that marks a `file` part's `value` as a mediaId staged with this library
+ * (`AG_UI_MEDIA_PROVIDER` in `@dudousxd/nestjs-agent-core/ag-ui`).
+ */
+const MEDIA_PROVIDER = 'nestjs-agent';
+
+function partTypeFor(contentType: string | undefined): 'image' | 'audio' | 'video' | 'document' {
+  const major = contentType?.split('/')[0]?.toLowerCase();
+  return major === 'image' || major === 'audio' || major === 'video' ? major : 'document';
+}
+
+/** The message text, then one `file` part per staged attachment the send carries. */
+function defaultContent(
+  body: Record<string, unknown>,
+  message: string,
+): string | AgUiContentPart[] {
+  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+  const files: AgUiContentPart[] = [];
+  for (const attachment of attachments) {
+    if (!isRecord(attachment) || typeof attachment.mediaId !== 'string') continue;
+    const contentType =
+      typeof attachment.contentType === 'string' ? attachment.contentType : undefined;
+    files.push({
+      type: partTypeFor(contentType),
+      source: {
+        type: 'file',
+        value: attachment.mediaId,
+        provider: MEDIA_PROVIDER,
+        ...(contentType !== undefined ? { mimeType: contentType } : {}),
+      },
+    });
+  }
+  if (files.length === 0) return message;
+  return [...(message.length > 0 ? [{ type: 'text' as const, text: message }] : []), ...files];
 }
 
 /** Start a turn against an AG-UI producer; the stream comes back in this library's framing. */
@@ -105,7 +162,13 @@ export async function agUiChatStream(
     threadId,
     runId: newId(),
     protocolVersion: '1.0',
-    messages: [{ id: newId(), role: 'user', content: options.content?.(body) ?? message }],
+    messages: [
+      {
+        id: newId(),
+        role: 'user',
+        content: options.content?.(body) ?? defaultContent(body, message),
+      },
+    ],
     ...(forwarded !== undefined ? { forwardedProps: forwarded } : {}),
   };
   const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -135,16 +198,18 @@ export async function agUiChatStream(
 type AgUiEvent = { type: string; [key: string]: unknown };
 
 interface Reframer {
-  /** The frames (already SSE-encoded) one AG-UI event stands for. */
-  push(event: AgUiEvent): string;
+  /** The frames (already SSE-encoded) one AG-UI event stands for; `id` is its SSE `id:`, if any. */
+  push(event: AgUiEvent, id?: number): string;
+  /** What is still held back (a step's end waiting for its usage), at the end of the stream. */
+  flush(): string;
   /** Set when the run ended; nothing is written after it. */
   closed: boolean;
 }
 
 /**
  * Re-frame an AG-UI event stream (SSE, one event per `data:`) in this library's stream protocol:
- * `event: meta`, numbered `data:` frames of {@link AgentStreamEvent}, then `event: done` or
- * `event: error`. Exported for a backend that fetches the stream itself.
+ * `event: meta`, `data:` frames of {@link AgentStreamEvent} (numbered with the run's own sequence
+ * when the producer numbers its events), then `event: done` or `event: error`. Exported for a backend that fetches the stream itself.
  */
 export function reframeAgUiStream(
   source: ReadableStream<Uint8Array>,
@@ -162,6 +227,8 @@ export function reframeAgUiStream(
         if (done) {
           // A stream that stopped without a terminal event is a truncated run: end it plainly, and
           // the transport reads the stored thread for the rest.
+          const rest = reframer.flush();
+          if (rest.length > 0) controller.enqueue(encoder.encode(rest));
           controller.close();
           return;
         }
@@ -172,8 +239,10 @@ export function reframeAgUiStream(
           const block = buffer.slice(0, separator);
           buffer = buffer.slice(separator + 2);
           separator = buffer.indexOf('\n\n');
-          const data = block
-            .split('\n')
+          const lines = block.split('\n');
+          const idLine = lines.find((line) => line.startsWith('id:'));
+          const id = idLine === undefined ? undefined : Number(idLine.slice(3).trim());
+          const data = lines
             .filter((line) => line.startsWith('data:'))
             .map((line) => line.slice(5).trimStart())
             .join('\n');
@@ -185,7 +254,10 @@ export function reframeAgUiStream(
             continue;
           }
           if (isRecord(event) && typeof event.type === 'string') {
-            out += reframer.push(event as AgUiEvent);
+            out += reframer.push(
+              event as AgUiEvent,
+              id !== undefined && Number.isSafeInteger(id) && id > 0 ? id : undefined,
+            );
           }
           if (reframer.closed) break;
         }
@@ -206,18 +278,72 @@ export function reframeAgUiStream(
 
 function createReframer(threadId: string): Reframer {
   const activities = new Map<string, { activityType: string; content: Record<string, unknown> }>();
-  let seq = 0;
   let metaSent = false;
-  const tools = new Map<string, { name: string; args: string }>();
+  const tools = new Map<
+    string,
+    { name: string; args: string; toolKind: 'read' | 'action'; parentId?: string }
+  >();
+  /**
+   * A step's end is held until the next event: a producer of this family follows `STEP_FINISHED`
+   * with `agora.step-usage`, whose usage, cost and reasoning time belong on that `step-finish`.
+   */
+  let pendingStep: Record<string, unknown> | undefined;
+  const encodeFrame = (streamEvent: AgentStreamEvent | Record<string, unknown>) =>
+    `data: ${JSON.stringify(streamEvent)}\n\n`;
+  const flushStep = (): string => {
+    if (pendingStep === undefined) return '';
+    const step = pendingStep;
+    pendingStep = undefined;
+    return encodeFrame(step);
+  };
+  /**
+   * The run's sequence number of the events being read, and the last one written out as a cursor.
+   * Several AG-UI events stand for one frame of the run, so the cursor (an `id:`-only SSE block the
+   * transport records) moves only once every event of a frame was re-framed — re-attaching
+   * `?after=` it then neither skips nor repeats anything.
+   */
+  let current: number | undefined;
+  let written: number | undefined;
+  const cursor = (): string => {
+    if (current === undefined || current === written) return '';
+    written = current;
+    return `${flushStep()}id: ${current}\n\n`;
+  };
+  /** The tool calls whose approval or question set this stream already showed. */
+  const shown = new Set<string>();
+  /** An independent proposal decided with no run: written at the run's end, with its text. */
+  let decision: { threadId: unknown; proposalDecision: unknown; text: string } | undefined;
   const state: Reframer = {
     closed: false,
-    push(event) {
+    flush() {
+      return state.closed ? '' : `${flushStep()}${cursor()}`;
+    },
+    push(event, id) {
       if (state.closed) return '';
       let out = '';
+      if (id !== undefined) {
+        if (current !== undefined && id > current) out += cursor();
+        current = id;
+      }
       const frame = (streamEvent: AgentStreamEvent | Record<string, unknown>) => {
-        seq += 1;
-        out += `id: ${seq}\ndata: ${JSON.stringify(streamEvent)}\n\n`;
+        out += encodeFrame(streamEvent);
       };
+      if (
+        event.type === 'CUSTOM' &&
+        event.name === 'agora.step-usage' &&
+        pendingStep !== undefined &&
+        isRecord(event.value)
+      ) {
+        const value = event.value;
+        if (isRecord(value.usage)) pendingStep.usage = value.usage;
+        if (typeof value.costUsd === 'number' || value.costUsd === null) {
+          pendingStep.costUsd = value.costUsd;
+        }
+        if (typeof value.reasoningMs === 'number') pendingStep.reasoningMs = value.reasoningMs;
+        out += flushStep();
+        return out;
+      }
+      out += flushStep();
       const meta = (runId: unknown, thread: unknown) => {
         if (metaSent) return;
         metaSent = true;
@@ -246,9 +372,30 @@ function createReframer(threadId: string): Reframer {
             frame({ kind: 'title', title: value.title });
           } else if (event.name === 'agora.queue') frame({ kind: 'queue', ...value });
           else if (event.name === 'agora.approval-requested') {
+            if (typeof value.id === 'string') shown.add(value.id);
             frame({ ...value, kind: 'approval-requested' });
           } else if (event.name === 'agora.approval-settled') {
             frame({ ...value, kind: 'approval-settled' });
+          } else if (
+            event.name === 'agora.elicitation' &&
+            typeof value.id === 'string' &&
+            isRecord(value.request) &&
+            Array.isArray(value.request.questions)
+          ) {
+            // The question set the run parked on, under the tool-call id an answer settles.
+            shown.add(value.id);
+            if (typeof value.request.id === 'string') shown.add(value.request.id);
+            frame({
+              kind: 'elicitation',
+              id: value.id,
+              request: value.request as unknown as ElicitationRequest,
+            });
+          } else if (event.name === 'agora.action-proposal-decision') {
+            decision = {
+              threadId: value.threadId,
+              proposalDecision: value.proposalDecision,
+              text: '',
+            };
           }
           return out;
         }
@@ -258,6 +405,9 @@ function createReframer(threadId: string): Reframer {
       switch (event.type) {
         case 'TEXT_MESSAGE_CONTENT':
         case 'TEXT_MESSAGE_CHUNK':
+          if (decision !== undefined && typeof event.delta === 'string') {
+            decision.text += event.delta;
+          }
           if (typeof event.delta === 'string' && event.delta.length > 0) {
             frame({ kind: 'text', text: event.delta });
           }
@@ -272,7 +422,7 @@ function createReframer(threadId: string): Reframer {
           frame({ kind: 'step-start' });
           break;
         case 'STEP_FINISHED':
-          frame({ kind: 'step-finish' });
+          pendingStep = { kind: 'step-finish' };
           break;
         case 'TOOL_CALL_START':
         case 'TOOL_CALL_CHUNK': {
@@ -280,8 +430,27 @@ function createReframer(threadId: string): Reframer {
           if (id === '') break;
           if (!tools.has(id)) {
             const name = typeof event.toolCallName === 'string' ? event.toolCallName : '';
-            tools.set(id, { name, args: '' });
-            frame({ kind: 'tool-input-start', id, name, toolKind: 'read' });
+            const metadata = isRecord(event.metadata) ? event.metadata : {};
+            // A producer of this family says whether the call is an action (it may wait for an
+            // approval); a call nobody classified is read-only, as AG-UI has no notion of either.
+            const toolKind = metadata['agora.toolKind'] === 'action' ? 'action' : 'read';
+            const parentId =
+              typeof metadata['agora.parentId'] === 'string'
+                ? metadata['agora.parentId']
+                : undefined;
+            tools.set(id, {
+              name,
+              args: '',
+              toolKind,
+              ...(parentId !== undefined ? { parentId } : {}),
+            });
+            frame({
+              kind: 'tool-input-start',
+              id,
+              name,
+              toolKind,
+              ...(parentId !== undefined ? { parentId } : {}),
+            });
           }
           if (event.type === 'TOOL_CALL_CHUNK' && typeof event.delta === 'string') {
             (tools.get(id) as { args: string }).args += event.delta;
@@ -305,7 +474,8 @@ function createReframer(threadId: string): Reframer {
             id,
             name: call.name,
             input: parseJson(call.args, {}),
-            toolKind: 'read',
+            toolKind: call.toolKind,
+            ...(call.parentId !== undefined ? { parentId: call.parentId } : {}),
           });
           break;
         }
@@ -356,15 +526,29 @@ function createReframer(threadId: string): Reframer {
           break;
         case 'RUN_FINISHED': {
           const outcome = isRecord(event.outcome) ? event.outcome : undefined;
+          if (decision !== undefined) {
+            // What a native decision answers with: a `data-proposal-decision` part.
+            frame({ kind: 'proposal-decision', ...decision });
+            decision = undefined;
+          }
           if (outcome?.type === 'cancelled') frame({ kind: 'cancelled' });
           if (outcome?.type === 'interrupt' && Array.isArray(outcome.interrupts)) {
+            const unseen = outcome.interrupts.filter((interrupt) => !isShown(interrupt, shown));
+            if (unseen.length === 0) {
+              // Parked on what this stream already showed: not over. End without `done`, at the
+              // cursor, so the transport re-attaches and follows the rest of the run.
+              out += cursor();
+              state.closed = true;
+              break;
+            }
             frame({
               kind: 'ui',
               id: `ag-ui:interrupt:${String(event.runId ?? '')}`,
               component: 'AgUiInterrupt',
-              props: { interrupts: outcome.interrupts },
+              props: { interrupts: unseen },
             });
           }
+          out += cursor();
           state.closed = true;
           out += 'event: done\ndata: {}\n\n';
           break;
@@ -386,6 +570,15 @@ function createReframer(threadId: string): Reframer {
   };
   let pendingStart: { runId: unknown; threadId: unknown } | undefined;
   return state;
+}
+
+/** Did the stream already show what this interrupt asks — an approval card or a question form? */
+function isShown(interrupt: unknown, shown: ReadonlySet<string>): boolean {
+  if (!isRecord(interrupt)) return false;
+  if (typeof interrupt.toolCallId === 'string' && shown.has(interrupt.toolCallId)) return true;
+  const metadata = isRecord(interrupt.metadata) ? interrupt.metadata : undefined;
+  const request = isRecord(metadata?.['agora.request']) ? metadata['agora.request'] : undefined;
+  return typeof request?.id === 'string' && shown.has(request.id);
 }
 
 function parseJson(text: string, fallback: unknown): unknown {

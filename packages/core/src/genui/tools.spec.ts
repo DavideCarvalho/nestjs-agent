@@ -88,6 +88,14 @@ describe('genuiTools per-component', () => {
     });
   });
 
+  it('offers no tool for a layout component — flat props cannot carry its children', () => {
+    const names = tools.map((tool) => tool.spec.name);
+    expect(names).not.toContain('ui__show_stack');
+    expect(names).not.toContain('ui__show_card');
+    // Leaf primitives still render something on their own.
+    expect(names).toContain('ui__show_heading');
+  });
+
   it('stamps terminal and honours a custom prefix', () => {
     const [first] = genuiTools(catalog, { terminal: true, namePrefix: 'show_' });
     expect(first?.spec).toMatchObject({ name: 'show_data_table', terminal: true });
@@ -157,6 +165,19 @@ describe('genuiTools show tool', () => {
       props: {},
     });
     expect(result?.issues?.[0]).toMatchObject({ path: ['props', 'name'] });
+  });
+
+  it('does not offer a layout component, and refuses one by name', async () => {
+    const [flat] = genuiTools(defineCatalog([deal, ...LAYOUT_COMPONENTS]), {
+      mode: 'tree',
+      showTool: true,
+    }).slice(1);
+    expect(flat?.spec.description).not.toContain('- Stack:');
+    const { ctx, emitUi } = ctxWithEmit();
+    await expect(flat?.handler.execute({ component: 'Stack', props: {} }, ctx)).rejects.toThrow(
+      /unknown component "Stack"/,
+    );
+    expect(emitUi).not.toHaveBeenCalled();
   });
 
   it('takes a custom name', () => {

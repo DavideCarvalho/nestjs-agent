@@ -4,16 +4,19 @@ import { encodeStreamEvent } from '../stream-events.js';
 import { assertConforms } from './conformance.spec-helper.js';
 import {
   AG_UI_CUSTOM,
+  AG_UI_MEDIA_PROVIDER,
   AgUiEncoder,
   type AgUiEvent,
   type AgUiSourceFrame,
   agUiEvents,
   agUiFramesFromNdjson,
+  agUiSse,
   decodeInterruptId,
   encodeInterruptId,
   planResume,
   readAnswersPayload,
   readApprovalPayload,
+  readForwardedProps,
   readUserTurn,
 } from './index.js';
 
@@ -173,6 +176,7 @@ describe('AgUiEncoder', () => {
       toolCallId: 'c1',
       toolCallName: 'search',
       parentMessageId: 'run-1:m1',
+      metadata: { 'agora.toolKind': 'read' },
     });
     const args = events.filter((event) => event.type === 'TOOL_CALL_ARGS');
     expect(args.map((event) => (event as { delta: string }).delta).join('')).toBe('{"q":"x"}');
@@ -642,6 +646,29 @@ describe('input', () => {
     expect(turn?.dropped).toHaveLength(2);
     expect(turn?.dropped[0]).toContain('url source');
   });
+
+  it('reads a file part this library staged (by mediaId) as an attachment reference', () => {
+    const turn = readUserTurn([
+      {
+        id: '1',
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Read this' },
+          {
+            type: 'document',
+            source: { type: 'file', value: 'media-1', provider: AG_UI_MEDIA_PROVIDER },
+          },
+          { type: 'image', source: { type: 'file', value: 'file-9', provider: 'openai' } },
+        ],
+      },
+    ]);
+    expect(turn?.text).toBe('Read this');
+    expect(turn?.staged).toEqual([{ mediaId: 'media-1' }]);
+    expect(turn?.media).toEqual([]);
+    expect(turn?.dropped).toHaveLength(1);
+    expect(readForwardedProps({ regenerate: true })).toEqual({ regenerate: true });
+    expect(readForwardedProps({ regenerate: 'yes' })).toEqual({});
+  });
 });
 
 describe('a sink that knows only the shared vocabulary', () => {
@@ -688,9 +715,40 @@ describe('a sink that knows only the shared vocabulary', () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         name: AG_UI_CUSTOM.elicitation,
-        value: expect.objectContaining({ runId: 'lib-run-1' }),
+        value: expect.objectContaining({ runId: 'lib-run-1', id: 'ask-1' }),
       }),
     );
+  });
+
+  it('says on TOOL_CALL_START whether a call is an action, and which call it runs under', async () => {
+    const events = await collect(
+      ended([
+        ev({ kind: 'tool-input-start', id: 'p', name: 'execute', toolKind: 'read' }),
+        ev({
+          kind: 'tool-input-available',
+          id: 'c',
+          name: 'refund',
+          input: { id: 7 },
+          toolKind: 'action',
+          parentId: 'p',
+        }),
+      ]),
+    );
+    await assertConforms(events);
+    expect(events.filter((event) => event.type === 'TOOL_CALL_START')).toEqual([
+      {
+        type: 'TOOL_CALL_START',
+        toolCallId: 'p',
+        toolCallName: 'execute',
+        metadata: { 'agora.toolKind': 'read' },
+      },
+      {
+        type: 'TOOL_CALL_START',
+        toolCallId: 'c',
+        toolCallName: 'refund',
+        metadata: { 'agora.toolKind': 'action', 'agora.parentId': 'p' },
+      },
+    ]);
   });
 
   it("carries a component's fallback text and component versions", async () => {
@@ -811,5 +869,42 @@ describe('agUiFramesFromNdjson', () => {
       { kind: 'error', code: 'quota_exceeded', message: 'over budget' },
     ]);
     await expect(read([new Error('socket closed')])).rejects.toThrow('socket closed');
+  });
+});
+
+describe('the run cursor', () => {
+  it("keeps each event's native sequence number: one per line of the sink, split lines included", async () => {
+    const line = (event: Parameters<typeof encodeStreamEvent>[0]) =>
+      new TextDecoder().decode(encodeStreamEvent(event));
+    const lines = [
+      line({ kind: 'step-start' }),
+      // bare text and an event sharing one line: still ONE native frame
+      `Hi ${line({ kind: 'text', text: 'there' })}`,
+      line({ kind: 'step-finish' }),
+    ];
+    async function* bytes() {
+      yield new TextEncoder().encode(lines.join(''));
+    }
+    const cursor = { seq: 0 };
+    const seen: [string, number][] = [];
+    for await (const event of agUiEvents(agUiFramesFromNdjson(bytes()), {
+      ...ids,
+      quietMs: 40,
+      cursor,
+    })) {
+      seen.push([event.type, cursor.seq]);
+    }
+    expect(seen.filter(([type]) => type === 'STEP_STARTED')).toEqual([['STEP_STARTED', 1]]);
+    expect(seen.filter(([type]) => type === 'TEXT_MESSAGE_CONTENT').map(([, seq]) => seq)).toEqual([
+      2, 2,
+    ]);
+    expect(seen.filter(([type]) => type === 'STEP_FINISHED')).toEqual([['STEP_FINISHED', 3]]);
+    expect(seen[0]).toEqual(['RUN_STARTED', 0]);
+    expect(agUiSse({ type: 'STEP_STARTED', stepName: 's' }, 3)).toBe(
+      'id: 3\ndata: {"type":"STEP_STARTED","stepName":"s"}\n\n',
+    );
+    expect(agUiSse({ type: 'STEP_STARTED', stepName: 's' }, 0)).toBe(
+      'data: {"type":"STEP_STARTED","stepName":"s"}\n\n',
+    );
   });
 });

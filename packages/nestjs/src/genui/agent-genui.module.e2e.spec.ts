@@ -142,9 +142,9 @@ describe('AgentGenuiModule', () => {
     const { assistants, app } = await boot(model, AgentGenuiModule.forRoot({ catalog }), {
       providers: [ReadsCatalog],
     });
-    expect(model.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['ui__show_callout', 'ui__show_stack']),
-    );
+    // `Stack` takes children, which a flat `ui__show_*` input cannot carry: no tool for it.
+    expect(model.tools.map((tool) => tool.name)).toContain('ui__show_callout');
+    expect(model.tools.map((tool) => tool.name)).not.toContain('ui__show_stack');
     expect(assistants[0]?.ui?.[0]).toMatchObject({ component: 'Callout', props: { text: 'hey' } });
     expect(app.get(ReadsCatalog).catalog).toBe(catalog);
   });

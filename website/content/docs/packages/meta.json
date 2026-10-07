@@ -6,6 +6,7 @@
     "core",
     "nestjs",
     "ai-sdk",
+    "opencode",
     "react",
     "genui",
     "data",

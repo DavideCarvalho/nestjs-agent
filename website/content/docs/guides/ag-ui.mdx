@@ -10,9 +10,10 @@ import { Callout } from 'fumadocs-ui/components/callout';
 front of it. With the AG-UI adapter in `adapters`, the same agent answers it as well, so any AG-UI
 client (`@ag-ui/client`'s `HttpAgent`, CopilotKit, a client in Python or .NET) can drive it without
 knowing this library. The [native stream](/docs/agent/reference/stream-events) is unchanged and stays
-the richer surface; AG-UI is a second door onto the same runs.
+the richer surface; AG-UI is a second door onto the same runs. What each capability looks like on
+either side is in [What AG-UI costs you](/docs/agent/guides/rendering-everywhere#what-ag-ui-costs-you).
 
-```ts title="app.module.ts"
+```ts title="Backend — src/app.module.ts"
 import { AgentModule, agUiAdapter } from '@dudousxd/nestjs-agent';
 
 AgentModule.forRoot({
@@ -28,7 +29,7 @@ exactly as `POST /agent/chat` does. `adapters` is static wiring, like `surface`:
 `AgentModule.forRootAsync` it sits on the options object, not in `useFactory`'s result, and
 `surface: 'engine'` mounts nothing.
 
-```ts
+```ts title="Frontend — any AG-UI client"
 import { HttpAgent } from '@ag-ui/client';
 
 const agent = new HttpAgent({ url: 'https://app.example/agent/ag-ui' });
@@ -40,15 +41,28 @@ await agent.runAgent();
 
 `agUiChatStream` (in `@dudousxd/nestjs-agent-react`) is the matching consumer: it POSTs a
 `RunAgentInput` and hands `useAgentChat` the answer re-framed in the native protocol, so the
-transcript, tool activity and generative UI render unchanged. Put it behind `openChatStream` and keep
-everything else — threads, the queue, approvals, uploads — on the REST routes:
+transcript, tool activity (with each call's kind and parent), generative UI, question forms and
+per-step usage render unchanged. Put it behind `openChatStream` and keep everything else (threads,
+the queue, approvals and answers, uploads, cancel) on the REST routes. `AgentClient` is a class, so
+override the method rather than spreading an instance, which would drop its methods:
 
-```ts
-const backend: AgentBackend = {
-  ...httpBackend,
-  openChatStream: (request) => agUiChatStream(request, { url: '/agent/ag-ui' }),
-};
+```ts title="Frontend — src/agent-backend.ts"
+import { AgentClient, type ChatStreamRequest, agUiChatStream } from '@dudousxd/nestjs-agent-react';
+
+export class AgUiAgentClient extends AgentClient {
+  override openChatStream(request: ChatStreamRequest) {
+    return agUiChatStream(request, { url: '/agent/ag-ui', headers: { /* auth, CSRF */ } });
+  }
+}
+
+// <AgentProvider backend={new AgUiAgentClient()}>
 ```
+
+The send's `pageContext`, `agent`, `model`, `persona` and `uiCapabilities` ride `forwardedProps`, and
+so does `regenerate: true` (`chat.regenerate()`). Attachments the composer staged travel by
+`mediaId`, as `file` parts with `provider: 'nestjs-agent'`. `agUiChatStream` does not read the
+provider's connection settings: `url` is the full path, headers are its own `headers`, and it fetches
+with `credentials: 'same-origin'` unless you pass a `fetch`.
 
 ## What the input means here
 
@@ -57,10 +71,10 @@ const backend: AgentBackend = {
 | `threadId` | The conversation. A thread the caller already owns is continued; an id nobody has is **created under that id** (`CreateThreadInput.id` — the bundled stores honour it; at most 255 characters). Another actor's thread is refused as on `chat`. |
 | `runId` | Echoed on `RUN_STARTED` / `RUN_FINISHED`. The library's own run id travels in the `agora.run` custom event. |
 | `messages` | The **last user message** is the turn to answer. Earlier messages are not read back in: the thread's history is the one the server stored. |
-| content parts | `text` parts are the message's text. A media part carried **inline** (`data`) is staged through the bound `AGENT_ATTACHMENT_STAGING` store, within the [attachment limits](/docs/agent/reference/configuration), and sent to the model. A part by `url` or provider `file` handle is dropped, and an `agora.warning` says so — the model is only handed bytes the server staged itself. |
+| content parts | `text` parts are the message's text. A media part with a `file` source whose `provider` is `'nestjs-agent'` (`AG_UI_MEDIA_PROVIDER`) names an attachment already staged with this library (`POST /agent/attachments`) by its `mediaId`; it is resolved for the caller exactly as `chat` resolves `attachments`, and a mediaId the caller does not own is a `403`. A media part carried **inline** (`data`) is staged through the bound `AGENT_ATTACHMENT_STAGING` store, within the [attachment limits](/docs/agent/reference/configuration). A part by `url`, or a `file` handle of another provider, is dropped, and an `agora.warning` says so — the model is only handed bytes the server staged itself. |
 | `resume` | Answers to the interrupts of the previous run — see below. |
 | `context` | Rides in the turn's page context as `agUiContext`, where a `PromptBuilder` and the tools read it. |
-| `forwardedProps` | `agent`, `persona`, `model` and `pageContext` are read as the matching fields of a native send (see [Personas](/docs/agent/guides/personas)). `uiCapabilities` declares the components this client draws; the rest arrive as text (see [One answer, every surface](/docs/agent/guides/rendering-everywhere)). An invalid `uiCapabilities` is a `400`. |
+| `forwardedProps` | `agent`, `persona`, `model` and `pageContext` are read as the matching fields of a native send (see [Personas](/docs/agent/guides/personas)). `uiCapabilities` declares the components this client draws; the rest arrive as text (see [One answer, every surface](/docs/agent/guides/rendering-everywhere)). An invalid `uiCapabilities` is a `400`. `regenerate: true` re-runs the thread's last exchange, as `regenerate` on `chat` does; on a thread that does not exist yet it is a `400`. A native send's `mode` and `transient` have no counterpart: a send on a thread with a turn running is `409 run_active`. |
 | `tools` | Frontend tools are not supported: the list is ignored, with a warning. |
 | `state` | Ignored; this producer emits no state events. |
 
@@ -79,10 +93,11 @@ parts needs more: `app.useBodyParser('json', { limit: '25mb' })` in `main.ts`.
 | `text` | `TEXT_MESSAGE_START` / `CONTENT` / `END`, one message per stretch of text |
 | `reasoning` | `REASONING_START`, a reasoning message, `REASONING_END` |
 | `step-start` / `step-finish` | `STEP_STARTED` / `STEP_FINISHED`; the step's usage is folded into the run's |
-| `tool-input-*` | `TOOL_CALL_START` / `ARGS` / `END` |
+| `tool-input-*` | `TOOL_CALL_START` / `ARGS` / `END`; the call's `toolKind` and `parentId` ride `TOOL_CALL_START`'s `metadata['agora.toolKind']` and `['agora.parentId']` |
 | `tool-output`, `-error`, `-denied` | `TOOL_CALL_RESULT` (a failure or a refusal is marked in `metadata['agora.outcome']`) |
 | `approval-requested`, `elicitation` (the run parks) | an `Interrupt` on the closing `RUN_FINISHED` |
 | `cancelled` | `RUN_FINISHED` with the cancelled outcome |
+| `message-metadata` | nothing: not carried |
 | `event: error` | `RUN_ERROR` with the native `code` |
 
 `RUN_FINISHED.usage` reports the run's tokens, **one entry per model** — keyed on the `model` each
@@ -95,11 +110,13 @@ What AG-UI has no event for travels as `CUSTOM` events, which a client that does
 | `name` | `value` |
 | --- | --- |
 | `agora.run` | `{ runId, threadId }` — the library's ids, e.g. for `POST /agent/chat/:runId/cancel` |
-| `agora.ui` | a [generative-UI](/docs/agent/guides/generative-ui) component `{ id, component, props, version?, toolCallId? }`; a repeat `id` replaces. Its `fallbackText` is not carried, so a client that cannot draw a component should leave it out of `uiCapabilities` to get the text instead |
+| `agora.ui` | a [generative-UI](/docs/agent/guides/generative-ui) component `{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId? }`; a repeat `id` replaces. `fallbackText` is what a client that cannot draw the component shows instead; one that never draws it should leave it out of `uiCapabilities` and get the text as a text message |
 | `agora.title` | `{ title }` |
-| `agora.step-usage` | `{ usage, costUsd, reasoningMs }` of one model step |
-| `agora.approval-requested`, `agora.approval-settled`, `agora.elicitation` | the native frames, for a client that renders them live |
-| `agora.queue` | the thread's message queue |
+| `agora.step-usage` | `{ usage, costUsd, reasoningMs }` of one model step, right after its `STEP_FINISHED` |
+| `agora.approval-requested`, `agora.approval-settled` | the native frames, for a client that renders them live |
+| `agora.elicitation` | `{ id, runId, request }`: the question set the run parked on, under the tool-call id an answer settles |
+| `agora.queue` | `{ queue, started? }`: the thread's message queue |
+| `agora.action-proposal-decision` | `{ threadId, proposalDecision }`: a proposal decided with no model run (below) |
 | `agora.warning` | `{ message }` — input this producer could not use |
 
 The names are shared with `@adonis-agora/agent`, which serves the same encoder.
@@ -109,7 +126,7 @@ The names are shared with `@adonis-agora/agent`, which serves the same encoder.
 With [`actionApprovalMode: 'independent'`](/docs/agent/guides/action-proposals), a user message to an
 existing thread that is a decision word ("yes", "no #id", …) and carries no media decides a pending
 proposal instead of starting a run. The answer is `RUN_STARTED`, a `CUSTOM` event named
-`aviary.action-proposal-decision` with `{ threadId, proposalDecision }`, the receipt as one text
+`agora.action-proposal-decision` with `{ threadId, proposalDecision }`, the receipt as one text
 message, and `RUN_FINISHED`. No model run is created.
 
 ## Interrupts and resume
@@ -120,7 +137,7 @@ continues it. Underneath, the library run is still parked where it stopped (dura
 [durable runner](/docs/agent/guides/human-in-the-loop-and-durability)); the resume settles what it
 waits for and re-attaches to it.
 
-```json
+```json title="Backend to client — the closing RUN_FINISHED"
 { "type": "RUN_FINISHED", "threadId": "t1", "runId": "r1",
   "outcome": { "type": "interrupt", "interrupts": [{
     "id": "agora_…", "reason": "tool_approval", "toolCallId": "call_1",
@@ -143,6 +160,20 @@ the first one is delivered, so a list with one bad entry settles nothing. An ent
 interrupt this agent never raised is skipped with a warning; an interrupt the list leaves out stays
 open, and the resumed run ends with the interrupt outcome again. Decisions are recorded as having
 come `via: 'ag-ui'`.
+
+An approval for an [independent action proposal](/docs/agent/guides/action-proposals) is an interrupt
+too; its id names the proposal, and `resume` decides it through the proposal service, as the native
+`action-proposals` routes do, without signalling the run that proposed it (which is not waiting).
+A resume list that only decides proposals is answered with `agora.action-proposal-decision` events
+and their receipts, with no run behind them.
+
+`agUiChatStream` does not resume: the React client renders the approval card and the question form
+from `agora.approval-requested` and `agora.elicitation` and decides them through the native
+`tool-call` routes. The AG-UI run has ended on the interrupt, so the client re-attaches to the
+parked run on `GET /agent/chat/:runId/stream?after=<id>` — every event this route writes carries the
+run's own sequence number as its SSE `id:` — and what the run does after the decision streams into
+the same message, as on the native stream. See
+[What AG-UI costs you](/docs/agent/guides/rendering-everywhere#what-ag-ui-costs-you).
 
 The interrupt `id` is the whole address of what it answers — the run, the call, and how much of the
 stream was already delivered — so the server keeps nothing between the two requests and **any
@@ -167,7 +198,7 @@ your own is built the same way.
 The encoder is framework-free, in `@dudousxd/nestjs-agent-core/ag-ui`, for a host that mounts its
 own route (or runs somewhere that is not Nest):
 
-```ts
+```ts title="Backend — your own route"
 import {
   agUiEvents,
   agUiFramesFromNdjson,
