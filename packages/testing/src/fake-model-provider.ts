@@ -1,4 +1,9 @@
-import type { ModelProvider, ModelTurnArgs, ModelTurnResult } from '@dudousxd/nestjs-agent-core';
+import {
+  type ModelProvider,
+  type ModelTurnArgs,
+  type ModelTurnResult,
+  encodeStreamEvent,
+} from '@dudousxd/nestjs-agent-core';
 
 export interface FakeTurn {
   text: string;
@@ -19,7 +24,8 @@ export type FakeScript = (args: ModelTurnArgs, turnIndex: number) => FakeTurn;
 
 /**
  * A deterministic, offline `ModelProvider`. Drives the agent loop without any API key,
- * streaming the scripted text to the sink and optionally requesting one tool call.
+ * streaming the scripted text to the sink — as a `text` stream event, the frame a real provider
+ * (`aiSdkModel`) writes and a client renders live — and optionally requesting tool calls.
  */
 export class FakeModelProvider implements ModelProvider {
   constructor(private readonly script: FakeScript) {}
@@ -28,8 +34,7 @@ export class FakeModelProvider implements ModelProvider {
     const turnIndex = args.messages.filter((message) => message.role === 'assistant').length;
     const turn = this.script(args, turnIndex);
 
-    const encoder = new TextEncoder();
-    await args.sink.write(encoder.encode(turn.text));
+    await args.sink.write(encodeStreamEvent({ kind: 'text', text: turn.text }));
 
     const requested = turn.toolCall !== undefined ? [turn.toolCall] : (turn.toolCalls ?? []);
     const toolCalls = requested.map((call) => ({
