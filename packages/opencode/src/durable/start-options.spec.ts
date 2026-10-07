@@ -63,4 +63,18 @@ describe('openCodeDurable start options', () => {
       'Too many turns at once',
     );
   });
+
+  it('takes start options and the refusal from a host in DI', async () => {
+    h = await bootEngine({
+      engine: (host) =>
+        openCodeDurable({
+          host: Object.assign(host, {
+            startOptions: async () => ({ concurrency: { key: 'tenant:t1', limit: 0 } }),
+            startError: () => new HttpException('Busy', HttpStatus.TOO_MANY_REQUESTS),
+          }),
+        }),
+      imports: [durableModule()],
+    });
+    await expect(h.service.chat({ actor, message: 'hi' })).rejects.toThrow('Busy');
+  });
 });

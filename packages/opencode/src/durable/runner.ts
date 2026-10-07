@@ -8,7 +8,8 @@ import type {
 import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
 import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { OPENCODE_OPTIONS } from '../tokens.js';
+import type { OpenCodeHost } from '../host.js';
+import { OPENCODE_HOST, OPENCODE_OPTIONS } from '../tokens.js';
 import { type OpenCodeEngineSettings, OpenCodeTurns } from '../turns.js';
 import { OpenCodeRunWorkflow, decisionToken } from './workflow.js';
 
@@ -36,6 +37,7 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
     @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
     private readonly turns: OpenCodeTurns,
     @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
+    @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
   ) {
     turns.startNext = (next, runId) => this.start(next, { runId });
   }
@@ -50,7 +52,10 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
   ): Promise<{ runId: string }> {
     const runId = options.runId ?? this.runIdFor(input);
     const durable = this.settings.durable;
-    const startOptions = (await durable?.start?.(input, runId)) ?? {};
+    const startOptions = {
+      ...((await durable?.start?.(input, runId)) ?? {}),
+      ...((await this.host.startOptions?.(input, runId)) ?? {}),
+    };
     try {
       await this.workflows.start(
         OpenCodeRunWorkflow,
@@ -62,7 +67,7 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
       // A run that suspends on its first step under a driving dispatcher surfaces the runtime's
       // suspend signal here: the run is persisted and will be resumed, not failed.
       if (isWorkflowControlFlowSignal(error)) return { runId };
-      throw durable?.startError?.(error, input) ?? error;
+      throw this.host.startError?.(error, input) ?? durable?.startError?.(error, input) ?? error;
     }
     return { runId };
   }

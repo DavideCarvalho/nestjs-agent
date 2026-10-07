@@ -58,6 +58,15 @@ export interface OpenCodeHost {
   ): Promise<void>;
 
   /**
+   * `openCodeDurable()` only: the turn's workflow start options (tags, search attributes, a
+   * concurrency quota) — like `settings.durable.start`, from a host that has its services in DI.
+   */
+  startOptions?(input: AgentRunInput, runId: string): Promise<Record<string, unknown>>;
+
+  /** `openCodeDurable()` only: what a refused start becomes (e.g. a concurrency limit → a 429). */
+  startError?(error: unknown, input: AgentRunInput): unknown;
+
+  /**
    * May this turn keep the thread's session? Asked when the session is still on its server; `false`
    * opens a new one (told the conversation so far) — e.g. the person the session's tools act for
    * changed. Omit → always reuse.
