@@ -53,8 +53,11 @@ const STRING_LITERAL_TYPES = new Set(['string', 'single_quote_string', 'double_q
 
 /**
  * Rewrites a SELECT so every reference to a scoped table is constrained to a
- * single tenant: `<tenantColumn> = '<tenantRef>'` is AND-ed into the WHERE of
- * each SELECT that reads a scoped table in its FROM — the top-level one and every
+ * single tenant: the SELECT's WHERE is parenthesised whole and
+ * `<alias>.<tenantColumn> = '<tenantRef>'` is AND-ed to it, for every scoped
+ * table in its FROM — always, even when the query already names the tenant
+ * (an `OR` can make such a predicate constrain nothing). This applies to each
+ * SELECT that reads a scoped table — the top-level one and every
  * subquery (in the select list, WHERE, HAVING, a JOIN's ON …). An existing
  * predicate for a different tenant is rejected (no cross-tenant reads).
  *
@@ -136,8 +139,10 @@ export class TenantScopeRewriter {
     );
     if (scopedFrom.length === 0) return;
 
-    const existing = this.collectTenantPredicates(ast.where);
-    for (const predicate of existing) {
+    // A literal naming another tenant anywhere in the WHERE is refused outright. One naming THIS
+    // tenant proves nothing — under an `OR` (`tenant = 'x' OR 1 = 1`) it constrains no row — so it
+    // never stands in for the constraint below.
+    for (const predicate of this.collectTenantPredicates(ast.where)) {
       if (predicate.value !== tenantRef) {
         throw new Error(
           'tenant scope: tenant mismatch — query targets a tenant other than the current session',
@@ -145,17 +150,16 @@ export class TenantScopeRewriter {
       }
     }
 
-    const coveredAliases = new Set(existing.map((predicate) => predicate.tableAlias));
+    // The caller's WHERE, parenthesised whole, AND every scoped table's own tenant equality —
+    // qualified by its alias, so a join or a correlated subquery cannot point it elsewhere.
+    let where: unknown = ast.where == null ? null : parenthesised(ast.where);
     for (const entry of scopedFrom) {
-      const alias = entry.as ?? entry.table;
-      const isAmbiguous = scopedFrom.length > 1;
-      const covered = coveredAliases.has(alias) || (!isAmbiguous && coveredAliases.has(null));
-      if (covered) continue;
-      ast.where = this.andCondition(
-        ast.where,
-        this.buildTenantEquality(isAmbiguous ? alias : null, tenantRef),
+      where = this.andCondition(
+        where,
+        this.buildTenantEquality(entry.as ?? entry.table, tenantRef),
       );
     }
+    ast.where = where;
   }
 
   private collectTenantPredicates(where: unknown): ExtractedPredicate[] {
@@ -174,7 +178,7 @@ export class TenantScopeRewriter {
     return [{ tableAlias: lhs.table ?? null, value: rhs.value }];
   }
 
-  private buildTenantEquality(tableAlias: string | null, tenantRef: string): BinaryExpr {
+  private buildTenantEquality(tableAlias: string, tenantRef: string): BinaryExpr {
     return {
       type: 'binary_expr',
       operator: '=',
@@ -198,6 +202,11 @@ export class TenantScopeRewriter {
  * Every SELECT in the tree, the root first: the statement itself and each subquery wherever it
  * sits — the select list, WHERE, HAVING, a JOIN's ON, a FROM (which `scopeSelect` then refuses).
  */
+/** `node` with the parser's own parentheses flag set, so it prints — and binds — as one term. */
+function parenthesised(node: unknown): unknown {
+  return typeof node === 'object' && node !== null ? { ...node, parentheses: true } : node;
+}
+
 function collectSelects(root: SelectAst): SelectAst[] {
   const found: SelectAst[] = [];
   const walk = (node: unknown): void => {
