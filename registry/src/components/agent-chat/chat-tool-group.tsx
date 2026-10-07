@@ -55,7 +55,7 @@ export function ChatToolCard({ call, className }: ChatToolCardProps) {
       >
         <WrenchIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">{name}</span>
-        <ToolStateBadge state={call.isAwaitingApproval ? 'approval-requested' : part.state} />
+        <ToolStateBadge call={call} />
         <ChevronDownIcon
           className={cn(
             'size-4 shrink-0 text-muted-foreground transition-transform',
@@ -87,12 +87,20 @@ function ToolApproval({ call }: { call: TranscriptToolCall }) {
   // for a call the server is already settling. Only the pressed one reports progress — the two
   // `isSubmitting` flags name WHICH decision is going, not merely that one is.
   const isSettling = call.approve.isSubmitting || call.reject.isSubmitting;
+  // The tool's own wording for the decision, when it declared one: the question, and its verb on
+  // the button.
+  const confirm = call.description.confirm;
   return (
     <div className="flex items-center gap-2 border-t border-border px-3 py-2">
       {call.error ? (
         <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
           {call.error}
         </p>
+      ) : confirm ? (
+        <div className="min-w-0 flex-1 text-xs">
+          <p className="text-foreground">{confirm.title}</p>
+          {confirm.detail ? <p className="text-muted-foreground">{confirm.detail}</p> : null}
+        </div>
       ) : (
         <p className="min-w-0 flex-1 text-xs text-muted-foreground">
           Waiting for you before it runs.
@@ -125,7 +133,7 @@ function ToolApproval({ call }: { call: TranscriptToolCall }) {
             'disabled:pointer-events-none disabled:opacity-40',
           )}
         >
-          Approve
+          {confirm?.verb ?? 'Approve'}
         </button>
       ) : null}
     </div>
@@ -141,16 +149,33 @@ const STATE_LABELS: Record<string, string> = {
   'output-denied': 'Denied',
 };
 
-function ToolStateBadge({ state }: { state: string }) {
-  const isTerminalFailure = state === 'output-error' || state === 'output-denied';
+/**
+ * A proposal (an independently approved action) settles its call at once on a receipt, so the
+ * part's own state says "Done" while the work is still queued: its badge follows the proposal.
+ */
+function ToolStateBadge({ call }: { call: TranscriptToolCall }) {
+  if (call.approval?.target?.kind === 'proposal') {
+    const { status, phrase } = call.description;
+    return <StateBadge label={phrase} isFailure={status === 'denied' || status === 'failed'} />;
+  }
+  const state = call.isAwaitingApproval ? 'approval-requested' : call.part.state;
+  return (
+    <StateBadge
+      label={STATE_LABELS[state] ?? state}
+      isFailure={state === 'output-error' || state === 'output-denied'}
+    />
+  );
+}
+
+function StateBadge({ label, isFailure }: { label: string; isFailure: boolean }) {
   return (
     <span
       className={cn(
         'shrink-0 rounded-full px-2 py-0.5 text-[0.6875rem] leading-none font-medium',
-        isTerminalFailure ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground',
+        isFailure ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground',
       )}
     >
-      {STATE_LABELS[state] ?? state}
+      {label}
     </span>
   );
 }

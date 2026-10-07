@@ -112,4 +112,52 @@ describe('ChatToolGroup', () => {
     expect(screen.getByText('purgeCache waiting')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
+
+  describe('an independently approved action (a proposal)', () => {
+    const confirmation = { title: 'Purge every cache?', verb: 'Purge', detail: 'All regions.' };
+    const proposal = (data: Record<string, unknown>) =>
+      ({
+        type: 'data-action-proposal',
+        data: {
+          id: 'call-2',
+          target: { kind: 'proposal', proposalId: 'p-1', threadId: 't-1' },
+          approver: 'requester',
+          confirmation,
+          ...data,
+        },
+      }) as UIMessage['parts'][number];
+    // In independent mode the call itself settles at once on a receipt; the work runs later.
+    const RECEIPT = part({
+      state: 'output-available',
+      output: { proposalId: 'p-1', status: 'pending' },
+      toolMetadata: { toolKind: 'action' },
+    });
+
+    it('asks in the confirmation wording, with its verb on the button', () => {
+      render(
+        <Harness
+          parts={[RECEIPT, proposal({ status: 'pending' })]}
+          onApprove={() => undefined}
+          onReject={() => undefined}
+        />,
+      );
+      expect(screen.getByText('Purge every cache?')).toBeTruthy();
+      expect(screen.getByText('All regions.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Purge' })).toBeTruthy();
+      expect(screen.getByText('Awaiting approval')).toBeTruthy();
+    });
+
+    it('shows an approved proposal as queued, not done, while the work waits', () => {
+      render(
+        <Harness parts={[RECEIPT, proposal({ status: 'approved', executionStatus: 'queued' })]} />,
+      );
+      expect(screen.getByText('Queued')).toBeTruthy();
+      expect(screen.queryByText('Done')).toBeNull();
+    });
+
+    it('shows a rejected proposal as a failure', () => {
+      render(<Harness parts={[RECEIPT, proposal({ status: 'rejected' })]} />);
+      expect(screen.getByText('Rejected')).toBeTruthy();
+    });
+  });
 });
