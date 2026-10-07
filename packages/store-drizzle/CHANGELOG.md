@@ -1,5 +1,18 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.26.0
+
+### Minor Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Independent approvals now work on Drizzle over postgres.js (`drizzle-orm/postgres-js`, `PostgresJsDatabase`). Its transactions are awaited like node-postgres's, so it is now on the certified list. The proposal, outcome-admission, transaction-race and chat-queue database suites now also run on postgres.js.
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs only. The `DrizzleAgentStore` doc comment now says it takes a SQLite, Postgres or MySQL handle. The Drizzle README's upgrade `ALTER` list now matches the schema, and it points to drizzle-kit or `agentSchemaDdl` for the tables added later. Its sections that came after "License" now sit before it. The `@dudousxd/nestjs-agent-rag` package description now mentions the Redis vector store.
+
+- Updated dependencies [[`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da)]:
+  - @dudousxd/nestjs-agent-core@0.41.0
+
 ## 0.25.0
 
 ### Minor Changes

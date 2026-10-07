@@ -1,5 +1,22 @@
 # @dudousxd/nestjs-agent-data
 
+## 0.4.0
+
+### Minor Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tighten the governed SQL tool:
+
+  - **Behavior change:** `TenantScopeRewriter.rewrite` now refuses a query on a scoped table when the actor has no `tenantRef`. Before, it ran the query unscoped. To keep the old "no tenant means every tenant" path, pass `onMissingTenant: 'passthrough'`. Queries that read no scoped table still run.
+  - Subqueries are now scoped too. A scoped table read in a subquery in the select list, `WHERE`, `HAVING` or a `JOIN ... ON` used to run unconstrained. CTEs, set operations and subqueries in `FROM` are refused at any depth.
+  - **Behavior change:** `injectLimit` (and so `executeSql`) caps an explicit `LIMIT` larger than `maxRows`. Before, any explicit `LIMIT` was trusted.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Security:** the governed SQL tool's tenant scoping could be bypassed with `OR`. `TenantScopeRewriter` treated any `tenant_column = '<current tenant>'` it found in the WHERE as covering the query, even under an `OR`. So `WHERE tenant_id = 'mine' OR 1 = 1` got no constraint added and read every tenant's rows. The rewriter now always wraps the query's WHERE in parentheses and ANDs `<alias>.<tenant_column> = '<tenant>'` for every scoped table, in the top-level query and in every subquery. A literal naming another tenant is still refused. The added predicate is now always qualified with the table's alias.
+
+### Patch Changes
+
+- Updated dependencies [[`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da)]:
+  - @dudousxd/nestjs-agent-core@0.41.0
+
 ## 0.3.46
 
 ### Patch Changes

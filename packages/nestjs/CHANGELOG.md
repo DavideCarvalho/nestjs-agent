@@ -1,5 +1,61 @@
 # @dudousxd/nestjs-agent
 
+## 1.22.0
+
+### Minor Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Security:** `AgentAuthzModule.forRoot()` now actually reaches the agent. `AgentModule` bound its own `AGENT_ROLES_POLICY`, and Nest resolves a module's own provider before a global one, so the agent loop never saw the Gate-backed policy: the role-based default ran instead, ignored `ability`, and let every actor call an ability-gated tool that named no `roles`. `AgentModule` now forwards to an `AGENT_ROLES_POLICY` bound by another module (as it already did for `AGENT_STORE`), whatever the import order. An explicit `rolesPolicy` option still wins.
+
+  **Behavior change (fail closed):** `DefaultRolesPolicy` (and `ClosedRolesPolicy`) now refuse a tool that declares an `ability` and no `roles`, because they can't evaluate an ability. Before, such a tool was open to everyone unless `defaultRoles` said otherwise. A tool that declares both is still decided by its `roles`.
+
+- [#307](https://github.com/DavideCarvalho/nestjs-agent/pull/307) [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add app-scoped component registries, validated callable component factories, typed table/chart presentations, and portable manifests. Support explicit output schemas for transformed props. Add functional defineTool authoring and class/functional present hooks that emit through the existing journaled UI path while retaining successful domain output on presentation errors, including completed-preflight replay.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Security:** proposal routes no longer return raw store rows. `GET /threads/:threadId/action-proposals`, the approve/reject routes, text decisions, the AG-UI decision event and the approval port all returned the stored row. That row includes the worker's execution lease token (which lets its holder settle the work), the delivery lease, the tool's `idempotencyKey`, and the execution address (`preparationInput`, `executionContext`). They now return `ActionProposalView` / `ActionProposalMutationView` (new in core, built with `toActionProposalView` / `toActionProposalMutationView`), which leave all of those out. `AgentApprovalPort`'s proposal methods and the React client's proposal types now use the view types. The codegen mirror no longer declares `idempotencyKey`.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Behavior change:** text decisions on action proposals are now in English by default.
+
+  - Approve: `yes`, `confirm`, `approve`, `approved`, `ok`.
+  - Reject: `no`, `cancel`, `reject`, `deny`.
+  - Remember the approval: `always in this conversation`.
+  - The agent's replies are in English too, for example "Proposal approved and queued to run."
+
+  The Portuguese commands (`sim`, `aprovar`, `rejeitar`, `sempre nesta conversa`, ...) are no longer recognized unless you opt in.
+
+  **To keep Portuguese**, pass the shipped preset. It accepts the Portuguese commands (English still works) and replies in Portuguese:
+
+  ```ts
+  import { ptBrActionProposalText } from "@dudousxd/nestjs-agent-core";
+
+  AgentModule.forRoot({ /* … */ actionProposalText: ptBrActionProposalText });
+  ```
+
+  For any other language, set `actionProposalText: { vocabulary?, replies? }`. Each part you pass replaces the default it names, field by field. Core also exports `DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY`, `DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES` and `textActionProposalReply`, and `resolveTextActionProposalDecision`/`parseTextActionProposalCommand` take an optional vocabulary.
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - AG-UI:
+
+  - The `agora.ui` event now carries `fallbackText` and `componentVersions`, so a client without a renderer for the component can still show something.
+  - `agora.approval-requested` now carries the proposal `target` and its `confirmation`. An interrupt left open for a proposal says `agora.target`, and its id names the proposal and its thread.
+  - Resuming a proposal interrupt now decides it through the proposal service, the same path as `POST .../action-proposals/:id/approve|reject`. A caller who may not decide it gets that service's `403`/`404`. Before, the resume tried to signal the finished run and got `409`.
+  - `AgentService.decideActionProposal` is the new entry point the resume uses.
+
+  **Breaking:** the AG-UI custom event for a proposal decided without a model run is renamed from `aviary.action-proposal-decision` to `agora.action-proposal-decision` (`AG_UI_CUSTOM.actionProposalDecision`), to match every other custom event. The old name is not kept.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs only: `AgentModuleOptions.actionApprovalMode`, `backgroundActorResolver` and `actionProposalWorker` now have JSDoc covering what each does, the defaults, and the boot-time checks.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `aviary:agent:quota.exceeded` is now published when the send gate refuses a turn with `429`, and when the message queue pauses on quota. Before, only the loop's legacy `deps.quota` path published it, and `AgentModule` never sets that path, so the dashboard and Telescope never saw a quota refusal.
+
+  `AgentQuotaExceeded` now has optional `period`, `reason`, `usedUsd` and `limitUsd`. `usedTokens` and `limitTokens` are now optional, because a USD-only spend cap has no token figures. The dashboard's live feed shows a USD ceiling when the window has no token ceiling. Also fixed the `QuotaProvider` JSDoc: the option is `AgentModule.forRoot({ quota })`, not `quotaProvider`.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Redis stream keys now expire.
+
+  - `@dudousxd/nestjs-agent-transport-redis`: `RedisTokenStreamSink` takes a `ttlSeconds` option (default 3600; `0` keeps keys until `close()`). Nothing calls `close()` on its own, so before this, every run's `:chunks` and `:state` keys stayed in Redis forever. The TTL slides from the run's last write and is set on both keys when the run ends or fails. `RedisStreamClient` gains an `expire(key, seconds)` method. An adapter that doesn't implement it still streams, but its keys never expire.
+  - `@dudousxd/nestjs-agent/sink-redis`: the TTL is now also re-armed on every write, so a run that crashes without ending still expires. `ttlSeconds: 0` now means "keep until `close()`". Before, it sent `EXPIRE 0`, which deleted the stream when the run ended.
+
+- Updated dependencies [[`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da)]:
+  - @dudousxd/nestjs-agent-core@0.41.0
+
 ## 1.21.0
 
 ### Minor Changes

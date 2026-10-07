@@ -1,5 +1,20 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.34.0
+
+### Minor Changes
+
+- [#307](https://github.com/DavideCarvalho/nestjs-agent/pull/307) [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Add an app-scoped React component registry, optional static HTML server rendering, and optional Playwright PNG/PDF capture with validated pagination, trusted app styles, isolated browser contexts, and bounded capture dimensions.
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - **Security:** proposal routes no longer return raw store rows. `GET /threads/:threadId/action-proposals`, the approve/reject routes, text decisions, the AG-UI decision event and the approval port all returned the stored row. That row includes the worker's execution lease token (which lets its holder settle the work), the delivery lease, the tool's `idempotencyKey`, and the execution address (`preparationInput`, `executionContext`). They now return `ActionProposalView` / `ActionProposalMutationView` (new in core, built with `toActionProposalView` / `toActionProposalMutationView`), which leave all of those out. `AgentApprovalPort`'s proposal methods and the React client's proposal types now use the view types. The codegen mirror no longer declares `idempotencyKey`.
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `useAgentUiCapabilities` is now exported from the package root. It reads the `uiCapabilities` declared on the nearest `<AgentProvider>`.
+
+- Updated dependencies [[`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`66305c4`](https://github.com/DavideCarvalho/nestjs-agent/commit/66305c47f0624ca3eafa0f9c298e40ad977ff064), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da), [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da)]:
+  - @dudousxd/nestjs-agent-core@0.41.0
+
 ## 0.33.0
 
 ### Minor Changes

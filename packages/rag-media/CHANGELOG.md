@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag-media
 
+## 0.6.4
+
+### Patch Changes
+
+- [#319](https://github.com/DavideCarvalho/nestjs-agent/pull/319) [`6b7de84`](https://github.com/DavideCarvalho/nestjs-agent/commit/6b7de84eca7dd094baf21a19be8144d8ae2409da) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `isMediaDeleteEvent` now also requires a non-empty `ownerType` and `ownerId`, which `MediaDeleteEvent` and `RagMediaRemovedPayload` both declare. Before, a payload with only an `id` passed the guard, and `undefined` owner fields reached the `rag-media.removed` event.
+
 ## 0.6.3
 
 ### Patch Changes
