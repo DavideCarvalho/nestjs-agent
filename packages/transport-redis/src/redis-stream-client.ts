@@ -22,4 +22,9 @@ export interface RedisStreamClient {
   subscribe(channel: string, onMessage: (message: string) => void): Promise<() => Promise<void>>;
   /** Delete the given keys (DEL). */
   del(...keys: string[]): Promise<void>;
+  /**
+   * Expire `key` after `seconds` (EXPIRE) — how a run's keys stop outliving their replay window.
+   * An adapter written before this existed still runs, but its keys never expire.
+   */
+  expire(key: string, seconds: number): Promise<void>;
 }

@@ -48,6 +48,9 @@ function ioredisClient(commandConn: Redis, subscriberConn: Redis): RedisStreamCl
     del: async (...keys) => {
       await commandConn.del(...keys);
     },
+    expire: async (key, seconds) => {
+      await commandConn.expire(key, seconds);
+    },
   };
 }
 
@@ -116,6 +119,17 @@ describe('RedisTokenStreamSink (real Redis)', () => {
     await writer.end();
 
     expect(await collected).toBe('ab');
+  });
+
+  it('leaves an ended run with a TTL on both keys', async () => {
+    const writer = sink.open('run-ttl');
+    await writer.write(encode('x'));
+    await writer.end();
+    const chunksTtl = await command.ttl('agent:stream:run-ttl:chunks');
+    const stateTtl = await command.ttl('agent:stream:run-ttl:state');
+    expect(chunksTtl).toBeGreaterThan(0);
+    expect(chunksTtl).toBeLessThanOrEqual(3600);
+    expect(stateTtl).toBeGreaterThan(0);
   });
 
   it('close() drops the run keys from Redis', async () => {

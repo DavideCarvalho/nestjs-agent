@@ -10,7 +10,7 @@ type Entry = [id: Buffer, fields: Buffer[]];
  * `xreadBuffer`, `duplicate`, `disconnect`, `del`, `expire`). Faithful enough to exercise replay +
  * cursor + terminal semantics; live-follow against a real Redis is covered by the integration run.
  */
-function fakeRedis(): Redis {
+function fakeRedis(ttls = new Map<string, number>()): Redis {
   const streams = new Map<string, Entry[]>();
   let seq = 0;
   const client = {
@@ -43,7 +43,8 @@ function fakeRedis(): Redis {
     async del() {
       return 1;
     },
-    async expire() {
+    async expire(key: string, seconds: number) {
+      ttls.set(key, seconds);
       return 1;
     },
   };
@@ -105,6 +106,21 @@ describe('RedisTokenStreamSink', () => {
 
     expect(await collect(sink.subscribe('run-a'))).toEqual(['AAA']);
     expect(await collect(sink.subscribe('run-b'))).toEqual(['BBB']);
+  });
+
+  it('arms the TTL on every write, so a run that never ends still expires', async () => {
+    const ttls = new Map<string, number>();
+    const writer = new RedisTokenStreamSink(fakeRedis(ttls), { ttlSeconds: 60 }).open('run-c');
+    await writer.write(new TextEncoder().encode('x'));
+    expect(ttls.get('agent:sink:run-c')).toBe(60);
+  });
+
+  it('sets no TTL under ttlSeconds: 0 — EXPIRE 0 would delete the stream outright', async () => {
+    const ttls = new Map<string, number>();
+    const writer = new RedisTokenStreamSink(fakeRedis(ttls), { ttlSeconds: 0 }).open('run-d');
+    await writer.write(new TextEncoder().encode('x'));
+    await writer.end();
+    expect(ttls.size).toBe(0);
   });
 
   it('AgentStreamError carries the structured code', () => {

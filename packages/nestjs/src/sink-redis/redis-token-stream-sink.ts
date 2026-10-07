@@ -10,9 +10,10 @@ export interface RedisTokenStreamSinkOptions {
   /** Key namespace for the per-run streams. Default `agent:sink:`. */
   keyPrefix?: string;
   /**
-   * TTL (seconds) applied to a run's stream once it ends/fails, so completed streams self-expire
-   * instead of accumulating in Redis. A subscriber that reconnects within the window still replays.
-   * Default 3600 (1h).
+   * How long (seconds) a run's stream outlives its last write, so streams self-expire instead of
+   * accumulating in Redis — ended runs past their replay window and runs that crashed without
+   * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the window
+   * still replays. Default 3600 (1h). `0` keeps the stream until `close()`.
    */
   ttlSeconds?: number;
   /** `XREAD BLOCK` timeout (ms) between follow polls. Default 5000. Purely an internal cadence. */
@@ -58,16 +59,22 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     return {
       write: async (chunk: Uint8Array) => {
         await this.redis.xadd(key, '*', CHUNK_FIELD, Buffer.from(chunk));
+        await this.expire(key);
       },
       end: async () => {
         await this.redis.xadd(key, '*', END_FIELD, '1');
-        await this.redis.expire(key, this.ttlSeconds);
+        await this.expire(key);
       },
       fail: async (error: StreamError) => {
         await this.redis.xadd(key, '*', FAIL_FIELD, JSON.stringify(error));
-        await this.redis.expire(key, this.ttlSeconds);
+        await this.expire(key);
       },
     };
+  }
+
+  /** (Re)arm the TTL — sliding from the run's last write. `EXPIRE 0` would delete, so 0 skips. */
+  private async expire(key: string): Promise<void> {
+    if (this.ttlSeconds > 0) await this.redis.expire(key, this.ttlSeconds);
   }
 
   async *subscribe(runId: string): AsyncIterable<Uint8Array> {
