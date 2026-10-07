@@ -26,9 +26,11 @@ export {
   type ChannelTextsOverrides,
   type ChannelTurnService,
   channelOfProposal,
+  channelTextsFor,
   DEFAULT_CHANNEL_TEXTS,
   mergeChannelTexts,
   proposalButtonIds,
+  ptBrChannelTexts,
 } from './handler.js';
 export {
   type ChannelHttpReply,
@@ -48,6 +50,7 @@ export {
   DEFAULT_CHANNEL_QUESTION_TEXTS,
   formatChannelQuestion,
   parseChannelAnswer,
+  ptBrChannelQuestionTexts,
 } from './questions.js';
 export { splitMessage } from './split.js';
 export type {
