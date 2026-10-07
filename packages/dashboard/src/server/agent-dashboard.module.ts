@@ -165,7 +165,7 @@ export class AgentApiModule {
         options.dashboardAuth,
         ...(options.guards ?? []).filter(isGuardClass),
         // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
-        // injects this WITHOUT `@Optional()` (same pattern as `AGENT_QUOTA_STORE`'s factory).
+        // injects this WITHOUT `@Optional()`.
         { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
       ],
       // DASHBOARD_AUTH re-exported so AgentUiController/AgentDashboardAuthController (hosted
