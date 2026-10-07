@@ -1,0 +1,287 @@
+---
+title: Endpoints
+icon: Route
+description: The REST + SSE surface mounted by AgentModule (default /agent) and the dashboard JSON API mounted by AgentDashboardModule (default /ai-gateway/api).
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+All routes below assume the default `path: 'agent'` (set via [`AgentModule.forRoot`](/docs/agent/reference/configuration)) — replace the `/agent` prefix if you configured a different one. See [Frontend](/docs/agent/guides/frontend) for a client walkthrough and [`packages/dashboard`](/docs/agent/packages/dashboard) for the console SPA.
+
+## Chat
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/chat` | `{ message: string; threadId?: string; agent?: string; persona?: string; model?: string; attachments?: { mediaId: string }[]; pageContext?: PageContext; regenerate?: true; transient?: boolean; mode?: 'auto' \| 'queue' \| 'interrupt'; uiCapabilities?: { components: { name: string; version: number }[] } }` | SSE stream (see below) — or `202 { queued: true; threadId; messageId; position; queue: ChatQueueState; runId?; interrupting? }` when the thread already has a turn running (see [Message queue](#message-queue)); `409 run_active` for a `regenerate` on a busy thread; `400 persona_not_found` for a `persona` the agent does not declare; `400 Invalid UI capabilities`; under `actionApprovalMode: 'independent'`, `200 { threadId; proposalDecision; text }` (JSON) when the message decided a pending [action proposal](#action-proposals) |
+| `GET` | `/agent/chat/:runId/stream` | `?after=<seq>` (or `Last-Event-ID`) | SSE stream — reconnect to an in-flight run, skipping the frames numbered up to the cursor |
+| `POST` | `/agent/chat/:runId/cancel` | — | `{ aborted: boolean }` — the request was accepted; see [Cancelling a run](/docs/agent/guides/human-in-the-loop-and-durability#cancelling-a-run) for where the run actually stops |
+
+`regenerate: true` re-runs the last exchange instead of appending a new user message: the loop
+truncates everything after the thread's last user message and re-answers it. It requires an existing
+`threadId` — there's no last exchange to redo on a fresh thread — and, like the ownership-scoped
+routes below, the caller must own that thread. `message` is ignored: the stored user message is the
+one answered, and it is never stored twice. A backend that serves these routes itself does the same,
+including dropping whatever its runner keeps of the replaced answer.
+
+`uiCapabilities` lists the generative-UI components this client renders, by exact version. Omitted,
+every catalog component is offered and sent; `components: []` is text only; anything else is
+intersected with the server catalog, and components left out arrive as their text. It is stored with
+a queued message. See [One answer, every surface](/docs/agent/guides/rendering-everywhere).
+
+`model` applies to **that turn only** — a send never stores it on the thread, new or existing. Pinning
+is `PATCH /agent/threads/:id { model }` (below), and only a pin outlives the turn.
+
+**Errors** answer their status with a JSON body `{ message, code? }`. The React client's
+`AgentHttpError` carries `status`, `code`, the parsed `body`, and the server's `message` as its own
+`message`, so a hook that shows `error.message` shows the server's words; `<AgentProvider onHttpError>`
+sees every error answer before it is thrown.
+
+`GET /agent/chat/:runId/stream` and `POST /agent/chat/:runId/cancel` are both ownership-scoped: each
+resolves the acting actor and checks they own the run currently streaming — `403` if it belongs to
+someone else, `404` if nobody is streaming that run. A finished run is a `404` rather than a replay
+of its buffer: ownership is derived from the thread's active stream, which the runner clears as the
+run ends, so reconnect while the turn is live (which is what `activeRunId` on a thread tells a
+client).
+
+Every event frame carries an SSE `id:` — strictly increasing (this library uses the frame's 1-based position in the run), the same on every attach —
+so a client that dropped can resume with `?after=<last id>`. See
+[Sequence numbers and reconnecting](/docs/agent/reference/stream-events#sequence-numbers-and-reconnecting).
+
+A turn's `attachments` may carry **only a `mediaId`** — see [Attachments](#attachments) below.
+
+<Callout type="info" title="The chat response is a stream, not JSON">
+  `POST /agent/chat` responds `Content-Type: text/event-stream` with headers `X-Agent-Run-Id` and `X-Agent-Thread-Id`. The first frame is `event: meta` carrying `data: { runId, threadId }`, followed by one `data:` frame per [stream event](/docs/agent/reference/stream-events) (`{ kind: 'text', text }`, tool calls, `ui`, `title`, …), and a closing `event: done`. `GET /agent/chat/:runId/stream` pipes the same format to resume/tail a run (its `meta` frame's `threadId` is `undefined`, since the thread isn't re-resolved on reconnect). A failed run (e.g. quota exceeded) ends the stream with `event: error` carrying `data: { code, message }` (a stable `code` — `quota_exceeded`, `output_rejected`, `structured_output_invalid`, `replay_diverged`, `model_no_output` or `run_failed`; for the last three `message` is a generic sentence in production, see [Error codes](/docs/agent/reference/stream-events#error-codes)) instead of appending error text to the assistant message.
+</Callout>
+
+## AG-UI
+
+Mounted only with `adapters: [agUiAdapter()]` — see [AG-UI](/docs/agent/guides/ag-ui).
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/ag-ui` | AG-UI 1.0 `RunAgentInput` (a `resume` list continues an interrupted run) | `text/event-stream`, one AG-UI event per `data:` line, `RUN_STARTED` → `RUN_FINISHED` / `RUN_ERROR`; `400 { code: 'invalid_input' \| 'invalid_resume' \| 'no_user_message' }`, `403`, `409 run_not_active` before the stream opens |
+
+## Message queue
+
+A send on a thread whose turn is still running is queued (per-thread FIFO, persisted) and runs when
+that turn settles — [Typing ahead](/docs/agent/guides/message-queue). `ChatQueueState` is
+`{ items: { id; content; attachments?; agentName?; model?; interrupt?; createdAt; updatedAt }[]; paused: { reason: 'run_failed' | 'cancelled' | 'quota_exceeded' | 'start_failed'; message?; at } | null }`.
+Every route is ownership-gated like the thread routes.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/threads/:id/queue` | — | `ChatQueueState` |
+| `DELETE` | `/agent/threads/:id/queue` | — | `ChatQueueState` — drops every waiting message and lifts a pause |
+| `POST` | `/agent/threads/:id/queue/resume` | — | `ChatQueueState & { runId? }` — lifts a pause; `runId` when the head started |
+| `PATCH` | `/agent/queue/:messageId` | `{ message?: string; attachments?: { mediaId: string }[] \| null; position?: number }` | `ChatQueueState` — `410` when it already started or was removed |
+| `DELETE` | `/agent/queue/:messageId` | — | `ChatQueueState` — `410` already gone, `404` unknown, `403` another actor's |
+| `POST` | `/agent/queue/:messageId/interrupt` | — | `ChatQueueState & { interrupting?; runId? }` — run a waiting message now: it moves to the head as an interrupt and the running turn is cancelled for it (`interrupting`); with nothing running it starts (`runId`). `410`/`404`/`403` as above |
+
+`mode`: `'auto'` (default) streams on an idle thread and queues on a busy one; `'queue'` always
+queues (and starts at once when idle — the `202` then carries `runId`); `'interrupt'` queues at the
+head and cancels the running turn. A queued message runs under its own id (`messageId` = the run
+id). The running turn's stream carries a `queue` frame on every change, and a final one with
+`started: { messageId, runId }` when it hands the thread over.
+
+## Attachments
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/attachments` | multipart, single file field `file` | `MessageAttachment` (`{ mediaId; url; contentType; name }`) |
+| `GET` | `/agent/attachments` | — | `StagedAttachment[]` (`{ mediaId; name; contentType; sizeBytes; createdAt }`) — the caller's own staged files, newest first |
+
+Always mounted; live whenever something is bound to `AGENT_ATTACHMENT_STAGING` (`501` otherwise).
+The body is aborted mid-stream past a hard 32 MiB ceiling (`HARD_MAX_ATTACHMENT_BYTES`) — the
+configured `maxBytes` narrows that at request time and cannot raise it. Both size gates answer
+`413`; a type outside `allowedContentTypes` answers `415`. The limits come from the staging store's
+`describe()` when it declares them (`AgentMediaAttachmentsModule`), else `AgentModule`'s
+`attachments` option — and `GET /agent/config` serves them. With `AgentMediaAttachmentsModule`, the
+resumable `/agent/attachments/uploads` routes are the documented upload path.
+
+`POST /agent/chat` names uploads as `attachments: [{ mediaId }]` — refs only; an entry with any other
+key is refused with `400`, and so are more than `MAX_ATTACHMENTS_PER_MESSAGE` (10) entries (`maxPerMessage` on `GET /agent/config`). With nothing bound to `AGENT_ATTACHMENT_STAGING`, a send that carries attachments answers `501`. `GET /agent/threads/:id` re-mints each attachment's `url` by `mediaId`.
+
+`GET` answers the question `GET /agent/threads/:id` cannot: an upload that was never sent belongs to
+no thread. It is scoped to the resolved actor and nothing else, bounded to `ATTACHMENT_PAGE_SIZE`
+(50), and answers `501` when the bound staging store implements no `list`. There is deliberately no
+`threadId` filter — a thread's attachments already ride on its messages in the thread payload, so a
+second ownership path would be new risk for information the client already holds. Entries carry **no
+url**: `resolve` mints those per turn so they can be short-lived, and a listing that returned one
+per row would undo that just to render a file list.
+
+### Resumable uploads (`@dudousxd/nestjs-agent/media`)
+
+Mounted by `AgentMediaAttachmentsModule` (not by `AgentModule`). The bytes go to nestjs-media's own
+tus endpoint (`PATCH /media/uploads/:uploadId`), never through these routes. See
+[File uploads](/docs/agent/guides/file-uploads).
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/attachments/uploads` | `{ filename; contentType; size }` | `{ mediaId; uploadId; location }`, or `415` / `413` / `400` |
+| `POST` | `/agent/attachments/uploads/:mediaId/complete` | — | `MessageAttachment`, or `409` while bytes are missing, `422` on a size mismatch, `404` when the id is not the caller's |
+| `DELETE` | `/agent/attachments/uploads/:mediaId` | — | `204`, or `404` when the id is not the caller's |
+
+<Callout type="info" title="Collecting unreferenced media is not an endpoint">
+  A sweep needs a host-chosen age threshold and ends in deleting files, so it stays an in-process
+  call — `AgentService.collectableAttachments(actor, { olderThan })`, which returns candidates and
+  never deletes anything. See [Persistence](/docs/agent/guides/persistence#which-media-a-message-still-references-optional).
+</Callout>
+
+<Callout type="warn" title="A chat turn may name a mediaId, never a url">
+  `POST /agent/chat` reads nothing but `mediaId` off each attachment and discards the rest. The url the model provider fetches is resolved server-side through `AttachmentStagingStore.resolve({ mediaId, actor })`, which returns `null` when the id is unknown **or** is not that actor's — so a caller can neither point the server at a url it chose (cloud metadata, an internal service) nor reach another actor's file, and a short-lived presigned url is minted per turn instead of replayed from the stored message. With nothing bound to `AGENT_ATTACHMENT_STAGING` there is no way to tell whose media an id is, so a turn carrying attachments is refused with `501`; text-only turns are unaffected. At most 10 attachments per turn, `400` beyond that or for an entry with no `mediaId`.
+</Callout>
+
+## Agents
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/agents` | — | `AgentCatalogEntry[]` (`{ name; description; isDefault?; lockedModel?; personas?: { id; label; description? }[]; defaultPersona? }`) — the discovered `@Agent` classes and their [personas](/docs/agent/guides/personas), for a client picker instead of a hardcoded list |
+| `GET` | `/agent/tools?agent=<name>` | — | `ToolCatalogEntry[]` (`{ name; kind; presentation? }`) — the tools the resolved actor can reach through that agent (default agent when omitted), with each tool's [`presentation`](/docs/agent/guides/tools#how-a-chat-talks-about-a-tool). Built by the same gates the model is offered tools through. `404` for an unknown agent. `?agent=*` answers the union across every agent, each tool once (`useToolCatalog({ agent: ALL_AGENTS })`), for a surface showing several agents' conversations. |
+
+## Models
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/models?agent=<name>` | — | `ModelCatalogView` (`{ default: string \| null; providers: { id; label; models: { id; label; description?; badges?: string[]; available: boolean; unavailableReason?; contextWindow? }[] }[]; locked?: { model; reason? } }`) — what the bound `ModelCatalog` offers the resolved actor for that agent (default agent when omitted); `{ providers: [], default: null }` without one |
+
+A turn runs on the send's `model`, else the thread's pinned `model` (`PATCH /agent/threads/:id`),
+else the provider's default. Any model the catalog does not list as `available` for the actor and
+agent is refused with `400` — when it is pinned, and again on every turn that runs on it, since
+availability can change in between. Without a catalog, every request naming a model is refused.
+
+A catalog that answers `locked: { model, reason? }` locks the agent to that model: every turn runs on
+it whatever the send or the thread's pin names, and a send naming another model is refused with `400`
+(the reason in the message). List the other models as unavailable too, so an older client cannot pick
+them. `lockedModel` on the agent's `GET /agent/agents` entry says the same before a chat starts.
+
+## Threads
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/threads` | — | `ThreadSummary[]` for the resolved actor |
+| `GET` | `/agent/threads/:id` | — | `ThreadDetail \| null` — with `queue: ChatQueueState` on a store that queues |
+| `PATCH` | `/agent/threads/:id` | `{ title?: string; defaultAgent?: string \| null; model?: string \| null; persona?: string \| null }` | `{ ok: boolean }` — renames the thread, sets its default agent, pins its model (`model: null` unpins; the model must be offered by the catalog) and/or pins its [persona](/docs/agent/guides/personas) (`persona: null` clears; `400 persona_not_found` for one the agent does not declare) (`defaultAgent: null` clears it; the key must be present in the body to change it at all — JSON has no `undefined`, so presence vs. absence is how "leave it alone" is distinguished from "clear it") |
+| `DELETE` | `/agent/threads/:id` | — | `{ ok: boolean }` (soft-delete) |
+| `POST` | `/agent/threads/:id/fork-from/:messageId` | — | `ThreadSummary` — a new thread branched at `messageId` |
+| `POST` | `/agent/threads/:id/promote` | — | `{ ok: boolean }` — promotes a `transient` thread (see the chat body above) to a persisted one |
+| `DELETE` | `/agent/threads/:id/from/:messageId` | — | `{ ok: boolean }` — truncates the thread from `messageId` onward |
+
+<Callout type="info" title="Persona catalog">
+  There is no `GET /agent/threads/personas/catalog` here (that is `@adonis-agora/agent`'s route): each agent's personas ride its `GET /agent/agents` entry. A thread's pinned persona is `persona` on its summary.
+</Callout>
+
+All `:id` routes are ownership-scoped: they resolve the acting actor and check they own the thread — `403` if it belongs to someone else, `404` if it doesn't exist.
+
+## Messages
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null; comment?: string }` | `{ feedback: { value; comment?; updatedAt } \| null }` |
+
+Rates a message in one of the caller's threads; `value: null` clears the rating. The rating comes
+back on the message in `GET /agent/threads/:id` (`feedback`). `403` for another actor's message,
+`404` for an unknown one, `400` for any other `value` or a comment over 2000 characters, `501` on a
+store without `threadOfMessage` + `setMessageFeedback` (both bundled stores have them).
+
+## Tool-calls
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `POST` | `/agent/tool-call/approve` | `{ toolCallId: string; remember?: boolean; via?: string }` | `{ ok: boolean }` |
+| `POST` | `/agent/tool-call/reject` | `{ toolCallId: string; reason?: string; via?: string }` | `{ ok: boolean }` |
+| `POST` | `/agent/tool-call/answer` | `{ toolCallId: string; answers?: Record<string, string[]>; via?: string }` | `{ ok: boolean }` |
+| `POST` | `/agent/tool-call/skip` | `{ toolCallId: string; via?: string }` | `{ ok: boolean }` |
+
+Approving/rejecting signals the run's `AgentRunner` (`approved: true`, or `approved: false` with an optional `reason`) — see [Human-in-the-loop & durability](/docs/agent/guides/human-in-the-loop-and-durability). The caller must be the call's recorded approver (`403` otherwise — the thread's owner for `requester`, a holder of the role otherwise) and the request must not have lapsed (`410`). All four routes answer `409 { code: 'run_not_active', message }` when the run that asked has ended — it failed, was cancelled, or its worker is gone — instead of signalling a run that will never read the decision. `remember: true` approves later calls of the same tool in the same thread; `via` (1–64 chars, default `'web'`) is recorded as the surface the decision came through. `answer`/`skip` settle a parked question set on the same channel — see [Asking the user](/docs/agent/guides/asking-the-user). An omitted question (or an omitted `answers` entirely) takes the request's own pre-picked default, resolved server-side, so an empty body is a valid confirmation; answers are checked against the parked questions (`400 answers["<id>"] <reason>` for a value a typed question's rules refuse, an off-list pick, or a `required` question left without an answer or default); `skip` is recorded as a rejection rather than as an answer. `answer`/`skip` take `via` like approve/reject, and the settled outcome records `answeredBy` (the actor) and `answeredVia`.
+
+All four bodies are validated before anything is signalled — a human reply is journaled and re-read on every replay of the run it settles, so a payload the loop cannot read is a run that fails identically forever rather than one failed request. `toolCallId` must be a non-empty string; `answers` must be an object of questionId → array of strings (at most 100 questions, 100 values each, 4096 characters per value); `reason` must be a string of at most 4096 characters. Anything else is a `400`.
+
+The run is derived server-side from the `toolCallId` — the call's own `runId` where the row carries one, falling back to its thread's active stream — so no run id is sent, and that is also how a delegated sub-agent's action tool routes to its own child run. All four routes are ownership-scoped: the acting actor must own the tool call — `403` if it belongs to someone else, `404` if it doesn't exist.
+
+## Action proposals
+
+Used with `actionApprovalMode: 'independent'` — see [Action proposals](/docs/agent/guides/action-proposals).
+Mounted with the other routes, in either mode; on a store without proposal support they answer `501`.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/threads/:threadId/action-proposals` | `?after=<cursor>` | `ActionProposal[]` the caller may see, up to 1000; header `X-Action-Proposals-Next` when there are more |
+| `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/approve` | `{ remember?: boolean }` | `ActionProposalMutationResult` — `{ status: 'applied' \| 'unchanged' \| 'conflict' \| 'not_found' \| 'expired'; proposal? }` |
+| `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/reject` | `{ reason?: string }` | `ActionProposalMutationResult` |
+
+The thread's owner sees every proposal; anyone else sees those the approval policy lets them decide.
+Deciding needs the same permission (`403` otherwise), and the thread's tenant must be the caller's
+(`403`). `404` for an unknown thread or proposal. A body field other than the one listed is a `400`.
+`X-Action-Proposals-Next` is URI-encoded JSON: decode it and pass it back as `after`; an invalid
+cursor is a `400`. The decision is recorded with `via: 'web'`.
+
+## Quota
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/quota` | — | `QuotaReport` — `{ windows: { period: 'day' \| 'month'; usedTokens?; limitTokens?; usedUsd; limitUsd?; resetsAt?; warnAt? }[]; blocked?: { period; reason? }; warning?: { period; ratio; reason? } }` |
+
+`GET /agent/quota` is the bound `QuotaProvider`'s report. The default, `LedgerQuotaProvider`, reads
+the usage ledger: a `day` window and a `month` window when the store implements `usageBetween`, with
+the ceilings `quota: { limits }` sets. `blocked` names the first exhausted window. `quota: { warnAt: 0.8 }`
+adds a soft limit: every window with a ceiling carries `warnAt`, and `warning` names the fullest window
+past it (never while `blocked`). A window leaves `usedTokens` out when its budget does not count
+tokens (a USD-only spend cap) instead of reporting `0`.
+
+When the host configured `quota` (limits or a provider), a `blocked` report also gates
+`POST /agent/chat`: the send is refused with `429` and `{ code: 'quota_exceeded', period, message }`
+before the turn starts. See [Cost & governance](/docs/agent/guides/cost-and-governance#quota).
+
+## Client config
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/agent/config` | — | `AgentClientConfig` — `{ attachments: { enabled; upload: 'multipart' \| 'resumable' \| null; maxBytes; allowedContentTypes; maxPerMessage }; models: { enabled }; quota: { enforced }; identity: { anonymous } }` |
+
+Server facts a client would otherwise repeat in its own config. `useAgentConfig()` reads it once per
+backend; `useAttachments` (and `chat.composer.files`) take their `accept` / `maxBytes` / `maxFiles`
+defaults from it.
+
+## Dashboard JSON API
+
+Mounted by `AgentDashboardModule.forRoot({ apiBasePath })` (default `/ai-gateway/api`, i.e. `<basePath>/api` under the default `/ai-gateway` UI base). Requires `AGENT_GOVERNANCE_QUERIES` to be bound by a store adapter (e.g. `MikroOrmAgentStoreModule`). The console's sections now live on hash routes (`/ai-gateway#/reliability`, `#/approvals`, …), deep-linkable on full page load.
+
+| Method | Path | Query / Body | Returns |
+|---|---|---|---|
+| `GET` | `/ai-gateway/api/spend` | `from?`, `to?` (`YYYY-MM-DD`, default last 30 days) | `SpendOverview` — `{ byModel: ModelSpendRow[]; byActor: ActorSpendRow[]; trend: UsageTrendPoint[] }` |
+| `GET` | `/ai-gateway/api/top-threads` | `from?`, `to?`, `limit?` (default 10, max 200) | `ThreadSpendRowWithLabel[]` — top threads by cost |
+| `GET` | `/ai-gateway/api/reliability` | `from?`, `to?` | `ReliabilityOverview` — `{ metrics, byAgent, errors, trend }` (success/error rate, retries, p95 duration, run/failure trend, failure breakdown by error code) |
+| `GET` | `/ai-gateway/api/runs` | `limit?` (default 50, max 200) | `RecentRunRow[]` — latest-N reads, feeds the telescope bridge |
+| `GET` | `/ai-gateway/api/runs-page` | `page?` (default 1), `limit?` (default 25, max 200), `where[agentName\|status\|errorCode\|fromDay\|toDay]` | `GovernancePage<RecentRunRow>` — paginated, filterable runs for the Reliability table |
+| `GET` | `/ai-gateway/api/runs/:runId` | — | `RunDetailWithLabel` — the run, its thread's headline (actor-labeled) and its tool calls; `404` on an unknown run |
+| `GET` | `/ai-gateway/api/tool-calls` | `limit?` (default 50, max 200) | `ToolCallActivityRow[]` |
+| `GET` | `/ai-gateway/api/tool-calls-page` | `page?`, `limit?` (default 25, max 200), `where[toolName\|toolType\|status\|threadId\|fromDay\|toDay]` | `GovernancePage<ToolCallActivityRow>` — paginated, filterable tool-call activity |
+| `GET` | `/ai-gateway/api/tools` | `from?`, `to?` | `ToolStatRow[]` — per-tool calls/failed/rejected + p95 executionMs |
+| `GET` | `/ai-gateway/api/threads` | `limit?` (default 50, max 200) | `ThreadActivityRowWithLabel[]` |
+| `GET` | `/ai-gateway/api/threads/:threadId` | `messages?` (default 50, max 200), `runs?` (default 25, max 200) | `ThreadDetailWithLabel` — the thread, its runs and newest messages, with `runTotal` / `thread.messageCount` for what the caps hid; a soft-deleted thread comes back flagged `deleted: true`; `404` on an unknown thread |
+| `GET` | `/ai-gateway/api/threads-page` | `page?`, `limit?` (default 25, max 200), `where[actorRef\|title\|fromDay\|toDay]` (`title` is a case-insensitive substring match) | `GovernancePage<ThreadActivityRowWithLabel>` |
+| `GET` | `/ai-gateway/api/approvals` | `limit?` (default 50, max 200) | `PendingApprovalRow[]` — tool calls sitting `pending_approval`, oldest first |
+| `GET` | `/ai-gateway/api/approvals-page` | `page?`, `limit?` (default 25, max 200), `where[toolName\|threadId\|actorRef\|agentName\|fromDay\|toDay]` | `GovernancePage<PendingApprovalRow>` — the inbox with a `total`, oldest first |
+| `POST` | `/ai-gateway/api/approvals/:toolCallId` | `{ approved: boolean; reason?: string }` | `204 No Content` — decides a pending HITL tool call, attributed to the resolved decider (see below) |
+| `GET` | `/ai-gateway/api/pricing` | — | `CurrentModelPrice[]` |
+| `POST` | `/ai-gateway/api/pricing` | `{ modelId; inputPricePer1m; outputPricePer1m; cacheWritePricePer1m?; cacheReadPricePer1m? }` | sets a model's current price; `400` on a malformed body |
+| `GET` | `/ai-gateway/api/stream` | — | SSE — `{ data: LiveAgentEvent }`, one frame per `aviary:agent:*` diagnostics event |
+
+The inbox lists blocking approvals (tool calls in `pending_approval`). Pending
+[action proposals](/docs/agent/guides/action-proposals) are not in it; decide those through the
+thread's action-proposal routes or `AGENT_APPROVAL_PORT.approveActionProposal`.
+
+When the dashboard is configured with `dashboardAuth`, it also mounts `<basePath>/auth/*`, outside its
+own guards: `GET`/`POST /auth/login` (a server-rendered login form) and `POST /auth/logout` for the
+`login` mode, `POST /auth/session` (the host frontend exchanges its own auth for the dashboard cookie)
+and `GET /auth/session-required` for the `session` mode. A mode's routes `404` when it is not listed
+in `auth.modes`, and all of them `404` without `dashboardAuth`. See
+[`packages/dashboard`](/docs/agent/packages/dashboard).
+
+`GovernancePage<T>` is `{ rows: T[]; page: number; pageSize: number; total: number }` (real `COUNT` + offset, deterministic id tiebreaks); an unknown `where` field `400`s naming it. `LiveAgentEvent` is `{ event: string; ts: number; payload: Record<string, unknown> }` — see [Diagnostics events](/docs/agent/reference/diagnostics-events) for the `event` names and `payload` shapes.
+
+<Callout type="warn" title="Two surfaces degrade to 501 / read-only when their port isn't bound">
+  `POST /ai-gateway/api/approvals/:toolCallId` returns `501` — and the SPA's Approvals section renders read-only — when no `AGENT_APPROVAL_PORT` is bound (see [DI tokens](/docs/agent/reference/di-tokens)). Likewise, `GET`/`POST /ai-gateway/api/pricing` 501 when no `AGENT_PRICING_STORE` is bound. Every other route above only needs `AGENT_GOVERNANCE_QUERIES`.
+
+  Who gets recorded as the decider on an approval: an explicit `approvalActorRef` dashboard option wins outright; otherwise the same `AGENT_ACTOR_RESOLVER` chat requests use (its `.id`) — a resolver that throws just omits the decider rather than failing the request, since the decision itself was already authorized by the dashboard's own guards.
+</Callout>

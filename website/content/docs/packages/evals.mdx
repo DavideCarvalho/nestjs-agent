@@ -1,0 +1,110 @@
+---
+title: '@dudousxd/nestjs-agent-evals'
+icon: Gauge
+description: Answer-quality scoring over stored runs — a Scorer SPI, a resumable batch runner, a ScoreStore, and built-in rule / statistical / model-graded scorers including HITL approval mining.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Scoring for the agent. Depends only on `-core`, adds no read tables of its own, and reads runs the
+agent **already persisted** — so it works against the MikroORM, Drizzle and in-memory stores
+unchanged.
+
+For the walkthrough (why offline-first, what each scorer means, how to write your own) see the
+[Evals & scorers guide](/docs/agent/guides/evals). This page is the package reference.
+
+## Install
+
+```bash
+pnpm add @dudousxd/nestjs-agent-evals @dudousxd/nestjs-agent-core
+```
+
+## API
+
+| Export | What it is |
+|---|---|
+| `Scorer` | The SPI: `{ name, kind, score(run): Promise<ScoreResult \| null> }`. `null` means "not applicable to this run". |
+| `ScorableRun` | The unit a scorer judges: run id/status/duration, the prompt and answer text, the tool calls with their statuses. |
+| `ScoreResult` | `{ score: 0..1, reason, metadata? }`. `clampScore(value)` clamps to `0..1`. |
+| `runEvaluation({ source, scorers, store, query, rescore?, now? })` | The batch/backfill. Resumable (skips `(run, scorer)` pairs the store already has unless `rescore: true`), collects per-run scorer failures instead of aborting. Returns `{ runsRead, runsScored, pairsSkipped, scoresRecorded, failures }`. `toRunScore(run, scorer, result)` builds the persisted row. |
+| `RunSampleSource` | Where runs come from — `listRuns(query)` / `getRun(runId)`. `RunSampleQuery` is `{ limit, fromDay?, toDay?, agentName?, status?, threadId? }`. |
+| `GovernanceRunSampleSource(queries, store)` | The default source, over `AgentGovernanceQueries` + `AgentStore`. |
+| `StaticRunSampleSource(runs)` | A fixed list — a checked-in regression set, or a test fixture. |
+| `ScoreStore` | Persistence: `recordScores` / `scoredRunIds` / `listScores`. |
+| `InMemoryScoreStore` | In-memory `ScoreStore` for tests and the offline demo. Append-only. |
+| `summarizeByScorer` · `summarizeByAgent` · `bucketScoreTrend` · `worstScoredRuns` | Pure aggregation over persisted scores, worst-first. |
+| `attachLiveScoring(options)` | Opt-in subscriber that scores runs as they finish off `aviary:agent:run.finished`. Returns `{ dispose(), settled() }`. |
+| `buildApprovalPrior` · `loadApprovalPrior(queries, { fromDay?, toDay?, pageSize?, maxRows? })` · `approvalPosterior` | The HITL decision corpus behind `ApprovalRiskScorer`. |
+| `discardingSink()` · `parseJudgeVerdict()` · `JudgeVerdictError` | The toolkit for writing a model-graded scorer. |
+
+## Built-in scorers
+
+| Scorer | Family | Reads | Abstains (`null`) when |
+|---|---|---|---|
+| `RunCompletionScorer` | `rule` | Run status, answer text, tool-call outcomes. | The run is still in flight, or the user cancelled it — a stopped run has no outcome to judge. |
+| `ApprovalOutcomeScorer` | `rule` | The fraction of the run's **decided** `action` calls a human approved. | No action proposed, or none decided yet. |
+| `ApprovalRiskScorer` | `statistical` | A Beta(1,1)-smoothed per-tool approval rate; the run scores as its riskiest action. | The run proposed no action. |
+| `AnswerRelevancyScorer({ model, systemPrompt? })` | `model` | LLM-as-judge over question + answer, via any `ModelProvider`. | No question or no answer to compare. |
+
+## Backfill
+
+```ts
+import {
+  ApprovalOutcomeScorer,
+  ApprovalRiskScorer,
+  GovernanceRunSampleSource,
+  InMemoryScoreStore,
+  RunCompletionScorer,
+  loadApprovalPrior,
+  runEvaluation,
+  summarizeByScorer,
+} from '@dudousxd/nestjs-agent-evals';
+
+const scores = new InMemoryScoreStore();
+const summary = await runEvaluation({
+  source: new GovernanceRunSampleSource(governanceQueries, agentStore),
+  scorers: [
+    new RunCompletionScorer(),
+    new ApprovalOutcomeScorer(),
+    new ApprovalRiskScorer(await loadApprovalPrior(governanceQueries)),
+  ],
+  store: scores,
+  query: { limit: 500, fromDay: '2026-09-01', toDay: '2026-09-07' },
+});
+
+summary.failures;                               // per-(run, scorer) errors; the batch still finished
+summarizeByScorer(await scores.listScores({})); // worst mean first
+```
+
+## Live scoring
+
+```ts
+const live = attachLiveScoring({
+  source,
+  scorers: [new RunCompletionScorer(), new ApprovalOutcomeScorer()],
+  store: scores,
+  sampleRate: 0.25,
+  onError: (error) => logger.warn({ error }, 'live scoring failed'),
+});
+// on shutdown
+live.dispose();
+```
+
+<Callout type="warn" title="The batch is the default path">
+  `attachLiveScoring` runs after a run has settled and its stream has closed, in a detached promise,
+  with a guarded subscriber — a scorer cannot fail a turn because by the time it runs there is no
+  turn left to fail. It still costs real work per run, so prefer the `rule` / `statistical` scorers
+  here and turn `sampleRate` down for anything model-graded.
+</Callout>
+
+## Persisting scores
+
+`InMemoryScoreStore` is append-only and enough for tests. A production adapter is one table:
+
+```text
+(runId, threadId, agentName, scorer, kind, score, reason, metadata, day, scoredAt)
+```
+
+kept apart from the agent's own tables so the agent's schema never grows a column per scorer.
+`day` is the **run's** UTC day, not the batch's — a trend must move when quality moves, not when
+someone re-ran a backfill over last month.

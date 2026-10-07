@@ -1,0 +1,208 @@
+---
+title: "@dudousxd/nestjs-agent"
+icon: Package
+description: The umbrella NestJS module — AgentModule, @AiTool discovery, provideAgentTool, the inline runner, HeaderActorResolver, and the /durable subpath.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+</Tabs>
+
+`@dudousxd/nestjs-agent` is the package you import in a Nest app. It wires
+[`-core`](/docs/agent/packages/core)'s loop and SPIs into NestJS DI: `AgentModule`, the `@AiTool`
+discovery mechanism, the `/agent` controllers, (opt-in) the durable runner under `/durable`,
+generative UI under `/genui` (`AgentGenuiModule` — see [Generative UI](/docs/agent/packages/genui)), and
+chat attachments on Aviary media under `/media` (`AgentMediaAttachmentsModule`, optional peer
+`@dudousxd/nestjs-media` — see [File uploads](/docs/agent/guides/file-uploads)).
+
+```ts
+import { Module } from '@nestjs/common';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { anthropic } from '@ai-sdk/anthropic';
+
+@Module({
+  imports: [AgentModule.forRoot({ model: aiSdkModel(anthropic('claude-sonnet-4-5')) })],
+})
+export class AppModule {}
+```
+
+## `AgentModule`
+
+| Static method | Purpose |
+|---|---|
+| `forRoot(options: AgentModuleOptions)` | Register the module synchronously — `model` (required), then optionally systemPrompt, store, actorResolver, quota, models, attachments, sink, rolesPolicy, approvalPolicy, actionApprovalMode, path, durable, surface, adapters, tools, defaultAgent, … |
+| `forRootAsync(options: AgentModuleAsyncOptions)` | Register via a factory (`imports` / `inject` / `useFactory`); `path`, `durable`, `guards`, `surface` and `adapters` stay static since routes and the runner are wired before the factory resolves. |
+
+There is no `forFeature` — named agents beyond the default are declared as `@Agent`-decorated
+providers and discovered at boot (see [multi-agent](/docs/agent/guides/multi-agent)), not passed as a
+definition array.
+
+`model` is the only required field. Everything else has a default — the in-memory store (or a store
+module's, found automatically), an anonymous identity per browser, every tool open to any resolved
+actor, `'You are a helpful assistant.'` — each logged at boot where it matters for production. The full option-by-option reference lives in
+[Reference → Configuration](/docs/agent/reference/configuration); this page covers the surface, not
+every field.
+
+`AgentModule` also binds `AGENT_APPROVAL_PORT` unconditionally (`@Global`, no config needed) to an
+internal `AgentApprovalPortAdapter` that routes through the same decision path chat approvals use
+(`AgentService.signalToolCall`) — this is what lets `@dudousxd/nestjs-agent-dashboard`'s approvals
+inbox work out of the box whenever `AgentModule` is imported anywhere in the app.
+
+<Callout type="warn" title="Under durable: true the turn's long steps are dispatched">
+The turn's model call and each tool execution are routed through
+`AgentRunSteps.llm`/`AgentRunSteps.tool` (see [Durable
+subpath](#durable-subpath--dudousxdnestjs-agentdurable) below) rather than run in the workflow body,
+and no option places them elsewhere. So an `@AiTool` handler runs in the serving worker with no
+caller context to inherit: one that touches infrastructure needs
+`@CreateRequestContext()`/`@EnsureRequestContext()`, exactly as a `@Step` handler does. And since
+the turn may run on a different worker than the one holding the SSE connection, **multi-pod fleets
+must wire a cross-process `TokenStreamSink`** (e.g. `RedisTokenStreamSink` from the `/sink-redis`
+subpath) via `AgentModule.forRoot({ sink })`. Boot logs a warning when durable is on with the
+default in-process sink.
+</Callout>
+
+## `@AiTool` and discovery
+
+`@AiTool({ name, kind, description, input, roles?, ability? })` marks an ordinary provider as a tool.
+`AiToolDiscoveryService` walks every provider at boot, reads the decorator metadata, and registers it
+into the shared `ToolRegistry` — there's no separate array to keep in sync. See
+[Tools](/docs/agent/guides/tools) for the full decorator surface and the `read` vs `action` split.
+
+## `provideAgentTool`
+
+For a functional tool (a plain `{ spec, handler }` pair, like the one `createExecuteSqlTool` returns
+from [`-data`](/docs/agent/packages/data)) that needs DI-resolved dependencies:
+
+```ts
+import { provideAgentTool } from '@dudousxd/nestjs-agent';
+
+providers: [
+  provideAgentTool(
+    (pool: ReadOnlyPool) => createExecuteSqlTool({ runner: { run: (sql) => pool.query(sql) }, /* … */ }),
+    [ReadOnlyPool],
+  ),
+];
+```
+
+A dependency-free functional tool can also be passed straight into `AgentModule.forRoot({ tools: [...] })`.
+
+## Independent approvals
+
+`actionApprovalMode: 'independent'` turns a parked `action` call into a persisted proposal: the turn
+ends, the conversation takes the next message, and a decision made later — in the chat, the console,
+or a text reply — queues the work for a background worker that runs it as the requester.
+
+```ts
+AgentModule.forRoot({
+  model,
+  actionApprovalMode: 'independent', // default 'blocking'
+  backgroundActorResolver: { resolve: ({ actorRef, tenantRef }) => findCurrentActor(actorRef, tenantRef) },
+  actionProposalWorker: { pollIntervalMs: 1_000, leaseMs: 30_000, maxConcurrency: 1 }, // optional
+  actionProposalText: ptBrActionProposalText, // optional: text decisions are English by default
+});
+```
+
+Boot fails without a `backgroundActorResolver` or on a store that lacks proposal and queue support.
+The module starts and stops `ActionProposalWorkerService` with the app (not on `surface: 'http'`),
+and `ActionProposalController` mounts `GET <path>/threads/:threadId/action-proposals` and
+`POST …/:proposalId/approve|reject`. See [Action proposals](/docs/agent/guides/action-proposals).
+
+## Runner and identity exports
+
+| Export | What it is |
+|---|---|
+| `InlineAgentRunner` | The default `AgentRunner` — runs a turn in-process, no extra dependencies. Swapped for `DurableAgentRunner` when `durable: true`. |
+| `AnonymousActorResolver` | The default when no `actorResolver` is set: one anonymous actor per browser, keyed by an `HttpOnly` cookie. |
+| `requestUserActorResolver(map?)` | An `ActorResolver` over `req.user` (Passport, cookie sessions). |
+| `HeaderActorResolver` | An `ActorResolver` reading `x-actor-id` / `x-actor-role` / `x-tenant-ref`. Only safe behind a trusted gateway that strips and re-sets those headers — see [Identity & Authorization](/docs/agent/guides/identity-and-authorization). |
+
+## Durable subpath — `@dudousxd/nestjs-agent/durable`
+
+Opt into the durable runner by importing the subpath alongside a configured `DurableModule` and
+setting `durable: true`. Each turn then runs as the `agent.run` `@dudousxd/nestjs-durable` workflow:
+every model and tool call becomes a checkpointed step, and human-in-the-loop approval becomes a real
+durable `waitForSignal` suspend instead of a held connection.
+
+```ts
+import { Module } from '@nestjs/common';
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
+
+@Module({
+  imports: [
+    DurableModule.forRoot({ /* … */ }),
+    AgentModule.forRoot({ /* model, store, actorResolver, … */ durable: true }),
+    AgentDurableModule,
+  ],
+})
+export class AppModule {}
+```
+
+| Export | What it is |
+|---|---|
+| `agentDurable(options: AgentModuleOptions)` | One-import helper — returns `[AgentModule.forRoot({ ...options, durable: true }), AgentDurableModule.forRoot()]` to spread into `imports`. |
+| `AgentDurableModule` | `@Global` module registering the `agent.run` workflow and binding `AGENT_DURABLE_RUNNER` (which `AgentModule` wires to `AGENT_RUNNER`). Registers `AgentRunSteps` under every surface but `'http'`, so the routed groups are served wherever a run may be driven. |
+| `DurableAgentRunner` | The `AgentRunner` implementation backing durable turns — same interface as `InlineAgentRunner`. |
+| `AgentRunSteps` | The two dispatched-step handlers, `@Step`-decorated: `llm` (`@Step({ retries: 3 })`, resolves model/tools/sink from the serving worker's own DI) and `tool` (`@Step()`, no retries — tool idempotency is the app's concern; applies the tool timeout handler-side). These are what execute every turn's long steps, on whichever worker takes the routed step. |
+
+Using the helper collapses the two imports above to one line:
+
+```ts
+imports: [DurableModule.forRoot({ /* … */ }), ...agentDurable({ model, store, actorResolver })];
+```
+
+<Callout type="warn" title="Forgetting AgentDurableModule fails loudly">
+Setting `durable: true` without importing `AgentDurableModule` (or its `agentDurable` helper) throws a
+clear error at boot rather than silently falling back to the inline runner.
+</Callout>
+
+### Cross-process token sink — `/sink-redis`
+
+```ts
+import { RedisTokenStreamSink } from '@dudousxd/nestjs-agent/sink-redis';
+```
+
+The default `TokenStreamSink` (`InProcessTokenStreamSink`) buffers tokens in-process. Under `durable: true` (dispatched steps or
+not), a turn's `agent.run` workflow — and, with dispatching on, the `llm` step itself — may execute on
+any worker in the fleet, not the pod holding the client's SSE connection. A multi-pod deployment must
+bind a cross-process sink such as `RedisTokenStreamSink` (Redis pub/sub) via
+`AgentModule.forRoot({ sink: new RedisTokenStreamSink(redis) })` — or, without Redis, the SQL sinks
+the store packages ship (`DrizzleTokenStreamSink`, `MikroOrmTokenStreamSink`). The durable runner
+logs a warning at boot when it is handed the default in-process sink.
+
+`new RedisTokenStreamSink(redis, { keyPrefix?, ttlSeconds?, blockMs? })` takes an ioredis client and
+keeps each run in a Redis Stream. `ttlSeconds` (default `3600`) is re-armed on every write and set when
+the run ends or fails, so a run whose process crashed still expires; `0` keeps the stream until
+`close()`.
+
+### Run reliability recording
+
+`AgentRunWorkflow` calls `AgentStore.recordRunStart`/`recordRunEnd` (both optional on the SPI — see
+[`-core`](/docs/agent/packages/core#the-spis)) as checkpointed steps: start is recorded with the run's
+`promptHash`, end with duration on success or an error code/message on failure. `DispatchedLlmInput`
+carries the `runId` so a dispatched `llm` step's retries can eventually be attributed back to the run
+via `bumpRunRetries` once the durable runtime exposes the attempt number to remote step handlers. This
+feeds the governance reads (`runMetrics`, `runsByAgent`, …) documented in
+[`-dashboard`](/docs/agent/packages/dashboard) and the Telescope Agent tab's Reliability section.
+
+## Related
+
+- [Getting Started](/docs/agent/getting-started) — install, declare a tool, register the module
+- [Tools](/docs/agent/guides/tools) — the `@AiTool` decorator surface in full
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — what changes under `durable: true`
+- [Concepts → Runners](/docs/agent/concepts/runners) — inline vs durable, one `AgentRunner` SPI
+- [Reference → Configuration](/docs/agent/reference/configuration) — every `AgentModuleOptions` field

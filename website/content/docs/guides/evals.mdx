@@ -1,0 +1,175 @@
+---
+title: Evals & Scorers
+icon: Gauge
+description: Measuring answer quality over time — offline scoring over stored runs, the three scorer families, and mining human-in-the-loop rejections as free negative labels.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The [cost & governance](/docs/agent/guides/cost-and-governance) read-model tells you what a turn
+**spent** and whether it **finished**. Neither answers the question you actually get asked after a
+prompt change: *did it get better?*
+
+`@dudousxd/nestjs-agent-evals` answers it with a **score** — a number in `0..1`, a sentence saying
+why, and a persisted history you can trend.
+
+---
+
+## Offline-first, and why
+
+A scorer reads a run the agent **already persisted**: the run row, the thread transcript, the tool
+calls and their outcomes. Nothing runs inside a turn.
+
+That is a deliberate cost decision, not an implementation detail. An LLM-as-judge wired into the loop
+doubles the latency and roughly doubles the bill of every message a user sends, to produce a number
+nobody is watching in real time. Grading is a batch job. Run it nightly, run it after a prompt
+change, run it over last month the day you write a new scorer — the runs are still there.
+
+```ts
+const summary = await runEvaluation({
+  source: new GovernanceRunSampleSource(governanceQueries, agentStore),
+  scorers: [new RunCompletionScorer(), new ApprovalOutcomeScorer()],
+  store: scoreStore,
+  query: { limit: 500, fromDay: '2026-09-01', toDay: '2026-09-07' },
+});
+```
+
+`runEvaluation` skips any `(run, scorer)` pair the store has already covered, so an interrupted
+backfill restarted with the same query costs nothing for the part it finished — and for a
+model-graded scorer, bills nothing. Pass `rescore: true` when a scorer's definition changed.
+
+A scorer that throws is recorded as a `ScorerFailure` and the batch carries on. One judge that
+replied with prose should not cost you the other 499 runs — and silently turning that failure into a
+score of 0 would be worse, because it would read as the agent's fault.
+
+---
+
+## The three families
+
+`ScorerKind` is persisted on every score, so a summary can separate a free deterministic signal from
+one that cost money to produce.
+
+| Kind | Means | Ships |
+|---|---|---|
+| `rule` | Deterministic, derived from the run alone. Free. | `RunCompletionScorer`, `ApprovalOutcomeScorer` |
+| `statistical` | An estimate over a corpus of past runs. Free, but only as good as the sample. | `ApprovalRiskScorer` |
+| `model` | LLM-as-judge. The expensive one. | `AnswerRelevancyScorer({ model, systemPrompt? })` — `model` is the judge's own `ModelProvider` |
+
+---
+
+## The signal nothing else has: HITL rejections
+
+The library already stops a `kind: 'action'` tool and asks a human
+[should this run?](/docs/agent/guides/human-in-the-loop-and-durability). The answer is recorded on
+the tool call.
+
+That answer is **a negative quality label a human produced for free** — in the words of the domain,
+about the exact proposal, at the moment it mattered. It exists because approval is a product feature,
+not because anyone set out to build an evaluation set. No amount of LLM-judging buys a signal of that
+quality.
+
+**`ApprovalOutcomeScorer`** reads the verdicts back: the fraction of a run's *decided* actions a
+human approved.
+
+```text
+purgeCache  → rejected  ┐
+restartPod  → executed  ┘ → score 0.5, "a human approved 1 of 2 decided actions (rejected: purgeCache)"
+```
+
+An action that was approved and then crashed counts as **approved** — the human still said yes, and
+the tool's own failure is `RunCompletionScorer`'s business.
+
+**`ApprovalRiskScorer`** turns the same corpus into a prediction: how likely is a human to reject
+what this run proposed, *before* anyone looks. The score is the smoothed probability that a human
+**approves** (`approvalPosterior`), so lower is riskier. It is smoothed with a Beta(1,1) prior, so a
+tool nobody has ever decided on sits at exactly `0.5` ("no evidence either way") and a single
+rejection never reads as certainty:
+
+```text
+0 approved of 1  → 0.33      0 approved of 3  → 0.20      0 approved of 50 → 0.02
+```
+
+A run scores as its **riskiest** proposed action, not the average — a turn proposing one tool humans
+reject nine times in ten is a risky turn no matter how many safe reads it made alongside. Sorted
+ascending, that is the order for a pending-approvals inbox. `metadata` carries `riskiestTool` and the
+per-tool counts the number rests on.
+
+```ts
+const prior = await loadApprovalPrior(governanceQueries, { fromDay: '2026-06-01' });
+new ApprovalRiskScorer(prior);
+```
+
+---
+
+## Abstaining is not scoring zero
+
+`Scorer.score` returns `null` for a run it has nothing to say about.
+
+<Callout type="info" title="Why null and not 1">
+  Most runs are read-only and carry no human verdict at all. An approval scorer that returned `1` for
+  those would bury the handful of runs that *do* carry a verdict under an average of ~1, and the
+  metric would stop meaning anything within a week. `0` says "bad", `null` says "not applicable", and
+  averaging the two together is how a quality number quietly dies.
+</Callout>
+
+`RunCompletionScorer` abstains on a run still in flight; the approval scorers abstain on a run that
+proposed no action; the judge abstains when there is no question or no answer to compare.
+
+---
+
+## Reading the results
+
+```ts
+const rows = await scoreStore.listScores({ fromDay: '2026-09-01', toDay: '2026-09-07' });
+
+summarizeByScorer(rows);   // per scorer: samples, mean, min, max — worst mean first
+summarizeByAgent(rows);    // per (agent, scorer) — which persona drags which signal down
+bucketScoreTrend(rows);    // daily mean per scorer — the "is it getting better" series
+worstScoredRuns(rows, 20); // the triage queue; every row carries its reason
+```
+
+Every rollup reports `samples` alongside the mean, because a mean over three runs is not a metric.
+And every score is bucketed under the **run's** UTC day, never the batch's — a trend has to move when
+the agent's quality moves, not when someone re-ran a backfill over last month.
+
+---
+
+## Writing your own
+
+```ts
+import type { ScorableRun, ScoreResult, Scorer } from '@dudousxd/nestjs-agent-evals';
+
+export class CitesSourcesScorer implements Scorer {
+  readonly name = 'cites-sources';
+  readonly kind = 'rule' as const;
+
+  async score(run: ScorableRun): Promise<ScoreResult | null> {
+    const retrieved = run.toolCalls.some((call) => call.toolName === 'retrieve');
+    if (!retrieved) return null;                       // nothing to cite — not applicable
+    const cited = /\[\d+\]/.test(run.output);
+    return { score: cited ? 1 : 0, reason: cited ? 'cited its passages' : 'used RAG without citing' };
+  }
+}
+```
+
+For a model-graded scorer, `discardingSink()` gives you the sink a judge call needs (there is no live
+stream to join) and `parseJudgeVerdict()` reads a `SCORE: n` / `REASON: …` reply, normalizing the
+band (`MAX_JUDGE_SCORE`, 5) to `0..1`. It **throws** a `JudgeVerdictError` on a reply it cannot read, which the batch records as a failure —
+scoring an unreadable judge as 0 would blame the agent for the judge's mistake.
+
+---
+
+## Live scoring, if you want it
+
+```ts
+const live = attachLiveScoring({ source, scorers, store: scoreStore, sampleRate: 0.25 });
+```
+
+Subscribes to `aviary:agent:run.finished` and scores off the
+[diagnostics channel](/docs/agent/concepts/architecture) — **after** the run has settled and its
+stream has closed, in a detached promise, with a guarded subscriber and every failure routed to
+`onError`. There is no code path from a scorer back into the turn: by the time the first scorer runs,
+there is no turn left to fail.
+
+It is opt-in and still costs real work per run, so keep the batch as the default path, prefer the
+`rule`/`statistical` scorers here, and turn `sampleRate` down for anything that bills.

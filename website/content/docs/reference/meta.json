@@ -1,0 +1,5 @@
+{
+  "title": "Reference",
+  "icon": "Library",
+  "pages": ["configuration", "endpoints", "stream-events", "diagnostics-events", "di-tokens"]
+}

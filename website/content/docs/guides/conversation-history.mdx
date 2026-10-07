@@ -1,0 +1,196 @@
+---
+title: Conversation history
+icon: Scissors
+description: Bound what a turn carries — a message/token window, an optional summary of what it left out, and the determinism rules a custom policy has to hold to.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+A turn is built from the thread: the loop loads it, maps every message into the model's messages, and
+calls the provider. With no ceiling configured that is *every* message the thread holds — so a
+long-lived thread costs more on each turn than it did on the last, and eventually stops working at
+all when the transcript passes the model's context limit.
+
+`history` is the ceiling.
+
+```ts
+AgentModule.forRoot({
+  model,
+  actorResolver,
+  history: { maxMessages: 40, maxTokens: 60_000, summarize: true },
+});
+```
+
+## The window
+
+`maxMessages` and `maxTokens` both keep the **newest** messages that fit. Set both and whichever cuts
+more wins — a count is a cheap guard against a chatty thread, a token budget is what actually tracks
+the provider's limit.
+
+- Tokens are **estimated**, not tokenized: roughly four characters per token over a message's content
+  plus its serialized tool calls and results, with a small per-message allowance. A real tokenizer is
+  model-specific and would pull a provider dependency into `-core`, and a budget only has to keep you
+  clear of the hard limit. Pass your own `estimate` to `windowHistory` if you want an exact one.
+- **The newest message always rides**, whatever the limits say — a turn with nothing to answer is
+  worse than a turn slightly over budget.
+- A cut can't orphan a tool result from its call. In this library a tool exchange is **one** message
+  (`toolCalls` + `toolResults` ride together on the assistant message that made them, and each model
+  adapter expands that into the assistant/tool pair the provider wants), so slicing the list is safe
+  in a way it wouldn't be against a provider-shaped transcript.
+
+## Summarizing what the window left out
+
+`summarize: true` folds the dropped messages into a leading `system` message instead of losing them:
+
+```text
+<conversation_summary>
+The user is migrating the billing service to Postgres; they've settled on …
+</conversation_summary>
+Earlier messages in this thread are no longer included verbatim. Treat the summary above as an
+accurate record of them.
+```
+
+It's one extra, non-streamed call to the module's model provider, made **once per run** (not per
+model step) and only when the window actually dropped something. Its tokens never reach the user's
+live stream, and it writes its own ledger row with `purpose: 'history_summary'` — so bounding context
+cost can't quietly become spend nothing accounts for. See
+[Cost & Governance](/docs/agent/guides/cost-and-governance).
+
+## Per agent
+
+An agent that answers from a page context needs far less window than one reasoning over a long
+back-and-forth, so the ceiling is a per-agent knob like `maxSteps`:
+
+```ts
+@Agent({
+  name: 'page-helper',
+  systemPrompt: 'You answer questions about the screen the user is on.',
+  history: { maxMessages: 6 },
+})
+@Injectable()
+export class PageHelperAgent {}
+```
+
+`@Agent({ history })` outranks anything set module-wide, for that agent only.
+
+## Your own policy
+
+`historyPolicy` takes a `HistoryPolicy` when the built-in window can't express what you need — pin
+the thread's opening brief, always keep messages carrying a tool result, vary the budget by the
+actor's plan:
+
+```ts
+import type { HistoryPolicy } from '@dudousxd/nestjs-agent-core';
+
+const pinTheBrief: HistoryPolicy = {
+  select: (messages) => ({
+    keep: [...messages.slice(0, 1), ...messages.slice(-20)],
+    drop: messages.slice(1, -20),
+  }),
+};
+
+AgentModule.forRoot({ model, actorResolver, historyPolicy: pinTheBrief });
+```
+
+Precedence, most specific first: `@Agent({ history })` → `historyPolicy` → `history`.
+
+<Callout type="warn" title="`select` must be pure — `summarize` is where I/O goes">
+  The loop calls `select` inside the `load:thread` checkpoint, and what that checkpoint records is
+  `select`'s result. So the ceiling bounds two things, not one: the prompt the model is sent, and the
+  payload the durable journal carries for the life of the run — re-read by the engine on every
+  workflow execution and re-parsed by every process that resumes it. On a 20-turn thread with 8 KB
+  tool outputs, a `maxMessages: 10` window takes `load:thread` from 176 KB to 43 KB.
+
+  `select` adds no checkpoint of its own, and it must stay pure for the same reason it always had to:
+  read a clock, a feature flag or a database inside it and a resumed run windows differently from the
+  one that suspended — the model gets a different prompt, and any step whose existence depends on the
+  split (`history:summarize`, below) lands at a position the history has no room for. Anything
+  non-deterministic belongs in `summarize`, which the loop runs inside a `history:summarize`
+  checkpoint: the first attempt's result is journaled, and every replay reads it back instead of
+  producing a new one.
+</Callout>
+
+<Callout title="What the ceiling drops is journaled only when something will read it">
+  A configured `summarize` can run in a later process than the one that loaded the thread, so the
+  dropped messages have to survive in the checkpoint for it to be handed them. Without a summarizer
+  nothing ever reads them again, and they are not written down — they are exactly the half of the
+  transcript the ceiling exists to leave behind.
+
+  A run that was already in flight when you upgraded to this keeps the old whole-thread payload: the
+  loop asks the durable runtime `ctx.patched('agent:selected-history')` and takes the previous load
+  for a run whose history holds it. The marker is position-transparent for such a run, so it finishes
+  on exactly the sequence it recorded.
+</Callout>
+
+## The ceiling also bounds the READ
+
+The window decides what the model is sent and what the journal carries. It can also decide what the
+database is asked for — and where it does, the thread's transcript is never materialized at all.
+
+`AgentStore.getThread` returns every message row, every attachment and every tool output a thread ever
+recorded. On a 50-turn thread whose turns each ran a 50 KB tool, that is **~2.6 MB per load, over 99%
+of it tool output**, to build a prompt bounded to the last few messages. Both SQL stores implement the
+core SPI's `ThreadTurnReader` instead:
+
+```ts
+interface ThreadTurnReader {
+  loadThreadForTurn(query: { threadId: string; messageLimit?: number }): Promise<ThreadTurnPage | null>;
+}
+```
+
+The loop probes the store for it and uses it when present — nothing to configure, and a store that
+does not implement it keeps working through the full read. The bound it is handed is your policy's
+`maxMessages`, so the same four-message window above reads 103 KB instead of 2.6 MB.
+
+<Callout type="warn" title="Declaring `maxMessages` is a promise about `select`">
+  A `HistoryPolicy` may declare `maxMessages`: the most messages `select` can ever keep. The loop
+  passes it to the store as the read bound, which only works if `select` keeps at most that many and
+  keeps the NEWEST ones — a window that size has to be indistinguishable, to `select`, from the full
+  transcript. `windowHistory({ maxMessages })` declares it for you. A custom policy that can keep
+  something older than its newest `maxMessages` (the `pinTheBrief` example above keeps the thread's
+  first message) must NOT declare it, or it will select over rows the store was never asked for.
+
+  Two ceilings deliberately name no bound, and read the whole thread:
+
+  - **A policy that summarizes.** `summarize` is handed what `select` *dropped*, and a read bounded to
+    what `select` keeps drops nothing — the turn would fold an empty summary into a prompt that is
+    missing the messages it stands in for, with nothing raised anywhere.
+  - **A ceiling expressed only in `maxTokens`.** No row count follows from a token budget: one message
+    can be four tokens or forty thousand. Naming one too low reads fewer rows than `select` would have
+    kept, which changes the prompt itself; leaving it out only costs the read. Set `maxMessages`
+    alongside `maxTokens` if you want the bound to reach the database.
+</Callout>
+
+<Callout title="This changes the read, not the journal">
+  Both reads answer the same three questions — the messages, the title, and whether the thread has ever
+  been answered — so what `load:thread` records is byte-identical either way. No checkpoint moved, no
+  payload changed, and no patch marker was spent: which read your store supports cannot decide a run's
+  checkpoints, and a run already in flight is unaffected.
+
+  `hasAssistantMessage` is answered over the whole thread rather than the returned page, because it is
+  what a `thread-start` intake asks. A long conversation whose window happens to hold only the user's
+  last questions has still been answered — derived from the page, it would re-introduce itself on every
+  turn.
+</Callout>
+
+## Building blocks
+
+`-core` exports the pieces the NestJS options are made of, for composing a policy of your own:
+
+| Export | What it is |
+|---|---|
+| `windowHistory({ maxMessages, maxTokens, estimate, summarize })` | The built-in policy the `history` option builds. |
+| `summarizeWithModel(model, instruction?)` | A `summarize` implementation over any `ModelProvider` — what `summarize: true` binds, with `DEFAULT_HISTORY_SUMMARY_INSTRUCTION`. |
+| `estimateMessageTokens(message)` | The default ~4-chars-per-token estimator. |
+| `HistoryPolicy`, `HistorySelection`, `HistorySummary`, `HistoryPolicyContext` | The SPI types. |
+| `HistoryPolicy.maxMessages` | Optional row ceiling the loop hands to the store as its read bound. |
+| `ThreadTurnReader`, `ThreadTurnQuery`, `ThreadTurnPage` | The bounded thread read the loop probes a store for. |
+
+## Where to go next
+
+<Cards>
+  <Card title="The agent loop" href="/docs/agent/concepts/the-agent-loop" description="Where the ceiling is applied, and what a turn is made of." />
+  <Card title="Input & output processors" href="/docs/agent/guides/processors" description="The other half of the boundary: transforming what the selected messages say, and gating the answer." />
+  <Card title="Cost & Governance" href="/docs/agent/guides/cost-and-governance" description="Usage purposes, spend roll-ups, and the daily quota the window keeps you inside." />
+</Cards>

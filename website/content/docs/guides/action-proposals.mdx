@@ -1,0 +1,247 @@
+---
+title: Action proposals
+icon: Inbox
+description: Independent approvals — an action waits as a proposal while the conversation goes on, is decided from the web, a text message, AG-UI or an operator console, and runs on a background worker.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+By default an `action` tool **blocks**: the turn parks until someone approves or rejects the call
+(see [Human-in-the-loop](/docs/agent/guides/human-in-the-loop-and-durability)). That suits a web chat
+with a button under the call. It does not suit a WhatsApp conversation, where the "yes" arrives as
+the next message, or a reviewer who decides an hour later.
+
+With `actionApprovalMode: 'independent'` the call becomes a **proposal** instead. The turn finishes,
+the conversation accepts the next message, and the proposal waits on its own:
+
+```text
+model calls refund ─► preflight (prepare) ─► proposal "pending" ─► turn ends
+                                                   │
+          web button · "yes" in chat · AG-UI · console decides
+                                                   │
+                     approved ─► queued ─► worker: preflight (execute) ─► execute
+                                                   │
+                       outcome fact + UI admitted into the thread (no model call)
+```
+
+Blocking stays the default. Nothing changes until you opt in.
+
+## Turning it on
+
+```ts title="app.module.ts"
+AgentModule.forRoot({
+  model,
+  store, // must support proposals (below)
+  actionApprovalMode: 'independent',
+  backgroundActorResolver: {
+    // Load the CURRENT actor. Return null if they were deleted or left the tenant.
+    async resolve({ actorRef, tenantRef }) {
+      return users.findActor(actorRef, tenantRef);
+    },
+  },
+  actionProposalWorker: { pollIntervalMs: 1_000, leaseMs: 30_000, maxConcurrency: 1 },
+});
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `actionApprovalMode` | `'blocking'` | `'independent'` turns `action` calls that need approval into proposals. |
+| `backgroundActorResolver` | required in independent mode | `resolve({ actorRef, tenantRef }) → Actor \| null`. Execution runs as the **requester**, re-resolved now. Role snapshots stored on the proposal are never used as authority. |
+| `actionProposalWorker.pollIntervalMs` | `1000` | How often the worker looks for work. Must be below a third of `leaseMs`. |
+| `actionProposalWorker.leaseMs` | `30000` | How long a worker holds one proposal before another may take it over. |
+| `actionProposalWorker.maxConcurrency` | `1` | Proposals executed at once per process. |
+
+All worker values are positive integers, checked at boot. The worker starts and stops with the
+application. It does not start on `surface: 'http'` pods. Several workers coordinate through leases
+and compare-and-set updates in the database.
+
+Boot fails early when the store lacks what independent mode needs: proposals, worker discovery,
+outcomes, atomic admission into the thread and the [message queue](/docs/agent/guides/message-queue).
+
+- **In-memory store**: one process only.
+- **Drizzle**: transactions are certified on better-sqlite3, node-postgres, mysql2 and libSQL. Other
+  drivers (postgres.js among them) do not support independent admission.
+- **MikroORM**: SQLite, PostgreSQL and MySQL.
+
+## What the model and the user see
+
+When the model calls an action that needs approval, the call is recorded with status `proposed` and
+the call's result is a receipt, not an effect:
+
+```json
+{ "proposalId": "proposal-…", "status": "pending", "executed": false }
+```
+
+The turn then ends without another model call, so nothing narrates the action as done: the
+approval card is the answer. The receipt is what the model reads in later turns. The stream carries
+the usual
+`approval-requested` frame, with `target: { kind: 'proposal', proposalId }`, the approver, the
+deadline and the resolved `confirmation`. `useAgentChat` renders that as an approval card whose
+buttons call the proposal routes.
+
+Stopping the chat turn does not cancel a proposal.
+
+## Checks around the approval
+
+An action's own [`preflight`](/docs/agent/guides/tools#preflight-checking-an-action-before-and-after-approval)
+runs twice:
+
+- **`prepare`**, before the card exists. Return `ready` (optionally with a per-call
+  `confirmation`), `denied` with a reason (no card, the model is told why), or `completed` with an
+  existing result (no card, nothing executes).
+- **`execute`**, on the worker, right before the side effect, against current state. This is where
+  you catch "already refunded" or "the order changed". Neither the policy nor a remembered approval
+  skips it.
+
+The proposal stores the original input and the normalized input that was approved. Before executing,
+the worker parses the original input through the **current** schema and compares it with the
+approved snapshot. If a schema change would alter what was approved, execution fails instead.
+
+The worker also re-resolves the recorded agent and persona against the current configuration and
+re-checks the requester's tool permissions.
+
+## Deciding
+
+### Web and HTTP
+
+| Method | Path | Body |
+| --- | --- | --- |
+| `GET` | `/agent/threads/:threadId/action-proposals` | `?after=<cursor>` |
+| `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/approve` | `{ remember?: boolean }` |
+| `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/reject` | `{ reason?: string }` |
+
+Any other body field is a `400`. The list returns the proposals the caller may see: the thread owner
+sees all of them, anyone else only the ones the approval policy lets them decide. It pages 1000 at a
+time. When there is more, the response carries `X-Action-Proposals-Next`: `decodeURIComponent` it and
+send the JSON string as the next `after`. The route adds that header to
+`Access-Control-Expose-Headers`. The React client follows the pages for you.
+
+Who may decide is the [approval policy](/docs/agent/guides/human-in-the-loop-and-durability#who-approves-and-for-how-long):
+`approver: 'requester'` means the thread's owner, any other string is a role, and
+`approvalPolicy.canDecide` can replace that rule. The server records the authenticated actor and the
+channel (`via: 'web'` here). The client cannot supply either.
+
+### Text
+
+In independent mode, a message sent to a thread that has pending proposals is first checked for a
+decision. A **whole message** made of one of these words decides one proposal:
+
+| Approves | Rejects |
+| --- | --- |
+| `yes`, `confirm`, `approve`, `approved`, `ok` | `no`, `cancel`, `reject`, `deny` |
+
+- Append `#<proposalId>` to name the proposal: `approve #proposal-…`.
+- `confirm always in this conversation #<id>` (any approving word) also remembers the approval.
+- Matching is case-insensitive. One trailing `.` or `!` is allowed. Anything else, a second line, a
+  question or quoted text, is an ordinary message for the model.
+- A bare word decides only when exactly one pending proposal is yours to decide. With several, the
+  reply lists the ids to choose from.
+
+A matched message never reaches the model and does not start a turn. The decision is recorded
+`via: 'text'`.
+
+The words and the replies are configurable. `actionProposalText` takes a `vocabulary` (`approve`,
+`reject`, `remember` word lists) and `replies` (`approved`, `rejected`, `expired`, `unchanged`,
+`ambiguous(ids)`, `tooMany`). Each part you pass replaces the default it names, field by field.
+Portuguese ships as a preset:
+
+```ts
+import { ptBrActionProposalText } from '@dudousxd/nestjs-agent-core';
+
+AgentModule.forRoot({
+  // …
+  actionApprovalMode: 'independent',
+  actionProposalText: ptBrActionProposalText, // sim / não / sempre nesta conversa, replies in Portuguese
+});
+```
+
+The preset adds `sim`, `confirmo`, `confirmar`, `aprovar`, `aprovo`, `pode` and `não`, `nao`,
+`cancelar`, `cancela`, `rejeitar`, `rejeito`, plus `sempre nesta conversa`. The English words keep
+working. A word on both lists is read as a rejection.
+
+Where it applies:
+
+- **`POST /agent/chat`** with a `threadId` answers `200 { threadId, proposalDecision, text }` (JSON,
+  not a stream). `text` is the reply ("Proposal approved and queued to run." by default). The React
+  client handles this answer and refreshes the proposals.
+- **`AgentService.send(…)`** returns the same object, for a channel you run in-process. See
+  [a text channel in-process](/docs/agent/guides/rendering-everywhere#a-text-channel-in-process).
+- **AG-UI**: the run is answered with `RUN_STARTED`, a `CUSTOM aviary.action-proposal-decision`
+  event, the receipt as a text message, and `RUN_FINISHED`. No model run is created.
+
+`AgentService.chat(…)` does not look for decisions.
+
+### Operators and other integrations
+
+`AGENT_APPROVAL_PORT` (bound by `AgentModule`) has `approveActionProposal(actor, { kind: 'proposal',
+threadId, proposalId }, { remember?, decidedVia? })` and `rejectActionProposal(…, { reason?,
+decidedVia? })`. A Slack or Teams integration calls the same scoped service, with its own `decidedVia`.
+
+## Expiry, remembering and replacement
+
+- **`ttlMs`** from the approval policy becomes the proposal's `expiresAt`, shown as a countdown on the
+  card. The worker expires due proposals. Expiry and decisions go through the same atomic
+  transition, so a stale card cannot approve an expired action.
+- **`remember: true`** approves later calls of the same tool in the same thread. It takes effect once
+  the approved execution reaches a terminal state, not when it is queued. Later calls still pass
+  permissions, validation and preflight.
+- **`replacementKey`** on the tool groups proposals that stand for the same thing. A new pending
+  proposal with the same requester, tenant, thread, tool and key supersedes the pending ones in the
+  same transaction. Approved or executing proposals still run.
+
+```ts
+@AiTool({
+  kind: 'action',
+  description: 'Set the delivery address of an order.',
+  input: z.object({ orderId: z.string(), address: z.string() }),
+  replacementKey: (input) => `order:${(input as { orderId: string }).orderId}`,
+})
+export class SetAddressTool { /* … */ }
+```
+
+`replacementKey` may also be a fixed string. It is evaluated on the approved, normalized input.
+
+## Execution and outcomes
+
+Execution is **at least once**. A worker can die after the side effect and before recording it, and
+recovery then runs the call again. Pass `ctx.idempotencyKey` to the external service, or use it as a
+unique key on your own write. See [Making a tool safe to run twice](/docs/agent/guides/tools#making-a-tool-safe-to-run-twice).
+
+When a proposal reaches a terminal state (succeeded, failed, rejected, expired), its outcome is
+stored and then **admitted** into the thread: one assistant message stating the fact, plus any UI
+the tool presented, written atomically. Admission waits while a user turn holds the thread, is
+deduplicated across retries, and is dropped if the thread was deleted or changed scope. It does not
+start a model call. The result's components are negotiated against the
+[`uiCapabilities`](/docs/agent/guides/rendering-everywhere) of the send that created the proposal.
+
+Proposal status is one of `pending`, `approved`, `rejected`, `expired`, `superseded`. Execution
+status is `queued`, `executing`, `succeeded` or `failed`.
+
+## The React side
+
+`useAgentChat` reads the thread's proposals after each stream ends, polls while one is pending or
+running (`proposalPollMs`, default 1000 ms), and refreshes on focus, `online` and when the tab becomes
+visible. Late outcome messages merge into the transcript without replacing a turn in progress. The
+state is on the hook's `proposals` (`{ items, error, refresh }`). Set `proposals: false` to turn the
+reads off, or `true` to keep them on when `history` and `resume` are both off. See
+[Frontend](/docs/agent/guides/frontend).
+
+## Rolling it out
+
+1. Stop writers on the old version.
+2. Apply the schema changes: the proposal table with its discovery, delivery and replacement
+   indexes, outcome columns on messages, the proposal pointer on tool calls, and `ui_capabilities` on
+   queued messages. Drizzle users generate a migration from the updated schema. MikroORM users
+   generate one from the updated entities, or let `ensureAgentSchema` apply the additive changes.
+3. Backfill the discovery metadata of existing proposals in bounded batches, once, from a script
+   (not on every worker tick): call `store.backfillActionProposalDiscoveryIndex({ limit: 500 })`
+   until it returns `0`. Both SQL stores have it.
+4. Deploy the new writers and workers, then set `actionApprovalMode: 'independent'`.
+
+Durable runs already in flight keep their blocking journal. Changing the mode never rewrites a
+running workflow. Terminal rows from before the migration do not get retroactive outcome messages.
+
+<Callout type="info">
+The design notes behind this live in the library repo:
+[independent-approvals.md](https://github.com/DavideCarvalho/nestjs-agent/blob/master/docs/independent-approvals.md).
+</Callout>

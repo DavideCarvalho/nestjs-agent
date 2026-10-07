@@ -1,0 +1,15 @@
+{
+  "title": "Agent",
+  "pages": [
+    "index",
+    "getting-started",
+    "hello-chat",
+    "full-featured-chat",
+    "concepts",
+    "guides",
+    "packages",
+    "recipes",
+    "reference",
+    "migrating"
+  ]
+}

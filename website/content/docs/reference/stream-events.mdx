@@ -1,0 +1,396 @@
+---
+title: Stream events
+icon: Radio
+description: The exact SSE wire contract of POST /agent/chat — every AgentStreamEvent kind, how the React client maps it, and what a backend that does not run this library's loop has to send.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`POST /agent/chat` and `GET /agent/chat/:runId/stream` stream `AgentStreamEvent`s (from
+`@dudousxd/nestjs-agent-core`). This page is the contract precisely enough that a backend which does
+**not** run this library's agent loop — a sandboxed runner, another framework, a proxy — can serve
+the same routes and get `@dudousxd/nestjs-agent-react` (the transport, `useAgentChat`, the
+transcript model) unchanged.
+
+<Callout type="info" title="Forward compatible by rule">
+  Every frame is a JSON object with a string `kind`. A reader must tolerate kinds it does not know —
+  the React transport forwards them as `data-<kind>` parts rather than dropping them. Fields are only
+  ever added, and added fields are optional (omitted, not `null`).
+</Callout>
+
+## Framing
+
+The response is `Content-Type: text/event-stream`. Optional response headers `X-Agent-Run-Id` and
+`X-Agent-Thread-Id` let a client learn the run before the first frame.
+
+Frames are separated by a blank line (`\n\n`). Four shapes:
+
+| Frame | Meaning |
+|---|---|
+| `event: meta` + `data: {"runId": string, "threadId": string}` | Identity of the run. Send it first. A client binds approve/reject/cancel to `runId` and a threadless chat adopts `threadId`. |
+| `data: <AgentStreamEvent JSON>` (no `event:` line) | One stream event, one JSON object per frame. |
+| `event: done` + `data: {}` | The run ended normally (including a cancel — see `cancelled`). |
+| `event: error` + `data: {"code": string, "message": string}` | The run failed. `code` is stable — a client branches on it and words the failure itself; `message` is a sentence safe to show as it is. See [Error codes](#error-codes). |
+
+Multi-line `data:` is joined with `\n`.
+
+### Error codes
+
+| `code` | Means | `message` |
+|---|---|---|
+| `quota_exceeded` | the actor's budget is spent | which budget — the library's own words |
+| `output_rejected` | an output processor refused the answer | the refusal — the library's own words |
+| `structured_output_invalid` | the answer never satisfied the agent's output schema | the library's own words |
+| `replay_diverged` | the durable runtime refused to resume the run: its journal and the deployed code disagree. The turn is over and will not come back; a new send starts a new one | generic in production |
+| `model_no_output` | a model call ended without producing anything | generic in production |
+| `run_failed` | anything else | generic in production |
+
+For the last three the error's own text names run ids, checkpoint positions, hosts and provider
+internals — nothing the person reading the chat can act on, and not theirs to see. In production
+(`NODE_ENV === 'production'`) the frame carries one fixed sentence (`RUN_FAILED_MESSAGE`: "The
+assistant could not finish this answer. Please try again.") and the error itself goes to the server
+log and the run row (`errorCode` / `errorMessage`). Outside production the raw message rides the
+frame; `exposeStreamErrorDetails(true | false)` from `@dudousxd/nestjs-agent-core` decides it
+outright.
+
+The React client keeps the frame on `chat.runError` (`{ code, message, runId? }`) until the next
+attempt starts — `chat.error` carries only the message — so an app renders its own text per code.
+
+A failed run leaves nothing waiting on it: the calls it had put to a person are settled `failed`,
+its run row is settled, and its thread is released, so the next send on the thread starts a turn.
+That turn is shown every tool call the dead one made with a result — the real output where the
+call's row says it ran, otherwise one saying it was never completed — because a provider refuses a
+prompt in which a tool call has no result after it.
+
+`GET <base>/chat/:runId/stream` replays the run's buffered frames from the beginning and then tails
+it. Answer `404` when nothing is streaming under that id — the client reads that as "nothing to
+resume", not an error.
+
+### Sequence numbers and reconnecting
+
+Number every event frame with an SSE `id:` line — a positive safe integer, strictly increasing
+within the run:
+
+```text
+id: 7
+data: {"kind":"text","text":"…"}
+```
+
+- The number belongs to the frame, not the connection: the same frame carries the same id on the
+  `POST` that started the run and on every later `GET …/stream`. This library numbers frames by their
+  1-based position in the run's buffered stream, which every sink replays from its first chunk in
+  write order.
+- Ids may skip numbers; only the order matters. A client keeps the highest id it took in as its
+  cursor and drops anything at or below it.
+- `meta`, `done` and `error` carry no id. Send `meta` again on every attach.
+- `GET <base>/chat/:runId/stream?after=<n>` sends only the frames numbered above `n` (still after
+  `meta`). Honour the standard `Last-Event-ID` header the same way; `after` wins when both are sent.
+
+The React transport uses this to survive a dropped connection: when a numbered stream errors or
+closes without `done`, it re-attaches with `?after=<last id it saw>` (exponential backoff,
+`status: 'reconnecting'` meanwhile) and continues the same message. It also drops frames at or below
+its cursor, so a server that ignores `after` still resumes correctly. A `404` on re-attach means the
+run ended while the client was away, and `useAgentChat` reloads the thread. A stream **without** ids
+is never resumed: one that closes without `done` is treated as finished.
+
+#### Numbering a stream you rebuild
+
+A runner that is not this library's loop often cannot replay a run frame for frame after its process
+restarts: the live deltas are gone, and it rebuilds what already streamed from durable state
+(checkpoints, stored steps), condensed into fewer frames. A counter restarted at `1` would give the
+same id to different frames, and a client resuming with `?after=<n>` would skip frames it never saw.
+Derive ids from durable facts instead:
+
+1. **Ids live in the run's own time, not the process's** — e.g. milliseconds since the run started
+   (the start instant stored with the run), as `max(previous + 1, elapsed)`. Frames written after a
+   restart number above anything written before it.
+2. **Every frame of one source event gets its own slot** — `event × K + index`, with `K` above the
+   most frames one event produces.
+3. **Rebuilt frames reuse the range of what they replace.** Store with each checkpoint the last id it
+   covered; a rebuilt step's condensed frames take ids inside that step's range, so a client that saw
+   the step skips them and one that did not takes them all.
+4. **Never reuse an id for different content, never go backwards.**
+
+Put a rebuilt step's condensed frames at the start of its range and the frame it parked on (an
+approval, a question) at the end, where the live stream raised it; that request's settlement takes
+the first id after the range. The one case numbering cannot fix is a client that saw only part of a
+step that was then condensed: it keeps what it had and skips the condensed rest, and the stored answer
+(a reload of the thread) is complete.
+
+This library's own runner needs none of this: its sink keeps the run's frames, so a replay is the
+original stream.
+
+## Event rules
+
+1. Every event is a JSON object with a string `kind`.
+2. A reader MUST tolerate a `kind` it does not know. The React transport forwards it as a
+   `data-<kind>` part (below) — it never drops it and never fails the stream.
+3. Fields are only ever added, and added fields are optional. Absent optional fields are omitted,
+   not `null`.
+4. Tool calls are addressed by `id`, unique within the run. Every frame about a call (`tool-input-*`,
+   `tool-output*`, `approval-requested`, `approval-settled`, `elicitation`) uses the same `id`, and the call MUST be
+   announced (`tool-input-start` or `tool-input-available`) before its outcome or approval frame —
+   the AI SDK drops the whole message when a call is settled before it exists. The React transport
+   guards the approval case, but not the outcome case.
+5. A run is ONE assistant message. `step-start`/`step-finish` bracket one model call plus its tool
+   execution; text and reasoning are grouped per step. A runner with no notion of steps may send a
+   single `step-start` at the beginning and a `step-finish` at the end, or none at all (the client
+   opens a step on the first content frame and closes it at `done`).
+
+## Events
+
+| `kind` | Fields | Client effect (AI SDK v7 chunk) |
+|---|---|---|
+| `step-start` | — | `start-step` |
+| `step-finish` | `usage?: { inputTokens, outputTokens, … }`, `costUsd?: number \| null`, `reasoningMs?: number`, `model?: string` | closes open text/reasoning, `finish-step`; `model` names the model the step ran on (the provider's, else the configured `modelId`) — what a per-model usage report keys on, e.g. AG-UI's `RUN_FINISHED.usage`; `costUsd` → `message-metadata` `{ costUsd }` (`null` = unpriced, never a fabricated `0`); `reasoningMs` → the closing reasoning part's `providerMetadata.agent.reasoningMs` (without it the client stamps the time it watched the reasoning stream, which reads ~0 on a replay — send it) |
+| `text` | `text: string` (a delta) | `text-start` once per run of prose, then `text-delta` |
+| `reasoning` | `text: string` (a delta) | `reasoning-start` once, then `reasoning-delta` |
+| `tool-input-start` | `id`, `name`, `toolKind: 'read' \| 'action'`, `parentId?` | `tool-input-start` with `toolMetadata: { toolKind, parentId? }` |
+| `tool-input-delta` | `id`, `delta: string` (a JSON text fragment of the input) | `tool-input-delta` |
+| `tool-input-available` | `id`, `name`, `input`, `toolKind`, `parentId?` | `tool-input-available` (metadata merged with what `tool-input-start` said) |
+| `tool-output` | `id`, `output` | `tool-output-available` |
+| `tool-output-error` | `id`, `error: string` | `tool-output-error` — the call failed, effects unknown |
+| `tool-output-denied` | `id`, `reason?` | `tool-output-denied` — a person said no; nothing ran |
+| `elicitation` | `id`, `request: { preamble?, questions[] }` | opens an `ask` tool call carrying the questions (see [Asking the user](#asking-the-user)) |
+| `approval-requested` | `id`, `approver: string`, `expiresAt?: string`, `reason?: string`, `confirmation?: { title, verb, detail? }`, `target?: { kind: 'proposal', proposalId }` | `data-approval-requested` part (id = call id) + native `tool-approval-request` (`approvalId` = call id); the tool part moves to `state: 'approval-requested'` |
+| `approval-settled` | `id`, `status: 'approved' \| 'rejected' \| 'expired'`, `approver?`, `decidedBy?`, `decidedVia?`, `remember?: boolean`, `reason?` | `data-approval-settled` part (id = call id); folded into the call's `approval` by the transcript. The call's own state still moves on its output frame |
+| `ui` | `id`, `component: string`, `props: object`, `version?: number`, `fallbackText?: string`, `componentVersions?: Record<string, number>`, `toolCallId?: string` | `data-ui` part (id = component id); a repeat `id` replaces the component in place. Closes the open prose so later text renders after it |
+| `title` | `title: string` | transient `data-title` (not stored on the message); `useAgentChat({ onTitle })` |
+| `cancelled` | — | transient `data-cancelled`. Send it as the last frame before `done` when someone stopped the run, so a reader can tell a truncated answer from a complete one |
+| `queue` | `queue: { items, paused }`, `started?: { messageId, runId }` | transient `data-queue`. A snapshot of the thread's [message queue](/docs/agent/guides/message-queue) — on every change while this run holds the thread, and, with `started`, as the last frame before the terminal when the thread passes to the next queued message (attach with `GET /agent/chat/:runId/stream`). `useAgentChat` keeps `chat.queue` from it |
+| *anything else* | any | `data-<kind>` part carrying the frame minus `kind`, keyed by `id` when the frame has a string `id` |
+
+### Tool kinds and approvals
+
+`toolKind: 'action'` marks a call that waits for a person before it executes. A client treats an
+`action` call whose input is available and whose outcome has not arrived as awaiting approval, with
+or without `approval-requested`. The frame adds who may decide and until when:
+
+- `approver` is an open vocabulary the host defines — `'requester'` (the person chatting), `'admin'`,
+  a role or team name. A client uses it to show "waiting on an admin" instead of buttons the viewer
+  cannot use.
+- `expiresAt` is ISO-8601. Absent → the request does not lapse.
+- `confirmation` is this call's prompt, already resolved by the tool's
+  [preflight](/docs/agent/guides/tools#preflight-checking-an-action-before-and-after-approval) or
+  from `presentation.confirm`. Render it as is; it wins over the catalog's templates and is stored
+  on the call, so a reload shows the same words.
+- `target: { kind: 'proposal', proposalId }` marks an
+  [independent approval](/docs/agent/guides/action-proposals). Decide it through
+  `POST <base>/threads/:threadId/action-proposals/:proposalId/approve` / `reject`, not the
+  `tool-call` routes. The run does not wait: the call's output is
+  `{ proposalId, status: 'pending', executed: false }` and the stream goes on to the end of the turn.
+  A later message that decides the proposal by text ("yes", "no #id") opens no stream:
+  `POST <base>/chat` answers `200 { threadId, proposalDecision, text }` as JSON, which the React
+  client surfaces as a transient `data-proposal-decision` part and follows by re-reading the
+  proposals.
+- A client that checked `part.state === 'input-available'` to find pending calls must also accept
+  `'approval-requested'` once a runner sends this frame; `TranscriptToolCall.isAwaitingApproval`
+  already covers both.
+- The decision is sent with `POST <base>/tool-call/approve` `{ toolCallId, remember?, via? }` /
+  `POST <base>/tool-call/reject` `{ toolCallId, reason?, via? }`. The approval id IS the tool call
+  id. `remember: true` approves later calls of the same tool in the same thread without asking;
+  `via` names the surface the decision came through (the lib records `'web'` when omitted). A
+  server answers `403` to a caller who is not the approver, `410` once the request lapsed, and
+  `409 { code: 'run_not_active', message }` when the run that asked has ended (it failed, was
+  cancelled, or its worker is gone): nothing is waiting for the decision and nothing will run, so
+  it is refused instead of accepted and dropped. A client treats the card as stale — the React
+  layer's `isRunNotActiveError(error)` recognises it, and the transcript model carries it as
+  `call.errorCode` — and the person sends the message again.
+
+The stream stays open while the run waits (a client that dropped reconnects through
+`GET <base>/chat/:runId/stream`). After the decision, continue on that stream with
+`approval-settled` (optional, recommended) and the outcome: `tool-output` when it ran,
+`tool-output-denied` when it was declined or lapsed, `tool-output-error` when it failed.
+
+### How an approval settles
+
+`approval-settled` says who decided and how; it never carries the outcome itself.
+
+| `status` | Send it when | Then |
+|---|---|---|
+| `approved` | a person approved (`decidedBy`, `decidedVia`, `remember`), or a remembered approval covered the call (`decidedVia: 'remembered'`, `remember: true`, plus `approver` since no request was streamed) | `tool-output` or `tool-output-error` |
+| `rejected` | a person declined (`decidedBy`, `decidedVia`, `reason`) | `tool-output-denied` with the same `reason` |
+| `expired` | `expiresAt` passed with nobody deciding | `tool-output-denied` with `reason: "approval expired"` |
+
+The transcript model reads both approval frames into `TranscriptToolCall.approval`:
+`{ approver, expiresAt, reason, status, remember, decidedBy, decidedVia, decisionReason }`. `status`
+is `pending` until a settlement arrives; a runner that never sends one still gets `rejected` /
+`approved` from the call's own state. `useApprovalCountdown(call.approval?.expiresAt)` gives the
+time left, ticking, for a headless countdown.
+
+In this library the approver, the time to live and the "no approval needed" answer come from the
+`ApprovalPolicy` SPI (see [Human-in-the-loop](/docs/agent/guides/human-in-the-loop-and-durability#who-approves-and-for-how-long)) — `AgentModule.forRoot({ approvalPolicy })`; a role approver is enforced on the
+approve/reject routes by the policy's `canDecide` (default: the decider holds that role). An expiry
+is settled by the runner itself — the durable runner hands the time to live to the signal wait's
+own timeout — and the model is told the approval expired, not that someone said no.
+
+**A runner that is not this library's loop** (e.g. one translating another agent's permission
+prompts) maps its own approval model onto these frames: its "who may decide" onto `approver`, its
+deadline onto `expiresAt`, its outcome record (who, which channel, "always allow") onto
+`approval-settled`. It enforces approvers and expiry on its own approve/reject routes, since those
+are the only way a decision reaches it.
+
+### Asking the user
+
+`elicitation` parks the run on a question set; it is answered with
+`POST /agent/tool-call/answer { toolCallId, answers?: Record<questionId, string[]>, via? }` (an
+omitted question takes its `defaults`) or declined with `POST /agent/tool-call/skip { toolCallId, via? }`
+(`via` as on approve/reject, `'web'` when omitted; both answer `409 { code: 'run_not_active' }` when
+the run that asked has ended). The matching `tool-output` carries the settled
+outcome — `{ answers, skipped, defaulted, summary?, answeredBy?, answeredVia? }`, where `answeredBy` /
+`answeredVia` say who answered and through which surface, the way an approval's `decidedBy` /
+`decidedVia` do. Persist the same object as the call's stored result so a reload shows it too; the
+transcript reads it into the elicitation block's `outcome`.
+
+A question is either a pick from `options` or a typed value:
+
+```ts
+{
+  id: string;
+  prompt: string;
+  description?: string;                   // help under the prompt
+  options?: { value, label, hotkey? }[];  // required unless `input` asks for a typed value
+  multiple?: boolean;
+  defaults?: string[];                    // pre-picked; required for a pick, optional when typed
+  allowFreeText?: boolean;
+  input?: {
+    type: 'text' | 'textarea' | 'number' | 'boolean' | 'date' | 'email' | 'url' | 'select';
+    placeholder?: string;
+    required?: boolean;
+    min?: number | string;                // number: min · text: min length · date: earliest YYYY-MM-DD
+    max?: number | string;
+    pattern?: string;                     // regex the whole value must match
+  };
+}
+```
+
+Answers stay `string[]` whatever the type, in one canonical form: numbers as decimals (`"42"`),
+booleans as `"true"`/`"false"`, dates as `YYYY-MM-DD`, everything else as typed. The answer route
+answers `400` (`answers["<id>"] <reason>`) for a value a question's rules refuse or a `required`
+question left without an answer or default. React's `coerceAnswer`/`validateAnswer` apply the same
+rules client-side.
+
+**Mapping another runner's forms.** A runner that is not this library's loop emits its own form
+prompts as an `elicitation` frame and converts the answers back. For example, an OpenCode `question`
+tool field `{ key, type, title, description, required, options }` maps as:
+
+| OpenCode field | `ElicitationQuestion` |
+|---|---|
+| `key` | `id` |
+| `title` (fall back to `key`) | `prompt` |
+| `description` | `description` |
+| `options: [{ value, label }]` | `options` (plus `input: { type: 'select' }`, and `defaults` when there is a sensible pick) |
+| `type: 'string'` | `input: { type: 'text' }` — or `textarea` / `email` / `url` / `date` when the runner knows more |
+| `type: 'number' \| 'integer'` | `input: { type: 'number' }` (plus `min`/`max` when the runner has bounds) |
+| `type: 'boolean'` | `input: { type: 'boolean' }` |
+| `required: true` | `input.required: true` |
+
+and each answer back with the inverse of the canonical form — `Number(v[0])`, `v[0] === 'true'`,
+the string itself — before handing it to the runner that asked. Enforce the same rules on its own
+answer route: the transcript model reports them, but only the server can refuse them.
+
+### Nested calls
+
+`parentId` places a call under another call on the same stream — the inner calls of a code-mode
+`execute`, the tools of a delegated agent. Rules:
+
+- the parent is announced first;
+- the first frame that names a parent fixes it; later frames may omit `parentId`;
+- a `parentId` naming a call the client does not have (or forming a cycle) is shown top-level — it
+  is never an error.
+
+The transcript model exposes this as `TranscriptToolBlock.roots` / `TranscriptToolCall.children` — see [Bring your own UI](/docs/agent/guides/bring-your-own-ui#blocks-why-grouping-is-the-models-job).
+Keep inner-call frames adjacent to their parent (no prose between them) so they land in the same
+tool block.
+
+### Generative UI
+
+`ui` is for components the server decides to show that are not a tool call's rendering. `component`
+is a key into the client's own registry (the library ships none); `props` must be JSON. Use
+`version` when `props` changes shape, so a client can still render components an older server
+persisted. Emitting the same `id` again (e.g. streaming rows into a table) updates it; it never
+duplicates it.
+
+`fallbackText` is the component's text from the server catalog, for a client that cannot draw it
+(an unknown name, a removed renderer, a changed version). `componentVersions` lists the version of
+every component in a `genui:tree`. `toolCallId` places the component next to the call that pushed it.
+
+A client that declared [`uiCapabilities`](/docs/agent/guides/rendering-everywhere) receives no `ui`
+frame for a component it left out: that component's text arrives as ordinary `text` frames instead,
+and is stored as an assistant message.
+
+## Tool catalog
+
+`GET /agent/tools?agent=<name>` returns `{ name, kind, presentation? }[]` for the tools the caller can
+reach — what `useToolCatalog` reads to narrate calls by each tool's declared words instead of its
+name (see [How a chat talks about a tool](/docs/agent/guides/tools#how-a-chat-talks-about-a-tool)).
+A runner that serves these routes can answer it from its own tool list; a tool with no entry is
+narrated generically.
+
+## Persisted history
+
+`GET /agent/threads/:id` returns `StoredMessage`s, which the client turns back into the same parts
+(`storedThreadToUiMessages`). Besides `content`, `toolCalls`/`toolResults` and `attachments`, a
+message may carry, per step:
+
+| Field | Replayed as |
+|---|---|
+| `reasoning?: string` | a `reasoning` part, placed before the text |
+| `reasoningMs?: number` | that part's `providerMetadata.agent.reasoningMs` (the transcript's `durationMs`) |
+| `ui?: { id, component, props, version?, fallbackText?, componentVersions?, toolCallId? }[]` | `data-ui` parts, first-seen order, last props per `id` |
+| `approvals?: { toolCallId, approver, expiresAt?, status, remember?, decidedBy?, decidedVia?, reason?, confirmation?, target?, proposalId? }[]` | a `data-approval-requested` part per entry, plus a `data-approval-settled` part once `status` is not `pending` — the same parts the live frames become |
+| `actionProposalOutcome?: { proposalId, decision, executionStatus?, result?, error?, ui, text?, … }` | the fact an [action proposal](/docs/agent/guides/action-proposals) admitted into the thread when it settled; `useAgentChat` merges it into the transcript |
+| `feedback?: { value: 'up' \| 'down', comment?, updatedAt }` | `message.metadata.feedback` (a merged turn reads its last row's) — what `useMessageFeedback` shows |
+
+A runner serving these routes should persist the same values it streamed, so a reload shows what
+the live stream did.
+
+## Example
+
+```text
+event: meta
+data: {"runId":"run_1","threadId":"thr_1"}
+
+data: {"kind":"title","title":"Refund for order 1042"}
+
+data: {"kind":"step-start"}
+
+data: {"kind":"text","text":"Let me look that order up."}
+
+data: {"kind":"tool-input-start","id":"c1","name":"execute","toolKind":"read"}
+
+data: {"kind":"tool-input-available","id":"c1","name":"execute","input":{"code":"…"},"toolKind":"read"}
+
+data: {"kind":"tool-input-available","id":"c1.0","name":"orders.get","input":{"id":1042},"toolKind":"read","parentId":"c1"}
+
+data: {"kind":"tool-output","id":"c1.0","output":{"status":"paid"}}
+
+data: {"kind":"tool-output","id":"c1","output":{"ok":true}}
+
+data: {"kind":"ui","id":"u1","component":"order-card","props":{"id":1042,"status":"paid"},"version":1}
+
+data: {"kind":"tool-input-available","id":"c2","name":"refund","input":{"id":1042},"toolKind":"action"}
+
+data: {"kind":"approval-requested","id":"c2","approver":"admin","expiresAt":"2026-10-01T12:00:00.000Z","reason":"Refunds need an admin"}
+
+    … the stream stays open while the run waits; an admin POSTs /tool-call/approve {"toolCallId":"c2","via":"slack"} …
+
+data: {"kind":"approval-settled","id":"c2","status":"approved","decidedBy":"admin-7","decidedVia":"slack"}
+
+data: {"kind":"tool-output","id":"c2","output":{"refunded":true}}
+
+data: {"kind":"step-finish","costUsd":0.0021}
+
+data: {"kind":"step-start"}
+
+data: {"kind":"text","text":"Done — the refund is on its way."}
+
+data: {"kind":"step-finish","costUsd":0.0004}
+
+event: done
+data: {}
+```
+
+A client that reconnects while the run is parked (`GET <base>/chat/run_1/stream`) gets every frame
+above from the beginning again, including the `approval-requested`, so the approval card is rebuilt
+without a thread re-fetch.

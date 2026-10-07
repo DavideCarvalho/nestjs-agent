@@ -1,0 +1,217 @@
+---
+title: "@dudousxd/nestjs-agent-dashboard"
+icon: LayoutDashboard
+description: A standalone AI-gateway governance console — bundled React SPA + JSON/SSE API mounted at its own route, no Telescope required — plus a dependency-free client subpath and a React launcher subpath.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-dashboard
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-dashboard
+    ```
+  </Tab>
+</Tabs>
+
+`AgentDashboardModule` mounts a bundled React SPA and its JSON + SSE API at their own route — spend
+per model/actor, a usage trend, run reliability, an approvals inbox, tool governance stats, and live
+tool-call/thread activity — without needing `@dudousxd/nestjs-telescope` installed at all. The SPA is
+a single page that routes its sections client-side via URL hash — `#/spend` (default), `#/models`,
+`#/actors`, `#/runs`, `#/reliability`, `#/approvals`, `#/tools`, `#/pricing`, `#/live` — deep-linkable
+(a hash may carry a query tail, e.g. `#/reliability?threadId=…`), no server routing, no extra dependency.
+
+```ts
+import { Module } from '@nestjs/common';
+import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+
+@Module({
+  imports: [AgentDashboardModule.forRoot({ basePath: '/ai-gateway' })],
+})
+export class AppModule {}
+```
+
+## `AgentDashboardModule.forRoot(options?)` / `forRootAsync(options)`
+
+| Option | Default | Purpose |
+|---|---|---|
+| `basePath` | `/ai-gateway` | Where the SPA is served — a page route, kept out of any `/api` prefix. |
+| `apiBasePath` | `<basePath>/api` | Where the JSON + SSE API is mounted (what the SPA fetches). Set it under your app's own `/api` prefix so it inherits your auth/proxy rules while the UI stays at `basePath`. |
+| `guards` | none | `Type<CanActivate>[]` stamped on both the SPA and API controllers, appended after the built-in `dashboardAuth` gate — a request must pass both. |
+| `imports` | none | Extra module imports so a guard's own dependencies (e.g. your `AuthModule`) resolve — the dashboard has no application context of its own to pull them from. |
+| `approvalActorRef` | the configured `ActorResolver` | `(req) => string \| undefined` — override for WHO is recorded as deciding a HITL approval (`Decision.executedByRef`). Default: the `AgentModule`-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is consulted, same identity seam chat uses. Set this only when console auth differs from chat auth. |
+| `dashboardAuth` | none | Built-in signed session-cookie gate for SPA + API — see [Console auth](#console-auth). |
+
+`forRootAsync` takes the same `basePath`/`apiBasePath`/`guards`/`imports`/`approvalActorRef` (static —
+routing needs them at module-build time) plus `inject` and `useDashboardAuth(...deps)`, which returns
+the `dashboardAuth` config (or `undefined` to leave it off) — for a `login`/`session` hook that needs
+injected services.
+
+It requires `AGENT_GOVERNANCE_QUERIES` to already be bound — import it alongside your
+`AgentModule.forRoot(...)` and a store adapter (MikroORM or Drizzle) that provides the read-model.
+
+<Callout type="warn" title="Guard it, don't leave it open">
+Prefer the `guards`/`imports` and/or `dashboardAuth` options over a hand-rolled reverse-proxy rule —
+they front both the SPA and its API. With neither set, the routes carry no authentication; front
+`basePath` (and `apiBasePath`) another way (a global guard, your proxy).
+</Callout>
+
+## Console auth
+
+`dashboardAuth` gates the console behind a stateless HMAC-SHA256-signed cookie. Routes live under
+`<basePath>/auth/*` and 404 when the option is unset.
+
+| Key | Purpose |
+|---|---|
+| `secret` | Required signing key (32+ bytes recommended). Missing/empty throws at boot. |
+| `ttl` | Cookie lifetime, `'<n><ms\|s\|m\|h\|d>'`. Default `'8h'`. |
+| `session` | Mode A: `(request) => DashboardSessionUser \| null`. Your frontend, carrying your app's auth, `POST`s `<basePath>/auth/session` (204 on success, 401 on `null`). |
+| `login` | Mode B: `(username, password) => DashboardSessionUser \| null`. Serves a built-in login page at `GET <basePath>/auth/login`; denied page loads redirect there with `?returnTo=`. |
+| `revalidate` | `(session) => boolean` — re-checks a live session when the cookie slides (at most once per `ttl/2` per cookie); `false` revokes it. |
+| `unauthenticatedPage` | `({ request, response, basePath }) => void` — render your own page at `<basePath>/auth/session-required` (Mode A only). Falls back to the built-in page if it throws or writes nothing. |
+
+At least one of `session`/`login` is required, or `forRoot`/`forRootAsync` throws. `DashboardSessionUser`
+is `{ id: string; name?: string; roles?: string[] }`. Unauthenticated API calls always get `401`.
+`POST <basePath>/auth/logout` clears the cookie.
+
+```ts
+AgentDashboardModule.forRoot({
+  dashboardAuth: {
+    secret: process.env.CONSOLE_SECRET!,
+    session: async (req) => resolveAdmin(req), // your own auth
+  },
+});
+```
+
+<Callout type="info" title="Inertia hosts">
+The console is a full-page app, not an Inertia page. An in-app `<Link>` visit to `basePath` is bounced
+with Inertia's own external-redirect mechanism (`409` + `X-Inertia-Location`) so the client does a full
+page load instead of rendering the SPA's HTML inside its own error modal.
+</Callout>
+
+## Subpath `/client` — a dependency-free typed client
+
+`@dudousxd/nestjs-agent-dashboard/client` re-declares the governance row shapes so it has **zero**
+runtime dependencies — safe to use from any frontend that only wants to call the API, without pulling
+in the server package.
+
+```ts
+import { agentClient } from '@dudousxd/nestjs-agent-dashboard/client';
+
+const overview = await agentClient.spend({ fromDay: '2026-06-01', toDay: '2026-06-30' });
+// overview.byModel / overview.byActor / overview.trend
+
+const calls = await agentClient.toolCalls(50);
+const threads = await agentClient.threads(50);
+
+const stop = agentClient.streamEvents((event) => console.log(event.event, event.payload));
+// stop() closes the SSE connection
+```
+
+Range reads take `{ fromDay, toDay }` (`YYYY-MM-DD`, inclusive UTC).
+
+| Method | Returns |
+|---|---|
+| `agentClient.spend(range: GovernanceRange)` | `{ byModel, byActor, trend }` for the day range — `byModel`/`byActor` rows carry an `actorLabel: string \| null` when an `ActorDirectory` (`AGENT_ACTOR_DIRECTORY`) is bound server-side. |
+| `agentClient.toolCalls(limit = 50)` | Most recent tool-call activity rows. |
+| `agentClient.threads(limit = 50)` | Most recent thread activity rows. |
+| `agentClient.topThreads(range, limit = 10)` | Top threads by cost. |
+| `agentClient.reliability(range)` | `{ metrics, byAgent, errors, trend }`. |
+| `agentClient.runs(limit = 50)` / `runsPage(query)` | Recent runs / a filtered page. |
+| `agentClient.toolCallsPage(query)` / `threadsPage(query)` | Filtered pages (`{ page, pageSize, where? }` → `{ rows, total, … }`). |
+| `agentClient.approvals(limit = 50)` / `approvalsPage(query)` | Pending HITL approvals, oldest first; the paged variant reports `total`. |
+| `agentClient.runDetail(runId)` / `threadDetail(threadId, { messages?, runs? })` | Drill-downs; reject with a `404 …` error if unknown. |
+| `agentClient.toolStats(range)` | Per-tool governance rollup. |
+| `agentClient.decideApproval(toolCallId, { approved, reason? })` | Decide a pending approval. |
+| `agentClient.pricing()` / `upsertPrice(input)` | Read / upsert model prices. |
+| `agentClient.streamEvents(onEvent)` | Live-tails `aviary:agent:*` over SSE; returns a function that closes the stream. |
+
+The same subpath exports the console launcher primitives for Mode A: `agentConsoleSessionUrl(basePath?)`,
+`agentConsoleUrl(basePath?)`, `mintAgentConsoleSession(options?)`, `openAgentConsole(options?)` (mint,
+then navigate) and `ConsoleSessionError`. `OpenConsoleOptions` is `{ basePath?, headers?, fetch?,
+signal?, navigate? }`; the mint uses `credentials: 'include'` and `redirect: 'manual'`, so an auth layer
+that rewrites the 401 into a sign-in redirect surfaces as an error instead of a false success.
+
+## Subpath `/react` — console launcher
+
+`@dudousxd/nestjs-agent-dashboard/react` (peer: `react`) re-exports the launcher primitives above plus:
+
+- `useOpenAgentConsole(options?)` → `{ open, isPending, error, reset }`.
+- `<OpenAgentConsoleButton />` — unstyled `<button>`; takes `OpenConsoleOptions`, `pendingLabel`,
+  `renderError` (pass `null` to render nothing) and any button prop.
+- `openAgentConsoleMutationOptions(options?)` — `{ mutationKey, mutationFn }` for TanStack Query's
+  `useMutation`, without a TanStack dependency.
+
+```tsx
+import { OpenAgentConsoleButton } from '@dudousxd/nestjs-agent-dashboard/react';
+
+<OpenAgentConsoleButton basePath="/ai-gateway" headers={() => ({ Authorization: `Bearer ${token()}` })} />;
+```
+
+The client reads `window.__AGENT_BASE__` / `window.__AGENT_API__` (injected by the UI controller) to
+find its API base, falling back to `/ai-gateway` / `/ai-gateway/api` — so the bundled SPA needs no
+build-time configuration, and an external frontend can set those globals itself to point elsewhere.
+
+## Reliability, approvals, and tool governance
+
+Beyond spend/usage, the console has three more sections, all fed by the same
+`AGENT_GOVERNANCE_QUERIES` read-model documented in [`-core`](/docs/agent/packages/core#the-spis):
+
+- **Reliability** (`#/reliability`) — success/error rate, retries, p50/p95 run duration, a run/failure
+  trend, failure breakdown by error code, and a recent-runs table with `promptHash` chips (correlate an
+  error-rate shift with a prompt change) and a 500-char-capped error message. The status filter covers
+  every terminal a run settles on, `cancelled` included — a user pressing Stop is not a failure, and a
+  terminal the dropdown omits is one a server-side filter cannot be asked for. A run's drill-down names
+  its `parentRunId` when it has one, which for a detached child is the only link back to the turn that
+  started it. Backed by `GET
+  <api>/reliability?from&to` and `GET <api>/runs?limit` (paginated variant: `GET <api>/runs-page`).
+- **Approvals** (`#/approvals`) — the cross-thread HITL inbox: every tool call sitting
+  `pending_approval`, oldest first, paged over `GET <api>/approvals-page` with the backlog total, and a
+  nav badge showing the pending count. Approve/reject posts
+  `POST <api>/approvals/:toolCallId` (`{ approved, reason? }`), which routes through the same decision
+  path chat approvals use — **without** re-running chat's own thread-ownership check, since a console
+  caller is already authorized by the dashboard's own guards.
+- **Tools** (`#/tools`) — per-tool governance rollup (`GET <api>/tools`): calls, failures, rejections,
+  and p95 execution time.
+
+<Callout type="warn" title="501 read-only mode">
+Mutating endpoints 501 (and the corresponding SPA section renders read-only) when their backing port
+isn't bound:
+
+- `POST <api>/approvals/:toolCallId` 501s with no `AGENT_APPROVAL_PORT` bound. In practice this is
+  bound automatically the moment `AgentModule` is imported anywhere in the app (see
+  [`-nestjs`](/docs/agent/packages/nestjs)) — it only 501s if the dashboard is mounted in a process
+  that never imports `AgentModule` at all (e.g. a read-replica/reporting app wired only against
+  `AGENT_GOVERNANCE_QUERIES`).
+- `GET`/`POST <api>/pricing` 501 with no `AGENT_PRICING_STORE` bound.
+
+Both cases are logged 501s, not crashes — the rest of the console keeps working.
+</Callout>
+
+## Paginated, filterable tables
+
+Tool calls, threads, runs, and pending approvals are each backed by a paged read (`toolCallsPage` /
+`threadsPage` / `runsPage` / `approvalsPage` on `AgentGovernanceQueries`) exposed over HTTP as `GET
+<api>/tool-calls-page`, `GET <api>/threads-page`, `GET <api>/runs-page`, `GET <api>/approvals-page`. The wire grammar mirrors the rest of the ecosystem: `page`
+(1-based), `limit` (clamped to 200 server-side), and `where[field]=value` filters (an unknown field
+400s). The SPA's list sections use these for prev/next pagination with debounced per-column filters;
+the older `recentToolCalls`/`recentThreads`/`recentRuns` latest-N reads remain in place for the
+Telescope bridge, which only needs the tail.
+
+## When to use it
+
+Reach for `-dashboard` when you want a governance console but aren't running Telescope, or want the
+AI-gateway surface independently addressable at its own route. Already running Telescope? The
+[`-telescope`](/docs/agent/packages/telescope) extension adds the same governance sections as an
+"Agent" tab instead — both read the same `AGENT_GOVERNANCE_QUERIES` read-model, so you can run either
+or both.
+
+See [Cost & Governance](/docs/agent/guides/cost-and-governance) for the ledger and read-model this
+console surfaces, and [Reference → Endpoints](/docs/agent/reference/endpoints) for the API routes
+directly.

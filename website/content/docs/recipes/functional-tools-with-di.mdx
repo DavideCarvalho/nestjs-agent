@@ -1,0 +1,233 @@
+---
+title: Functional tools with DI
+icon: Puzzle
+description: Register a tool that needs constructor-injected dependencies without a class — provideAgentTool(factory, inject) resolves it through Nest's container and returns { spec, handler }, auto-discovered at boot exactly like an @AiTool class.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Reach for this when a tool needs a DI-resolved dependency — a repository, an HTTP client, another
+service — but you'd rather not stand up a whole `@AiTool` class for it, or you're generating tools
+from data (e.g. one per configured integration). A **functional tool** is the same `{ spec, handler
+}` shape a class-based tool compiles down to; `provideAgentTool` is how you register one as a Nest
+provider so `AiToolDiscoveryService` picks it up at boot.
+
+---
+
+## The contract
+
+From [`functional-tool.ts`](https://github.com/DavideCarvalho/nestjs-agent/blob/master/packages/nestjs/src/functional-tool.ts):
+
+```ts
+/** A tool expressed as data + handler, not an `@AiTool` class. */
+interface FunctionalTool {
+  spec: ToolSpec;
+  handler: ToolHandler;
+}
+
+// Two forms — a static tool, or a factory with `inject` for DI-resolved dependencies:
+function provideAgentTool(tool: FunctionalTool): Provider;
+function provideAgentTool(
+  factory: (...deps: never[]) => FunctionalTool,
+  inject?: FactoryProvider['inject'],
+): Provider;
+
+// A LIST from one factory — for when the tool count is only known once deps resolve.
+function provideAgentTools(
+  factory: (...deps: never[]) => readonly FunctionalTool[] | Promise<readonly FunctionalTool[]>,
+  inject?: FactoryProvider['inject'],
+): Provider;
+```
+
+A `ToolSpec` is the same shape a `@AiTool({ ... })` decorator captures — `{ name, kind, description,
+inputSchema, presentation?, roles?, enabled?, ability?, terminal?, ... }` — and a `ToolHandler` is
+the same contract a decorated class implements: `execute(input, ctx)` plus the optional `present`,
+`preflight`, `isEnabled`, `canUse` and `describe` hooks.
+
+`defineTool` (also exported from `@dudousxd/nestjs-agent`) builds the `{ spec, handler }` pair from
+one flat object with inferred input types — `input` instead of `inputSchema`, `kind` defaulting to
+`'read'`, and the handler hooks inline:
+
+```ts
+import { defineTool, provideAgentTool } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+
+const upperTool = defineTool({
+  name: 'upper',
+  description: 'Upper-cases the input.',
+  input: z.object({ text: z.string() }),
+  execute: async ({ text }) => ({ text: text.toUpperCase() }), // `text` is typed from the schema
+});
+
+export const UpperToolProvider = provideAgentTool(upperTool);
+```
+
+---
+
+## A tool with an injected dependency
+
+```ts
+// src/tools/count-open-orders.tool.ts
+import { provideAgentTool, type AiToolCtx, type FunctionalTool } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+import { OrdersService } from '../orders/orders.service.js';
+
+function countOpenOrdersTool(orders: OrdersService): FunctionalTool {
+  return {
+    spec: {
+      name: 'countOpenOrders',
+      kind: 'read',
+      description: 'How many orders are currently open for a customer.',
+      inputSchema: z.object({ customerId: z.string() }),
+    },
+    handler: {
+      async execute(input: { customerId: string }, ctx: AiToolCtx) {
+        // Scope to the caller's tenant from ctx.actor, never from tool input.
+        return { count: await orders.countOpen(input.customerId, ctx.actor.tenantRef) };
+      },
+    },
+  };
+}
+
+export const CountOpenOrdersToolProvider = provideAgentTool(countOpenOrdersTool, [OrdersService]);
+```
+
+Drop the provider in any module's `providers` — no separate tool registry to keep in sync:
+
+```ts
+// src/orders/orders.module.ts
+import { Module } from '@nestjs/common';
+import { CountOpenOrdersToolProvider } from '../tools/count-open-orders.tool.js';
+import { OrdersService } from './orders.service.js';
+
+@Module({
+  providers: [OrdersService, CountOpenOrdersToolProvider],
+})
+export class OrdersModule {}
+```
+
+`provideAgentTool` mints a fresh, unique provide token per call, so the same factory can be used more
+than once (e.g. one tool per configured integration) without collisions. When the integrations
+themselves come from an injected config, `provideAgentTools(factory, inject)` returns the whole
+list from one factory (sync or async) and each element is registered.
+
+---
+
+## An action with preflight and a per-call confirmation
+
+An `action` tool parks for approval before it runs. Two optional pieces make that prompt accurate:
+`spec.presentation.confirm` (a template filled from the call's input) and `handler.preflight`, a
+read-only check that runs after authorization and validation — once with `phase: 'prepare'` before
+approval is requested, and again with `phase: 'execute'` right before the side effect.
+
+```ts
+import {
+  provideAgentTool,
+  type AiToolCtx,
+  type FunctionalTool,
+  type ToolPreflightOptions,
+  type ToolPreflightResult,
+} from '@dudousxd/nestjs-agent';
+
+type CancelInput = { orderId: string };
+type CancelOutput = { cancelled: boolean };
+
+function cancelOrderTool(orders: OrdersService): FunctionalTool {
+  return {
+    spec: {
+      name: 'cancelOrder',
+      kind: 'action',
+      description: 'Cancel an open order.',
+      inputSchema: z.object({ orderId: z.string() }),
+      presentation: {
+        label: 'Order cancellation',
+        running: 'Cancelling order {orderId}',
+        done: 'Cancelled order {orderId}',
+        tone: 'destructive',
+        // Fallback wording when preflight returns no confirmation of its own.
+        confirm: { title: 'Cancel order {orderId}?', verb: 'Cancel order' },
+      },
+    },
+    handler: {
+      async preflight(
+        input: CancelInput,
+        ctx: AiToolCtx,
+        _options: ToolPreflightOptions,
+      ): Promise<ToolPreflightResult<CancelOutput>> {
+        const order = await orders.find(input.orderId, ctx.actor.tenantRef);
+        if (!order) return { status: 'denied', reason: 'No such order.' };
+        if (order.status === 'cancelled') return { status: 'completed', output: { cancelled: true } };
+        return {
+          status: 'ready',
+          // Resolved strings, not templates — overrides presentation.confirm for THIS call.
+          confirmation: { title: `Cancel ${order.items} items for $${order.total}?`, verb: 'Cancel order' },
+        };
+      },
+      async execute(input: CancelInput, ctx: AiToolCtx): Promise<CancelOutput> {
+        await orders.cancel(input.orderId, ctx.actor.tenantRef, ctx.idempotencyKey);
+        return { cancelled: true };
+      },
+    },
+  };
+}
+
+export const CancelOrderToolProvider = provideAgentTool(cancelOrderTool, [OrdersService]);
+```
+
+- `denied` returns the reason to the model; `completed` returns an existing result. Both skip
+  approval and execution.
+- Preflight must not write or emit UI. Its `prepare` result is journaled with the call, so a
+  replay neither reruns it nor changes the approval branch. Read tools ignore the hook.
+- It does not replace idempotency or a transaction — pass `ctx.idempotencyKey` to the write.
+
+See [Human-in-the-loop & durability](/docs/agent/guides/human-in-the-loop-and-durability) for how
+the parked call is approved, and [Action proposals](/docs/agent/guides/action-proposals) for
+approving it outside the run.
+
+---
+
+## A static tool with no dependencies
+
+For a tool with nothing to inject, register it directly on `AgentModule.forRoot({ tools: [...] })`
+instead of a per-module provider:
+
+```ts
+const echoTool: FunctionalTool = {
+  spec: {
+    name: 'echo',
+    kind: 'read',
+    description: 'Echoes the input back — a smoke-test tool.',
+    inputSchema: z.object({ text: z.string() }),
+  },
+  handler: {
+    async execute(input: { text: string }) {
+      return { text: input.text };
+    },
+  },
+};
+
+AgentModule.forRoot({
+  model: myModelProvider,
+  tools: [echoTool],
+  // ...
+});
+```
+
+<Callout type="info" title="Functional tool vs. @AiTool class">
+Both compile to the exact same `{ spec, handler }` shape and are discovered the same way at boot —
+neither is more "real" than the other. Reach for `@AiTool` when a tool is naturally a class (it fits
+alongside your other providers, benefits from method-level readability). Reach for
+`provideAgentTool` when the tool is more natural as data — generated per config, wrapping a single
+function, or needing DI without the ceremony of a class. See [Tools](/docs/agent/guides/tools) for
+the `@AiTool` decorator surface, `read` vs `action`, and the full `AiToolCtx` shape — everything
+there about `kind`, roles, and `ability` applies to `ToolSpec` here unchanged.
+</Callout>
+
+---
+
+## Related
+
+- [Tools](/docs/agent/guides/tools) — the `@AiTool` decorator surface, `read` vs `action`, and
+  `AiToolCtx`
+- [Custom `ModelProvider`](/docs/agent/recipes/custom-model-provider) — the other hand-rolled SPI,
+  for the model side instead of the tool side

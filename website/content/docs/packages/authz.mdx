@@ -1,0 +1,112 @@
+---
+title: '@dudousxd/nestjs-agent-authz'
+icon: Lock
+description: Adapts a @dudousxd/nestjs-authz Gate to the agent's RolesPolicy SPI, so ability-gated tools run through your app's real authz policies.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+For anything richer than a role list — ownership, per-resource rules, policies — this package
+delegates a tool's `ability` gate to a [`@dudousxd/nestjs-authz`](https://github.com/DavideCarvalho/aviary)
+`Gate`, while tools with no `ability` still fall through to the built-in role-based policy.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-authz @dudousxd/nestjs-authz
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @dudousxd/nestjs-agent-authz @dudousxd/nestjs-authz
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+```ts
+import { AuthzModule } from '@dudousxd/nestjs-authz';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentAuthzModule } from '@dudousxd/nestjs-agent-authz';
+
+@Module({
+  imports: [
+    AuthzModule.forRoot(/* your abilities & policies */),
+    AgentModule.forRoot({ /* model, store, actorResolver, ... */ }),
+    AgentAuthzModule.forRoot(),
+  ],
+})
+export class AppModule {}
+```
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action', // never auto-executes, waits for HITL approval
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+  ability: 'cache.purge', // delegated to the authz Gate
+})
+export class PurgeCacheTool implements ToolHandler<{ key: string }> {
+  async execute(input: { key: string }) {
+    /* ... */
+  }
+}
+```
+
+<Callout type="warn" title="AgentAuthzModule does not import AuthzModule">
+It injects the `Gate` from your app's global `AuthzModule` — register `AuthzModule.forRoot(...)`
+once at the root; otherwise the `Gate` provider is missing and DI fails at boot.
+</Callout>
+
+`AgentModule` picks the policy up in either import order: when no `rolesPolicy` option is set, it
+forwards its `AGENT_ROLES_POLICY` to the one `AgentAuthzModule` binds (the same container scan it uses
+for a store module's `AGENT_STORE`). An explicit `AgentModule.forRoot({ rolesPolicy })` still wins, and
+boot logs a warning when both are configured. With the forwarded policy, `AgentModule`'s own
+`defaultRoles` / `emptyRoles` are not used: configure them on `AgentAuthzModule.forRoot({ fallbackRoles,
+emptyRoles })`.
+
+<Callout type="warn" title="Without this module, an ability-only tool is closed">
+The built-in `DefaultRolesPolicy` and `ClosedRolesPolicy` cannot evaluate an `ability`, so they refuse
+a tool that declares an `ability` and no `roles`. Forgetting `AgentAuthzModule` therefore hides the
+tool instead of opening it. A tool that declares both is decided by its `roles` under those policies.
+</Callout>
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `AgentAuthzModule` | `@Global` `DynamicModule` factory | `.forRoot(options?)` binds an `AuthzRolesPolicy` (built from the injected `Gate`) under the `AGENT_ROLES_POLICY` token the agent loop's tool gate consults |
+| `AuthzRolesPolicy` | class (`RolesPolicy`) | `can(actor, tool)` — delegates to `gate.forUser(...).allows(ability)` when the tool declares `ability`, else falls through to `DefaultRolesPolicy` |
+| `AuthzRolesPolicyOptions` | type | `{ fallbackRoles?: string[], emptyRoles?: 'allow' \| 'deny' }` — `fallbackRoles` are used by the fallback `DefaultRolesPolicy` when a tool has neither `ability` nor `roles` (defaults to `[]` — `['ADMIN']` for the old ADMIN-only fallback); `emptyRoles` says what an empty list means there: `'allow'` (default, no restriction) or `'deny'` (nobody) |
+| `userFromActor(actor)` | function | Maps the agent's `Actor` onto the minimal `{ id, roles? }` shape authz's default role resolver reads — no host user entity required (`tenantRef` is not passed) |
+| `AuthzUser` | type | The shape `userFromActor` returns / `gate.forUser(...)` expects |
+
+## Decision logic
+
+- Tool **declares an `ability`** → decision goes to the Gate: `gate.forUser(userFromActor(actor)).allows(ability)`.
+- Tool **has no `ability`** → falls through to `DefaultRolesPolicy`, matching the actor's roles
+  against the tool's `roles` (or `fallbackRoles`). An empty list is unrestricted unless
+  `emptyRoles: 'deny'`, in which case such a tool reaches nobody.
+
+## Peer dependencies
+
+`@dudousxd/nestjs-authz` (`~0.6.3`) and `@nestjs/common` (`^10 \|\| ^11 \|\| ^12`).
+
+## When to use it
+
+Reach for this package the moment a tool's authorization needs more than "does the actor have role
+X" — ownership checks, resource-scoped policies, or any rule your app's authz layer already knows
+how to evaluate. Tools that only ever need a role check don't need this package at all; the built-in
+`roles` gate on `@AiTool` covers that case with zero dependencies.
+
+## Related
+
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — roles vs abilities, the `ActorResolver`, and the anonymous-by-default identity
+- [`@dudousxd/nestjs-authz` docs](/docs/authz) — `Gate`, abilities, and policies

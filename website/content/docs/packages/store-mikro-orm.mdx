@@ -1,0 +1,267 @@
+---
+title: '@dudousxd/nestjs-agent-store-mikro-orm'
+icon: Database
+description: MikroORM AgentStore adapter — threads, messages, tool calls, usage, run reliability, and action proposals — with safe auto-schema.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The `AgentStore` SPI (from `@dudousxd/nestjs-agent-core`) backed by MikroORM. The store is a POJO
+that receives an `EntityManager`; every operation runs on a fresh `em.fork()` so per-request
+identity maps never bleed across concurrent turns.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-store-mikro-orm @mikro-orm/core @mikro-orm/nestjs
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @dudousxd/nestjs-agent-store-mikro-orm @mikro-orm/core @mikro-orm/nestjs
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+`forFeature()` does **not** register the entities — add them to your own MikroORM config so they
+enter the shared ORM's metadata (the store's repositories and the boot heal read it):
+
+```ts
+import { Module } from '@nestjs/common';
+import { MikroOrmModule } from '@mikro-orm/nestjs';
+import { AGENT_ENTITIES, MikroOrmAgentStoreModule } from '@dudousxd/nestjs-agent-store-mikro-orm';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+
+@Module({
+  imports: [
+    MikroOrmModule.forRoot({
+      // …driver, dbName
+      entities: [...yourEntities, ...AGENT_ENTITIES], // agentEntities() with no collation on SQLite/Postgres
+    }),
+    MikroOrmAgentStoreModule.forFeature(), // binds AGENT_STORE, AGENT_GOVERNANCE_QUERIES, AGENT_PRICING_STORE, AGENT_CONFIRM_TOKEN_STORE
+    AgentModule.forRoot({
+      model: myModelProvider,
+      // no `store` — the agent reads it from AGENT_STORE
+      actorResolver: new HeaderActorResolver(),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+`forFeature(options?)`:
+
+| Option | Default | |
+|---|---|---|
+| `autoSchema` | `true` | Run `ensureAgentSchema(orm)` on application bootstrap. `false` when your own migrations own these tables |
+| `pricingStore` | `MikroOrmPricingStore` | A `Type<AgentPricingStore>` bound to `AGENT_PRICING_STORE` instead |
+| `ragIngestionLog` | `true` | Bind and export `MikroOrmRagIngestionLog`; `false` binds nothing |
+
+With `autoSchema` on, the tables are created and healed at boot. With it off, use MikroORM
+migrations (`agentSchemaSql` renders the DDL), or call the helper yourself:
+
+```ts
+import { ensureAgentSchema } from '@dudousxd/nestjs-agent-store-mikro-orm';
+
+await ensureAgentSchema(orm); // fingerprint-gated getUpdateSchemaSQL({ safe: true }) — create + add-column only
+```
+
+Upgrading from a release before Postgres/MySQL were tested for real: `agent_message` gains a nullable
+`seq` (per-thread append order); Postgres gains an index on `agent_tool_call.message_id`; on **MySQL**
+timestamps become `datetime(6)`, long text columns `longtext`, and identity columns (`actor_ref`,
+`tenant_ref`, memory `scope`/`origin_actor_ref`) the binary collation `utf8mb4_bin`. The MySQL
+`modify` statements rebuild the tables once — on a large deployment, boot with
+`forFeature({ autoSchema: false })` and run `ensureAgentSchema(orm)` from a one-off script in a
+maintenance window.
+
+Upgrading from a release before reasoning was persisted: `agent_message` gained three nullable
+columns. `ensureAgentSchema` adds them; `migration:create` picks them up from the entity diff; or by
+hand:
+
+```sql
+alter table agent_message add column reasoning text null;
+alter table agent_message add column reasoning_ms integer null;
+alter table agent_message add column ui json null;
+```
+
+Upgrading from a release before [personas](/docs/agent/guides/personas): three more nullable
+columns, picked up the same three ways.
+
+```sql
+alter table agent_thread add column persona varchar(255) null;
+alter table agent_message add column persona varchar(255) null;
+alter table agent_queued_message add column persona varchar(255) null;
+```
+
+Upgrading from a release before per-call confirmations and independent approvals: nullable
+`agent_tool_call.confirmation` (json) and `agent_tool_call.proposal_id`,
+`agent_message.action_proposal_outcome` (escaped JSON text), `agent_queued_message.ui_capabilities`
+(json), and the new `agent_action_proposal` table. Same three ways; see
+[Action proposals](#action-proposals-independent-approvals) for the rollout order.
+
+<Callout type="warn" title="MikroOrmAgentStoreModule.forFeature() is global">
+It binds `AGENT_STORE`, `AGENT_GOVERNANCE_QUERIES`, `AGENT_PRICING_STORE` and
+`AGENT_CONFIRM_TOKEN_STORE` on a **global** Nest module. Import it once —
+`AgentModule.forRoot({...})` (and the dashboard/telescope surfaces) resolve these tokens app-wide with
+no re-binding. Do not import it more than once expecting scoped behavior.
+</Callout>
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `MikroOrmAgentStoreModule` | `DynamicModule` factory | `.forFeature({ autoSchema?, pricingStore?, ragIngestionLog? })` binds `AGENT_STORE` + `AGENT_GOVERNANCE_QUERIES` + `AGENT_PRICING_STORE` + `AGENT_CONFIRM_TOKEN_STORE` globally, and heals the schema at boot unless `autoSchema: false`. Does not register entities |
+| `MikroOrmAgentStoreOptions` | type | The `forFeature` options |
+| `MikroOrmAgentStore` | class | `AgentStore` implementation — the write side (threads, messages, tool calls, usage), including `updateThread` (title, the thread's `defaultAgent`, `model` and/or `persona`), the projected `defaultAgentForThread`/`modelForThread`/`personaForThread` and `loadThreadForTurn` reads (see [what a turn reads off a thread](/docs/agent/guides/persistence#what-a-turn-reads-off-a-thread)), `referencedMediaIds` (which media a live message still carries — the library half of [attachment collection](/docs/agent/guides/persistence#which-media-a-message-still-references-optional)), the optional `recordRunStart`/`recordRunEnd`/`bumpRunRetries` run-reliability hooks, the `ChatQueueStore` [message queue](/docs/agent/guides/persistence#the-message-queue-optional), and every action-proposal capability (see below). `new MikroOrmAgentStore(em, { clock? })` |
+| `MikroOrmMemoryProvider` | class | `MemoryProvider` implementation over `agent_memory` — `list` (scope-gated in the query), `write` (upsert on the (`scope`, `key`) unique index, with `pinned`/`created_at`/`id` out of the conflict merge), `forget` (the actor's own scope in the `where`), plus `pin({ id, pinned })` for the console. No `search` — see [Memory](/docs/agent/guides/memory#search-on-the-provider) |
+| `MikroOrmGovernanceQueries` | class | `AgentGovernanceQueries` implementation — the full read-model: spend by model/actor/thread, usage trend, recent activity, run reliability (`runMetrics`/`runsByAgent`/`runErrors`/`runTrend`/`recentRuns`), the approvals inbox (`pendingApprovals`), per-tool stats (`toolStats`), and paged/filterable reads (`toolCallsPage`/`threadsPage`/`runsPage`) |
+| `MikroOrmRagIngestionLog` | class | Records every RAG ingestion outcome into `rag_ingestion_log` by subscribing to the `aviary:rag:*` diagnostics — the only place a **skipped** or **failed** document is visible, since one that produced no chunks does not exist as far as `VectorStore.listDocuments()` is concerned. Reads: `list`/`listPage` (a page plus the unpaginated total), `get`, `remove`, `removeByCollection`, the delete-safe keyset `iterate`, and `listDocumentIds` for an orphan sweep. On by default; `forFeature({ ragIngestionLog: false })` binds nothing |
+| `MikroOrmPricingStore` | class | `AgentPricingStore` implementation — `upsertModelPrice` / `listCurrentPrices`, the write side of model pricing (see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices)) |
+| `MikroOrmTokenStreamSink` | class | A multi-replica `TokenStreamSink` over `agent_stream_frame` — several replicas with no Redis. `new MikroOrmTokenStreamSink(em, options?)`; pass it as `AgentModule`'s `sink`. Not bound by the module. Polled, text coalesced at write time, TTL from the last write; see [the live stream across replicas](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink) |
+| `MikroOrmConfirmTokenStore` | class | `ConfirmTokenStore` over `agent_confirm_token` — what makes a [confirmed write](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool) single use across replicas. `claim` is one insert that skips on a duplicate hash (the primary key is the lock), `release`, `purgeExpired(now?)`. Bound to `AGENT_CONFIRM_TOKEN_STORE` by `MikroOrmAgentStoreModule` |
+| `MikroOrmStreamFrameTable` | class | The `StreamFrameTable` behind `MikroOrmTokenStreamSink` |
+| `ensureAgentSchema(orm)` | function | Fingerprint-gated, non-destructive heal (`getUpdateSchemaSQL({ safe: true })`, agent tables only) — create + add-column, never drop or alter. Re-diffs afterwards and throws `AgentSchemaHealError` rather than record a heal that did not apply |
+| `agentSchemaSql(ormOrConfig, { ifNotExists?, collation? }?)` | function → `Promise<string[]>` | The agent DDL rendered from entity metadata in your dialect, without touching the live database — for a MikroORM `Migration` (`agentSchemaSql(this.config)`). `ifNotExists` defaults to `true`; `collation` defaults to the one your registered entities carry |
+| `AgentSchemaHealError` | class | Thrown when structure the diff asked for is still pending after the heal; carries the pending statements. The schema fingerprint is NOT recorded, so the next boot retries |
+| `agentManagedTables()` | function → `string[]` | Every table this store owns, for a host's own MikroORM schema-diff `skipTables` — mirrors `durableManagedTables()`/`telescopeManagedTables()` |
+| `AGENT_ENTITIES` | `EntitySchema[]` | The agent entity schemas, pre-stamped with `utf8mb4_unicode_ci` for MySQL parity |
+| `agentEntities({ collation? })` | function | Builds the entity schemas with a custom (or no) collation, e.g. for SQLite |
+| `AGENT_COLLATION` | `'utf8mb4_unicode_ci'` | The default collation baked into `AGENT_ENTITIES` |
+| entity classes (`AgentActionProposal`, `AgentThread`, `AgentMessage`, `AgentQueuedMessage`, `AgentToolCall`, `AgentTokenUsage`, `AgentModelPricing`, `AgentRun`, `AgentMemory`, `RagIngestionLog`, `AgentStreamFrame`, `AgentConfirmToken`) | `EntitySchema`-backed classes | The tables this store owns — `agent_action_proposal`, `agent_thread`, `agent_message`, `agent_queued_message`, `agent_tool_call`, `agent_token_usage`, `agent_model_pricing`, `agent_run`, `agent_memory`, `rag_ingestion_log`, `agent_stream_frame`, `agent_confirm_token`. Each has a `…Schema(collation?)` builder (`agentThreadSchema`, …) |
+| custom repositories (`AgentThreadRepository`, `AgentMessageRepository`, `AgentToolCallRepository`, … one per entity) | `EntityRepository` subclasses | Wired through each schema's `repository` option and `[EntityRepositoryType]`, so `em.getRepository(AgentThread)` is typed as `AgentThreadRepository` and a host can inject them by type |
+| `RAG_INGESTION_LOG_PAGE_ORDER` | const | The `rag_ingestion_log` paging order (`updatedAt desc`, `documentId asc`) |
+
+<Callout type="info" title="referencedMediaIds needs no migration">
+`referencedMediaIds(actorRef, mediaIds)` — the library half of
+[attachment collection](/docs/agent/guides/persistence#which-media-a-message-still-references-optional)
+— reads the `attachments` JSON column `agent_message` has carried since attachments shipped, so an
+existing database answers correctly the moment you upgrade. No new table, no column, no backfill,
+and no boot-time heal in the path at all. The match
+runs in memory rather than in SQL (the column holds an array of objects, no dialect indexes that),
+bounded to one actor's attachment-bearing messages (a message still waiting in a thread's queue counts too). A soft-deleted thread still counts as holding
+its references: the rows survive, so the bytes are still reachable.
+</Callout>
+
+<Callout type="info" title="How the add-column heal works on SQLite">
+The heal applies `getUpdateSchemaSQL({ safe: true })` and keeps the statements whose every named
+table is an agent table. On MySQL and Postgres a new column is a plain `alter table … add column`. On
+**SQLite/libsql** MikroORM expresses the same change as a table rebuild (`create table
+agent_thread__temp_alter` → copy → `drop` → `rename`), which is kept as a unit and run with
+foreign-key enforcement off, restored afterwards — dropping `agent_thread` with enforcement on fires
+the children's `on delete cascade` and would take every message with it.
+
+The heal then re-diffs and throws `AgentSchemaHealError` if required structure is still pending, and
+the schema fingerprint is written only after it returns. A heal the database refused (no DDL grant, a
+managed schema) therefore fails the boot with the pending statements in the message instead of being
+recorded as applied — apply them with [`agentSchemaSql`](#exports) in a migration.
+</Callout>
+
+<Callout type="info" title="rag_ingestion_log — the ingest ledger, and why it carries no agent_ prefix">
+`@dudousxd/nestjs-agent-rag-media` owns no storage: it publishes `aviary:rag:*` diagnostics, and a
+store *subscribes*. `MikroOrmRagIngestionLog` is this adapter's subscriber, which is why this store
+creates and heals a table named outside the `agent_` family.
+[`store-drizzle`](/docs/agent/packages/store-drizzle) carries the same capability as
+`DrizzleRagIngestionLog` — the choice of ORM adapter does not decide whether a deployment can audit
+its ingestions.
+
+The table is the only place a document that produced **no chunks** is visible at all: an extraction
+that came back empty, a mime type with no extractor, an embedding call that threw.
+`VectorStore.listDocuments()` knows only about successes, so without this table a scanned PDF that
+silently failed to index reads exactly like one nobody ever uploaded.
+
+`MikroOrmAgentStoreModule.forFeature()` binds and exports it by default; `{ ragIngestionLog: false }`
+binds nothing at all, for a host that records outcomes itself or ingests no media.
+</Callout>
+
+<Callout type="info" title="agent_memory — the library owns this one, and not a skill table">
+[Memory](/docs/agent/guides/memory) rows live in `agent_memory`, created and healed like the rest.
+That looks inconsistent next to skills, whose rows are always the host's, and the difference is what
+a row can be related to: a skill plausibly joins your own entities (who authored it, which depot,
+which review approved it), while a memory is a key, a fact, an **opaque** scope token and an origin.
+Every other part of memory was already the library's — the `remember` tool, `writeMemory`, the
+`memory:digest` checkpoint, and the read-back and delete endpoints — so storage was the only half a
+consumer had to invent.
+
+`MikroOrmAgentStoreModule.forFeature()` exports `MikroOrmMemoryProvider` but never binds
+`AGENT_MEMORY`: that token's presence is what turns memory on, so binding it would give the feature
+to every host that installed the store.
+</Callout>
+
+<Callout type="info" title="agent_run — the reliability + approvals table">
+Every turn is recorded as a run in `agent_run` (status, duration, error code/message, retry count, a
+`promptHash` for correlating error-rate shifts with prompt changes, and `parent_run_id` — the run
+that delegated this one, so a delegation's cost rolls up to the turn that asked for it even when the
+child is detached and outlives that turn). `MikroOrmGovernanceQueries` reads
+it for the dashboard's Reliability section and for `pendingApprovals`/`toolStats` — created and
+healed by `ensureAgentSchema` like every other table here, no separate wiring needed.
+</Callout>
+
+## Action proposals (independent approvals)
+
+`MikroOrmAgentStore` implements everything `actionApprovalMode: 'independent'` checks for at boot —
+`ActionProposalStore`, `ActionProposalWorkerStore`, `ActionProposalDiscoveryIndexStore`, outcome
+admission, atomic replacement, and the `ChatQueueStore` queue — on SQLite, Postgres and MySQL. No
+extra registration: `AGENT_STORE` is already the proposal store. See
+[Action proposals](/docs/agent/guides/action-proposals).
+
+- **Entity.** `AgentActionProposal` (`agent_action_proposal`) keeps the decision, its audit and the
+  execution work in one row, updated by compare-and-swap on `revision`. SHA-256 physical keys; every
+  read and mutation checks the exact tenant, actor and thread scope. No foreign keys to chat rows.
+  Passing a transactional `EntityManager` keeps proposal operations inside the caller's transaction.
+- **Worker discovery.** `claimNextActionProposal({ workerId, leaseMs })` claims queued or
+  expired-lease work across scopes (at most 32 candidates per call);
+  `expireActionProposals({ limit })` expires due pending proposals (`limit` 1–1000). Privileged —
+  never expose them on user routes.
+- **Outcomes.** Admission locks the proposal and thread and inserts one assistant message carrying
+  `agent_message.action_proposal_outcome` together with the delivery state, in one transaction.
+- **SQLite.** Writes to one database file are also serialized in-process, so an async transaction
+  does not block the event loop; database locks and version CAS remain the cross-replica authority.
+
+<Callout type="warn" title="Rollout order for an existing database">
+Existing proposal rows get `discovery_index_version = 0`; workers only discover version-1 rows.
+Mixing older writers with active discovery is unsupported.
+
+1. Stop writers running the older package version.
+2. Apply the schema — `ensureAgentSchema` (the `autoSchema` boot heal), or a migration generated from
+   the updated entities: proposal discovery/delivery/replacement columns and indexes,
+   `agent_message.action_proposal_outcome`, `agent_tool_call.proposal_id`,
+   `agent_queued_message.ui_capabilities`.
+3. Repeat the bounded backfill until it returns `0`:
+
+   ```ts
+   while (await store.backfillActionProposalDiscoveryIndex({ limit: 1000 })) {
+     // each batch returns the number of rows it upgraded
+   }
+   ```
+
+   `limit` is 1–1000. Each row is updated under its observed revision and the version-zero fence;
+   payload, audit, idempotency key and timestamps are preserved. Run it outside long-lived snapshot
+   transactions. Discovery never backfills implicitly.
+4. Deploy the new writers and workers, then enable `actionApprovalMode: 'independent'`.
+</Callout>
+
+## Peer dependencies
+
+`@mikro-orm/core` (`^6 \|\| ^7`), `@mikro-orm/nestjs` (`^6 \|\| ^7`), and `@nestjs/common`
+(`^10 \|\| ^11 \|\| ^12`) — plus your driver package (`@mikro-orm/postgresql`, `@mikro-orm/mysql`, …).
+
+## When to use it
+
+Reach for this adapter when MikroORM is already your app's ORM — `MikroOrmModule.forRoot(...)`
+owns the connection, your config registers the agent's entities alongside your own, and
+`forFeature()` binds the stores.
+If you'd rather bring an already-opened handle and skip MikroORM entirely, see
+[`store-drizzle`](/docs/agent/packages/store-drizzle).
+
+## Related
+
+- [Persistence](/docs/agent/guides/persistence) — the `AgentStore` SPI, the bound tokens, and choosing an adapter
+- [Action proposals](/docs/agent/guides/action-proposals) — independent approvals on top of this store
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the read-model this adapter feeds, and the ledger cost formula

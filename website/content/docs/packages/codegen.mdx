@@ -1,0 +1,136 @@
+---
+title: '@dudousxd/nestjs-agent-codegen'
+icon: FileCode
+description: A @dudousxd/nestjs-codegen extension that injects a typed api.agent.* client for the agent's JSON REST routes into your generated api.ts.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The agent's controllers live in `node_modules`, where `@dudousxd/nestjs-codegen`'s static AST
+discovery can't see them. This extension injects the JSON REST routes directly — the agents catalog,
+threads (incl. rename/promote/fork/truncate), tool-call approve/reject/answer/skip, skills, tools,
+memories, staged attachments, message feedback, the model catalog, quota, client config, the
+message queue and cancel — so they show up in your unified generated client. A spec in the package
+(`covers-every-json-route.spec.ts`) reads the library's controllers off disk and fails when a JSON
+route there is missing from the injected list.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add -D @dudousxd/nestjs-agent-codegen @dudousxd/nestjs-codegen
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install -D @dudousxd/nestjs-agent-codegen @dudousxd/nestjs-codegen
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+```ts
+// codegen.config.ts
+import { defineConfig } from '@dudousxd/nestjs-codegen';
+import { nestjsAgentCodegen } from '@dudousxd/nestjs-agent-codegen';
+
+export default defineConfig({
+  extensions: [nestjsAgentCodegen({ basePath: '/api' })],
+});
+```
+
+```ts
+// generated client usage — plain fetch always works:
+import { api } from '../lib/api';
+
+const threads = await api.agent.threads.list();
+await api.agent.toolCall.approve({ body: { toolCallId } });
+```
+
+With the [`@dudousxd/nestjs-codegen-tanstack`](/docs/codegen) extension registered, each call also
+returns a handle with `.queryOptions()` / `.mutationOptions()`:
+
+```ts
+import { useQuery, useMutation } from '@tanstack/react-query';
+
+const threads = useQuery(api.agent.threads.list().queryOptions());
+const approve = useMutation(api.agent.toolCall.approve().mutationOptions());
+```
+
+<Callout type="warn" title="Routes deliberately omitted">
+`POST /agent/chat` and `GET /agent/chat/:runId/stream` are SSE, not JSON, so they're excluded from
+the generated client. Use `@dudousxd/nestjs-agent-react`'s `useAgentChat` (a Vercel AI SDK
+transport) for those — see [Frontend](/docs/agent/guides/frontend). `POST /agent/attachments` is a
+multipart upload and is also left out.
+
+The resumable-upload routes under `/agent/attachments/uploads` and the AG-UI route are also left
+out (the first follow the tus protocol, the second answers a stream). Call those with your own
+client.
+</Callout>
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `nestjsAgentCodegen(options?)` | function → `AgentCodegenExtension` | Injects the agent's JSON REST routes (table below) into the codegen route set. The extension's `name` is `'nestjs-agent'`; `transformRoutes` appends the fixed list synchronously |
+| `AgentCodegenExtension` | type | `CodegenExtension` with a required `transformRoutes(routes)` |
+| `AgentCodegenOptions` | type | `{ basePath?: string; name?: string }` — the mount prefix (default `''`) and the client namespace (default `'agent'`, i.e. `api.agent.*`) |
+
+## Routes it injects
+
+| Method & path | Generated name |
+|---|---|
+| `GET /agent/agents` | `agent.agents.list` |
+| `GET /agent/models` | `agent.models.list` |
+| `GET /agent/threads` | `agent.threads.list` |
+| `GET /agent/threads/:id` | `agent.threads.get` |
+| `DELETE /agent/threads/:id` | `agent.threads.remove` |
+| `POST /agent/threads/:id/fork-from/:messageId` | `agent.threads.fork` |
+| `PATCH /agent/threads/:id` | `agent.threads.rename` (body: `title`, `defaultAgent`, `model`, `persona`) |
+| `POST /agent/threads/:id/promote` | `agent.threads.promote` |
+| `DELETE /agent/threads/:id/from/:messageId` | `agent.threads.truncate` |
+| `POST /agent/tool-call/approve` | `agent.toolCall.approve` |
+| `POST /agent/tool-call/reject` | `agent.toolCall.reject` |
+| `POST /agent/tool-call/answer` | `agent.toolCall.answer` |
+| `POST /agent/tool-call/skip` | `agent.toolCall.skip` |
+| `GET /agent/skills` | `agent.skills.list` |
+| `GET /agent/tools` | `agent.tools.list` |
+| `GET /agent/memories` | `agent.memories.list` |
+| `DELETE /agent/memories/:id` | `agent.memories.forget` |
+| `GET /agent/attachments` | `agent.attachments.list` |
+| `POST /agent/messages/:id/feedback` | `agent.messages.feedback` |
+| `GET /agent/quota` | `agent.quota.report` |
+| `GET /agent/config` | `agent.config` |
+| `GET /agent/threads/:id/queue` | `agent.queue.get` |
+| `DELETE /agent/threads/:id/queue` | `agent.queue.clear` |
+| `POST /agent/threads/:id/queue/resume` | `agent.queue.resume` |
+| `PATCH /agent/queue/:messageId` | `agent.queue.update` |
+| `POST /agent/queue/:messageId/interrupt` | `agent.queue.interrupt` |
+| `DELETE /agent/queue/:messageId` | `agent.queue.remove` |
+| `POST /agent/chat/:runId/cancel` | `agent.chat.cancel` |
+| `GET /agent/threads/:threadId/action-proposals` | `agent.actionProposals.list` |
+| `POST /agent/threads/:threadId/action-proposals/:proposalId/approve` | `agent.actionProposals.approve` (body: `remember?`) |
+| `POST /agent/threads/:threadId/action-proposals/:proposalId/reject` | `agent.actionProposals.reject` (body: `reason?`) |
+
+Response and body types are hand-mirrored from `@dudousxd/nestjs-agent-core` (dates are ISO
+strings); deeply nested tool-call payloads are typed loosely as `Record<string, unknown>[]`.
+
+## Peer dependencies
+
+`@dudousxd/nestjs-codegen` (`>=0.2.0`).
+
+## When to use it
+
+Add this extension once your frontend already consumes a `@dudousxd/nestjs-codegen`-generated
+client and you want the agent's thread/quota/approval surface typed the same way as the
+rest of your API — rather than hand-writing a client against those routes.
+
+## Related
+
+- [Frontend](/docs/agent/guides/frontend) — `useAgentChat`, the streaming transport, and where the generated client fits alongside it
+- [Codegen docs](/docs/codegen) — the extension mechanism and the unified `api.ts` output

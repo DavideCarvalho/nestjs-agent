@@ -1,0 +1,154 @@
+---
+title: Configuration
+icon: Settings
+description: The full AgentModule.forRoot() options reference, forRootAsync, and how @Agent-decorated classes register into the AgentRegistry.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every option below is passed to `AgentModule.forRoot({ … })`. `model` is the only required option — everything else has a default. See [Architecture](/docs/agent/concepts/architecture) for how these pieces fit together, and [`packages/nestjs`](/docs/agent/packages/nestjs) for the package itself.
+
+## `AgentModule.forRoot(options)`
+
+### Model & infra
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `model` | `ModelProvider` | — (required) | The LLM provider — `aiSdkModel(…)`, or `aiSdkModels({ … })` for a picker (its `.catalog` is used when `models` is omitted). The only required option. |
+| `systemPrompt` | `string \| (ctx) => string` | `'You are a helpful assistant.'` | Base prompt of the default agent and of any `@Agent` that declares none; the function form gets `{ actor, agentName, pageContext }`. |
+| `models` | `ModelCatalog` | the model provider's `.catalog`, else none (empty catalog) | Which models a caller may pick: answers `GET /agent/models?agent=` and gates a send's `model` and a thread's pinned `model` (400 unless listed as `available` for that actor and agent). The pick reaches `model` as `ModelTurnArgs.model` for every call of the turn. `staticModelCatalog(view)` wraps a fixed list. See [Picking a model](/docs/agent/guides/frontend#picking-a-model). |
+| `store` | `AgentStore` | a store module's `AGENT_STORE`, else `InMemoryAgentStore` | Persistence adapter. Omit it and import a store module (e.g. `MikroOrmAgentStoreModule.forFeature()`) — its `AGENT_STORE` is found automatically, whatever the import order. With neither, the in-memory store is used and a boot warning says it is not for production. |
+| `sink` | `TokenStreamSink` | in-memory sink | Live token transport. The default is single-process only — for multi-replica, use `@dudousxd/nestjs-agent-transport-redis`'s `RedisTokenStreamSink`, or, with no Redis, `DrizzleTokenStreamSink` / `MikroOrmTokenStreamSink` over your database (see [the live stream across replicas](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink)). |
+| `tools` | `FunctionalTool[]` | `[]` | Static functional tools (`{ spec, handler }`) registered at boot. DI-dependent tools use `provideAgentTool(factory, inject)` in a module's `providers` instead. |
+| `toolTransientRetry` | `{ attempts, backoffMs, classify? } \| false` | `{ attempts: 2, backoffMs: 150 }` | Re-invokes a tool in place, inside the same tool step, when it throws a transient error (deadlock, lock-wait timeout, serialization failure). `classify` changes what counts as transient; `false` turns it off. Pair with [`ctx.idempotencyKey`](/docs/agent/guides/tools#making-a-tool-safe-to-run-twice). |
+| `toolTimeoutMs` | `number` | _none_ (no timeout) | Abort a single tool call that runs longer than this and record it as failed — the model gets the timeout as the tool's result and can adapt, instead of the turn hanging. See [Tools](/docs/agent/guides/tools#per-tool-timeout). |
+| `retrieval` | `{ mode: 'inject'; retriever: Retriever; topK?: number }` | _none_ (off) | Always-on RAG: before each turn, retrieve passages for the user message and augment the system prompt with them. For agentic retrieval (the model decides when to search) don't set this — expose a tool instead: `provideAgentTool(createRetrievalTool(retriever))`. |
+| `attachments` | `{ maxBytes?: number; allowedContentTypes?: string[] }` | 20 MiB, common multimodal types | Limits for `POST /agent/attachments` when the bound staging store declares none (a store's `describe()` — `AgentMediaAttachmentsModule`'s — wins). `maxBytes` narrows — never raises — the hard 32 MiB ceiling (`HARD_MAX_ATTACHMENT_BYTES`) multer enforces while the body streams; `allowedContentTypes` defaults to `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`, `text/plain`, `text/csv`. The route is live whenever something is bound to `AGENT_ATTACHMENT_STAGING` (`501` otherwise). Served to clients by `GET /agent/config`. |
+| `guards` | `Type<CanActivate>[]` | `[]` | Guard(s) stamped uniformly on every controller this module mounts (chat, threads, tool-call, quota, agents, attachments, config, …) via `@nestjs/common`'s `@UseGuards`, with REPLACE semantics — a repeated registration never accumulates guards. Without this, every route is open beyond whatever `actorResolver` itself enforces. Guard classes are added to the module's `providers` for DI. |
+| `surface` | `'http' \| 'engine' \| 'both'` | `'both'` | Which half this process mounts. `'engine'` mounts no controllers; `'http'` mounts them and, under `durable: true` with `AgentDurableModule.forRoot({ surface })`, executes no agent work. The action-proposal worker does not start on `'http'`. Static wiring, like `path`. |
+| `adapters` | `AgentProtocolAdapter[]` | `[]` | Wire protocols served alongside the native one, over the same runs — `[agUiAdapter()]` mounts `POST /agent/ag-ui` ([AG-UI](/docs/agent/guides/ag-ui)). Their controllers mount under `path`, behind `guards`, and not at all on `surface: 'engine'`. Static wiring: on `forRootAsync` it sits on the options object, not in `useFactory`'s result. |
+
+### Identity & authz
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `actorResolver` | `ActorResolver` | `AnonymousActorResolver` | Resolves the acting `Actor` per request — the identity seam. Omitted → the endpoints are public and every browser is its own anonymous actor (`HttpOnly` cookie; boot notice). `requestUserActorResolver()` requires login via `req.user`; `HeaderActorResolver` trusts gateway headers. See [Identity & Authorization](/docs/agent/guides/identity-and-authorization). |
+| `rolesPolicy` | `RolesPolicy` | `DefaultRolesPolicy` | Tool authorization gate. A tool that declares no `roles` reaches the policy with `roles: undefined`; `DefaultRolesPolicy` applies `defaultRoles` at that point (not baked into the tool spec earlier). |
+| `approvalPolicy` | `ApprovalPolicy` | the requester, no expiry | Who approves an `action` call (`requirementFor → { required, approver, ttlMs? }`) and who may decide (`canDecide`). See [Human-in-the-loop](/docs/agent/guides/human-in-the-loop-and-durability#who-approves-and-for-how-long). |
+| `defaultRoles` | `string[]` | `[]` (no restriction) | Roles `DefaultRolesPolicy` requires when a tool's own `roles` is omitted; empty restricts nobody. `['ADMIN']` for admin-only-by-default. |
+| `emptyRoles` | `'allow' \| 'deny'` | `'allow'` | What an empty roles list means to the default policy. `'deny'` binds `ClosedRolesPolicy`: a tool needs `roles` (or a non-empty `defaultRoles`) to be reachable. Ignored when `rolesPolicy` is set. See [Keeping an empty list closed](/docs/agent/guides/identity-and-authorization#keeping-an-empty-list-closed). |
+
+### Action approvals
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `actionApprovalMode` | `'blocking' \| 'independent'` | `'blocking'` | `'independent'` turns an `action` call that needs approval into a proposal: the turn ends, the decision comes later (web, text message, AG-UI, console), and a background worker runs it. Boot fails unless the store supports proposals. See [Action proposals](/docs/agent/guides/action-proposals). |
+| `backgroundActorResolver` | `{ resolve({ actorRef, tenantRef }) → Promise<Actor \| null> }` | — (required for `'independent'`) | Re-resolves the requester's current identity and roles before the worker executes an approved proposal. |
+| `actionProposalWorker` | `{ pollIntervalMs?, leaseMs?, maxConcurrency? }` | `{ 1000, 30000, 1 }` | Positive integers; `pollIntervalMs` must be below `leaseMs / 3`. |
+| `actionProposalText` | `{ vocabulary?: { approve?, reject?, remember? }; replies?: { approved?, rejected?, expired?, unchanged?, ambiguous?, tooMany? } }` | English (`yes`/`confirm`/`approve`/`approved`/`ok`, `no`/`cancel`/`reject`/`deny`, `always in this conversation`) | The whole-message words that decide a proposal by text, and the replies. Each part replaces the default it names, field by field. `ptBrActionProposalText` (from `@dudousxd/nestjs-agent-core`) is the Portuguese preset. See [Deciding by text](/docs/agent/guides/action-proposals#text). |
+
+### Quota
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `quota` | `{ limits: { day?: { tokens?, usd? }; month?: { tokens?, usd? } }; warnAt?: number } \| QuotaProvider` | _none_ (reported, not enforced) | The budget behind `GET /agent/quota`. `{ limits }` puts ceilings on the built-in `LedgerQuotaProvider`, and `warnAt` (`0..1`, e.g. `0.8`) adds a soft limit past which the report carries a `warning`; a `QuotaProvider` replaces it (an AI-gateway spend cap). Either turns on the send gate: a `blocked` report refuses `POST /agent/chat` with `429`. Limits apply per actor (per browser in anonymous mode). |
+
+### Routing
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `path` | `string` | `'agent'` | Route prefix the controllers mount under (→ `/agent/chat`, `/agent/threads`, …). |
+
+### Durable
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `durable` | `boolean` | `false` | Run each turn as a durable workflow instead of in-process. The turn's model call and each tool execution are dispatched steps (`AgentRunSteps.llm` / `AgentRunSteps.tool`) — see the callouts below. Requires importing `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` alongside a configured `DurableModule` — otherwise boot throws a clear error instead of an unresolved-dependency crash. |
+
+<Callout type="warn" title="Your tool handlers run in a worker, with no caller context">
+  A dispatched step is served by whichever worker takes the routed group, so an `@AiTool` handler is in the same position as any `@Step` handler: nothing of the request that started the turn is ambient there. A handler that reaches for a request-scoped ORM EntityManager, an AsyncLocalStorage tenant or a CLS transaction must establish it — under MikroORM, `@CreateRequestContext()` / `@EnsureRequestContext()` on the handler. Skip it and the call is recorded `failed`, the error goes to the model and the turn completes: for an `action` tool, a human's approval spent on something that never ran. There is no option to place the work elsewhere; this is what `ctx.step` means in [`nestjs-durable`](/docs/durable), whose `ctx.localStep` is the named escape hatch for the workflow body's own bookkeeping.
+</Callout>
+
+<Callout type="warn" title="Multi-pod fleets need a cross-process sink">
+  The turn runs on whichever worker takes `agent.run`, and dispatches its model call from there, so the process writing tokens is generally not the pod holding the SSE connection. Multi-pod fleets must wire a cross-process `TokenStreamSink` (e.g. `@dudousxd/nestjs-agent-transport-redis`'s `RedisTokenStreamSink`); a boot warning fires when `durable: true` is on with the default in-process sink.
+</Callout>
+
+### Follow-ups
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `ask` | `boolean` | `false` | Offer every agent the built-in `ask` tool, so the model can put its own clarifying question set to the user when it judges the scope is missing. Not a registered tool and not role-gated — it has no handler; the loop settles it against a person. Its schema requires a pre-picked `defaults` on every question. `@Agent({ ask })` overrides this for one persona. See [Asking the user](/docs/agent/guides/asking-the-user). |
+| `followUps` | `boolean \| { count: number }` | `false` | After the final turn, make one extra model call proposing short follow-up questions, stored on the assistant message's `followUps` and recorded as a `follow_ups` usage row. `true` proposes 3; pass `{ count }` to change that. Off by default — it costs an extra model call. See [Cost & Governance](/docs/agent/guides/cost-and-governance). |
+
+### Conversation history
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `history` | `{ maxMessages?: number; maxTokens?: number; summarize?: boolean }` | _none_ (unbounded) | Ceiling on how much of a thread rides into each turn. Both limits keep the newest messages that fit; set both and whichever cuts more wins, and the newest message always rides regardless. Tokens are estimated (~4 chars/token plus tool-call payloads), not tokenized. `summarize: true` folds what the window left out into a leading `system` message via one extra model call per run, recorded as a `history_summary` usage row. Omit and a turn carries the entire thread. See [Conversation history](/docs/agent/guides/conversation-history). |
+| `historyPolicy` | `HistoryPolicy` | _none_ | A window the built-in can't express (pin the opening brief, keep every message carrying a tool result, budget by actor). Wins over a module-wide `history`; `@Agent({ history })` wins over both. `select` MUST be a pure function of the messages it's given — the loop calls it outside any checkpoint, which is what keeps a policy from moving a single existing checkpoint position. Non-deterministic work belongs in `summarize`, which runs inside the `history:summarize` checkpoint. |
+
+### Processors
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `inputProcessors` | `InputProcessor[]` | `[]` | Rewrite `{ system, messages }` before **every** model call of a turn — masking identifiers, stamping a policy preamble, trimming an oversized tool result. Transformation only; `history`/`historyPolicy` still own which messages are there to transform. Runs inside the `process:input:<step>` checkpoint, so a processor may call a model. Applies to every agent — there is no per-agent override. A processor needing DI is built in `forRootAsync`'s `useFactory`. See [Input & output processors](/docs/agent/guides/processors). |
+| `outputProcessors` | `OutputProcessor[]` | `[]` | Gate every model answer before the stream, the store or the next step sees it: `pass`, `replace` (redact), or `reject`, which fails the run with an `OutputRejectedError` and an `output_rejected` stream error. **Registering one turns off live token streaming for the turn** — the model call is buffered and released as one `text` frame once the chain passes — unless every processor in the chain declares `incremental`, in which case it gates a growing prefix and the turn keeps streaming (see [Incremental gating](/docs/agent/guides/processors#incremental-gating-keeping-the-stream); the [guardrails](/docs/agent/guides/processors#guardrails) do). Runs inside the `process:output:<step>` checkpoint, which also performs the release. |
+
+### Skills & memory
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `skills` | `{ provider?: SkillProvider; scopes?: ScopeResolver; maxSkills?: number }` | _none_ (off) | Its presence turns skills on: `skills: {}` offers the `@Skill` providers. `maxSkills` caps the prompt catalog (default 20). See [Skills](/docs/agent/guides/skills). |
+| `memory` | `{ provider: MemoryProvider; scopes?: ScopeResolver; maxMemories?: number; maxFactChars?: number }` | _none_ (off) | Its presence turns memory on: a block of facts in every turn and the `remember` tool. `maxMemories` default 20, `maxFactChars` default 240. See [Memory](/docs/agent/guides/memory). |
+
+### Default agent
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `defaultAgent` | `string` | _none_ | The name of the agent a turn uses when the caller doesn't select one explicitly. Omit → the single discovered `@Agent` (when there is exactly one), else `'default'` (a bare assistant if no `@Agent` is registered at all). |
+
+<Callout type="warn" title="Agents are declared as classes, not as forRoot options">
+  There is no `forFeature(definitions)` and no inline agent-config object anymore — an agent is an ordinary Nest provider decorated `@Agent({ name, description?, systemPrompt?, model?, maxSteps?, tools?, handoff?, history?, outputSchema?, outputRepairAttempts?, intake?, ask?, personas?, defaultPersona? })`, discovered at boot via `DiscoveryService` and registered into the shared `AgentRegistry`. Being a class means it gets constructor DI (its retriever, schema service, policy) instead of a static config blob. A dynamic prompt is a `@SystemPrompt()` method on the class instead of a string; a `@SystemPromptContributor()` method on *any* provider appends a section after every agent's base prompt app-wide. See [Multi-agent](/docs/agent/guides/multi-agent) for `@Agent({ handoff })` composing an orchestrator, and [Identity & authorization](/docs/agent/guides/identity-and-authorization) for `actorResolver`/`rolesPolicy`. `personas` are named variants of one agent — a prompt and a narrower tool allow-list, picked per send and pinned on the thread; see [Personas](/docs/agent/guides/personas). `GET /agent/agents` (backed by `AgentCatalogEntry[]`) is the picker catalog for both agents and their personas.
+</Callout>
+
+### `@Agent(options)`
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Unique agent name. Referenced by the chat body's `agent`, `handoff`, and the `GET /agent/agents` catalog. |
+| `description` | `string` | Human-readable summary, shown to an orchestrator that may hand off to this agent and surfaced on the catalog entry. |
+| `systemPrompt` | `string` | A flat base prompt. For a dynamic prompt (reads services, the turn's `PromptContext`), add a `@SystemPrompt()` method instead — it takes precedence when present. |
+| `model` | `string` | Accounting label for the model this agent uses (the model provider itself is shared module-wide). |
+| `maxSteps` | `number` | Cap on model→tool iterations for this agent's turn. Default 8. |
+| `history` | `{ maxMessages?: number; maxTokens?: number; summarize?: boolean }` | This agent's own conversation-history ceiling, overriding the module-wide `history`/`historyPolicy`. Same shape and semantics as the module option. |
+| `outputSchema` | `StandardSchemaV1` | Constrain this agent's final answer to a schema (Zod, Valibot, ArkType). The turn calls its tools as usual; the schema is satisfied by one extra formatting call afterwards (`structured:<step>:<n>`, `tools: []`), billed as a `structured_output` usage row. The validated value comes back as `object` on the run's result and is recorded on the assistant message as a synthetic `structured_output` tool call. Declared here rather than per request because a schema is a live object and `AgentRunInput` crosses a JSON boundary into the durable workflow. See [Structured output](/docs/agent/guides/structured-output). |
+| `intake` | `{ questions: ElicitationQuestion[]; preamble?: string; when?: 'thread-start' \| 'every-turn' }` | Questions this agent puts to the user **before** it starts working. Authored, so it costs no model call and `questions.length` is known before the form appears — which is what lets a client render "Question 1 of 3". Every question should pre-pick a `defaults`; confirming is meant to be enough. `when` defaults to `'thread-start'` (ask once per thread). Settled through `POST /agent/tool-call/answer` \| `/skip`. See [Asking the user](/docs/agent/guides/asking-the-user). |
+| `ask` | `boolean` | Let this agent's model call the built-in `ask` tool, overriding the module-wide `ask`. |
+| `outputRepairAttempts` | `number` | Extra model calls allowed to fix an answer that failed `outputSchema`, each shown the previous attempt's validation issues. Default 1; `0` fails on the first invalid reply with a `StructuredOutputError` (`structured_output_invalid` stream error). |
+| `tools` | `string[]` | Allow-list of global tool names this agent may use. Omit → every tool its role allows. |
+| `handoff` | `(Type \| { agent: Type; detached?: boolean })[]` | Other `@Agent` classes this agent may hand off to — auto-exposed as handoff tools. `{ agent, detached: true }` starts the delegate as its own run. Naming a non-`@Agent` class throws at boot. See [Multi-agent](/docs/agent/guides/multi-agent). |
+| `maxDelegationDepth` | `number` | How deep delegation may nest below this agent before further hops are refused. Default 5. |
+| `maxAgentAppearances` | `number` | How many times one agent may appear on a single delegation chain below this one (cycle detection). Default 1. |
+| `personas` | `Persona[]` | Named variants of this agent (a prompt and optionally a narrower tool list), picked per send and pinned on the thread. See [Personas](/docs/agent/guides/personas). |
+| `defaultPersona` | `string` | The persona a send runs under when neither it nor its thread names one. |
+
+## `AgentModule.forRootAsync(options)`
+
+```ts
+interface AgentModuleAsyncOptions {
+  imports?: unknown[];
+  inject?: unknown[];
+  useFactory: (...args: never[]) => AgentModuleOptions | Promise<AgentModuleOptions>;
+  path?: string;
+  durable?: boolean;
+  guards?: Type<CanActivate>[];
+  surface?: 'http' | 'engine' | 'both';
+  adapters?: AgentProtocolAdapter[];
+}
+```
+
+<Callout type="info" title="Why these fields live outside the factory">
+  `path`, `durable`, `guards`, `surface` and `adapters` are all static wiring metadata — which controllers exist, which routes they expose, and which runner `AGENT_RUNNER` binds to are all decided at module build time, before the async factory resolves. Passing them on `AgentModuleAsyncOptions` (not inside the resolved `AgentModuleOptions`) is what makes that possible.
+</Callout>
+
+`AGENT_STORE` resolves the same way for `forRoot` and `forRootAsync`: the factory's `store`, else the one a store module binds (found automatically), else the in-memory store.

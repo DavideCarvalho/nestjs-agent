@@ -1,0 +1,184 @@
+---
+title: Runners
+icon: Cpu
+description: One AgentRunner SPI, two implementations — inline runs in-process by default, durable is an opt-in that checkpoints every step and turns HITL approval into a real suspend.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+The [agent loop](/docs/agent/concepts/the-agent-loop) doesn't know or care how its `step` and
+`awaitApproval` hooks are implemented — that's the whole point of the `AgentRunner` SPI. Two
+implementations exist, and switching between them never touches your tools, your frontend, or the
+wire protocol.
+
+```ts
+interface AgentRunner {
+  start(input: AgentRunInput, options?: { runId?: string }): Promise<{ runId: string }>;
+  isRunActive?(runId: string): Promise<boolean>;
+  // HumanReply = Decision (approve/reject an action) | ElicitationReply (answers to an `ask`)
+  signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void>;
+  cancel(runId: string): Promise<void>;
+}
+```
+
+`start` enqueues and returns immediately with the `runId` — the actual tokens flow separately over
+the `TokenStreamSink` data plane, not through this call. See
+[Architecture](/docs/agent/concepts/architecture) for how the control and data planes split.
+
+`cancel` really stops the run: the loop observes the request between steps, before the next model
+call, and before a turn's tools are dispatched, then unwinds — recording the run `cancelled` (its own
+terminal, not a failure) and ending the stream on a `{ kind: 'cancelled' }` frame. A tool already
+executing is left to finish. See
+[Cancelling a run](/docs/agent/guides/human-in-the-loop-and-durability#cancelling-a-run) for the full
+behaviour, including what each runner does about a turn parked on a human.
+
+## Inline (default) vs. durable (opt-in)
+
+| | Inline runner (default) | Durable runner (`durable: true`) |
+|---|---|---|
+| The pause | an in-process runner holds the turn open | a real durable **suspend** — the run is checkpointed to the state store |
+| Surviving a restart | no — the pending turn is lost | yes — the run resumes from cache on approval |
+| Where the turn executes | the pod that received the request, start to finish | whichever worker picks up the `agent.run` workflow — and the model call and each tool call can each land on a *different* worker again (see below) |
+| Requires | nothing extra | `@dudousxd/nestjs-durable` + `AgentDurableModule` + a configured `DurableModule` |
+| Wire protocol | identical | identical |
+
+`AgentModule.forRoot` binds `InlineAgentRunner` to the `AGENT_RUNNER` token unless `durable: true` is
+set — inline is the real, zero-dependency default, not a fallback.
+
+<Callout type="info" title="Independent approvals don't park a turn under either runner">
+With `actionApprovalMode: 'independent'`, an `action` call is recorded as an action proposal and the
+turn ends — nothing waits on `signal`. Approved proposals are executed by an `ActionProposalWorker`
+that the module starts and stops with the application (not on `surface: 'http'`), tuned by
+`actionProposalWorker: { pollIntervalMs = 1000, leaseMs = 30000, maxConcurrency = 1 }` (positive
+integers; the poll interval must be under a third of the lease). Several workers coordinate through
+database leases. A durable run journaled before the mode was enabled keeps blocking. See
+[Action proposals](/docs/agent/guides/action-proposals).
+</Callout>
+
+## When to pick which
+
+- **Inline** for local development, tests (pairs naturally with `@dudousxd/nestjs-agent-testing`'s
+  fake model and in-memory store), and any deployment where a lost in-flight turn on a crash is
+  acceptable.
+- **Durable** once you need a turn to survive a process restart mid-approval, want every model and
+  tool call individually checkpointed (so a crash replays from cache instead of re-charging the model
+  or re-running a side effect), or already run `@dudousxd/nestjs-durable` elsewhere in the app.
+
+Because the `AgentRunner` SPI is the only seam, you can develop against inline and flip to durable in
+production by changing configuration, not code.
+
+## Dispatched steps: what the durable runner does with a turn
+
+Under `durable: true`, the workflow's bookkeeping (persisting a message, bumping quota, stream
+markers) checkpoints as `ctx.localStep` — pinned to whichever worker is running the workflow. The
+turn's two genuinely *long* operations — the model call and each tool execution — are dispatched as
+separately-routed durable steps instead (`AgentRunSteps.llm` / `AgentRunSteps.tool`), so a turn
+isn't pinned to one pod for however long the model takes to respond or a tool takes to run. That is
+not a setting: `ctx.step` is the one step primitive in [`nestjs-durable`](/docs/durable), whose
+`ctx.localStep` is the deliberate escape hatch for work that must run in the body, and the agent's
+bookkeeping is what uses it.
+
+A turn that asks for several `read` tools dispatches them **together** — one suspend, N workers busy
+at once, rather than a suspend/resume round trip per call. See
+[The agent loop](/docs/agent/concepts/the-agent-loop#several-tool-calls-in-one-turn) for the ordering
+rules that keep that replay-safe.
+
+Both worker groups are registered by `AgentDurableModule` under every surface but `'http'`, so a
+fleet never ends up routing to an unserved worker group.
+
+Your tool handlers are what pays for this: an `@AiTool` handler runs in the serving worker with
+nothing of the originating request ambient around it, exactly like any `@Step` handler in this
+ecosystem. A handler that reaches for a request-scoped ORM EntityManager, an AsyncLocalStorage
+tenant or a CLS transaction has to establish it — `@CreateRequestContext()` /
+`@EnsureRequestContext()` under MikroORM. A handler that does not throws in the worker: the call is
+recorded `failed`, the model receives the error, the turn completes, and an `action` tool's human
+approval has been spent on something that never ran.
+
+The workflow routes by the `@Step`-stamped NAME, read off `AgentRunSteps.prototype`, and never holds
+the instance. That matters on the `'http'` surface, which registers the workflow but deliberately
+provides no `AgentRunSteps`: were the branch conditional on having one, the same run would write
+in-process checkpoint names on an http pod and routed ones on an engine pod, and whichever replayed
+second would fail on the mismatch. Which branch a turn takes is a property of the run, not of the
+process replaying it.
+
+<Callout type="info" title="What a checkpoint costs, and the one knob that changes it">
+Each `ctx.localStep` is three statements against the state store: a point read of the checkpoint
+position, a `running` placeholder, and the `completed` row. A plain turn writes around 13 of them, so
+the placeholder alone is about a quarter of the turn's checkpoint traffic.
+
+That placeholder is what makes a step visible **in flight** — in the durable dashboard, and to a
+fresh page load or REST query — rather than appearing only once it finishes. The live SSE view sees
+the start either way; what you'd lose is reload-survivable in-flight visibility, on exactly the steps
+whose failure you would want to look at.
+
+The switch (`trackStepStart`) belongs to the durable **engine**, not to a step, a workflow, or this
+library: it is a `WorkflowEngineDeps` field, applied to every workflow in the process, and
+`nestjs-agent` neither sets it nor could. At `@dudousxd/nestjs-durable@0.34` it is not forwarded from
+`DurableModule.forRoot` either, so a host that wants it off constructs the engine itself. Decide it
+for the deployment, not for the agent.
+</Callout>
+
+<Callout type="warn" title="Upgrading a fleet that has been running everything in-process">
+Dispatching changes which checkpoint names a turn writes, so it is read from the journal via
+`ctx.patched('agent:dispatched-steps')`: a fresh run dispatches, and a run already journaled under
+the in-process names finishes on them, so in-flight turns survive the upgrade. What does not follow
+automatically is the rest of it. Your `@AiTool` handlers start running in whichever workers serve
+`AgentRunSteps.llm`/`.tool` — confirm those groups are served, that the handlers establish their own
+execution context, and that the sink below is cross-process, before rolling out.
+</Callout>
+
+<Callout type="warn" title="Multi-pod fleets need a cross-process sink">
+Because a dispatched step can execute on any worker, the pod that streams tokens for `llm` may not
+be the pod holding the client's SSE connection. Wire a cross-process `TokenStreamSink` (e.g.
+`RedisTokenStreamSink` from `-transport-redis`) for any multi-pod deployment under `durable: true`
+— dispatched or not, since the run itself is already not pinned to the requesting pod. A boot
+warning fires when dispatching is effectively on with the default in-process sink still bound. See
+[Architecture](/docs/agent/concepts/architecture) for the full control/data-plane picture.
+</Callout>
+
+## The one-import shortcut
+
+The long form wires `durable: true` on `AgentModule.forRoot` and imports `AgentDurableModule`
+separately. `agentDurable(options)` collapses both into one:
+
+```ts
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { agentDurable } from '@dudousxd/nestjs-agent/durable';
+
+@Module({
+  imports: [
+    DurableModule.forRoot({ /* store, transport, … */ }),
+    ...agentDurable({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+      // ...same options as AgentModule.forRoot, minus `durable`
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+`agentDurable` spreads into `imports` because it wires `AgentModule.forRoot({ ...options, durable:
+true })` and `AgentDurableModule` together — it isn't a module itself.
+
+<Callout type="warn" title="durable: true alone isn't enough">
+Setting `durable: true` on `AgentModule.forRoot` without importing `AgentDurableModule` throws at
+boot with a clear message rather than failing silently or falling back to inline — a forgotten import
+is a configuration error, not a degraded mode.
+</Callout>
+
+## Full details
+
+The mechanics of the durable suspend itself — the `agent.run` workflow, `ctx.waitForSignal`, and
+resuming a dropped stream — are in
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability); the durable
+runtime it depends on is documented in full at [`@dudousxd/nestjs-durable`](/docs/durable).
+
+## Where to go next
+
+<Cards>
+  <Card title="Human-in-the-loop & Durability" href="/docs/agent/guides/human-in-the-loop-and-durability" description="Action approval as a durable signal — the run suspends and resumes across restarts." />
+  <Card title="Durable" href="/docs/durable" description="The workflow runtime the durable runner is built on — steps, signals, replay." />
+</Cards>

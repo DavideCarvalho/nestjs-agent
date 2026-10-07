@@ -1,0 +1,351 @@
+---
+title: Cost & Governance
+icon: Coins
+description: The usage ledger and read-model — spend per model and actor, a gateway's reported cost preferred over a cache-aware estimate, daily quota, and the console that surfaces it all.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Every turn writes a row to a usage ledger. A **read-model** rolls those rows up into spend per
+model, spend per actor, a usage trend over time, and recent tool-call / thread activity — the
+numbers behind the [governance console](#surfacing-it). Cost is resolved **per row**, and the model
+is honest about what it knows: a gateway's real reported cost wins; otherwise it estimates, and the
+estimate accounts for prompt caching.
+
+---
+
+## The ledger
+
+Each model turn appends an `agent_token_usage` row: the actor, thread, model id, purpose, the token
+counts, and — when a gateway reported it — the real dollar cost. This is the raw material; you never
+write to it directly, the loop does. Aggregation happens in the read-model, in-process, so the
+day-bucketing stays engine-portable across MikroORM and Drizzle.
+
+---
+
+## Cost per row: reported wins, else estimate
+
+```text
+costUsd = COALESCE(reportedCostUsd, cache-aware token estimate)
+```
+
+Cost is computed **per usage row and then summed** — never once on an aggregate — so a
+gateway-priced turn and a token-estimated turn can sit side by side in the same rollup and each be
+correct.
+
+### A gateway's reported cost wins
+
+A gateway knows the real spend of a turn. When it reports one, the model provider surfaces it on the
+turn result and it is stored verbatim:
+
+| Provider | Where the real cost comes from |
+|---|---|
+| Vercel AI Gateway | `providerMetadata.gateway.cost` |
+| OpenRouter | `total_cost` |
+| Direct (Anthropic / OpenAI / Bedrock) | *only tokens reported* → falls through to the estimate |
+
+Your `ModelProvider` sets `costUsd` on the `ModelTurnResult` when it has it; the loop persists it to
+the nullable `cost_usd` column, and the read-model uses it verbatim. Preferring the report per row
+is why prompt-cache pricing skew never reaches numbers a gateway already priced.
+
+```ts
+// inside your ModelProvider.runTurn — pass the gateway's number straight through
+return {
+  text,
+  toolCalls,
+  usage: { inputTokens, outputTokens },
+  costUsd: providerMetadata?.gateway?.cost, // undefined for direct providers — that's fine
+};
+```
+
+### The fallback estimate is cache-aware
+
+When no gateway priced the turn, the estimate runs against the **current** pricing row for the model
+(`AgentModelPricing` where `isCurrent`). Prompt caching makes a naive `inputTokens × inputPrice`
+wrong — cache writes cost a premium, cache reads a fraction — so the estimate splits the input side:
+
+```text
+estimate =
+    uncachedInput × inputPricePer1m
+  + cacheWrite    × cacheWritePricePer1m   (falls back to inputPricePer1m)
+  + cacheRead     × cacheReadPricePer1m    (falls back to inputPricePer1m)
+  + output        × outputPricePer1m
+```
+
+`MessageUsage` carries the split, and the counts are **subsets** of `inputTokens`
+(`uncachedInput = inputTokens − cacheWrite − cacheRead`):
+
+```ts
+interface MessageUsage {
+  inputTokens: number;  // the whole input side, cached and uncached alike
+  outputTokens: number;
+  cacheWriteTokens?: number; // subset of inputTokens — billed at a premium
+  cacheReadTokens?: number;  // subset of inputTokens — billed at a discount
+  reasoningTokens?: number;  // subset of outputTokens — observability only (output-rate)
+}
+```
+
+<Callout type="info" title="Backward compatible by construction">
+Because the cache counts are subsets of `inputTokens`, token totals and quota never change when a
+breakdown is present. And because the cache rates are nullable, a pricing table with no cache data
+reduces **exactly** to the old `input×inputPrice + output×outputPrice`. Reasoning tokens ride along
+for observability but are billed at the output rate, so they don't move the estimate.
+</Callout>
+
+---
+
+## The pricing table
+
+Prices are versioned rows keyed by model, with the live one flagged `isCurrent`. Add the nullable
+cache rates to make the fallback precise for prompt-cached models:
+
+```ts
+// one current row per model
+{
+  modelId: 'claude-sonnet-4-6',
+  inputPricePer1m: 3,
+  outputPricePer1m: 15,
+  cacheWritePricePer1m: 3.75, // ~1.25× input
+  cacheReadPricePer1m: 0.3,   // ~0.1× input
+  effectiveFrom: new Date('2026-06-01T00:00:00Z'),
+  isCurrent: true,
+}
+```
+
+Supersede a price by inserting a new `isCurrent: true` row and clearing the flag on the old one; the
+read-model always joins to the current row, and historical rows are ignored.
+
+### Seeding prices
+
+<Callout type="warn" title="Unpriced models cost $0">
+The pricing table starts empty. Until something writes a row for a model, that model's estimate has
+no current price to join against, and every turn against it is costed at `$0` — tokens still
+accumulate correctly, only the dollar figure is missing. Seeding prices isn't optional for accurate
+cost reporting; it's a required setup step, same as wiring a store.
+</Callout>
+
+The write side is a separate SPI, `AgentPricingStore` (from `@dudousxd/nestjs-agent-core`), bound to
+the `AGENT_PRICING_STORE` token by the same store module that binds `AGENT_STORE`:
+
+```ts
+interface AgentPricingStore {
+  upsertModelPrice(input: ModelPriceInput): Promise<void>; // atomic supersede — retires the old
+                                                             // current row, inserts a new one now
+  listCurrentPrices(): Promise<CurrentModelPrice[]>;
+}
+```
+
+Inject it and seed prices at boot, either one at a time with `upsertModelPrice` or in bulk with the
+`seedModelPrices(store, prices[])` helper:
+
+```ts
+import { Inject, Injectable, OnApplicationBootstrap } from '@nestjs/common';
+import { AGENT_PRICING_STORE, seedModelPrices, type AgentPricingStore } from '@dudousxd/nestjs-agent';
+
+@Injectable()
+export class SeedAgentPricing implements OnApplicationBootstrap {
+  constructor(@Inject(AGENT_PRICING_STORE) private readonly pricing: AgentPricingStore) {}
+
+  async onApplicationBootstrap() {
+    await seedModelPrices(this.pricing, [
+      { modelId: 'claude-sonnet-4-6', inputPricePer1m: 3, outputPricePer1m: 15, cacheWritePricePer1m: 3.75, cacheReadPricePer1m: 0.3 },
+    ]);
+  }
+}
+```
+
+`upsertModelPrice` is the same atomic supersede described above, just exposed as a real write path
+instead of a manual insert — it retires the model's current row and inserts the new one as current,
+effective now. `-store-mikro-orm` and `-store-drizzle` both ship an implementation
+(`MikroOrmPricingStore` / `DrizzlePricingStore`); `-testing` ships `InMemoryPricingStore` for tests.
+
+---
+
+## The read-model
+
+`AgentGovernanceQueries` is the read/analytics half of the store SPI (the write half is
+`AgentStore`). The store adapters bind it to the `AGENT_GOVERNANCE_QUERIES` token, so the surfaces
+just inject it:
+
+| Method | Returns |
+|---|---|
+| `spendByModel(range)` | requests / input+output tokens / cost, per model |
+| `spendByActor(range)` | requests / total tokens / cost, per actor |
+| `usageTrend(range)` | total tokens + cost bucketed by day |
+| `recentToolCalls(limit)` | latest tool calls with status + thread |
+| `recentThreads(limit)` | latest threads with message count + tokens |
+| `runMetrics(range)` | success/error rate, retries, p95 run duration |
+| `runsByAgent(range)` | run counts broken down by agent name |
+| `runErrors(range)` | failure counts broken down by error code |
+| `runTrend(range)` | run + failure counts bucketed by day |
+| `recentRuns(limit)` | latest runs with `promptHash`, duration, outcome |
+| `pendingApprovals(limit)` | oldest-first pending action-tool calls, joined to thread/actor |
+| `toolStats(range)` | per-tool calls / failed / rejected counts + p95 execution time |
+| `toolCallsPage(query)` / `threadsPage(query)` / `runsPage(query)` | the same tool-call/thread/run activity, paginated and filterable |
+
+The run-reliability and tool-governance methods (`runMetrics` through `toolStats`, and `runsPage`)
+are **required** members of the interface — an external adapter must implement them, but one whose
+backing store never records runs (no `recordRunStart`, see [Persistence](/docs/agent/guides/persistence#run-reliability-recording-optional))
+is free to return zeros/empty rather than throw, and the dashboard renders an empty state instead of
+erroring.
+
+For unit tests and the offline demo, `@dudousxd/nestjs-agent-testing` ships an
+`InMemoryGovernanceQueries` with an optional pricing map (default empty → zero cost, tokens still
+counted) and in-memory implementations of every read above.
+
+---
+
+## Run reliability
+
+Every run's start and end are durably recorded (see [Persistence](/docs/agent/guides/persistence#run-reliability-recording-optional)),
+so the read-model can answer "is the agent healthy" as a real signal instead of a diagnostics-tailing
+guess: success/error rate, retry counts, run duration as a distribution (p50/p95), a run/failure trend
+over time, a failure breakdown by error code, and a recent-runs table that carries each run's
+`promptHash` — a stable fingerprint of the resolved system prompt (pre-RAG) that lets you correlate an
+error-rate spike with a specific prompt change rather than guessing from timing alone.
+
+---
+
+## Tool governance
+
+`toolStats(range)` rolls the tool-call ledger up per tool: how many times it was called, how many
+failed, how many were rejected at the approval gate, and the p95 execution time. It's the
+per-tool complement to the per-model/per-actor cost views above — the number to reach for when one
+tool is timing out or getting rejected disproportionately, not just costing the most.
+
+---
+
+## The approvals inbox
+
+Pending `action` tool calls (see [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability))
+are a governance surface in their own right: `pendingApprovals(limit)` lists them oldest-first,
+joined to their thread and actor, and both shipped surfaces render an Approvals section with
+approve/reject affordances (and a nav badge for the pending count).
+
+Deciding from the console — rather than from the chat UI watching the run — goes through the
+`AGENT_APPROVAL_PORT` SPI, described in full in
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability#approving-from-a-console-not-just-chat):
+it routes through the same durable-signal / inline-resolution decision path as chat approvals,
+without re-running chat's ownership check, and records who decided via `executedByRef`. Under
+`actionApprovalMode: 'independent'` the port's `approveActionProposal` / `rejectActionProposal`
+decide a proposal instead, by thread and proposal id ([Action proposals](/docs/agent/guides/action-proposals)). When no
+`AGENT_APPROVAL_PORT` is bound, the dashboard's approval endpoints answer `501` and the SPA renders
+the inbox read-only rather than pretending decisions are being applied.
+
+---
+
+## Paginated, filterable lists
+
+`toolCallsPage`, `threadsPage`, and `runsPage` back the console's list views with real pagination
+instead of a latest-N cap: a neutral `GovernancePageQuery<TWhere>` (`page`, `limit`, a typed `where`)
+returns a `GovernancePage` with a real `COUNT`, offset paging, deterministic id tiebreaks, and
+case-insensitive title search where relevant. The dashboard's HTTP surface speaks the same wire
+grammar the rest of the ecosystem uses — `page`, `limit`, `where[field]=value`, with an unknown
+field 400ing — so the SPA's tables get prev/next paging with per-table debounced filters. The
+latest-N reads (`recentToolCalls`, `recentThreads`, `recentRuns`) remain for the Telescope bridge,
+which doesn't need pagination.
+
+---
+
+## Quota
+
+`GET /agent/quota` reports the actor's budget across windows — each `{ period, usedTokens?,
+limitTokens?, usedUsd, limitUsd?, resetsAt?, warnAt? }` — `blocked` when one is used up, and
+`warning` (`{ period, ratio, reason? }`) when one is past its soft limit. It comes from a
+`QuotaProvider`; the default `LedgerQuotaProvider` reads this ledger (a `day` window, plus `month`
+when the store has `usageBetween`) and, unconfigured, only reports. Tokens count
+`inputTokens + outputTokens`, unaffected by the cache split.
+
+One option configures it:
+
+```ts
+AgentModule.forRoot({
+  // ceilings on the default provider — tokens and/or USD, per window
+  quota: { limits: { day: { tokens: 200_000 }, month: { usd: 20 } }, warnAt: 0.8 },
+  // …or the host's own budget, e.g. what an AI gateway says is left
+  // quota: { report: async ({ actor }) => gatewayBudget(actor.id) },
+});
+```
+
+Either form turns on the send gate: while the report is `blocked`, `POST /agent/chat` answers `429`
+with `{ code: 'quota_exceeded', period, message }` before any work — no model call, no usage row.
+The limits apply per actor — per browser in [anonymous mode](/docs/agent/guides/identity-and-authorization#the-default-anonymous-one-identity-per-browser),
+where a public deployment without them has unbounded spend. On the client, `useAgentChat` reads the
+report and refuses to send while it is blocked (`chat.blocked`, `composer.blockedBy === 'quota'`),
+and `chat.quota.warning` names the window past `warnAt` — see
+[Frontend](/docs/agent/guides/frontend#quota). A message waiting in a thread's
+[queue](/docs/agent/guides/message-queue) is checked as it starts; a spent budget pauses the queue
+(`quota_exceeded`).
+
+---
+
+## Follow-up suggestions cost an extra call
+
+`AgentModule.forRoot({ followUps: true | { count } })` proposes short follow-up questions after the
+final turn — but it does so with one **additional** model call, over and above the turn's own steps.
+That call writes its own usage row (`purpose: 'follow_ups'`), so it shows up in `spendByModel` /
+`spendByActor` like any other, and it counts against quota the same as a normal step. It's off by
+default for exactly this reason — turn it on only where the extra spend is worth the UX. See
+[Configuration](/docs/agent/reference/configuration) for the option.
+
+---
+
+## So does a structured answer
+
+`@Agent({ outputSchema })` restates the turn's final answer as a schema with one **additional**,
+non-streamed model call — plus up to `outputRepairAttempts` more when a reply fails validation. Each
+attempt writes its own row with `purpose: 'structured_output'` and counts against quota like any
+other step. It is a separate pass rather than a constraint on the turn's own calls for reasons
+covered in [Structured output](/docs/agent/guides/structured-output); the cost is the price of it.
+
+---
+
+## Surfacing it
+
+Both surfaces read the same `AGENT_GOVERNANCE_QUERIES` read-model and tail live tool-call / quota
+signals off the `aviary:agent:*` diagnostics channel — pick either or both.
+
+<Tabs items={['Standalone dashboard', 'Telescope tab']}>
+  <Tab value="Standalone dashboard">
+    A bundled React SPA served by a NestJS module, mounted at its own route, **no Telescope required**:
+
+    ```ts
+    import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+
+    @Module({ imports: [AgentDashboardModule.forRoot({ basePath: '/ai-gateway' })] })
+    export class AppModule {}
+    ```
+
+    The in-process analog of a hosted AI-gateway dashboard — spend per model/actor, usage trend, and
+    live activity — at `/ai-gateway`.
+  </Tab>
+  <Tab value="Telescope tab">
+    Already running `@dudousxd/nestjs-telescope`? Register the extension on Telescope's `extensions`
+    array to get the same governance sections as an "Agent" tab (agent runs also show up in the
+    durable "Workflows" tab for free):
+
+    ```ts
+    import { TelescopeModule } from '@dudousxd/nestjs-telescope';
+    import { agentTelescopeExtension } from '@dudousxd/nestjs-agent-telescope';
+
+    @Module({ imports: [TelescopeModule.forRoot({ extensions: [agentTelescopeExtension()] })] })
+    export class AppModule {}
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="info" title="Any consumer can subscribe">
+The read-model and the diagnostics channel are public. Beyond the shipped surfaces, your app can
+query `AGENT_GOVERNANCE_QUERIES` for its own billing export, or subscribe to `aviary:agent:*` for
+alerts and metrics — the library instruments nothing in your code.
+</Callout>
+
+---
+
+## Related
+
+- [Persistence](/docs/agent/guides/persistence) — the stores that bind `AGENT_STORE` + `AGENT_GOVERNANCE_QUERIES`, and the `agent_run` reliability table
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — the actor every cost row is attributed to
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — the approvals `AGENT_APPROVAL_PORT` and `executedByRef` behind the inbox
+- [Tools](/docs/agent/guides/tools) — every tool call is audited in the ledger

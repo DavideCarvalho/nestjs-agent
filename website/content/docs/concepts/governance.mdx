@@ -1,0 +1,120 @@
+---
+title: Governance
+icon: ShieldCheck
+description: Four layers stack on every turn — who's calling and what they may do, how many tokens they've spent today, what it cost, and an audit trail of everything that happened.
+---
+
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+"Governance" isn't one feature — it's four independent layers the loop applies to every turn.
+Each has its own SPI, its own configuration point, and its own guide; none of them requires the
+others.
+
+| Layer | What it does | Where configured | Guide |
+|---|---|---|---|
+| Identity + authorization | Resolves the actor from the request — an anonymous identity per browser by default, your login when configured; gates each tool by role intersection or a delegated ability | `actorResolver`, `defaultRoles`, `emptyRoles` or `rolesPolicy` on `AgentModule.forRoot`, plus per-tool `roles`/`ability` | [Identity & Authorization](/docs/agent/guides/identity-and-authorization) |
+| Quota | Refuses a send (`429`) while the actor's budget — day/month, tokens/USD — is used up | `quota: { limits }` or `quota: yourQuotaProvider` on `AgentModule.forRoot`; omitted → reported, never enforced | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
+| Cost | A usage row per model call, rolled into spend per model/actor/day; a gateway's reported cost wins, else a cache-aware token estimate | The store's `AgentGovernanceQueries` + a versioned `AgentModelPricing` table | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
+| Reliability | Every run's start/end is durably recorded (success/failure, duration, retries, `promptHash`), independent of thread history | Automatic once the bound `AgentStore` implements the optional recording SPI (both bundled stores do) | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
+| Approvals | Who must approve an `action` call and for how long (`ApprovalPolicy`); per-call `preflight` checks; a cross-thread inbox of blocking calls awaiting a decision; optionally, independent proposals that don't hold the turn | `approvalPolicy` and `actionApprovalMode` on `AgentModule.forRoot`; `AGENT_APPROVAL_PORT` — bound automatically by `AgentModule` | [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability), [Action proposals](/docs/agent/guides/action-proposals) |
+| Audit | Every stage of a run announced on Node's `diagnostics_channel`, plus tracing spans for a per-run waterfall | Nothing to configure — `aviary:agent:*` always fires; consumed by Telescope or your own subscriber | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
+
+## Identity + authorization
+
+Two questions gate every tool call: who is calling, and may they call this. Without an
+`actorResolver` every browser is its own anonymous actor (an `HttpOnly` cookie), so two visitors never
+share an identity; configure one to require login. Once an actor is resolved, each tool declares exactly one gate: `roles` (a
+tool with none declared reaches the policy as `roles: undefined`, and `DefaultRolesPolicy` applies
+`defaultRoles` there — an empty list is **open** unless `emptyRoles: 'deny'` binds `ClosedRolesPolicy`)
+or `ability` (delegated to a `nestjs-authz` Gate by `AuthzRolesPolicy` from
+[`-authz`](/docs/agent/packages/authz), which `AgentModule` picks up in either import order; without it, the built-in policies refuse a tool that has an `ability` and no `roles`). A handler's own
+`isEnabled()` and `canUse(actor)` run alongside the policy, and a persona's `allowedTools` narrows the
+set further. All of it runs server-side, both when the turn's tool list is built and again on invoke,
+before the tool's `execute` is ever called — a model can *ask* for anything, it can't talk its way
+past the gate.
+
+The same "the agent never fabricates a caller" principle carries into the governance endpoints:
+`POST /agent/tool-call/approve` · `/reject` and the `/agent/threads/:id` family resolve the acting
+actor and assert they own the target thread/tool-call — someone else's returns `403`, a missing one
+`404`.
+
+## Quota
+
+A per-actor budget across windows (`day`, `month`; tokens and/or USD), read off the usage ledger by
+the default `LedgerQuotaProvider` or supplied by your own `QuotaProvider`. `GET /agent/quota` reports
+it; with `quota` configured, a send is refused with `429` while a window is exhausted. Tokens count
+`inputTokens + outputTokens` — unaffected by the cache-token breakdown that only refines cost.
+
+## Cost
+
+Every model call appends a usage row regardless of outcome. Cost is resolved **per row**: a
+gateway's real reported cost (Vercel AI Gateway, OpenRouter) wins when present; otherwise the
+estimate accounts for prompt caching (cache writes at a premium, cache reads at a discount) against
+the current pricing row for that model. `AgentGovernanceQueries` rolls the rows up into spend by
+model, spend by actor, a daily trend, and recent activity — the same read-model the standalone
+dashboard and the Telescope "Agent" tab both consume.
+
+## Reliability
+
+Cost and quota answer "what did this cost"; reliability answers "did the run actually succeed."
+Every run's start and end are recorded through an optional `AgentStore` surface
+(`recordRunStart`/`recordRunEnd`/`bumpRunRetries` — a store that doesn't implement it degrades to no
+reliability data, not an error), including the sha256 `promptHash` of the run's resolved system
+prompt, so an error-rate shift can be correlated with a prompt change. `AgentGovernanceQueries`
+exposes the rollups — aggregate (`runMetrics`, `runsByAgent`, `runErrors`, `runTrend`) and per-run
+(`recentRuns`, and a paginated/filterable `runsPage`) — consumed by the same two surfaces as cost:
+the standalone dashboard's Reliability section and Telescope's Agent tab. See
+[Architecture](/docs/agent/concepts/architecture) for how a run's outcome gets recorded when its
+steps are dispatched across the fleet.
+
+## Approvals inbox
+
+Whether an `action` call needs approval at all, who may decide it (`'requester'` — the thread's owner
+— or a role), and how long the request stays open (`ttlMs`, after which it settles `expired`) is the
+`ApprovalPolicy`'s call; the default asks the requester, with no expiry. Before the card is shown and
+again right before execution, the tool's own `preflight` can deny the call, report it already done,
+or supply per-call confirmation wording — no approval, remembered or not, skips the execution-time
+check.
+
+An `action` tool's suspend (see [The agent loop](/docs/agent/concepts/the-agent-loop) and
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability)) is normally
+decided from the thread it happened in. The approvals inbox is the cross-thread view of the same
+decision: every tool call sitting `pending_approval`, across every thread and actor, oldest first
+(`AgentGovernanceQueries.pendingApprovals`). The optional `AGENT_APPROVAL_PORT` SPI
+(`AgentApprovalPort`) — bound automatically by `AgentModule`/`AgentDurableModule` — routes a
+console-side approve/reject through the exact same decision path a chat approval uses (a durable
+signal, or inline resolution), **without** re-deriving thread ownership; the console's own guards
+are expected to front that authorization instead. `Decision` carries an optional `executedByRef`,
+so the loop can persist who actually decided (`decision.executedByRef ?? the run's actor`) — the
+dashboard's `approvalActorRef` option stamps it from the live request, defaulting to the same
+`ActorResolver` chat already uses. No port bound → the API answers `501` and the console renders
+read-only rather than silently no-op-ing an approval.
+
+With `actionApprovalMode: 'independent'`, an `action` call becomes an **action proposal** instead of a
+parked turn: the turn finishes, and the proposal is decided later — over
+`GET <base>/threads/:threadId/action-proposals` and
+`POST <base>/threads/:threadId/action-proposals/:proposalId/approve` · `/reject`, a text command in
+the thread, or the port's `approveActionProposal` / `rejectActionProposal` (which require an actual
+actor and an explicit thread/proposal target). A worker executes approved proposals under the
+requester's *current* identity and permissions. Proposals are not `pending_approval` tool calls, so
+they don't appear in `pendingApprovals`. See [Action proposals](/docs/agent/guides/action-proposals).
+
+## Audit
+
+Every stage of a run — start, message, tool call, delegation, retrieval, quota exceeded, failure,
+finish — is announced on Node's `diagnostics_channel` under `aviary:agent:*`. This is unconditional
+instrumentation, not an opt-in: the library doesn't instrument your code, but it always announces
+its own. Alongside those point events, every run also emits tracing **spans**
+(`llm.turn`/`tool.execution`/`retrieval`/`follow-ups`, correlated by `traceId = runId`) so a single
+turn renders as a waterfall rather than a flat list — see
+[Architecture](/docs/agent/concepts/architecture#observability-tracing-a-turn-as-spans). Telescope
+consumes both the channel (for live activity and per-tool stats, `toolStats`) and the spans (for
+the waterfall); any other subscriber (your own metrics, an alerting rule) can tap the point events
+the same way.
+
+## Where to go next
+
+<Cards>
+  <Card title="Identity & Authorization" href="/docs/agent/guides/identity-and-authorization" description="Anonymous by default, login in one line, and role vs. ability gates." />
+  <Card title="Cost & Governance" href="/docs/agent/guides/cost-and-governance" description="The usage ledger, reported-cost-wins, cache-aware pricing, and the console." />
+</Cards>

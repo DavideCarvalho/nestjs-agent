@@ -1,0 +1,235 @@
+---
+title: "@dudousxd/nestjs-agent-core"
+icon: Box
+description: The framework-agnostic agent loop, tool registry, and every SPI a provider, store, or dashboard implements against.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+</Tabs>
+
+`-core` has no NestJS dependency. It owns `runAgentLoop` — the model → tools → model cycle — the
+`ToolRegistry`, and the SPIs every other package implements or is bound to: a model provider, a
+store, a governance read-model, an actor resolver, a roles policy, an approval policy, a token sink,
+a quota provider, and the optional action-proposal stores behind independent approvals.
+
+| Entry point | What it holds |
+|---|---|
+| `@dudousxd/nestjs-agent-core` | The loop, the registry, every SPI, the in-memory store, confirmed writes, the action-proposal runtime. |
+| `@dudousxd/nestjs-agent-core/genui` | Isomorphic generative-UI catalog and component registries (`defineComponent`, `defineCatalog`, `createComponent`, `createComponentRegistry`, `table`, `chart`, `negotiateCatalog`). See [Generative UI](/docs/agent/packages/genui). |
+| `@dudousxd/nestjs-agent-core/genui/builtins` | The builtin component definitions. |
+| `@dudousxd/nestjs-agent-core/ag-ui` | Framework-free AG-UI 1.0 producer: `AgUiEncoder`, `agUiEvents`, `agUiSse`, `agUiFramesFromNdjson`, the `RunAgentInput` readers (`parseRunInput`, `planResume`, …) and the interrupt-id codec. Served by the umbrella's `agUiAdapter()`. |
+| `@dudousxd/nestjs-agent-core/guardrails` | PII / secret / prompt-injection / tool-poisoning detectors, the rule engine (`scan`), `Vault`, `StreamGuard`, and the adapter onto the processor seams. |
+
+<Callout type="info" title="You rarely import this directly">
+Most apps only ever import `@dudousxd/nestjs-agent` (the umbrella) and a store package. `-core`
+matters when you're writing a `ModelProvider`, an `AgentStore` adapter, or a custom `RolesPolicy` —
+or reading the shapes below to understand what the loop guarantees. See
+[Concepts → Architecture](/docs/agent/concepts/architecture) for how the pieces fit together.
+</Callout>
+
+## Implementing an SPI directly
+
+Most consumers only ever type against `-core`'s interfaces — for example a custom `RolesPolicy` that
+replaces the default role-intersection check:
+
+```ts
+import type { Actor, RolesPolicy, ToolSpec } from '@dudousxd/nestjs-agent-core';
+
+export class BusinessHoursPolicy implements RolesPolicy {
+  can(actor: Actor, tool: ToolSpec): boolean {
+    const withinHours = new Date().getUTCHours() < 18;
+    const hasRole = (tool.roles ?? []).some((role) => actor.roles?.includes(role));
+    return tool.kind === 'action' ? hasRole && withinHours : hasRole;
+  }
+}
+```
+
+`runAgentLoop` is the one place tool execution happens — a `ModelProvider.runTurn` performs exactly
+one model turn and **must not** execute tools itself, which is what keeps a turn replay-safe under the
+durable runner. See [Concepts → The agent loop](/docs/agent/concepts/the-agent-loop) for the full
+turn-by-turn walkthrough.
+
+## The SPIs
+
+Every contract a provider, store, or dashboard is built against. Shapes are trimmed to their key
+members — see the source for full JSDoc.
+
+| SPI | Purpose | Key shape |
+|---|---|---|
+| `ModelProvider` | Wraps the actual LLM call. | `runTurn(args: ModelTurnArgs): Promise<ModelTurnResult>` — `args` carries `system`, `messages`, `tools`, a `sink: SinkWriter` for live deltas, `abortSignal`, an optional `model` (the id a caller picked from the model catalog), and an optional `outputSchema` (set only on the structured-output formatting pass, which always sends `tools: []`); the result carries `text`, `toolCalls`, `usage`, optional `modelId`, `costUsd`, `reasoning` / `reasoningMs`, `ui`, and `object` (a provider's own parse of a constrained reply — the loop validates it regardless). |
+| `AgentStore` | ORM-agnostic persistence for threads, messages, tool calls, and usage. | `createThread` / `getThread` / `listThreads` / `forkThread` / `appendMessage` / `truncateFrom` / `recordToolCall` / `updateToolCall` / `recordUsage` / `quotaToday` / `ownerOfThread(threadId): Promise<string \| null>` / `ownerOfToolCall(toolCallId): Promise<string \| null>` / `runForToolCall(toolCallId): Promise<string \| null>` / `ownerOfActiveStream(runId): Promise<string \| null>` / optional `updateThread` / `activeRunForThread` / **optional `recordRunStart(input: RecordRunStartInput)` / `recordRunEnd(input: RecordRunEndInput)` / `bumpRunRetries(runId)`** — run reliability recording, absent = graceful no-op. |
+| `ThreadTurnReader` | The bounded thread read a TURN makes, instead of `getThread`'s whole transcript — ~2.6 MB down to ~103 KB on a 50-turn thread whose turns each ran a 50 KB tool. Probed structurally on the bound store (not declared on `AgentStore`), so a store without it keeps working through the full read, with nothing to configure. Both bundled SQL stores implement it. | `loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage \| null>` — `{ threadId, messageLimit? }` in, `{ title, defaultAgent, hasAssistantMessage, messages }` out, oldest-first. `messageLimit` is the policy's `HistoryPolicy.maxMessages`, omitted (read everything) for a summarizing policy or a token-only ceiling. `hasAssistantMessage` is answered over the WHOLE thread, never the returned page. |
+| `AgentPricingStore` | Write side of model pricing — the SPI that seeds the pricing table the cost estimate reads. | `upsertModelPrice(input: ModelPriceInput): Promise<void>` (atomic supersede — retires the model's current row, inserts a new current one) / `listCurrentPrices(): Promise<CurrentModelPrice[]>`. |
+| `AgentGovernanceQueries` | The read/analytics half of the store — the dashboard and Telescope tab both consume this one interface. | Usage/spend: `spendByModel(range)` / `spendByActor(range)` / `spendByThread(range, limit)` / `usageTrend(range)` / `recentToolCalls(limit)` / `recentThreads(limit)`. Run reliability: `runMetrics(range)` / `runsByAgent(range)` / `runErrors(range)` / `runTrend(range)` / `recentRuns(limit)` — all REQUIRED; an adapter over a store that never records runs returns zeros/empty. Governance: `pendingApprovals(limit)` (the approvals inbox) / `toolStats(range)`. Paged, filterable variants for the dashboard's list tables: `toolCallsPage` / `threadsPage` / `runsPage` (each takes a `GovernancePageQuery<TWhere>` — `page`, `pageSize`, typed `where` — and returns a `GovernancePage<TRow>` with `total` for prev/next paging). |
+| `AgentApprovalPort` | Console-side HITL decisions — the approvals inbox routes through this instead of re-running chat's own approve/reject authorization. Optional: absent = the dashboard's approvals inbox 501s and renders read-only. | `approve(toolCallId, opts?: { executedByRef?, remember?, decidedVia? })` / `reject(toolCallId, opts?: { executedByRef?, reason?, decidedVia? })`; for independent proposals, optional `approveActionProposal(actor, { kind: 'proposal', threadId, proposalId }, opts?)` / `rejectActionProposal(…)`. |
+| `ActionProposalStore` | Optional. Persists independent action proposals: scoped snapshots, atomic decisions, fenced execution leases. Companion capabilities: `ActionProposalSupersessionStore` (`replacementKey`), `ActionProposalWorkerStore` (`claimNextActionProposal`, `expireActionProposals`), `ActionProposalOutcomeStore` (atomic admission of the result into the thread). `assertIndependentActionCapabilities(store, resolver)` fails boot when one is missing. Shipped: `InMemoryActionProposalStore` (one process), and the Drizzle / MikroORM stores. | `createActionProposal` / `getActionProposal` / `listActionProposals` / `decideActionProposal` / `claimActionProposal` / `extendActionProposalLease` / `settleActionProposal`. See [Action proposals](/docs/agent/guides/action-proposals). |
+| `ConfirmTokenStore` | Makes a confirmed write's `confirmToken` single use. `InMemoryConfirmTokenStore` in `-core`; `DrizzleConfirmTokenStore` / `MikroOrmConfirmTokenStore` in the stores, bound to `AGENT_CONFIRM_TOKEN_STORE`. | `claim(input): Promise<boolean>` / `release(hash)` / optional `purgeExpired(now?)`. |
+| `ActorResolver` | Resolves the caller for an inbound request — the identity seam. Optional on `AgentModule`: omitted, the umbrella binds `AnonymousActorResolver` (one `HttpOnly`-cookie identity per browser) and logs that the endpoints are public. | `resolve(req: unknown): Actor \| Promise<Actor>`. |
+| `BackgroundActorResolver` | Re-resolves the requester when an independent action proposal executes outside any request. Required with `actionApprovalMode: 'independent'`. | `resolve({ actorRef, tenantRef }): Promise<Actor \| null>` — `null` when the actor was deleted or left the tenant. |
+| `RolesPolicy` | Decides whether an actor may invoke a tool. Shipped: `DefaultRolesPolicy` (an empty roles list is **open**), `ClosedRolesPolicy` (an empty list denies — what `AgentModule.forRoot({ emptyRoles: 'deny' })` binds), and `closeEmptyRoles(policy)` to close a policy you didn't build. | `can(actor: Actor, tool: ToolSpec): boolean \| Promise<boolean>`. |
+| `ApprovalPolicy` | Whether an `action` call needs approval, who may decide, and for how long the request stays open. Default `DefaultApprovalPolicy`: every `action` needs the requester (`'requester'`), no expiry. | `requirementFor(tool, actor, thread): { required, approver, ttlMs? }`; optional `canDecide(actor, decision)` — without it, `'requester'` means the thread's owner and any other approver string is a role. |
+| `TokenStreamSink` + `SinkWriter` | The data plane — live token transport decoupled from durability, keyed by `runId`. `-core` also ships `SqlTokenStreamSink` (polling, one row per frame) over a `StreamFrameTable`; the store packages ship it as `DrizzleTokenStreamSink` / `MikroOrmTokenStreamSink`. | Sink: `open(runId)` / `subscribe(runId): AsyncIterable<Uint8Array>` / `close(runId)`. Writer: `write(chunk)` / `end()` / `fail(error)` / optional `flush()`. |
+| `QuotaProvider` | The actor's budget windows (`day` / `month`, tokens and/or USD) and whether one blocks a send. The umbrella's `LedgerQuotaProvider` is the default. | `report(query: QuotaQuery): Promise<QuotaReport>`. |
+| `QuotaStore` | Older per-actor/day token counter, still exported. | `check(actorRef, day): Promise<QuotaState>` / `bump(actorRef, day, tokens): Promise<void>`. |
+| `ModelCatalog` | Which models a caller may pick. `staticModelCatalog(view)` wraps a fixed list; `aiSdkModels` carries one. | `list(query): ModelCatalogView \| Promise<ModelCatalogView>`. |
+| `HistoryPolicy` | Selects which thread messages ride into a turn. | `select(messages, ctx): HistorySelection`; optional `maxMessages`, `summarize(dropped, ctx)`. |
+| `ChatQueueStore` | Messages sent while the agent is answering, run in order afterwards. Probed with `isChatQueueStore(store)`; all three bundled stores implement it. | `enqueueMessage` / `listQueue` / `updateQueuedMessage` / `moveQueuedMessage` / `removeQueuedMessage` / `clearQueue` / `queuePause` / `setQueuePause` / `claimActiveStream` / `releaseActiveStream` / … |
+| `AgentRunner` | Runs a turn — the inline or durable strategy. | `start(input: AgentRunInput, options?: { runId? }): Promise<{ runId }>` / `signal(runId, toolCallId, reply: HumanReply)` (a `Decision` or a question-set answer) / `cancel(runId)` / optional `isRunActive(runId)` — see [Cancelling a run](/docs/agent/guides/human-in-the-loop-and-durability#cancelling-a-run). |
+| `InputProcessor` | Rewrites `{ system, messages }` before every model call of a turn — transformation only; `HistoryPolicy` owns selection. Runs inside the `process:input:<step>` checkpoint, so it may call a model. | `name: string`; `process(prompt: ProcessedPrompt, ctx: ProcessorContext): ProcessedPrompt \| Promise<ProcessedPrompt>`. |
+| `OutputProcessor` | Gates each model step's answer before the stream, the store, or the next step sees it. Registering one buffers the turn's model output instead of streaming it live. | `name: string`; `process(answer: ModelAnswer, ctx: ProcessorContext): OutputVerdict \| Promise<OutputVerdict>` — `{ action: 'pass' }` \| `{ action: 'replace', text }` \| `{ action: 'reject', reason }`. |
+| `Retriever` | RAG retrieval seam — vector/keyword search behind the agentic tool or inject mode. | `retrieve(query: string, options?: RetrieveOptions): Promise<Passage[]>`. |
+| `EmbeddingProvider` | Text → vectors, for retrieval + ingestion. | `embed(texts: string[]): Promise<number[][]>`. |
+| `Reranker` | Second-stage RAG precision — re-scores retrieved passages against the query. | `rerank(query: string, passages: Passage[], options?: RerankOptions): Promise<Passage[]>`. |
+| `ActorDirectory` | Optional read-side lookup from opaque store `actorRef`s to human display labels — governance/dashboard surfaces resolve refs to names instead of rendering `u_8f21…`. Unbound → surfaces show the raw ref. Injected via `AGENT_ACTOR_DIRECTORY`. | `resolveDisplay(refs: readonly string[]): Promise<Record<string, string>>`. |
+| `AttachmentStagingStore` | Upload + resolution seam for message attachments (an image/PDF a user attaches before the model sees it) — turns an uploaded file into a model-reachable `MessageAttachment` URL (the lib never fetches bytes itself), and turns a `mediaId` a chat turn claims back into that attachment, or `null` when the id is unknown or is not that actor's. `resolve` is the only source of a url the model provider is asked to fetch, so an implementation that echoes back a request's url reopens an SSRF. Unbound → the `POST /agent/attachments` controller is never mounted and a turn cannot carry attachments. Injected via `AGENT_ATTACHMENT_STAGING`. The optional `list` is the host half of attachment housekeeping — you stored the bytes, so only you can enumerate them; it pairs with `AgentStore.referencedMediaIds` to find media no live message points at (see [Persistence](/docs/agent/guides/persistence#which-media-a-message-still-references-optional)). | `stage(input: StageAttachmentInput): Promise<MessageAttachment>`, `resolve(input: ResolveAttachmentInput): Promise<MessageAttachment \| null>`, `list?(input: ListStagedAttachmentsInput): Promise<StagedAttachment[]>`. |
+
+<Callout type="info" title="Run reliability recording">
+Every run is durably recorded: the loop calls `AgentStore.recordRunStart` (with a `promptHash` — the
+sha256 of the run's resolved, pre-RAG system prompt, so a governance read can correlate an error-rate
+shift with a prompt change) as a checkpointed step, then `recordRunEnd` on completion or failure
+(duration, error code/message). Both bundled store adapters (MikroORM, Drizzle) ship an `agent_run`
+table (autoSchema-managed) backing this; a custom `AgentStore` that omits these three methods just
+gets zeros/empty back from the `runMetrics`/`runsByAgent`/`runErrors`/`runTrend`/`recentRuns`/`runsPage`
+reads instead of a crash.
+</Callout>
+
+<Callout type="warn" title="A ModelProvider never executes tools">
+`runTurn` streams text and returns requested tool calls — it must not run them. The loop runs every
+tool call as its own step so a turn stays replay-safe when it's executing as a durable workflow. See
+[Concepts → Runners](/docs/agent/concepts/runners) for inline vs durable.
+</Callout>
+
+## Core types worth knowing
+
+| Type | What it holds |
+|---|---|
+| `Actor` | `{ id, roles?, tenantRef? }` — the caller, resolved by an `ActorResolver`. |
+| `ToolSpec` | `{ name, kind, description, inputSchema, presentation?, roles?, ability?, enabled?, targetAgent?, detached?, terminal?, replacementKey? }` — the declared shape of a tool. `kind` is `'read' \| 'action' \| 'agent' \| 'ask' \| 'skill' \| 'memory'`; you author `read` and `action`, the rest are synthesized by the loop. `terminal` ends the turn after a successful call. `presentation` carries the card copy (`label` / `running` / `done`, optional `confirm: { title, verb, detail? }` with `{field}` placeholders, `result` view). `replacementKey` (string or `(input, ctx) => string`) groups pending independent proposals so a newer one supersedes the older. |
+| `ToolHandler` | `execute(input, ctx)` plus optional hooks: `preflight(input, ctx, { phase: 'prepare' \| 'execute' })` — a read-only state check for `action` tools, run before the approval card and again right before execution, returning `{ status: 'ready', confirmation? }`, `{ status: 'denied', reason }` or `{ status: 'completed', output }` (denied → `ToolPreflightDeniedError` on direct invoke); `present(output, ctx)` — component presentation(s) derived from a successful result, whose errors never fail the action; `isEnabled()`, `canUse(actor)`, `describe(scope)` (may return `available: false`). |
+| `AiToolCtx` | `{ actor, threadId, runId, requestId, toolCallId?, idempotencyKey?, agentName?, persona?, pageContext?, host?, uiCapabilities?, onPresentationError?, emitUi }` — handed to every `ToolHandler.execute`. `idempotencyKey` is `<runId>:<toolCallId>`, stable across replays and retries — pass it to the external write, since tool execution is at-least-once. `agentName` is the agent running this turn (provenance a tool can scope on); `persona` its persona, when it runs under one. `emitUi(component, props, { id?, version? })` pushes a generative-UI component, streamed live and persisted on the message (see [Generative UI](/docs/agent/guides/generative-ui)). Always present: where there is no conversation (the MCP server, a bare `registry.invoke`) it is `createNoopEmitUi()`, which pushes nothing and still resolves to an id. A handler may also implement `describe({ actor, threadId?, agentName? })` to vary its model-facing description / input schema per turn. The generative-UI catalog is the isomorphic subpath [`@dudousxd/nestjs-agent-core/genui`](/docs/agent/packages/genui). |
+| `MessageUsage` | `{ inputTokens, outputTokens, cacheWriteTokens?, cacheReadTokens?, reasoningTokens? }` — the cache-aware usage shape behind cost accounting. |
+| `AgentDefinition` | `{ name, description?, systemPrompt?, tools?, delegatesTo?, modelId?, maxSteps?, maxDelegationDepth?, maxAgentAppearances?, history?, outputSchema?, outputRepairAttempts?, intake?, ask?, personas?, defaultPersona? }` — one named agent, authored as an `@Agent`-decorated class and populated into the `AgentRegistry` by discovery. |
+| `Persona` | `{ id, label, description?, systemPrompt?, allowedTools?, aliases? }` — a named variant of one agent: its own prompt and, optionally, a narrower tool allow-list applied after the agent's own (to the offered list and to `ToolRegistry.invoke` via `InvokeOptions.allowedTools`). Selected per send, pinned on the thread, frozen for a durable run. See [Personas](/docs/agent/guides/personas). |
+| `ModelPriceInput` | `{ modelId, inputPricePer1m, outputPricePer1m, cacheWritePricePer1m?, cacheReadPricePer1m? }` — the shape `AgentPricingStore.upsertModelPrice` accepts. |
+| `Decision` | `{ approved: boolean, reason?: string, executedByRef?: string, remember?: boolean, decidedVia?: string, expired?: true }` — a human decision on a pending action tool call. `remember` approves this tool for the rest of the thread; `decidedVia` records the channel. `executedByRef` is who decided; absent means the run's own actor decided (the chat approve/reject flow). The dashboard's approvals inbox stamps this from its `approvalActorRef` option (or the configured `ActorResolver` by default) when routing through `AgentApprovalPort`. |
+| `AgentLoopResult<T>` | `{ text, object? }` — what `runAgentLoop` and the `agent.run` workflow resolve to. `object` is the validated `outputSchema` value, typed from the schema. |
+| `RecordRunStartInput` / `RecordRunEndInput` | `{ runId, threadId, actorRef, agentName?, parentRunId?, promptHash? }` / `{ runId, status: 'completed' \| 'failed' \| 'cancelled', durationMs?, errorCode?, errorMessage? }` — what `AgentStore.recordRunStart`/`recordRunEnd` accept. `cancelled` is a third terminal, not a flavour of `failed`: a failure rate computed over these rows has to be able to leave a user pressing Stop out of it. It carries no `errorCode`/`errorMessage`. |
+
+## Also exported
+
+`ToolRegistry`, `DefaultRolesPolicy` / `ClosedRolesPolicy` / `closeEmptyRoles`, `AgentRegistry`,
+`InMemoryAgentStore`, `createFunctionalTool` (a `{ spec, handler }` tool without NestJS), the error
+classes (`ToolForbiddenError`, `ToolNotFoundError`, `ToolDisabledError`, `ToolInputInvalidError`,
+`ToolPreflightDeniedError`, `ToolInputDriftError`, `QuotaExceededError`, `RunCancelledError`,
+`OutputRejectedError`, `ProcessorFailedError`, `StructuredOutputError`, `ConfirmTokenError`, plus
+`agentFailureCode(error)` which maps them to a stream error code), the processor plumbing (`createFrameBuffer`,
+`releaseGatedFrames`, `decodeStreamEvent`) and the structured-output helpers (`validateStructured`,
+`extractJson`, `DEFAULT_STRUCTURED_OUTPUT_INSTRUCTION`, `repairInstruction`), the
+`seedModelPrices(store, prices[])` helper (loops `upsertModelPrice` over an array — the quick way to
+seed a pricing table at boot), and the `aviary:agent:*` diagnostics helpers — re-exported by the
+umbrella package too, so an app importing `@dudousxd/nestjs-agent` never needs a direct dependency on
+`-core`.
+
+## Gating writes: blocking approval, independent proposals, confirmed writes
+
+Three mechanisms, all in `-core`, for a tool that changes something:
+
+- **Blocking approval (default).** An `action` call the `ApprovalPolicy` marks `required` parks the
+  turn on `awaitApproval` until approve/reject (or `ttlMs` expiry). The tool's `preflight` runs with
+  `phase: 'prepare'` before the card — a `ready` result can supply per-call `confirmation` wording,
+  persisted and streamed with the card — and again with `phase: 'execute'` right before the side
+  effect. A remembered approval or policy never skips the execute-phase check.
+- **Independent proposals** (`actionApprovalMode: 'independent'` on the umbrella). The call is
+  recorded as an action proposal instead of parking: the model gets
+  `{ proposalId, status: 'pending', executed: false }`, the turn ends without another model call, and
+  the thread accepts new messages. A decision (HTTP route, approval port, or a whole-message text
+  command such as `yes` / `reject #ID`, or a configured vocabulary such as `ptBrActionProposalText`) queues the work; `ActionProposalWorker` executes it under a
+  fenced lease after re-resolving the requester through `BackgroundActorResolver`, rechecking
+  permissions and re-parsing the original input against the current schema (drift fails with
+  `ToolInputDriftError`). The outcome is admitted into the thread as an assistant message — no model
+  continuation. Execution is at least once; use `ctx.idempotencyKey`. See
+  [Action proposals](/docs/agent/guides/action-proposals).
+- **Confirmed writes.** `defineConfirmedTool(options, { prepare, preview, commit })` returns a
+  functional tool (registered as `kind: 'read'`) whose gate lives inside it, so it works where an
+  `action` has no approval channel (MCP). A call without `confirm` validates, previews, and returns a
+  `confirmToken` — an HMAC over tool, actor, tenant, expiry and canonical arguments (`secret`
+  required, `ttlMs` default 15 min). The same arguments plus `confirm: true` and the token commit; the
+  `ConfirmTokenStore` (`store` option or `AGENT_CONFIRM_TOKEN_STORE`) makes the token single use.
+  `withConfirmFields(schema)` adds `confirm` / `confirmToken` to a schema as a `SchemaExtension`, which
+  `-ai-sdk` and `-mcp-server` convert through the inner schema.
+
+## Presenting tool output
+
+`ToolHandler.present(output, ctx)` returns `ComponentPresentation`s (built with `createComponent`,
+`table` or `chart` from `-core/genui`) that are validated and pushed through `ctx.emitUi` after a
+successful call; denied or failed calls present nothing, and a presentation error never fails the
+action. A `ComponentRegistry` (`createComponentRegistry().register(definition, { web, text, … })`)
+renders the same presentation per channel, falling back to its `text` renderer or the definition's
+`fallbackText`. When a client declares `uiCapabilities`, the server intersects them with the
+authorized catalog (`negotiateCatalog`) and turns unsupported emissions into their text
+representation. See [Rendering everywhere](/docs/agent/guides/rendering-everywhere).
+
+<Callout type="info" title="Dispatched-step plumbing (advanced)">
+Most apps never touch this — it exists so `@dudousxd/nestjs-agent`'s durable module can route a
+turn's model/tool step to any worker in a fleet instead of running it in-process. `-core` exports the
+serializable `LlmStepEnvelope`/`ToolStepEnvelope` shapes those steps carry over the wire, the optional
+`AgentLoopHooks.dispatchLlm`/`dispatchTool` hooks the loop calls when dispatching is enabled (absent =
+identical in-process behavior), `AgentLoopHooks.isControlFlowError` (an OVERRIDE for a runner whose
+signals carry no marker — the loop recognizes the durable runtimes' own signals unaided, see
+`isControlFlowSignal` below), `traceLlmTurn`/`traceToolExecution` (the diagnostics spans, emitted from wherever the step actually
+executes), and `withToolTimeout`. See [`@dudousxd/nestjs-agent`](/docs/agent/packages/nestjs) — the
+"Durable subpath" section — for how the nestjs package wires these into `AgentRunSteps.llm`/`.tool`.
+</Callout>
+
+<Callout type="info" title="Cancellation (for a custom runner)">
+`AgentLoopHooks.cancelled()` answers one question — has someone asked this run to stop. The loop asks
+it only at the points where stopping is safe and cheap (between steps, before the next model call,
+before a turn's tools are dispatched) and only from **inside a checkpoint**, so the answer is
+journaled and a cancel that arrives between two replays cannot change a branch a replayed position
+already took. The positions sit behind `hooks.patched('agent:cancellation')`, so a run already in
+flight keeps the shape it recorded, and omitting the hook adds not one checkpoint.
+
+Observing a cancel throws `RunCancelledError`, which unwinds through the path a suspend already uses.
+A custom runner catches it and settles the run itself: `recordRunEnd({ status: 'cancelled' })`, and
+`writer.write(encodeStreamEvent({ kind: 'cancelled' }))` followed by `writer.end()` — never
+`writer.fail()`. A tool already executing is never interrupted; see
+[Cancelling a run](/docs/agent/guides/human-in-the-loop-and-durability#cancelling-a-run).
+</Callout>
+
+## Recognizing the runner's own errors
+
+Two predicates let `-core` tell a durable runtime's signals apart from real failures **without
+depending on either durable package** — the inline runner has to work with neither installed:
+
+- **`isControlFlowSignal(error)`** — a suspend or continue-as-new, thrown to unwind the turn. Matched
+  by the `Symbol.for('aviary:durable:control-flow')` property the runtimes stamp on it, not by
+  `instanceof`: the class differs between the in-process engine and the BullMQ thin worker, and a
+  global-registry symbol is the same symbol in every copy of every module. The loop and
+  `invokeWithTransientRetry` both check it, so a suspend propagates untouched even when the host
+  supplied no `isControlFlowError` hook — otherwise the tool `catch` would write it to the journal as
+  a tool failure.
+- **`isReplayIntegrityError(error)`** — the checkpoint machinery refusing a position. Matched by class
+  NAME (`NonDeterminismError` / `NondeterminismError`, the same contract under two spellings in two
+  packages).
+
+Both must be rethrown untouched from any `catch` in a workflow body: every recovery path writes more
+checkpoints, and on a journal that has already diverged each of those asks for a position the history
+cannot supply — so the recovery raises its own refusal, and that is the error the operator ends up
+reading.
+
+See [Getting Started](/docs/agent/getting-started) to wire the loop into a NestJS app, or
+[Concepts → Architecture](/docs/agent/concepts/architecture) for how the SPIs above compose into a
+running turn.

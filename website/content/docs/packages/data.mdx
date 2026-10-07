@@ -1,0 +1,85 @@
+---
+title: "@dudousxd/nestjs-agent-data"
+icon: Table
+description: createExecuteSqlTool — governed, read-only SQL as a prebuilt tool. AST-validated single SELECTs, a fail-closed table allowlist, tenant scoping, and a row cap.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-data
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-data
+    ```
+  </Tab>
+</Tabs>
+
+`@dudousxd/nestjs-agent-data` ships one tool — `executeSql` — that lets the model answer questions
+about your real data by writing SQL, without ever holding a connection. The model proposes a query;
+the library validates, gates, rewrites, and caps it before your injected runner ever executes it.
+
+```ts
+import { createExecuteSqlTool, GroupTableAccessPolicy, TenantScopeRewriter } from '@dudousxd/nestjs-agent-data';
+
+const { spec, handler } = createExecuteSqlTool({
+  runner: { run: (sql) => readOnlyPool.query(sql) },
+  tableAccess: new GroupTableAccessPolicy({
+    roleGroups: { ADMIN: ['orders'] },
+    tablesByGroup: { orders: ['orders', 'order_items'] },
+  }),
+  tenantScope: new TenantScopeRewriter({ tenantColumn: 'tenant_id', scopedTables: ['orders'] }),
+});
+```
+
+`createExecuteSqlTool` returns a plain `{ spec, handler }` pair (a `FunctionalTool`), not an `@AiTool`
+class — register it with the umbrella's `provideAgentTool` (or list it under
+`AgentModule.forRoot({ tools: [...] })`) rather than declaring it as a provider.
+
+## Exports
+
+| Export | What it is |
+|---|---|
+| `createExecuteSqlTool(deps: ExecuteSqlDeps)` | Assembles the guardrail pipeline; returns `{ spec: ToolSpec, handler: ToolHandler }`. |
+| `SqlValidator` | Layer 1 — AST-parses the statement (MySQL dialect, `node-sql-parser`), asserts it's exactly one `SELECT`, extracts the referenced base tables (CTEs, joins and subqueries walked). Throws `SqlValidationError`. |
+| `TableAccessPolicy` | The interface `GroupTableAccessPolicy` implements — `canAccess(roles, table): boolean`. |
+| `GroupTableAccessPolicy` | Layer 2 — a fail-closed, group-based table allowlist (`roleGroups` + `tablesByGroup`; entries are exact names or `prefix_*` patterns). An unclassified table, unknown roles, or no roles are denied. |
+| `TenantScopeRewriter` | Layer 3 — `new TenantScopeRewriter({ tenantColumn, scopedTables })`. AND-s `tenantColumn = '<tenantRef>'` into the `WHERE` for each scoped table in every `SELECT`'s `FROM`/`JOIN`s, subqueries in the select list, `WHERE`, `HAVING` and `JOIN … ON` included; rejects a CTE, `UNION`/`INTERSECT`/`EXCEPT`, a subquery in `FROM` (at any depth), or an explicit predicate naming another tenant. An actor with no `tenantRef` is refused on a query that reads a scoped table, unless `onMissingTenant: 'passthrough'` lets it through unscoped. |
+| `injectLimit(sql, max)` | Layer 4 — wraps a query with no `LIMIT`, or a `LIMIT` above `max`, as `SELECT * FROM (<sql>) AS subq LIMIT <max>`. A `LIMIT` within `max` is left as is. |
+| `SqlValidationError`, `QueryRunner`, `ExecuteSqlResult`, `GroupTableAccessConfig`, `TenantScopeConfig`, `SqlValidationResult` | The error class and the supporting types. |
+
+`ExecuteSqlDeps`:
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `runner` | `{ run(sql): Promise<Record<string, unknown>[]> }` | — | Your read-only pool. The package opens no connection of its own. |
+| `tableAccess` | `TableAccessPolicy` | — | Required. The Layer 2 allowlist. |
+| `tenantScope` | `TenantScopeRewriter` | — | Optional. Omit only if `tableAccess` alone is sufficient isolation. |
+| `validator` | `SqlValidator` | fresh instance | Swap in a custom validator. |
+| `maxRows` | `number` | `100` | Row cap, injected when the query has no `LIMIT` and applied over a larger one. |
+
+The tool is registered as `executeSql` (`kind: 'read'`, input `{ sql: string }`) and returns
+`{ rows, rowCount, sql, truncated? }` — `sql` is the statement actually run, after rewriting. A result
+whose JSON exceeds 256 KB keeps the leading rows that fit and sets `truncated: true`.
+
+<Callout type="warn" title="Defense-in-depth, not a substitute for read-only credentials">
+Point `runner` at a read-only pool with a least-privilege DB user. The four guardrails (single-SELECT,
+table allowlist, tenant scoping, row cap) are the mechanism; a read-only connection is your backstop.
+Tenant scoping only constrains tables you list in `scopedTables`, and an existing tenant predicate
+counts even under an `OR` — for multi-tenant data, enforce tenancy in the database (views, row-level
+security) as well.
+</Callout>
+
+## When to use it
+
+Reach for `-data` when you want the model to answer ad-hoc questions over real tables (counts,
+lookups, aggregates) without writing a bespoke `read` tool per query shape. It's a `read`-kind tool by
+design — auto-executing is safe because the pipeline, not the model, decides what's reachable.
+
+The full pipeline — why the layer order matters, worked examples for each layer, and wiring the
+factory form of `provideAgentTool` — is in [Governed SQL](/docs/agent/guides/governed-sql).

@@ -1,0 +1,169 @@
+---
+title: "@dudousxd/nestjs-agent-ai-sdk"
+icon: Sparkles
+description: aiSdkModel adapts any Vercel AI SDK v7 LanguageModel to the ModelProvider SPI — streaming, tool-call translation, cache-aware usage, and gateway cost, with zero provider code.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-ai-sdk ai @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-ai-sdk ai @dudousxd/nestjs-agent-core
+    ```
+  </Tab>
+</Tabs>
+
+`aiSdkModel(model, opts?)` is the core of the package: it wraps any Vercel AI SDK v7 `LanguageModel`
+so `AgentModule.forRoot({ model })` needs no hand-written `ModelProvider`. Pick a model from any AI SDK
+provider package and pass it straight in. The package also exports `aiSdkModels` (several models
+behind one provider, for a picker), `aiSdkEmbedding` (an `EmbeddingProvider` for RAG), and
+`attachmentFetchDownloader`.
+
+```ts
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { anthropic } from '@ai-sdk/anthropic';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+
+AgentModule.forRoot({
+  model: aiSdkModel(anthropic('claude-sonnet-4-6')),
+  // …
+});
+```
+
+`opts` is `CallSettings` — anything you'd pass to the SDK's `streamText` (`temperature`,
+`maxOutputTokens`, `providerOptions`, headers, …) plus `experimental_download` (below). `model`,
+`instructions` (the turn's system prompt), `messages`, `tools`, and `abortSignal` are owned by the
+adapter and always win over `opts`.
+
+## What the adapter does
+
+| Concern | Behavior |
+|---|---|
+| Streaming | Calls `streamText` and translates its parts into the agent stream vocabulary on `args.sink`: `text-delta` → `text` frames (also assembled into the turn's text), `reasoning-delta` → `reasoning`, and `tool-input-start` / `tool-input-delta` / `tool-call` → live tool-call card frames (`tool-input-start` / `tool-input-delta` / `tool-input-available`, with `toolKind` collapsed to `'read' \| 'action'`). An `error` part is rethrown as the provider's own error instead of surfacing as the SDK's generic "No output generated". |
+| Tool calls | Builds an SDK `ToolSet` **without** an `execute` function, so the SDK returns tool-calls for the agent loop to run as its own steps — the adapter never executes a tool itself. |
+| Usage | Maps SDK `LanguageModelUsage` to the core `MessageUsage` shape, including cache (`cacheWriteTokens` / `cacheReadTokens`) and reasoning (`reasoningTokens`) breakdowns when the provider reports them. |
+| Cost | Reads a gateway's real reported cost — Vercel AI Gateway's `providerMetadata.gateway.cost`, then OpenRouter's `total_cost` — into `costUsd`. Direct providers (Anthropic/OpenAI/Bedrock direct) report only tokens, so `costUsd` is left `undefined` and the governance read-model estimates instead. See [Cost & Governance](/docs/agent/guides/cost-and-governance). |
+| Structured output | When the turn carries an `outputSchema`, maps it onto `streamText`'s `output: Output.object({ schema })` so the provider constrains generation, and returns the SDK's parsed value as `object`. A refusal to parse (`NoObjectGeneratedError`) is reported as no object rather than rethrown — the agent loop turns the unparsed text into a repairable `StructuredOutputError`. See [Structured output](/docs/agent/guides/structured-output). |
+| Model id | Surfaces `response.modelId` on the result when the SDK reports one, so accounting reflects the model actually used rather than only the configured id. |
+
+## Tool schemas reach the model as real shapes
+
+A tool's `input` is a [Standard Schema](https://standardschema.dev) — Zod, Valibot, or ArkType all
+work (see [Tools](/docs/agent/guides/tools)). The adapter recognizes two forms and hands them straight
+to the SDK's own schema conversion rather than degrading them:
+
+- **Zod** — detected by its `~standard.vendor === 'zod'` tag; the SDK converts it with its native
+  zod-to-json-schema path.
+- **Valibot / ArkType / Zod 4** — detected by the Standard JSON Schema extension
+  (`~standard.jsonSchema`); the SDK calls its `input()` converter.
+
+Either way the model sees the tool's real parameter names and required fields, not a generic object.
+A schema wrapped by `withConfirmFields` (a core `SchemaExtension`, used by
+[confirmed writes](/docs/agent/packages/core#gating-writes-blocking-approval-independent-proposals-confirmed-writes))
+is converted through its inner schema, with `confirm` / `confirmToken` added to the JSON properties.
+
+A hand-rolled Standard Schema that implements neither still validates correctly (the loop calls
+`~standard.validate` before running the handler), but the adapter degrades its *model-facing* schema
+to a permissive `{ type: 'object', additionalProperties: true }` — the model has to guess the
+arguments. Implement `~standard.jsonSchema` on a custom schema to avoid that.
+
+<Callout type="info" title="Peer dependency: ai ^7.0.0">
+`ai` is a peer, not a bundled dependency — bring the AI SDK version your app already uses. `@ai-sdk/*`
+provider packages (`@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/amazon-bedrock`, …) are separate
+installs; pick whichever the model in `aiSdkModel(...)` needs.
+</Callout>
+
+## Downloading staged attachments
+
+`AiSdkModelOptions` (the adapter's second argument) accepts `experimental_download`, forwarded
+straight to the SDK's `streamText` call — its hook for fetching a message part's bytes before the
+model sees it. It matters for a chat turn's image/PDF `attachments` (core's `MessageAttachment`,
+rendered by this adapter as native `image`/`file` content parts): the AI SDK's *default* downloader
+refuses localhost/private hostnames as an SSRF guard, which kills the model call with
+`AI_DownloadError: URL with hostname localhost is not allowed` the moment an attachment's URL points
+at a non-public store — local MinIO in dev, a VPC-only S3 endpoint.
+
+`attachmentFetchDownloader(fetchImpl?)` is the ready-made fix: a plain fetch with **no** hostname
+policy, for hosts whose attachment staging presigns exactly that kind of non-public URL. URLs the
+model already supports natively are left to the provider unchanged; everything else is fetched and
+inlined as bytes. Errors carry the response status and hostname only — never the full (possibly
+presigned) URL, so a failure log can't leak a credentialed link.
+
+```ts
+import { aiSdkModel, attachmentFetchDownloader } from '@dudousxd/nestjs-agent-ai-sdk';
+import { anthropic } from '@ai-sdk/anthropic';
+
+AgentModule.forRoot({
+  model: aiSdkModel(anthropic('claude-sonnet-4-6'), {
+    experimental_download: attachmentFetchDownloader(),
+  }),
+  // …
+});
+```
+
+<Callout type="warn" title="Only safe for URLs the host itself generated">
+This bypasses the SDK's SSRF guard entirely, so it is safe only because agent attachment URLs come
+exclusively from the host's own `AGENT_ATTACHMENT_STAGING` presigner — never from user input. That
+is now enforced rather than assumed: `POST /agent/chat` reads only a `mediaId` off each attachment
+and rebuilds the rest through
+[`AttachmentStagingStore.resolve`](/docs/agent/reference/endpoints#attachments), discarding any url
+the request named. What remains yours: a `resolve` implementation that returns a url **it** minted
+(and only for media that actor owns), and not pointing `attachmentFetchDownloader` at some other
+downloader hook that might see a user-supplied URL.
+</Callout>
+
+## Several models: `aiSdkModels`
+
+`aiSdkModel(model)` serves one model — a turn that picked another is refused, never silently run on
+this one. For a model picker, `aiSdkModels` takes a map whose keys are what a client picks, and
+carries the catalog `AgentModule` lists when `models` is omitted:
+
+```ts
+import { aiSdkModels } from '@dudousxd/nestjs-agent-ai-sdk';
+
+AgentModule.forRoot({
+  model: aiSdkModels(
+    {
+      fast: { model: openai('gpt-5-mini'), label: 'Fast', badges: ['fast'] },
+      smart: { model: anthropic('claude-sonnet-4-5'), label: 'Smart', badges: ['reasoning'] },
+      'openai/o3': 'openai/o3', // an AI Gateway id works as the model too
+    },
+    { default: 'fast', temperature: 0.3 },
+  ),
+});
+```
+
+An entry is a bare `LanguageModel` or `{ model, label?, description?, badges?, contextWindow?, provider? }`.
+Entries group by provider (`provider`, else the id's prefix before `/`, else the model's own
+provider); `providerLabels` names the groups. A turn with no pick runs on `default` (the first entry
+when omitted; a `default` that isn't in the map throws at construction); one naming a model the map
+does not hold fails. Other options are passed to `streamText` like `aiSdkModel`'s. For availability that depends on the
+caller, pass your own `models` catalog next to it.
+
+## Embeddings: `aiSdkEmbedding`
+
+`aiSdkEmbedding(model)` adapts an AI SDK `EmbeddingModel` to core's `EmbeddingProvider` — the
+retrieval-side sibling of `aiSdkModel`. It batches through `embedMany` and returns one vector per
+input, in order (an empty input makes no call).
+
+```ts
+import { aiSdkEmbedding } from '@dudousxd/nestjs-agent-ai-sdk';
+import { openai } from '@ai-sdk/openai';
+
+const embedder = aiSdkEmbedding(openai.embedding('text-embedding-3-small'));
+```
+
+See [RAG](/docs/agent/guides/rag).
+
+## Related
+
+- [Getting Started](/docs/agent/getting-started) — the zero-boilerplate model path in full
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — reported-cost-wins, the cache-aware fallback estimate, and the pricing table
+- [Tools](/docs/agent/guides/tools) — why Standard Schema shape matters for tool calling

@@ -1,0 +1,122 @@
+---
+title: Migrating to the DX release
+icon: ArrowUpCircle
+description: Every API the zero-config / one-way-each release removed or changed, and what replaces it — @dudousxd/nestjs-agent 1.12, -core 0.28, -react 0.23, -ai-sdk 0.8.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+This release makes the default case a few lines and removes the duplicated ways of doing the same
+thing — outright, with no compatibility aliases. The versions that carry it:
+
+| Package | From |
+|---|---|
+| `@dudousxd/nestjs-agent` | `1.12.0` (server zero-config landed in `1.11.0`) |
+| `@dudousxd/nestjs-agent-core` | `0.28.0` |
+| `@dudousxd/nestjs-agent-react` | `0.23.0` (provider in `0.21.0`, chat wiring in `0.22.0`) |
+| `@dudousxd/nestjs-agent-ai-sdk` | `0.8.0` |
+| `@dudousxd/nestjs-agent-testing` | `0.20.0` (needs `-core` ≥ `0.27`) |
+| `@dudousxd/nestjs-agent-authz` | `0.4.0` |
+| `@dudousxd/nestjs-agent-store-drizzle` / `-store-mikro-orm` | `0.18.0` / `0.24.0` |
+| `@dudousxd/nestjs-agent-codegen` | `0.10.0` |
+
+<Callout type="warn" title="Behaviour changes that do not fail to compile">
+1. **Tools are no longer ADMIN-only by default.** A tool without `roles` is callable by any resolved
+   actor. Keep the old behaviour with `defaultRoles: ['ADMIN']` (and
+   `new AuthzRolesPolicy(gate, { fallbackRoles: ['ADMIN'] })`).
+2. **No `actorResolver` no longer throws** — the endpoints become public with one anonymous actor per
+   browser. If you relied on the throw, configure a resolver.
+3. **`useAgentChat({ threadId })` now reads the thread** (history + resume). Pass `history: false`
+   and `resume: false` if you seed and resume it yourself.
+4. **`aiSdkModel` refuses a pick it cannot serve** instead of silently running its own model.
+5. **Quota enforcement moved to the send gate.** With `quotaLimitTokens` or a `quota` store, the
+   loop checkpointed `quota:check`/`quota:bump`; those steps are gone — drain in-flight durable runs
+   before upgrading.
+</Callout>
+
+## Server (`@dudousxd/nestjs-agent`, `-core`, `-ai-sdk`)
+
+| Removed / changed | Replace with |
+|---|---|
+| `actorResolver` required | Optional. Omit → `AnonymousActorResolver` (public). Login: `requestUserActorResolver(map?)` (reads `req.user`) or your own `ActorResolver`. |
+| `DefaultRolesPolicy` default `['ADMIN']` | Default `[]` = unrestricted. `defaultRoles: ['ADMIN']` restores it. |
+| `AgentModuleAsyncOptions.externalStore` | Removed — a store module's `AGENT_STORE` is found automatically. Omit `store` entirely. |
+| `store` required (or a store module) | Optional — the in-memory store is the fallback (boot warning). |
+| `quotaLimitTokens: N` | `quota: { limits: { day: { tokens: N } } }` |
+| `quotaLimits: L` | `quota: { limits: L }` |
+| `quotaProvider: P` | `quota: P` |
+| `quota: someQuotaStore`, `LedgerQuotaStore`, `AGENT_QUOTA_STORE` binding | Removed from the module. Use `quota: { limits }` or a `QuotaProvider`. `LedgerQuotaProvider(store, limits?)` (no `QuotaStore` argument). |
+| `GET <base>/quota/today`, `AgentService.quotaToday` | `GET <base>/quota` (`useQuota` / `chat.quota`). |
+| `attachments.upload` / `attachmentsUpload` | Removed — `POST <base>/attachments` is live whenever a staging store is bound. |
+| Attachment limits in two places | The staging store's `describe()` wins (`AgentMediaAttachmentsModule`), else `attachments: { maxBytes, allowedContentTypes }`. |
+| `POST <base>/chat` `attachments` with full objects | `{ mediaId }` refs only — other keys are refused with `400`. |
+| `ThreadDetail.activeStreamId` | `activeRunId` (summary and detail). |
+| `aiSdkModel(model, { resolveModel })` | `aiSdkModels({ id: model, … }, { default })` — its `.catalog` feeds `GET /models` when `models` is omitted. |
+| `@AiTool({ name, kind })` required | Both optional: name from the class (`GetWeatherTool` → `getWeather`), kind `read`. |
+| `defaultAgent: { systemPrompt }` in old snippets | Never valid (`defaultAgent` is an agent **name**). Use `systemPrompt: '…'` on the module, or `@Agent` classes. |
+| `InMemoryAgentStore` from `-testing` | Still exported there; it lives in `-core` now (import from either). |
+
+New: `GET <base>/config` (`AgentClientConfig`), `AttachmentStagingStore.describe()`, module-level
+`systemPrompt`, `requestUserActorResolver`, `AnonymousActorResolver`, `aiSdkModels`.
+
+## React (`@dudousxd/nestjs-agent-react`)
+
+| Removed / changed | Replace with |
+|---|---|
+| `useAgentChat({ baseUrl, headers, getHeaders, credentials, fetch, attachments })` | `<AgentProvider baseUrl path headers getHeaders credentials fetch attachments={{ upload }}>` once, or `useAgentChat({ backend: new AgentClient({ … }) })`. |
+| `useAgentChat({ client })`, `chat.client` | `backend` / `chat.backend`. |
+| `baseUrl: '/agent'` (produced `/agent/agent/…`) | `baseUrl` is the origin; the prefix is `path` (default `'agent'`). |
+| `AgentClientOptions.attachments: strategy` | `attachments: { upload: strategy }`. |
+| `useToolCatalog({ client })`, `createSkillsSource({ client })` | `useToolCatalog()` (provider) / `{ backend }`; `createSkillsSource({ backend })`. |
+| `/media`: `withMediaUploads(backend, conn)` | `<AgentProvider attachments={{ upload: mediaAttachments() }}>`, or `createMediaUpload(conn)` as your backend's `uploadAttachment`. |
+| `/media`: `mediaAttachments({ path })` | The path comes from the client's `path`. |
+| `chat.threads`, `loadThreads`, `deleteThread`, `renameThread` | `useThreads()` → `threads`, `refresh`, `remove`, `rename`. |
+| `chat.loadThread(id)` | History loads itself for `threadId`; `chat.backend.getThread(id)` for a manual read. |
+| `chat.quota` (today's usage) / `loadQuota()` | `chat.quota` is now the `useQuota` state (`windows`, `day`, `month`, `blocked`); the gate is automatic. |
+| `chat.setThreadModel(id)` | `chat.models.pinToThread(id)`. |
+| `chat.forkThread(threadId, messageId)` | `chat.fork({ messageId, threadId? })`. |
+| `chat.truncateFromMessage(threadId, messageId)` | `chat.truncateFrom({ messageId, threadId? })`. |
+| `chat.promoteThread(id)` | `chat.promote({ threadId? })`. |
+| `resume` default `false` | Default `true`. |
+| `AgentClient.getQuotaToday`, `AgentBackend.getQuotaToday`, `QuotaToday` | `getQuota` / `useQuota`. |
+| `AgentClient.renameThread(id, title)` | `updateThread(id, { title })`. |
+| `AttachmentsState.attachments` | `files.refs` (send) — each item still has `.attachment`. |
+| Transcript handlers `onApprove(id, opts)`, `onReject(id)`, `onAnswer(id, answers)`, `onSkip(id)`, `onEditSubmit(id, text)`, `onFork(id)`, `onRegenerate(id)` | One object each: `({ toolCallId, remember })`, `({ toolCallId, reason })`, `({ toolCallId, answers })`, `({ toolCallId })`, `({ messageId, text })`, `({ messageId })`, `({ messageId })` — also on `MessageList`, `MessageItem` and the registry's `AgentChat`. |
+| Approval / question blocks inert without handlers | Settled through the in-scope backend by default; `onApprove: null` (etc.) opts out. |
+| Replayed messages without metadata | `metadata.createdAt` always, `metadata.usage` on a row that has it — `useChatTranscript` reads them by default. |
+
+New: `AgentProvider`, `useAgentBackend`, `useAgentConfig`, `chat.transcript`, `chat.composer`,
+`chat.models`, `chat.blocked`, `chat.isLoadingHistory`, `useAgentChat({ history, quota, composer, transcript })`,
+`AgentClientOptions.path`.
+
+## A minimal before / after
+
+```ts
+// before
+AgentModule.forRoot({
+  model: aiSdkModel(openai('gpt-5-mini')),
+  store: new InMemoryAgentStore(),
+  actorResolver: new HeaderActorResolver(),
+  quotaLimitTokens: 200_000,
+});
+
+// after
+AgentModule.forRoot({
+  model: aiSdkModel(openai('gpt-5-mini')),
+  actorResolver: new HeaderActorResolver(), // or omit for anonymous, or requestUserActorResolver()
+  quota: { limits: { day: { tokens: 200_000 } } },
+  defaultRoles: ['ADMIN'], // only if you relied on the old ADMIN-only default
+});
+```
+
+```tsx
+// before
+const chat = useAgentChat({ baseUrl: '', getHeaders, threadId, initialMessages, resume: true });
+const quota = useQuota({ backend: chat.backend });
+useEffect(() => void chat.loadThreads(), []);
+
+// after
+<AgentProvider getHeaders={getHeaders}>…</AgentProvider>;
+const chat = useAgentChat({ threadId }); // history, resume and the quota gate are automatic
+const { threads } = useThreads();
+```

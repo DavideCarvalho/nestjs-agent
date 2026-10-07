@@ -1,0 +1,12 @@
+{
+  "title": "Recipes",
+  "icon": "ChefHat",
+  "pages": [
+    "index",
+    "custom-model-provider",
+    "inline-to-durable",
+    "functional-tools-with-di",
+    "billing-export",
+    "offline-testing"
+  ]
+}

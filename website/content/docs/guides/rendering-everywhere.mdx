@@ -1,0 +1,185 @@
+---
+title: One answer, every surface
+icon: Split
+description: How one tool result reaches the web, AG-UI clients, text-only channels such as WhatsApp, and MCP — UI capabilities negotiation, text fallbacks, and what each surface receives.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The same agent answers a React app, an AG-UI client, a WhatsApp bot and an MCP client. You write a
+tool once. What each surface gets depends on what it can draw, and the server decides that per
+request.
+
+```text
+tool execute ──► domain output ──────────────────────────────► the model, MCP callers
+     │
+     └─ present / ctx.emitUi ──► component { name, props, version }
+                                   │  validated against the server catalog
+                                   │  intersected with the client's uiCapabilities
+                                   ├─ supported   ──► `ui` frame (+ fallbackText) ──► React, AG-UI `agora.ui`
+                                   └─ unsupported ──► `text` frame (the component's text) ──► any channel
+```
+
+A tool result has three layers, and each surface takes the ones it can use:
+
+| Layer | Who owns it | Where it goes |
+| --- | --- | --- |
+| **Domain output**, what `execute` returns | the tool | Always to the model. It is the whole answer over MCP and `registry.invoke`. |
+| **Component**, `{ component, props, version }` from `present` or `ctx.emitUi` | the server catalog | A `ui` frame, persisted on the message, for clients that declared the component. |
+| **Text**, the definition's `fallbackText` | the server catalog | Instead of the component on a client that cannot draw it, and kept next to it in history. |
+
+## Per surface
+
+| Surface | Declares | Receives |
+| --- | --- | --- |
+| Web, native stream (`POST /agent/chat`, `useAgentChat`) | `uiCapabilities` in the body, or `<AgentProvider uiCapabilities>` | `ui` frames for declared components and `text` frames for the rest. See [Generative UI](/docs/agent/guides/generative-ui). |
+| AG-UI (`POST /agent/ag-ui`) | `forwardedProps.uiCapabilities` | `CUSTOM agora.ui` events for declared components, text messages for the rest. See [AG-UI](/docs/agent/guides/ag-ui). |
+| Text channel (WhatsApp, SMS, a Slack bot) run in-process through `AgentService` | `uiCapabilities: { components: [] }` | Only text. The model is offered no UI tool. |
+| MCP (`AgentMcpServerModule`) | nothing | The tool's domain output as JSON text. Components are not sent. |
+| A file attachment (PNG/PDF) | your channel code | What `createReactServerRenderer` renders from the same component. See [Component registries and server rendering](/docs/agent/guides/component-rendering). |
+
+## Declaring what a client can draw
+
+A client sends the components it has renderers for, each with the exact version it implements:
+
+```ts
+uiCapabilities: {
+  components: [
+    { name: 'DataTable', version: 1 },
+    { name: 'Chart', version: 1 },
+  ],
+}
+```
+
+- **Omitted**: nothing is negotiated. Every component of the authorized catalog is offered and drawn,
+  which is how clients behaved before negotiation existed.
+- **`components: []`**: text only.
+- **A list**: the server intersects it with the catalog it would use anyway (the static one, or the
+  resolver's for this tenant). A component matches only by name **and** version, where a definition
+  without `version` is version `1`. The list never adds a component or grants a permission.
+
+The shape is strict: only `components`, each entry only `name` (a valid component name) and a
+positive integer `version`, no duplicates. Anything else is a `400 Invalid UI capabilities` on
+`POST /agent/chat`, and a `400` on AG-UI.
+
+Where the declaration travels:
+
+- **`POST /agent/chat`** body field `uiCapabilities`.
+- **React**: `<AgentProvider uiCapabilities={…}>` once, or `useAgentChat({ uiCapabilities })` per
+  chat. The chat's option wins. Every send carries it. The React client does not derive the list
+  from your genui registry, so pass it explicitly.
+- **AG-UI**: `forwardedProps.uiCapabilities`. `agUiChatStream` forwards the send's `uiCapabilities`
+  there.
+- **In-process**: `AgentService.send({ …, uiCapabilities })` and `AgentService.chat(…)`.
+- A **queued** message stores the declaration and runs under it. An
+  [action proposal](/docs/agent/guides/action-proposals) stores it in its execution context, so a
+  result that lands later is negotiated for the client that asked.
+
+## What changes for the model
+
+The genui tools describe themselves per turn from the negotiated catalog:
+
+- A per-component tool (`ui__show_<name>`) whose component the client did not declare is removed
+  from that turn's tool list.
+- The tree tool and the `ui__show` tool list only declared components, and are removed when none are
+  left.
+
+With `components: []` the model sees no UI tool at all and answers in prose.
+
+## What changes for your tools
+
+`ctx.emitUi` and a tool's `present` hook go through the same negotiation when the server has a
+catalog (`AgentGenuiModule`):
+
+1. The props are validated against the **server** definition (name, version, schema). An unknown
+   component or invalid props throws.
+2. If the client declared the component, it is pushed as a `ui` frame carrying `fallbackText`, the
+   definition's text for those props.
+3. If not, the component's text is written as a `text` frame instead. The text is stored as an
+   assistant message after the tool step and added to the model's context, so the conversation reads
+   the same on reload.
+
+A tree is all or nothing: if any node's component is not declared, the whole tree is sent as text
+(`treeToText`).
+
+<Callout type="warn" title="Capabilities need a server catalog">
+When a client sends `uiCapabilities` and the server has no catalog (`AgentGenuiModule` is not
+imported), `ctx.emitUi` throws `UI capabilities require an authorized server catalog`. Inside a
+`present` hook this is reported as a presentation error and the domain result is kept. In a tool
+body that calls `ctx.emitUi` directly, the call fails. With a catalog, every component a tool pushes
+must be defined in it.
+</Callout>
+
+`fallbackText` is the component definition's `fallbackText(props)`. With none, or when it throws,
+the text is the props as a JSON code block, preceded by `*title*` when the props have a `title`. Text
+is Slack mrkdwn-compatible. For a nicer per-channel rendering, register channel renderers on a
+component registry and call `registry.render(presentation, 'whatsapp')`. See
+[Custom components and renderers per channel](/docs/agent/guides/component-rendering#custom-components-and-renderers-per-channel).
+
+## A text channel in-process
+
+A messaging webhook resolves its own actor, sends with an empty capability list, and reads the
+answer back when the run ends:
+
+```ts
+@Injectable()
+export class WhatsAppInbound {
+  constructor(private readonly agent: AgentService) {}
+
+  async handle(actor: Actor, threadId: string, text: string): Promise<string | undefined> {
+    const sent = await this.agent.send({
+      actor,
+      threadId,
+      message: text,
+      uiCapabilities: { components: [] }, // text only
+    });
+    // With actionApprovalMode: 'independent', "yes" / "no #id" decide a pending action here
+    // (the words are configurable: actionProposalText).
+    if ('proposalDecision' in sent) return sent.text;
+    if (sent.queued) return undefined; // runs after the turn in progress
+    for await (const _chunk of this.agent.subscribe(sent.runId)) {
+      // ends when the run settles
+    }
+    const thread = await this.agent.getThread(actor, sent.threadId);
+    // Reply with the assistant messages stored after the user's message.
+    return lastAssistantText(thread);
+  }
+}
+```
+
+`lastAssistantText` is your code. Under [independent approvals](/docs/agent/guides/action-proposals)
+an `action` tool does not hold the run open waiting for a click: the turn ends with the pending
+action, the user answers in a later message, and the result is posted to the thread when it runs.
+With the default blocking approvals, a text channel has to decide the call through
+`AgentService.approve` / `reject` itself.
+
+To send a table as an image instead of text, take the stored component off the message (it is in
+`ui`, with its `fallbackText`) and render it with `createReactServerRenderer(…).images(item)` in your
+delivery code. Receiving a component never sends an attachment by itself.
+
+## MCP
+
+The [MCP server](/docs/agent/packages/mcp-server) exposes the same registry, with no conversation
+behind a call:
+
+- `tools/call` returns the tool's **domain output** as JSON text. That is the reason to keep
+  `execute`'s output complete and leave the visuals to `present`.
+- `ctx.emitUi` resolves to an id and discards the component. `present` runs, and what it returns is
+  discarded too. No text fallback is produced.
+- `action` tools are not exposed unless `actions: 'execute'`. When they are, their
+  [preflight](/docs/agent/guides/tools#preflight-checking-an-action-before-and-after-approval) still
+  runs before execution.
+
+## History and renderer drift
+
+Every stored `ui` component keeps its `version` and `fallbackText`, and a tree keeps
+`componentVersions` for its nodes. When a renderer is later missing, its version changed, its props no
+longer validate or it throws, React's `GenerativeUI` shows your `fallback`. Without one it shows the
+stored `fallbackText`. A tree with stored text and no `fallback` falls back as a whole.
+
+## Related
+
+- [Generative UI](/docs/agent/guides/generative-ui): the catalog, `AgentGenuiModule` and the React provider.
+- [Component registries and server rendering](/docs/agent/guides/component-rendering): `present`, `table`/`chart`, HTML/PNG/PDF.
+- [Action proposals](/docs/agent/guides/action-proposals): approvals that work on every surface, including text.
+- [AG-UI](/docs/agent/guides/ag-ui) and [the MCP server](/docs/agent/packages/mcp-server).
