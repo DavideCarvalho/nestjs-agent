@@ -94,7 +94,9 @@ export class MikroOrmAgentStore
     ChatQueueStore,
     ActionProposalStore,
     ActionProposalWorkerStore,
-    ActionProposalDiscoveryIndexStore
+    ActionProposalDiscoveryIndexStore,
+    ActionProposalOutcomeStore,
+    ActionProposalSupersessionStore
 {
   private readonly proposals: MikroOrmActionProposals;
   constructor(

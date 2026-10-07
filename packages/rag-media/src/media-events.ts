@@ -78,7 +78,11 @@ export function isMediaDeleteEvent(payload: unknown): payload is MediaDeleteEven
     return false;
   }
   const candidate = payload as Record<string, unknown>;
-  return isNonEmptyString(candidate.id);
+  return (
+    isNonEmptyString(candidate.id) &&
+    isNonEmptyString(candidate.ownerType) &&
+    isNonEmptyString(candidate.ownerId)
+  );
 }
 
 export function isMediaConversionEvent(payload: unknown): payload is MediaConversionEvent {

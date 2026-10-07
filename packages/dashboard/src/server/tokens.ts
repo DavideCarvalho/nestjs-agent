@@ -59,8 +59,7 @@ export const DASHBOARD_API_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:a
  * `undefined` when the host didn't set one — the controller then falls back to
  * {@link AGENT_ACTOR_RESOLVER} for decider attribution). Threaded to `AgentApiModule` (where the API
  * controller actually lives) same as the pattern above — `useValue` even when `undefined`, so
- * injecting it needs no `@Optional()` (mirrors `AGENT_QUOTA_STORE`'s factory in
- * `@dudousxd/nestjs-agent`).
+ * injecting it needs no `@Optional()`.
  */
 export const DASHBOARD_APPROVAL_ACTOR_REF = Symbol.for(
   '@dudousxd/nestjs-agent-dashboard:approval-actor-ref',

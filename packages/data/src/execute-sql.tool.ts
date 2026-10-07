@@ -20,7 +20,7 @@ export interface ExecuteSqlDeps {
   tableAccess: TableAccessPolicy;
   /** Optional per-row tenant constraint applied before the query runs. */
   tenantScope?: TenantScopeRewriter;
-  /** Row cap injected when the query has no LIMIT. Defaults to 100. */
+  /** Row cap: injected when the query has no LIMIT, enforced over a larger one. Defaults to 100. */
   maxRows?: number;
 }
 

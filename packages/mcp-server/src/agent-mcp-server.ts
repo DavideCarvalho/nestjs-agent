@@ -133,11 +133,17 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
     const listed = await Promise.all(
       registries.map((source) => source.definitionsFor(actor, policy, allowedTools)),
     );
-    const exposed = listed
-      .flat()
-      .filter((definition) =>
-        isToolExposedOverMcp({ name: definition.name, kind: definition.kind, actions }),
-      );
+    const exposed = listed.flat().filter((definition) => {
+      const presentation = registries
+        .find((source) => source.has(definition.name))
+        ?.spec(definition.name)?.presentation;
+      return isToolExposedOverMcp({
+        name: definition.name,
+        kind: definition.kind,
+        actions,
+        ...(presentation !== undefined ? { presentation } : {}),
+      });
+    });
     return { tools: exposed.map(describe) };
   });
 
@@ -157,6 +163,7 @@ export function createAgentMcpServer(options: CreateAgentMcpServerOptions): Serv
         kind: spec.kind,
         actions,
         ...(allowedTools !== undefined ? { allowedTools } : {}),
+        ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
       });
       const ctx = toolContext({ actor, sessionId: extra.sessionId, requestId: extra.requestId });
       const output = await source.invoke(name, args ?? {}, ctx, policy);

@@ -21,6 +21,11 @@ export const AGENT_DURABLE_RUNNER = Symbol.for('@dudousxd/nestjs-agent:durable-r
 export const AGENT_SINK = Symbol.for('@dudousxd/nestjs-agent:sink');
 export const AGENT_MODEL = Symbol.for('@dudousxd/nestjs-agent:model');
 export const AGENT_ROLES_POLICY = Symbol.for('@dudousxd/nestjs-agent:roles-policy');
+/**
+ * @deprecated Nothing binds or injects this token since the quota rework (#230): `AgentModule`
+ * enforces and reports the budget through {@link AGENT_QUOTA_PROVIDER}, configured with
+ * `AgentModule.forRoot({ quota })`. Inject `AGENT_QUOTA_PROVIDER` instead. Removed in the next major.
+ */
 export const AGENT_QUOTA_STORE = Symbol.for('@dudousxd/nestjs-agent:quota-store');
 export const AGENT_TOOL_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:tool-registry');
 export const AGENT_REGISTRY = Symbol.for('@dudousxd/nestjs-agent:agent-registry');

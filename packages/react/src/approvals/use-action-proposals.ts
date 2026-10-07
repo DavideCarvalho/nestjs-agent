@@ -1,11 +1,11 @@
-import type { ActionProposal } from '@dudousxd/nestjs-agent-core';
+import type { ActionProposalView } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentBackend } from '../backend.js';
 import { proposalNeedsPolling, reconcileProposalMessages } from './proposals.js';
 
 export interface ActionProposalsState {
-  items: ActionProposal[];
+  items: ActionProposalView[];
   error: Error | null;
   refresh(): Promise<void>;
 }
@@ -17,7 +17,7 @@ export function useActionProposals(
   refreshKey: string,
   pollMs = 1000,
 ): ActionProposalsState {
-  const [items, setItems] = useState<ActionProposal[]>([]);
+  const [items, setItems] = useState<ActionProposalView[]>([]);
   const [error, setError] = useState<Error | null>(null);
   const latest = useRef({ threadId, setMessages });
   latest.current = { threadId, setMessages };

@@ -1,4 +1,4 @@
-import { AG_UI_PROTOCOL_VERSION, type AgUiEvent } from './types.js';
+import { AG_UI_CUSTOM, AG_UI_PROTOCOL_VERSION, type AgUiEvent } from './types.js';
 
 /** A decision-only protocol invocation: no model run, stream holder or tool execution is created. */
 export function actionProposalDecisionEvents(input: {
@@ -17,7 +17,7 @@ export function actionProposalDecisionEvents(input: {
     },
     {
       type: 'CUSTOM',
-      name: 'aviary.action-proposal-decision',
+      name: AG_UI_CUSTOM.actionProposalDecision,
       value: { threadId: input.threadId, proposalDecision: input.proposalDecision },
     },
     { type: 'TEXT_MESSAGE_START', messageId, role: 'assistant' },

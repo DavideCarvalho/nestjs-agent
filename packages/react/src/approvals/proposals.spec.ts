@@ -62,7 +62,7 @@ it('adds one persisted outcome with late UI while preserving newer active messag
     proposalNeedsPolling({
       ...proposal,
       decision: 'approved',
-      execution: { status: 'executing', generation: 1, lease: null },
+      execution: { status: 'executing', generation: 1 },
     }),
   ).toBe(true);
 });
@@ -109,7 +109,7 @@ it('routes a pending receipt through an explicit proposal target and shows queue
       {
         ...proposal,
         decision: 'approved',
-        execution: { status: 'queued', generation: 0, lease: null },
+        execution: { status: 'queued', generation: 0 },
       },
     ],
     [],

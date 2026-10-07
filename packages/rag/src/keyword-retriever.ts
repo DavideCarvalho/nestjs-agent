@@ -150,6 +150,18 @@ export class KeywordRetriever implements Retriever {
   }
 }
 
+/**
+ * Unicode-aware terms: letters, digits and `_` in any script — the same token class as the Redis
+ * lexical path — so "manutenção" stays one word instead of "manuten" + "o". Accents are folded
+ * (NFKD, combining marks dropped) on both the indexed text and the query, so "manutencao" typed
+ * without them still matches.
+ */
 function tokenize(text: string): string[] {
-  return text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return (
+    text
+      .normalize('NFKD')
+      .replace(/\p{M}/gu, '')
+      .toLowerCase()
+      .match(/[\p{L}\p{N}_]+/gu) ?? []
+  );
 }

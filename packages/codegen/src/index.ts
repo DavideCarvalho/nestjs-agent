@@ -86,6 +86,17 @@ const MEMORY_ENTRY = `{ id: string; key: string; text: string; scope: string; or
 const STAGED_ATTACHMENT =
   '{ mediaId: string; name: string; contentType: string; sizeBytes: number; createdAt: string }';
 
+/** Mirrors `ToolConfirmation` in core/src/tool-presentation.ts. */
+const TOOL_CONFIRMATION = '{ title: string; verb: string; detail?: string }';
+/**
+ * `GET /agent/threads/:threadId/action-proposals` — mirrors `ActionProposalView` in
+ * core/src/action-proposal-view.ts. The audit and outcome stay loose: what a
+ * frontend branches on is the decision and the execution status.
+ */
+const ACTION_PROPOSAL = `{ id: string; tenantRef: string | null; actorRef: string; threadId: string; originRunId: string; originMessageId: string; originToolCallId: string; toolName: string; input: unknown; confirmation: ${TOOL_CONFIRMATION}; approver: string; expiresAt: number | null; replacementKey?: string; decision: 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded'; decisionAudit: Record<string, unknown> | null; execution: { status: 'queued' | 'executing' | 'succeeded' | 'failed'; generation: number; result?: unknown; error?: string } | null; supersededBy?: string; outcome?: Record<string, unknown>; createdAt: number; updatedAt: number }`;
+/** `POST …/action-proposals/:proposalId/approve|reject` — mirrors `ActionProposalMutationView`. */
+const ACTION_PROPOSAL_MUTATION = `{ status: 'applied' | 'unchanged' | 'conflict' | 'not_found' | 'expired'; proposal?: ${ACTION_PROPOSAL} }`;
+
 function route(
   method: string,
   path: string,
@@ -304,6 +315,38 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       { query: null, body: null, response: CHAT_QUEUE_STATE },
       [{ name: 'messageId', source: 'path' }],
     ),
+    // One page per call: the next page's cursor travels in the `X-Action-Proposals-Next` response
+    // header, which a generated client does not surface — `AgentClient.listActionProposals` follows it.
+    route(
+      'GET',
+      `${root}/threads/:threadId/action-proposals`,
+      `${ns}.actionProposals.list`,
+      { query: '{ after?: string }', body: null, response: `${ACTION_PROPOSAL}[]` },
+      [
+        { name: 'threadId', source: 'path' },
+        { name: 'after', source: 'query' },
+      ],
+    ),
+    route(
+      'POST',
+      `${root}/threads/:threadId/action-proposals/:proposalId/approve`,
+      `${ns}.actionProposals.approve`,
+      { query: null, body: '{ remember?: boolean }', response: ACTION_PROPOSAL_MUTATION },
+      [
+        { name: 'threadId', source: 'path' },
+        { name: 'proposalId', source: 'path' },
+      ],
+    ),
+    route(
+      'POST',
+      `${root}/threads/:threadId/action-proposals/:proposalId/reject`,
+      `${ns}.actionProposals.reject`,
+      { query: null, body: '{ reason?: string }', response: ACTION_PROPOSAL_MUTATION },
+      [
+        { name: 'threadId', source: 'path' },
+        { name: 'proposalId', source: 'path' },
+      ],
+    ),
     route(
       'POST',
       `${root}/chat/:runId/cancel`,
@@ -317,17 +360,20 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
 /**
  * A [`@dudousxd/nestjs-codegen`](https://www.npmjs.com/package/@dudousxd/nestjs-codegen) extension
  * that emits the `@dudousxd/nestjs-agent` JSON REST routes (agents catalog, threads incl.
- * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, skills, tools, memories, staged
- * attachments, message feedback, model catalog, quota, the thread message queue, cancel) into your
+ * rename/promote/fork/truncate, tool-call approve/reject/answer/skip, action proposals
+ * list/approve/reject, skills, tools, memories, staged attachments, message feedback, model catalog,
+ * quota, the thread message queue, cancel) into your
  * generated `api.ts` — so they're available as a typed client
  * / TanStack hooks in your frontend.
  *
  * It injects the routes directly, because the agent controllers live in `node_modules` where static
- * AST discovery can't see them. Three endpoints are deliberately left out, and
- * `covers-every-json-route.spec.ts` fails on any fourth that goes missing by accident: the streaming
+ * AST discovery can't see them. A few endpoints are deliberately left out, and
+ * `covers-every-json-route.spec.ts` fails on any other that goes missing by accident: the streaming
  * `POST /agent/chat` and `GET /agent/chat/:runId/stream` — use `@dudousxd/nestjs-agent-react`'s
- * `useAgentChat` (a Vercel AI SDK transport) — and `POST /agent/attachments`, a multipart upload
- * where codegen models JSON bodies.
+ * `useAgentChat` (a Vercel AI SDK transport) — `POST /agent/attachments`, a multipart upload
+ * where codegen models JSON bodies, the opt-in resumable-upload routes
+ * (`/agent/attachments/uploads`, driven by the React package's uploader) and the opt-in AG-UI
+ * adapter's route.
  *
  * ```ts
  * defineConfig({ extensions: [nestjsAgentCodegen({ basePath: '/api' })] });

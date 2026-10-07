@@ -17,7 +17,8 @@ pnpm add @dudousxd/nestjs-agent-store-drizzle drizzle-orm
 
 The host app owns the connection and passes in an already-opened Drizzle handle — this module never
 opens one itself. **SQLite, Postgres and MySQL** all work — CI runs every store suite on
-better-sqlite3, node-postgres (Postgres 16) and mysql2 (MySQL 8.4), and the other Drizzle drivers of
+better-sqlite3, node-postgres (Postgres 16) and mysql2 (MySQL 8.4), the independent-approval suites
+also on postgres.js, and the other Drizzle drivers of
 each dialect speak the same query builder. Build the handle with the schema object for your dialect;
 every store reads the dialect off the handle.
 
@@ -146,41 +147,48 @@ EXISTS`, and an explicit add-column pass for columns this package introduced aft
 since the `CREATE TABLE` guard is inert against a table that already exists. Calling it on boot is
 enough; it never drops a column or changes a type.
 
-On your own drizzle-kit migrations, those additive statements are yours to write:
+On your own drizzle-kit migrations, those additive statements are yours to write. The simplest way
+to keep them right is to let drizzle-kit write them: re-export the package's schema for your dialect
+(`agentSchema`, `pgAgentSchema` or `mysqlAgentSchema`) from the schema file drizzle-kit reads, and
+`drizzle-kit generate` diffs the agent tables like your own. `agentSchemaDdl(dialect)` returns the
+complete target DDL (tables and indexes) if you would rather compare by hand.
+
+For reference, on SQLite, the columns added to the original chat tables since they first shipped
+(all nullable; adjust the types to your dialect):
 
 ```sql
 ALTER TABLE agent_thread ADD COLUMN default_agent TEXT;
-ALTER TABLE agent_message ADD COLUMN run_id TEXT;
+ALTER TABLE agent_thread ADD COLUMN model TEXT;
+ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT;
 ALTER TABLE agent_message ADD COLUMN attachments TEXT;
-ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT;
+ALTER TABLE agent_message ADD COLUMN agent_name TEXT;
+ALTER TABLE agent_message ADD COLUMN run_id TEXT;
 ALTER TABLE agent_message ADD COLUMN reasoning TEXT;
 ALTER TABLE agent_message ADD COLUMN reasoning_ms INTEGER;
 ALTER TABLE agent_message ADD COLUMN ui TEXT;
 ALTER TABLE agent_message ADD COLUMN feedback TEXT;
-ALTER TABLE agent_thread ADD COLUMN model TEXT;
+ALTER TABLE agent_message ADD COLUMN seq INTEGER;
+ALTER TABLE agent_message ADD COLUMN action_proposal_outcome TEXT;
+ALTER TABLE agent_tool_call ADD COLUMN run_id TEXT;
+ALTER TABLE agent_tool_call ADD COLUMN confirmation TEXT;
 ALTER TABLE agent_tool_call ADD COLUMN approver TEXT;
 ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER;
 ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER;
 ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT;
+ALTER TABLE agent_tool_call ADD COLUMN proposal_id TEXT;
+ALTER TABLE agent_token_usage ADD COLUMN cache_write_tokens INTEGER;
+ALTER TABLE agent_token_usage ADD COLUMN cache_read_tokens INTEGER;
+ALTER TABLE agent_token_usage ADD COLUMN cost_usd REAL;
+ALTER TABLE agent_model_pricing ADD COLUMN cache_write_price_per_1m REAL;
+ALTER TABLE agent_model_pricing ADD COLUMN cache_read_price_per_1m REAL;
 CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
--- the chat message queue
-ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT;
-CREATE TABLE agent_queued_message (
-  id TEXT PRIMARY KEY NOT NULL,
-  thread_id TEXT NOT NULL REFERENCES agent_thread(id) ON DELETE CASCADE,
-  actor TEXT NOT NULL,
-  content TEXT NOT NULL,
-  attachments TEXT,
-  agent_name TEXT,
-  model TEXT,
-  page_context TEXT,
-  interrupt INTEGER NOT NULL DEFAULT 0,
-  position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX agent_queued_message_thread_position_idx ON agent_queued_message (thread_id, position);
 ```
+
+Tables added since then are new tables, not alterations. Take their `CREATE TABLE` and
+`CREATE INDEX` statements from `agentSchemaDdl(dialect)`: `agent_queued_message` (the chat message
+queue), `agent_run`, `agent_memory`, `agent_stream_frame`, `agent_confirm_token`,
+`rag_ingestion_log` and `agent_action_proposal`. Later columns on those tables (for example the
+proposal discovery and delivery columns described below) are added the same way.
 
 The index is not optional on Postgres: `agent_tool_call.message_id` carries a foreign key, and
 Postgres — unlike MySQL — does not index one for you, while both message-scoped reads (the thread
@@ -234,17 +242,14 @@ a gateway-reported `costUsd` wins when present, otherwise a cache-aware estimate
 the input rate). See the [root README](https://github.com/DavideCarvalho/nestjs-agent#cost--governance)
 for the full model.
 
-## License
-
-MIT © Davide Carvalho
-
+## Action confirmations
 
 Action preflight confirmations persist in the nullable `agent_tool_call.confirmation` JSON column.
 The schema helper adds this column to existing databases. Hosts managing their own migrations must
 add it before upgrading (`JSONB` on PostgreSQL, `JSON` on MySQL, JSON text on SQLite). The stored
 confirmation is returned in `StoredMessage.approvals` so a reload uses the same wording.
 
-### Durable action proposals
+## Durable action proposals
 
 `DrizzleAgentStore` also implements the optional core `ActionProposalStore` capability.
 Its `createActionProposal`, scoped get/list, immutable decision, lease claim/renewal,
@@ -308,11 +313,11 @@ tools. This upgrade does not support mixed old and new writers: old writers cann
 maintain the new indexes. Discovery deliberately excludes rows awaiting backfill;
 it never performs an implicit, unbounded migration.
 
-### Independent approval runtime
+## Independent approval runtime
 
 `actionApprovalMode: 'independent'` requires proposal discovery, atomic replacement,
 terminal outcome admission and the thread queue on the same database. This adapter
-advertises admission support for better-sqlite3, node-postgres, mysql2 and libSQL;
+advertises admission support for better-sqlite3, node-postgres, postgres.js, mysql2 and libSQL;
 other Drizzle drivers retain blocking behavior and fail independent configuration.
 Synchronous SQLite transaction callbacks complete synchronously, including both
 assistant insertion and the delivery compare-and-set. PostgreSQL/MySQL admission
@@ -334,3 +339,7 @@ effects remain at least once; use the stable tool-context idempotency key.
 
 See [the shared setup and rollout guide](../../docs/independent-approvals.md) for
 policies, text/channel decisions, remembered approvals and component capabilities.
+
+## License
+
+MIT © Davide Carvalho

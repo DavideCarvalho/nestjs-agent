@@ -320,6 +320,9 @@ export class Guardrails {
   constructor(private readonly options: GuardrailsOptions = {}) {
     this.shorthand = shorthandRules(options);
     this.vaults = options.vaults ?? new InMemoryVaultStore();
+    // Bound, so `screen: guardrails.screenTool` can be handed over detached — the shape an MCP
+    // importer's screen hook takes.
+    this.screenTool = this.screenTool.bind(this);
     const name = options.name ?? 'guardrails';
     this.input = { name, process: (prompt, ctx) => this.processInput(prompt, ctx) };
     const incremental =
@@ -363,7 +366,8 @@ export class Guardrails {
   /**
    * Screens one tool definition (name, title, description, and every description in its input
    * schema) for hidden instructions. `allowed: false` means a `block`/`approve` rule fired — leave
-   * the tool out of the catalog. Shaped to be handed straight to an MCP importer's screen hook.
+   * the tool out of the catalog. Shaped — and bound — to be handed straight to an MCP importer's
+   * screen hook: `screen: guardrails.screenTool`.
    */
   async screenTool(
     tool: ToolDefinitionText & { server?: string },

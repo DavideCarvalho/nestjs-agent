@@ -8,6 +8,8 @@ import {
   type ToolSpec,
   defineConfirmedTool,
 } from '@dudousxd/nestjs-agent-core';
+import { defineCatalog, genuiTools } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -159,6 +161,23 @@ describe('createAgentMcpServer', () => {
     expect(tools.map((tool) => tool.name)).toEqual(['search_docs']);
     expect(tools[0]?.annotations?.readOnlyHint).toBe(true);
     expect(tools[0]?.inputSchema.properties).toMatchObject({ q: { type: 'string' } });
+  });
+
+  it('never lists or runs a generative-UI tool — over MCP its component reaches nobody', async () => {
+    // `ui__show_*`, `ui__show` and the tree tool are `read` tools whose result is shown elsewhere:
+    // all they do is push a component, and an MCP client has no screen to push it to.
+    const ui = genuiTools(defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS]));
+    expect(ui.length).toBeGreaterThan(2);
+    for (const tool of ui) registry.register(tool.spec, tool.handler);
+    const client = await connect({ server: serverWith(), actor: ANALYST });
+
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(['search_docs']);
+    for (const tool of ui) {
+      const result = await client.callTool({ name: tool.spec.name, arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(textOf(result.content)).toMatch(/shown elsewhere/);
+    }
   });
 
   it('runs a read tool and returns its output', async () => {

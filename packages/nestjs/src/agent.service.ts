@@ -6,6 +6,7 @@ import {
   AGENT_QUOTA_PROVIDER,
   AGENT_RUNNER,
   AGENT_STORE,
+  type ActionProposalMutationView,
   type Actor,
   type AgentRunInput,
   type AgentRunner,
@@ -56,6 +57,7 @@ import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { ActionProposalService } from './proposals/action-proposal.service.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
+import { publishQuotaBlocked } from './quota-exceeded.js';
 import { RunNotActiveException } from './run-not-active.exception.js';
 import { threadPersona } from './thread-persona.js';
 
@@ -169,6 +171,29 @@ export class AgentService {
     @Optional() private readonly proposals?: ActionProposalService,
   ) {}
 
+  /**
+   * Decide one independent proposal through the scoped proposal service — what the native
+   * `action-proposals/:id/approve|reject` routes call — and the reply to show for it. `404` when
+   * proposals are not on, `403`/`404` when this actor may not decide it.
+   */
+  async decideActionProposal(
+    actor: Actor,
+    threadId: string,
+    proposalId: string,
+    command: {
+      decision: 'approved' | 'rejected';
+      remember?: boolean;
+      reason?: string;
+      via: string;
+    },
+  ): Promise<{ proposalDecision: ActionProposalMutationView; text: string }> {
+    if (this.options?.actionApprovalMode !== 'independent' || !this.proposals) {
+      throw new NotFoundException('Proposal not found');
+    }
+    const result = await this.proposals.decide(threadId, proposalId, actor, command);
+    return { proposalDecision: result, text: this.proposals.reply(result, command.decision) };
+  }
+
   async handleTextDecision(threadId: string, actor: Actor, text: string) {
     if (this.options?.actionApprovalMode !== 'independent' || !this.proposals)
       return { status: 'unmatched' as const };
@@ -211,8 +236,10 @@ export class AgentService {
     if (this.options?.quota === undefined || this.quotaProvider === undefined) {
       return;
     }
-    const { blocked } = await this.quotaProvider.report({ actor });
+    const report = await this.quotaProvider.report({ actor });
+    const { blocked } = report;
     if (blocked !== undefined) {
+      publishQuotaBlocked(actor, report, blocked);
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,

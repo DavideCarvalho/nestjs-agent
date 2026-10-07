@@ -345,6 +345,10 @@ export interface ToolPreparationResult {
  * visitor included, when no resolver is configured); restrict with `@AiTool({ roles })` per tool,
  * `AgentModule.forRoot({ defaultRoles })` module-wide, or a `rolesPolicy` of your own. `action`
  * tools still park on approval either way.
+ *
+ * A tool gated by an `ability` and naming no `roles` is refused: this policy cannot evaluate an
+ * ability, and falling through to the open default would hand the tool to everyone. Bind an
+ * ability-aware policy (`AgentAuthzModule`) to reach it — or give the tool `roles` as well.
  */
 export class DefaultRolesPolicy implements RolesPolicy {
   /** What an empty roles list means here — see {@link EmptyRoles}. */
@@ -358,6 +362,7 @@ export class DefaultRolesPolicy implements RolesPolicy {
   }
 
   can(actor: Actor, tool: ToolSpec): boolean {
+    if (tool.ability !== undefined && tool.roles === undefined) return false;
     const allowed = tool.roles ?? this.defaultRoles;
     if (allowed.length === 0) return this.emptyRoles === 'allow';
     return (actor.roles ?? []).some((role) => allowed.includes(role));

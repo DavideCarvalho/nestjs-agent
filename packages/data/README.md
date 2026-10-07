@@ -6,8 +6,8 @@ Give the model **read-only SQL access without handing it the database**. Every q
 
 1. **AST-validated** — single `SELECT` only (rejects writes/DDL/multi-statement), via `node-sql-parser`.
 2. **Authorized** — checked against a **fail-closed** table-access policy (a table in no allowed group is denied).
-3. **Tenant-scoped** (optional) — rewritten to add `tenantColumn = tenantRef` for scoped tables; rejects CTE/UNION/subquery-in-FROM.
-4. **Capped** — a `LIMIT` is injected before your runner ever touches the DB.
+3. **Tenant-scoped** (optional) — rewritten to add `tenantColumn = tenantRef` for scoped tables, in the top-level query and in every subquery; rejects CTE/UNION/subquery-in-FROM. A query on a scoped table from an actor with no `tenantRef` is refused, unless you pass `onMissingTenant: 'passthrough'` (the privileged "sees every tenant" path).
+4. **Capped** — a `LIMIT` is injected before your runner ever touches the DB, and a larger explicit `LIMIT` is capped to `maxRows`.
 
 The package never opens a connection — you inject a `QueryRunner` over your read-only pool.
 

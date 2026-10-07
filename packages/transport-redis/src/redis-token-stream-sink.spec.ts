@@ -52,6 +52,13 @@ class FakeRedis implements RedisStreamClient {
       this.values.delete(key);
     }
   }
+
+  /** The TTL last armed per key — what EXPIRE would have set. */
+  readonly ttls = new Map<string, number>();
+
+  async expire(key: string, seconds: number): Promise<void> {
+    this.ttls.set(key, seconds);
+  }
 }
 
 function encode(text: string): Uint8Array {
@@ -66,6 +73,45 @@ async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string> {
   }
   return out;
 }
+
+describe('RedisTokenStreamSink — key expiry', () => {
+  it('arms a TTL on the chunks on every write, and on both keys when the run ends', async () => {
+    const redis = new FakeRedis();
+    const writer = new RedisTokenStreamSink(redis).open('run-1');
+    await writer.write(encode('hi'));
+    expect(redis.ttls.get('agent:stream:run-1:chunks')).toBe(3600);
+    await writer.end();
+    expect(redis.ttls.get('agent:stream:run-1:state')).toBe(3600);
+  });
+
+  it('expires a failed run too, with the configured TTL', async () => {
+    const redis = new FakeRedis();
+    const writer = new RedisTokenStreamSink(redis, { ttlSeconds: 60 }).open('run-1');
+    await writer.write(encode('hi'));
+    await writer.fail({ code: 'boom', message: 'x' });
+    expect(redis.ttls.get('agent:stream:run-1:chunks')).toBe(60);
+    expect(redis.ttls.get('agent:stream:run-1:state')).toBe(60);
+  });
+
+  it('sets no TTL under ttlSeconds: 0', async () => {
+    const redis = new FakeRedis();
+    const writer = new RedisTokenStreamSink(redis, { ttlSeconds: 0 }).open('run-1');
+    await writer.write(encode('hi'));
+    await writer.end();
+    expect(redis.ttls.size).toBe(0);
+  });
+
+  it('still streams through an adapter that predates expire', async () => {
+    const redis = new FakeRedis();
+    // Shadow the method with nothing, the way an adapter written before `expire` looks at runtime.
+    Object.defineProperty(redis, 'expire', { value: undefined });
+    const sink = new RedisTokenStreamSink(redis);
+    const writer = sink.open('run-1');
+    await writer.write(encode('ok'));
+    await writer.end();
+    expect(await collect(sink.subscribe('run-1'))).toBe('ok');
+  });
+});
 
 describe('RedisTokenStreamSink', () => {
   it('replays buffered chunks for a late subscriber after the run ended', async () => {

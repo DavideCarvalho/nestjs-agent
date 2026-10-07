@@ -75,7 +75,7 @@ describe('createExecuteSqlTool', () => {
     expect(runner.lastSql).toContain('tenant-abc');
   });
 
-  it('passes through unchanged when tenantRef is undefined (privileged)', async () => {
+  it('refuses a scoped query when tenantRef is undefined, and runs nothing', async () => {
     const runner = new FakeRunner([{ id: 1 }]);
     const tenantScope = new TenantScopeRewriter({
       tenantColumn: 'base_id',
@@ -83,8 +83,32 @@ describe('createExecuteSqlTool', () => {
     });
     const { handler } = createExecuteSqlTool({ runner, tableAccess, tenantScope });
 
+    await expect(
+      handler.execute({ sql: 'SELECT id FROM vehicle' }, ctx({ tenantRef: undefined })),
+    ).rejects.toThrow(/no tenant/);
+    expect(runner.lastSql).toBeUndefined();
+  });
+
+  it("passes through unchanged when tenantRef is undefined under onMissingTenant: 'passthrough'", async () => {
+    const runner = new FakeRunner([{ id: 1 }]);
+    const tenantScope = new TenantScopeRewriter({
+      tenantColumn: 'base_id',
+      scopedTables: ['vehicle'],
+      onMissingTenant: 'passthrough',
+    });
+    const { handler } = createExecuteSqlTool({ runner, tableAccess, tenantScope });
+
     await handler.execute({ sql: 'SELECT id FROM vehicle' }, ctx({ tenantRef: undefined }));
 
     expect(runner.lastSql).not.toContain('base_id');
+  });
+
+  it('caps an explicit LIMIT above maxRows', async () => {
+    const runner = new FakeRunner([]);
+    const { handler } = createExecuteSqlTool({ runner, tableAccess, maxRows: 50 });
+
+    await handler.execute({ sql: 'SELECT id FROM vehicle LIMIT 100000' }, ctx());
+
+    expect(runner.lastSql).toMatch(/LIMIT 50$/);
   });
 });

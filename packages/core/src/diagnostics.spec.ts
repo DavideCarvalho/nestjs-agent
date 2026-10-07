@@ -3,6 +3,7 @@ import { channelName } from '@dudousxd/nestjs-diagnostics';
 import { describe, expect, it } from 'vitest';
 import {
   AGENT_DIAGNOSTIC_EVENTS,
+  AGENT_SPAN_EVENTS,
   type AgentDiagnosticEvent,
   type AgentDiagnosticKey,
   agentDiagnosticKey,
@@ -49,6 +50,18 @@ describe('diagnostics', () => {
         message: 'Deadlock found when trying to get lock',
       },
     });
+  });
+});
+
+describe('AGENT_SPAN_EVENTS', () => {
+  it('lists every span-only event, structured-output included', () => {
+    expect(AGENT_SPAN_EVENTS).toEqual([
+      'llm.turn',
+      'tool.execution',
+      'retrieval',
+      'follow-ups',
+      'structured-output',
+    ]);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ActionProposal, StoredMessage } from '@dudousxd/nestjs-agent-core';
+import type { ActionProposalView, StoredMessage } from '@dudousxd/nestjs-agent-core';
 import type { UIMessage } from 'ai';
 import { storedMessageToUiMessage } from '../stored-message-to-ui-message.js';
 
@@ -6,7 +6,7 @@ export type ApprovalTarget =
   | { kind: 'legacy'; toolCallId: string }
   | { kind: 'proposal'; proposalId: string; threadId?: string };
 
-export function proposalNeedsPolling(proposal: ActionProposal): boolean {
+export function proposalNeedsPolling(proposal: ActionProposalView): boolean {
   return (
     proposal.decision === 'pending' ||
     proposal.execution?.status === 'queued' ||
@@ -18,7 +18,7 @@ export function proposalNeedsPolling(proposal: ActionProposal): boolean {
 /** Patch proposal metadata and append outcome facts; never replace live text with stored rows. */
 export function reconcileProposalMessages(
   current: UIMessage[],
-  proposals: ActionProposal[],
+  proposals: ActionProposalView[],
   facts: StoredMessage[],
 ): UIMessage[] {
   const messages = current.map((message) => {

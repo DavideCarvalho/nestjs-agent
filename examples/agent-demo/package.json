@@ -6,7 +6,8 @@
   "description": "Runnable proof: durable agent run + SSE streaming + HITL approval + diagnostics",
   "scripts": {
     "start": "tsx src/main.ts",
-    "demo": "tsx src/demo.ts"
+    "demo": "tsx src/demo.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",

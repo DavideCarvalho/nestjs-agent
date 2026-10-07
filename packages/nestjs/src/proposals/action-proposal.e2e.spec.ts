@@ -148,3 +148,81 @@ function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error('Expected fixture value');
   return value;
 }
+
+it('never lets a lease token, idempotency key or execution address leave over HTTP', async () => {
+  const actor = { id: 'a' };
+  const store = new InMemoryAgentStore();
+  const thread = await store.createThread({ actor });
+  const scope = { threadId: thread.id, actorRef: 'a', tenantRef: null };
+  const base = {
+    ...scope,
+    originRunId: 'r',
+    originMessageId: 'm',
+    toolName: 'send',
+    input: { amount: 5 },
+    preparationInput: { amount: 5 },
+    executionContext: { requestId: 'secret-request' },
+    confirmation: { title: 'Send 5', verb: 'Send' },
+    approver: 'requester',
+    expiresAt: null,
+  };
+  await store.createActionProposal({
+    ...base,
+    id: 'leased',
+    originToolCallId: 'c1',
+    idempotencyKey: 'secret-key-1',
+  });
+  await store.createActionProposal({
+    ...base,
+    id: 'pending',
+    originToolCallId: 'c2',
+    idempotencyKey: 'secret-key-2',
+  });
+  await store.decideActionProposal(scope, 'leased', {
+    decision: 'approved',
+    actorRef: 'a',
+    via: 'web',
+  });
+  const claimed = await store.claimActionProposal(scope, 'leased', {
+    workerId: 'worker-secret',
+    leaseMs: 60_000,
+  });
+  const token = required(claimed.proposal?.execution?.lease).token;
+  const module = await Test.createTestingModule({
+    imports: [
+      AgentModule.forRoot({
+        store,
+        actionApprovalMode: 'independent',
+        actorResolver: { resolve: () => actor },
+        backgroundActorResolver: { resolve: async () => actor },
+        actionProposalWorker: { pollIntervalMs: 60_000, leaseMs: 600_000 },
+        model: new FakeModelProvider(() => ({ text: 'Hello' })),
+      }),
+    ],
+  }).compile();
+  const app = module.createNestApplication<NestExpressApplication>();
+  await app.init();
+  try {
+    const server = app.getHttpServer();
+    const leaks = ['secret-key', 'secret-request', 'worker-secret', token, 'preparationInput'];
+    const list = await request(server)
+      .get(`/agent/threads/${thread.id}/action-proposals`)
+      .expect(200);
+    expect(list.body.map((row: { id: string }) => row.id).sort()).toEqual(['leased', 'pending']);
+    expect(list.body.find((row: { id: string }) => row.id === 'leased').execution).toMatchObject({
+      status: 'executing',
+    });
+    const decided = await request(server)
+      .post(`/agent/threads/${thread.id}/action-proposals/pending/approve`)
+      .send({})
+      .expect(201);
+    const texted = await request(server)
+      .post('/agent/chat')
+      .send({ threadId: thread.id, message: 'approve #leased' });
+    for (const body of [list.text, decided.text, texted.text]) {
+      for (const secret of leaks) expect(body).not.toContain(secret);
+    }
+  } finally {
+    await app.close();
+  }
+});

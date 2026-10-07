@@ -1,4 +1,8 @@
-import type { ActionApprovalMode, BackgroundActorResolver } from '@dudousxd/nestjs-agent-core';
+import type {
+  ActionApprovalMode,
+  BackgroundActorResolver,
+  TextActionProposalConfig,
+} from '@dudousxd/nestjs-agent-core';
 import type {
   ActorResolver,
   AgentHistoryWindow,
@@ -125,9 +129,38 @@ export interface AgentMemoryOptions {
 }
 
 export interface AgentModuleOptions {
+  /**
+   * How an `action` tool waits for its approval. `'blocking'` (default): the turn parks on the
+   * decision and resumes when it lands. `'independent'`: the call is recorded as an action proposal
+   * and answered at once with a receipt (`{ proposalId, status: 'pending', executed: false }`), the
+   * turn finishes, and a background worker runs the action once it is approved — decided through
+   * `POST <base>/threads/:threadId/action-proposals/:proposalId/approve|reject`, the approval port or
+   * a text command. Needs `backgroundActorResolver` and a store with the proposal capabilities
+   * (both checked at boot). See `docs/independent-approvals.md`.
+   */
   actionApprovalMode?: ActionApprovalMode;
+  /**
+   * Resolves the CURRENT actor (id, tenant, roles) for a proposal's recorded `actorRef`/`tenantRef`
+   * when the worker runs it — there is no request to read an identity from. Return `null` for an
+   * actor that no longer exists or no longer belongs to the tenant; the action then fails rather
+   * than running. Required under `actionApprovalMode: 'independent'`.
+   */
   backgroundActorResolver?: BackgroundActorResolver;
+  /**
+   * Tuning for the worker that runs approved proposals under `actionApprovalMode: 'independent'`
+   * (started with the module unless `surface: 'http'`). `pollIntervalMs` — how often it looks for
+   * queued work, default 1000; `leaseMs` — how long a claim holds before another worker may recover
+   * it, default 30000; `maxConcurrency` — proposals claimed per poll, default 1. All positive
+   * integers, and `pollIntervalMs` must stay below a third of `leaseMs`.
+   */
   actionProposalWorker?: { pollIntervalMs?: number; leaseMs?: number; maxConcurrency?: number };
+  /**
+   * The words a chat message must consist of to approve or reject a proposal by text, and what the
+   * agent answers. English by default (`yes`/`confirm`/`approve`, `no`/`cancel`/`reject`, …); pass
+   * `ptBrActionProposalText` from `@dudousxd/nestjs-agent-core` for Portuguese, or your own — either
+   * part replaces the default it names, field by field.
+   */
+  actionProposalText?: TextActionProposalConfig;
   // --- infrastructure ---
   /**
    * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model

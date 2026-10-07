@@ -9,7 +9,11 @@ import {
   type ToolDescribeScope,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
-import { type AgUiEvent, decodeInterruptId } from '@dudousxd/nestjs-agent-core/ag-ui';
+import {
+  type AgUiEvent,
+  decodeInterruptId,
+  encodeInterruptId,
+} from '@dudousxd/nestjs-agent-core/ag-ui';
 import { InMemoryAgentStore, InMemoryAttachmentStagingStore } from '@dudousxd/nestjs-agent-testing';
 import { type CanActivate, type DynamicModule, Global, Injectable, Module } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -551,12 +555,12 @@ it('acknowledges an independent text decision over AG-UI without starting a mode
     },
   );
   const client = agent(app.url, actor.id, thread.id);
-  const result = await run(client, 'confirmar #proposal-control');
+  const result = await run(client, 'confirm #proposal-control');
   expect(modelCalls).toBe(0);
   expect(result.events.map((event) => event.type)).toContain('RUN_FINISHED');
   expect(
     result.events.some(
-      (event) => event.type === 'CUSTOM' && event.name === 'aviary.action-proposal-decision',
+      (event) => event.type === 'CUSTOM' && event.name === 'agora.action-proposal-decision',
     ),
   ).toBe(true);
   expect(
@@ -568,4 +572,94 @@ it('acknowledges an independent text decision over AG-UI without starting a mode
     )?.decisionAudit?.via,
   ).toBe('text');
   assertConforms(result.events);
+});
+
+describe('independent proposals over AG-UI', () => {
+  it('names the proposal and its confirmation on the approval event', async () => {
+    const app = await boot(
+      (_args, turn) =>
+        turn === 0
+          ? { text: '', toolCall: { name: 'refund', input: { id: 3 } } }
+          : { text: 'Asked.' },
+      {
+        actionApprovalMode: 'independent',
+        backgroundActorResolver: { resolve: async ({ actorRef }) => ({ id: actorRef }) },
+        actionProposalWorker: { pollIntervalMs: 60_000, leaseMs: 600_000 },
+      },
+    );
+    const { events } = await run(agent(app.url), 'refund 3');
+    const requested = events.find(
+      (event) => event.type === 'CUSTOM' && event.name === 'agora.approval-requested',
+    ) as { value: Record<string, unknown> } | undefined;
+    expect(requested?.value).toMatchObject({
+      target: { kind: 'proposal', proposalId: expect.any(String) },
+      confirmation: { title: expect.any(String), verb: expect.any(String) },
+    });
+  });
+
+  it('resumes a proposal interrupt through the proposal service, and refuses another actor with 403', async () => {
+    const store = new InMemoryAgentStore();
+    const actor = { id: 'u1' };
+    const thread = await store.createThread({ id: crypto.randomUUID(), actor });
+    await store.createActionProposal({
+      id: 'proposal-resume',
+      threadId: thread.id,
+      actorRef: actor.id,
+      tenantRef: null,
+      originRunId: 'finished-origin',
+      originMessageId: 'origin-message',
+      originToolCallId: 'origin-call',
+      toolName: 'refund',
+      input: { id: 11 },
+      confirmation: { title: 'Refund?', verb: 'Refund' },
+      approver: 'requester',
+      expiresAt: null,
+      idempotencyKey: 'resume',
+    });
+    let modelCalls = 0;
+    const app = await boot(
+      () => {
+        modelCalls++;
+        return { text: 'Unexpected model run' };
+      },
+      {
+        store,
+        actionApprovalMode: 'independent',
+        backgroundActorResolver: { resolve: async () => actor },
+        actionProposalWorker: { pollIntervalMs: 60_000, leaseMs: 600_000 },
+      },
+    );
+    const interruptId = encodeInterruptId({
+      kind: 'proposal',
+      parked: 'finished-origin',
+      stream: 'finished-origin',
+      toolCallId: 'origin-call',
+      position: 4,
+      proposalId: 'proposal-resume',
+      threadId: thread.id,
+    });
+    const resume = (payload: unknown) =>
+      input({ threadId: thread.id, resume: [{ interruptId, status: 'resolved', payload }] });
+
+    // Somebody else's proposal is refused the way the native route refuses it — not a 500.
+    const intruder = await post(app.url, resume(true), 'intruder');
+    expect(intruder.status).toBe(403);
+
+    const response = await post(app.url, resume({ approved: false, reason: 'no' }));
+    expect(response.status).toBe(200);
+    const events = await readEvents(response);
+    await assertConforms(events);
+    expect(modelCalls).toBe(0);
+    expect(
+      events.find(
+        (event) => event.type === 'CUSTOM' && event.name === 'agora.action-proposal-decision',
+      ),
+    ).toMatchObject({ value: { proposalDecision: { status: 'applied' } } });
+    const decided = await store.getActionProposal(
+      { threadId: thread.id, actorRef: actor.id, tenantRef: null },
+      'proposal-resume',
+    );
+    expect(decided?.decision).toBe('rejected');
+    expect(decided?.decisionAudit?.via).toBe('ag-ui');
+  });
 });

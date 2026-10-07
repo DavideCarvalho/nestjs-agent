@@ -132,6 +132,11 @@ export function useAgentBackend<B extends AgentBackend = AgentBackend>(own?: B):
 const AgentUiCapabilitiesContext = sharedContext<UiCapabilities>(
   '@dudousxd/nestjs-agent-react:ui-capabilities',
 );
+/**
+ * The UI capabilities the nearest `<AgentProvider uiCapabilities>` declared, or `undefined` when it
+ * declared none. `useAgentChat` reads this unless given its own `uiCapabilities`; read it too when a
+ * hook of yours talks to the agent outside `useAgentChat`.
+ */
 export function useAgentUiCapabilities(): UiCapabilities | undefined {
   return useContext(AgentUiCapabilitiesContext) ?? undefined;
 }

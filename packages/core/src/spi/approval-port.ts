@@ -1,5 +1,5 @@
+import type { ActionProposalMutationView } from '../action-proposal-view.js';
 import type { Actor } from '../types.js';
-import type { ActionProposalMutationResult } from './action-proposal-store.js';
 /**
  * Console-side HITL decisions. Implemented by the agent runtime (the nestjs package binds it to
  * the same signal path chat approvals use); the dashboard injects it OPTIONALLY — absent = the
@@ -10,12 +10,12 @@ export interface AgentApprovalPort {
     actor: Actor,
     target: { kind: 'proposal'; threadId: string; proposalId: string },
     opts?: { remember?: boolean; decidedVia?: string },
-  ): Promise<ActionProposalMutationResult>;
+  ): Promise<ActionProposalMutationView>;
   rejectActionProposal?(
     actor: Actor,
     target: { kind: 'proposal'; threadId: string; proposalId: string },
     opts?: { reason?: string; decidedVia?: string },
-  ): Promise<ActionProposalMutationResult>;
+  ): Promise<ActionProposalMutationView>;
   /**
    * `remember` approves later calls of the same tool in the same thread; `decidedVia` names the
    * surface the decision came through (`'console'`, `'slack'`, …) and is persisted with the call.

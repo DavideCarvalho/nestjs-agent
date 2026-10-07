@@ -1,5 +1,5 @@
+import { ACTION_PROPOSAL_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
 import { describe, it } from 'vitest';
-import { ACTION_PROPOSAL_STORE_CONTRACT } from '../../testing/src/action-proposal-store-contract.js';
 import { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
 import { InMemoryAgentStore } from './in-memory-store.js';
 

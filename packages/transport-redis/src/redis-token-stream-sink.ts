@@ -12,7 +12,16 @@ type Terminal = { t: 'end' } | { t: 'fail'; error: StreamError };
 export interface RedisTokenStreamSinkOptions {
   /** Key/channel namespace. Defaults to `agent:stream`. Keys are `${keyPrefix}:${runId}:...`. */
   keyPrefix?: string;
+  /**
+   * How long (seconds) a run's keys outlive its last write, so streams self-expire instead of
+   * accumulating in Redis — ended runs past their replay window and runs that crashed without
+   * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the
+   * window still replays. Default 3600 (1h). `0` keeps the keys until `close()`.
+   */
+  ttlSeconds?: number;
 }
+
+const DEFAULT_TTL_SECONDS = 3600;
 
 /**
  * A multi-replica {@link TokenStreamSink} over Redis. Each run's chunks are appended to a Redis LIST
@@ -26,12 +35,14 @@ export interface RedisTokenStreamSinkOptions {
  */
 export class RedisTokenStreamSink implements TokenStreamSink {
   private readonly keyPrefix: string;
+  private readonly ttlSeconds: number;
 
   constructor(
     private readonly client: RedisStreamClient,
     options: RedisTokenStreamSinkOptions = {},
   ) {
     this.keyPrefix = options.keyPrefix ?? 'agent:stream';
+    this.ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
   }
 
   private chunksKey(runId: string): string {
@@ -50,6 +61,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     return {
       write: async (chunk: Uint8Array) => {
         await this.client.rpush(this.chunksKey(runId), toBase64(chunk));
+        await this.expire(this.chunksKey(runId));
         await this.client.publish(this.channel(runId), 'chunk');
       },
       end: async () => {
@@ -57,6 +69,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
           this.stateKey(runId),
           JSON.stringify({ t: 'end' } satisfies Terminal),
         );
+        await this.expire(this.chunksKey(runId), this.stateKey(runId));
         await this.client.publish(this.channel(runId), 'end');
       },
       fail: async (error: StreamError) => {
@@ -64,9 +77,17 @@ export class RedisTokenStreamSink implements TokenStreamSink {
           this.stateKey(runId),
           JSON.stringify({ t: 'fail', error } satisfies Terminal),
         );
+        await this.expire(this.chunksKey(runId), this.stateKey(runId));
         await this.client.publish(this.channel(runId), 'end');
       },
     };
+  }
+
+  /** (Re)arm the TTL on `keys` — sliding from the run's last write. */
+  private async expire(...keys: string[]): Promise<void> {
+    // An adapter written against the interface before `expire` existed: keep streaming, unexpired.
+    if (this.ttlSeconds <= 0 || typeof this.client.expire !== 'function') return;
+    for (const key of keys) await this.client.expire(key, this.ttlSeconds);
   }
 
   async *subscribe(runId: string): AsyncIterable<Uint8Array> {

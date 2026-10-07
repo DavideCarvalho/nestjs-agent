@@ -1,6 +1,6 @@
 import type {
-  ActionProposal,
-  ActionProposalMutationResult,
+  ActionProposalMutationView,
+  ActionProposalView,
   AgentCatalogEntry,
   AgentClientConfig,
   ChatQueueState,
@@ -61,7 +61,7 @@ export interface ResumeStreamRequest {
 export interface ChatStreamResponse {
   proposalDecision?: {
     threadId: string;
-    proposalDecision: ActionProposalMutationResult | { status: 'ambiguous'; proposalIds: string[] };
+    proposalDecision: ActionProposalMutationView | { status: 'ambiguous'; proposalIds: string[] };
     text?: string;
   };
   body: ReadableStream<Uint8Array>;
@@ -196,17 +196,17 @@ export interface AgentBackend {
   promoteThread?(id: string): Promise<unknown>;
   truncateFromMessage?(threadId: string, messageId: string): Promise<unknown>;
 
-  listActionProposals?(input: { threadId: string }): Promise<ActionProposal[]>;
+  listActionProposals?(input: { threadId: string }): Promise<ActionProposalView[]>;
   approveActionProposal?(input: {
     threadId: string;
     proposalId: string;
     remember?: boolean;
-  }): Promise<ActionProposalMutationResult>;
+  }): Promise<ActionProposalMutationView>;
   rejectActionProposal?(input: {
     threadId: string;
     proposalId: string;
     reason?: string;
-  }): Promise<ActionProposalMutationResult>;
+  }): Promise<ActionProposalMutationView>;
 
   approveToolCall?(input: {
     toolCallId: string;

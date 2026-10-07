@@ -8,6 +8,8 @@ export function actionProposalTransactionMode(
     [
       'NodePgDatabase',
       'NodePgTransaction',
+      'PostgresJsDatabase',
+      'PostgresJsTransaction',
       'MySql2Database',
       'MySql2Transaction',
       'LibSQLDatabase',

@@ -324,7 +324,8 @@ describe('McpToolSource — tool screen', () => {
     const imported = await source(
       {
         create: linkedTransport([weatherTool, poisonedTool], okCall),
-        screen: (tool) => guardrails.screenTool(tool),
+        // Passed detached, as the McpToolScreen docs say it can be.
+        screen: guardrails.screenTool,
       },
       { warn: (message) => warnings.push(message) },
     ).import();

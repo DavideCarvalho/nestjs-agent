@@ -15,8 +15,14 @@ function summarize(event: FeedEvent): string {
       return `${str(payload.role)} message · ${num(payload.textLength)} chars`;
     case 'tool-call':
       return `${str(payload.toolName)} (${str(payload.toolType)}) · ${str(payload.status)}`;
-    case 'quota.exceeded':
-      return `actor ${str(payload.actorId)} over budget · ${num(payload.usedTokens)}/${num(payload.limitTokens)} tok`;
+    case 'quota.exceeded': {
+      // A spend cap carries no token figures; show whichever ceiling the window had.
+      const figures =
+        payload.limitTokens === undefined && payload.limitUsd !== undefined
+          ? `$${num(payload.usedUsd).toFixed(2)}/$${num(payload.limitUsd).toFixed(2)}`
+          : `${num(payload.usedTokens)}/${num(payload.limitTokens)} tok`;
+      return `actor ${str(payload.actorId)} over budget${payload.period ? ` (${str(payload.period)})` : ''} · ${figures}`;
+    }
     case 'delegated':
       return `delegated to ${str(payload.toAgent)}${payload.fromAgent ? ` from ${str(payload.fromAgent)}` : ''}`;
     default:

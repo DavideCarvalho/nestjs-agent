@@ -98,8 +98,8 @@ type TurnMessageRow = { [K in keyof ReturnType<typeof turnMessageColumns>]: Agen
 
 /**
  * {@link AgentStore} backed by Drizzle ORM — a second adapter alongside the MikroORM one, proving
- * the store SPI is ORM-portable. A POJO receiving a Drizzle SQLite database handle (the host app
- * owns the connection). Behaviour mirrors {@link import('@dudousxd/nestjs-agent-store-mikro-orm')}
+ * the store SPI is ORM-portable. A POJO receiving a Drizzle database handle — SQLite, Postgres or
+ * MySQL (the host app owns the connection). Behaviour mirrors {@link import('@dudousxd/nestjs-agent-store-mikro-orm')}
  * exactly (fork/truncate/quota/active-stream/soft-delete semantics) so the two are interchangeable.
  */
 export class DrizzleAgentStore
