@@ -59,7 +59,7 @@ Mounted only with `adapters: [agUiAdapter()]` — see [AG-UI](/docs/agent/guides
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| `POST` | `/agent/ag-ui` | AG-UI 1.0 `RunAgentInput` (a `resume` list continues an interrupted run) | `text/event-stream`, one AG-UI event per `data:` line, `RUN_STARTED` → `RUN_FINISHED` / `RUN_ERROR`; `400 { code: 'invalid_input' \| 'invalid_resume' \| 'no_user_message' }`, `403`, `409 run_not_active` before the stream opens |
+| `POST` | `/agent/ag-ui` | AG-UI 1.0 `RunAgentInput` (a `resume` list continues an interrupted run) | `text/event-stream`, one AG-UI event per `data:` line, `RUN_STARTED` → `RUN_FINISHED` / `RUN_ERROR`; each event of the run carries the run's own sequence number as its SSE `id:` (the `?after=` cursor of `chat/:runId/stream`); `400 { code: 'invalid_input' \| 'invalid_resume' \| 'no_user_message' }`, `403`, `409 run_active` (a turn is already running on the thread — there is no queueing over AG-UI), `409 run_not_active` (a resume of a run that is no longer waiting) before the stream opens |
 
 ## Message queue
 

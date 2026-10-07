@@ -111,9 +111,6 @@ function text(value: unknown): string {
  *  - `cancelled` → the cancelled outcome; an error frame → `RUN_ERROR`;
  *  - generative UI, title, queue and the native approval/elicitation frames → `CUSTOM` events named
  *    in {@link AG_UI_CUSTOM}, for what AG-UI has no event for.
- *
- * Not mapped: sub-agent attribution (`subagentRunId`) — a delegated agent's frames are projected
- * flat, as the protocol allows of a producer that does not attribute.
  */
 export class AgUiEncoder {
   private position = 0;

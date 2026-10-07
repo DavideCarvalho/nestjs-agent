@@ -382,11 +382,14 @@ export class AgUiRunHandler {
     res.setHeader('X-Agent-Run-Id', runId);
     res.flushHeaders();
     let terminal = false;
+    // Every event goes out with the run's own sequence number as its SSE `id:`, so a consumer can
+    // follow the rest of the run on `chat/:runId/stream?after=<id>` once this AG-UI run ends.
+    const cursor = { seq: 0 };
     try {
       const frames = agUiFramesFromNdjson(this.agent.subscribe(runId));
-      for await (const event of agUiEvents(frames, options)) {
+      for await (const event of agUiEvents(frames, { ...options, cursor })) {
         if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') terminal = true;
-        res.write(agUiSse(event));
+        res.write(agUiSse(event, cursor.seq));
       }
     } catch {
       // The stream under the run broke. The status line is long gone, so the failure travels

@@ -38,7 +38,7 @@ and stamped as version `1`.
 Spread them next to your own components. The catalog file is isomorphic, so the React app imports
 the same file.
 
-```ts title="catalog.ts"
+```ts title="Backend — src/agent/catalog.ts"
 import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
 import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
 import { z } from 'zod';
@@ -54,7 +54,7 @@ const DealCard = defineComponent({
 export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS, DealCard]);
 ```
 
-```ts title="app.module.ts (backend)"
+```ts title="Backend — src/app.module.ts"
 import { Module } from '@nestjs/common';
 import { AgentModule } from '@dudousxd/nestjs-agent';
 import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
@@ -76,7 +76,7 @@ a factory, and the catalog is injectable as `@InjectGenuiCatalog()` (token `GENU
 
 There is no switch to turn builtins on or off. You choose what goes in the array:
 
-```ts title="catalog.ts"
+```ts title="Backend — src/agent/catalog.ts"
 import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
 import { BUILTIN_COMPONENTS, Callout, Chart, DataTable } from '@dudousxd/nestjs-agent-core/genui/builtins';
 
@@ -92,7 +92,7 @@ export const noDiff = defineCatalog(BUILTIN_COMPONENTS.filter((c) => c.name !== 
 own definition of that name (a stricter schema, another description, a `version`), use
 `catalog.extend(...)`, where a later definition replaces an earlier one of the same name:
 
-```ts title="catalog.ts"
+```ts title="Backend — src/agent/catalog.ts"
 import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
 import { BUILTIN_COMPONENTS, DataTable } from '@dudousxd/nestjs-agent-core/genui/builtins';
 
@@ -138,7 +138,7 @@ Your own tools can push any catalog component, builtins included, with
 Register a renderer under each builtin's name, as for any other component. Each receives the
 validated props spread, and `children` when it is a layout node in a tree.
 
-```tsx title="main.tsx (frontend)"
+```tsx title="Frontend — src/main.tsx"
 import { AgentProvider } from '@dudousxd/nestjs-agent-react';
 import type { GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
 import { catalog } from './catalog';

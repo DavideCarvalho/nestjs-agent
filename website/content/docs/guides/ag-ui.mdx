@@ -169,8 +169,11 @@ and their receipts, with no run behind them.
 
 `agUiChatStream` does not resume: the React client renders the approval card and the question form
 from `agora.approval-requested` and `agora.elicitation` and decides them through the native
-`tool-call` routes. See [What AG-UI costs you](/docs/agent/guides/rendering-everywhere#what-ag-ui-costs-you)
-for what that means for the rest of the run.
+`tool-call` routes. The AG-UI run has ended on the interrupt, so the client re-attaches to the
+parked run on `GET /agent/chat/:runId/stream?after=<id>` — every event this route writes carries the
+run's own sequence number as its SSE `id:` — and what the run does after the decision streams into
+the same message, as on the native stream. See
+[What AG-UI costs you](/docs/agent/guides/rendering-everywhere#what-ag-ui-costs-you).
 
 The interrupt `id` is the whole address of what it answers — the run, the call, and how much of the
 stream was already delivered — so the server keeps nothing between the two requests and **any

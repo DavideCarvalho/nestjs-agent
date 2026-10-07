@@ -206,9 +206,9 @@ async function readEvents(response: Response): Promise<AgUiEvent[]> {
   const text = await response.text();
   return text
     .split('\n\n')
-    .map((frame) => frame.trim())
-    .filter((frame) => frame.startsWith('data: '))
-    .map((frame) => JSON.parse(frame.slice('data: '.length)) as AgUiEvent);
+    .map((frame) => frame.split('\n').find((line) => line.startsWith('data: ')))
+    .filter((line): line is string => line !== undefined)
+    .map((line) => JSON.parse(line.slice('data: '.length)) as AgUiEvent);
 }
 
 function input(overrides: Partial<RunAgentInput> = {}): RunAgentInput {
@@ -414,6 +414,42 @@ describe('POST /agent/ag-ui', () => {
     // usage follows the run boundary: the resumed run reports only its own model call
     const usage = (second.events.at(-1) as { usage?: { inputTokens?: number }[] }).usage;
     expect(usage).toHaveLength(1);
+  });
+
+  it("numbers events with the run's own sequence, so the native stream continues where it ended", async () => {
+    const { url } = await boot(refundScript);
+    const response = await post(
+      url,
+      input({ messages: [{ id: 'm1', role: 'user', content: 'refund 7' }] }),
+    );
+    const runId = response.headers.get('x-agent-run-id') as string;
+    const raw = await response.text();
+    const ids = [...raw.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+    expect(ids.length).toBeGreaterThan(0);
+    // Non-decreasing: several events can stand for one frame of the run.
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    const last = ids.at(-1) as number;
+    const callId = (raw.match(/"toolCallId":"([^"]+)"/) as RegExpMatchArray)[1] as string;
+
+    // Re-attached natively from the AG-UI run's last id (the run is still parked), then decided
+    // over the native route: the rest of the run streams on the re-attached connection.
+    const rest = await fetch(`${url}/agent/chat/${runId}/stream?after=${last}`, {
+      headers: { 'x-actor-id': 'u1' },
+    });
+    expect(rest.status).toBe(200);
+    const approved = await fetch(`${url}/agent/tool-call/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-actor-id': 'u1' },
+      body: JSON.stringify({ toolCallId: callId }),
+    });
+    expect(approved.status).toBeLessThan(300);
+    const text = await rest.text();
+    const restIds = [...text.matchAll(/^id: (\d+)$/gm)].map((match) => Number(match[1]));
+    expect(restIds[0]).toBe(last + 1);
+    // Nothing the AG-UI run delivered comes again; what the run did after the decision does.
+    expect(text).not.toContain('"kind":"approval-requested"');
+    expect(text).toContain('"kind":"tool-output"');
+    expect(text).toContain('Done.');
   });
 
   it('a resume that declines feeds the refusal back to the model', async () => {

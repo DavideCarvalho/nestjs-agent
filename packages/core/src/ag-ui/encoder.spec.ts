@@ -10,6 +10,7 @@ import {
   type AgUiSourceFrame,
   agUiEvents,
   agUiFramesFromNdjson,
+  agUiSse,
   decodeInterruptId,
   encodeInterruptId,
   planResume,
@@ -868,5 +869,42 @@ describe('agUiFramesFromNdjson', () => {
       { kind: 'error', code: 'quota_exceeded', message: 'over budget' },
     ]);
     await expect(read([new Error('socket closed')])).rejects.toThrow('socket closed');
+  });
+});
+
+describe('the run cursor', () => {
+  it("keeps each event's native sequence number: one per line of the sink, split lines included", async () => {
+    const line = (event: Parameters<typeof encodeStreamEvent>[0]) =>
+      new TextDecoder().decode(encodeStreamEvent(event));
+    const lines = [
+      line({ kind: 'step-start' }),
+      // bare text and an event sharing one line: still ONE native frame
+      `Hi ${line({ kind: 'text', text: 'there' })}`,
+      line({ kind: 'step-finish' }),
+    ];
+    async function* bytes() {
+      yield new TextEncoder().encode(lines.join(''));
+    }
+    const cursor = { seq: 0 };
+    const seen: [string, number][] = [];
+    for await (const event of agUiEvents(agUiFramesFromNdjson(bytes()), {
+      ...ids,
+      quietMs: 40,
+      cursor,
+    })) {
+      seen.push([event.type, cursor.seq]);
+    }
+    expect(seen.filter(([type]) => type === 'STEP_STARTED')).toEqual([['STEP_STARTED', 1]]);
+    expect(seen.filter(([type]) => type === 'TEXT_MESSAGE_CONTENT').map(([, seq]) => seq)).toEqual([
+      2, 2,
+    ]);
+    expect(seen.filter(([type]) => type === 'STEP_FINISHED')).toEqual([['STEP_FINISHED', 3]]);
+    expect(seen[0]).toEqual(['RUN_STARTED', 0]);
+    expect(agUiSse({ type: 'STEP_STARTED', stepName: 's' }, 3)).toBe(
+      'id: 3\ndata: {"type":"STEP_STARTED","stepName":"s"}\n\n',
+    );
+    expect(agUiSse({ type: 'STEP_STARTED', stepName: 's' }, 0)).toBe(
+      'data: {"type":"STEP_STARTED","stepName":"s"}\n\n',
+    );
   });
 });
