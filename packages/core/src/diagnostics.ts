@@ -255,7 +255,15 @@ export const AGENT_SPAN_EVENTS: readonly AgentSpanEvent[] = [
   'tool.execution',
   'retrieval',
   'follow-ups',
+  'structured-output',
 ];
+
+/** Compile-time-only check: every {@link AgentSpanEvent} must appear in `AGENT_SPAN_EVENTS`. */
+type AgentSpanEventsCoverAllKeys = [AgentSpanEvent] extends [(typeof AGENT_SPAN_EVENTS)[number]]
+  ? true
+  : ['AGENT_SPAN_EVENTS is missing an AgentSpanEvent'];
+const agentSpanEventsCoverAllKeys: AgentSpanEventsCoverAllKeys = true;
+void agentSpanEventsCoverAllKeys;
 
 /** Compile-time-only check: every span event must be declared on `ChannelRegistry['agent']`. */
 type AgentSpanEventsAreRegistered = [AgentSpanEvent] extends [keyof ChannelRegistry['agent']]
