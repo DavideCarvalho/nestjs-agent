@@ -388,6 +388,16 @@ describe('DefaultRolesPolicy — the default', () => {
     expect(policy.can({ id: 'anon:abc', roles: ['anonymous'] }, spec())).toBe(false);
     expect(policy.can({ id: 'u1', roles: ['USER'] }, spec())).toBe(true);
   });
+
+  it('refuses a tool gated by an ability it cannot evaluate, rather than opening it to all', () => {
+    const policy = new DefaultRolesPolicy();
+    const gated = { ...(spec() as object), ability: 'cache.purge' } as never;
+    expect(policy.can({ id: 'u1', roles: ['ADMIN'] }, gated)).toBe(false);
+    expect(policy.can({ id: 'anon:abc' }, gated)).toBe(false);
+    // Naming roles as well lets the role-based default decide on those.
+    const both = { ...(spec(['ADMIN']) as object), ability: 'cache.purge' } as never;
+    expect(policy.can({ id: 'u1', roles: ['ADMIN'] }, both)).toBe(true);
+  });
 });
 
 describe('an empty roles list', () => {

@@ -633,7 +633,9 @@ A tool declares **one** of two gates — `roles` or `ability`:
 - **`ability`** (delegated to an ability-aware policy): `@AiTool({ ability: 'cache.purge' })` — checked
   by [`@dudousxd/nestjs-authz`](https://github.com/DavideCarvalho/aviary) via
   `gate.forUser(actor).allows(ability)` once you add `AgentAuthzModule`. Tools without an `ability`
-  fall back to the role policy, so non-authz apps are unaffected.
+  fall back to the role policy, so non-authz apps are unaffected. Without `AgentAuthzModule` the
+  built-in policy can't check an ability, so it refuses a tool that names an `ability` and no
+  `roles`.
 
 ```ts
 @Module({ imports: [AuthzModule.forRoot(/* … */), AgentAuthzModule.forRoot()] })

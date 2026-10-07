@@ -117,8 +117,9 @@ export interface ToolSpec {
   enabled?: boolean | (() => boolean | Promise<boolean>);
   /**
    * An authorization ability name (e.g. 'cache.purge'). Consumed by an ability-aware RolesPolicy
-   * such as the `@dudousxd/nestjs-agent-authz` Gate adapter. Apps that don't use authz ignore it
-   * and rely on `roles` instead — both live on the same SPI, so neither is required.
+   * such as the `@dudousxd/nestjs-agent-authz` Gate adapter. A policy that can't evaluate one (the
+   * role-based default) refuses a tool that names an `ability` and no `roles` — fail closed rather
+   * than open; a tool naming both falls back to its `roles` there.
    */
   ability?: string;
 }

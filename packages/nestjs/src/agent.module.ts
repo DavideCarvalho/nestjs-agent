@@ -26,6 +26,7 @@ import {
   type ModelCatalog,
   type ModelProvider,
   type QuotaProvider,
+  type RolesPolicy,
   ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -81,10 +82,13 @@ const logger = new Logger('AgentModule');
  * module's providers before any is instantiated, so the answer is complete whatever the import
  * order; the instance itself is read lazily, at first use.
  */
-function externalStoreWrapper(modules: ModulesContainer): { instance: unknown } | undefined {
+function externalWrapper(
+  modules: ModulesContainer,
+  token: symbol,
+): { instance: unknown } | undefined {
   for (const module of modules.values()) {
     if (module.metatype === AgentModule) continue;
-    const wrapper = module.providers.get(AGENT_STORE);
+    const wrapper = module.providers.get(token);
     if (wrapper !== undefined) return wrapper as { instance: unknown };
   }
   return undefined;
@@ -117,7 +121,7 @@ function forwardingStore(wrapper: { instance: unknown }): AgentStore {
  */
 function resolveStore(options: AgentModuleOptions, modules: ModulesContainer): AgentStore {
   if (options.store !== undefined) return options.store;
-  const external = externalStoreWrapper(modules);
+  const external = externalWrapper(modules, AGENT_STORE);
   if (external !== undefined) return forwardingStore(external);
   logger.warn(
     'No `store` configured and no store module imported — using the in-memory store. Threads are ' +
@@ -125,6 +129,45 @@ function resolveStore(options: AgentModuleOptions, modules: ModulesContainer): A
       'import a store module (e.g. MikroOrmAgentStoreModule.forFeature()).',
   );
   return new InMemoryAgentStore();
+}
+
+/**
+ * The roles policy: the `rolesPolicy` option, else one another module binds (`AgentAuthzModule`, a
+ * host's own), else the role-based default. The same scan as the store, for the same reason: Nest
+ * resolves a module's own provider before a global one, so a policy bound elsewhere under
+ * `AGENT_ROLES_POLICY` would otherwise never reach the agent — and the role-based default, which
+ * has no notion of abilities, would silently stand in for it.
+ */
+function resolveRolesPolicy(options: AgentModuleOptions, modules: ModulesContainer): RolesPolicy {
+  const external = externalWrapper(modules, AGENT_ROLES_POLICY);
+  if (options.rolesPolicy !== undefined) {
+    if (external !== undefined) {
+      logger.warn(
+        'Both a `rolesPolicy` option and a module binding AGENT_ROLES_POLICY (e.g. ' +
+          'AgentAuthzModule) are configured — the `rolesPolicy` option wins.',
+      );
+    }
+    return options.rolesPolicy;
+  }
+  if (external !== undefined) return forwardingPolicy(external);
+  return options.emptyRoles === 'deny'
+    ? new ClosedRolesPolicy(options.defaultRoles)
+    : new DefaultRolesPolicy(options.defaultRoles);
+}
+
+/** A policy that forwards to another module's `AGENT_ROLES_POLICY`, resolved on first use. */
+function forwardingPolicy(wrapper: { instance: unknown }): RolesPolicy {
+  return {
+    can(actor, tool) {
+      const policy = wrapper.instance as RolesPolicy | undefined | null;
+      if (policy === undefined || policy === null) {
+        throw new Error(
+          'AgentModule: the AGENT_ROLES_POLICY bound by another module is not ready yet',
+        );
+      }
+      return policy.can(actor, tool);
+    },
+  };
 }
 
 function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProvider {
@@ -176,12 +219,9 @@ function sharedProviders(durable: boolean): Provider[] {
     },
     {
       provide: AGENT_ROLES_POLICY,
-      useFactory: (options: AgentModuleOptions) =>
-        options.rolesPolicy ??
-        (options.emptyRoles === 'deny'
-          ? new ClosedRolesPolicy(options.defaultRoles)
-          : new DefaultRolesPolicy(options.defaultRoles)),
-      inject: [AGENT_OPTIONS],
+      useFactory: (options: AgentModuleOptions, modules: ModulesContainer) =>
+        resolveRolesPolicy(options, modules),
+      inject: [AGENT_OPTIONS, ModulesContainer],
     },
     {
       provide: AGENT_ACTOR_RESOLVER,

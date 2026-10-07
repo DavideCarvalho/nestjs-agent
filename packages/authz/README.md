@@ -21,7 +21,7 @@ import { AgentAuthzModule } from '@dudousxd/nestjs-agent-authz';
   imports: [
     AuthzModule.forRoot(/* … */),    // the app's global Gate
     AgentModule.forRoot({ model, store, modelId }),
-    AgentAuthzModule.forRoot(),       // binds AGENT_ROLES_POLICY to the Gate-backed policy
+    AgentAuthzModule.forRoot(),       // the agent's tool gate now consults the Gate
   ],
 })
 export class AppModule {}
@@ -34,6 +34,14 @@ export class PurgeCacheTool implements ToolHandler<{ key: string }> { /* … */ 
 ```
 
 `forRoot({ fallbackRoles })` configures the role policy used when a tool declares no `ability`.
+
+`AgentModule` picks the policy up from `AgentAuthzModule` wherever it sits in `imports`. Don't also
+pass `rolesPolicy` to `AgentModule.forRoot` — an explicit `rolesPolicy` wins over this module (with
+a warning at boot).
+
+Without this module, the agent's role-based default can't evaluate an `ability`: it **refuses** a
+tool that declares an `ability` and no `roles` (fail closed), and decides a tool that declares both
+by its `roles`.
 
 ## License
 
