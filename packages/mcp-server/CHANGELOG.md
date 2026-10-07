@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.4.0
+
+### Minor Changes
+
+- [#317](https://github.com/DavideCarvalho/nestjs-agent/pull/317) [`8ba61cd`](https://github.com/DavideCarvalho/nestjs-agent/commit/8ba61cda56bb3c158284d5539325d971f332374f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Engines: `AgentModule.forRoot({ engine })` runs turns on something other than the library's loop, and `@dudousxd/nestjs-agent-opencode`'s `openCode({ host })` runs them on OpenCode 2 sessions — the library's routes, stream protocol, approvals, questions and queue over OpenCode's loop. `model` is optional when an engine is set. Durable turns via `openCodeDurable()` (`/durable`); approval policy, `@AiTool`s over MCP, skills, memory and regenerate reach the OpenCode session. `AgentMcpServerModule`'s `context` option ties a tool call to the conversation it serves (from `_meta`); under OpenCode, tools' `ctx.emitUi` reaches the turn, `remember` writes memory, and `keyValueOpenCodeSessionStore` shares sessions across processes.
+
 ## 0.3.2
 
 ### Patch Changes
