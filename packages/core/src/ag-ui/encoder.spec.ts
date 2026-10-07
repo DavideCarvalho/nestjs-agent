@@ -693,6 +693,73 @@ describe('a sink that knows only the shared vocabulary', () => {
     );
   });
 
+  it("carries a component's fallback text and component versions", async () => {
+    const events = await collect(
+      ended([
+        {
+          kind: 'ui',
+          id: 'u1',
+          component: 'Tree',
+          props: {},
+          fallbackText: 'Q3 revenue: $1.2M',
+          componentVersions: { Tree: 1, Chart: 3 },
+        },
+      ]),
+    );
+    expect(events).toContainEqual({
+      type: 'CUSTOM',
+      name: AG_UI_CUSTOM.ui,
+      value: {
+        id: 'u1',
+        component: 'Tree',
+        props: {},
+        fallbackText: 'Q3 revenue: $1.2M',
+        componentVersions: { Tree: 1, Chart: 3 },
+      },
+    });
+  });
+
+  it('names a proposal on its approval event, and an interrupt left open addresses it', async () => {
+    const target = { kind: 'proposal' as const, proposalId: 'p-1' };
+    const events = await collect(
+      parked([
+        ev({
+          kind: 'tool-input-available',
+          id: 'c1',
+          name: 'refund',
+          input: { id: 7 },
+          toolKind: 'action',
+        }),
+        {
+          kind: 'approval-requested',
+          id: 'c1',
+          approver: 'requester',
+          target,
+          confirmation: { title: 'Refund?', verb: 'Refund' },
+        },
+      ]),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        name: AG_UI_CUSTOM.approvalRequested,
+        value: expect.objectContaining({
+          target,
+          confirmation: { title: 'Refund?', verb: 'Refund' },
+        }),
+      }),
+    );
+    const finished = events.at(-1) as {
+      outcome?: { interrupts?: { id: string; metadata?: unknown }[] };
+    };
+    const interrupt = finished.outcome?.interrupts?.[0];
+    expect(interrupt?.metadata).toMatchObject({ 'agora.target': target });
+    expect(decodeInterruptId(interrupt?.id)).toMatchObject({
+      kind: 'proposal',
+      proposalId: 'p-1',
+      threadId: 'thread-1',
+    });
+  });
+
   it('numbers a component that carries no id by its position', async () => {
     const events = await collect(ended([{ kind: 'ui', component: 'Card', props: {} }]));
     expect(events).toContainEqual({

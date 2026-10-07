@@ -148,10 +148,10 @@ export class ActionProposalService {
     result: ActionProposalMutationResult,
     decision: 'approved' | 'rejected',
   ) {
-    return {
-      threadId,
-      proposalDecision: result,
-      text: textActionProposalReply(result, decision, this.replies),
-    };
+    return { threadId, proposalDecision: result, text: this.reply(result, decision) };
+  }
+  /** The configured reply to a decision the store answered with `result`. */
+  reply(result: ActionProposalMutationResult, decision: 'approved' | 'rejected'): string {
+    return textActionProposalReply(result, decision, this.replies);
   }
 }

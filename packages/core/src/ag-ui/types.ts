@@ -156,6 +156,8 @@ export const AG_UI_CUSTOM = {
   elicitation: 'agora.elicitation',
   /** `{ usage, costUsd, reasoningMs }` of one model step. */
   stepUsage: 'agora.step-usage',
+  /** A proposal decided by a text message or an interrupt resume, with no model run behind it. */
+  actionProposalDecision: 'agora.action-proposal-decision',
   /** `{ message }` — input material this producer could not use and dropped. */
   warning: 'agora.warning',
 } as const;

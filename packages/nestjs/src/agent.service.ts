@@ -6,6 +6,7 @@ import {
   AGENT_QUOTA_PROVIDER,
   AGENT_RUNNER,
   AGENT_STORE,
+  type ActionProposalMutationResult,
   type Actor,
   type AgentRunInput,
   type AgentRunner,
@@ -169,6 +170,29 @@ export class AgentService {
     @Optional() private readonly queue?: ChatQueueService,
     @Optional() private readonly proposals?: ActionProposalService,
   ) {}
+
+  /**
+   * Decide one independent proposal through the scoped proposal service — what the native
+   * `action-proposals/:id/approve|reject` routes call — and the reply to show for it. `404` when
+   * proposals are not on, `403`/`404` when this actor may not decide it.
+   */
+  async decideActionProposal(
+    actor: Actor,
+    threadId: string,
+    proposalId: string,
+    command: {
+      decision: 'approved' | 'rejected';
+      remember?: boolean;
+      reason?: string;
+      via: string;
+    },
+  ): Promise<{ proposalDecision: ActionProposalMutationResult; text: string }> {
+    if (this.options?.actionApprovalMode !== 'independent' || !this.proposals) {
+      throw new NotFoundException('Proposal not found');
+    }
+    const result = await this.proposals.decide(threadId, proposalId, actor, command);
+    return { proposalDecision: result, text: this.proposals.reply(result, command.decision) };
+  }
 
   async handleTextDecision(threadId: string, actor: Actor, text: string) {
     if (this.options?.actionApprovalMode !== 'independent' || !this.proposals)
