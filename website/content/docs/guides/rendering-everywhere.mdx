@@ -1,7 +1,7 @@
 ---
 title: One answer, every surface
 icon: Split
-description: How one tool result reaches the web, AG-UI clients, text-only channels such as WhatsApp, and MCP — UI capabilities negotiation, text fallbacks, and what each surface receives.
+description: How one tool result reaches the web, AG-UI clients, text-only channels such as WhatsApp, and MCP — what lives in the NestJS backend and what in the React frontend, UI capabilities negotiation, text fallbacks, and what AG-UI carries compared with the native stream.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -28,21 +28,214 @@ A tool result has three layers, and each surface takes the ones it can use:
 | **Component**, `{ component, props, version }` from `present` or `ctx.emitUi` | the server catalog | A `ui` frame, persisted on the message, for clients that declared the component. |
 | **Text**, the definition's `fallbackText` | the server catalog | Instead of the component on a client that cannot draw it, and kept next to it in history. |
 
+## Backend and frontend
+
+Every piece below runs on one of two sides. Each code block on this page names its side and the file
+it belongs in.
+
+| Side | Runs in | Files (a Nest API in `api/`, a React app in `web/`) | Imports from |
+| --- | --- | --- | --- |
+| **Backend** | the NestJS process | `src/app.module.ts` (`AgentModule.forRoot`, `AgentGenuiModule`, `adapters`), `src/genui/*.ts` (component definitions, the catalog), `*.tool.ts` (`@AiTool` providers), your guards and `actorResolver`, services of your own that call `AgentService` (webhooks, jobs) | `@dudousxd/nestjs-agent`, `@dudousxd/nestjs-agent/genui`, `@dudousxd/nestjs-agent-core/genui`, `@dudousxd/nestjs-agent-core/genui/builtins` (`@dudousxd/nestjs-agent-core/ag-ui` only for a route of your own) |
+| **Frontend** | the browser | the page that mounts the chat, the React renderers of your components, `<AgentProvider>` | `@dudousxd/nestjs-agent-react`, `@dudousxd/nestjs-agent-react/genui` |
+
+The backend owns everything the model and the database touch: which components exist (the catalog),
+what each tool returns, validation, negotiation, the text fallback and the HTTP routes.
+`AgentModule` mounts the routes itself; you write no controller for the chat. The frontend only
+draws: it maps a component name to a React component, says which of them it can draw, and renders
+the stream it reads from those routes.
+
+<Callout type="info" title="One file may be read by both sides">
+`src/genui/catalog.ts` lives with the backend, but it is plain data: `@dudousxd/nestjs-agent-core/genui`
+imports nothing server-only, so the React app may import the same file to validate props before
+drawing. That import is optional. Keep anything server-only (repositories, services, config) out of
+the catalog and the definitions it imports. With the API and the app in two repositories, publish the
+file as a small package.
+</Callout>
+
+## End to end: a React chat that draws `OrderSummary`
+
+One component, one tool, one chat page. The backend half is the same for every surface on this
+page; only the frontend half is specific to the React chat.
+
+### Backend — NestJS
+
+**1. The component definition**, the contract every surface reads:
+
+| Field | Read by |
+| --- | --- |
+| `name`, `version` | the frontend registry that draws it, and capability negotiation |
+| `props` (Standard Schema or JSON Schema) | the backend, which validates every push; the frontend, which can validate before drawing |
+| `description` | the model, when the genui tools offer the component |
+| `fallbackText(props)` | every surface that cannot draw it |
+
+```ts title="Backend — api/src/genui/order-summary.ts"
+import { createComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { z } from 'zod';
+
+export const orderSummary = createComponent({
+  name: 'OrderSummary',
+  title: 'Order summary',
+  description: 'One order: status and total.',
+  version: 1,
+  props: z.object({ id: z.string(), status: z.string(), totalCents: z.number().int() }),
+  fallbackText: ({ id, status, totalCents }) =>
+    `*Order ${id}* — ${status}, ${(totalCents / 100).toFixed(2)}`,
+});
+```
+
+**2. The catalog:**
+
+```ts title="Backend — api/src/genui/catalog.ts (the frontend may import it too)"
+import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
+import { orderSummary } from './order-summary';
+
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, orderSummary.definition]);
+```
+
+**3. The tool** returns domain data and presents it with the component:
+
+```ts title="Backend — api/src/orders/order-status.tool.ts"
+import { AiTool, type AiToolCtx } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+import { orderSummary } from '../genui/order-summary';
+import { type Order, OrdersService } from './orders.service';
+
+@AiTool({
+  description: 'Look up one of the customer’s orders.',
+  input: z.object({ orderId: z.string() }),
+})
+export class OrderStatusTool { // name: orderStatus, kind: read
+  constructor(private readonly orders: OrdersService) {}
+
+  execute({ orderId }: { orderId: string }, ctx: AiToolCtx) {
+    return this.orders.findForCustomer(orderId, ctx.actor.id);
+  }
+
+  present(order: Order) {
+    return orderSummary({ id: order.id, status: order.status, totalCents: order.totalCents });
+  }
+}
+```
+
+The model reads `execute`'s return value on every surface. `present` (or a direct `ctx.emitUi`) is
+the only part whose delivery differs.
+
+**4. The module.** `AgentModule` mounts the agent's routes under `path` (default `agent`), resolves
+the caller with `actorResolver`, and puts every route behind `guards`. `AgentGenuiModule` gives the
+server its catalog. The tool is an ordinary provider:
+
+```ts title="Backend — api/src/app.module.ts"
+import { Module } from '@nestjs/common';
+import { AgentModule, requestUserActorResolver } from '@dudousxd/nestjs-agent';
+import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
+import { catalog } from './genui/catalog';
+import { OrderStatusTool } from './orders/order-status.tool';
+import { OrdersService } from './orders/orders.service';
+import { SessionGuard } from './auth/session.guard';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      model,                                     // see Getting started
+      actorResolver: requestUserActorResolver(), // who is calling: reads req.user
+      guards: [SessionGuard],                    // your guard, on every agent route
+      // path: 'agent',                          // the default: routes under /agent
+    }),
+    AgentGenuiModule.forRoot({ catalog }),
+  ],
+  providers: [OrdersService, OrderStatusTool],
+})
+export class AppModule {}
+```
+
+A guard that sets `req.user` is enough for `requestUserActorResolver()`; without `actorResolver` the
+routes are anonymous, one identity per browser. See
+[Identity & Authorization](/docs/agent/guides/identity-and-authorization).
+
+### Frontend — React
+
+**5. The renderer**, an ordinary React component whose props are the definition's `props`:
+
+```tsx title="Frontend — web/src/genui/order-summary.tsx"
+export function OrderSummary({ id, status, totalCents }: { id: string; status: string; totalCents: number }) {
+  return (
+    <section>
+      <h3>Order {id}</h3>
+      <p>{status} — {(totalCents / 100).toFixed(2)}</p>
+    </section>
+  );
+}
+```
+
+**6. The page** mounts the connection, hands it the registry, and says what it can draw:
+
+```tsx title="Frontend — web/src/chat-page.tsx"
+import { AgentProvider, ChatInput, MessageList, useAgentChat } from '@dudousxd/nestjs-agent-react';
+import type { GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
+import { catalog } from '../../api/src/genui/catalog'; // optional: validate props before drawing
+import { OrderSummary } from './genui/order-summary';
+
+// Keys are the catalog's component names.
+const registry: GenuiRegistry = { OrderSummary };
+
+export function ChatPage() {
+  return (
+    <AgentProvider
+      genui={{ registry, catalog }}
+      uiCapabilities={{ components: [{ name: 'OrderSummary', version: 1 }] }}
+    >
+      <Chat />
+    </AgentProvider>
+  );
+}
+
+function Chat() {
+  const chat = useAgentChat();
+  return (
+    <>
+      <MessageList messages={chat.messages} status={chat.status} />
+      <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
+    </>
+  );
+}
+```
+
+`MessageList` draws every pushed component inside the provider. For your own markup, render each
+`ui` block with `<GenerativeUI part={block} />` (see [Frontend](/docs/agent/guides/frontend)).
+
+With this page, `OrderSummary` is drawn. Any other catalog component a tool presents (a builtin
+`DataTable`, say) arrives as its text, and the genui tools offer the model only `OrderSummary`,
+because the page declared nothing else.
+
+### How the two halves connect
+
+| | Backend side | Frontend side |
+| --- | --- | --- |
+| **Base URL** | `AgentModule` mounts `POST /agent/chat`, `GET /agent/chat/:runId/stream`, `GET /agent/threads/:id`, … ([all routes](/docs/agent/reference/endpoints)) under `path` (default `agent`), after any global prefix | `<AgentProvider>` calls the same origin under `/agent`. Pass `path` for another prefix (global prefix included), `baseUrl` for an API on another origin |
+| **Identity** | `actorResolver` turns the request into an actor, behind `guards`; every thread, run and attachment is owner-scoped to it | the session cookie rides every request (`credentials="include"` across origins), or `getHeaders` sends a bearer token |
+| **CSRF** | the library checks none itself: whatever CSRF middleware or guard your app applies covers the agent's routes too | `getHeaders` sends the token per request, for example the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN` (see [Cookie sessions and CSRF](/docs/agent/guides/frontend#cookie-sessions-and-csrf)) |
+| **What can be drawn** | intersects `uiCapabilities` with the catalog, validates, sends a `ui` frame or text | `uiCapabilities` on the provider (or `useAgentChat({ uiCapabilities })`) rides in the body of every `POST /agent/chat` |
+| **Component identity** | `name` and `version` of the definition | the registry key, and the `{ name, version }` declared in `uiCapabilities`. All three must match |
+| **History** | messages are persisted with their `ui` list (`fallbackText`, `version`, `componentVersions`) | `useAgentChat({ threadId })` loads `GET /agent/threads/:id` and draws the same components (or texts) again |
+
 ## Per surface
 
 | Surface | Declares | Receives |
 | --- | --- | --- |
 | Web, native stream (`POST /agent/chat`, `useAgentChat`) | `uiCapabilities` in the body, or `<AgentProvider uiCapabilities>` | `ui` frames for declared components and `text` frames for the rest. See [Generative UI](/docs/agent/guides/generative-ui). |
-| AG-UI (`POST /agent/ag-ui`) | `forwardedProps.uiCapabilities` | `CUSTOM agora.ui` events for declared components, text messages for the rest. See [AG-UI](/docs/agent/guides/ag-ui). |
+| AG-UI (`POST /agent/ag-ui`) | `forwardedProps.uiCapabilities` | `CUSTOM agora.ui` events (with `fallbackText`) for declared components, text messages for the rest. See [Web over AG-UI](#web-over-ag-ui) and [what it costs you](#what-ag-ui-costs-you). |
 | Text channel (WhatsApp, SMS, a Slack bot) run in-process through `AgentService` | `uiCapabilities: { components: [] }` | Only text. The model is offered no UI tool. |
 | MCP (`AgentMcpServerModule`) | nothing | The tool's domain output as JSON text. Components are not sent. |
 | A file attachment (PNG/PDF) | your channel code | What `createReactServerRenderer` renders from the same component. See [Component registries and server rendering](/docs/agent/guides/component-rendering). |
 
 ## Declaring what a client can draw
 
-A client sends the components it has renderers for, each with the exact version it implements:
+A client sends the components it has renderers for, each with the exact version it implements. It
+is written by the **frontend** (or by the backend code that speaks for a channel, such as a webhook)
+and applied by the **backend**:
 
-```ts
+```ts title="Frontend — uiCapabilities, as the client sends it"
 uiCapabilities: {
   components: [
     { name: 'DataTable', version: 1 },
@@ -88,8 +281,9 @@ With `components: []` the model sees no UI tool at all and answers in prose.
 
 ## What changes for your tools
 
-`ctx.emitUi` and a tool's `present` hook go through the same negotiation when the server has a
-catalog (`AgentGenuiModule`):
+All of this happens in the Nest process; the frontend receives only the result. `ctx.emitUi` and a
+tool's `present` hook go through the same negotiation when the server has a catalog
+(`AgentGenuiModule`):
 
 1. The props are validated against the **server** definition (name, version, schema). An unknown
    component or invalid props throws.
@@ -116,12 +310,108 @@ is Slack mrkdwn-compatible. For a nicer per-channel rendering, register channel 
 component registry and call `registry.render(presentation, 'whatsapp')`. See
 [Custom components and renderers per channel](/docs/agent/guides/component-rendering#custom-components-and-renderers-per-channel).
 
+## Web over AG-UI
+
+**Backend.** Add the adapter next to the native routes. It mounts `POST /agent/ag-ui`, behind the
+same `actorResolver`, `guards` and ownership checks:
+
+```ts title="Backend — api/src/app.module.ts"
+import { AgentModule, agUiAdapter } from '@dudousxd/nestjs-agent';
+
+AgentModule.forRoot({
+  // … as above
+  adapters: [agUiAdapter()],
+});
+```
+
+The route reads `forwardedProps.uiCapabilities` (a malformed value is a `400`) and negotiates exactly
+as above. A drawable component arrives as the `CUSTOM` event `agora.ui` with
+`{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId? }`, so an AG-UI
+client that cannot draw it after all can still show the text. An undeclared one arrives as text,
+inside the run's `TEXT_MESSAGE_*` events.
+
+**Frontend.** Any AG-UI client posts a `RunAgentInput` to that URL with `uiCapabilities` in
+`forwardedProps`. The React chat above sends its turns over AG-UI by replacing one method of the
+backend, `openChatStream`, with `agUiChatStream`. It forwards the send's `uiCapabilities`, staged
+attachments and `regenerate`; everything else stays on the native routes:
+
+```ts title="Frontend — web/src/agent-backend.ts"
+import { AgentClient, type ChatStreamRequest, agUiChatStream } from '@dudousxd/nestjs-agent-react';
+
+export const readCookie = (name: string) =>
+  decodeURIComponent(document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))?.[1] ?? '');
+
+/** Turns over AG-UI; threads, queue, decisions, uploads, cancel and re-attach over REST. */
+export class AgUiAgentClient extends AgentClient {
+  override openChatStream(request: ChatStreamRequest) {
+    return agUiChatStream(request, {
+      url: '/agent/ag-ui',
+      // Not the provider's getHeaders: built here, per send.
+      headers: { 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') },
+    });
+  }
+}
+```
+
+```tsx title="Frontend — web/src/chat-page.tsx"
+import { AgUiAgentClient, readCookie } from './agent-backend';
+
+const backend = new AgUiAgentClient({ getHeaders: () => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') }) });
+
+<AgentProvider
+  backend={backend}
+  genui={{ registry, catalog }}
+  uiCapabilities={{ components: [{ name: 'OrderSummary', version: 1 }] }}
+>
+  <Chat />
+</AgentProvider>;
+```
+
+`agUiChatStream` does not read the provider's connection settings: `url` is the full path (base URL
+and prefix included), headers are its own `headers`, and it fetches with
+`credentials: 'same-origin'` unless you pass a `fetch` of your own. See [AG-UI](/docs/agent/guides/ag-ui).
+
+### What AG-UI costs you
+
+AG-UI is a second door onto the same runs, not a richer one. The server side (tools, authorization,
+quota, durable runs, memory) is identical; what differs is what the wire carries and what a request
+can ask for. The native stream is `POST /agent/chat` plus `GET /agent/chat/:runId/stream`; AG-UI is
+`POST /agent/ag-ui`. "React" below means `useAgentChat` over a backend whose `openChatStream` is
+`agUiChatStream`, which keeps the REST routes for everything but the turn.
+
+| Capability | Native stream + React client | AG-UI |
+| --- | --- | --- |
+| Text | `text` frames | **Same.** `TEXT_MESSAGE_START` / `CONTENT` / `END`, one message per stretch of text |
+| Reasoning | `reasoning` frames | **Same.** `REASONING_START`, one reasoning message, `REASONING_END` |
+| Tool calls and results | `tool-input-*` with `toolKind` (`read` / `action`) and `parentId`; `tool-output`, `-error`, `-denied` | **Same.** `TOOL_CALL_START` / `ARGS` / `END` with `metadata['agora.toolKind']` and `['agora.parentId']`, which React reads back; `TOOL_CALL_RESULT` with a failure or refusal in `metadata['agora.outcome']`. A generic client sees nested calls flat |
+| Generative UI | `ui` frames with `fallbackText` and `componentVersions`, drawn by `GenerativeUI` | **Same content.** The `CUSTOM` event `agora.ui` carries every field; React draws it unchanged. A generic AG-UI client ignores it unless it knows the name. Negotiation through `forwardedProps.uiCapabilities` works the same |
+| `pageContext`, agent, persona, model | body fields of `POST /agent/chat` | **Same**, through `forwardedProps`. AG-UI `context` is added to the page context as `agUiContext` |
+| Attachments | uploaded to `POST /agent/attachments`, sent as `{ mediaId }` refs | **Same** for staged files: React sends each as a `file` part with `provider: 'nestjs-agent'` and the mediaId, resolved and ownership-checked as on `chat`. Inline `data` parts are staged through `AGENT_ATTACHMENT_STAGING`. A `url` part or another provider's `file` part is dropped with an `agora.warning`, and so is an attachment past the per-message limit (native: `400`) or inline bytes of a type or size the limits refuse |
+| Regenerate | `regenerate: true` on `POST /agent/chat` | **Same.** `forwardedProps.regenerate: true`, which React sends for `chat.regenerate()` |
+| Approvals (`action` tools) | the stream stays open; `approval-requested` / `-settled` frames; decided through `POST /agent/tool-call/approve` / `reject` | **Partial.** The AG-UI run **ends** with an `Interrupt` (`reason: 'tool_approval'`); a later request with `resume` decides it and streams the rest. React renders the card from `agora.approval-requested` but decides through the native `tool-call` routes, not `resume`; its stream has already ended, so what the run does next is not streamed into the chat and shows on the next history load |
+| Questions (elicitation) | `elicitation` frame, answered through `POST /agent/tool-call/answer` / `skip` while the stream continues | **Partial.** An `Interrupt` (`reason: 'input_required'`) with a JSON Schema of the answers, answered through `resume`. `agora.elicitation` carries `{ id, runId, request }` and React renders the question form from it, answered over the native routes, with the same after-the-answer gap as approvals |
+| Interrupt outcome in React | — | React also adds a `ui` part named `AgUiInterrupt` with the interrupts. Your registry does not know it: it renders nothing, or your genui `fallback` when you pass one |
+| Independent action proposals | proposal routes; a text decision answers `200` JSON with `proposalDecision` | **Partial.** A proposal's interrupt id names it, and `resume` decides it through the proposal service. A text decision answers with the `CUSTOM` event `agora.action-proposal-decision` and the confirmation as text; React shows the text but does not read the event |
+| Message queue | a send on a busy thread is queued (`202`); `mode: 'queue' \| 'interrupt'` | **Not carried.** `POST /agent/ag-ui` on a busy thread is `409 run_active`; there is no `mode`. The queue's snapshots arrive as `agora.queue`. React queues through the REST route (`enqueueMessage`), so `chat.queue` keeps working |
+| Transient threads | `transient: true` on `POST /agent/chat` | **Not carried.** A `threadId` nobody has is created as a regular thread |
+| Re-attach after a dropped connection | `GET /agent/chat/:runId/stream?after=<seq>` replays and follows | **Not on AG-UI.** A dropped connection does not stop the run; the library's run id (`agora.run`, `X-Agent-Run-Id`) re-attaches over the native route. React does that, but its `after` cursor counts the re-framed AG-UI frames, not the run's own sequence numbers, so frames around the drop can be skipped or repeated |
+| Cancel | `POST /agent/chat/:runId/cancel` | **Partial.** AG-UI has no cancel request: use the native route with the id from `agora.run`, as React does. A cancelled run ends with `RUN_FINISHED`, `outcome: { type: 'cancelled' }` |
+| Durable runs, several replicas | re-attach from any replica | **Same.** A parked run waits durably; the interrupt id carries everything a resume needs, so any replica sharing the token sink serves it |
+| Title, usage, cost | `title`; `step-finish` with `usage`, `costUsd`, `reasoningMs` | **Same.** `agora.title`; `agora.step-usage` right after `STEP_FINISHED`, which React puts back on `step-finish`; per-model `RUN_FINISHED.usage` for generic clients (React does not read it) |
+| `message-metadata` frames | merged into the message's `metadata` | **Not carried.** The encoder drops them (only a runner that is not this library's loop writes them) |
+| Threads, history, fork, feedback, quota, models, agents, tools, memories, config | REST routes | Not part of AG-UI. React keeps them on REST |
+| Frontend tools, AG-UI `state` | — | **Not supported.** `tools` is ignored with an `agora.warning`; `state` is ignored and no state events are sent |
+
+Choose AG-UI when the client is someone else's (CopilotKit, `@ag-ui/client`, a Python or .NET agent
+UI). For your own React app, the native stream carries more and needs no adapter.
+
 ## A text channel in-process
 
-A messaging webhook resolves its own actor, sends with an empty capability list, and reads the
-answer back when the run ends:
+**Backend only.** There is no frontend of yours: the channel's app is the client. A messaging
+webhook resolves its own actor, sends with an empty capability list, and reads the answer back when
+the run ends:
 
-```ts
+```ts title="Backend — api/src/whatsapp/whatsapp-inbound.service.ts"
 @Injectable()
 export class WhatsAppInbound {
   constructor(private readonly agent: AgentService) {}
