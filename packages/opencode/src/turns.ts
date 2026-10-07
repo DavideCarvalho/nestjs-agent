@@ -52,6 +52,7 @@ import {
 import type { OpenCodeClient, OpenCodePermissionRule } from './client.js';
 import { OpenCodeEventHub } from './event-hub.js';
 import type {
+  OpenCodeAmendment,
   OpenCodeHost,
   OpenCodeRunResult,
   OpenCodeServer,
@@ -814,13 +815,13 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     writer: { write(chunk: Uint8Array): void | Promise<void> },
     result: OpenCodeRunResult,
   ) {
-    const hook = this.host.beforeSettle;
-    if (hook === undefined) return {};
-    const amendment =
-      (await hook(result).catch((error: unknown) => {
-        this.logger.warn(`beforeSettle failed: ${errorText(error, 'error')}`);
-        return undefined;
-      })) ?? {};
+    if (this.host.beforeSettle === undefined) return {};
+    let amendment: OpenCodeAmendment = {};
+    try {
+      amendment = (await this.host.beforeSettle(result)) ?? {};
+    } catch (error) {
+      this.logger.warn(`beforeSettle failed: ${errorText(error, 'error')}`);
+    }
     const ui = amendment.ui ?? [];
     const last = result.messages.at(-1);
     if (ui.length > 0) {
@@ -833,9 +834,11 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
 
   /** Delivery, telemetry, spend: after the run settled. Errors are the host's, never the run's. */
   private async settled(result: OpenCodeRunResult): Promise<void> {
-    await this.host.onSettled?.(result).catch((error: unknown) => {
+    try {
+      await this.host.onSettled?.(result);
+    } catch (error) {
       this.logger.warn(`onSettled failed: ${errorText(error, 'error')}`);
-    });
+    }
   }
 
   /** End the run's stream and bookkeeping for how its execution ended. */

@@ -136,6 +136,37 @@ describe('OpenCodeHost lifecycle hooks', () => {
     });
   });
 
+  it("calls the settle hooks as the host's methods, and survives one that throws", async () => {
+    const notice = { id: 'n1', component: 'Notice', props: {} };
+    h = await bootEngine({
+      engine: (host) =>
+        openCode({
+          // Hooks that read `this` (a class host's methods), one throwing before it returns a promise.
+          host: Object.assign(host, {
+            notice,
+            beforeSettle(this: { notice: typeof notice }): Promise<OpenCodeAmendment> {
+              return Promise.resolve({ ui: [this.notice] });
+            },
+            onSettled(): Promise<void> {
+              throw new Error('delivery is down');
+            },
+          }),
+        }),
+      script: async (t) => {
+        t.emit('session.text.delta', { delta: 'Done.' });
+        t.succeed();
+      },
+    });
+    const { runId, threadId } = await h.service.chat({ actor, message: 'hi' });
+    const fs = await frames(h.service, runId);
+    expect(fs).toContainEqual({ kind: 'ui', ...notice });
+    expect(fs.at(-1)?.kind).not.toBe('error');
+    await eventually(
+      async () => (await h?.store.getThread(threadId))?.activeRunId == null,
+      'released',
+    );
+  });
+
   it('carries hostContext through a durable turn', async () => {
     const seen: Seen = { asks: [], settled: [] };
     h = await bootEngine({
