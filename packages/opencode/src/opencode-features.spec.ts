@@ -112,10 +112,7 @@ describe('openCode engine: the library seams', () => {
       engine: (host) =>
         openCode({
           host,
-          tools: {
-            url: 'https://app.test/mcp',
-            headers: (who) => ({ Authorization: `Bearer token-for-${who.id}` }),
-          },
+          tools: { url: 'https://app.test/mcp', secret: 'test-secret' },
         }),
       providers: [LookupTool, SendTool],
     });
@@ -128,7 +125,7 @@ describe('openCode engine: the library seams', () => {
       config: {
         type: 'remote',
         url: 'https://app.test/mcp',
-        headers: { Authorization: 'Bearer token-for-u1' },
+        headers: { Authorization: expect.stringMatching(/^Bearer [\w-]+\.[\w-]+$/) },
         oauth: false,
       },
     });

@@ -8,6 +8,7 @@ import {
   AGENT_STORE,
   type ActionProposalMutationView,
   type Actor,
+  type AgentHostContext,
   type AgentRunInput,
   type AgentRunner,
   type AgentStore,
@@ -95,6 +96,14 @@ export interface ChatParams {
   uiCapabilities?: UiCapabilities;
   actor: Actor;
   message: string;
+  /** The host's own facts about this send — see `AgentRunInput.hostContext`. */
+  hostContext?: AgentHostContext;
+  /**
+   * The HOST already decided this actor may write this thread — a chat-app thread several people
+   * share, where anyone in it may continue the conversation. Skips the thread-ownership check of a
+   * send; never set it from a request's own claim.
+   */
+  authorized?: boolean;
   threadId?: string;
   agentName?: string;
   /**
@@ -399,6 +408,7 @@ export class AgentService {
       }
       const created = await this.store.createThread({
         actor: params.actor,
+        ...(agentName !== undefined ? { agentName } : {}),
         ...(params.transient === true ? { transient: true } : {}),
         ...(params.newThreadId !== undefined ? { id: params.newThreadId } : {}),
         ...(params.personaId !== undefined ? { persona: params.personaId } : {}),
@@ -407,7 +417,7 @@ export class AgentService {
     } else {
       // Every send onto an existing thread is gated by ownership: a regenerate rewinds the thread,
       // and a queued message would otherwise land in someone else's conversation.
-      await this.assertOwnsThread(params.actor, threadId);
+      if (params.authorized !== true) await this.assertOwnsThread(params.actor, threadId);
       // A persona a send NAMES is the person's pick for this conversation: pinned, so the next send
       // (and a reopened thread's picker) keeps it. One the send fell back to is not pinned.
       if (params.personaId !== undefined) {
@@ -426,6 +436,7 @@ export class AgentService {
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(params.pageContext !== undefined ? { pageContext: params.pageContext } : {}),
       ...(params.uiCapabilities !== undefined ? { uiCapabilities: params.uiCapabilities } : {}),
+      ...(params.hostContext !== undefined ? { hostContext: params.hostContext } : {}),
       ...(model !== undefined ? { model } : {}),
     };
 
@@ -449,7 +460,7 @@ export class AgentService {
     // `queue` always answers as a queued send (202), so a client that asked for it handles one
     // shape; an idle thread starts it straight away all the same (`enqueue` kicks the queue).
     if (live === null && mode !== 'queue') {
-      const runId = crypto.randomUUID();
+      const runId = this.runner.runIdFor?.(input) ?? crypto.randomUUID();
       if (
         await queue
           .queueStore()
@@ -508,6 +519,7 @@ export class AgentService {
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
       ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+      ...(input.hostContext !== undefined ? { hostContext: input.hostContext } : {}),
       ...(interrupting !== undefined ? { interrupt: true, at: 'head' as const } : {}),
     });
     let runId: string | undefined;

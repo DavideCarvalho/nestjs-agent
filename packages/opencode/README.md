@@ -86,32 +86,46 @@ same steps in memory (single replica). Several processes need a cross-process si
 | --- | --- |
 | `@Agent` / `@SystemPrompt` / contributors | instructions `aviary.system`, refreshed every turn |
 | `approvalPolicy` | who approves each `permission.asked`, and its expiry; not required → answered at once |
-| `tools: { url, headers }` | the module's `@AiTool`s over MCP (`AgentMcpServerModule` with `actions: 'execute'`): reads allowed, actions asked |
+| `tools: { url, secret }` | the module's `@AiTool`s over the engine's own MCP endpoint: reads allowed, actions asked, and run only against an approval |
 | `skills` / `@Skill` | `.opencode/skills/<name>/SKILL.md` in the session's directory |
-| `memory` | instructions `aviary.memory`; with `tools`, a `remember` tool when the provider writes |
+| `memory` | instructions `aviary.memory`; with `tools`, a `remember` tool when the provider writes (on the engine's endpoint only) |
 | `ctx.emitUi` in a tool | the component lands in the turn's stream and message (see below) |
 | `regenerate` | the session is reverted to before the last user message |
 
 ## Tools over MCP
 
+With `tools`, the engine mounts its own MCP endpoint at `POST <agent path>/opencode/mcp` and
+registers it in every session (`mcp.add`) with a bearer token it mints: signed with `tools.secret`,
+naming the turn's actor and the OpenCode server, expiring after `tools.ttlMs` (7 days; re-issued on a
+kept session's turns once half-way through). Use the same `secret` in every process.
+
 ```ts
 AgentModule.forRoot({
   engine: openCode({
     host: MyOpenCodeHost,
-    tools: { url: 'https://app.internal/mcp', headers: (actor) => ({ Authorization: `Bearer ${mint(actor)}` }) },
+    // Where OpenCode reaches the app — from where OpenCode runs.
+    tools: { url: 'http://app.internal:3000/agent/opencode/mcp', secret: process.env.OPENCODE_TOOLS_SECRET },
   }),
   memory: { provider }, // a provider with `write` → OpenCode gets `remember`
   ...
 }),
-AgentMcpServerModule.forRootAsync({
-  inject: [OpenCodeTurns],
-  useFactory: (turns: OpenCodeTurns) => ({
-    name: 'app', version: '1', auth: myBearerResolver,
-    actions: 'execute', // OpenCode's `ask` rules put the person in front of action tools
-    context: (input) => turns.toolContext(input), // ties each call to its turn (`_meta`)
-  }),
-}),
 ```
+
+The endpoint serves turns, nothing else. A token alone runs nothing:
+
+- a call runs only while the token's actor has a turn running on the session the call names (OpenCode
+  puts it in `_meta`), on the token's server;
+- the agent's (and persona's) allow-list, `enabled`, the roles policy and `canUse` apply, on
+  `tools/list` and on `tools/call`; the kinds only the loop serves are never offered;
+- an `action` runs only against an approval granted in that turn (a person's, or the approval policy
+  saying none is needed): one call per approval. OpenCode's `ask` rules put the approval card in
+  front of the call; the endpoint checks it again, so a caller that skips OpenCode's rules (a model
+  in code mode that read the endpoint's headers) is refused;
+- `remember` is served here only — it is not added to the module's registry, so it is not on
+  `AgentMcpServerModule` or the `/tools` catalog.
+
+The module's `guards` are not applied to the endpoint (its callers are OpenCode sessions, not the
+app's users); a global guard of your own must let `opencode/mcp` through.
 
 ## Several processes
 

@@ -65,10 +65,10 @@ A multi-process deployment needs a cross-process `TokenStreamSink` and a persist
 | `@Agent` / `@SystemPrompt` / contributors | instructions entry `aviary.system`, every turn |
 | `approvalPolicy` | consulted on every `permission.asked`: not required → answered at once; otherwise its approver and `ttlMs` (expiry → rejected, "nobody approved in time") |
 | remembered approvals | answered without asking |
-| `@AiTool`s (`tools: { url, headers }`) | served by `AgentMcpServerModule` (`actions: 'execute'`), registered in the session with `mcp.add`; the server allowed as a whole (`aviary*`: OpenCode offers a server's tools only then), `action` tools `ask` → approval cards, tools outside the agent's allow-list denied |
+| `@AiTool`s (`tools: { url, secret }`) | served by the engine's own endpoint (`POST <agent path>/opencode/mcp`), registered in the session with `mcp.add` and a signed token (actor, server, expiry); the server allowed as a whole (`aviary*`: OpenCode offers a server's tools only then), `action` tools `ask` → approval cards, tools outside the agent's allow-list denied. The endpoint enforces it again: a call runs only for a turn of the token's actor running on the calling session, under the allow-list and roles, and an action only against an approval granted in that turn, once |
 | `skills` / `@Skill` | written as `.opencode/skills/<name>/SKILL.md` in the session's directory, allowed for the `skill` tool |
-| `memory` | instructions entry `aviary.memory`; with `tools` and a provider that writes, a `remember` tool over MCP (one fact, at the actor's own scope) |
-| `ctx.emitUi` in a tool | `AgentMcpServerModule`'s `context: (i) => turns.toolContext(i)` ties an MCP call to its turn through `_meta['ai.opencode/sessionID']`: the component is a `ui` frame on the turn's stream, persisted on its message (a session another process follows: found through `session.get` → `metadata.threadId` → the thread's running turn) |
+| `memory` | instructions entry `aviary.memory`; with `tools` and a provider that writes, a `remember` tool on the engine's endpoint only (one fact, at the actor's own scope) |
+| `ctx.emitUi` in a tool | the endpoint ties an MCP call to its turn through `_meta['ai.opencode/sessionID']` (`OpenCodeTurns.callContext`): the component is a `ui` frame on the turn's stream, persisted on its message (a session another process follows: found through `session.get` → `metadata.threadId` → the thread's running turn) |
 | regenerate | the store is rewound and the session reverted (`session.revert`) |
 
 ## What an engine does not get
