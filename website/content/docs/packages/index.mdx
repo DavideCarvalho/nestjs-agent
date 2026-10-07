@@ -1,0 +1,86 @@
+---
+title: Packages
+icon: Boxes
+description: The full nestjs-agent package set — core, the NestJS module, the model adapter, stores, the React frontend, governed SQL, the dashboard, and the ecosystem glue points.
+---
+
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+`@dudousxd/nestjs-agent` is a monorepo of small, single-purpose packages. [`-core`](/docs/agent/packages/core)
+defines the SPIs and the agentic loop — the **mechanism**. Everything else either implements one of
+those SPIs (a model adapter, a store, a dashboard) or consumes the library from an app (the NestJS
+module, the React frontend). Which tables, which tenant column, which roles, which model — that's
+**policy** you supply by installing the right package and configuring it, never by forking the loop.
+
+## The map
+
+| Package | Role |
+|---|---|
+| [`-core`](/docs/agent/packages/core) | Framework-agnostic agent loop, tool registry, and the SPIs (`ModelProvider`, `AgentStore`, `AgentGovernanceQueries`, `ActorResolver`, `RolesPolicy`, `ApprovalPolicy`, `TokenStreamSink`, `QuotaProvider`, `ActionProposalStore`, …); subpaths `/genui`, `/genui/builtins`, `/ag-ui`, `/guardrails`. |
+| [`(umbrella)`](/docs/agent/packages/nestjs) | NestJS `AgentModule` + `@AiTool` + the `/agent` controllers (incl. `agUiAdapter()` for AG-UI 1.0 and the action-proposal routes); subpaths `/durable` (durable runner), `/sink-redis`, `/guardrails`, `/genui`, `/media` (chat attachments on `nestjs-media`). |
+| [`-ai-sdk`](/docs/agent/packages/ai-sdk) | `aiSdkModel(model)` / `aiSdkModels({ … })` adapt Vercel AI SDK v7 `LanguageModel`s to `ModelProvider`; `aiSdkEmbedding` adapts an `EmbeddingModel` — zero provider code. |
+| [`-react`](/docs/agent/packages/react) | `useAgentChat` + styling-agnostic chat components for a browser frontend; subpaths `/markdown`, `/genui`, `/genui/json-render`, `/genui/server` (server-side component rendering), `/media`. |
+| [`-data`](/docs/agent/packages/data) | `createExecuteSqlTool` — governed, read-only SQL as a prebuilt tool. |
+| [`-rag`](/docs/agent/packages/rag) | Retrieval-Augmented Generation — chunking, ingestion, an embedding-backed `Retriever`, and in-memory + pgvector stores. |
+| [`-rag-media`](/docs/agent/packages/rag-media) | Auto-ingest `nestjs-media` uploads into agent RAG — extract, chunk, embed, index, owner-scoped, delete-synced. |
+| [`-mcp`](/docs/agent/packages/mcp) | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP). |
+| [`-mcp-server`](/docs/agent/packages/mcp-server) | MCP server — expose this deployment's tools to an external MCP client, over the agent's own registry and roles policy. |
+| [`/genui`](/docs/agent/packages/genui) | Generative UI across the packages — the isomorphic catalog (`-core/genui`), `AgentGenuiModule` (`nestjs-agent/genui`) and `GenuiProvider` (`-react/genui`). |
+| [`-evals`](/docs/agent/packages/evals) | Answer-quality scoring over stored runs — a `Scorer` SPI, a resumable batch runner, and rule / statistical / model-graded built-ins. |
+| [`-dashboard`](/docs/agent/packages/dashboard) | Standalone AI-gateway governance console (bundled SPA + API), no Telescope required. |
+| [`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm) | `AgentStore` + `AgentGovernanceQueries` + `AgentPricingStore` on MikroORM, plus the action-proposal stores, `MikroOrmConfirmTokenStore` and `MikroOrmTokenStreamSink`. |
+| [`-store-drizzle`](/docs/agent/packages/store-drizzle) | `AgentStore` + `AgentGovernanceQueries` + `AgentPricingStore` on Drizzle, plus the action-proposal stores, `DrizzleConfirmTokenStore` and `DrizzleTokenStreamSink`. |
+| [`-transport-redis`](/docs/agent/packages/transport-redis) | `RedisTokenStreamSink` — a `TokenStreamSink` over Redis for multi-replica deployments. (A SQL sink from either store package also works, without Redis.) |
+| [`-telescope`](/docs/agent/packages/telescope) | Telescope extension — an "Agent" tab reusing the governance read-model. |
+| [`-authz`](/docs/agent/packages/authz) | Plugs `@dudousxd/nestjs-authz` into tool authorization as a `RolesPolicy`. |
+| [`-codegen`](/docs/agent/packages/codegen) | Emits `api.agent.*` into the ecosystem's unified typed client. |
+| [`-testing`](/docs/agent/packages/testing) | In-memory store/sink/quota + a deterministic fake model for offline tests. |
+
+## How they layer
+
+```text
+-react ──▸ (SSE /agent/chat) ──▸ umbrella (@dudousxd/nestjs-agent) ──▸ -core
+-codegen ─▸ (REST /agent/*)  ──┘                                       │
+                                                                        │  (SPIs)
+        -store-mikro-orm / -store-drizzle ─────────────────────────────┤  AgentStore + AgentGovernanceQueries + AgentPricingStore
+                              -ai-sdk ──────────────────────────────────┤  ModelProvider
+                              -authz ────────────────────────────────────┤  RolesPolicy
+                              -transport-redis (or a store's SQL sink) ────┤  TokenStreamSink
+                              -data (createExecuteSqlTool) ───────────────────┤  a read-kind ToolSpec + ToolHandler
+                              -rag ─────────────────────────────────────────────┤  Retriever + EmbeddingProvider (RAG tool / inject)
+                              -mcp (an external MCP server's tools) ─────────────┤  ToolSpecs + ToolHandlers, HITL-gated by default
+                              -mcp-server (this deployment's tools, outward) ───┤  reads the same ToolRegistry + RolesPolicy, over MCP
+                              -rag-media (auto-ingest via diagnostics channel) ──┤  feeds -rag's VectorStore, no hard dep
+        -dashboard / -telescope ──────────────────────────────────────────────┘  consume AgentGovernanceQueries
+```
+
+`-core` has no NestJS dependency and defines every contract; the umbrella package owns the NestJS
+module, controllers and runners. The other NestJS-aware packages (the stores, `-authz`, `-mcp`,
+`-mcp-server`, `-rag-media`, `-dashboard`) only add a module that binds their implementation to an
+SPI token. Each adapter implements contracts from `-core` and nothing else: a store package
+implements the store-side SPIs, the AI SDK adapter `ModelProvider` and `EmbeddingProvider`, the authz
+adapter `RolesPolicy`. The dashboard and the Telescope extension are peers — both read the same
+`AgentGovernanceQueries` read-model and the same `aviary:agent:*` diagnostics channel, so you can run
+either, both, or neither.
+
+<Cards>
+  <Card title="Core" href="/docs/agent/packages/core" description="The loop, the tool registry, and every SPI." />
+  <Card title="NestJS (umbrella)" href="/docs/agent/packages/nestjs" description="AgentModule, @AiTool, the /agent controllers, and /durable." />
+  <Card title="AI SDK adapter" href="/docs/agent/packages/ai-sdk" description="aiSdkModel — zero provider code for any Vercel AI SDK v7 model." />
+  <Card title="React" href="/docs/agent/packages/react" description="useAgentChat and styling-agnostic chat components." />
+  <Card title="Data" href="/docs/agent/packages/data" description="Governed, read-only SQL as a prebuilt tool." />
+  <Card title="RAG" href="/docs/agent/packages/rag" description="Chunking, ingestion, an embedding-backed Retriever, in-memory + pgvector stores." />
+  <Card title="RAG media" href="/docs/agent/packages/rag-media" description="Auto-ingest nestjs-media uploads into agent RAG." />
+  <Card title="MCP" href="/docs/agent/packages/mcp" description="Import an external MCP server's tools as governed agent tools." />
+  <Card title="MCP server" href="/docs/agent/packages/mcp-server" description="Expose this deployment's tools to an external MCP client." />
+  <Card title="Generative UI" href="/docs/agent/packages/genui" description="The isomorphic catalog, AgentGenuiModule, and GenuiProvider." />
+  <Card title="Evals" href="/docs/agent/packages/evals" description="Answer-quality scoring over stored runs." />
+  <Card title="Dashboard" href="/docs/agent/packages/dashboard" description="The standalone AI-gateway governance console." />
+  <Card title="Store (MikroORM)" href="/docs/agent/packages/store-mikro-orm" description="AgentStore + AgentGovernanceQueries + AgentPricingStore on MikroORM." />
+  <Card title="Store (Drizzle)" href="/docs/agent/packages/store-drizzle" description="AgentStore + AgentGovernanceQueries + AgentPricingStore on Drizzle." />
+  <Card title="Transport (Redis)" href="/docs/agent/packages/transport-redis" description="RedisTokenStreamSink for multi-replica token streaming." />
+  <Card title="Telescope" href="/docs/agent/packages/telescope" description="An 'Agent' tab reusing the governance read-model." />
+  <Card title="Authz" href="/docs/agent/packages/authz" description="Ability-aware RolesPolicy via @dudousxd/nestjs-authz." />
+  <Card title="Codegen" href="/docs/agent/packages/codegen" description="api.agent.* in the unified typed client." />
+  <Card title="Testing" href="/docs/agent/packages/testing" description="In-memory store/sink/quota + a deterministic fake model." />
+</Cards>

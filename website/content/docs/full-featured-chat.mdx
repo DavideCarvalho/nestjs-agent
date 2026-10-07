@@ -1,0 +1,237 @@
+---
+title: Full-featured chat
+icon: LayoutDashboard
+description: Login, a persistent store, a model picker, quota, attachments, approvals and generative UI — one AgentProvider and one useAgentChat, with your own markup.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[Hello chat](/docs/agent/hello-chat) with every feature switched on. The server adds options, one per
+feature; the client configures the connection once in `<AgentProvider>` and gets everything else
+from `useAgentChat` — the transcript, the composer and the model picker come already wired.
+
+## Server
+
+```ts
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { AgentModule, requestUserActorResolver } from '@dudousxd/nestjs-agent';
+import { AgentMediaAttachmentsModule } from '@dudousxd/nestjs-agent/media';
+import { aiSdkModels } from '@dudousxd/nestjs-agent-ai-sdk';
+import { MikroOrmAgentStoreModule } from '@dudousxd/nestjs-agent-store-mikro-orm';
+import { anthropic } from '@ai-sdk/anthropic';
+import { openai } from '@ai-sdk/openai';
+import { RefundOrderTool, SearchOrdersTool } from './tools';
+
+@Module({
+  imports: [
+    MikroOrmAgentStoreModule.forFeature(), // found by AgentModule — no `store` option needed
+    AgentMediaAttachmentsModule.forRoot({ maxBytes: 10 * 1024 * 1024 }), // next to a configured MediaModule
+    AgentModule.forRoot({
+      model: aiSdkModels(
+        {
+          fast: { model: openai('gpt-5-mini'), label: 'Fast', badges: ['fast'] },
+          smart: { model: anthropic('claude-sonnet-4-5'), label: 'Smart', badges: ['reasoning'] },
+        },
+        { default: 'fast' },
+      ),
+      systemPrompt: ({ actor }) => `You are Acme's support assistant. The user id is ${actor.id}.`,
+      actorResolver: requestUserActorResolver(), // req.user from Passport / your session middleware
+      quota: { limits: { day: { tokens: 200_000 }, month: { usd: 20 } } },
+      followUps: true,
+    }),
+  ],
+  providers: [SearchOrdersTool, RefundOrderTool],
+})
+export class AppModule {}
+```
+
+```ts
+// src/tools.ts
+import { AiTool } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+
+@AiTool({ description: 'Find orders by customer email.', input: z.object({ email: z.string() }) })
+export class SearchOrdersTool {
+  async execute({ email }: { email: string }) { /* … */ }
+}
+
+@AiTool({
+  kind: 'action', // parks on approval before it runs
+  description: 'Refund an order.',
+  input: z.object({ orderId: z.string() }),
+  roles: ['SUPPORT'], // only support staff may even see it
+  presentation: {
+    label: 'Refund',
+    running: 'Refunding {orderId}',
+    done: 'Refunded {orderId}',
+    confirm: { title: 'Refund {orderId}?', verb: 'Refund' },
+  },
+})
+export class RefundOrderTool {
+  async execute({ orderId }: { orderId: string }, ctx) {
+    await ctx.emitUi('RefundReceipt', { orderId, status: 'refunded' }); // a component in the answer
+    return { refunded: true };
+  }
+}
+```
+
+## Client
+
+```tsx
+// main.tsx — the connection, once
+import { AgentProvider } from '@dudousxd/nestjs-agent-react';
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
+import { RefundReceipt } from './components';
+
+const readCookie = (name: string) =>
+  decodeURIComponent(document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))?.[1] ?? '');
+
+<AgentProvider
+  path="agent"                                              // AgentModule's `path` (default)
+  getHeaders={() => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') })} // CSRF for a cookie session
+  attachments={{ upload: mediaAttachments() }}              // resumable uploads via nestjs-media
+  genui={{ registry: { RefundReceipt } }}                   // how pushed components render
+>
+  <App />
+</AgentProvider>;
+```
+
+```tsx
+// Chat.tsx — one hook, your markup
+import { GenerativeUI } from '@dudousxd/nestjs-agent-react/genui';
+import { useAgentChat, useThreads } from '@dudousxd/nestjs-agent-react';
+
+export function Chat({ threadId, onNavigate }: { threadId?: string; onNavigate: (id: string) => void }) {
+  const chat = useAgentChat({
+    ...(threadId !== undefined ? { threadId } : {}), // history loads, a streaming turn re-attaches
+    onThreadCreated: onNavigate,                    // first send, or a fork
+    whileRunning: 'queue',                          // the default: mid-turn sends wait their turn
+  });
+  const { threads, rename, remove } = useThreads();
+  const { transcript, composer, models, queue } = chat;
+
+  return (
+    <div className="chat">
+      <aside>
+        {threads.map((t) => (
+          <a key={t.id} onClick={() => onNavigate(t.id)}>{t.title}</a>
+        ))}
+      </aside>
+
+      <main {...transcript.scroll.getContainerProps()}>
+        {transcript.items.map((item) => (
+          <article key={item.id} data-role={item.role}>
+            {item.blocks.map((block) => {
+              if (block.kind === 'text') return <Markdown key={block.key}>{block.text}</Markdown>;
+              if (block.kind === 'ui') return <GenerativeUI key={block.key} part={block} />;
+              if (block.kind === 'tools')
+                return block.calls.map((call) => (
+                  <div key={call.toolCallId}>
+                    {call.description.phrase}
+                    {call.isAwaitingApproval ? (
+                      <>
+                        <p>{call.description.confirm?.title}</p>
+                        <button disabled={!call.approve.available} onClick={() => call.approve.run()}>
+                          {call.description.confirm?.verb ?? 'Approve'}
+                        </button>
+                        <button disabled={!call.reject.available} onClick={call.reject.run}>Reject</button>
+                      </>
+                    ) : null}
+                    {call.error ? <small role="alert">{call.error}</small> : null}
+                  </div>
+                ));
+              if (block.kind === 'elicitation')
+                return (
+                  <form key={block.key} onSubmit={(e) => { e.preventDefault(); block.answer.run(); }}>
+                    {block.questions.map((q) => (
+                      <fieldset key={q.id}>
+                        <legend>{q.prompt}</legend>
+                        {q.options.map((o) => (
+                          <label key={o.value}>
+                            <input type="checkbox" checked={o.isSelected} onChange={o.select} /> {o.label}
+                          </label>
+                        ))}
+                      </fieldset>
+                    ))}
+                    <button disabled={!block.answer.available}>Answer</button>
+                  </form>
+                );
+              return null;
+            })}
+            {item.usage ? <small>{item.usage.costLabel}</small> : null}
+            {item.timestamp ? <time>{item.timestamp.relative}</time> : null}
+            {item.regenerate.available ? <button onClick={item.regenerate.run}>Retry</button> : null}
+          </article>
+        ))}
+        {transcript.queued.map((item) => (
+          <article key={item.id} data-role="user" data-state={item.state}>
+            {item.text}
+            <button onClick={() => queue.move(item.id, 0)} disabled={item.isNext}>Run next</button>
+            {item.remove.available ? <button onClick={item.remove.run}>Remove</button> : null}
+          </article>
+        ))}
+        {queue.paused ? (
+          <p role="status">
+            Queue paused ({queue.paused.reason}) <button onClick={() => queue.resume()}>Resume</button>
+          </p>
+        ) : null}
+      </main>
+
+      <footer {...composer.files.dropZoneProps}>
+        <select value={models.selected ?? ''} onChange={(e) => models.select(e.target.value)}>
+          {models.list.map((m) => (
+            <option key={m.id} value={m.id} disabled={!m.available}>{m.label}</option>
+          ))}
+        </select>
+        {composer.files.items.map((f) => (
+          <span key={f.id} data-status={f.status}>{f.name} <button onClick={() => composer.files.remove(f.id)}>×</button></span>
+        ))}
+        <input {...composer.files.inputProps} />
+        <textarea
+          value={composer.text}
+          onChange={(e) => composer.setText(e.target.value)}
+          onPaste={composer.files.onPaste}
+        />
+        {transcript.stop.available ? <button onClick={transcript.stop.stop}>Stop</button> : null}
+        {/* Mid-turn this queues the draft (files included) instead of being refused. */}
+        <button disabled={!composer.canSend} onClick={() => void composer.submit()}>Send</button>
+        {composer.blockedBy === 'quota' ? <p role="alert">{chat.blocked?.reason ?? 'Budget used up'}</p> : null}
+      </footer>
+    </div>
+  );
+}
+```
+
+## What each piece is doing
+
+| You wrote | The library did |
+|---|---|
+| `useAgentChat({ threadId })` | read the thread, seeded the history, re-attached to a turn still streaming (`history: false` / `resume: false` opt out) |
+| `transcript.items[…].blocks` | grouped the parts, bound approve / reject / answer / skip / stop / fork / regenerate to this chat, read the tool catalog for `call.description`, and read `metadata.createdAt` / `metadata.usage` for `timestamp` / `usage` |
+| `call.description.confirm` | the approval wording for this call: the `confirmation` the tool's `preflight` returned for it, else the `presentation.confirm` template filled from the input |
+| `composer.submit()` | sent the draft with the ready uploads as `{ mediaId }` refs, cleared both; `canSend` is false while empty, uploading or over quota (`blockedBy` says which). Mid-turn it queued the draft on the thread instead (`'busy'` only with `whileRunning: 'block'`) |
+| `transcript.queued` / `queue` | messages sent mid-turn, waiting server-side for the running turn; the chat attached to each as it started. `queue.move` / `edit` / `remove` / `resume` change what waits — see [Typing ahead](/docs/agent/guides/message-queue) |
+| `composer.files` | validated against the server's own limits (`GET /agent/config`), uploaded each file resumably, with progress and cancel |
+| `models.list` / `select` | fetched `GET /agent/models` on first read (the `aiSdkModels` catalog), sends the pick as each turn's `model` — that turn only, never stored, dropped when the chat switches threads; `models.pinToThread(id)` persists it on the thread (`models.pinned`), and `models.locked` says when the agent always runs on one model |
+| `chat.blocked` | read `GET /agent/quota`; sends are refused client-side with `QuotaBlockedError` while blocked (the server would answer `429`); `chat.quota.warning` names a window past its soft limit |
+| `useThreads()` | the provider's backend; refreshes itself when this chat creates a thread, settles a run or streams a title |
+
+Every piece is also a hook of its own — `useChatTranscript`, `useAttachments`, `useModels`,
+`useQuota`, `useThreads`, `useMessageFeedback`, `useToolCatalog` — each taking `backend` optionally,
+for a layout that splits them across components. Override any of the chat's wiring with
+`useAgentChat({ transcript: { … }, composer: { … }, blocked, model })`.
+
+An approval that should not hold the conversation — the refund decided later, by someone else — is
+`actionApprovalMode: 'independent'` on the server. Nothing changes in this component: the call's
+`approval.target` becomes a proposal, `useAgentChat` re-reads the thread's proposals after each turn
+and while one is pending or running, and `call.approve.run()` decides it through the proposal routes.
+See [Action proposals](/docs/agent/guides/action-proposals).
+
+<Callout type="info" title="Prefer the shipped components?">
+Replace the transcript and composer markup with `<MessageList messages={chat.messages} status={chat.status} queue={chat.queue} />`
+and `<ChatInput onSubmit={(text) => chat.sendMessage({ text })} />`, and `genui` on the provider
+draws pushed components. `MessageList` does not draw tool calls (only through `renderToolPart`, which
+gets the raw part) or question sets, so keep the approval and question markup above, or install the
+registry's `AgentChat`, which draws both. See [Chat components](/docs/agent/guides/chat-components).
+</Callout>

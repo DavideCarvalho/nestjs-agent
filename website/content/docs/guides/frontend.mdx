@@ -1,0 +1,521 @@
+---
+title: Frontend
+icon: MonitorSmartphone
+description: Wire a React chat UI to the agent — AgentProvider for the connection, useAgentChat for everything else (history, resume, quota, models, composer, a bound transcript), and styling-agnostic components.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@dudousxd/nestjs-agent-react` connects a React app to the `/agent` endpoints. `<AgentProvider>`
+holds the connection once; `useAgentChat` wraps the Vercel AI SDK v7 `useChat` with a transport for
+the agent's SSE protocol and does the wiring around it — loading a thread's history, re-attaching to
+a turn still streaming, gating sends on quota — and returns a transcript, a composer and a model
+picker that are already bound to the chat. The components ship **no styles**.
+
+---
+
+## Install
+
+```bash
+pnpm add @dudousxd/nestjs-agent-react ai @ai-sdk/react
+# optional — only if you use the /markdown renderer:
+pnpm add streamdown @streamdown/code @streamdown/math @streamdown/mermaid \
+  react-markdown remark-gfm remark-math rehype-katex rehype-sanitize katex \
+  prism-react-renderer unist-util-visit
+```
+
+`ai` and `@ai-sdk/react` are peers — `useAgentChat` returns the AI SDK's own `useChat` result, spread
+with the agent extras, so you interoperate with the SDK directly.
+
+---
+
+## The minimal chat
+
+```tsx
+import { ChatInput, MessageList, useAgentChat } from '@dudousxd/nestjs-agent-react';
+
+export function Chat() {
+  const chat = useAgentChat();
+  return (
+    <>
+      <MessageList messages={chat.messages} status={chat.status} />
+      <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
+    </>
+  );
+}
+```
+
+With no provider, every hook shares one client for the same origin under `/agent`. That is the whole
+setup for an app served next to its API.
+
+---
+
+## `<AgentProvider>`: the connection, once
+
+Every hook — `useAgentChat`, `useThreads`, `useModels`, `useAgents`, `useQuota`, `useToolCatalog`,
+`useMessageFeedback`, `useAttachments`, `useAgentConfig` — talks to the enclosing provider's backend
+unless it is handed a `backend` of its own.
+
+```tsx
+import { AgentProvider } from '@dudousxd/nestjs-agent-react';
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
+
+<AgentProvider
+  baseUrl="https://api.example.com"   // the origin; default '' (same origin)
+  path="api/agent"                    // AgentModule's `path`, global prefix included; default 'agent'
+  credentials="include"               // cookies on a cross-origin API
+  getHeaders={() => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') })} // read per request
+  attachments={{ upload: mediaAttachments() }} // optional — resumable uploads via nestjs-media
+  genui={{ registry, catalog }}       // optional — how pushed components render
+  onHttpError={(error) => { if (error.status === 401) signIn(); }} // optional — every error answer
+>
+  <App />
+</AgentProvider>;
+```
+
+| Prop | Purpose |
+|---|---|
+| `baseUrl` | The server's origin. Default `''`. It is **only** the origin — the agent's route prefix is `path`. |
+| `path` | The agent's route prefix (`AgentModule`'s `path` + any global prefix). Default `'agent'`. |
+| `headers` / `getHeaders` | Static headers / headers resolved on every request (a rotating bearer token, a CSRF header read from its cookie). |
+| `credentials` | Forwarded to `fetch`: `'include'` for cookie auth on another origin. |
+| `fetch` | Injectable `fetch` for tests / non-browser runtimes. |
+| `attachments.upload` | How the built-in client uploads (`mediaAttachments()`, or your own `AttachmentUploadStrategy`). |
+| `onHttpError` | Called with every error answer of the built-in client (`AgentHttpError`, or a `MediaUploadError` from `mediaAttachments()`) before it is thrown — "401 → sign in again". Read at call time. |
+| `genui` | Everything `<GenuiProvider>` takes — see [Generative UI](/docs/agent/guides/generative-ui). |
+| `uiCapabilities` | The components (and versions) this app can render, sent with every chat send under the provider — see [Which components this client can draw](#which-components-this-client-can-draw). |
+| `backend` | Any `AgentBackend` instead of the built-in client (the connection props are then ignored). |
+
+`useAgentBackend()` returns the backend in scope, for calls of your own.
+
+### Cookie sessions and CSRF
+
+Nothing assumes bearer tokens. For a cookie session, set `credentials` and hand the CSRF header to
+`getHeaders` — it runs per request, so a rotated token is picked up:
+
+```tsx
+const readCookie = (name: string) =>
+  decodeURIComponent(document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))?.[1] ?? '');
+
+<AgentProvider credentials="include" getHeaders={() => ({ 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') })}>
+  <App />
+</AgentProvider>;
+```
+
+See [Identity & Authorization](/docs/agent/guides/identity-and-authorization) for how the server
+turns the request into an actor — including the default anonymous mode, which needs no client code.
+
+---
+
+## `useAgentChat`
+
+```tsx
+const chat = useAgentChat({
+  threadId,                              // omit → the first send creates one
+  onThreadCreated: (id) => router.replace(`/chat/${id}`),
+  agent: 'support',                      // a named agent per turn
+});
+```
+
+Give it a `threadId` and it reads the thread: the history is loaded into the chat and a turn that
+was still streaming is re-attached — a reload mid-answer keeps streaming it. Change `threadId` and it
+switches cleanly to the other thread; pass back the id it just created (to sync the URL) and the live
+conversation is kept as it is.
+
+| Option | Purpose |
+|---|---|
+| `backend` | Default: the provider's (or the shared same-origin client). |
+| `threadId` | The thread to bind to. Omitted → the backend creates one on the first send. |
+| `history` | Load the thread's history. Default `true`; skipped when `initialMessages` is given. |
+| `initialMessages` | History you already have (SSR, a cache) — seeds the chat instead of loading it. |
+| `resume` | Re-attach to the thread's streaming turn (`activeRunId`). Default `true`. |
+| `resumeRunId` | A run id you already know is streaming — attached to on mount without reading the thread. |
+| `agent` | Named agent to run each turn. |
+| `persona` | One of the agent's personas, read per send; the server pins it on the thread ([Personas](/docs/agent/guides/personas)). |
+| `model` | Control the model yourself; omitted → `chat.models.selected`. |
+| `quota` | Read `GET /quota` and gate sends on it. Default `true` when the backend supports it. |
+| `blocked` | Override the gate: `null` never blocks, a `QuotaBlock` always does. |
+| `composer` | `{ accept, maxBytes, maxFiles, upload, describeRejection }` for `chat.composer.files`. |
+| `whileRunning` | What a send does while a turn runs: `'queue'` (default), `'interrupt'` or `'block'` ([Typing ahead](/docs/agent/guides/message-queue)). |
+| `transcript` | Overrides for `chat.transcript` — anything `useChatTranscript` takes. |
+| `uiCapabilities` | Overrides the provider's `uiCapabilities` for this chat's sends. |
+| `proposals` / `proposalPollMs` | Read the thread's [action proposals](#approvals-that-do-not-hold-the-turn) — default on, off when `history` and `resume` are both `false` / the poll interval while one is pending or running, default `1000`. |
+| `reconnect` | `{ maxAttempts, baseDelayMs, maxDelayMs }`, or `false`. |
+| `getPageContext` | Read at each send to attach a page snapshot (page-assistant). |
+| `onThreadCreated` | This chat moved to a thread it created: its first send, or a `fork`. |
+| `onFinish` / `onRunSettled` | A turn rendered / the server finished writing the run (title and terminal state persisted). |
+| `onTitle` / `onData` | The server named the thread mid-stream / every data part as it arrives. |
+| `background` / `backgroundPollMs` | Track detached sub-agents (see below). |
+
+What it returns, on top of the AI SDK chat (`messages`, `status`, `sendMessage`, `stop`, `error`,
+`setMessages`, …):
+
+| Field | What it is |
+|---|---|
+| `transcript` | `useChatTranscript` bound to this chat — approve/reject/answer/skip, stop, fork, regenerate, the tool catalog, timestamps and usage. |
+| `composer` | `{ text, setText, files, canSend, blockedBy, submit({ mode? }) }`. |
+| `queue` | Messages waiting behind the running turn: `items`, `paused`, `add`, `edit`, `move`, `remove`, `interrupt`, `clear`, `resume` ([Typing ahead](/docs/agent/guides/message-queue)). |
+| `models` | `{ list, providers, selected, pinned, defaultModel, locked, select(id), pinToThread(id), isLoading, error }` — fetched on first read. |
+| `threadPersona` | The persona pinned on the thread, or `null`. |
+| `proposals` | `{ items, error, refresh() }` — the thread's action proposals, already merged into `messages`. |
+| `quota` / `blocked` | The `useQuota` state; the window blocking sends right now. |
+| `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — routed by tool-call id, or by `target` for an action proposal. |
+| `fork` / `truncateFrom` / `promote` | `({ messageId, threadId? })` / `({ threadId? })` — default to this chat's thread. |
+| `cancel()` | Close the stream and hard-abort the run server-side. |
+| `regenerate()` | Re-run the last exchange (the server truncates and re-answers). |
+| `getThreadId()` | The thread the chat is on now. |
+| `runId` / `activeRunId` | The current run / the loaded thread's running turn. |
+| `isLoadingHistory` / `historyError` | The history read. |
+| `runError` | The last run's `event: error` frame as `{ code, message }`, or `null`. |
+| `connection` | `live`, or `reconnecting` with the attempt. |
+| `background` | `{ runs, isWorking, refresh() }`. |
+| `backend` | The backend the chat talks to. |
+
+<Callout type="info" title="Only the latest message goes over the wire">
+The backend hydrates prior history from its store, so the transport sends only the newest user
+message each turn. Payloads stay tiny and the client cannot corrupt replayed history.
+</Callout>
+
+---
+
+## The transcript, already wired
+
+`chat.transcript` is the headless transcript model with every action bound to the chat:
+
+```tsx
+const { transcript } = useAgentChat();
+
+{transcript.items.map((item) => (
+  <article key={item.id} data-role={item.role}>
+    {item.blocks.map((block) =>
+      block.kind === 'text' ? <p key={block.key}>{block.text}</p>
+      : block.kind === 'tools' ? block.calls.map((call) => (
+          <div key={call.toolCallId}>
+            {call.description.phrase}
+            {call.isAwaitingApproval ? <button onClick={() => call.approve.run()}>Approve</button> : null}
+          </div>
+        ))
+      : null,
+    )}
+    {item.timestamp ? <time>{item.timestamp.relative}</time> : null}
+  </article>
+))}
+```
+
+Approvals and question sets are actionable with nothing passed — and not only here:
+`useChatTranscript` on its own settles them through the in-scope backend when no handler is given —
+a handler left undefined is NOT off. Pass `onApprove: null` (etc.) to opt one decision out, or
+`readOnly: true` (also `<MessageList readOnly>`) for a surface nobody acts on — an audit or shared
+view: approvals and question sets still render, with no approve / reject / answer / skip, edit,
+fork, regenerate or stop, whatever handlers or backend are in scope. (`MessageList`'s own markup
+draws neither — see [Rendering with the components](#rendering-with-the-components).)
+
+`isLoadingHistory` is `true` from the first render with a `threadId` until the history read settles,
+so render a skeleton on it rather than on `messages.length === 0`. Every handler takes one
+object — `onApprove({ toolCallId, remember })`, `onAnswer({ toolCallId, answers })`,
+`onEditSubmit({ messageId, text })`, `onFork({ messageId })` — the same shape as `chat.approve` and
+friends, so they pass straight through. The full model is in
+[Bring your own UI](/docs/agent/guides/bring-your-own-ui#the-transcript-model).
+
+## The composer
+
+```tsx
+const { composer } = useAgentChat();
+
+<div {...composer.files.dropZoneProps}>
+  <textarea value={composer.text} onChange={(e) => composer.setText(e.target.value)} onPaste={composer.files.onPaste} />
+  <input {...composer.files.inputProps} />
+  <button disabled={!composer.canSend} onClick={() => void composer.submit()}>Send</button>
+</div>
+```
+
+`submit()` sends the draft with the ready uploads attached (as `{ mediaId }` refs) and clears both.
+`blockedBy` says why it cannot send: `'empty'`, `'busy'`, `'uploading'` or `'quota'`. The file tray
+takes its `accept` / `maxBytes` / `maxFiles` defaults from the server (`GET /agent/config`) — see
+[File uploads](/docs/agent/guides/file-uploads).
+
+## Picking a model
+
+```tsx
+const { models } = useAgentChat();
+
+<select value={models.selected ?? ''} onChange={(e) => models.select(e.target.value)}>
+  {models.list.map((m) => (
+    <option key={m.id} value={m.id} disabled={!m.available}>{m.label}</option>
+  ))}
+</select>
+```
+
+`models.list` is fetched the first time it is read (`GET /agent/models`, the server's catalog —
+`aiSdkModels` carries one). `select(id)` runs the following turns on it; `selected` is the pick, else
+the thread's pinned model, else the server default. `pinToThread(id)` persists the pick on the thread
+(`null` unpins) — before the first send, it lands on the thread that send creates. A single send can
+still override with `sendMessage(msg, { body: { model } })`. `useModels()` / `useAgents()` are the
+standalone hooks.
+
+## Quota
+
+`useAgentChat` reads `GET /agent/quota` and refuses to send while a window is exhausted —
+`sendMessage` / `regenerate` reject with `QuotaBlockedError` and `composer.blockedBy` is `'quota'`,
+instead of a turn the server would refuse with `429`:
+
+```tsx
+const chat = useAgentChat();
+
+<meter value={chat.quota.month?.usedUsd ?? 0} max={chat.quota.month?.limitUsd ?? 1} />
+{chat.blocked ? <p role="alert">{chat.blocked.reason}</p> : null}
+```
+
+The report re-reads after every run a chat on the same backend settles. `blocked` overrides the gate;
+`quota: false` skips the read. `useQuota()` is the standalone hook.
+
+---
+
+## Your own backend
+
+Every call goes through one interface, `AgentBackend`. `AgentClient` — `fetch` over this library's
+routes — is the default. An app with its own client (a generated one, its own auth, or a server that
+is not this library but speaks the [stream protocol](/docs/agent/reference/stream-events)) implements
+it and hands it to the provider:
+
+```tsx
+import type { AgentBackend } from '@dudousxd/nestjs-agent-react';
+
+const backend: AgentBackend = {
+  async openChatStream({ body, headers, signal }) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'content-type': 'application/json', ...csrfHeader(), ...headers },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`chat failed: ${res.status}`);
+    return { body: res.body }; // SSE bytes, stream-protocol framing
+  },
+  async resumeChatStream({ runId, after, signal }) {
+    const res = await fetch(`/api/chat/${runId}/stream${after ? `?after=${after}` : ''}`, {
+      credentials: 'include',
+      signal,
+    });
+    return res.status === 404 ? null : { body: res.body! };
+  },
+  cancelStream: (runId) => api.chat.cancel(runId),
+  listThreads: () => api.threads.list(),
+  getThread: (id) => api.threads.get(id),
+  updateThread: (id, patch) => api.threads.update(id, patch),
+  deleteThread: (id) => api.threads.remove(id),
+  // optional: enqueueMessage, getQueue, updateQueuedMessage, removeQueuedMessage,
+  // interruptQueuedMessage, clearQueue, resumeQueue, forkFromMessage, promoteThread,
+  // truncateFromMessage, approveToolCall, rejectToolCall, answerToolCall, skipToolCall,
+  // listActionProposals, approveActionProposal, rejectActionProposal, uploadAttachment, listTools,
+  // listSkills, getQuota, listModels, listAgents, getConfig, setMessageFeedback
+};
+
+<AgentProvider backend={backend}>
+  <App />
+</AgentProvider>;
+```
+
+The streaming, thread and cancel members are required; the rest are optional, and a hook that needs
+a missing one either skips it (quota, models, config, the tool catalog are read only when present)
+or throws `AgentBackendUnsupportedError` when you call it. The body `openChatStream` receives is
+`{ message, threadId?, agent?, persona?, model?, attachments?: { mediaId }[], pageContext?, regenerate?, uiCapabilities? }`
+(`enqueueMessage` gets the same body plus `mode: 'queue' | 'interrupt'`).
+
+---
+
+## Rendering with the components
+
+`ChatInput` is a composer (Enter submits, Shift+Enter newlines, optional dictation); `MessageList`
+windows the thread, shows a typing indicator, an inline error + retry banner and follow-up chips.
+Everything is driven through `classNames` and callbacks.
+
+```tsx
+<MessageList
+  messages={chat.messages}
+  status={chat.status}
+  error={chat.error ?? null}
+  onRetry={() => chat.regenerate()}
+  regeneratable
+  onRegenerate={() => chat.regenerate()}
+  onFork={({ messageId }) => chat.fork({ messageId })}
+  classNames={{ root: 'messages', message: { byRole: { user: 'me', assistant: 'bot' } } }}
+/>
+<ChatInput
+  onSubmit={(text) => chat.sendMessage({ text })}
+  isStreaming={chat.status === 'streaming' || chat.status === 'submitted'}
+  onStop={() => chat.cancel()}
+/>
+```
+
+`MessageList` also accepts `renderText`, `renderToolPart` / `renderToolGroup`, `renderReasoning`,
+`renderFiles`, `renderUi`, `editable` + `onEditSubmit({ messageId, text })`, `readOnly`, `queue`, and
+`getUsage` / `getCreatedAt` (defaults read the message's metadata). Both components are thin
+renderers over `useChatTranscript`.
+
+<Callout type="warn" title="Tool calls and question sets are yours to draw">
+`MessageList` draws a tool call only through `renderToolPart` / `renderToolGroup`, which receive the
+raw `AnyToolUIPart` — not the call's approve / reject state — and it never draws a question set. For
+approval cards and question forms, render `chat.transcript` yourself ([the transcript, already
+wired](#the-transcript-already-wired)) or use the registry's `AgentChat`
+([Chat components](/docs/agent/guides/chat-components)).
+</Callout>
+
+### Rich markdown (the `/markdown` subpath)
+
+```tsx
+import { AgentMarkdown } from '@dudousxd/nestjs-agent-react/markdown';
+
+<MessageList
+  messages={chat.messages}
+  status={chat.status}
+  renderText={(text, { isStreaming }) => <AgentMarkdown isStreaming={isStreaming}>{text}</AgentMarkdown>}
+/>;
+```
+
+`AgentMarkdown` ships the streamdown stack (GFM, KaTeX, highlighted code, Mermaid), defers expensive
+renders until a block settles, and takes `remarkPlugins`, `components`, `allowedTags`,
+`literalTagContent`. Its peers are optional: apps that don't import the subpath never bundle them.
+
+---
+
+## Human-in-the-loop
+
+A `kind: 'action'` tool never auto-executes — the run parks until a person decides (see
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability)). In the
+transcript, the parked call has `isAwaitingApproval`, `approve.run({ remember? })`, `reject.run()`,
+and `approval` (`{ approver, expiresAt, reason, status, remember, decidedBy, decidedVia,
+decisionReason, confirmation?, target?, executionStatus? }`) once the backend said who has to
+decide. `chat.approve({ toolCallId, remember })` and `chat.reject({ toolCallId, reason })` are the
+same calls, routed by tool-call id alone — the server derives the run awaiting it.
+
+The card's words are `call.description.confirm` (`{ title, verb, detail }`): the `confirmation` the
+tool's `preflight` returned for **this** call when it returned one (it rides the
+`approval-requested` frame and the stored thread, as `approval.confirmation`), else the tool's
+`presentation.confirm` template filled from the input. Render the title and use `verb` as the
+approve button's label, and one card reads right for every call.
+
+```tsx
+import { formatElapsed, useApprovalCountdown } from '@dudousxd/nestjs-agent-react';
+
+function Deadline({ expiresAt }: { expiresAt: string | null }) {
+  const { remainingMs, isExpired } = useApprovalCountdown(expiresAt);
+  if (remainingMs === null) return null;
+  return <small>{isExpired ? 'Expired' : `${formatElapsed(remainingMs)} left`}</small>;
+}
+```
+
+A decision the server refuses — `403` (not your approval), `410` (lapsed) — lands on `call.error`
+with the affordance still live.
+
+### Approvals that do not hold the turn
+
+With `actionApprovalMode: 'independent'` on the server, an `action` call becomes a **proposal**: the
+turn finishes (the call's output is a `{ proposalId, status: 'pending', executed: false }` receipt)
+and the chat can take the next message while the decision waits. `useAgentChat` handles the rest:
+
+- after every turn, on reconnect, on window focus / `online` / tab visible, and every
+  `proposalPollMs` (default `1000`) while a proposal is pending, queued, executing or its outcome
+  is undelivered, it reads `GET <base>/threads/:id/action-proposals` (`chat.proposals`);
+- each proposal is merged into the message that proposed it as a `data-action-proposal` part, so
+  the call's `approval` carries `target: { kind: 'proposal', proposalId, threadId }`, `status`
+  (`pending`, `approved`, `rejected`, `expired`, `superseded`) and `executionStatus` (`queued`,
+  `executing`, `succeeded`, `failed`) — and `call.description.status` / `phrase` read
+  *Awaiting approval*, *Queued*, *Executing*, *Succeeded*, *Failed*, *Rejected*, *Expired* or
+  *Replaced*;
+- `call.approve.run()` / `reject.run()` (and `chat.approve` / `chat.reject` given a `target`)
+  decide through `POST <base>/threads/:id/action-proposals/:proposalId/approve|reject`;
+- the assistant message the server writes with the outcome is appended to `messages` when it lands,
+  without replacing what is on screen.
+
+A whole-message decision command the server recognises (`yes`, `approve`, `reject`, … with an
+optional `#ID`; see [Action proposals](/docs/agent/guides/action-proposals#text) for the words and
+the Portuguese preset) is settled without a model turn: it comes back as a short assistant text, and the
+proposals are re-read.
+
+For a chat not built on `useAgentChat` (the SDK's `useChat` over `AgentChatTransport`),
+`useActionProposals(backend, threadId, setMessages, refreshKey, pollMs?)` is the same
+reconciliation as a hook — `refreshKey` is any string that changes when a turn ends (`useAgentChat`
+passes its status and connection state) — and
+`reconcileProposalMessages(messages, proposals, facts)` / `proposalNeedsPolling(proposal)` are the
+pure pieces under it. See [Action proposals](/docs/agent/guides/action-proposals).
+
+---
+
+## Which components this client can draw
+
+`uiCapabilities` tells the server which pushed components this app renders, by name and version:
+
+```tsx
+<AgentProvider uiCapabilities={{ components: [{ name: 'RefundReceipt', version: 1 }] }}>
+  <App />
+</AgentProvider>;
+```
+
+Every send under the provider carries it (`useAgentChat({ uiCapabilities })` overrides it per chat),
+and so does a message queued behind a running turn. The server intersects it with its own component
+catalog: only those components are offered to the model, and a component this client cannot draw
+arrives as its text instead. `{ components: [] }` asks for text only; omitting it keeps the full
+catalog. It is declared, not derived — list what your `genui` registry renders. It needs a server
+catalog (`AgentGenuiModule`): with capabilities sent and none bound, `ctx.emitUi` fails the call. See
+[Rendering everywhere](/docs/agent/guides/rendering-everywhere).
+
+---
+
+## When the connection drops
+
+Against a server that numbers its frames (this library's does), a stream that drops mid-run is
+re-attached from its last frame — `GET <base>/chat/:runId/stream?after=<n>` — with exponential
+backoff. `chat.status` is `'reconnecting'` meanwhile and `chat.connection` carries the attempt. If
+the run finished while the client was away, the hook reloads the thread so the full answer replaces
+the partial one.
+
+```tsx
+{chat.status === 'reconnecting' ? <p role="status">Reconnecting…</p> : null}
+```
+
+## Run failures
+
+A run that fails mid-stream ends with a structured `event: error` frame (`{ code, message }`), which
+surfaces as the AI SDK's `chat.error` — the same `error` prop `MessageList` renders — and as
+`chat.runError` (`{ code, message }`, so you can word each `code` yourself). REST calls throw
+`AgentHttpError` carrying `.status`, so a `403` (someone else's thread) is easy to tell from a `404`.
+
+---
+
+## Threads and feedback
+
+```tsx
+import { useMessageFeedback, useThreads } from '@dudousxd/nestjs-agent-react';
+
+const { threads, rename, remove } = useThreads();
+const feedback = useMessageFeedback({ threadId: chat.getThreadId });
+
+<button aria-pressed={feedback.feedbackOf(message)?.value === 'down'} onClick={() => feedback.toggle(message, 'down')}>
+  Not helpful
+</button>
+```
+
+`useThreads` refreshes itself when a chat on the same backend creates a thread, settles a run or
+streams a title; `rename` / `remove` are optimistic and roll back on failure. `useMessageFeedback`
+maps a message streamed in this session to the row its run persisted.
+
+## Sub-agents the chat did not wait for
+
+A [detached delegation](/docs/agent/guides/multi-agent#delegate-without-waiting) finishes after the
+turn that started it. With `background: true` the hook tracks it — `chat.background.runs`
+(`{ runId, agent, toolCallId, toolName, status, message? }`), `isWorking`, `refresh()` — polling the
+thread only while something is outstanding (`backgroundPollMs`, default `5000`), and appends the
+answer to `chat.messages` when it lands.
+
+---
+
+## Related
+
+- [Hello chat](/docs/agent/hello-chat) · [Full-featured chat](/docs/agent/full-featured-chat)
+- [Bring your own UI](/docs/agent/guides/bring-your-own-ui) — the transcript model in full
+- [File uploads](/docs/agent/guides/file-uploads) · [Generative UI](/docs/agent/guides/generative-ui)
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization)
+- [Action proposals](/docs/agent/guides/action-proposals) · [Rendering everywhere](/docs/agent/guides/rendering-everywhere)
+- [Migrating](/docs/agent/migrating) — what changed in the DX release

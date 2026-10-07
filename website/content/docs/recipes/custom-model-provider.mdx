@@ -1,0 +1,198 @@
+---
+title: Custom ModelProvider
+icon: Plug
+description: Implement the ModelProvider SPI by hand for a gateway or client aiSdkModel doesn't cover — stream text deltas to the sink, translate the endpoint's tool-call events, and never execute a tool yourself.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Reach for this when you're **not** going through the Vercel AI SDK — a bespoke internal gateway, a
+provider `aiSdkModel` doesn't wrap, or a raw HTTP client you already trust. A `ModelProvider` is a
+one-method adapter: given a system prompt, message history, and tool definitions, run exactly one
+model turn, stream the text as it arrives, and hand back what the model asked for. Nothing about the
+loop, the tool registry, or durability leaks into this interface — you only translate one turn.
+
+---
+
+## The contract
+
+From [`model-provider.ts`](https://github.com/DavideCarvalho/nestjs-agent/blob/master/packages/core/src/spi/model-provider.ts) and [`token-stream-sink.ts`](https://github.com/DavideCarvalho/nestjs-agent/blob/master/packages/core/src/spi/token-stream-sink.ts):
+
+```ts
+interface ModelTurnArgs {
+  system: string;
+  messages: ModelMessage[];
+  tools: ToolDefinition[];
+  /** The model writes streamed text deltas here as it generates them. */
+  sink: SinkWriter;
+  abortSignal?: AbortSignal;
+  /** Set only on the structured-output formatting pass (always with `tools: []`). Ignoring it is safe. */
+  outputSchema?: StandardSchemaV1;
+  /** The catalog id picked for this turn (per-send or thread-pinned). Absent → your default. */
+  model?: string;
+}
+
+/** The outcome of ONE assistant turn. The loop — not the model — drives tool execution. */
+interface ModelTurnResult {
+  text: string;
+  toolCalls: ToolCallRequest[];
+  usage: MessageUsage;
+  /** Wins over the module's configured modelId when set — keeps cost labels honest. */
+  modelId?: string;
+  /** A gateway's ACTUAL reported spend for the turn; omit it and the read-model estimates instead. */
+  costUsd?: number;
+  /** Already-parsed reply when you constrained generation to `outputSchema` (the loop re-validates). */
+  object?: unknown;
+  // ...plus optional reasoning / reasoningMs / ui overrides, derived from the sink frames when omitted.
+}
+
+interface SinkWriter {
+  write(chunk: Uint8Array): void | Promise<void>;
+  end(): void | Promise<void>;
+  fail(error: StreamError): void | Promise<void>;
+  flush?(): void | Promise<void>;
+}
+
+/**
+ * Contract: `runTurn` performs exactly one model turn, streaming deltas to `args.sink`, and
+ * returns the assembled text + requested tool calls + usage. It MUST NOT execute tools — the
+ * agent loop runs each as a (durable) step for replay-safety.
+ */
+interface ModelProvider {
+  runTurn(args: ModelTurnArgs): Promise<ModelTurnResult>;
+}
+```
+
+<Callout type="warn" title="Never execute a tool inside runTurn">
+Tools are handed to your provider as `ToolDefinition[]` — `name`, `kind`, `description`,
+`inputSchema` (a Standard Schema), **no handler**. When the model asks to call one, translate that into a `ToolCallRequest` (`{ id,
+name, input }`) and return it in `toolCalls`. Do not look up a handler and run it here — the agent
+loop validates the input, checks authorization, and executes the tool as its own (durable-safe)
+step. A provider that executes tools breaks replay: a crashed-and-resumed durable turn would run
+the side effect twice.
+</Callout>
+
+---
+
+## A minimal streaming implementation
+
+This adapts a hypothetical streaming HTTP completions endpoint — the shape you'd see behind an
+internal gateway. Swap the fetch/parsing block for your real client; the sink and return-shape
+plumbing around it stays the same regardless of what you're calling.
+
+The sink is a byte channel the client reads as **NDJSON `AgentStreamEvent` frames** — write each
+delta through `encodeStreamEvent({ kind: 'text', text })`, not as raw text bytes. The React client
+drops any `data:` frame that isn't a JSON object with a `kind`, so bare text would never render
+live (it still lands in the persisted message via `text`). See the
+[stream events reference](/docs/agent/reference/stream-events).
+
+```ts
+// src/model/raw-http-model.ts
+import {
+  encodeStreamEvent,
+  type ModelProvider,
+  type ModelTurnArgs,
+  type ModelTurnResult,
+  type ToolCallRequest,
+} from '@dudousxd/nestjs-agent';
+
+type StreamEvent =
+  | { type: 'text-delta'; delta: string }
+  | { type: 'tool-call'; id: string; name: string; input: unknown }
+  | { type: 'usage'; inputTokens: number; outputTokens: number };
+
+/** Hand-rolled ModelProvider over a raw streaming completions endpoint (NDJSON-over-SSE). */
+export function rawHttpModel(endpoint: string, apiKey: string): ModelProvider {
+  return {
+    async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          system: args.system,
+          messages: args.messages,
+          tools: args.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+        }),
+        ...(args.abortSignal ? { signal: args.abortSignal } : {}),
+      });
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let text = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      const toolCalls: ToolCallRequest[] = [];
+
+      while (reader) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split('\n');
+        buffered = lines.pop() ?? ''; // keep a partial trailing line for the next chunk
+        for (const line of lines) {
+          if (!line.startsWith('data:')) {
+            continue;
+          }
+          const event = JSON.parse(line.slice(5)) as StreamEvent;
+          if (event.type === 'text-delta') {
+            text += event.delta;
+            // Stream to the live data plane — this is NOT tool execution, just token transport.
+            await args.sink.write(encodeStreamEvent({ kind: 'text', text: event.delta }));
+          } else if (event.type === 'tool-call') {
+            // Optional: a live tool-call card on the client (aiSdkModel emits this too). The wire
+            // toolKind is only 'read' | 'action' — every other ToolKind collapses to 'read'.
+            const kind = args.tools.find((tool) => tool.name === event.name)?.kind;
+            await args.sink.write(
+              encodeStreamEvent({
+                kind: 'tool-input-available',
+                id: event.id,
+                name: event.name,
+                input: event.input,
+                toolKind: kind === 'action' ? 'action' : 'read',
+              }),
+            );
+            // Translate the endpoint's tool-call event into a request for the loop to run.
+            toolCalls.push({ id: event.id, name: event.name, input: event.input });
+          } else {
+            inputTokens = event.inputTokens;
+            outputTokens = event.outputTokens;
+          }
+        }
+      }
+
+      return { text, toolCalls, usage: { inputTokens, outputTokens } };
+    },
+  };
+}
+```
+
+Wire it in exactly where any `ModelProvider` goes:
+
+```ts
+AgentModule.forRoot({
+  model: rawHttpModel(process.env.LLM_ENDPOINT ?? '', process.env.LLM_API_KEY ?? ''),
+  // everything else is optional — `forRoot({ model })` alone is a working setup
+});
+```
+
+<Callout type="info" title="Reported cost, when your gateway has it">
+If your endpoint's `usage` event carries a real dollar figure (a gateway's actual spend, not an
+estimate), set it on the result as `costUsd` — the governance read-model uses a reported cost
+verbatim instead of estimating from tokens. Direct providers that only report tokens simply omit
+it. See [Cost & Governance](/docs/agent/guides/cost-and-governance).
+</Callout>
+
+---
+
+## Related
+
+- [`aiSdkModel` package](/docs/agent/packages/ai-sdk) — the shipped adapter doing exactly this
+  against the Vercel AI SDK's `streamText`, worth reading even if you don't use it: it shows how to
+  map `ToolDefinition[]` into a real tool-parameter JSON schema and extract a gateway's reported cost.
+- [Architecture](/docs/agent/concepts/architecture) — why `ModelProvider` is one of the SPI seams,
+  and how it fits alongside `AgentStore`, `TokenStreamSink`, and the rest.
+- [Offline testing](/docs/agent/recipes/offline-testing) — `FakeModelProvider`, the scripted
+  in-memory `ModelProvider` used across the test suite, is a second worked example of this SPI.

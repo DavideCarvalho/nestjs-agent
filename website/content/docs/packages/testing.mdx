@@ -1,0 +1,158 @@
+---
+title: '@dudousxd/nestjs-agent-testing'
+icon: FlaskConical
+description: In-memory store, governance queries, quota, token sink, and a deterministic fake model — the whole agent loop, offline.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Every SPI the agent depends on, in-memory: `AgentStore`, `AgentGovernanceQueries`, `MemoryProvider`, `QuotaStore`,
+`TokenStreamSink`, a scripted `ModelProvider`, and offline embedding/reranking fakes. Exercise
+auto-executing reads, a suspending action tool, and multi-agent delegation with no API key, no
+database, and no Redis. It also ships framework-agnostic **contract suites** a store adapter (yours or
+the library's) can run to prove it behaves like the real thing.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add -D @dudousxd/nestjs-agent-testing
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install -D @dudousxd/nestjs-agent-testing
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+```ts
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { FakeModelProvider, InMemoryAgentStore, echoScript } from '@dudousxd/nestjs-agent-testing';
+
+AgentModule.forRoot({
+  model: new FakeModelProvider(echoScript('Hello from the fake model.')),
+  store: new InMemoryAgentStore(), // pass directly instead of importing a store module
+  actorResolver: new HeaderActorResolver(),
+});
+```
+
+Script a tool call instead of a plain reply by returning `toolCall` from a `FakeScript` — the
+function receives `(args, turnIndex)`, so the script is a pure function of the turn history:
+
+```ts
+import { FakeModelProvider, type FakeScript } from '@dudousxd/nestjs-agent-testing';
+
+const script: FakeScript = (args, turnIndex) =>
+  turnIndex === 0
+    ? { text: '', toolCall: { name: 'getWeather', input: { city: 'Lisbon' } } }
+    : { text: "It's partly cloudy in Lisbon." };
+
+const model = new FakeModelProvider(script);
+```
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `FakeModelProvider` | class (`ModelProvider`) | Deterministic, offline model — streams a scripted reply to the sink and optionally requests one tool call |
+| `FakeScript` | type | `(args: ModelTurnArgs, turnIndex: number) => FakeTurn` — a pure function of the turn history |
+| `FakeTurn` | type | `{ text: string; toolCall?: { name: string; input: unknown }; toolCalls?: { name: string; input: unknown }[]; costUsd?: number }` — `toolCalls` requests several tools at once (ignored when `toolCall` is set) |
+| `echoScript(reply?)` | function → `FakeScript` | Trivial script: stream a fixed reply, never call a tool |
+| `InMemoryAgentStore` | class (`AgentStore`, `ChatQueueStore`, `ActionProposalStore`) | Full in-memory store — threads, messages, tool calls, usage, run outcomes (`recordRunStart`/`recordRunEnd`/`bumpRunRetries`), `referencedMediaIds`, the message queue, and action proposals — no database. Lives in `-core` (it is `AgentModule`'s zero-config default) and is re-exported here, along with the `Governance*Row` types |
+| `InMemoryAttachmentStagingStore` | class (`AttachmentStagingStore`) | The host half of the attachment surface — `stage` / `resolve` / `list`, with per-actor checks implemented rather than waved through, plus `setClock()` to stage media at a chosen instant and `delete()` to stand in for a host collecting bytes. Enough to exercise a [sweep](/docs/agent/guides/persistence#which-media-a-message-still-references-optional) end to end with no object store |
+| `InMemoryAttachmentStagingOptions` | type | `{ now?: () => Date; urlFor?: (mediaId: string) => string }` |
+| `InMemoryGovernanceQueries` | class (`AgentGovernanceQueries`) | In-memory read-model over an `InMemoryAgentStore` — spend, usage trend, recent activity, run reliability (`runMetrics`, `runsByAgent`, `runErrors`, `runTrend`, `recentRuns`), the approvals inbox (`pendingApprovals`), tool stats (`toolStats`), and paged reads (`toolCallsPage`/`threadsPage`/`runsPage`); takes an optional pricing map |
+| `InMemoryModelPrice` | type | `{ inputPricePer1m; outputPricePer1m; cacheWritePricePer1m?; cacheReadPricePer1m? }` — one entry in the pricing map |
+| `InMemoryMemoryProvider` | class (`MemoryProvider`) | Full in-memory [memory](/docs/agent/guides/memory) — scope-gated `list`, a `write` that upserts on (`scope`, `key`) and preserves `pinned`, a `forget` restricted to the actor's own scope, and `pin()`. `{ recall: true }` also serves `search`, ranked by word overlap, so the relevance path is exercised without an index |
+| `InMemoryMemoryProviderOptions` | type | `{ recall?: boolean }` — whether the provider has a `search` property at all, which is the switch the loop reads |
+| `everyMemoryField(ctx)` / `expectedMemoryRecord(written, minted)` / `EveryMemoryField` | functions + type | The memory round-trip fixtures, typed `Required<StoreMemoryInput>` and `Required<MemoryRecord>` — a new field on either shape fails to **compile** until an adapter can name it |
+| `InMemoryPricingStore` | class (`AgentPricingStore`) | In-memory `upsertModelPrice` / `listCurrentPrices` — the write side of model pricing, for tests that assert on `seedModelPrices` behavior without a database |
+| `InMemoryQuotaStore` | class (`QuotaStore`) | In-memory per-actor/day token budget; constructor takes an optional `limitTokens` (default `1_000_000`) |
+| `InMemoryTokenStreamSink` | class (`TokenStreamSink`) | Buffers streamed chunks per run so a late subscriber (reconnect) replays everything emitted so far, then follows live |
+| `InMemoryStreamFrameTable` | class (`StreamFrameTable`) | Core's `SqlTokenStreamSink` logic without a database: several sinks over one instance behave as replicas sharing a table |
+| `FakeEmbeddingProvider` | class (`EmbeddingProvider`) | Deterministic hashed bag-of-words, L2-normalized; `{ dimensions?: number (default 64); tokens?: 'ascii' \| 'unicode' }`. Cosine similarity tracks word overlap |
+| `hashedEmbeddings(dimensions = 64)` | function → `EmbeddingProvider` | `FakeEmbeddingProvider` with Unicode tokens — run ingest → embed → retrieve offline, or as a "no embedding model" dev mode |
+| `FakeReranker` | class (`Reranker`) | Re-scores passages by distinct query-term overlap and sorts descending |
+| `EVERY_MESSAGE_FIELD` / `EveryMessageField` | const + type | Every optional `AppendMessageInput` field populated, typed `Required<…>` — a new field fails to **compile** until an adapter round-trips it |
+
+<Callout type="info" title="Pricing map defaults to empty — zero cost, tokens still counted">
+`InMemoryGovernanceQueries` takes an optional `ReadonlyMap<string, InMemoryModelPrice>`. Omit it (the
+default) and every row's estimated cost is `0` while `inputTokens` / `outputTokens` still accumulate
+correctly — pass a map only when a test needs to assert on spend, not just token counts.
+</Callout>
+
+```ts
+import { InMemoryAgentStore, InMemoryGovernanceQueries } from '@dudousxd/nestjs-agent-testing';
+
+const store = new InMemoryAgentStore();
+const queries = new InMemoryGovernanceQueries(
+  store,
+  new Map([['claude-sonnet-4-6', { inputPricePer1m: 3, outputPricePer1m: 15 }]]),
+);
+```
+
+`InMemoryAgentStore` records run start/end and retries the same way a real store does, so
+`queries.runMetrics(range)`, `.recentRuns(limit)`, and `.pendingApprovals(limit)` are assertable in a
+unit test with no database — useful for testing the Reliability/Approvals dashboard sections, or a
+tool's HITL approval flow, entirely offline.
+
+## Contract suites
+
+Each suite is a `readonly` array of `{ name, run }` cases; `run` throws on the first mismatch, so any
+test runner works:
+
+```ts
+import { CHAT_QUEUE_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
+
+for (const contractCase of CHAT_QUEUE_STORE_CONTRACT) {
+  it(contractCase.name, async () => contractCase.run(await freshSubject()));
+}
+```
+
+| Suite | Subject | Covers |
+|---|---|---|
+| `CHAT_QUEUE_STORE_CONTRACT` | `{ store: AgentStore & ChatQueueStore; threadId }` | FIFO with head inserts, field round-trips, edits/moves, conditional removal, pause, compare-and-set admission. JSON compared ignoring key order (`jsonb`/MySQL `JSON` reorder keys) |
+| `CONFIRM_TOKEN_STORE_CONTRACT` | `{ store: ConfirmTokenStore; rows() }` | First claim wins atomically, release, expiry purge, only the hash is stored |
+| `SQL_TOKEN_STREAM_SINK_CONTRACT` | `{ sinkOn(replica, options?), rowCount(runId), seqs(runId), insertRow(…) }`; `run(subject, runId)` | Order, cross-replica delivery, replay, coalesced text, contiguous `seq` under concurrent writers, TTL purge, failure |
+| `ACTION_PROPOSAL_STORE_CONTRACT` | `{ store: ActionProposalStore; setNow(ms) }` | The [action-proposal](/docs/agent/guides/action-proposals) store: scoped snapshots, atomic decisions, queued execution |
+| `ACTION_PROPOSAL_WORKER_STORE_CONTRACT` | `{ store: ActionProposalStore & ActionProposalWorkerStore; setNow(ms) }` | Worker discovery across scopes and fenced, recoverable leases |
+
+Each suite also exports its `…ContractCase` / `…ContractSubject` types. The Drizzle and MikroORM
+adapters run these suites against real SQLite, Postgres and MySQL (testcontainers).
+
+## Peer dependencies
+
+`@dudousxd/nestjs-agent-core` (`>=0.27.0 <1.0.0`).
+
+## The runnable offline demo
+
+The repo's `examples/agent-demo` is built entirely on these in-memory pieces — a scripted proof of
+auto-executing reads, a suspending action tool, and multi-agent delegation, with zero
+infrastructure:
+
+```bash
+pnpm --filter agent-demo demo   # the offline scripted proof
+pnpm --filter agent-demo start  # the full NestJS app + console at /ai-gateway
+```
+
+## When to use it
+
+Use this package for unit tests of your tools and app wiring, and for any environment where a real
+model/database/Redis would be overkill — CI, demos, local development before you've wired
+persistence. Swap in a real store adapter
+([`store-mikro-orm`](/docs/agent/packages/store-mikro-orm) or
+[`store-drizzle`](/docs/agent/packages/store-drizzle)) and a real `ModelProvider`
+(`@dudousxd/nestjs-agent-ai-sdk`'s `aiSdkModel`) for production — the agent loop and your tools are
+unchanged either way.
+
+## Related
+
+- [Persistence](/docs/agent/guides/persistence) — the `AgentStore` SPI this package's in-memory store implements, and the two real adapters
+- [Getting Started](/docs/agent/getting-started) — the `pnpm --filter agent-demo demo` walkthrough

@@ -1,0 +1,184 @@
+---
+title: The agent loop
+icon: Repeat
+description: One turn is model → tools → model, bounded by maxSteps, with a usage row appended every time the model is called.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+A **turn** is the unit of work behind one chat message: the model responds, the loop runs whatever
+tools it asked for, and feeds the results back — repeating until the model stops calling tools or a
+step ceiling is hit. Everything else in the library (governance, cost, HITL) hangs off this one
+iteration.
+
+## model → tools → model
+
+Each pass through the loop is one **step**:
+
+1. The model is called with the system prompt, the thread's messages so far, and the tools the actor
+   is allowed to see (after the agent's allow-list, the persona's `allowedTools` when the turn runs
+   under a [persona](/docs/agent/guides/personas), `enabled`/`isEnabled`, the roles policy, `canUse`,
+   and — when the client declared `uiCapabilities` — the negotiated component catalog). This is one
+   `ModelProvider.runTurn` call.
+2. A usage row is appended — unconditionally, whether or not the model asked for a tool.
+3. If the model returned zero tool calls, the loop **breaks** — the turn is done.
+4. Otherwise, each requested tool call is resolved by its `kind`, and the results are fed back to the
+   model as the next step's input.
+
+<AgentLoop />
+
+<Callout type="info" title="Same loop, whether or not a step is dispatched">
+This is the loop from its own point of view: step 1 (the model call) and step 4's tool executions
+happen exactly as described whether they run in-process (the inline runner) or — under
+`durable: true` — as routed steps served by a different worker than the one running the turn. The
+loop's hooks (`step`, `dispatchLlm`, `dispatchTool`) are what change underneath it; the model →
+tools → model shape above doesn't. See [Architecture](/docs/agent/concepts/architecture) for what
+changes cross-process when a step is dispatched, and [Runners](/docs/agent/concepts/runners) for
+what each runner does with the loop.
+</Callout>
+
+## `read` vs `action`
+
+A tool call's `kind` decides whether it runs unattended or waits for a human — see
+[Tools](/docs/agent/guides/tools) for the full decorator surface:
+
+| `kind` | What happens | Use for |
+|---|---|---|
+| `read` | Auto-executes immediately, same step | Lookups, queries — anything side-effect-free |
+| `action` | Loop suspends for an explicit approve/reject before `execute` runs — unless the `ApprovalPolicy` says no approval is required, or the tool was remembered as approved for the thread | Anything that mutates, spends, sends, or deletes |
+| `agent` | Synthesized, never hand-authored — delegates to a named sub-agent | Multi-agent orchestration |
+| `ask` / `skill` / `memory` | Synthesized by the loop when `ask`, `skills` or `memory` is configured — a clarifying question set (parks like an approval), loading a skill, writing a memory | Built-ins, not authored |
+
+Before an `action` parks, its handler's `preflight(input, ctx, { phase: 'prepare' })` may deny it,
+report it already done (`completed` — no card, no execution), or supply per-call confirmation wording
+for the card. It runs again with `phase: 'execute'` immediately before `execute`.
+
+A rejected `action` call doesn't throw — its result (`{ rejected: true, reason }`) is fed back to the
+model like any other tool result, so the model can adapt within the same turn instead of failing it.
+A preflight denial and an expired approval (`{ rejected: true, expired: true, reason }`) are fed back
+the same way.
+
+<Callout type="info" title="Independent approvals end the turn instead of parking it">
+With `actionApprovalMode: 'independent'`, an `action` that needs approval is recorded as an action
+proposal, the model's tool result is `{ proposalId, status: 'pending', executed: false }`, and the turn
+ends at the end of that step without another model call. The proposal is decided and executed outside
+the turn; its outcome is added to the thread as an assistant message, with no model continuation. See
+[Action proposals](/docs/agent/guides/action-proposals).
+</Callout>
+
+## Several tool calls in one turn
+
+A model routinely asks for more than one tool at a time. When **every** call in the turn is a `read`
+(or a `skill` load or `memory` write, which take a read's positions), the loop runs their invocations
+**concurrently** — the turn costs its slowest call, not the sum of
+them. Two independent three-second lookups take three seconds.
+
+Concurrency stops at the invocation. The bookkeeping around it stays strictly in call order:
+
+```
+persist:toolcall:a   persist:toolcall:b     ← claim every call first, in order
+        tool:a               tool:b         ← launched together, in one tick
+persist:toolexec:a   persist:toolexec:b     ← recorded in order, once all have settled
+```
+
+That order is the whole design, not an implementation detail. Under the durable runner the loop body
+is *replayed*, and checkpoint positions are handed out by a counter as the body runs — so a scheme
+that ordered them by whichever tool finished first would produce a different journal on the replay
+than on the original run. Positions are taken on the **call**, before the step's first `await`, so
+launching the batch in one tick pins the block in call order however the tools then settle.
+
+<Callout type="warn" title="Why it is reads only">
+- An **`action`** suspends on a human approval. That is decision time, not I/O, so overlapping what
+  follows it saves nothing — and reserving an execution slot for a call that may still be *rejected*
+  reserves one that the rejection never fills.
+- An **`agent`** delegation is a child workflow. Its parallel form is the durable runtime's own
+  `ctx.all` — one workflow over a reserved block of positions, with the bookkeeping that makes a fan
+  render as a fan — not a set of independent tasks, so it does not ride this path.
+
+A turn with a single call, or one containing an `action`, `agent` or `ask` call, runs exactly as it
+always has: one call at a time, start to finish, before the next one is claimed.
+</Callout>
+
+Each call's kind is read from its own `persist:toolcall` checkpoint rather than from the running
+process's tool registry, so every process that replays the turn reaches the same verdict about
+whether it was eligible — including one whose registry never declared the tool.
+
+## Bounded by `maxSteps`
+
+The loop is a plain bounded iteration, not a "runs until done" open loop:
+
+```ts
+for (let i = 0; i < maxSteps; i += 1) {
+  // one model call, then its tool calls
+}
+```
+
+`maxSteps` comes from the agent that runs the turn — set it per agent with `@Agent({ maxSteps })` —
+and **defaults to 8** when omitted. It exists to stop a
+model that keeps calling tools from running away with an unbounded turn — hitting the ceiling ends
+the turn with whatever text the last step produced. Two things end the loop earlier, after the step's
+tools settle and without another model call: a successful call to a tool declared `terminal`, and
+(in independent mode) a call that created an action proposal.
+
+## What the model is given: the whole thread, unless you bound it
+
+Step 1's "the thread's messages so far" is literal — by default the loop maps **every** message the
+store holds for that thread into the model call, on every step of every turn. That is the right
+default for a thread that ends, and the wrong one for an assistant someone lives in: the prompt grows
+monotonically, each turn costs more than the last, and the thread eventually stops working when the
+transcript passes the model's context limit.
+
+`AgentModule.forRoot({ history: { maxMessages, maxTokens } })` keeps the newest messages that fit,
+and `{ summarize: true }` folds the rest into a leading `system` summary — one extra model call per
+run, billed as a `history_summary` usage row. The window is applied inside the thread load itself, so
+every step of the turn sees the same bounded list **and** the durable journal records the bounded
+list rather than the whole transcript. See
+[Conversation history](/docs/agent/guides/conversation-history).
+
+## Optional: gating what goes out and what comes back
+
+Two seams sit either side of the model call, and neither exists unless you configure it.
+`inputProcessors` rewrite `{ system, messages }` before **every** model call of the turn (the
+transcript grows between steps, so a redactor that only saw the opening prompt would miss whatever a
+tool result brought back). `outputProcessors` see each step's answer and may redact, replace, or
+refuse it outright — a refusal ends the run before the text is streamed, persisted, or carried into
+the next step.
+
+Gating the answer and streaming it token by token are mutually exclusive, so registering an output
+processor switches the turn's model call to a buffered sink; the loop releases it as one `text` frame
+once the chain has passed. See [Input & output processors](/docs/agent/guides/processors) for exactly
+what a subscriber still receives live.
+
+## Optional: an answer with a shape
+
+With `@Agent({ outputSchema })`, the loop makes **one more** call once a step comes back with no tool
+calls — carrying the schema and no tools — and validates the reply against it. It is a separate pass
+rather than a constraint on the turn's own calls because most providers refuse a response format and
+a tool set in the same request, and because skipping it for a tool-less agent would make the turn's
+checkpoint sequence depend on a tool-registry lookup. It writes its own `structured_output` usage
+row, and an invalid reply is repaired a bounded number of times before the run fails with a
+`StructuredOutputError`. See [Structured output](/docs/agent/guides/structured-output).
+
+## Every turn appends a usage row
+
+Step 2 above isn't conditional on tool calls: **every** model call writes a row to the usage ledger,
+with the actor, thread, model id, and token counts — the raw material the
+[cost and quota machinery](/docs/agent/concepts/governance) rolls up. A turn with three internal
+steps writes three usage rows, not one.
+
+## Optional: follow-up suggestions after the loop ends
+
+With `AgentModule.forRoot({ followUps: true })`, once the loop breaks (step 3 above) the turn makes
+**one more** model call — outside the `maxSteps`-bounded loop — asking for short follow-up questions.
+The result lands on the assistant message's `followUps` field and writes its own usage row
+(`purpose: 'follow_ups'`). It's off by default: the loop's job is answering the turn; follow-ups are
+an opt-in, separately-costed extra. See [Cost & Governance](/docs/agent/guides/cost-and-governance).
+
+## Where to go next
+
+<Cards>
+  <Card title="Tools" href="/docs/agent/guides/tools" description="@AiTool classes, read vs action, the handler signature, and the tool context." />
+  <Card title="Human-in-the-loop & Durability" href="/docs/agent/guides/human-in-the-loop-and-durability" description="How an action tool's suspend is implemented under each runner." />
+  <Card title="Conversation history" href="/docs/agent/guides/conversation-history" description="Bounding what a turn carries: a message/token window and an optional summary of what it drops." />
+</Cards>

@@ -1,0 +1,32 @@
+{
+  "title": "Guides",
+  "icon": "BookOpen",
+  "pages": [
+    "tools",
+    "identity-and-authorization",
+    "human-in-the-loop-and-durability",
+    "action-proposals",
+    "asking-the-user",
+    "skills",
+    "memory",
+    "multi-agent",
+    "personas",
+    "rag",
+    "conversation-history",
+    "processors",
+    "structured-output",
+    "cost-and-governance",
+    "evals",
+    "persistence",
+    "frontend",
+    "message-queue",
+    "bring-your-own-ui",
+    "ag-ui",
+    "file-uploads",
+    "chat-components",
+    "generative-ui",
+    "component-rendering",
+    "rendering-everywhere",
+    "governed-sql"
+  ]
+}

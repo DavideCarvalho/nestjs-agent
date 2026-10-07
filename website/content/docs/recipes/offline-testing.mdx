@@ -1,0 +1,228 @@
+---
+title: Offline testing
+icon: WifiOff
+description: Exercise the whole agent loop — chat, tool calling, HITL approval — with @dudousxd/nestjs-agent-testing's in-memory doubles. No API key, no Redis, fully deterministic.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Testing agent behavior shouldn't need a real LLM key or infrastructure. `@dudousxd/nestjs-agent-testing`
+ships an in-memory double for every SPI the module depends on — model, store, sink, quota,
+governance — so a full `AgentModule.forRoot` boots and runs turns in a plain Nest testing module.
+
+---
+
+## Wire in-memory everything
+
+```ts
+// src/app.e2e.spec.ts
+import { Agent, AgentModule, AgentService, AiTool, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import {
+  FakeModelProvider,
+  InMemoryAgentStore,
+  InMemoryTokenStreamSink,
+  type FakeScript,
+} from '@dudousxd/nestjs-agent-testing';
+import { Injectable } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { z } from 'zod';
+
+@AiTool({
+  name: 'getWeather',
+  kind: 'read',
+  description: 'Current weather for a city.',
+  input: z.object({ city: z.string() }),
+})
+@Injectable()
+class GetWeatherTool {
+  async execute(input: { city: string }) {
+    return { tempC: 21, city: input.city };
+  }
+}
+
+// Agents are `@Agent`-decorated providers, discovered at boot — not a `defaultAgent` config object.
+@Agent({ name: 'default', systemPrompt: 'test agent' })
+@Injectable()
+class TestAgent {}
+
+async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string> {
+  const decoder = new TextDecoder();
+  let out = '';
+  for await (const chunk of iterable) {
+    out += decoder.decode(chunk);
+  }
+  return out;
+}
+```
+
+## Script the model, run a turn
+
+`FakeModelProvider` takes a `FakeScript` — a pure function of the turn's args and how many assistant
+turns have already happened — so a scripted conversation stays deterministic across replays. Here it
+asks for `getWeather` on turn 0, then answers on turn 1:
+
+```ts
+it('auto-executes a read tool then answers', async () => {
+  const script: FakeScript = (_args, turnIndex) =>
+    turnIndex === 0
+      ? { text: 'checking', toolCall: { name: 'getWeather', input: { city: 'Recife' } } }
+      : { text: 'it is 21C' };
+
+  const store = new InMemoryAgentStore();
+  const moduleRef = await Test.createTestingModule({
+    imports: [
+      AgentModule.forRoot({
+        model: new FakeModelProvider(script),
+        store,
+        sink: new InMemoryTokenStreamSink(),
+        quota: { limits: { day: { tokens: 200_000 } } },
+        actorResolver: new HeaderActorResolver(),
+      }),
+    ],
+    providers: [GetWeatherTool, TestAgent],
+  }).compile();
+
+  const app = moduleRef.createNestApplication();
+  await app.init();
+  const service = app.get(AgentService);
+
+  const { runId } = await service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'weather?' });
+  const streamed = await collect(service.subscribe(runId));
+
+  expect(streamed).toContain('it is 21C');
+  expect(store.toolCallRows()[0]).toMatchObject({ toolName: 'getWeather', status: 'executed' });
+
+  await app.close();
+});
+```
+
+## Exercising HITL approval
+
+An `action` tool suspends instead of auto-executing; drive the approval from the test itself via
+`AgentService.approve`:
+
+```ts
+it('suspends an action tool until approved, then executes', async () => {
+  const script: FakeScript = (_args, turnIndex) =>
+    turnIndex === 0
+      ? { text: 'about to purge', toolCall: { name: 'purgeCache', input: { key: 'cfg' } } }
+      : { text: 'purged ok' };
+
+  // ...same module wiring as above, with a `kind: 'action'` PurgeCacheTool provider...
+
+  const { runId } = await service.chat({ actor: { id: 'u1', roles: ['ADMIN'] }, message: 'purge it' });
+
+  const collected = collect(service.subscribe(runId));
+  await new Promise((resolve) => setTimeout(resolve, 20)); // let the loop reach the approval gate
+  // approve by tool-call id — the server derives the run; FakeModelProvider ids calls `call-<turn>-<name>`
+  await service.approve({ id: 'u1', roles: ['ADMIN'] }, 'call-0-purgeCache');
+
+  expect(await collected).toContain('purged ok');
+});
+```
+
+## Independent approvals, offline
+
+With `actionApprovalMode: 'independent'` the action becomes a persisted proposal and the turn ends
+without waiting. `InMemoryAgentStore` implements the proposal store (single process), and the
+proposal worker starts with the app, so the whole flow runs in the test:
+
+```ts
+import { ActionProposalService } from '@dudousxd/nestjs-agent';
+
+const actor = { id: 'u1', roles: ['ADMIN'] };
+// ...module as above, plus:
+//   actionApprovalMode: 'independent',
+//   backgroundActorResolver: { resolve: async () => actor },
+//   actionProposalWorker: { pollIntervalMs: 20, leaseMs: 1_000 }, // poll < lease / 3
+
+const { runId, threadId } = await service.chat({ actor, message: 'purge it' });
+await collect(service.subscribe(runId)); // the turn ends; nothing has run yet
+
+const scope = { threadId, actorRef: actor.id, tenantRef: null };
+const [proposal] = await store.listActionProposals(scope);
+await app.get(ActionProposalService).decide(threadId, proposal!.id, actor, { decision: 'approved' });
+
+// The worker executes it and admits the outcome into the thread as an assistant message.
+await vi.waitFor(async () => {
+  const current = await store.getActionProposal(scope, proposal!.id);
+  expect(current?.outcomeDelivery?.status).toBe('admitted');
+});
+```
+
+The origin call's tool result is `{ proposalId, status: 'pending', executed: false }`. See
+[Action proposals](/docs/agent/guides/action-proposals).
+
+## Contract suites for your own store
+
+If you implement a store SPI yourself, `@dudousxd/nestjs-agent-testing` exports the same behavior
+suites the shipped MikroORM/Drizzle adapters run. Each is an array of `{ name, run(subject) }`
+cases:
+
+| Export | Subject |
+|---|---|
+| `ACTION_PROPOSAL_STORE_CONTRACT` | `{ store: ActionProposalStore, setNow(ms) }` |
+| `ACTION_PROPOSAL_WORKER_STORE_CONTRACT` | `{ store: ActionProposalStore & ActionProposalWorkerStore, setNow(ms) }` |
+| `CHAT_QUEUE_STORE_CONTRACT` | `{ store: AgentStore & ChatQueueStore, threadId }` |
+| `CONFIRM_TOKEN_STORE_CONTRACT` | `{ store: ConfirmTokenStore, rows() }` |
+| `SQL_TOKEN_STREAM_SINK_CONTRACT` | `{ sinkOn(replica, options?), rowCount(runId), seqs(runId), ... }` |
+
+```ts
+import { ACTION_PROPOSAL_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
+
+for (const contract of ACTION_PROPOSAL_STORE_CONTRACT) {
+  it(contract.name, async () => {
+    let now = 1000;
+    await contract.run({
+      store: new MyAgentStore(db, { clock: () => now }), // your store, with an injectable clock
+      setNow: (value) => {
+        now = value;
+      },
+    });
+  });
+}
+```
+
+## RAG without an embedding model
+
+`hashedEmbeddings(dimensions = 64)` returns a deterministic hashed bag-of-words
+`EmbeddingProvider` with Unicode tokens. There's no model and no network. Similar wording ranks
+close; similar meaning doesn't. It's enough to run ingest → embed → retrieve offline.
+`FakeEmbeddingProvider({ dimensions?, tokens?: 'ascii' | 'unicode' })` is the class behind it, and
+`FakeReranker` reorders passages by query-term overlap for testing `RerankingRetriever`.
+
+<Callout type="info" title="Governance doubles, when you need them">
+`InMemoryGovernanceQueries` wraps an `InMemoryAgentStore` and takes an optional pricing map (default
+empty → zero cost, tokens still counted) — bind it to `AGENT_GOVERNANCE_QUERIES` to test a
+[billing export](/docs/agent/recipes/billing-export) or the dashboard/telescope wiring without a
+database. `InMemoryTokenStreamSink` is the same double used above (and `InMemoryQuotaStore` the
+loop-level quota double, for core-level tests); none of them require Redis, Postgres, or an API key.
+</Callout>
+
+---
+
+## The runnable proof
+
+The full picture — durable turns, SSE streaming, HITL approval, multi-agent delegation, and the
+diagnostics channel, all offline — lives in `examples/agent-demo` in the library's repo. It wires
+`FakeModelProvider`, `InMemoryAgentStore`, `InMemoryQuotaStore`, and `InMemoryGovernanceQueries`
+together with the real durable runner (`InMemoryStateStore`, no Redis) and the standalone dashboard:
+
+```bash
+pnpm --filter agent-demo demo
+```
+
+It prints three scenarios end to end — a read tool auto-executing, an action tool suspending for
+approval and resuming, and an orchestrator delegating to a sub-agent — against a real, booted Nest
+app, using nothing but the doubles above.
+
+---
+
+## Related
+
+- [Testing package](/docs/agent/packages/testing) — the full `@dudousxd/nestjs-agent-testing`
+  surface: every in-memory double and what SPI each one satisfies
+- [Tools](/docs/agent/guides/tools) — `read` vs `action`, and why the approval flow exists
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — the same
+  approval flow under the durable runner, where the pause is a real suspend instead of an
+  in-process hold

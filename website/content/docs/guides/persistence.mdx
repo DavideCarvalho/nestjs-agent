@@ -1,0 +1,583 @@
+---
+title: Persistence
+icon: Database
+description: The AgentStore SPI — threads, messages, tool calls, and a token-usage ledger — behind one ORM-portable interface, wired on MikroORM or Drizzle.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Persistence is the write half of the agent: every turn creates or continues a **thread**, appends
+**messages**, records each **tool call**, and writes a row to a **token-usage ledger**. All of that
+goes through one interface — the `AgentStore` SPI — so the agent loop never knows which ORM (or
+database) is underneath. The library ships two adapters that implement the exact same SPI: MikroORM
+and Drizzle. Pick one, wire it, and the agent reads it through a DI token.
+
+---
+
+## The `AgentStore` SPI
+
+`AgentStore` (from `@dudousxd/nestjs-agent-core`) is ORM-agnostic — refs are string ids, and an
+adapter is free to back them with real relations. Its core is five concerns across five tables (the
+SQL adapters own more — queue, runs, memory, stream frames, confirm tokens, action proposals —
+covered below):
+
+| Concern | Table | SPI methods |
+|---|---|---|
+| Threads | `agent_thread` | `createThread`, `getThread`, `listThreads`, `softDeleteThread`, `forkThread`, `setTitle`, `promoteThread`, `updateThread`, `setActiveStream`, `ownerOfThread`, `ownerOfActiveStream` |
+| Messages | `agent_message` | `appendMessage`, `setMessageToolResults`, `truncateFrom` |
+| Tool calls | `agent_tool_call` | `recordToolCall`, `updateToolCall`, `ownerOfToolCall`, `runForToolCall` |
+| Token usage (ledger) | `agent_token_usage` | `recordUsage`, `quotaToday` |
+| Model pricing | `agent_model_pricing` | read by the governance read-model; written by the separate `AgentPricingStore` SPI (`upsertModelPrice`, `listCurrentPrices`) — see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices) |
+
+```ts
+// the shape both adapters implement
+export interface AgentStore {
+  createThread(input: CreateThreadInput): Promise<ThreadSummary>;
+  getThread(threadId: string): Promise<ThreadDetail | null>;
+  listThreads(actorRef: string, limit?: number): Promise<ThreadSummary[]>;
+  softDeleteThread(threadId: string): Promise<void>;
+  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary>;
+  appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
+  setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void>;
+  recordToolCall(input: RecordToolCallInput): Promise<void>;
+  recordUsage(input: RecordUsageInput): Promise<void>;
+  quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number; costUsd: number }>;
+  ownerOfThread(threadId: string): Promise<string | null>;
+  ownerOfToolCall(toolCallId: string): Promise<string | null>;
+  runForToolCall(toolCallId: string): Promise<string | null>;
+  ownerOfActiveStream(runId: string): Promise<string | null>;
+  // …setTitle, promoteThread, setActiveStream, truncateFrom, updateToolCall, plus optional members
+}
+```
+
+A message's tool CALLS are known when it is appended and their outputs are not, so the loop settles
+them afterwards with `setMessageToolResults` — a single write of the turn's complete result list,
+inside a checkpoint the turn already had. Both live on the message because that is where a thread
+reader pairs them: a call whose result is only in `agent_tool_call` renders as a tool still running,
+however long ago the turn finished.
+
+`ownerOfThread`, `ownerOfToolCall`, and `ownerOfActiveStream` resolve the owning `actorRef` (or
+`null` if the row doesn't exist) — the governance endpoints (`/agent/threads/:id`,
+`/agent/tool-call/approve` · `/reject`, `/agent/chat/:runId/cancel`) call these to assert the acting
+actor owns the target before acting on it. `runForToolCall` resolves the tool call's thread's active
+stream — the run currently awaiting it — so approve/reject route to the exact run (including a
+delegated sub-agent's own child run) without a client-supplied run id.
+
+Each usage row carries the cache-aware token counts (`inputTokens`, `outputTokens`,
+`cacheWriteTokens`, `cacheReadTokens`) and an optional provider-reported `costUsd` — the raw material
+the [Cost & Governance](/docs/agent/guides/cost-and-governance) read-model rolls up.
+
+### Which agent answers a thread
+
+A thread carries its own `defaultAgent` (`agent_thread.default_agent`), set through
+`updateThread({ defaultAgent })` — `PATCH /agent/threads/:id` — and cleared with an explicit `null`.
+A `chat()` call that names no agent uses it, ahead of the module's configured `defaultAgent`; a
+`chat()` call that names one still wins. It comes back on every thread summary and detail as
+`defaultAgent: string | null`, and a `forkThread` carries it onto the fork, since a fork continues
+the same conversation.
+
+Both SQL adapters also implement `defaultAgentForThread(threadId)`, a one-column read on the primary
+key. `AgentService` prefers it for exactly this lookup: `getThread` would return the whole transcript
+— every message, every persisted tool output — to answer with one nullable string, which on a 20-turn
+thread with 8 KB tool results is ~170 KB read and discarded per turn. The method is not part of the
+`AgentStore` SPI; it is probed structurally against the `ThreadDefaultAgentReader` shape exported from
+`@dudousxd/nestjs-agent`, and a store that doesn't offer it still answers through the full read.
+
+### What a turn reads off a thread
+
+A turn needs a WINDOW of the thread: its last few messages, the title, and whether the thread has
+ever been answered. `getThread` gives it the transcript instead — every message, every attachment,
+every tool output the thread ever recorded — and the run journals what it loaded, so the same payload
+is re-read and re-parsed on every replay. On a 50-turn thread whose turns each ran a 50 KB tool that
+is ~1.9 MB per load, 97% of it tool results.
+
+Both SQL adapters implement `loadThreadForTurn({ threadId, messageLimit })`:
+
+```ts
+const page = await store.loadThreadForTurn({ threadId, messageLimit: 20 });
+// { title, defaultAgent, hasAssistantMessage, messages }  — oldest first
+```
+
+The bound is the database's (`order by created_at desc limit ?`, reversed for the prompt) over the
+columns a model turn reads; `usage`, `follow_ups` and `run_id` stay in the table. A `messageLimit` of
+`0` reads no messages at all, and an omitted one reads the whole thread.
+
+`hasAssistantMessage` is answered over the whole thread rather than the returned page — it is what a
+thread-start intake asks ("has this conversation been answered before?"), and a thread whose window
+holds only the user's last questions has still been answered. Like `defaultAgentForThread`, the
+method is not part of the `AgentStore` SPI: it is probed structurally, and a store that doesn't offer
+it still answers through the full `getThread` read.
+
+### Which turn asked for a run
+
+A delegation's child run records its parent in `agent_run.parent_run_id` — set from
+`RecordRunStartInput.parentRunId`, which both runners populate for awaited and detached children
+alike. The durable runtime journals the same edge, but only there, and a journal is not what a
+reliability or cost surface reads: without the column a run-row reader cannot roll a child's spend
+up to the turn that asked for it. A **detached** child makes it sharper, since it outlives its
+parent's turn and so is paired by nothing in the transcript either.
+
+A store that persists nothing for it still works — it loses the tree, not the run. Runs recorded
+before the column existed keep it null; the edge for a finished turn lives only in the journal and
+is not backfilled.
+
+### Which turn wrote a message
+
+`AppendMessageInput.runId` records the run that produced the message, and `StoredMessage.runId`
+reads it back. The loop stamps both the user message and every assistant message it writes.
+
+Without it, the only way to attribute a message to a turn is to compare its timestamp against the
+run's `startedAt` — and regenerating breaks that. A regenerate truncates the replaced answer and
+re-answers the **surviving** user message without appending a new one, so the transcript ends up as
+one prompt followed by the newest answer. Walking forward by time then hands the older run the
+replacement's text, scoring one run against another's output.
+
+The field is optional, so a row written before this existed simply has none, and a host that appends
+messages outside a run may omit it. Readers should treat a transcript with no stamp at all as legacy
+and fall back to timestamps, but a stamped transcript holding nothing for a given run as genuinely
+empty for that run — see `GovernanceRunSampleSource` in
+[`-evals`](/docs/agent/packages/evals), which does exactly that.
+
+<Callout type="info" title="Adding the column to a database that already exists">
+The MikroORM adapter heals its own schema at boot (`getUpdateSchemaSQL({ safe: true })` — create and
+add-column only), so `run_id` appears on the next start. On SQLite/libsql, where that diff comes out
+as a table rebuild rather than an `add column`, the heal applies the rebuild as a unit and verifies
+the result, throwing rather than recording a heal that did not land. The Drizzle adapter's `ensureAgentSchema`
+is `CREATE TABLE IF NOT EXISTS` DDL, which is inert against a table that already exists, so it now
+carries an explicit additive-column pass that adds `run_id` when the table predates it.
+</Callout>
+
+### What the model thought, and what it showed
+
+`AppendMessageInput` / `StoredMessage` also carry, per step:
+
+| Field | What it is |
+|---|---|
+| `reasoning?: string` | The model's thinking, as it streamed (`reasoning` frames). |
+| `reasoningMs?: number` | How long it thought: the sum of each burst of consecutive `reasoning` frames, up to the next frame that was not reasoning. |
+| `ui?: AgentUiComponent[]` | Components pushed during the step (`ui` frames) — first-seen order, last props per `id`. |
+
+The loop derives all three from the frames the model provider writes (`observeTurnFrames`), inside
+the `llm:<i>` checkpoint — so they are journaled with the turn and a replay persists the same
+thinking instead of re-measuring a turn that is not happening. A provider that knows better may
+report them on `ModelTurnResult` itself; its values win. The client replays them as a `reasoning`
+part before the text (with its duration) and `data-ui` parts — see
+[Bring your own UI](/docs/agent/guides/bring-your-own-ui#reasoning).
+
+A custom adapter should hold itself to `EVERY_MESSAGE_FIELD` from `-testing`: it includes these, so a
+round-trip spec against it fails until the adapter persists them.
+
+<Callout type="info" title="Adding the columns to a database that already exists">
+`agent_message` gains `reasoning` (text), `reasoning_ms` (integer) and `ui` (JSON), all nullable.
+Both adapters' `ensureAgentSchema` add them on boot; on your own migrations, see
+[`-store-drizzle`](/docs/agent/packages/store-drizzle) and
+[`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm).
+</Callout>
+
+### What a confirmation card said
+
+An action tool's preparation preflight can replace the `presentation.confirm` wording for one call.
+Both SQL adapters persist it in a nullable JSON column, `agent_tool_call.confirmation`, and return it
+in `StoredMessage.approvals`, so a reloaded transcript shows the card the user actually saw. Both
+`ensureAgentSchema` helpers add the column; on your own migrations add it before upgrading (`jsonb`
+on Postgres, `json` on MySQL, JSON text on SQLite).
+
+---
+
+## The message queue (optional)
+
+`ChatQueueStore` is what lets a message sent mid-turn wait on the thread
+([Typing ahead](/docs/agent/guides/message-queue)): per-thread FIFO storage of queued messages
+(`enqueueMessage`, `listQueue`, `getQueuedMessage`, `updateQueuedMessage`, `moveQueuedMessage`,
+`removeQueuedMessage`, `clearQueue`), a per-thread pause (`queuePause`, `setQueuePause`), and the
+admission primitives — `claimActiveStream(threadId, runId, { replacing? })` and
+`releaseActiveStream(threadId, runId)`, both compare-and-set on the thread's active run, plus
+`activeRunForThread`. It is probed structurally (`isChatQueueStore`): a store without every member
+keeps the old behaviour, where a send on a busy thread starts a second turn.
+
+The in-memory, Drizzle and MikroORM stores implement it; the SQL ones add an
+`agent_queued_message` table (cascading off `agent_thread`, indexed on `(thread_id, position)`) and
+an `agent_thread.queue_pause` column through `ensureAgentSchema`. A queued message also keeps the
+sender's renderer capabilities (`uiCapabilities`, column `ui_capabilities`), so the turn it starts
+offers the same component catalog the send would have. A store of your own can run
+`CHAT_QUEUE_STORE_CONTRACT` from `@dudousxd/nestjs-agent-testing` — framework-agnostic cases, each
+throwing on the first mismatch:
+
+```ts
+import { CHAT_QUEUE_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
+
+for (const contractCase of CHAT_QUEUE_STORE_CONTRACT) {
+  it(contractCase.name, async () => {
+    const store = await freshStore();
+    const thread = await store.createThread({ actor: { id: 'contract-actor' } });
+    await contractCase.run({ store, threadId: thread.id });
+  });
+}
+```
+
+## Which media a message still references (optional)
+
+`stage()` on an `AttachmentStagingStore` writes bytes at upload time, **before any message exists**.
+A user who attaches a file and then never sends it leaves media in your object store with nothing
+pointing at it — no message, no listing, no sweep. Finding it needs two facts held by different
+owners:
+
+| Who | Knows | Method |
+|---|---|---|
+| The host | Which media it staged, and when | `AttachmentStagingStore.list({ actor, stagedBefore?, limit? })` → `StagedAttachment[]` |
+| The library | Which media a live message still carries | `AgentStore.referencedMediaIds(actorRef, mediaIds)` → `string[]` |
+
+```ts
+referencedMediaIds?(actorRef: string, mediaIds: readonly string[]): Promise<string[]>;
+```
+
+Both are optional, and both are implemented by `-store-mikro-orm`, `-store-drizzle` and
+`InMemoryAgentStore` / `InMemoryAttachmentStagingStore`.
+
+### Running a sweep safely
+
+`AgentService.collectableAttachments` composes the two and returns candidates. It **never deletes
+anything** — the bytes are yours, and so is the decision:
+
+```ts
+const olderThan = new Date(Date.now() - 48 * 60 * 60 * 1000);
+for (const entry of await agents.collectableAttachments(actor, { olderThan })) {
+  await myMediaStore.delete(entry.mediaId);
+}
+```
+
+Three properties are worth knowing before you point that at a production bucket.
+
+**References are re-derived, never latched.** `truncateFrom` deletes messages, and regenerating a
+turn does exactly that — so media that was referenced becomes unreferenced again. A `referenced`
+flag written when a message is sent would never be unset by that delete, and the bytes would be
+pinned for ever. Every call answers from the surviving message rows (and queued messages) instead.
+
+**`olderThan` is required and has no default.** Freshly staged media is an upload in flight, not
+garbage; how long one of your composers may sit open with a file attached is your knowledge, not the
+library's. It is pushed down to `list` as `stagedBefore` *and* re-applied to the result, so a store
+that ignores the hint cannot quietly turn a sweep into "delete what the user is about to send".
+
+**An unanswerable query refuses rather than guessing.** If the staging store has no `list`, or the
+`AgentStore` no `referencedMediaIds`, the call raises `501`. Reading silence as "nothing is
+referenced" would hand back every attachment the actor ever sent, marked safe to delete.
+
+Every read is per-actor. Media referenced only by *another* actor's thread reads as unreferenced
+here, so this can never be turned into a probe for what exists in someone else's conversation — and
+because your inventory is per-actor too, the candidate ids are already the caller's own. A
+soft-deleted thread still holds its references: the message rows survive, so the bytes are still
+reachable from stored state. Delete the thread for real and the cascade frees them.
+
+<Callout type="info" title="Nothing to migrate">
+`referencedMediaIds` reads the `attachments` JSON column messages have carried since attachments
+shipped, so an existing database answers correctly the moment you upgrade — no new table, no column,
+no backfill, and no boot-time heal in the path (which also sidesteps the MikroORM-on-SQLite
+add-column caveat in [`store-mikro-orm`](/docs/agent/packages/store-mikro-orm)). A normalized index
+table would query faster and would have reported every attachment written before the backfill as
+unreferenced — the one failure mode worth designing out when the next step is a delete.
+</Callout>
+
+---
+
+## Run reliability recording (optional)
+
+Beyond the five tables above, `AgentStore` carries three **optional** methods for a sixth concern —
+run outcomes, in `agent_run` — absent on an adapter, they're a graceful no-op, so an existing custom
+`AgentStore` keeps compiling untouched:
+
+```ts
+recordRunStart?(run: RecordRunStartInput): Promise<void>; // carries promptHash
+recordRunEnd?(end: RecordRunEndInput): Promise<void>;     // durationMs, errorCode/errorMessage on failure
+bumpRunRetries?(runId: string): Promise<void>;
+```
+
+The loop calls `recordRunStart` at the top of a turn as a checkpointed step, carrying the sha256 of
+the resolved system prompt as `promptHash` — computed **pre-RAG**, so it identifies the prompt
+*version* rather than the per-request, retrieval-augmented text, letting you correlate error-rate
+shifts with prompt changes. `recordRunEnd` is called on completion (with duration) and on failure
+(with an error code/message) by both runners — the durable workflow and the inline runner alike.
+
+Both bundled adapters (`-store-mikro-orm`, `-store-drizzle`) implement all three against a new
+`agent_run` table (autoSchema-managed, alongside the five tables above), and the same rows back
+`AgentGovernanceQueries`' reliability reads — `runMetrics`, `runsByAgent`, `runErrors`, `runTrend`,
+`recentRuns` (which surfaces each run's `promptHash`) — plus a paginated `runsPage`. See
+[Cost & Governance](/docs/agent/guides/cost-and-governance) for what those reads render.
+
+---
+
+## Action proposals (optional)
+
+With `actionApprovalMode: 'independent'`, an action waiting for approval no longer holds the turn: it
+is persisted as an **action proposal** that a worker executes after the decision (see
+[Action proposals](/docs/agent/guides/action-proposals)). The configuration check requires the
+`AGENT_STORE` itself to carry these capabilities (all from `@dudousxd/nestjs-agent-core`) and fails
+at boot otherwise:
+
+| Capability | Methods |
+|---|---|
+| `ActionProposalStore` | `createActionProposal`, `getActionProposal`, `listActionProposals`, `decideActionProposal`, `claimActionProposal`, `extendActionProposalLease`, `settleActionProposal` — all scoped to tenant, actor and thread |
+| `ActionProposalSupersessionStore` | `createReplacingActionProposal`, `supersedeActionProposal` |
+| `ActionProposalWorkerStore` | `claimNextActionProposal`, `expireActionProposals` — privileged, unscoped, worker-only |
+| `ActionProposalOutcomeStore` | `getThreadActionProposalScope`, `claimNextActionProposalOutcome`, `admitActionProposalOutcome` |
+| `ChatQueueStore` | the [message queue](#the-message-queue-optional) |
+
+`DrizzleAgentStore` and `MikroOrmAgentStore` implement all of them over `agent_action_proposal` (one
+row per proposal: canonical snapshot, decision and execution work, version-fenced), plus
+`agent_message.action_proposal_outcome` for the result message a worker admits and
+`agent_tool_call.proposal_id`. The Drizzle adapter advertises admission only on better-sqlite3,
+node-postgres, mysql2 and libSQL (`actionProposalAdmissionSupported`); MikroORM supports SQLite,
+Postgres and MySQL. `InMemoryAgentStore` implements them for a single process. A store of your own can
+run `ACTION_PROPOSAL_STORE_CONTRACT` and `ACTION_PROPOSAL_WORKER_STORE_CONTRACT` from
+`@dudousxd/nestjs-agent-testing`.
+
+<Callout type="warn" title="Rollout on an existing database">
+SQL stores also implement `ActionProposalDiscoveryIndexStore.backfillActionProposalDiscoveryIndex({ limit })`
+(`limit` 1–1000). Workers only discover rows whose discovery metadata is current, and older rows
+need the backfill. In order: stop older writers → apply the additive schema (`ensureAgentSchema` or
+your migration) → repeat the backfill until it returns `0` → deploy the new writers and workers.
+Never run the backfill implicitly from a worker tick, and do not mix old and new writers. Details per
+adapter: [`-store-drizzle`](/docs/agent/packages/store-drizzle#action-proposals-independent-approvals),
+[`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm#action-proposals-independent-approvals).
+</Callout>
+
+---
+
+## Four tokens, bound together
+
+An adapter binds **four** DI tokens — the write side, the read side, the pricing writer, and the
+confirm-token ledger — so wiring one module gives you persistence, analytics, priced cost estimates,
+and single-use confirmed writes:
+
+| Token | Bound to | Consumed by |
+|---|---|---|
+| `AGENT_STORE` | the store (`MikroOrmAgentStore` / `DrizzleAgentStore`) | the agent module — every turn reads it |
+| `AGENT_GOVERNANCE_QUERIES` | the read-model (`…GovernanceQueries`) | the dashboard & Telescope surfaces |
+| `AGENT_PRICING_STORE` | the pricing writer (`MikroOrmPricingStore` / `DrizzlePricingStore`, or your `pricingStore` option) | your app, to seed/update model prices — see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices) |
+| `AGENT_CONFIRM_TOKEN_STORE` | `MikroOrmConfirmTokenStore` / `DrizzleConfirmTokenStore` | [confirmed writes](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool) — single use across replicas |
+
+All four are `Symbol.for(...)` tokens from `@dudousxd/nestjs-agent-core` (global-registry symbols,
+so DI survives pnpm's dual ESM/CJS copies). A store module binds them **globally** (a Nest global
+module), so any module in the app resolves them without re-importing. That's why `store` on
+`AgentModule.forRoot({ … })` is **optional**: import a store module and the agent resolves the store
+from the app-wide `AGENT_STORE` — leave `store` off entirely. Pass `store` only for a store you don't
+bind through a module (the in-memory testing store, say).
+
+<Callout type="info" title="One import, read + write + pricing">
+Importing a store module binds `AGENT_GOVERNANCE_QUERIES`, `AGENT_PRICING_STORE` and
+`AGENT_CONFIRM_TOKEN_STORE` as well as `AGENT_STORE`. That's why the governance console and Telescope tab "just work" once persistence is
+wired — they read the same adapter's read-model. Cost estimates are the exception: they stay `$0`
+until something writes to `AGENT_PRICING_STORE`, since a fresh pricing table has no rows to read. See
+[Cost & Governance](/docs/agent/guides/cost-and-governance).
+</Callout>
+
+---
+
+## Wiring an adapter
+
+The same SPI, two ORMs. MikroORM runs on your app's ORM and heals its tables at boot; Drizzle takes
+an already-opened db handle that the host owns.
+
+<Tabs items={['MikroORM', 'Drizzle']}>
+<Tab value="MikroORM">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-store-mikro-orm @mikro-orm/core @mikro-orm/nestjs
+```
+
+`MikroOrmAgentStoreModule.forFeature()` binds all four tokens. It needs a `MikroOrmModule.forRoot(...)`
+in scope for the `EntityManager`, and it does **not** register the entities — add them to your
+MikroORM config.
+
+```ts
+import { Module } from '@nestjs/common';
+import { MikroOrmModule } from '@mikro-orm/nestjs';
+import { AGENT_ENTITIES, MikroOrmAgentStoreModule } from '@dudousxd/nestjs-agent-store-mikro-orm';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+
+@Module({
+  imports: [
+    MikroOrmModule.forRoot({
+      // …driver, dbName
+      entities: [...yourEntities, ...AGENT_ENTITIES],
+    }),
+    MikroOrmAgentStoreModule.forFeature(), // binds AGENT_STORE (+ queries, pricing, confirm tokens); heals the schema at boot
+    AgentModule.forRoot({
+      model: myModelProvider,
+      // no `store` — the agent reads it from AGENT_STORE
+      actorResolver: new HeaderActorResolver(),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+By default (`autoSchema: true`) the module runs `ensureAgentSchema(orm)` on application bootstrap — a
+non-destructive `getUpdateSchemaSQL({ safe: true })` over the agent tables only: create +
+add-column, never a drop or alter. Pass `forFeature({ autoSchema: false })` when your own MikroORM
+migrations own the tables (`agentSchemaSql(this.config)` renders the DDL inside a `Migration`), and
+call the helper yourself if you want it:
+
+```ts
+import { ensureAgentSchema } from '@dudousxd/nestjs-agent-store-mikro-orm';
+
+await ensureAgentSchema(orm);
+```
+
+It is fingerprint-gated (a steady-state boot is one cheap read) and it verifies itself: what the heal
+applied is re-diffed, and required structure still pending throws `AgentSchemaHealError` instead of
+writing the fingerprint that would stop later boots from retrying.
+
+The entity set is exported too: `AGENT_ENTITIES` (stamped with `utf8mb4_unicode_ci` for MySQL
+parity) and `agentEntities({ collation })` if you need to omit the collation for SQLite.
+
+</Tab>
+<Tab value="Drizzle">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-store-drizzle drizzle-orm
+```
+
+The host app opens the connection and hands `DrizzleAgentStoreModule.forRoot({ db })` an
+already-opened Drizzle handle — the module never opens one itself. SQLite, Postgres and MySQL all
+work: build the handle with `agentSchema`, `pgAgentSchema` or `mysqlAgentSchema` and the stores read
+the dialect off it.
+
+```ts
+import { Module } from '@nestjs/common';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import {
+  DrizzleAgentStoreModule,
+  agentSchema,
+  ensureAgentSchema,
+} from '@dudousxd/nestjs-agent-store-drizzle';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+
+const db = drizzle(new Database('app.db'), { schema: agentSchema });
+await ensureAgentSchema(db); // creates what is missing, never drops — or run your own migrations
+
+@Module({
+  imports: [
+    DrizzleAgentStoreModule.forRoot({ db }), // binds AGENT_STORE + AGENT_GOVERNANCE_QUERIES + AGENT_PRICING_STORE + AGENT_CONFIRM_TOKEN_STORE
+    AgentModule.forRoot({
+      model: myModelProvider,
+      actorResolver: new HeaderActorResolver(),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+The package ships the tables per dialect (`agentSchema` · `pgAgentSchema` · `mysqlAgentSchema`),
+`ensureAgentSchema` and `agentSchemaDdl(dialect)`, `DrizzleAgentStore`, `DrizzleGovernanceQueries`,
+`DrizzlePricingStore`, and the rest listed in [`-store-drizzle`](/docs/agent/packages/store-drizzle#exports).
+
+<Callout type="warn" title="ensureAgentSchema is a quick start, not a migration story">
+`ensureAgentSchema` is additive only: its DDL is rendered from the dialect's schema object, so it
+creates missing tables and adds missing columns and indexes (so an existing database picks them up
+when you next call it — the module does not call it for you). It never drops a column, never changes
+a type, and can't express anything else a real migration can. On Postgres/MySQL it holds a
+cross-replica lock. For production, prefer drizzle-kit migrations pointed at your dialect's schema
+object — treat `ensureAgentSchema` as the "stand it up with no migration files" path (tests, demos,
+first boot). A host on its own migrations owns those additive statements itself.
+</Callout>
+
+</Tab>
+</Tabs>
+
+---
+
+## Choosing an adapter
+
+Both implement the identical SPI, so the agent behaves the same either way — the choice is about the
+rest of your stack.
+
+| | MikroORM | Drizzle |
+|---|---|---|
+| Import | `MikroOrmAgentStoreModule.forFeature()` | `DrizzleAgentStoreModule.forRoot({ db })` |
+| Connection | MikroORM owns it (`forRoot`) | host owns it, passes `db` in |
+| Entities / tables | you add `AGENT_ENTITIES` to your MikroORM config | `agentSchema` / `pgAgentSchema` / `mysqlAgentSchema` on your handle |
+| Schema | healed at boot (`autoSchema`, default on), or MikroORM migrations with `agentSchemaSql` | drizzle-kit migrations (or call `ensureAgentSchema` yourself) |
+| Dialects | SQLite, Postgres, MySQL (all CI-tested) | SQLite, Postgres, MySQL (CI: better-sqlite3, node-postgres, mysql2) |
+| Independent approvals | SQLite, Postgres, MySQL | certified drivers only: better-sqlite3, node-postgres, mysql2, libSQL |
+| Binds | `AGENT_STORE` + `AGENT_GOVERNANCE_QUERIES` + `AGENT_PRICING_STORE` + `AGENT_CONFIRM_TOKEN_STORE` | same four |
+
+Reach for the adapter that matches the ORM already in your app. The SPI is the portability guarantee:
+if you migrate ORMs later, only the store module import changes — the agent, the tools, and the
+governance surfaces are untouched.
+
+---
+
+## The live stream across replicas (`sink`)
+
+The store holds threads; the **sink** holds a run's live stream while it is being written, so a
+browser that reconnects (`GET /agent/chat/:runId/stream?after=`) is replayed what it missed. The
+default sink keeps that in the process running the turn — with several replicas a reconnect landing
+elsewhere finds nothing. Share it: Redis (`@dudousxd/nestjs-agent-transport-redis`), or, with no
+Redis, the database these adapters already use:
+
+```ts
+import { DrizzleTokenStreamSink } from '@dudousxd/nestjs-agent-store-drizzle';
+AgentModule.forRoot({ model, sink: new DrizzleTokenStreamSink(db) });
+
+import { MikroOrmTokenStreamSink } from '@dudousxd/nestjs-agent-store-mikro-orm';
+AgentModule.forRootAsync({
+  inject: [EntityManager],
+  useFactory: (em: EntityManager) => ({ model, sink: new MikroOrmTokenStreamSink(em) }),
+});
+```
+
+- **One row per frame** in `agent_stream_frame`, numbered per run from 1 with no gaps — the next
+  number is taken in the insert itself and the `(run_id, seq)` key turns two writers' race (a parent
+  and its delegate on different replicas) into a retry.
+- **Polled**, not pushed: a subscriber reads the rows past its cursor every `pollIntervalMs` (250 ms),
+  slowing to `idlePollIntervalMs` (1 s) once the run has written nothing for five seconds. No
+  `LISTEN`/`NOTIFY`.
+- **Text is coalesced at write time**: consecutive `text` frames within `flushMs` (50 ms) become one
+  row. Every replica reads the same rows, so the SSE ids — and an `?after=` cursor — are the same
+  wherever the client reconnects. `flushMs: 0` writes every frame.
+- **TTL from the last write** (`ttlSeconds`, 1 h): a run parked on an approval for longer loses its
+  buffered frames — the persisted thread is the record. `purgeExpired()` runs on its own after a run
+  ends (at most once a minute; `autoPurge: false` to schedule it yourself).
+- A run that fails ends with a terminal row carrying its error: a subscriber replays, then gets the
+  stream's `event: error`.
+
+Both constructors take an optional second argument, `SqlTokenStreamSinkOptions` (`pollIntervalMs`,
+`idlePollIntervalMs`, `flushMs`, `ttlSeconds`, `autoPurge`). The sink is not bound by the store
+modules — you pass it.
+
+The logic is `SqlTokenStreamSink` in core, over a six-method `StreamFrameTable` (`append`, `read`,
+`has`, `remove`, `lapsedRuns`, `isUniqueViolation`) — implement that for another database and the
+rest comes with it; `SQL_TOKEN_STREAM_SINK_CONTRACT` in `-testing` checks it. The adapters' tables
+are exported as `DrizzleStreamFrameTable` and `MikroOrmStreamFrameTable`.
+
+## In-memory store for tests
+
+For offline tests and demos, `@dudousxd/nestjs-agent-testing` ships an `InMemoryAgentStore` (plus
+`InMemoryGovernanceQueries`, `InMemoryPricingStore`, an `InMemoryQuotaStore`, `InMemoryTokenStreamSink`,
+and a deterministic fake model). No database, no migrations — the whole loop (auto-executing reads, a
+suspending action tool, multi-agent delegation) runs with zero infrastructure.
+
+```ts
+import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
+
+AgentModule.forRoot({
+  model: fakeModel,
+  store: new InMemoryAgentStore(), // pass it directly instead of importing a store module
+  actorResolver: new HeaderActorResolver(),
+});
+```
+
+The repo's `examples/agent-demo` is a runnable proof built entirely on these in-memory pieces — see
+[Getting Started](/docs/agent/getting-started) for the `pnpm --filter agent-demo demo` command.
+
+---
+
+## Related
+
+- [Getting Started](/docs/agent/getting-started) — install, declare a tool, and stream your first turn
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the usage ledger, `AGENT_GOVERNANCE_QUERIES`, and the console
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — when a suspended run is checkpointed to the store
+- [Action proposals](/docs/agent/guides/action-proposals) — independent approvals, which persist through the proposal capabilities above
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — the actor whose ref keys every thread and usage row

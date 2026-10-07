@@ -1,0 +1,48 @@
+---
+title: DI tokens
+icon: Braces
+description: The Symbol.for(...) injection tokens exported by @dudousxd/nestjs-agent-core, what they resolve to, and who binds them.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+All tokens live in `packages/core/src/tokens.ts` and are `Symbol.for(...)` (global symbol registry), not plain `Symbol()` — pnpm peer multiplexing + dual ESM/CJS can load `core` more than once, and a plain `Symbol()` would mint a distinct token per copy. Naming convention: `@dudousxd/nestjs-agent:<name>`. See [Architecture](/docs/agent/concepts/architecture) for how these providers wire together.
+
+| Token | Resolves to | Bound by | Inject it when… |
+|---|---|---|---|
+| `AGENT_OPTIONS` | `AgentModuleOptions` (the raw options object) | `AgentModule.forRoot`/`forRootAsync` (`useValue`/`useFactory`) | You need the resolved module config itself, not a derived provider. |
+| `AGENT_STORE` | `AgentStore` | always bound by `AgentModule`: `options.store`, else the one a store adapter module binds (found automatically, forwarded), else `InMemoryAgentStore` | You need direct thread/message persistence access outside `AgentService`. |
+| `AGENT_RUNNER` | `AgentRunner` | `InlineAgentRunner` by default; re-bound to `AGENT_DURABLE_RUNNER` when `durable: true` | You need to `start`/`signal`/`cancel` a run directly rather than through `AgentService`. |
+| `AGENT_DURABLE_RUNNER` | `AgentRunner` (durable-backed) | **only** `AgentDurableModule` (`@dudousxd/nestjs-agent/durable`) | Never inject directly — `AGENT_RUNNER` reads it via optional injection when `durable: true`, and throws a clear error if `AgentDurableModule` wasn't imported. |
+| `AGENT_SINK` | `TokenStreamSink` | `options.sink`, else `InProcessTokenStreamSink` | You need to publish/subscribe to raw token streams outside the chat controller. |
+| `AGENT_MODEL` | `ModelProvider` | `options.model` | A tool or service needs the configured LLM provider directly. |
+| `AGENT_ROLES_POLICY` | `RolesPolicy` | `options.rolesPolicy`; else a forwarder to the `AGENT_ROLES_POLICY` another module binds (`AgentAuthzModule`, found automatically in either import order); else `ClosedRolesPolicy(options.defaultRoles)` when `emptyRoles: 'deny'`, else `DefaultRolesPolicy(options.defaultRoles)`. Boot warns when both the option and a bound policy exist (the option wins). Both built-in policies refuse a tool with an `ability` and no `roles`. | You're implementing custom tool-authorization logic that needs the active policy, or binding your own policy from another module. |
+| `AGENT_QUOTA_PROVIDER` | `QuotaProvider` | `options.quota` when it is a provider, else `LedgerQuotaProvider` (with `options.quota.limits`) | You need the actor's budget windows outside `GET /agent/quota`. |
+| `AGENT_TOOL_REGISTRY` | `ToolRegistry` | always, a fresh `new ToolRegistry()` per module instance | You're registering or introspecting tools directly (most apps use `provideAgentTool` instead). |
+| `AGENT_REGISTRY` | `AgentRegistry` | always — a fresh `AgentRegistry`, seeded at boot by `AgentDiscoveryService` from every `@Agent`-decorated provider it finds via `DiscoveryModule` | You need to look up an `AgentDefinition` by name outside the runner. |
+| `AGENT_ACTOR_RESOLVER` | `ActorResolver` | `options.actorResolver`, else `AnonymousActorResolver` | You need to resolve the calling `Actor` yourself, e.g. in a guard. |
+| `AGENT_GOVERNANCE_QUERIES` | `AgentGovernanceQueries` | a store adapter module (e.g. `MikroOrmAgentStoreModule`), consumed by the dashboard's `DashboardService` and the `-telescope` extension | You're building a custom governance/reporting surface over spend, usage, or thread history. |
+| `AGENT_PRICING_STORE` | `AgentPricingStore` | a store adapter module (e.g. `MikroOrmAgentStoreModule`) | You need to seed or update model prices (`upsertModelPrice`, `seedModelPrices`) — see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices). Without it, unpriced models estimate at `$0`. |
+| `AGENT_DEPS_FACTORY` | `AgentDepsFactory` | `AgentDepsFactory` class, via `useExisting` | You need per-agent resolved deps (model, store, sink, roles policy, prompt contributors) outside `AgentService`. A `Symbol.for` token — not the class — because tsup's dual index/durable bundles each get their own copy of the class. |
+| `AGENT_RETRIEVER` | `Retriever` | `options.retrieval.retriever` when inject-mode RAG is configured | You need the raw retrieval SPI outside the loop's automatic inject-mode augmentation — e.g. to build your own `createRetrievalTool` wiring. |
+| `AGENT_EMBEDDING_PROVIDER` | `EmbeddingProvider` | a RAG/ingestion adapter module | You need text→vector embedding directly, outside retrieval or ingestion. |
+| `AGENT_PROMPT_CONTRIBUTORS` | `PromptContributor[]` | always — a shared, mutable list `AgentDiscoveryService` fills from every `@SystemPromptContributor()` method it finds | You're building tooling that needs to enumerate the app-wide prompt contributors the loop appends after each agent's base prompt. |
+| `AGENT_ACTOR_DIRECTORY` | `ActorDirectory \| undefined` | optionally bound by the host application | Resolving opaque store `actorRef`s to human display labels on a governance/dashboard read surface you're building yourself. Unbound by default — the shipped dashboard/telescope surfaces degrade to the raw ref when absent. |
+| `AGENT_ATTACHMENT_STAGING` | `AttachmentStagingStore \| undefined` | optionally bound by the host application | You're persisting an uploaded attachment (`stage`) and resolving a claimed `mediaId` back to its url for a turn (`resolve`). What turns `POST /agent/attachments` on (it answers `501` with nothing bound), whose `describe()` (when present) sets the attachment limits, **and** what a chat turn needs to carry attachments at all — with nothing bound, `POST /agent/chat` refuses attachments with `501` rather than trusting urls from the request. |
+| `AGENT_APPROVAL_PORT` | `AgentApprovalPort \| undefined` | the agent runtime, when `durable`/inline HITL is wired — bound to the same decision path chat approvals use | The dashboard injects this **optionally** to route console-side approve/reject; when absent, the Approvals inbox renders read-only and `POST approvals/:toolCallId` returns `501`. You'd inject it directly only if building your own approval surface.  It also has `approveActionProposal` / `rejectActionProposal(actor, { kind: 'proposal', threadId, proposalId }, opts)` for [action proposals](/docs/agent/guides/action-proposals), recorded with your `decidedVia`. |
+| `AGENT_MODEL_CATALOG` | `ModelCatalog` | `options.models`, else the model provider's `.catalog`, else an empty catalog | You need the models a caller may pick, as `GET /agent/models` answers them. |
+| `AGENT_SKILLS` | resolved skills config, or `undefined` | `AgentModule`, from `options.skills` | Your own surface lists the skills an actor can reach, resolved the way the loop resolves them. |
+| `AGENT_MEMORY` | resolved memory config, or `undefined` | `AgentModule`, from `options.memory` | Your own surface reads or edits memories, resolved the way the loop resolves them. |
+| `AGENT_CONFIRM_TOKEN_STORE` | `ConfirmTokenStore` | `DrizzleAgentStoreModule` / `MikroOrmAgentStoreModule` | Building a [confirmed tool](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool): `provideAgentTool(factory, [AGENT_CONFIRM_TOKEN_STORE])`. |
+
+Tokens exported by `@dudousxd/nestjs-agent` subpaths rather than core:
+
+| Token | From | Resolves to |
+|---|---|---|
+| `AGENT_CHAT_QUEUE` | `@dudousxd/nestjs-agent` | The `ChatQueueService` behind the [message queue](/docs/agent/guides/message-queue). A token so the separate `/durable` bundle reaches the same instance. |
+| `GENUI_CATALOG` | `@dudousxd/nestjs-agent/genui` | The genui `Catalog` (`@InjectGenuiCatalog()`). See [Generative UI](/docs/agent/guides/generative-ui). |
+| `AGENT_MEDIA_ATTACHMENTS` | `@dudousxd/nestjs-agent/media` | The `MediaAttachmentStaging` instance, for `remove()` in a sweep. See [File uploads](/docs/agent/guides/file-uploads). |
+
+<Callout type="info" title="AGENT_STORE is always bound">
+  `AgentModule` binds `AGENT_STORE` itself: the `store` option, else a forwarder to the `AGENT_STORE` a store adapter module binds (found by scanning the container, so import order does not matter), else the in-memory store — with a boot warning that it is not for production.
+</Callout>

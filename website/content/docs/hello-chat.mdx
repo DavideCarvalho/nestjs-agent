@@ -1,0 +1,87 @@
+---
+title: Hello chat
+icon: MessageCircle
+description: The smallest end-to-end AI chat — a NestJS server in about six lines and a React client in about five, no login, no database.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A working, public, login-less chat: every visitor gets their own conversation history, nothing to
+configure but the model.
+
+## Server
+
+```bash
+pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-ai-sdk @ai-sdk/openai
+```
+
+```ts
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { openai } from '@ai-sdk/openai';
+
+@Module({ imports: [AgentModule.forRoot({ model: aiSdkModel(openai('gpt-5-mini')) })] })
+export class AppModule {}
+```
+
+Set `OPENAI_API_KEY`, start the app, and `/agent/chat`, `/agent/threads`, … are live. The two boot
+notices (in-memory store, public endpoints) are the defaults you change for production — see
+[Getting Started → the defaults](/docs/agent/getting-started#the-defaults-and-how-to-change-each).
+
+## React
+
+```bash
+pnpm add @dudousxd/nestjs-agent-react ai @ai-sdk/react
+```
+
+```tsx
+import { ChatInput, MessageList, useAgentChat } from '@dudousxd/nestjs-agent-react';
+
+export function Chat() {
+  const chat = useAgentChat();
+  return (
+    <>
+      <MessageList messages={chat.messages} status={chat.status} queue={chat.queue} />
+      <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
+    </>
+  );
+}
+```
+
+Keep typing while it answers: a message sent mid-turn waits in the thread's queue (server-side) and
+runs when the answer finishes — `queue={chat.queue}` shows what is waiting. See
+[Typing ahead](/docs/agent/guides/message-queue).
+
+The hook talks to the same origin under `/agent`. If the API lives elsewhere, wrap the app once:
+
+```tsx
+<AgentProvider baseUrl="https://api.example.com" credentials="include">
+  <Chat />
+</AgentProvider>
+```
+
+(a cross-site API also needs `AnonymousActorResolver`'s cookie sent cross-site —
+`actorResolver: new AnonymousActorResolver({ sameSite: 'none' })` on the server, over HTTPS).
+
+<Callout type="info" title="What you get without writing it">
+Each browser is its own anonymous actor (an `HttpOnly` cookie), so `useThreads()` lists only that
+visitor's conversations. Components ship no styles: pass `classNames`, or render your own markup off
+`chat.transcript` ([Bring your own UI](/docs/agent/guides/bring-your-own-ui)).
+</Callout>
+
+<Callout type="warn" title="MessageList does not draw tool calls or questions">
+`MessageList` renders text, reasoning, files and pushed components (through `renderUi` or a
+`<GenuiProvider>`). A tool call appears only through your `renderToolPart` / `renderToolGroup`,
+which get the raw part, and a question set not at all — so an `action` tool's approval has no button
+there unless your `renderToolPart` draws one (`chat.approve({ toolCallId })`). `chat.transcript` carries both with
+approve / reject / answer / skip already bound to the backend: render them from it, or install the
+registry's `AgentChat` ([Chat components](/docs/agent/guides/chat-components)), which draws them.
+</Callout>
+
+## Next
+
+- Add a tool: [Getting Started → Step 3](/docs/agent/getting-started#step-3--declare-a-tool-optional)
+- Everything on at once: [Full-featured chat](/docs/agent/full-featured-chat)
+- Require login: `actorResolver: requestUserActorResolver()` — [Identity & Authorization](/docs/agent/guides/identity-and-authorization)

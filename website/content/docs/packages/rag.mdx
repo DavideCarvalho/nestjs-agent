@@ -1,0 +1,247 @@
+---
+title: '@dudousxd/nestjs-agent-rag'
+icon: Search
+description: Retrieval-Augmented Generation — chunking, ingestion, dense/lexical/hybrid/reranked retrievers, in-memory + pgvector + Redis stores, and tree navigation for long documents. Framework-agnostic, core-only dep.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+RAG for the agent. It's framework-agnostic (depends only on `-core`): you bring an embedding model
+and, for pgvector or Redis, a driver. Ships chunking, ingestion, dense / lexical / hybrid / reranking
+`Retriever`s, three `VectorStore` adapters (in-memory, pgvector, RediSearch), dependency-free HTTP
+embedding and rerank clients, retrieval telemetry, and tree navigation for long documents.
+
+For the full walkthrough (agentic vs inject mode, citations, how it plugs into the loop) see the
+[RAG guide](/docs/agent/guides/rag). This page is the package reference.
+
+## Install
+
+```bash
+pnpm add @dudousxd/nestjs-agent-rag @dudousxd/nestjs-agent-core
+```
+
+## API
+
+| Export | What it is |
+|---|---|
+| `chunkText(text, { chunkSize?, overlap?, separator? })` | Overlapping, boundary-aware chunks (defaults 800 / 100). With `separator` (e.g. `'\n'` for one record per line) whole records are packed up to `chunkSize` and never split; `overlap` is ignored in that mode. |
+| `chunkDocuments(docs, { chunkSize?, overlap?, separator? })` | Documents → `ChunkRecord[]` (ids `${doc.id}#${n}`). Feed the same array to a vector store and a keyword index. |
+| `ingestChunks(chunks, { embedder, store })` | Embed pre-chunked records (one `embed` call) → upsert. Returns the record count. |
+| `ingestDocuments(docs, { embedder, store, chunkSize?, overlap?, separator? })` | `chunkDocuments` + `ingestChunks` in one call. Returns the chunk count. |
+| `EmbeddingRetriever(embedder, store, { minScore? })` | The core `Retriever` from an `EmbeddingProvider` + `VectorStore`. `minScore` drops passages below a similarity floor, so an unanswerable query can return nothing (unset → nothing dropped). |
+| `LexicalRetriever(store)` | The core `Retriever` over a store's own full-text index (`LexicalVectorStore.searchText`) — the lexical leg of hybrid without an in-process index. |
+| `KeywordRetriever({ k1?, b? })` | In-memory BM25 lexical `Retriever` (defaults 1.5 / 0.75). `add(chunks)`, `remove(documentId)`, `clear()`, `size`. Tokenizes Unicode text (`[\p{L}\p{N}_]+`) and folds accents, so `manutencao` matches `manutenção`. |
+| `HybridRetriever(retrievers, { k?, fetchTopK?, weights? })` | Fuses retrievers with Reciprocal Rank Fusion (defaults `k` 60, `fetchTopK` 20). Fused scores are rank-based — threshold the legs, not this. |
+| `RerankingRetriever(base, reranker, { fetchTopK? })` | Over-fetch from `base` (default 20), reorder with a `Reranker`, truncate to `topK`. |
+| `FilteredRetriever(base, filter)` | ANDs a fixed metadata `filter` into every query — the owner/tenant-scoping primitive (`{ ownerId }`). Fixed filter wins, so a caller can't widen the scope. |
+| `MemoryVectorStore` | In-JS cosine `VectorStore` — tests + small/embedded corpora. |
+| `PgVectorStore(client, { table?, dimensions?, … })` | pgvector `VectorStore` over a `pg` Pool, a Drizzle database, a `postgres.js` `sql`, or a hand-written `PgClient` (table default `agent_rag_chunks`, `dimensions` default 1536). `ensureSchema()` / `schemaStatements()`. See [pgvector](#pgvector). |
+| `PgLexicalVectorStore(client, { …, fullText? })` | `PgVectorStore` + Postgres full-text `searchText`, so `LexicalRetriever` / hybrid work on Postgres. |
+| `RedisVectorStore(client, { index?, prefix?, dimensions?, filterableFields?, lexicalScorer? })` | RediSearch `VectorStore` + `searchText` over an injected `RedisSearchClient` (`sendCommand`). HNSW + cosine; `ensureSchema()` runs `FT.CREATE`, adds missing filter TAGs with `FT.ALTER`, and throws `RedisVectorSchemaMismatchError` on a dimension/type change. |
+| `createRetrievalTool(retriever, { name?, description?, topK?, telemetry? })` | The agentic-retrieval tool (`{ spec, handler }`, default name `search_knowledge`) — pass to `provideAgentTool`. Instruments the retriever unless `telemetry: false`. |
+| `instrumentRetriever(retriever, { describe?, collection? })` | Wrap any `Retriever` so each retrieval publishes on `aviary:rag:retrieval` (`RAG_RETRIEVAL_CHANNEL`). See [Telemetry](#telemetry). |
+| `openAiEmbeddings({ model, baseUrl?, apiKey?, dimensions?, batchSize?, maxInputChars?, headers?, timeoutMs?, onUsage?, onWarn?, fetch? })` | `EmbeddingProvider` over any OpenAI-compatible `/embeddings`, no SDK. See [HTTP models](#http-embeddings-and-reranker). |
+| `HttpReranker({ url, model?, apiKey?, format?, headers?, timeoutMs?, fetch? })` | `Reranker` over a Cohere / Jina / Voyage / TEI-style `/rerank` endpoint. |
+| `toPgClient(source)` | Adapts a `pg` / Drizzle / `postgres.js` client to `PgClient` (what the Pg stores call internally). |
+| `isLexicalVectorStore(store)` / `applyMetadataPatch(metadata, patch)` | Capability guard for `searchText`; the `updateMetadata` merge semantics, for custom stores. |
+| `buildDocumentTree`, `indexDocumentTree`, `TreeNavigationRetriever`, `TwoStageRetriever`, `createNavigateDocumentTool`, `MemoryDocumentTreeStore`, `PgDocumentTreeStore` | Tree navigation retrieval for long documents. See [Tree navigation](#tree-navigation-long-documents). |
+
+## Building blocks
+
+```ts
+import {
+  EmbeddingRetriever,
+  MemoryVectorStore,
+  ingestDocuments,
+} from '@dudousxd/nestjs-agent-rag';
+import { aiSdkEmbedding } from '@dudousxd/nestjs-agent-ai-sdk';
+import { openai } from '@ai-sdk/openai';
+
+const embedder = aiSdkEmbedding(openai.embedding('text-embedding-3-small'));
+const store = new MemoryVectorStore();
+
+await ingestDocuments(
+  [{ id: 'refund-policy', text: '…', source: 'docs/refunds' }],
+  { embedder, store, chunkSize: 800 },
+);
+
+const retriever = new EmbeddingRetriever(embedder, store);
+```
+
+## pgvector
+
+`PgVectorStore` takes a `pg` `Pool`, a Drizzle database (`drizzle(pool)` / `drizzle(sql)`), a
+`postgres.js` `sql`, or a hand-written `PgClient` (`{ query(sql, params) → rows }`). The package pulls
+in no driver of its own; `toPgClient` does the adapting.
+
+```ts
+import { Pool } from 'pg';
+import { PgVectorStore } from '@dudousxd/nestjs-agent-rag';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const store = new PgVectorStore(pool, { dimensions: 1536 }); // or new PgVectorStore(db) with Drizzle
+await store.ensureSchema(); // CREATE EXTENSION vector + table + HNSW cosine index
+```
+
+`store.schemaStatements()` returns the same DDL as strings, for a migration instead of a boot-time
+side effect. Other options (all off by default):
+
+| Option | Default | Effect |
+|---|---|---|
+| `table` | `agent_rag_chunks` | Table name. |
+| `dimensions` | `1536` | Embedding width. A list (`[768, 1536]`) allows mixed widths in one table: untyped `vector` column, one partial HNSW index per width, and `search` compares the query only against vectors of its own width. |
+| `nullableEmbeddings` | `false` | `embedding: []` is stored as `NULL` (index text now, embed later); `search` skips those rows, `searchText` still finds them. |
+| `iterativeScan` | off | `'strict_order' \| 'relaxed_order'` — pgvector ≥ 0.8 keeps scanning until `topK` rows pass a selective filter. Applied with `SET LOCAL`, so it needs a client with a transaction (Pool, Drizzle, postgres.js); skipped otherwise or on older pgvector. |
+| `efSearch` | pgvector's (40) | `hnsw.ef_search` for `search`. Needs a transaction, like `iterativeScan`. |
+| `upsertBatchSize` | `100` | Rows per multi-row `INSERT … ON CONFLICT` in `upsert`. |
+
+NUL bytes are stripped from every text/jsonb binding (Postgres rejects them). Every filtered statement
+goes through the protected `whereConditions(filter, params)`, so a subclass can map filters onto its
+own columns in one place.
+
+### Full-text search on Postgres
+
+`PgLexicalVectorStore` is the same store plus `searchText` (a `LexicalVectorStore`), so
+`LexicalRetriever` and `HybridRetriever` work on Postgres as on RediSearch:
+
+```ts
+import {
+  EmbeddingRetriever, HybridRetriever, LexicalRetriever, PgLexicalVectorStore,
+} from '@dudousxd/nestjs-agent-rag';
+
+const store = new PgLexicalVectorStore(pool, {
+  dimensions: 1536,
+  fullText: { config: 'simple' }, // or { column: 'tsv' } for a tsvector column you maintain
+});
+const hybrid = new HybridRetriever([
+  new EmbeddingRetriever(embedder, store),
+  new LexicalRetriever(store),
+]);
+```
+
+`fullText` options: `config` (text-search configuration, default `simple`; must match the index),
+`column` (your own `tsvector` column; without it `ensureSchema` adds a GIN index over
+`to_tsvector(config, text)`), `anyTermFallback` (default `true`), `stopWords` (default
+`DEFAULT_STOP_WORDS` — English, Portuguese, Spanish; `false` keeps every word).
+
+A question is searched by its meaningful terms: stop words of the language(s) it is written in are
+dropped, and rows holding any remaining term are ranked by the sum of the matched terms' IDF (BM25
+without term frequencies), `ts_rank_cd` breaking ties. Quoted phrases and `-word` go through
+`websearch_to_tsquery` as written first; `anyTermFallback: false` keeps only that (every word must
+appear). `keywordTerms`, `hasSearchSyntax` and `anyTermTsquery` are exported for other stores. On a
+populated table, create the GIN index in a migration (`schemaStatements()` prints it).
+
+## HTTP embeddings and reranker
+
+No SDK needed for the two HTTP contracts most providers and self-hosted servers speak:
+
+```ts
+import { HttpReranker, RerankingRetriever, openAiEmbeddings } from '@dudousxd/nestjs-agent-rag';
+
+// Any OpenAI-compatible POST /embeddings: OpenAI, a gateway, Ollama, TEI, vLLM…
+const embedder = openAiEmbeddings({
+  baseUrl: 'http://tei:8080/v1', // default https://api.openai.com/v1
+  model: 'BAAI/bge-m3',
+  apiKey: process.env.EMBEDDINGS_API_KEY, // optional
+  onUsage: (tokens) => meter.add(tokens), // optional
+});
+
+// Cohere / Jina / Voyage / TEI-style POST /rerank
+const reranker = new HttpReranker({
+  url: 'https://api.cohere.com/v2/rerank',
+  model: 'rerank-v3.5',
+  apiKey: process.env.COHERE_API_KEY,
+});
+const precise = new RerankingRetriever(retriever, reranker, { fetchTopK: 30 });
+```
+
+`openAiEmbeddings` defaults: `batchSize` 64, `maxInputChars` 24 000 (longer inputs are truncated;
+`Infinity` disables), `timeoutMs` 120 000. A batch the server refuses as too large (HTTP 413, or TEI's
+`batch size N > maximum allowed batch size M`; see `isBatchTooLarge`) is split in halves and retried,
+later requests to the same server and model start at the size that worked, and each split is reported
+through `onWarn`. `HttpReranker`'s `format` is `'auto'` (default; sends both `documents` and `texts`),
+`'cohere'` or `'tei'`; `timeoutMs` defaults to 30 000. Both throw `HttpModelError` (with the HTTP
+`status`) on failure.
+
+## Telemetry
+
+Each retrieval can publish one `aviary:rag:retrieval` diagnostics event (`RAG_RETRIEVAL_CHANNEL`):
+`{ retriever, store?, collection?, topK, chunks, zeroHit, topScore?, meanScore?, failed, error? }`, with
+the duration on the envelope. Counts, durations and kinds only — never query or passage text.
+
+`createRetrievalTool` instruments the retriever it wraps by default. For inject mode or any code that
+calls `retrieve` directly, wrap it once:
+
+```ts
+import { instrumentRetriever } from '@dudousxd/nestjs-agent-rag';
+
+const retriever = instrumentRetriever(hybrid, {
+  // optional: name the collection per call when one index holds many
+  collection: (filter) => (typeof filter?.collectionId === 'string' ? filter.collectionId : undefined),
+});
+```
+
+A composed retrieval is one event: the outermost instrumented retriever reports, inner ones stay
+silent. With no subscriber the wrapper delegates straight through; a throwing retriever is reported as
+`failed` and rethrown unchanged. [Telescope](/docs/agent/packages/telescope) subscribes and renders
+the **Retrieval** and **Retrieval sources** sections of its Agent tab.
+
+## Tree navigation (long documents)
+
+For long structured documents (regulations, contracts, 10-Ks, manuals), chunk search tends to find the
+right document and lose the right page. PageIndex-style tree navigation builds a table-of-contents tree
+per long document at ingestion, and at query time an LLM walks the outline to the sections that answer.
+It costs LLM calls and seconds per query, so the intended shape is hybrid first, tree navigation only
+inside the top long documents.
+
+```ts
+import {
+  PgDocumentTreeStore, TreeNavigationRetriever, TwoStageRetriever,
+  createNavigateDocumentTool, indexDocumentTree, openAiChatTreeLlm,
+} from '@dudousxd/nestjs-agent-rag';
+
+const trees = new PgDocumentTreeStore(pool); // same clients as PgVectorStore
+await trees.ensureSchema();                  // or trees.schemaStatements() in a migration
+const llm = openAiChatTreeLlm({ model: 'gpt-4.1-mini', apiKey }); // or treeLlmFromModelProvider(provider)
+
+// At ingestion, next to chunk + embed. Skips short docs (default < 20 pages and < 60k chars).
+await indexDocumentTree(
+  { pages, title: file.name }, // or { sections: [{ title, level, text, page }] }, optional outline
+  { store: trees, documentId: file.id, llm, metadata: { ownerId }, source: file.name },
+);
+
+const navigator = new TreeNavigationRetriever({ store: trees, llm });
+// First stage picks documents; long ones among the top `considerDocuments` (3) get navigated
+// (at most `navigateDocuments`, 2); short ones keep their chunks.
+const retriever = new TwoStageRetriever(hybrid, navigator, { navigateDocuments: 2 });
+
+// …or let the model open a long document itself: navigate_document({ documentId, question })
+provideAgentTool(createNavigateDocumentTool(navigator, { filter: (ctx) => ({ ownerId: ctx.actor.id }) }));
+```
+
+- **Building** uses the cheapest structure that works: the passed `outline`, then section titles or
+  detected headings, then LLM structuring only for documents with no usable structure, and page groups
+  as the never-failing fallback. A hard per-document `budget` (`maxCalls`, `maxInputTokens`,
+  `maxOutputTokens`, `timeoutMs`, `callTimeoutMs`) is checked before every call, with no retries.
+  Builds are fingerprinted: an unchanged document costs no LLM call; a changed one re-summarizes only
+  changed sections. Without `llm` the build is LLM-free.
+- **Navigating**: an outline under `singlePassMaxChars` is navigated in one call; larger ones by a
+  bounded beam (`beamWidth`, `maxSteps`) under a per-navigation `budget`. Passages carry `documentId`,
+  `nodeId`, `title`, `pageStart`/`pageEnd` and `path` in their metadata; `navigate()` / `search()`
+  also return the step-by-step trail.
+- **Access control**: `DocumentTreeStore` filters have the vector stores' semantics (scalar equality,
+  array match-any, empty-array deny), and the navigator, `TwoStageRetriever` and the tool pass the
+  caller's filter to every tree read.
+- **LLM adapters** (`TreeLlm`): `openAiChatTreeLlm` (any OpenAI-compatible `/chat/completions`),
+  `treeLlmFromModelProvider`, `cachedTreeLlm(llm, cache?)`, and the deterministic `keywordTreeLlm()`
+  for tests. `MemoryDocumentTreeStore` is the in-memory store.
+
+<Callout type="info" title="Custom vector stores">
+  `VectorStore` is the extension point — `upsert`, `search`, `remove`, `updateMetadata`,
+  `listDocuments`, `listChunks`, `listDocumentIds`, `removeMany`, `removeWhere` and `countChunks` are
+  all required; `searchText` (`LexicalVectorStore`) is optional. Implement it over Qdrant, Pinecone, Weaviate, or your own `-data` SQL seam, and pair it with any
+  `EmbeddingProvider` via `EmbeddingRetriever`. `remove(documentId)` deletes a document's chunks
+  (delete-sync, and avoiding an orphaned tail when a re-ingest produces fewer chunks);
+  `listDocuments(filter?)` enumerates the indexed documents (id + metadata) — the seam
+  [rag-media](/docs/agent/packages/rag-media)'s reconciler diffs against.
+</Callout>

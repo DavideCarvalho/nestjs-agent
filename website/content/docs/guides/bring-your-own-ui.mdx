@@ -1,0 +1,596 @@
+---
+title: Bring your own UI
+icon: Palette
+description: Build a chat on useAgentChat, useChatTranscript and the stored-history mappers — the library computes the model, you write the markup.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[Frontend](/docs/agent/guides/frontend) covers `MessageList` / `ChatInput` — the optional,
+styling-agnostic reference components. This guide is for the common case in a product with its own
+design system: skip the components and render off `useAgentChat` plus `useChatTranscript`, the model
+those components are themselves one rendering of. Nothing here is a fallback path or an escape hatch.
+
+If you want a designed starting point rather than a blank file, the
+[chat components](/docs/agent/guides/chat-components) are a shadcn registry over this same model —
+copied into your project as source, and yours to edit.
+
+---
+
+## The headless split
+
+`@dudousxd/nestjs-agent-react` is four layers, and only the top one renders anything:
+
+| Layer | What it owns | Ships a UI? |
+|---|---|---|
+| `AgentClient` | The REST calls — threads, quota, attachments, approve/reject | No |
+| `AgentChatTransport` + `useAgentChat` | SSE parsing, resume/reconnect, thread state, HITL routing — the AI SDK v7 `ChatTransport`/`useChat` contract | No |
+| `useChatTranscript` / `useTranscriptItem` | The transcript model — parts grouped into runs, per-message derived values, actions as state machines, list windowing, stick-to-bottom | No |
+| `MessageList` / `ChatInput` / `AgentMarkdown` | One rendering of that model | Yes — and it's optional |
+
+A host that never imports `MessageList` still gets everything below it: streaming, thread CRUD,
+quota, cancel, regenerate, human-in-the-loop, *and* the message-level logic the components used to
+keep to themselves. Bubble layout, tool-call cards, composer design, upload-progress affordances,
+and theming are 100% the host's — the library never assumes a design system, a CSS framework, or
+even that you're rendering HTML at all.
+
+<Callout type="info" title="A real host owns all of this">
+Products built on this hook typically own every visual surface — message bubbles, tool-result
+cards branched by tool name, a composer with per-file upload progress, loading skeletons — and
+never import a single component from the package. That's the intended shape, not a workaround.
+What they should **not** own is the logic under those surfaces: reimplementing tool grouping or the
+edit machine by hand is how a host ends up shipping a message item that quietly lost `copy` and
+`fork`. Drive `useChatTranscript` and write only the markup.
+</Callout>
+
+---
+
+## `useAgentChat` on its own
+
+The options that matter for a custom chat screen:
+
+```tsx
+import { useAgentChat } from '@dudousxd/nestjs-agent-react';
+import { isTextUIPart, isToolUIPart } from 'ai';
+
+function CustomChat({ threadId }: { threadId?: string }) {
+  const chat = useAgentChat({
+    // Omit the key entirely when absent — `UseAgentChatOptions` is built with
+    // `exactOptionalPropertyTypes`, so an explicit `threadId: undefined` doesn't type-check.
+    ...(threadId !== undefined ? { threadId } : {}),
+    agent: 'support',
+    // A threadId loads its history and re-attaches a turn still streaming — nothing to wire.
+    onThreadCreated: (newThreadId) => router.replace(`/chat/${newThreadId}`),
+    // Fires once per run when the SERVER is done writing (title + terminal state persisted) —
+    // the right signal to refetch a thread list/sidebar; `onFinish` only means "a turn rendered".
+    onRunSettled: ({ status }) => {
+      if (status === 'completed') refetchThreadList();
+    },
+  });
+
+  return (
+    <div className="my-chat-shell">
+      {chat.messages.map((message) => (
+        <div
+          key={message.id}
+          className={message.role === 'user' ? 'my-bubble-user' : 'my-bubble-assistant'}
+        >
+          {message.parts.map((part, i) => {
+            if (isTextUIPart(part)) return <p key={i}>{part.text}</p>;
+            if (isToolUIPart(part)) return <MyToolCard key={i} part={part} />;
+            return null;
+          })}
+        </div>
+      ))}
+      <MyComposer
+        disabled={chat.status === 'streaming'}
+        onSubmit={(text) => chat.sendMessage({ text })}
+      />
+    </div>
+  );
+}
+```
+
+`chat` is the AI SDK v7 `useChat` return value (`messages`, `status`, `sendMessage`, `stop`, `error`,
+…) spread together with the agent extras: `transcript`, `composer`, `queue`, `models`, `quota` /
+`blocked`, `proposals`, `runId` / `activeRunId`, `runError`, `backend`, `fork` / `truncateFrom` /
+`promote`, `cancel`, HITL `approve` / `reject` / `answer` / `skip`, and `regenerate` — see [Frontend](/docs/agent/guides/frontend#useagentchat).
+The connection (`baseUrl`, `path`, headers, credentials) lives on `<AgentProvider>`.
+
+The options worth knowing beyond the basics (`threadId`, `agent`):
+
+| Option | Type | Why it matters |
+|---|---|---|
+| `history` | `boolean` | Load the `threadId`'s history (default `true`); skipped when `initialMessages` is given. |
+| `initialMessages` | `UIMessage[]` | History you already have — seeds the chat instead of the hook's own read (pair with `storedThreadToUiMessages`). |
+| `resume` | `boolean` | Default `true`: if the thread has a running turn (`activeRunId`), attach to its stream — the reload-survival case. `false` opts out. |
+| `resumeRunId` | `string` | The lower-level primitive `resume` builds on: wire a known run id directly (e.g. from a thread you already fetched) to reconnect without the hook doing its own fetch. |
+| `onThreadCreated` | `(threadId: string) => void` | Fires once when a threadless chat's first send makes the backend mint a thread — the hook also remembers the id internally, so subsequent sends reuse it even before you act on the callback. |
+| `onRunSettled` | `({ runId, status }) => void` | Fires once per run when its stream **settles** server-side (title + terminal state persisted) — including a resumed stream's own completion. This is the signal to refetch a sidebar/thread list; `onFinish` only means a turn rendered client-side. Skipped if the initial POST failed before any run id was learned. |
+| `getPageContext` | `() => Record \| null` | Read at every send to attach a page snapshot (page-assistant use cases). |
+
+<Callout type="warn" title="onFinish vs onRunSettled">
+`onFinish` is the AI SDK's own per-turn callback — it fires once a turn's UI stops updating. It
+does **not** mean the server has finished persisting the title or the run's terminal status.
+`onRunSettled` is the agent-specific signal for that; reach for it whenever you're refetching
+anything server-derived (thread title, list ordering, quota).
+</Callout>
+
+---
+
+## The transcript model
+
+`chat.messages` is the wire shape, not a renderable one. Turning it into a chat screen means
+grouping runs of consecutive tool parts, deciding which message is "the streaming one", keeping an
+edit draft per message, flashing a copied state, formatting cost and relative time, mounting only
+the tail of a long thread, and following the stream without stealing the viewport from a reader
+scrolled up. That is the work `MessageList` used to keep to itself.
+
+`useChatTranscript` returns it as a model with nothing drawn:
+
+```tsx
+import { useAgentChat, useChatTranscript } from '@dudousxd/nestjs-agent-react';
+
+function CustomChat({ threadId }: { threadId: string }) {
+  // `chat.transcript` is this model with every action already bound to the chat; add to it with
+  // `useAgentChat({ transcript: { editable: true, onEditSubmit } })`. Call `useChatTranscript`
+  // yourself only for a chat that is not `useAgentChat`'s:
+  const chat = useAgentChat({
+    threadId,
+    transcript: { editable: true, onEditSubmit: ({ text }) => chat.sendMessage({ text }) },
+  });
+  const { transcript } = chat;
+
+  return (
+    <div {...transcript.scroll.getContainerProps()} className="my-scroller">
+      {transcript.window.canLoadEarlier ? (
+        <button onClick={transcript.window.loadEarlier}>
+          Load {transcript.window.hiddenCount} earlier
+        </button>
+      ) : null}
+
+      {transcript.items.map((item) => (
+        <article key={item.id} className={item.isUser ? 'bubble-user' : 'bubble-assistant'}>
+          {item.blocks.map((block) => {
+            if (block.kind === 'text') return <MyMarkdown key={block.key}>{block.text}</MyMarkdown>;
+            if (block.kind === 'tools') return <MyToolGroup key={block.key} parts={block.parts} />;
+            return (
+              <MyDisclosure key={block.key} open={block.isOpen} onToggle={() => block.toggle()}>
+                {block.text}
+              </MyDisclosure>
+            );
+          })}
+
+          {item.edit.isEditing ? (
+            <textarea {...item.edit.getTextareaProps()} />
+          ) : item.edit.available ? (
+            <button onClick={item.edit.start}>Edit</button>
+          ) : null}
+
+          {item.copy.available ? (
+            <button onClick={item.copy.copy}>{item.copy.copied ? 'Copied' : 'Copy'}</button>
+          ) : null}
+          {item.fork.available ? <button onClick={item.fork.run}>Fork</button> : null}
+          {item.regenerate.available ? (
+            <button onClick={item.regenerate.run}>Regenerate</button>
+          ) : null}
+          {item.usage ? <span>{item.usage.costLabel} · {item.usage.tokensLabel}</span> : null}
+          {item.timestamp ? (
+            <time title={item.timestamp.absolute}>{item.timestamp.relative}</time>
+          ) : null}
+        </article>
+      ))}
+
+      {transcript.showTypingIndicator ? <MySpinner /> : null}
+      {transcript.scroll.showJumpToLatest ? (
+        <button onClick={transcript.scroll.scrollToBottom}>Jump to latest</button>
+      ) : null}
+      {transcript.stop.available ? (
+        <button onClick={transcript.stop.stop}>
+          {transcript.stop.isStopping ? 'Stopping…' : 'Stop'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+```
+
+### The instance
+
+| | Shape | Notes |
+|---|---|---|
+| `items` | `TranscriptItem[]` | The mounted window, oldest first. `item.index` is the position in the FULL thread. |
+| `item.blocks` | `{ kind: 'text' \| 'reasoning' \| 'tools' \| 'files' \| 'sources' \| 'elicitation' \| 'ui', key, … }[]` | See below. |
+| `item.text` | `string` | The prose alone — what `copy` writes and what an edit starts from. Reasoning is excluded. |
+| `item.copy` | `{ available, copied, copy() }` | `copied` resets after `copyResetMs` (default 1500ms). `available` is false when there is no prose. |
+| `item.edit` | `{ available, isEditing, draft, canSave, start(), cancel(), setDraft(), save(), getTextareaProps() }` | `available` only for user messages, and only when `editable` + `onEditSubmit` are both wired. Blank drafts are refused; the saved text is trimmed. |
+| `item.fork` / `item.regenerate` | `{ available, run() }` | Regenerate is offered on the **last** assistant message only. |
+| `item.usage` | `{ inputTokens, outputTokens, totalTokens, costUsd, costLabel, tokensLabel } \| null` | Resolved through `getUsage` (default: the message's `metadata.usage`). The labels are derivations (`$0.012`, `2.0k tokens`), not markup. |
+| `item.timestamp` | `{ date, iso, relative, absolute } \| null` | Resolved through `getCreatedAt` (default: `metadata.createdAt`, stamped on replayed and live messages). `null` for an unparseable stamp, so a bad `created_at` renders nothing rather than "Invalid Date". |
+| `item.isStreaming` / `isLastAssistant` / `isUser` | `boolean` | Only the last assistant message streams. |
+| `window` | `{ visibleCount, hiddenCount, canLoadEarlier, loadEarlier(), showAll() }` | Default 50 mounted, +50 per `loadEarlier`. Mounting every markdown-rendered message of a long thread locks the main thread during streaming. |
+| `scroll` | `{ isAtBottom, showJumpToLatest, scrollToBottom(), getContainerProps() }` | See [Stick-to-bottom](#stick-to-bottom). |
+| `stop` | `{ available, isStopping, stop() }` | See [Stopping a turn](#stopping-a-turn). |
+| `showEmptyState` / `showTypingIndicator` / `showFollowUps` | `boolean` | "Should this be on screen" — the model decides whether, the host decides what. |
+
+`useTranscriptItem({ message })` is the same model for one message, when the host lays out the list
+itself. `MessageItemView({ item })` renders the shipped markup for an item you modelled yourself.
+
+### Blocks: why grouping is the model's job
+
+A turn's parts arrive interleaved — prose, then three tool calls, then more prose. Rendering each
+part on its own gives three separate tool cards where the UX wants one "3 tools ran" disclosure, so
+every host writes the same buffer-and-flush loop. `item.blocks` has already run it:
+
+- **`tools`** — a run of CONSECUTIVE tool parts, as `block.parts`. Any other part between two calls
+  ends the run, including the AI SDK's `step-start` marker, so tools from different steps never
+  merge into one group.
+- **`text`** — a run of prose. `block.isStreaming` is that PART's state, distinct from
+  `item.isStreaming` (the message's).
+- **`reasoning`** — a run of the model's thinking, with its own `isOpen` / `toggle(open?)`
+  disclosure state. It defaults to open while streaming and folded once done, per run.
+- **`ui`** — a component the server pushed into the message (the stream's `ui` frame):
+  `{ id, component, props, version, fallbackText?, componentVersions?, toolCallId }`. `component` is
+  a key into YOUR registry — the library ships none. A repeat `id` updates the component in place.
+  `fallbackText` is the server's text for it, for a renderer you no longer have.
+
+Each `tools` block also carries `calls` (the same parts with their human-decision state) and
+`roots` — the calls as a tree. A call the stream sent with a `parentId` (the inner calls of a
+code-mode `execute`, a delegated agent's tools) sits in its parent's `children`; a parent that is not
+in the block, or a cycle, leaves the call at the top level. Every call also exposes `toolKind`,
+`parentId` and `approval` — `{ approver, expiresAt, reason, status, confirmation?, target?, … }`
+when the runner said who has to decide, else `null` (see
+[Frontend → Human-in-the-loop](/docs/agent/guides/frontend#human-in-the-loop)).
+
+```tsx
+function ToolTree({ calls }: { calls: TranscriptToolCall[] }) {
+  return (
+    <ul>
+      {calls.map((call) => (
+        <li key={call.toolCallId} data-state={call.part.state}>
+          {call.name}
+          {call.approval ? <small> waiting on {call.approval.approver}</small> : null}
+          {call.children.length > 0 ? <ToolTree calls={call.children} /> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+// <ToolTree calls={block.roots} />
+```
+
+Other `data-*` parts are omitted, but they still end a tool run — where they sit in the transcript
+is meaningful even when their content isn't modelled. (`data-approval-requested`,
+`data-approval-settled` and `data-action-proposal` are the exception: they are folded into their
+call's `approval` and take no position.)
+
+### Reasoning
+
+Reasoning has been on the wire since AI SDK v7 support landed: the backend emits a `reasoning` frame
+and `AgentChatTransport` maps it to the SDK's `reasoning-start` / `reasoning-delta` /
+`reasoning-end` chunks, so `reasoning` parts are already on your `UIMessage`s if the model produces
+them. Render them from the `reasoning` block — `MessageItem` shows one way (a toggle plus the body,
+overridable through `renderReasoning` and `reasoningLabel`), and a host is free to show a "thinking"
+shimmer instead, or nothing at all.
+
+Thinking is timed and persisted. The backend reports each step's `reasoningMs` on `step-finish`, the
+transport stamps it on the reasoning part (`providerMetadata.agent.reasoningMs`), and the stored
+message keeps it, so `block.durationMs` reads the same live and after a reload — `null` while the
+block still streams. `useElapsed(running)` is the headless ticker for that window and
+`formatElapsed(ms)` the label:
+
+```tsx
+import { formatElapsed, useElapsed, type TranscriptReasoningBlock } from '@dudousxd/nestjs-agent-react';
+
+function ThoughtFor({ block }: { block: TranscriptReasoningBlock }) {
+  const elapsed = useElapsed(block.isStreaming);
+  const ms = block.isStreaming ? elapsed : block.durationMs;
+  return ms === null ? null : <span>Thought for {formatElapsed(ms)}</span>;
+}
+```
+
+A reloaded thread gets the same parts back: `storedThreadToUiMessages` puts a step's persisted
+reasoning before its text, and its pushed components after it as `data-ui` parts.
+
+### Stopping a turn
+
+`POST /agent/chat/:runId/cancel` closes the SSE client-side and hard-aborts the run server-side;
+`useAgentChat` exposes it as `cancel()`. `transcript.stop` wraps it as a machine so a host can render
+the gap honestly: `available` only while a turn is in flight and a canceller is wired, `isStopping`
+from the click until the run actually leaves a busy status. `ChatInput` takes `isStreaming` +
+`onStop` and renders the same thing next to send.
+
+### Stick-to-bottom
+
+The most common streaming-chat bug is scrolling to the bottom on every token, which yanks the
+viewport away from a reader scrolled up mid-thread. `transcript.scroll` (also exported standalone as
+`useStickToBottom`) follows the stream only while the reader is already at the bottom, unpins the
+moment they scroll up, and exposes `showJumpToLatest` for the affordance that brings them back:
+
+```tsx
+<div {...transcript.scroll.getContainerProps()}>…</div>
+```
+
+`getContainerProps()` returns a callback `ref` and an `onScroll` — behaviour only, no classes. The
+bottom is measured with a small threshold (default 32px) because sub-pixel layout leaves a residue
+after a programmatic scroll, and an exact comparison unpins on the very scroll it just caused.
+
+---
+
+## The transport, standalone
+
+`AgentChatTransport` is a plain AI SDK v7 `ChatTransport`. Wire it straight into the SDK's own
+`useChat` for the SSE plumbing alone, with none of `useAgentChat`'s thread/quota/approval state —
+useful when a host already has its own thread/quota management and only wants the wire protocol:
+
+```ts
+import { useChat } from '@ai-sdk/react';
+import { AgentChatTransport } from '@dudousxd/nestjs-agent-react';
+
+const transport = new AgentChatTransport({
+  path: 'agent', // the default; `baseUrl` is the origin
+  getHeaders: () => ({ 'x-actor-id': currentUser.id }),
+  onMeta: ({ runId, threadId }) => console.log('turn started', runId, threadId),
+});
+const chat = useChat({ transport });
+```
+
+Beyond text, reasoning and tool calls, the transport maps the rest of the
+[stream vocabulary](/docs/agent/reference/stream-events) to AI SDK data parts, which `useChat`'s
+`onData` — and `useAgentChat({ onData })` — sees as they arrive:
+
+| Stream frame | Becomes |
+|---|---|
+| `ui` | a `data-ui` part keyed by the component id (a repeat id updates it in place) |
+| `approval-requested` | a `data-approval-requested` part keyed by the call id, plus the SDK's native approval request — the tool part moves to `state: 'approval-requested'` |
+| `approval-settled` | a `data-approval-settled` part keyed by the call id (who decided, through what, remembered or not) |
+| `message-metadata` | merged into the message's `metadata` |
+| `title` / `cancelled` / `queue` | transient `data-title` / `data-cancelled` / `data-queue` — never stored on the message. `useAgentChat({ onTitle })` fires with the title; `chat.queue` follows the queue |
+| a kind this version does not know | a `data-<kind>` part — forwarded, never dropped |
+
+---
+
+## Talking about tool calls
+
+Tools declare how they are spoken about on the server
+([`@AiTool({ presentation })`](/docs/agent/guides/tools#how-a-chat-talks-about-a-tool)).
+`chat.transcript` already reads it — `useToolCatalog()` fetches `GET /agent/tools` once per backend +
+agent and shares the answer — so every tool call carries a `description`, and every tool block an
+`activity` grouping. For your own `useChatTranscript`, pass `toolCatalog: useToolCatalog().catalog`:
+
+```tsx
+import { useAgentChat } from '@dudousxd/nestjs-agent-react';
+
+const { transcript } = useAgentChat();
+
+// inside a `tools` block:
+<ul>
+  {block.activity.map((group) => (
+    <li key={group.key} data-state={group.status}>
+      <MyGlyph name={group.icon} /> {group.phrase}
+      {group.count > 1 ? ` ×${group.count}` : null}
+    </li>
+  ))}
+</ul>;
+```
+
+| Helper | What it gives you |
+|---|---|
+| `call.description` / `describeToolCall(part, catalog)` | `{ status, phrase, label, icon, tone, detail, confirm, result, error }`. `status` is `running` / `awaiting-approval` / `done` / `failed` / `denied` (a tool that returns `{ error }` has failed). `confirm` is the approval prompt filled from the input; `result` the output read through the declared view. |
+| `groupToolActivity(block.roots, options)` | Calls folded by key — the presentation label by default — with `count`, the worst `status` (running › awaiting-approval › failed › denied › done), the latest `phrase`, and `innerCount` of nested calls. `expandNested: true` replaces a parent (a code-mode `execute`) with the calls it made; `keyOf` groups by anything (e.g. source + action); `hideCorrected: true` drops failures the model later fixed. |
+| `phraseFor` / `fillTemplate` / `readPath` | The template engine. An undescribed tool reads `Working` / `Done` (overridable), never its name. |
+| `resolveResultView(output, view)` / `inferResultView(output)` | The output as plain data — `metrics` readings, `table` rows as text, `log` lines, `note` text — never a serialized payload. |
+| `toolCallState` / `correctedCallIds` / `isActionCall` | The pieces the above are built from. |
+
+---
+
+## Rendering tool parts: read vs. action cards
+
+Every tool call arrives as a `ToolUIPart` (or `DynamicToolUIPart` for tools registered at runtime) on
+the assistant message. Both narrow under `isToolUIPart` / `isDynamicToolUIPart` from `ai`; the
+package re-exports the union as `AnyToolUIPart` for a shared prop type across your card components.
+
+The field that decides whether a tool call renders as a plain "read" card or needs an
+approve/reject affordance is `part.toolMetadata?.toolKind` — `'read'` or `'action'`, forwarded from
+the tool's own `@AiTool({ kind })` declaration (see [Tools](/docs/agent/guides/tools)):
+
+```tsx
+function MyToolCard({ part }: { part: AnyToolUIPart }) {
+  const isAction = part.toolMetadata?.toolKind === 'action';
+  // `approval-requested` when the runner sent who has to decide; `input-available` when it did not.
+  const awaitingDecision =
+    part.state === 'approval-requested' || (isAction && part.state === 'input-available');
+
+  return (
+    <div className={isAction ? 'tool-card tool-card--action' : 'tool-card tool-card--read'}>
+      <code>{part.type}</code>
+      <pre>{JSON.stringify(part.input, null, 2)}</pre>
+      {awaitingDecision ? <ApprovalActions toolCallId={part.toolCallId} /> : null}
+      {part.state === 'output-available' ? <pre>{JSON.stringify(part.output, null, 2)}</pre> : null}
+    </div>
+  );
+}
+```
+
+<Callout type="info" title="toolKind is omitted, not undefined, on older backends">
+`toolMetadata` is only attached when the backend reports a `toolKind` at all — an older backend
+that predates the field simply omits the whole `toolMetadata` key rather than sending it as
+`undefined`. Guard with `part.toolMetadata?.toolKind`, not a truthy check on `toolMetadata` alone,
+and treat a missing value as "render like a read tool" (the safe default — no card should silently
+claim approval isn't needed when it can't tell).
+</Callout>
+
+---
+
+## Human-in-the-loop: approve / reject
+
+Wire the buttons straight to the hook's `approve` / `reject` — both resolve by `toolCallId` alone,
+so they work from any component, not just the one that rendered the pending call:
+
+```tsx
+function ApprovalActions({ toolCallId }: { toolCallId: string }) {
+  return (
+    <div className="tool-actions">
+      <button onClick={() => chat.approve({ toolCallId })}>Approve</button>
+      <button onClick={() => chat.reject({ toolCallId, reason: 'Not now' })}>Reject</button>
+    </div>
+  );
+}
+```
+
+`approve` resolves the durable suspend and the run resumes streaming; `reject` (with an optional
+`reason`) feeds the decline back to the model. Label the card with `call.description.confirm`
+(`{ title, verb, detail }`) — the per-call wording the tool's `preflight` returned, else its
+`presentation.confirm` template — rather than with the tool name.
+
+Under `actionApprovalMode: 'independent'` the pending call is a **proposal** and the turn has
+already ended: the decision needs its target, which `call.approval.target` carries once
+`useAgentChat` has merged the thread's proposals in —
+`chat.approve({ toolCallId, target: call.approval.target })`, or simply `call.approve.run()`. See
+[Frontend → Approvals that do not hold the turn](/docs/agent/guides/frontend#approvals-that-do-not-hold-the-turn). See
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) for what
+backs the pause — an in-process hold under the inline runner, a real durable **signal** under the
+durable one. The wire protocol, and everything above it, is identical either way.
+
+---
+
+## Stored-history parity: `storedThreadToUiMessages`
+
+`useAgentChat({ threadId })` loads and converts a thread's history for you. When you seed it yourself
+(`initialMessages`), a thread's `StoredMessage[]` (from `backend.getThread(threadId)`) needs converting
+to `UIMessage[]` first. The naive per-row mapper
+(`storedMessageToUiMessage`) is exact for a single already-atomic row, but the agent loop persists
+**one store row per model iteration** — a turn with tool calls appends a "thinking…" row plus tool
+calls, then a separate final-answer row. Mapped 1:1, that reloads as 2-3 assistant bubbles for what
+the live stream rendered as one continuous turn.
+
+`storedThreadToUiMessages` closes that gap: it groups consecutive assistant rows (no user message
+between them) into **one** `UIMessage`, concatenating their parts in row order — the same
+`[text?, tools?, text?, tools?, …]` sequence the live transport streams for that turn — and stamps
+`metadata.usage` with the summed tokens/cost across the merged rows whenever an actual merge (2+
+rows) happened:
+
+```ts
+import { storedThreadToUiMessages } from '@dudousxd/nestjs-agent-react';
+
+const detail = await backend.getThread(threadId);
+const initialMessages = storedThreadToUiMessages(detail.messages);
+useAgentChat({ threadId, initialMessages }); // skips its own history read; still resumes
+```
+
+The grouped message's `id` is the **last** row's id — the final-answer row, since it's the one
+carrying `followUps` and the natural key for turn-level actions like fork or regenerate. A lone
+assistant row with nothing to merge comes back identical to `storedMessageToUiMessage` — which
+stamps `metadata.createdAt` and the row's own `metadata.usage`.
+
+```ts
+// Read the aggregated cost/tokens off a merged turn, same shape as a single row's usage:
+const usage = (message.metadata as { usage?: AggregatedTurnUsage } | undefined)?.usage;
+```
+
+`costUsd` on the aggregate is `null` only when **every** merged row reports an unknown cost (no
+pricing store bound, or an unpriced model) — a row with a real `0` mixed with unknown rows still
+sums to a real number, so only an all-unknown turn reports `null`.
+
+---
+
+## Attachments
+
+`useAttachments` is the composer's file tray, minus the tray (`chat.composer.files` is one, already
+on the chat's backend). It validates each file, uploads it with progress and cancel, keeps the
+per-file state, and hands you the handlers for a file input, a drop zone and paste. `accept`,
+`maxBytes` and `maxFiles` default to the server's limits (`GET /agent/config`). The markup is
+yours:
+
+```tsx
+import { messageFiles, useAttachments } from '@dudousxd/nestjs-agent-react';
+
+const files = useAttachments({
+  backend: chat.backend, // or `upload: (file, { signal, onProgress }) => myUpload(file)`
+  accept: 'image/*,.pdf',
+  maxBytes: 20 * 1024 * 1024,
+  maxFiles: 5,
+});
+
+<form {...files.dropZoneProps} data-dragging={files.isDragging}>
+  <textarea onPaste={files.onPaste} />
+  <input {...files.inputProps} hidden ref={pickerRef} />
+  {files.items.map((item) => (
+    <FileChip
+      key={item.id}
+      name={item.name}
+      preview={item.previewUrl}
+      status={item.status} // 'uploading' | 'ready' | 'error' | 'rejected'
+      progress={item.progress} // 0..1
+      error={item.error}
+      onRetry={() => files.retry(item.id)}
+      onRemove={() => files.remove(item.id)} // cancels an upload in flight
+    />
+  ))}
+  <button
+    disabled={files.isUploading}
+    onClick={async () => {
+      await chat.sendMessage({ text }, { body: { attachments: files.refs } });
+      files.clear();
+    }}
+  />
+</form>
+```
+
+`rejected` items failed `accept` / `maxBytes` / `maxFiles` and were never uploaded (`error` says
+why, `describeRejection` rewords it). `error` items failed the upload and can be retried. `refs` are
+the `{ mediaId }`s `POST /agent/chat` takes — the server reads only the id and resolves the rest
+from its own storage, so a url you built by hand never reaches the model. `onPaste` stages pasted
+screenshots and leaves a text paste alone; `dropZoneProps` only reacts to drags that carry files.
+
+For resumable uploads through Aviary media, set `<AgentProvider attachments={{ upload: mediaAttachments() }}>`
+(`@dudousxd/nestjs-agent-react/media`); `useAttachments` under it uploads that way. For your own
+storage, pass your own strategy or `upload`. Both are covered in
+[File uploads](/docs/agent/guides/file-uploads).
+
+`AgentClient.uploadAttachment(file, { signal, onProgress })` is the single round-trip underneath —
+progress via XHR when no `fetch` was injected — for a screen that stages files on its own.
+
+To show the files on a message, `messageFiles(message)` reads them off live or replayed messages —
+`url`, `mediaType`, `filename`, `kind` (`image`, `pdf`, `text`, `audio`, `video`, `other`),
+`extension`, and the stored `mediaId` for replayed ones. The transcript model's `files` blocks carry
+the same data grouped for layout.
+
+### Files the user uploaded but never sent
+
+`GET /agent/attachments` returns the caller's own staged files as metadata (`mediaId`, `name`,
+`contentType`, `sizeBytes`, `createdAt`) — including uploads that belong to no thread because they
+were never sent, which is the one thing walking `messages[].attachments` cannot show you. It carries
+no urls: `resolve` mints those per turn so they can be short-lived.
+
+An upload nobody sent is also storage nobody is tracking. Sweeping it is a server-side job, not
+something a browser triggers — see
+[Persistence](/docs/agent/guides/persistence#which-media-a-message-still-references-optional).
+
+---
+
+## What the host owns vs. what the library owns
+
+| | The library (`useAgentChat` / `AgentClient` / `AgentChatTransport`) | The host |
+|---|---|---|
+| Streaming | SSE parsing, chunking, resume/reconnect | — |
+| Threads | List/get/delete/fork/rename/promote/truncate | Sidebar layout, empty states, sorting |
+| Attachments | The upload round-trip, the typed result | Per-file progress UI, drag-and-drop, previews |
+| Tool calls | `toolMetadata.toolKind`, part state (`input-available` / `output-available` / …) | Bubble layout, tool-specific cards, icons |
+| HITL | `approve` / `reject` wired to the current run | The Approve/Reject affordance itself |
+| History | `storedThreadToUiMessages` turn-grouping + aggregated usage | Skeletons, virtualization, date separators |
+| Transcript logic | `useChatTranscript`: part grouping, edit/copy machines, usage + relative-time derivations, windowing, stick-to-bottom | Which of those to render, and as what |
+| Errors | `chat.error` and `chat.runError` (the SSE `event: error` frame's `{ code, message }`), `AgentHttpError.status` / `.code` on REST calls, `call.errorCode` on a refused decision (`isRunNotActiveError`) | The words for each code, toasts, inline banners, retry buttons |
+| Everything visual | Nothing | Bubbles, composer, theming, design tokens |
+
+---
+
+## Related
+
+- [Frontend](/docs/agent/guides/frontend) — `MessageList` / `ChatInput`, the optional reference
+  components built on this same hook
+- [Tools](/docs/agent/guides/tools) — declaring `read` vs. `action` tools, the source of `toolKind`
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — the durable
+  suspend behind `approve` / `reject`
+- [Persistence](/docs/agent/guides/persistence) — the `StoredMessage` shape `storedThreadToUiMessages` consumes
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the usage figures behind `AggregatedTurnUsage`

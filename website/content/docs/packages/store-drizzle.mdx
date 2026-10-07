@@ -1,0 +1,281 @@
+---
+title: '@dudousxd/nestjs-agent-store-drizzle'
+icon: Database
+description: Drizzle AgentStore adapter — threads, messages, tool calls, usage, run reliability, and action proposals — over an app-owned SQLite, Postgres or MySQL handle.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The `AgentStore` SPI (from `@dudousxd/nestjs-agent-core`) backed by Drizzle. Unlike the MikroORM
+adapter, this package never opens a connection itself — the host app owns and hands it an
+already-opened Drizzle db.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-store-drizzle drizzle-orm
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @dudousxd/nestjs-agent-store-drizzle drizzle-orm
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+SQLite, Postgres and MySQL all work. Build the handle with your dialect's schema object
+(`agentSchema` · `pgAgentSchema` · `mysqlAgentSchema` — same table, column and property names); every
+store reads the dialect off the handle. CI runs every store suite on better-sqlite3, node-postgres
+(Postgres 16) and mysql2 (MySQL 8.4).
+
+```ts
+import { Module } from '@nestjs/common';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import {
+  DrizzleAgentStoreModule,
+  agentSchema,
+  ensureAgentSchema,
+} from '@dudousxd/nestjs-agent-store-drizzle';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+
+const db = drizzle(new Database('app.db'), { schema: agentSchema });
+await ensureAgentSchema(db); // creates what is missing, never drops — or run your own migrations
+
+@Module({
+  imports: [
+    DrizzleAgentStoreModule.forRoot({ db }), // binds AGENT_STORE, AGENT_GOVERNANCE_QUERIES, AGENT_PRICING_STORE, AGENT_CONFIRM_TOKEN_STORE
+    AgentModule.forRoot({
+      model: myModelProvider,
+      actorResolver: new HeaderActorResolver(),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+Postgres and MySQL take the same module; only the handle differs:
+
+```ts
+// Postgres
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { pgAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
+const db = drizzle(pool, { schema: pgAgentSchema });
+
+// MySQL (8.0+)
+import { drizzle } from 'drizzle-orm/mysql2';
+import { mysqlAgentSchema } from '@dudousxd/nestjs-agent-store-drizzle';
+const db = drizzle(pool, { schema: mysqlAgentSchema, mode: 'default' });
+```
+
+| | SQLite | Postgres | MySQL |
+|---|---|---|---|
+| JSON columns | `text` (JSON) | `jsonb` | `json` |
+| timestamps | epoch-ms `integer` | `timestamptz(3)` | `datetime(3)`, UTC |
+| long text (content, reasoning, errors) | `text` | `text` | `longtext` |
+| prices / costs | `real` | `double precision` | `double` |
+| id / actor comparison | exact | exact | exact (`utf8mb4_bin`) |
+
+`forRoot` options: `db` (required), `pricingStore` (a `Type<AgentPricingStore>` bound to
+`AGENT_PRICING_STORE` instead of `DrizzlePricingStore`), `ragIngestionLog` (default `true`).
+
+<Callout type="warn" title="DrizzleAgentStoreModule.forRoot() is global">
+Like the MikroORM adapter, this module binds `AGENT_STORE`, `AGENT_GOVERNANCE_QUERIES`,
+`AGENT_PRICING_STORE` and `AGENT_CONFIRM_TOKEN_STORE` on a **global** Nest module. Import it once —
+the agent, dashboard, and telescope surfaces resolve these tokens app-wide with no re-binding.
+</Callout>
+
+<Callout type="info" title="ensureAgentSchema is a quick start, not a migration story">
+It is additive only: the DDL is rendered from the dialect's schema object, so it creates any missing
+table, adds any column or index a running database lacks, and never drops a column or changes a type.
+On Postgres and MySQL it holds a cross-replica lock (`pg_advisory_xact_lock` / `get_lock`) so replicas
+booting an empty database at once do not race their `CREATE TABLE`s; on Postgres the whole heal is one
+transaction. It runs only when you call it — the module does not call it for you.
+
+Prefer drizzle-kit migrations in production: point drizzle-kit at your dialect's schema object, or
+emit `agentSchemaDdl(dialect)` (the full `CREATE TABLE` / `CREATE INDEX` list). On your own
+migrations, the additive statements are yours to write — on SQLite, for a database that predates them:
+
+```sql
+ALTER TABLE agent_thread ADD COLUMN default_agent TEXT;
+ALTER TABLE agent_message ADD COLUMN run_id TEXT;
+ALTER TABLE agent_message ADD COLUMN attachments TEXT;
+ALTER TABLE agent_run ADD COLUMN parent_run_id TEXT;
+ALTER TABLE agent_message ADD COLUMN reasoning TEXT;
+ALTER TABLE agent_message ADD COLUMN reasoning_ms INTEGER;
+ALTER TABLE agent_message ADD COLUMN ui TEXT;
+CREATE INDEX agent_tool_call_message_idx ON agent_tool_call (message_id);
+ALTER TABLE agent_message ADD COLUMN feedback TEXT;
+ALTER TABLE agent_message ADD COLUMN seq INTEGER;
+ALTER TABLE agent_thread ADD COLUMN model TEXT;
+ALTER TABLE agent_thread ADD COLUMN queue_pause TEXT;
+-- approval policies
+ALTER TABLE agent_tool_call ADD COLUMN approver TEXT;
+ALTER TABLE agent_tool_call ADD COLUMN expires_at INTEGER;
+ALTER TABLE agent_tool_call ADD COLUMN remember INTEGER;
+ALTER TABLE agent_tool_call ADD COLUMN decided_via TEXT;
+-- personas
+ALTER TABLE agent_thread ADD COLUMN persona TEXT;
+ALTER TABLE agent_message ADD COLUMN persona TEXT;
+ALTER TABLE agent_queued_message ADD COLUMN persona TEXT;
+-- per-call confirmations (action preflight)
+ALTER TABLE agent_tool_call ADD COLUMN confirmation TEXT;
+-- independent approvals
+ALTER TABLE agent_tool_call ADD COLUMN proposal_id TEXT;
+ALTER TABLE agent_message ADD COLUMN action_proposal_outcome TEXT;
+ALTER TABLE agent_queued_message ADD COLUMN ui_capabilities TEXT;
+```
+
+Whole tables added since (`agent_queued_message`, `agent_stream_frame`, `agent_confirm_token`,
+`agent_action_proposal`) come from `agentSchemaDdl(dialect)` or the schema object. On Postgres the
+JSON columns are `jsonb`, on MySQL `json`.
+</Callout>
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `DrizzleAgentStoreModule` | `DynamicModule` factory | `.forRoot({ db })` binds `AGENT_STORE` + `AGENT_GOVERNANCE_QUERIES` + `AGENT_PRICING_STORE` + `AGENT_CONFIRM_TOKEN_STORE` globally over your db handle |
+| `DrizzleAgentStore` | class | `AgentStore` implementation — the write side, including `updateThread` (title, the thread's `defaultAgent`, `model` and/or `persona`), the projected `defaultAgentForThread`/`modelForThread`/`personaForThread` and `loadThreadForTurn` reads (see [what a turn reads off a thread](/docs/agent/guides/persistence#what-a-turn-reads-off-a-thread)), `referencedMediaIds` (which media a live message still carries — the library half of [attachment collection](/docs/agent/guides/persistence#which-media-a-message-still-references-optional)), the optional `recordRunStart`/`recordRunEnd`/`bumpRunRetries` run-reliability hooks the loop and durable runners call, the `ChatQueueStore` [message queue](/docs/agent/guides/persistence#the-message-queue-optional), and every action-proposal capability [independent approvals](/docs/agent/guides/action-proposals) needs (see below). `new DrizzleAgentStore(db, { clock? })` |
+| `DrizzleActionProposalStore` | class | The proposal capabilities alone (`ActionProposalStore`, `ActionProposalWorkerStore`, `ActionProposalDiscoveryIndexStore`, `ActionProposalSupersessionStore`) over `agent_action_proposal`, for a host that needs proposals without the rest of the store. `new DrizzleActionProposalStore(db, { clock? })`. Not bound by the module — `DrizzleAgentStore` delegates to one internally |
+| `DrizzleMemoryProvider` | class | `MemoryProvider` implementation over `agent_memory` — `list` (scope-gated in the query), `write` (upsert on the (`scope`, `key`) unique index, whose conflict `set` names exactly what a rewrite may change, so `pinned`/`created_at`/`id` are left alone), `forget` (the actor's own scope in the `where`), plus `pin({ id, pinned })` for the console. No `search` — see [Memory](/docs/agent/guides/memory#search-on-the-provider) |
+| `DrizzleGovernanceQueries` | class | `AgentGovernanceQueries` implementation — the full read-model: spend by model/actor/thread, usage trend, recent activity, run reliability (`runMetrics`/`runsByAgent`/`runErrors`/`runTrend`/`recentRuns`), the approvals inbox (`pendingApprovals`), per-tool stats (`toolStats`), and paged/filterable reads (`toolCallsPage`/`threadsPage`/`runsPage`) |
+| `DrizzleRagIngestionLog` | class | Records every RAG ingestion outcome into `rag_ingestion_log` by subscribing to the `aviary:rag:*` diagnostics — the only place a **skipped** or **failed** document is visible, since one that produced no chunks does not exist as far as `VectorStore.listDocuments()` is concerned. Reads: `list`/`listPage` (a page plus the unpaginated total), `get`, `remove`, `removeByCollection`, the delete-safe keyset `iterate`, and `listDocumentIds` for an orphan sweep. On by default; `forRoot({ db, ragIngestionLog: false })` binds nothing |
+| `DrizzlePricingStore` | class | `AgentPricingStore` implementation — `upsertModelPrice` / `listCurrentPrices`, the write side of model pricing (see [Cost & Governance](/docs/agent/guides/cost-and-governance#seeding-prices)) |
+| `DrizzleTokenStreamSink` | class | A multi-replica `TokenStreamSink` over `agent_stream_frame` — several replicas with no Redis. `new DrizzleTokenStreamSink(db, options?)` (`SqlTokenStreamSinkOptions`); pass it as `AgentModule`'s `sink`. Not bound by the module. Polled, text coalesced at write time, TTL from the last write; see [the live stream across replicas](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink) |
+| `DrizzleConfirmTokenStore` | class | `ConfirmTokenStore` over `agent_confirm_token` — what makes a [confirmed write](/docs/agent/guides/tools#confirmed-writes--the-gate-inside-the-tool) single use across replicas. `claim` is one insert that skips on a duplicate hash (the primary key is the lock), `release`, `purgeExpired(now?)`. Bound to `AGENT_CONFIRM_TOKEN_STORE` by `DrizzleAgentStoreModule` |
+| `DrizzleStreamFrameTable` | class | The `StreamFrameTable` behind `DrizzleTokenStreamSink`, for composing your own `SqlTokenStreamSink` |
+| `agentSchema` | Drizzle schema object | The SQLite tables this store owns — `agentActionProposal`, `agentThread`, `agentMessage`, `agentQueuedMessage`, `agentToolCall`, `agentTokenUsage`, `agentModelPricing`, `agentRun`, `agentMemory`, `ragIngestionLog`, `agentConfirmToken`, `agentStreamFrame`. Each table is also exported on its own |
+| `pgAgentSchema` / `mysqlAgentSchema` | Drizzle schema object | The same tables, keys and property names in Postgres / MySQL types |
+| `ensureAgentSchema(db)` | function | Non-destructive heal for the handle's dialect: creates missing tables, adds missing columns and indexes, never drops or alters. Cross-replica lock on Postgres/MySQL |
+| `agentSchemaDdl(dialect)` | function → `string[]` | The `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX` statements for `'sqlite' \| 'postgres' \| 'mysql'`, in dependency order — for a hand-written migration |
+| `agentDialectOf(db)` | function | Which dialect a handle speaks: `'sqlite' \| 'postgres' \| 'mysql'` |
+| `AgentDrizzleDb` | type | The db handle the module and stores take — `AgentSqliteDb \| AgentPgDb \| AgentMySqlDb` (all exported), any driver of those dialects |
+| `AgentDialect` | type | `'sqlite' \| 'postgres' \| 'mysql'` |
+| `DrizzleAgentStoreModuleOptions` | type | `{ db, pricingStore?, ragIngestionLog? }` |
+| `RAG_INGESTION_LOG_PAGE_ORDER` | `SQL[]` | The `rag_ingestion_log` paging order (`updated_at desc`, tiebroken on the key) |
+| `AgentRunRow` / `AgentThreadRow` / `AgentMessageRow` / `AgentQueuedMessageRow` / `AgentMemoryRow` / `RagIngestionLogRow` | type | `$inferSelect` row shapes (SQLite schema) |
+
+<Callout type="info" title="referencedMediaIds needs no migration">
+It reads the `attachments` JSON column `agent_message` has carried since attachments shipped, so an
+existing database answers correctly the moment you upgrade — no new table, no column, no backfill.
+The match runs in memory rather than in SQL (the column holds an array of objects, no dialect
+indexes that), bounded to one actor's attachment-bearing messages (a message still waiting in a thread's queue counts too). A soft-deleted thread still
+counts as holding its references: the rows survive, so the bytes are still reachable.
+</Callout>
+
+<Callout type="info" title="agent_memory — the library owns this one, and not a skill table">
+[Memory](/docs/agent/guides/memory) rows live in `agent_memory`, created by `ensureAgentSchema` like
+the rest. That looks inconsistent next to skills, whose rows are always the host's, and the
+difference is what a row can be related to: a skill plausibly joins your own entities, while a memory
+is a key, a fact, an **opaque** scope token and an origin. `origin_thread_id` is the one column here
+that is deliberately *not* a foreign key — a memory outlives the conversation it came from, and a
+cascade off `agent_thread` would delete beliefs when a transcript aged out.
+
+`DrizzleAgentStoreModule.forRoot({ db })` exports `DrizzleMemoryProvider` but never binds
+`AGENT_MEMORY`: that token's presence is what turns memory on, so binding it would give the feature
+to every host that installed the store.
+</Callout>
+
+<Callout type="info" title="rag_ingestion_log — the ingest ledger, and why it carries no agent_ prefix">
+`@dudousxd/nestjs-agent-rag-media` owns no storage: it publishes `aviary:rag:*` diagnostics, and a
+store *subscribes*. `DrizzleRagIngestionLog` is this adapter's subscriber, which is why
+`ensureAgentSchema` creates a table named outside the `agent_` family, indexed by
+(`collection`, `updated_at`) for the per-collection listing.
+[`store-mikro-orm`](/docs/agent/packages/store-mikro-orm) carries the same capability as
+`MikroOrmRagIngestionLog` — the choice of ORM adapter does not decide whether a deployment can audit
+its ingestions.
+
+The table is the only place a document that produced **no chunks** is visible at all: an extraction
+that came back empty, a mime type with no extractor, an embedding call that threw.
+`VectorStore.listDocuments()` knows only about successes, so without this table a scanned PDF that
+silently failed to index reads exactly like one nobody ever uploaded.
+
+`DrizzleAgentStoreModule.forRoot({ db })` binds and exports it by default;
+`{ ragIngestionLog: false }` binds nothing at all, for a host that records outcomes itself or
+ingests no media.
+</Callout>
+
+<Callout type="info" title="agent_run — the reliability + approvals table">
+Every turn is recorded as a run in `agentRun` (status, duration, error code/message, retry count, a
+`promptHash` for correlating error-rate shifts with prompt changes). `DrizzleGovernanceQueries` reads
+it for the dashboard's Reliability section and for `pendingApprovals`/`toolStats` — no separate table
+or wiring needed, it's created by `ensureAgentSchema` like every other table here.
+</Callout>
+
+<Callout type="info" title="agent_tool_call.confirmation — per-call confirmation wording">
+An action's preparation preflight can return its own confirmation wording for one call. It is stored
+in the nullable JSON column `agent_tool_call.confirmation` and returned in `StoredMessage.approvals`,
+so a reload shows the same card text. `ensureAgentSchema` adds the column; on your own migrations add
+it before upgrading.
+</Callout>
+
+## Action proposals (independent approvals)
+
+`DrizzleAgentStore` implements everything `actionApprovalMode: 'independent'` checks for at boot —
+`ActionProposalStore`, `ActionProposalWorkerStore`, `ActionProposalOutcomeStore`,
+`ActionProposalSupersessionStore`, `ActionProposalDiscoveryIndexStore`, and the `ChatQueueStore`
+[message queue](/docs/agent/guides/persistence#the-message-queue-optional) — so the module's
+`AGENT_STORE` needs no extra binding. See [Action proposals](/docs/agent/guides/action-proposals).
+
+- **Table.** `agent_action_proposal` holds the canonical proposal snapshot, its decision and its
+  execution work in one row, fenced by a numeric `version`. The primary key and `scope_key` are
+  SHA-256 digests; every read and mutation checks tenant, actor and thread scope. No foreign keys to
+  chat rows.
+- **Worker discovery.** `claimNextActionProposal({ workerId, leaseMs })` claims queued or
+  expired-lease work across scopes (at most 32 candidates per call);
+  `expireActionProposals({ limit })` expires due pending proposals (`limit` 1–1000). Privileged —
+  never expose them on public routes.
+- **Outcomes.** A terminal outcome is admitted as one assistant message, written with its delivery
+  state in one transaction; the message carries `agent_message.action_proposal_outcome`. Queued
+  messages carry the client's renderer capabilities in `agent_queued_message.ui_capabilities`, and
+  tool calls point at their proposal through `agent_tool_call.proposal_id`.
+- **Certified drivers.** Admission (`actionProposalAdmissionSupported`) is advertised only for
+  better-sqlite3, node-postgres, mysql2 and libSQL. On any other Drizzle driver the store reports
+  `false` and independent mode fails at configuration; blocking approvals still work.
+
+<Callout type="warn" title="Rollout order for an existing database">
+Proposals written before discovery shipped have `discovery_index_version = 0`, and workers only
+discover version-1 rows. Mixed old and new writers are unsupported.
+
+1. Stop writers running the older package version.
+2. Apply the additive schema — `ensureAgentSchema(db)`, or your drizzle-kit migration from the
+   updated schema object: proposal `execution_status`, `lease_expires_at`, `proposal_expires_at`,
+   `discovery_index_version` (default 0), `delivery_status`, `delivery_lease_expires_at`,
+   `replacement_group_key`, `outcome_id_key` and their indexes; plus the message, tool-call and
+   queued-message columns above.
+3. Run the bounded backfill until it returns `0`:
+
+   ```ts
+   while (await store.backfillActionProposalDiscoveryIndex({ limit: 1000 })) {
+     // each batch returns the number of rows it upgraded
+   }
+   ```
+
+   Each call (`limit` 1–1000) rewrites discovery metadata from the stored snapshot under the row's
+   version fence; it never changes the payload or runs a tool. Workers never backfill implicitly.
+4. Deploy the new writers and workers, then enable `actionApprovalMode: 'independent'`.
+</Callout>
+
+## Peer dependencies
+
+`drizzle-orm` (`>=0.40.0 <1.0.0`) and `@nestjs/common` (`^10 \|\| ^11 \|\| ^12`), plus your driver
+(`better-sqlite3`, `pg`, `mysql2`, `@libsql/client`, …).
+
+## When to use it
+
+Reach for this adapter when your app already owns a Drizzle connection (or wants one) and you'd
+rather hand the agent a db handle than let an ORM own the lifecycle. SQLite, Postgres and MySQL are
+supported; for independent approvals, use one of the certified drivers above.
+
+## Related
+
+- [Persistence](/docs/agent/guides/persistence) — the `AgentStore` SPI, the bound tokens, and choosing an adapter
+- [Action proposals](/docs/agent/guides/action-proposals) — independent approvals on top of this store

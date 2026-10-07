@@ -1,0 +1,157 @@
+---
+title: '@dudousxd/nestjs-agent-telescope'
+icon: Telescope
+description: Telescope extension that adds an "Agent" tab — live runs + tool calls off diagnostics, historical spend off the governance read-model, RAG retrieval telemetry.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The first-class `@dudousxd/nestjs-telescope` extension for nestjs-agent. It adds an "Agent" tab fed
+by three sources: the `aviary:agent:*` diagnostics channel (live runs, tool calls) via a watcher, the
+`AGENT_GOVERNANCE_QUERIES` read-model (historical spend/usage, run reliability, tool stats, the
+approvals inbox, and paginated runs/tool-calls/threads tables) via a set of dashboard data providers,
+and the `aviary:rag:retrieval` channel (retrieval latency, passage counts, scores, store/collection)
+via a second watcher — see [RAG retrieval](#rag-retrieval).
+Run detail also correlates into the TRACES tab (see [Tracing](#tracing) below).
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-telescope @dudousxd/nestjs-telescope
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @dudousxd/nestjs-agent-telescope @dudousxd/nestjs-telescope
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+Register `agentTelescopeExtension()` on Telescope's `extensions` array, same as any other Telescope
+extension:
+
+```ts
+import { TelescopeModule } from '@dudousxd/nestjs-telescope';
+import { agentTelescopeExtension } from '@dudousxd/nestjs-agent-telescope';
+
+@Module({
+  imports: [
+    TelescopeModule.forRoot({
+      authorizer: () => true, // restrict in production
+      extensions: [agentTelescopeExtension()],
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+<Callout type="warn" title="The governance panels need AGENT_GOVERNANCE_QUERIES bound">
+The Spend / Models / Actors panels resolve `AGENT_GOVERNANCE_QUERIES` from the host DI container at
+request time. The host must bind that token — by importing a store module
+([`store-mikro-orm`](/docs/agent/packages/store-mikro-orm), [`store-drizzle`](/docs/agent/packages/store-drizzle),
+or [`testing`](/docs/agent/packages/testing)'s `InMemoryGovernanceQueries`) — in the same app that
+registers `TelescopeModule.forRoot({ extensions: [agentTelescopeExtension()] })`. If the binding is
+absent, those panels render an empty state; the live watcher-fed panels (runs, tool calls) keep
+working regardless, since they depend only on the diagnostics channel.
+</Callout>
+
+## Options
+
+| Option | Purpose |
+|---|---|
+| `threadHref` | URL template (`{threadId}`) deep-linking a table row's thread cell to the host's own viewer. |
+| `runHref` | URL template (`{runId}`). Defaults to the in-app trace waterfall (`#/traces/{runId}`). |
+| `providers` | Host `DataProvider[]` registered under this extension, so a host section on the Agent tab can bind to them. Names starting with `agent.` throw at boot — use your own prefix. |
+| `sections` | Host `DashboardSection[]` appended after the built-in sections. |
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `agentTelescopeExtension(opts?)` | function → `TelescopeExtension` | The extension (`name: 'agent'`): registers both watchers, the `agent` and `agent-rag` entry types, the "Agent" dashboard, and every data provider below. Options above; `AgentTelescopeExtensionOptions` is the type |
+| `AgentTelescopeWatcher` | class (`Watcher`) | Subscribes to every point event on `aviary:agent:*` — driven off core's `AGENT_DIAGNOSTIC_EVENTS` (currently 12: `run.started`, `message`, `tool-call`, `quota.exceeded`, `run.finished`, `run.failed`, `delegated`, `retrieved`, `skills.resolved`, `memory.resolved`, `memory.written`, `tool.retry`), so a new point event is picked up automatically — and records each as a Telescope entry of type `agent`. Has a `dispose()` to detach cleanly on module teardown |
+| `RagTelescopeWatcher`, `RAG_ENTRY_TYPE` | class (`Watcher`), const `'agent-rag'` | Records `aviary:rag:retrieval` events as `agent-rag` entries, tagged `retrieval`, `retriever:<kind>`, `store:<kind>` and `zero-hit`. Usable on its own in a host's `watchers` list |
+| `agentDashboard(opts?)` | function | The "Agent" dashboard definition (`id: 'agent.overview'`; `{ threadHref?, runHref?, sections? }`) |
+| `agentRunsProvider`, `agentTokensProvider`, `agentToolStatusProvider` | data providers | Live activity panels, sourced from watcher-recorded entries. `agentToolsProvider` is also exported but not registered by the extension |
+| `agentSpendTotalProvider`, `agentTokensTotalProvider`, `agentSpendByModelProvider`, `agentModelSpendTableProvider`, `agentSpendByActorProvider`, `agentActorSpendTableProvider`, `agentUsageTrendProvider`, `agentTopThreadsTableProvider` | data providers | Spend/usage governance panels, sourced from `AGENT_GOVERNANCE_QUERIES` |
+| `agentRunsTotalProvider`, `agentRunsSuccessRateProvider`, `agentRunsFailedProvider`, `agentRunsRetriesProvider`, `agentRunsDurationProvider`, `agentRunsByAgentTableProvider`, `agentRunErrorsProvider`, `agentRunsTrendProvider`, `agentRecentRunsTableProvider` | data providers | Reliability governance panels (success/error rate, p50/p95 duration, failure breakdown, recent runs) |
+| `agentRecentToolCallsTableProvider`, `agentToolStatsTableProvider` | data providers | Tool governance panels (recent calls, per-tool calls/failed/rejected + p95 executionMs) |
+| `agentRecentThreadsTableProvider`, `agentPendingApprovalsCountProvider`, `agentPendingApprovalsTableProvider` | data providers | Recent threads and the HITL approvals inbox (count + table) |
+| `agentRunsPagedTableProvider`, `agentToolCallsPagedTableProvider`, `agentThreadsPagedTableProvider` | data providers | Paginated runs/tool-calls/threads tables (reads `AgentGovernanceQueries`' `runsPage`/`toolCallsPage`/`threadsPage`), backing the Agent tab's prev/next tables — requires `@dudousxd/nestjs-telescope >=1.18` for the renderer's `paged: true` support |
+| `ragRetrievalsProvider`, `ragZeroHitRateProvider`, `ragChunksProvider`, `ragLatencyProvider`, `ragScoresProvider`, `ragTrendProvider`, `ragStoreBreakdownProvider`, `ragRetrieverBreakdownProvider`, `ragCollectionsTableProvider`, `ragSlowestTableProvider` | data providers | Retrieval panels, sourced from `agent-rag` entries (no DI binding needed) |
+| `resolveRange`, `shiftUtcDay` | functions | Range/day-bucketing helpers shared by the governance providers |
+| `toActorSpendRows`, `toActorSpendSegments`, `toModelSpendRows`, `toModelSpendSegments`, `totalCostUsd`, `totalTokens`, `toUsageTrendRows`, `toThreadSpendRows`, `toRunAgentTableRows`, `toRunErrorSegments`, `toRunTrendRows`, `toRecentRunTableRows`, `toRecentToolCallRows`, `toRecentThreadTableRows`, `toPendingApprovalTableRows`, `toToolStatTableRows`, `capErrorMessage`, `shortPromptHash` | functions | Pure row/segment shaping helpers behind the governance panels |
+| `readRetrievals`, `toRagRetrieval`, `toCollectionRows`, `toLatencyDistribution`, `toRetrievalTrendRows`, `toRetrieverSegments`, `toScoreDistribution`, `toSlowestRows`, `toStoreSegments`, `zeroHitRate`, `meanChunks`, `percentile`, type `RagRetrieval` | functions | Pure shaping helpers behind the retrieval panels |
+
+<Callout type="info" title="Automatic dedup with the generic diagnostics bridge">
+`AgentTelescopeWatcher.register()` claims every `agent:*` diagnostics key it records via
+`@dudousxd/nestjs-diagnostics`' claim registry (`claimDiagnostics`, diagnostics 0.7+) and releases the
+claim in `dispose()`. `@dudousxd/nestjs-diagnostics-telescope`'s generic bridge checks the registry
+before recording a `diagnostic` entry, so it skips every key this watcher already owns — no
+hand-written `exclude: [agentDiagnosticKey(...)]` list needed to avoid double-recording the same
+event under two entry types.
+</Callout>
+
+## Tracing
+
+Every agent run also emits diagnostics **spans** — `llm.turn`, `tool.execution`, `retrieval`,
+`follow-ups` (core's `AGENT_SPAN_EVENTS`) — correlated by `traceId = runId`. With a span-aware bridge
+these render in Telescope's **TRACES** tab as a nested waterfall for the run: one row per model call,
+tool execution, RAG retrieval, or follow-up-suggestions call, each with its duration and, on failure,
+an error phase. Span payloads are metadata-only (model id, token counts, tool name/type, step index)
+— never prompt or output text — and are emitted from inside the checkpointed step bodies, so a
+replayed (cached) step never re-emits its span.
+
+Rendering requires:
+
+- `@dudousxd/nestjs-agent-core >=0.7.0` (emits the spans; already satisfied by this package's own dependency on it).
+- `@dudousxd/nestjs-diagnostics-telescope >=0.7` — the span-aware diagnostics bridge that turns
+  `:start`/`:end`/`:asyncStart`/`:asyncEnd`/`:error` sub-channel traffic into Telescope spans.
+- `@dudousxd/nestjs-telescope >=1.17` — the version that added explicit `RecordInput.traceId` support.
+
+Without both bridge versions the spans are still emitted (cheaply — the phase envelopes are gated on
+subscriber presence) but simply go unobserved; nothing breaks. Once wired, a run/thread table's
+`runId` cell defaults to a `#/traces/{runId}` deep link into that waterfall (override via
+`agentTelescopeExtension({ runHref })` if the host has its own run viewer).
+
+<Callout type="info" title="Runs also show up in the Workflows tab, for free">
+Under the durable runner (`AgentModule.forRoot({ durable: true })`), each turn is a durable workflow,
+so it already appears in `@dudousxd/nestjs-durable`'s Telescope "Workflows" tab with no extra wiring
+— the Agent tab's governance sections and the trace waterfall are additive, not a replacement. Since a turn's long steps are dispatched, the
+`llm.turn`/`tool.execution` spans for a given run originate from whichever worker actually executed
+that step, not necessarily the pod that started the run — the trace still stitches them together by `traceId = runId`.
+</Callout>
+
+## RAG retrieval
+
+The **Retrieval** and **Retrieval sources** sections (retrieval count, zero-hit rate, passages per
+retrieval, latency, top dense score, trend, breakdowns by store / retriever / collection, slowest
+retrievals) read `agent-rag` entries from Telescope's own storage — no DI binding needed. They stay
+empty until something publishes retrieval telemetry: `createRetrievalTool` from
+[`-rag`](/docs/agent/packages/rag) does so by default; wrap any other retriever (e.g. inject-mode
+`AgentModule.forRoot({ retrieval })`) with `instrumentRetriever(retriever)`. Retrievals use their own
+entry type so high-volume retrieval traffic can't push `agent` entries out of the providers' window.
+The watcher claims `rag:retrieval`, so the generic diagnostics bridge doesn't double-record it.
+
+## Peer dependencies
+
+`@dudousxd/nestjs-telescope` (`>=1.18.0`).
+
+## When to use it
+
+Add this package once you're already running `@dudousxd/nestjs-telescope` and want agent runs, tool
+calls, and spend in the same console as your requests, queries, and jobs — no separate route to
+stand up. If you don't run Telescope, `@dudousxd/nestjs-agent-dashboard` gives you the same
+governance surfaces standalone (see [Cost & Governance](/docs/agent/guides/cost-and-governance)).
+
+## Related
+
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the ledger, the read-model, and surfacing it via dashboard or Telescope tab
+- [Telescope docs](/docs/telescope) — the extension mechanism, watchers, and the console itself

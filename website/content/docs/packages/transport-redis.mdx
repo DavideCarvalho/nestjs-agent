@@ -1,0 +1,163 @@
+---
+title: '@dudousxd/nestjs-agent-transport-redis'
+icon: Radio
+description: RedisTokenStreamSink — a TokenStreamSink over Redis for multi-replica deployments, so a token stream started on one pod is subscribable and resumable from any other.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The default `TokenStreamSink` (`InProcessTokenStreamSink`) buffers a run's tokens in the process
+that started it — reconnect from a different pod and there's nothing to replay. `-transport-redis`
+implements the same `TokenStreamSink` SPI over Redis, so any replica can `subscribe` to any run's
+stream.
+
+<Tabs items={['pnpm', 'npm']}>
+<Tab value="pnpm">
+
+```bash
+pnpm add @dudousxd/nestjs-agent-transport-redis
+```
+
+</Tab>
+<Tab value="npm">
+
+```bash
+npm install @dudousxd/nestjs-agent-transport-redis
+```
+
+</Tab>
+</Tabs>
+
+## Minimal example
+
+```ts
+import { RedisTokenStreamSink } from '@dudousxd/nestjs-agent-transport-redis';
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      model: myModelProvider,
+      actorResolver: new HeaderActorResolver(),
+      // myRedisClient: a RedisStreamClient (see below); options: { keyPrefix?: string; ttlSeconds?: number }
+      sink: new RedisTokenStreamSink(myRedisClient), // shared across every replica
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+## `RedisStreamClient` — bring your own driver
+
+The package takes zero dependency on `ioredis` or `node-redis` — it depends on a small interface,
+`RedisStreamClient`, that your app implements over whichever client it already runs:
+
+```ts
+interface RedisStreamClient {
+  rpush(key: string, value: string): Promise<void>;
+  lrange(key: string, start: number, stop: number): Promise<string[]>;
+  set(key: string, value: string): Promise<void>;
+  get(key: string): Promise<string | null>;
+  publish(channel: string, message: string): Promise<void>;
+  subscribe(channel: string, onMessage: (message: string) => void): Promise<() => Promise<void>>;
+  del(...keys: string[]): Promise<void>;
+  expire(key: string, seconds: number): Promise<void>;
+}
+```
+
+A run's `:chunks` and `:state` keys expire `ttlSeconds` (default `3600`) after the run's last write;
+the TTL slides with each write and is set on both keys when the run ends or fails. `ttlSeconds: 0`
+keeps them until `close()`. An adapter without `expire` still streams, but its keys never expire.
+
+A subscribed Redis connection can't run other commands, so most drivers need a **dedicated**
+connection for `subscribe` — the sink only calls it from `subscribe()`:
+
+```ts
+// adapting ioredis: one command connection, one subscriber connection
+import Redis from 'ioredis';
+import type { RedisStreamClient } from '@dudousxd/nestjs-agent-transport-redis';
+
+function ioredisStreamClient(redis: Redis, sub: Redis): RedisStreamClient {
+  return {
+    rpush: async (key, value) => { await redis.rpush(key, value); },
+    lrange: (key, start, stop) => redis.lrange(key, start, stop),
+    set: async (key, value) => { await redis.set(key, value); },
+    get: (key) => redis.get(key),
+    publish: async (channel, message) => { await redis.publish(channel, message); },
+    subscribe: async (channel, onMessage) => {
+      const listener = (ch: string, message: string) => { if (ch === channel) onMessage(message); };
+      sub.on('message', listener);
+      await sub.subscribe(channel);
+      return async () => {
+        sub.off('message', listener);
+        await sub.unsubscribe(channel);
+      };
+    },
+    del: async (...keys) => { await redis.del(...keys); },
+    expire: async (key, seconds) => { await redis.expire(key, seconds); },
+  };
+}
+```
+
+<Callout type="info" title="No driver dependency, on purpose">
+Requiring your app to adopt a specific Redis client just to stream tokens would be the wrong trade.
+`RedisStreamClient` is the seam: implement its eight methods over whichever client (`ioredis`,
+`node-redis`, a cluster client) your app already runs, and `RedisTokenStreamSink` never needs to
+know which one.
+</Callout>
+
+## How it's keyed
+
+Per run (`keyPrefix` defaults to `agent:stream`):
+
+| Structure | Key | Purpose |
+|---|---|---|
+| LIST | `<prefix>:<runId>:chunks` | Every chunk (base64) appended in order — what a late subscriber replays before following live. |
+| pub/sub channel | `<prefix>:<runId>` | A wake-up published per chunk and on end, for subscribers already caught up. |
+| terminal marker | `<prefix>:<runId>:state` | `{ t: 'end' }` or `{ t: 'fail', error }`, set when the run ends — a reconnect after completion sees the ending instead of hanging on an empty subscribe. |
+
+Keys are written without a TTL; `close(runId)` deletes the list and the marker. Configure expiry or
+an eviction policy on the Redis side if runs aren't closed.
+
+A run that ended in failure re-raises as `AgentStreamError` (from `@dudousxd/nestjs-agent-core`) on
+the subscriber side rather than silently closing, so a reconnecting client can tell "the run is done"
+from "the run failed" the same way it would against the in-process sink.
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `RedisTokenStreamSink` | class (`TokenStreamSink`) | `new RedisTokenStreamSink(client, options?)`; `open` / `subscribe` / `close`, backed by the LIST + pub/sub + marker scheme above |
+| `RedisTokenStreamSinkOptions` | type | `{ keyPrefix?: string }` — default `agent:stream` |
+| `RedisStreamClient` | type | The eight-method seam your app implements over its own Redis driver |
+
+## When to use it
+
+Reach for this package the moment your app runs more than one replica behind a load balancer (or
+serverless instances that don't share process memory) and you want `GET /agent/chat/:runId/stream`
+to work no matter which instance handles the reconnect. Single-replica deployments — most local dev,
+many small production deployments — are fine on the default `InProcessTokenStreamSink` and don't need
+this package at all.
+
+<Callout type="info" title="Several replicas, no Redis">
+If you already run a SQL store, `DrizzleTokenStreamSink(db)` ([`-store-drizzle`](/docs/agent/packages/store-drizzle))
+and `MikroOrmTokenStreamSink(em)` ([`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm)) — both
+built on core's `SqlTokenStreamSink` — keep frames in an `agent_stream_frame` table that every replica
+polls. Coalesced text rows, a TTL (`ttlSeconds`, default 1h) with auto-purge, and polling latency
+(`pollIntervalMs`, default 250ms) instead of pub/sub push.
+</Callout>
+
+<Callout type="warn" title="durable: true dispatches the turn's long steps">
+Under `AgentModule.forRoot({ durable: true, ... })` the model call and each tool execution run as
+routed durable steps, so they can execute on a *different* worker process than the one that opened
+the stream — this is true even in a "single replica" web app paired with a separate durable worker
+pool, not just multi-pod fleets. A cross-process sink like `RedisTokenStreamSink` is required
+whenever the process that streams a chunk may differ from the one a client reconnects through; a boot
+warning fires when durable is on with the default in-process sink.
+</Callout>
+
+## Related
+
+- [Architecture](/docs/agent/concepts/architecture) — the control plane / data plane split this sink lives on
+- [Frontend](/docs/agent/guides/frontend) — `resumeRunId` and reconnecting a dropped SSE stream

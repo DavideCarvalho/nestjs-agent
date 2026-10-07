@@ -1,0 +1,237 @@
+---
+title: Skills
+icon: GraduationCap
+description: Authored procedures the model pulls in when a task calls for one — scoped per user, per tenant, or per an axis you invent, with the catalog in the prompt and the bodies on the transcript.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Every deployment accumulates instructions that are true *sometimes*. How the Berlin warehouse labels a pallet.
+What counts as an expedited order this quarter. The three-step reconciliation someone worked out
+and wrote down.
+
+They have nowhere good to live. In the system prompt they are paid for on every turn by every user,
+whether the question needs them or not — and an agent carrying five of them is an agent whose prompt
+is mostly things the current question does not need. Hardcoded as a tool, they are a deploy away from
+changing, and the model has to guess from a name what the tool is going to tell it.
+
+A **skill** splits the two halves:
+
+```text
+<skills>
+Procedures available to you. Each line is a name, the scope it came from, and what it covers — not
+the procedure itself.
+- label-pallet [tenant:berlin] — Label a pallet for outbound freight. (overrides the one from global)
+- expedite     [global]        — Decide whether an order is expedited, and route it.
+</skills>
+```
+
+That is what the turn pays for: one line each. The instructions themselves arrive only if the model
+calls the built-in `skill` tool, and they arrive as a tool result — on the transcript, not in the
+system block.
+
+<Callout type="info">
+**A skill is not an agent.** An [`@Agent`](/docs/agent/guides/multi-agent) is *who is answering* —
+its model, its tools, its history ceiling, its output schema. A skill is *how one task is done*, and
+any agent may load it. An instruction that should apply to **every** turn of a persona is still that
+persona's `systemPrompt` (or a `@SystemPromptContributor()`); a skill is for the ones that should
+apply only when the work calls for them, which is the whole of what makes them cheap.
+</Callout>
+
+---
+
+## Turning them on
+
+```ts
+AgentModule.forRoot({
+  // ...model, store, actorResolver
+  skills: {},
+});
+```
+
+`skills: {}` is the opt-in. Discovered `@Skill` classes alone do **not** turn skills on: adding a
+decorated class would otherwise insert a checkpoint into every turn, and a durable run already in
+flight when that deployment rolled would replay against a sequence one position short.
+
+## Authoring one in code
+
+```ts
+@Skill({
+  name: 'label-pallet',
+  description: 'Label a pallet for outbound freight.',
+  scope: 'tenant:berlin',
+})
+@Injectable()
+export class LabelPalletSkill implements SkillBody {
+  constructor(private readonly units: UnitService) {}
+
+  body(ctx: SkillContext): string {
+    return `Strip any carrier prefix, then match against the outbound manifest.
+Known aliases for this base: ${this.units.aliasesFor(ctx.actor.tenantRef).join(', ')}`;
+  }
+}
+```
+
+The class is an ordinary provider, so it gets constructor DI — the reason a skill is a class and not
+a config entry. For a body that never varies, `@Skill({ name, description, body: '…' })` is enough.
+Omit `scope` and the skill publishes at `'global'`.
+
+## Serving them from your own table
+
+Skills a person administers — per user, per tenant, edited in a console — belong in your own storage.
+Implement `SkillProvider` and hand it over:
+
+```ts
+skills: {
+  provider: {
+    // Asked on EVERY turn: keep it cheap, catalog columns only.
+    list: ({ scopes }) => this.repo.find({ scope: { $in: [...scopes] } }, {
+      fields: ['name', 'description', 'scope'],
+    }),
+    // Asked only when the model actually wants that procedure.
+    load: ({ name, scope }) => this.repo.findOne({ name, scope }).then((row) => row?.body ?? null),
+  },
+}
+```
+
+Both calls take one object (`{ scopes, ctx }`, `{ name, scope, ctx }`), so `name` and `scope` cannot
+be transposed. A row `list` returns outside `scopes` is dropped, not trusted. Both sources feed one catalog. Between two skills of the same name *at the same scope*, the provider
+you wired wins over a decorated class — the one you can edit without a deploy is the better answer.
+
+<Callout type="info">
+**This library owns no skill table.** Your rows stay yours, which means your `Sector` entity can
+relate to them however it likes and your migrations never have to agree with the boot-time schema
+heal that manages the `agent_*` tables.
+</Callout>
+
+---
+
+## Scopes are tokens, and you order them
+
+A skill is published at an opaque **scope token**. Which tokens apply to a turn is answered by a
+`ScopeResolver`, returning them **most specific first**:
+
+```ts
+skills: {
+  scopes: {
+    resolve: async ({ actor }) => [
+      `actor:${actor.id}`,
+      `sector:${await this.sectors.of(actor.id)}`,
+      `tenant:${actor.tenantRef}`,
+      'global',
+    ],
+  },
+}
+```
+
+Precedence *is* that order. Nothing in the library knows what a sector is, and nothing has to: adding
+an axis is a resolver you write, not an enum you wait for or a column you migrate. Omit `scopes`
+entirely and you get `defaultScopeResolver` — the actor's own scope, their tenant's (when they have
+one), and `global` — which is everything an `Actor` alone can say.
+
+### The winner names what it beat
+
+Most specific wins. The scopes it outranked are recorded on the entry's `shadows`, shown to the model
+in the catalog line (`overrides the one from global`) and returned on the endpoint. A silent override
+is indistinguishable from an instruction nobody wrote; this way the agent can say *"I followed your
+depot's version, which differs from the tenant default"*.
+
+### Who may write one
+
+There is no write endpoint: who administers `sector:logistics` is a fact this library does not have.
+What it ships is the rule, as a pure function you call from your own console:
+
+```ts
+const verdict = skillWriteVerdict({
+  scope: 'tenant:berlin',
+  actor,
+  scopes: await resolver.resolve({ actor, threadId }),
+  author: { kind: 'human', actorRef: actor.id },
+  elevated: await this.gate.administers(actor, 'tenant:berlin'),
+});
+```
+
+- Only a scope in the actor's resolved `scopes` can be written at all.
+- Your **own** scope is yours, always.
+- A **wider** scope needs `elevated` — your answer to "may this person administer that scope".
+- **Nothing but a human may write above its own scope**, whatever elevation you grant. An agent that
+  can write a `tenant:` skill is an agent whose prompt anyone in that tenant can edit by talking to
+  it: they ask, the turn writes the instruction, and every later turn for every other user follows
+  it. That is prompt injection with persistence, and no permission makes it a different shape. An
+  agent that has learned something worth sharing *proposes* it; a person publishes it.
+
+---
+
+## Listing them for a UI
+
+```http
+GET /agent/skills?threadId=<optional>
+```
+
+```json
+[
+  {
+    "name": "label-pallet",
+    "description": "Label a pallet for outbound freight.",
+    "scope": "tenant:berlin",
+    "shadows": ["global"]
+  },
+  { "name": "work-order", "description": "Open and route a work order.", "scope": "global" }
+]
+```
+
+Most specific first, then alphabetical. `shadows` is omitted when nothing was overridden, so a client
+can tell *"there is no org default"* from *"there is one and yours wins"*.
+
+This is the **same list the model is offered**, built by the same `offerSkills` call against the same
+provider and resolver. A second implementation of "which skills apply" would drift the first time
+either was edited, and the drift reads to a user as a skill they can invoke that the agent then says
+it has never heard of. Ownership posture mirrors [`GET /agent/agents`](/docs/agent/guides/multi-agent):
+the actor comes from your `ActorResolver`, and nothing a caller passes widens the answer.
+
+---
+
+## What it costs the prompt
+
+Five things write the system block, in this fixed order:
+
+1. the agent's base prompt,
+2. each `@SystemPromptContributor()` section,
+3. the [memory](/docs/agent/guides/memory) block,
+4. the injected [retrieval](/docs/agent/guides/rag) block,
+5. the skills catalog.
+
+Skills are deliberately the cheapest of the five. The catalog is one line per skill, capped by
+`maxSkills` (default 20 — and when it bites, the **widest** scopes are dropped first, since an org
+default is what a deployment can best afford to lose). The bodies are not in the system block at all:
+they arrive as tool results on the transcript, where the
+[history ceiling](/docs/agent/guides/conversation-history) already governs them. ([Memory](/docs/agent/guides/memory)
+goes the other way, and for a reason: a body is read *because the model asked for it*, while a memory
+is worthless unless it is there on the turn nobody thought to look.)
+
+A new `aviary:agent:skills.resolved` diagnostics event reports how many skills were offered, how many
+the cap left out, and exactly how many characters the block added — so a turn whose input tokens jump
+can be attributed to a contributor by name instead of guessed at.
+
+---
+
+## Determinism
+
+Which instructions entered a turn's prompt is a decision *about that turn*, so it has to be readable
+from that turn's journal — never from whatever a replaying process's provider happens to hold now.
+
+- **One checkpoint for the catalog** (`skills:catalog`), holding the whole offer: the scopes the
+  resolver returned *and* the entries that survived precedence. A pod that resolves the actor into
+  different scopes rebuilds the identical prompt on resume.
+- **A load rides a read tool's positions** (`persist:toolcall:<id>`, `tool:<id>`,
+  `persist:toolexec:<id>`) and adds no name of its own. The body comes back *from* the `tool:` step,
+  so a skill edited between a suspend and a resume never rewrites the prompt of a run in flight.
+- **The catalog is the authorization boundary**, not just a menu. A name the turn was not offered is
+  refused even when the provider would happily serve it — so a model that invents a name (or repeats
+  one it saw elsewhere) cannot reach a body it has no claim on, and the refusal comes back as an
+  ordinary tool failure it can act on.
+- `ToolKind` gains `'skill'`, carried by no `ToolSpec`. Like `ask`, the tool is never registered, and
+  the branch that serves it is settled inside the already-journaled `persist:toolcall` checkpoint.
+
+Configure no skills and a turn's checkpoint sequence is byte-identical to one that never had the
+option.

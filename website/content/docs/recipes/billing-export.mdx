@@ -1,0 +1,132 @@
+---
+title: Billing export
+icon: Receipt
+description: Inject AGENT_GOVERNANCE_QUERIES and build your own CSV/JSON spend export off the same read-model the standalone dashboard and Telescope tab consume — the interface and the diagnostics channel are both public.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The shipped governance console (`@dudousxd/nestjs-agent-dashboard`) and the Telescope "Agent" tab
+both read spend and usage off one interface. Nothing stops your own code from reading the same
+interface — reach for this when finance wants a CSV per actor, you're feeding a third-party billing
+system, or you just don't want to stand up either shipped surface.
+
+---
+
+## The contract
+
+From [`governance-queries.ts`](https://github.com/DavideCarvalho/nestjs-agent/blob/master/packages/core/src/spi/governance-queries.ts):
+
+```ts
+/** Inclusive UTC day range, each YYYY-MM-DD. */
+interface GovernanceRange {
+  fromDay: string;
+  toDay: string;
+}
+
+interface ActorSpendRow {
+  actorRef: string;
+  requests: number;
+  totalTokens: number;
+  costUsd: number;
+  /** Distinct threads the actor used in the range. */
+  threadCount: number;
+}
+
+interface AgentGovernanceQueries {
+  spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]>;
+  spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]>;
+  /** Top threads by spend, highest cost first, capped at `limit`. */
+  spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]>;
+  usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]>;
+  recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
+  recentThreads(limit: number): Promise<ThreadActivityRow[]>;
+  // ...plus reliability (runMetrics/runsByAgent/runErrors/runTrend/recentRuns), toolStats,
+  // pendingApprovals, paginated approvalsPage/toolCallsPage/threadsPage/runsPage, and the
+  // runDetail/threadDetail drill-downs — all REQUIRED members an external adapter must implement
+  // (see the source link above for the full, current shape).
+}
+```
+
+Consumers inject it via the `AGENT_GOVERNANCE_QUERIES` token; whichever store adapter you configured
+(MikroORM, Drizzle, or `InMemoryGovernanceQueries` in tests) binds it. The interface has grown a lot
+beyond spend/usage since this recipe was first written — this snippet keeps only the members a
+billing export actually reads; see [Endpoints](/docs/agent/reference/endpoints#dashboard-json-api)
+for what the rest feed.
+
+---
+
+## A CSV export service
+
+```ts
+// src/billing/billing-export.service.ts
+import { AGENT_GOVERNANCE_QUERIES, type AgentGovernanceQueries } from '@dudousxd/nestjs-agent';
+import { Inject, Injectable } from '@nestjs/common';
+
+@Injectable()
+export class BillingExportService {
+  constructor(
+    @Inject(AGENT_GOVERNANCE_QUERIES)
+    private readonly governance: AgentGovernanceQueries,
+  ) {}
+
+  async spendCsv(fromDay: string, toDay: string): Promise<string> {
+    const rows = await this.governance.spendByActor({ fromDay, toDay });
+    const header = 'actorRef,requests,totalTokens,threadCount,costUsd';
+    const lines = rows.map(
+      (row) =>
+        `${row.actorRef},${row.requests},${row.totalTokens},${row.threadCount},${row.costUsd.toFixed(4)}`,
+    );
+    return [header, ...lines].join('\n');
+  }
+}
+```
+
+Mount it under your own controller — this is ordinary application code, not a library surface:
+
+```ts
+// src/billing/billing-export.controller.ts
+import { Controller, Get, Header, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { BillingExportService } from './billing-export.service.js';
+
+@Controller('billing')
+export class BillingExportController {
+  constructor(private readonly billing: BillingExportService) {}
+
+  @Get('export.csv')
+  @Header('content-type', 'text/csv')
+  async export(
+    @Query('from') fromDay: string,
+    @Query('to') toDay: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.send(await this.billing.spendCsv(fromDay, toDay));
+  }
+}
+```
+
+```ts
+@Module({
+  controllers: [BillingExportController],
+  providers: [BillingExportService],
+})
+export class BillingModule {}
+```
+
+<Callout type="info" title="The read-model and diagnostics are both public">
+Beyond the shipped surfaces, your app can query `AGENT_GOVERNANCE_QUERIES` for its own billing
+export, or subscribe to the `aviary:agent:*` diagnostics channel for alerts and metrics — the
+library instruments nothing in your code, so neither integration point is off-limits. `spendByModel`
+and `usageTrend` follow the same `GovernanceRange` shape if you need a per-model or a daily-trend
+export instead; `spendByThread(range, limit)` gives the top-N threads by cost.
+</Callout>
+
+---
+
+## Related
+
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the ledger, reported-cost-wins,
+  cache-aware pricing, and the two shipped surfaces this export sits alongside
+- [Offline testing](/docs/agent/recipes/offline-testing) — `InMemoryGovernanceQueries` for testing
+  an export like this one without a database

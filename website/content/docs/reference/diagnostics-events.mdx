@@ -1,0 +1,97 @@
+---
+title: Diagnostics events
+icon: Activity
+description: The aviary:agent:* diagnostics_channel events published by @dudousxd/nestjs-agent-core, with exact payload shapes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@dudousxd/nestjs-agent-core` publishes lifecycle events on the `aviary:agent:*` [`node:diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html) namespace via `@dudousxd/nestjs-diagnostics`' `emit('agent', <event>, payload)`. Both the [dashboard's live feed](/docs/agent/reference/endpoints#dashboard-json-api) and the `-telescope` "Agent" tab subscribe to the same channel — see [Governance](/docs/agent/concepts/governance) and [`packages/telescope`](/docs/agent/packages/telescope).
+
+## Events
+
+| Event | Payload fields | Publisher |
+|---|---|---|
+| `run.started` | `runId: string`; `threadId: string`; `actorId: string`; `agentName?: string`; `persona?: string` | `publishAgentRunStarted` |
+| `message` | `runId: string`; `threadId: string`; `role: 'user' \| 'assistant'`; `textLength: number` | `publishAgentMessage` |
+| `tool-call` | `runId: string`; `toolName: string`; `toolType: 'read' \| 'action'`; `status: string`; `durationMs?: number` | `publishAgentToolCall` |
+| `quota.exceeded` | `actorId: string`; `period?: 'day' \| 'month'`; `reason?: string`; `usedTokens?: number`; `limitTokens?: number`; `usedUsd?: number`; `limitUsd?: number` | `publishAgentQuotaExceeded` — when the send gate refuses a turn with `429`, and when the [message queue](/docs/agent/guides/message-queue) pauses on quota. Token figures are absent on a USD-only cap. |
+| `run.failed` | `runId: string`; `code: string`; `message: string` | `publishAgentRunFailed` |
+| `run.finished` | `runId: string`; `threadId: string`; `steps: number`; `inputTokens: number`; `outputTokens: number` | `publishAgentRunFinished` |
+| `delegated` | `runId: string`; `fromAgent?: string`; `toAgent: string`; `detached?: boolean` | `publishAgentDelegated` — `detached: true` when the delegate was started, not awaited |
+| `retrieved` | `runId: string`; `query: string`; `count: number` | `publishAgentRetrieved` — **inject mode only** (`retrieval: { mode: 'inject' }`). Agentic retrieval through a tool is not reported here; wrap the retriever with `instrumentRetriever` to see it on `aviary:rag:retrieval`. |
+| `skills.resolved` | `runId: string`; `scopes: number`; `offered: number`; `omitted: number`; `promptChars: number` | once per run, at the `skills:catalog` checkpoint (counts only, never skill names) |
+| `memory.resolved` | `runId: string`; `scopes: number`; `offered: number`; `omitted: number`; `pinnedOmitted: number`; `recalled: boolean`; `promptChars: number` | once per run, at the `memory:digest` checkpoint (counts only, never keys or text) |
+| `memory.written` | `runId: string`; `scope: string`; `chars: number` | each `remember` write (the length, never the fact) |
+| `tool.retry` | `toolName: string`; `toolCallId: string`; `attempt: number`; `message: string` | each in-place transient retry (`toolTransientRetry`), not the final outcome |
+
+These 12 are the **point events**, exported as a stable, compile-time-checked `AGENT_DIAGNOSTIC_EVENTS`
+array with a matching `agentDiagnosticKey(event)` helper that composes the telescope bridge's
+`agent:<event>` key — pass those keys to `nestjsDiagnosticsTelescope({ exclude: [...] })` to mute a
+channel already recorded elsewhere.
+
+### RAG events (`aviary:rag:*`)
+
+The RAG packages publish on their own namespace:
+
+| Event | Payload | Publisher |
+|---|---|---|
+| `retrieval` | `RagRetrievalEvent` — `{ retriever, store?, collection?, topK, chunks, zeroHit, topScore?, meanScore?, failed, error? }`, with `durationMs` on the envelope | `instrumentRetriever(retriever, options?)` from `@dudousxd/nestjs-agent-rag` (channel `RAG_RETRIEVAL_CHANNEL`). Only an instrumented retriever publishes it. |
+| `media.ingested` | `{ mediaId, ownerType, ownerId, collection, source, size, mimeType, chunks, … }` | `@dudousxd/nestjs-agent-rag-media` |
+| `media.removed` | `{ mediaId, ownerType, ownerId, … }` | `@dudousxd/nestjs-agent-rag-media` |
+| `media.skipped` | `{ mediaId, mimeType, reason: 'unsupported-type' \| 'too-large' \| 'empty-text', ownerType?, ownerId?, collection?, … }` | `@dudousxd/nestjs-agent-rag-media` |
+| `media.failed` | `{ mediaId, error, mimeType?, kind?, ownerType?, ownerId?, collection?, … }` | `@dudousxd/nestjs-agent-rag-media` |
+
+<Callout type="info" title="tool-call's toolType is narrower than ToolKind">
+  `AgentToolCallEvent.toolType` is `'read' | 'action'` — it does not include the `'agent'` kind that `ToolSpec.kind` supports for delegation. Delegation gets its own `delegated` event instead.
+</Callout>
+
+## Trace spans (`traceId = runId`)
+
+Every run also emits five **span-only** events — never as point events on the base channel, only via
+`trace()` on the `:start`/`:end`/`:asyncStart`/`:asyncEnd`/`:error` sub-channels, correlated by
+`traceId = runId`. This is what lets the Telescope TRACES tab render a turn as a nested waterfall
+(llm calls, tool executions, retrieval, follow-ups, structured-output) with durations and error
+phases. They're emitted
+from *inside* the checkpointed step bodies, so a replayed (cached) step never re-emits — and, for
+dispatched turns (see [Inline → durable](/docs/agent/recipes/inline-to-durable)), from whichever
+worker actually executes the step.
+
+| Span event | START payload fields |
+|---|---|
+| `llm.turn` | `runId: string`; `step: number` (zero-based model-call index) |
+| `tool.execution` | `runId: string`; `toolCallId: string`; `toolName: string`; `toolType: 'read' \| 'action'` |
+| `retrieval` | `runId: string`; `queryLength: number`; `topK: number` |
+| `follow-ups` | `runId: string`; `step: number`; `count: number` |
+| `structured-output` | `runId: string`; `step: number`; `attempt: number` |
+
+Payloads are metadata-only — model id, token counts, tool name/type, step index, query *length* —
+never prompt or output text. `traceLlmTurn`/`traceToolExecution` are exported for remote execution
+sites that need to emit the same span shape.
+
+<Callout type="warn" title="Spans need the span-aware bridge">
+  Rendering these as a waterfall requires `@dudousxd/nestjs-diagnostics-telescope` 0.7+ and
+  `@dudousxd/nestjs-telescope` 1.17+ (explicit `RecordInput.traceId`). Without them the spans are
+  still emitted but unobserved — zero cost, since the phase envelopes are gated on subscriber
+  presence. Span events are deliberately excluded from `AGENT_DIAGNOSTIC_EVENTS`: the point-event
+  watcher has nothing to subscribe to on their base channels. They are listed in `AGENT_SPAN_EVENTS`
+(`llm.turn`, `tool.execution`, `retrieval`, `follow-ups`, `structured-output`).
+</Callout>
+
+## How to subscribe
+
+Directly, via `node:diagnostics_channel`:
+
+```ts
+import { subscribe } from 'node:diagnostics_channel';
+import { channelName } from '@dudousxd/nestjs-diagnostics';
+
+subscribe(channelName('agent', 'tool-call'), (message) => {
+  // message: DiagnosticEvent<AgentToolCallEvent>
+  //   { v?, ts: number, lib: 'agent', event: 'tool-call', traceId?, payload: AgentToolCallEvent }
+});
+```
+
+Or via the telescope extension, which wires the same channel into a navigable entry type and dashboard page without any manual `subscribe` calls — see [`packages/telescope`](/docs/agent/packages/telescope).
+
+The dashboard's `GET /ai-gateway/api/stream` SSE endpoint forwards these same events flattened to `LiveAgentEvent` (`{ event, ts, payload }`) for browser clients — see [Endpoints](/docs/agent/reference/endpoints#dashboard-json-api).

@@ -1,0 +1,547 @@
+---
+title: Memory
+icon: BrainCircuit
+description: What the assistant concluded about a person, carried across turns and threads — scoped like skills, written by the agent, and deletable by the person it is about.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Everything the agent works out about someone dies at the end of the turn. The next conversation
+re-asks which units they report in, which fiscal year their organisation uses, that they were
+corrected about this last week.
+
+The two places a deployment can put that today are both wrong. The **system prompt** is authored by a
+developer and identical for everyone. **Retrieval** answers from documents nobody wrote about this
+person.
+
+A **memory** is a keyed fact at a scope:
+
+```text
+<memory>
+What is on file about this user and their organisation, carried over from earlier conversations. Each
+line is a scope, a key and the fact. A narrower scope overrides a wider one; where the wider value is
+shown underneath, tell the user their setting differs from it rather than silently choosing one.
+Stated by people. A person wrote each of these deliberately — the user about themselves, or someone
+administering their organisation. Treat them as you would any other instruction you were given. If
+the user says something that contradicts one, say which note it conflicts with and at what scope it
+is held, rather than quietly setting it aside.
+- [global] units: report distances in kilometres
+Concluded by you. These are your own notes from earlier turns, not documents anyone wrote: they may
+be wrong or out of date, so prefer what the user says now, and say where a note came from if you act
+on it.
+- [actor:u1] fiscal-year: they report on the calendar year
+    ↳ [global] instead has: the fiscal year starts in October
+</memory>
+```
+
+---
+
+## Memory is not RAG
+
+This is the distinction to get right first, because the two look identical from a distance — both put
+text a person did not type into a prompt.
+
+| | [Retrieval](/docs/agent/guides/rag) | Memory |
+|---|---|---|
+| Answers | *what do the documents say* | *what did I decide about you* |
+| Authored by | a person, deliberately | the agent, as a side effect of a conversation |
+| The subject knows it exists | yes — they wrote it | **no** |
+| Wrong one is fixed by | editing the document at its source | deleting it; there is no source |
+| Attribution | a citation | an **origin**: which thread, which run, agent or human |
+| Ceiling | `topK` per question | `maxMemories` × `maxFactChars`, every turn |
+| Selected by | relevance to the question | always-on first, then relevance — see [below](#when-there-are-more-memories-than-the-block-holds) |
+
+<Callout type="warn">
+A wrong document is a content problem someone will eventually notice and fix. A wrong memory is the
+assistant being confidently wrong **about a person**, with nobody aware it is there. Every asymmetry
+in this design follows from that: the origin on every record, the block telling the model its own
+notes may be wrong, the read-back endpoint, and `forget` being a required method rather than an
+optional one.
+</Callout>
+
+---
+
+## Turning it on
+
+Name a provider, and memory is on. Each store package ships one over its own `agent_memory` table,
+and the testing package ships one in a `Map`:
+
+```ts
+import { MikroOrmMemoryProvider } from '@dudousxd/nestjs-agent-store-mikro-orm';
+// or DrizzleMemoryProvider from …-store-drizzle, or InMemoryMemoryProvider from …-testing
+
+AgentModule.forRootAsync({
+  // no `store`: AgentModule finds the AGENT_STORE the store module binds
+  inject: [MikroOrmMemoryProvider],
+  useFactory: (memory: MikroOrmMemoryProvider) => ({
+    // ...model
+    memory: { provider: memory },
+  }),
+});
+```
+
+A store module **exports** its provider but never binds `AGENT_MEMORY`, because that token's
+*presence* is what turns the feature on: binding it would give memory to every host that installed
+the store. Naming the provider is how you opt in.
+
+There is still no decorator and no zero-config form, unlike [skills](/docs/agent/guides/skills). A
+memory is by definition something the agent worked out about someone, so a memory a developer wrote
+in a class would be an instruction wearing a memory's clothes — which is what `@Skill` and
+`@SystemPromptContributor()` are for.
+
+<Callout type="info">
+**The library owns `agent_memory`; a skill table is still yours.** The two look like the same
+question and are not. A skill row plausibly joins your own entities — who authored it, which depot
+it belongs to, which review approved it — while a memory row is a key, a fact, an opaque scope token
+and an origin, with nothing to relate to. And every other part of memory was already the library's:
+the `remember` tool, `writeMemory`, the `memory:digest` checkpoint, and the
+[read-back and delete](#forgetting). `agent_memory` is in `agentManagedTables()`, so your migration
+differ skips it like `agent_thread`.
+</Callout>
+
+### Writing your own
+
+The SPI is still the seam, and a deployment whose memories live somewhere the built-ins do not reach
+implements it directly:
+
+```ts
+const myMemoryProvider: MemoryProvider = {
+  // Asked on EVERY turn: keep it cheap.
+  list: ({ scopes }) => this.repo.find({ scope: { $in: [...scopes] } }),
+  // REQUIRED.
+  forget: ({ id }) => this.repo.nativeDelete({ id }).then((rows) => rows > 0),
+  // Optional — upsert on (scope, key). Omit it and the model is never offered `remember`.
+  write: ({ key, text, scope, origin }) => this.repo.upsert({ key, text, scope, origin }),
+  // Optional — relevance selection once the set outgrows the block. See "When there are more
+  // memories than the block holds" below.
+  search: ({ scopes, query, limit }) => this.repo.searchByRelevance(scopes, query, limit),
+};
+```
+
+<Callout type="info">
+Every method takes **one named object**, not positional arguments. `key`, `text` and `scope` are all
+strings: transposed, a positional call compiles without a complaint and writes a fact whose key is
+its value, at a scope nobody meant. The same holds for every multi-argument export in `memory.ts`.
+</Callout>
+
+<Callout type="info">
+**`forget` is required; `write` is not.** A deployment may reasonably populate memory from its own
+pipeline and offer the agent no write tool. No deployment may reasonably hold conclusions about a
+person that the person cannot have deleted. Making it optional would turn forgetting into a wiring
+choice, and it is not one.
+</Callout>
+
+---
+
+## Scopes: the same tokens skills use
+
+A memory is published at an opaque scope token, and which tokens apply to a turn is answered by the
+**same** `ScopeResolver` skills use — most specific first, precedence falling out of the order.
+
+```ts
+memory: {
+  provider: myMemoryProvider,
+  scopes: {
+    resolve: async ({ actor }) => [
+      `actor:${actor.id}`,
+      `depot:${await this.depots.of(actor.id)}`,
+      `tenant:${actor.tenantRef}`,
+      'global',
+    ],
+  },
+}
+```
+
+`depot:` is invented entirely by the example above. The library knows `actor:`, `tenant:` and
+`global` because `Actor` carries an id and a tenant ref — every other token is a string you mint, and
+adding one is a line in your resolver rather than a change in this package. Put it where its
+precedence belongs: the ORDER is the whole of the ranking, and only you know whether a depot's facts
+should outrank its tenant's.
+
+One resolver on purpose. A deployment that could answer *"which scopes does this actor have"* twice
+would eventually answer it differently, and the two answers would be a skills bug and a privacy bug
+respectively.
+
+### Conflict shows both values
+
+Two memories sharing a **key** at different scopes are one question answered twice. The narrower wins
+— and the entry carries the beaten **text**, not merely the scope it beat:
+
+```json
+{
+  "key": "fiscal-year",
+  "text": "they report on the calendar year",
+  "scope": "actor:u1",
+  "overrides": [
+    { "scope": "global", "text": "the fiscal year starts in October", "author": "human" }
+  ]
+}
+```
+
+This is where memory departs from a skill's `shadows`. A skill only has to say *which* scope it
+outranked — the agent follows one procedure either way. A memory is a **value**, and an agent that
+knew only that a wider one existed could tell the user nothing except which one it picked. With both
+in front of it, it can say *"I used the calendar year, which is your setting — the org default is
+October"*.
+
+<Callout type="info">
+The key is also what makes conflict **mechanically** detectable. A keyless memory store can only hope
+its facts do not contradict each other; nothing in it can notice when they do.
+</Callout>
+
+The beaten value carries its **author** too, because precedence is blind to it: an agent's own
+inference at `actor:` outranks an administrator's published policy at `global`, and the block renders
+the two differently — *"a person stated"* rather than *"instead has"*. Precedence is unchanged, but
+the model can now tell a stale guess from what the organisation decided, and say which it is
+departing from.
+
+---
+
+## Who may write one
+
+```ts
+const verdict = memoryWriteVerdict({
+  scope: 'tenant:berlin',
+  actor,
+  scopes: await resolver.resolve({ actor, threadId }),
+  author: { kind: 'human', actorRef: actor.id },
+  elevated: await this.gate.administers(actor, 'tenant:berlin'),
+});
+```
+
+- Only a scope in the actor's resolved `scopes` can be written at all.
+- Your **own** scope is yours, always.
+- A **wider** scope needs `elevated` — your answer to "may this person administer that scope".
+- **Nothing but a human may write above its own scope**, whatever elevation you grant.
+
+That last rule is the same one [skills](/docs/agent/guides/skills#who-may-write-one) carry, and it
+bites harder here. A tenant *skill* an agent could publish is a procedure anyone in the tenant can
+edit by talking to the assistant. A tenant *memory* is a **fact everyone in the tenant is then
+answered from** — with no document to inspect, and nobody aware it was written.
+
+### The tool enforces it by shape
+
+```json
+{ "key": "fiscal-year", "fact": "they report on the calendar year" }
+```
+
+The `remember` tool takes **no scope parameter**. An agent may only ever write the actor it is running
+for, so a scope argument could only ever be a request that gets refused — and a refusable request is
+one a model will keep making, and one a future reader will be tempted to make grantable.
+
+**Promotion is a human act.** An agent that has genuinely learned something the organisation should
+know writes it at its own scope; a person reads it in your console and republishes it wider. There is
+no proposal queue in this library, because a queue with no human workflow attached is a table that
+fills up.
+
+---
+
+## Forgetting
+
+```http
+GET    /agent/memories?threadId=<optional>
+DELETE /agent/memories/:id
+```
+
+```json
+[
+  {
+    "id": "mem_01H…",
+    "key": "fiscal-year",
+    "text": "they report on the calendar year",
+    "scope": "actor:u1",
+    "origin": { "author": "agent", "threadId": "thr_…", "runId": "run_…", "actorRef": "u1" },
+    "updatedAt": "2026-09-01T09:12:44.000Z",
+    "overrides": [{ "scope": "global", "text": "the fiscal year starts in October" }]
+  }
+]
+```
+
+Three decisions worth naming:
+
+**The read-back ignores `maxMemories`.** That ceiling is a budget on what one *turn* carries.
+Applying it here would mean a person could not see — and so could not delete — a belief the assistant
+is one write away from acting on again. Showing someone more than the model sees is harmless; showing
+them less is the failure the endpoint exists to prevent.
+
+**Deleting your own needs nobody's permission.** `memoryForgetVerdict` takes no `elevated` flag, on
+purpose: the endpoint that serves it must not be able to ask a host a question a host might answer
+*no* to. Deleting a `tenant:` memory is an administrative act on shared state and belongs in your
+console, with the same elevation a write there needs.
+
+**An id the actor cannot see answers 404, not 403.** Otherwise the endpoint is a way to find out what
+the assistant believes about other people. A memory the actor *can* see but that is held at a wider
+scope (a `tenant:` one) answers 403: deleting it is the console's job.
+
+### A memory whose conversation is gone
+
+The [history ceiling](/docs/agent/guides/conversation-history) eventually drops the messages a
+conclusion was drawn from. The memory is **kept**, and the read-back shows it with an origin that no
+longer resolves.
+
+Deleting it instead would be worse in both directions. It would make memory silently lossy in exactly
+the long-lived threads that need it most — and it would mean a *cost control* quietly changed what the
+assistant believes. A history ceiling must never double as an eraser. The origin is a pointer that is
+allowed to dangle; that it can is why the read-back and the delete button exist.
+
+---
+
+## When there are more memories than the block holds
+
+The **prompt budget** has to be bounded. The **store** has no reason to be. A person accumulates
+preferences over months, and an organisation publishes facts meant for everyone in it — so the
+applicable set outgrows `maxMemories` quickly, and once it does, *which* of them the block carries is
+a decision somebody has to make.
+
+Making it by **scope** is the wrong answer, and it fails quietly:
+
+<Callout type="warn">
+A turn's candidates are the **union** of every resolved scope — a few hundred of yours, several
+hundred of your depot's, thousands of your tenant's. Selecting narrowest-first means that as soon as one
+person has twenty notes of their own, **nothing their organisation knows ever reaches the prompt
+again**. The facts that apply to the most people are the first to be dropped, and the only trace is a
+non-zero `omitted`. That failure looks exactly like the feature working.
+</Callout>
+
+So separate two things that are easy to conflate:
+
+- **Precedence** resolves a *conflict*: two memories at the same `key`, the narrower one winning and
+  the beaten value riding along as `overrides`. Scope decides this, and that is correct.
+- **Selection** decides *which of thousands* appear at all. That is relevance to the turn — never
+  scope.
+
+### `search` on the provider
+
+Give the provider a `search` and the block is filled by relevance instead:
+
+```ts
+search: async ({ scopes, query, limit }) => {
+  const vector = await this.embedder.embed([query]);
+  return this.repo.raw(
+    `SELECT * FROM agent_memory
+      WHERE scope IN (?)
+        AND (pinned OR key IN (SELECT key FROM agent_memory
+                                WHERE scope IN (?)
+                             ORDER BY embedding <=> ?
+                                LIMIT ?))`,
+    [scopes, scopes, vector[0], limit],
+  );
+},
+```
+
+**The host owns the index, even where the library owns the rows.** A deployment with twenty memories
+must not have to stand up a vector store to keep working — omit `search` and every turn is served by
+`list`, exactly as before. One with two thousand uses whatever it already runs: pgvector, a full-text
+index, a hybrid service. The library owns the resolution, the precedence, the budget and the journal.
+
+<Callout type="info">
+**Neither built-in store adapter implements `search`**, and that is a decision rather than a gap. An
+index's shape depends entirely on what a deployment already runs, so shipping one would make the
+adapter require infrastructure most hosts do not have, for a ceiling most of them never reach. The
+signal that it is worth building is [`MemoryDigest.omitted`](#what-it-costs-the-prompt) going
+non-zero — and `pinnedOmitted` especially, which means a standing policy stopped reaching any prompt.
+Both are on the `aviary:agent:memory.resolved` diagnostic. When you get there, implement `search`
+against your own index and pass that as the provider, or wrap the built-in one.
+
+`InMemoryMemoryProvider` from the testing package *does* implement it, under `{ recall: true }`,
+ranked by word overlap — enough to exercise this path, and this section's three clauses, without an
+index.
+</Callout>
+
+Three clauses, and the third is the one that is easy to miss:
+
+1. **Filter to `scopes` before ranking.** A search that ranks before it filters is a cross-tenant leak
+   wearing a relevance score — the nearest neighbour to *"how do we label a pallet"* is another
+   tenant's pallet-labelling rule. Records returned outside `scopes` are dropped rather than trusted, so a
+   mistake costs throughput rather than privacy, but **the drop is a backstop, not the boundary**.
+2. **Rank the *keys*** and take the best `limit` of them. Precedence resolves a key to one line, so
+   `limit` keys is `limit` lines — the block's own unit.
+3. **Return every record sharing a returned key**, plus every `pinned` record at those scopes. A search that returned the `global` half of a
+   conflict and not the `actor:` half would render the org default as the answer: the exact failure
+   memory exists to prevent, and one nothing downstream can detect. It is one query either way — the
+   subselect above.
+
+### What it is searched with
+
+**The user's own turn text, and nothing else.** It is the only thing available before the first model
+call, which is where memory has to be — a memory is worthless unless it is in front of the model on
+the turn nobody thought to look for it. It is also already a journaled input to the run, so it needs
+no determinism machinery of its own.
+
+<Callout type="warn">
+**What that fails at:** a turn with no topic. *"and the other thing?"*, *"do that"*, *"yes"*. The
+query is then noise and the ranking is noise with it. The answer is not a cleverer query — a rolling
+transcript window drifts toward whatever dominated the conversation, and asking the model to request
+a recall makes it recall-on-demand, which is the thing working memory deliberately is not. The answer
+is `pinned`, below.
+</Callout>
+
+### Recall over a **transcript** is still a different feature
+
+Searching what was *said* earlier is retrieval over messages, and the
+[`Retriever`, `Reranker` and `EmbeddingProvider`](/docs/agent/guides/rag) SPIs already do it. This
+section is about searching the **memories**, which are conclusions, not messages.
+
+---
+
+## Always-on memories
+
+Some facts must be present regardless of what the turn is about. *"Never dispatch a pallet without a
+printed manifest"* is never semantically close to a question about labelling, so under pure relevance
+it silently stops appearing.
+
+`MemoryRecord.pinned` marks those:
+
+```json
+{ "key": "manifest-required", "text": "never dispatch a pallet without a printed manifest", "scope": "tenant:berlin", "pinned": true }
+```
+
+**It is categorical, not a priority number**, and that is deliberate:
+
+- A number **inflates**. Everybody picks 100, then something has to outrank 100, and there is no way
+  to close that off later without renumbering live data.
+- A number **carries no reviewable meaning**. There is no natural scale, so nobody can say whether 5
+  is right — and an admin's 100 and an end user's 100 sort identically while meaning different
+  things, in a system that deliberately holds memories from both.
+- A number **competes with relevance**, which is already a continuous ordering. Two continuous
+  orderings side by side pose a question with no principled answer: does priority 8 beat a
+  substantially better semantic match, and by how much?
+
+A category turns into a **budget** rather than a sort key. Pinned entries are taken from
+`maxMemories` first; recall fills whatever is left. The ceiling stays the product of two numbers an
+operator set.
+
+**If more is pinned than the block holds**, the ceiling still bites — pinning cannot be a way to grow
+a prompt without deciding to. The overflow is dropped in the order the library already has (narrowest
+scope, then newest), and it is reported on its own: `MemoryDigest.pinnedOmitted`, and
+`aviary:agent:memory.resolved`'s `pinnedOmitted`. That is the number to alert on. Ordinary omission is
+the budget working; a dropped always-on memory is a deployment's own standing policies having stopped
+reaching any prompt, and the fix is to unpin something or raise `maxMemories`.
+
+<Callout type="warn">
+**An agent may not pin its own writes.** `StoreMemoryInput` has no `pinned` field and the `remember`
+tool has no such parameter — the same enforcement-by-shape that keeps `scope` off it. An agent that
+could pin its own conclusion has granted itself a permanent place in every future prompt, and unlike
+an ordinary wrong memory it can never fall out of the block on its own. Pinning is the strongest form
+of the persistence the [write-authority rules](#who-may-write-one) exist to govern, so it sits with
+the strictest of them: a person does it, in your console.
+</Callout>
+
+A pin belongs to the **question**, not to the record that currently answers it. Pin `fiscal-year` at
+`global` and a personal override of it is always-on too — otherwise "always-on" would mean "always-on
+until someone disagrees".
+
+<Callout type="info">
+This library reads `pinned` and never writes it, the same way it never mints an `id`. If your `write`
+upserts on (`scope`, `key`), **preserve the flag** — an upsert that drops it has silently unpinned the
+row. The built-in providers keep it out of the conflict merge for exactly that reason, and expose
+`pin({ id, pinned })` for the console side: an operator's act, deliberately not a method on the SPI,
+so nothing an agent can reach is able to call it.
+</Callout>
+
+---
+
+## Whose note is the model reading
+
+A wide-scope memory is usually **published by an administrator**, not concluded by the agent — that
+is what the write-authority rules make promotion a human act *for*. So the block cannot carry one
+framing over the whole list.
+
+Telling the model *"these are your own notes … prefer what the user says now"* about an
+organisation's published policy is false, and it is unsafe: it hands any user an override of company
+policy by asserting the opposite in conversation. That is not a jailbreak, it is the documented
+instruction.
+
+`MemoryOrigin.author` is the axis, and it is the only one that matters here — **scope says who a fact
+applies to, not who decided it.** The block renders two sections:
+
+| `origin.author` | Framing | What the model is told |
+|---|---|---|
+| `'human'` | *Stated by people* | Treat as an instruction you were given. A user contradicting one is a **conflict to surface**, naming the note and its scope — not an override to apply. |
+| `'agent'` | *Concluded by you* | Your own notes, possibly wrong or stale. **Prefer what the user says now**, and say where a note came from if you act on it. |
+
+A section that has no entries is not rendered, so a deployment where the agent writes everything reads
+exactly as it always did.
+
+<Callout type="info">
+`author` is set by whoever calls `write`, and the agent's path cannot claim `'human'`: `writeMemory`
+hard-codes `'agent'`. If you need to tell *the subject wrote this about themselves* from *an
+administrator published this*, compare `origin.actorRef` against the actor — the two values do not
+need a third.
+</Callout>
+
+### A partial block says so
+
+When the ceiling bit, or when recall selected, the block tells the model it is reading a **selection**
+— *"other notes exist that are not in this list, so never read something's absence from it as evidence
+that it was never recorded."* Without that line a model reads a partial set as a whole one and turns
+an absence into a claim: *"you never told me that"* about a fact it simply was not shown.
+
+---
+
+## What it costs the prompt
+
+Five things write the system block, in this fixed order — most durable first:
+
+1. the agent's base prompt (the same for everyone, every turn),
+2. each `@SystemPromptContributor()` section,
+3. **memory** (the same for this person, every turn),
+4. the injected [retrieval](/docs/agent/guides/rag) block (this question only),
+5. the [skills](/docs/agent/guides/skills) catalog (a menu rather than an instruction, so a reader
+   meets instructions before options).
+
+Memory is in the system block, where a skill's **body** deliberately is not — and the difference is
+not inconsistency. A body is read *because the model went and asked for it*. A memory is worthless
+unless it is in front of the model on the turn nobody thought to look: *"they report distances in
+kilometres"* only works unprompted.
+
+What makes that affordable is that **a memory has no body**. `maxMemories` lines (default 20), each
+capped at `maxFactChars` (default 240) **when it is written** — so the block's whole ceiling is a
+product of two numbers you set, and the push-back lands at the moment the model is writing an essay
+instead of a fact. A fact that cannot be stated in a line is not a memory; it is a document.
+
+Selection runs in three orders, answering three different questions.
+[Always-on](#always-on-memories) entries come first, whatever else is true. Then, among the rest:
+**relevance** where the provider [ranked](#when-there-are-more-memories-than-the-block-holds) them,
+otherwise the **widest** scopes dropped first and the **stalest** within a scope — which is the right
+order only while nothing is being starved, i.e. exactly the case a host running no index is in.
+Rendering is a third order, by scope then key: a block ordered by recency or by score would reshuffle
+itself on every write and throw away the provider's prompt cache.
+
+Two diagnostics events: `aviary:agent:memory.resolved` (scopes, offered, omitted, `pinnedOmitted`,
+`recalled`, `promptChars`) so a turn whose input tokens jump can be attributed by name — and so that
+"this deployment holds few memories" can be told from "this turn drew twenty out of two thousand",
+which `offered` alone reports identically — and `aviary:agent:memory.written` (scope, chars) so an
+operator can watch the agent's own write volume, the risk surface memory has and retrieval does not.
+Neither carries a key or a fact; a key is as revealing as the fact it names.
+
+---
+
+## Determinism
+
+Which memories entered a turn's prompt is a decision *about that turn*, so it has to be readable from
+that turn's journal — never from whatever a replaying process's provider happens to hold now.
+
+- **One checkpoint for the digest** (`memory:digest`), holding the whole thing: the scopes the
+  resolver returned *and* the entries that survived selection, precedence and the ceiling. It sits
+  after `persist:run:start`, so the `promptHash` recorded there keeps identifying the prompt *version*
+  rather than a person.
+- **The search happens inside it.** A ranking is the most re-derivable decision in this library — the
+  index moves, a neighbour is written, embeddings are recomputed — so its result is part of the
+  checkpoint every replay reads back, never something a replaying process asks again. A run that
+  suspended for an approval and resumes an hour later rebuilds the *identical* block.
+- **It is the authorization boundary as well as the prompt source.** A `remember` call is checked
+  against `digest.scopes` — the scopes the run recorded — so a membership table edited mid-run cannot
+  retroactively widen (or narrow) what a turn already in flight may write.
+- **A write rides a read tool's positions** (`persist:toolcall:<id>`, `tool:<id>`,
+  `persist:toolexec:<id>`) and happens *inside* `tool:<id>`. That is what makes it idempotent under
+  replay: a resumed run reads the stored record back instead of storing a second copy of a fact the
+  model decided once.
+- **The digest is resolved once per run.** A memory written mid-turn reaches the model as that call's
+  tool result, on the transcript — re-resolving it would let the system block change between two
+  steps of one turn, which is a prompt no journal position covers.
+- `ToolKind` gains `'memory'`, carried by no `ToolSpec`. Like `ask` and `skill`, the tool is never
+  registered and its branch is settled inside the already-journaled `persist:toolcall` checkpoint.
+
+Configure no memory and a turn's checkpoint sequence is byte-identical to one that never had the
+option.

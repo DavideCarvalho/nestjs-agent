@@ -1,0 +1,531 @@
+---
+title: Tools
+icon: Wrench
+description: Declaring agent tools with @AiTool — the decorator surface, read vs action, the ToolHandler interface, and the per-invocation context.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+A tool is how the model reaches into your app. You declare one as an ordinary NestJS injectable
+decorated with `@AiTool`; at boot the agent discovers it, registers its schema, and offers it to
+the model. The decorator is the **contract** — name, input shape, who may call it, and whether it
+runs on its own; the class body is your **domain**.
+
+---
+
+For result-driven UI, use the tool’s optional `present` hook. See [Component registries and server rendering](/docs/agent/guides/component-rendering) for functional/class tools, custom components, shared React renderers, and WhatsApp image/PDF delivery.
+
+## Declaring a tool
+
+`@AiTool` marks a provider class as a tool. The class implements `ToolHandler` — a single
+`execute(input, ctx)` method. The `input` schema is validated before `execute` runs, so `input` is
+already parsed and typed by the time you touch it.
+
+```ts
+// src/tools/get-weather.tool.ts
+import { AiTool, type ToolHandler, type AiToolCtx } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+
+@AiTool({
+  description: 'Current weather for a city.',
+  input: z.object({ city: z.string() }),
+  // name: 'getWeather' — the default, from the class name minus `Tool`
+  // kind: 'read'       — the default: auto-executes; see read vs action below
+})
+export class GetWeatherTool implements ToolHandler<{ city: string }> {
+  async execute(input: { city: string }, ctx: AiToolCtx) {
+    return { tempC: 21, summary: 'partly cloudy' };
+  }
+}
+```
+
+Then list it in the module that imports `AgentModule` — the same place you'd list any provider:
+
+```ts
+@Module({
+  imports: [AgentModule.forRoot({ /* … */ })],
+  providers: [GetWeatherTool],
+})
+export class AppModule {}
+```
+
+That's the whole registration story. `AiToolDiscoveryService` walks every provider at boot, reads
+the `@AiTool` metadata, and registers each into the shared `ToolRegistry`. There is no separate
+`tools: [...]` array to keep in sync — if it's a provider and it's decorated, it's a tool.
+
+---
+
+## Tools are ordinary injectables
+
+Because a tool is a normal provider, it can inject anything else in your app — a repository, an HTTP
+client, a queue, another service. Constructor DI works exactly as it does anywhere in NestJS.
+
+```ts
+@AiTool({
+  name: 'countOpenOrders',
+  kind: 'read',
+  description: 'How many orders are currently open for a customer.',
+  input: z.object({ customerId: z.string() }),
+})
+export class CountOpenOrdersTool implements ToolHandler<{ customerId: string }> {
+  constructor(private readonly orders: OrdersService) {}
+
+  async execute(input: { customerId: string }, ctx: AiToolCtx) {
+    return { count: await this.orders.countOpen(input.customerId) };
+  }
+}
+```
+
+<Callout type="info" title="Discovered, not registered by hand">
+You never wire a tool into a registry yourself. The agent instruments nothing in your code — it
+only reads `@AiTool` metadata off providers you already declared. A decorated class with no
+`execute()` method is skipped with a warning rather than silently offered to the model.
+</Callout>
+
+---
+
+## The decorator surface
+
+Every option lives on the `@AiTool({ … })` object.
+
+| Option | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | no | The tool name the model calls. Unique across the registry. Default: the class name camelCased with a trailing `Tool` dropped (`GetWeatherTool` → `getWeather`, `SQLQueryTool` → `sqlQuery`). |
+| `kind` | `'read' \| 'action'` | no | `read` (the default) auto-executes; `action` pauses for approval. See below. |
+| `description` | `string` | yes | What the model reads to decide when to call it. Write it for the model. |
+| `input` | Standard Schema | yes | Zod, Valibot, or ArkType. Validated before `execute` runs. |
+| `roles` | `string[]` | no | Roles allowed to invoke. Omit to inherit the module's `defaultRoles` — `[]` by default, i.e. any resolved actor (an anonymous visitor included). |
+| `ability` | `string` | no | An authz ability checked by an ability-aware policy instead of `roles`. |
+| `presentation` | `ToolPresentation` | no | How a chat talks about the tool without naming it. Never shown to the model. See [How a chat talks about a tool](#how-a-chat-talks-about-a-tool). |
+| `enabled` | `boolean \| () => boolean \| Promise<boolean>` | no | Whether the tool exists in this deployment, checked every turn before the role gate. `false` hides it from the model. When the answer needs DI, implement `isEnabled()` on the class instead. |
+| `terminal` | `boolean` | no | The turn ends once a call to this tool succeeds, with no model call to narrate it. See [Generative UI](/docs/agent/guides/generative-ui#3-pushing-from-your-own-tools-ctxemitui). |
+| `replacementKey` | `string \| (input, ctx) => string \| undefined` | no | Under [independent approvals](/docs/agent/guides/action-proposals#expiry-remembering-and-replacement), a new pending proposal supersedes pending ones with the same key. |
+
+<Callout type="info" title="Standard Schema, not just Zod">
+`input` is a [Standard Schema](https://standardschema.dev), so Zod, Valibot, and ArkType all work.
+The parsed, typed value is what lands in your handler's first argument — the `I` in
+`ToolHandler<I>`. Keep that generic in sync with the schema and `input` is fully typed inside
+`execute`.
+</Callout>
+
+<Callout type="warn" title="Give the model the real parameter shapes">
+The model only calls a tool well when it can see the tool's parameters. Zod (any version), Valibot,
+and ArkType all convey their shape to the model — Zod by its vendor tag, the others through the
+Standard JSON Schema extension — so with any of them the model sees `city`, `units`, and which are
+required. A **hand-rolled** Standard Schema that implements neither still *validates* the input, but
+the model receives only a generic object and has to guess the arguments. If you write your own
+schema, implement the [`~standard.jsonSchema`](https://standardschema.dev) converter so the model
+sees the shape too.
+</Callout>
+
+There's a third kind, `agent`, but you never author it. The library synthesizes an `agent`-kind
+delegate tool for each `handoff` edge in a multi-agent setup; the loop handles it directly and
+your handler is never called. See [Multi-agent](/docs/agent/guides/multi-agent).
+
+---
+
+## How a chat talks about a tool
+
+A tool's name is an identifier, not copy — `executeSql` should never reach a person's screen, and a
+client that kept its own name-to-sentence map would go stale on the next rename. Declare the words
+beside the input schema instead, so whoever renames an input field is the one who re-words the
+sentence that mentions it:
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action',
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+  presentation: {
+    label: 'Cache purge',            // noun phrase, for counts and headings
+    running: 'Purging {key}',        // while in flight — {dotted.path} over the call's INPUT
+    done: 'Purged {key}',            // once settled
+    icon: 'cache',                   // a key into the client's own glyph map
+    detail: 'Evicts one key from the shared Redis cache',
+    tone: 'destructive',             // earns the warning treatment on the approval prompt
+    confirm: { title: 'Purge {key}?', verb: 'Purge' },
+    result: { kind: 'metrics', fields: [{ path: 'evicted', label: 'Evicted' }] }, // over the OUTPUT
+  },
+})
+```
+
+| Field | Meaning |
+|---|---|
+| `label` | Noun phrase: "Database query". Also what a phrase falls back to while its slots are still empty. |
+| `running` / `done` | Sentence templates. A `{slot}` with nothing behind it collapses with the space before it, so `"Reading {bucket}"` degrades to `"Reading"`, never to braces. |
+| `icon`, `detail`, `tone` | Glyph key, one explanatory line, `neutral` / `destructive`. |
+| `confirm` | `{ title, verb, detail? }` — the approval prompt for an `action` tool, templated over the input. A [preflight](#preflight-checking-an-action-before-and-after-approval) can replace it for one call. |
+| `result` | How the output reads as content: `{ kind: 'metrics', fields }`, `{ kind: 'table', rows, columns, empty? }`, `{ kind: 'log', lines }`, `{ kind: 'note', text }`, or `{ kind: 'elsewhere' }` when it is drawn somewhere else already. Every variant names dotted paths, never shapes. |
+
+`GET /agent/tools?agent=<name>` serves `{ name, kind, presentation? }` for the tools the caller can
+reach through that agent — the same gates the model is offered tools through — and the React
+package's [`useToolCatalog`](/docs/agent/guides/bring-your-own-ui#talking-about-tool-calls) reads it.
+A tool with no `presentation` is narrated generically ("Working" / "Done"), never by its name.
+
+---
+
+## `read` vs `action` — the crucial distinction
+
+`kind` decides whether a tool runs on its own or waits for a human. This is the single most
+important field on the decorator.
+
+| `kind` | Behavior | Use for |
+|---|---|---|
+| `read` | **Auto-executes.** The loop calls `execute` as soon as the model asks, feeds the result back, and keeps streaming. | Lookups, queries, anything side-effect-free and safe to run unattended. |
+| `action` | **Never auto-executes.** The loop suspends and waits for an explicit approve/reject before `execute` is ever called. | Anything that mutates, spends, sends, or deletes. |
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action', // the run pauses here — execute() does not fire until approval
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+})
+export class PurgeCacheTool implements ToolHandler<{ key: string }> {
+  constructor(private readonly cache: CacheService) {}
+
+  async execute(input: { key: string }, ctx: AiToolCtx) {
+    await this.cache.purge(input.key);
+    return { purged: input.key };
+  }
+}
+```
+
+When the model calls an `action` tool, the run pauses and surfaces a pending tool-call over the
+wire; a human hits `POST /agent/tool-call/approve` (or `/reject`) to continue. Under
+`durable: true` that pause is a real durable suspend — checkpointed to the state store and
+resumable across restarts. Either way, `execute` runs only after approval.
+
+<Callout type="info" title="Where a tool actually runs under durable: true">
+Under `durable: true`, every tool call — `read` or `action` — executes as a dispatched
+`AgentRunSteps.tool` step rather than in-process, and there is no option that changes that: whichever
+worker in the fleet picks the step up rebuilds the `AiToolCtx` and re-resolves your tool from its own
+DI, then calls `execute`. The interface is the same (the same `ToolHandler`, the same `ctx`), but the
+*execution context* is not: your handler is now a `@Step` handler in every sense, so its
+dependencies must be resolvable from every worker in the fleet, and anything it resolves per
+invocation from the caller's context — a request-scoped ORM EntityManager, an AsyncLocalStorage
+tenant, a CLS transaction — it must establish itself (`@CreateRequestContext()` /
+`@EnsureRequestContext()` under MikroORM). A handler that does not throws there: the call is recorded
+`failed`, the model gets the error, the turn completes — and on an `action` tool that is a human's
+approval spent on something that never ran. `toolTimeoutMs` is applied inside the handler
+(`withToolTimeout`), not as a durable step timeout. See [Human-in-the-loop &
+Durability](/docs/agent/guides/human-in-the-loop-and-durability#dispatched-steps-the-run-isnt-pinned-to-a-pod).
+</Callout>
+
+<Callout type="warn" title="Pick the kind by side effects, not by convenience">
+`read` tools run without a human in the loop, so a tool that mutates or spends must be `action`.
+The gate is the `kind`, not the name — a `read` tool that quietly writes is a governance hole. The
+full approval and durability mechanics live in
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability).
+</Callout>
+
+### Confirmed writes — the gate inside the tool
+
+An `action` parks on a person's approval, and an MCP caller has no channel to give one — so the
+[MCP server](/docs/agent/packages/mcp-server) keeps `action` tools off its surface. A **confirmed
+tool** is the write that works there too: the human gate lives INSIDE a `read` tool. The first call
+validates and previews without writing and returns a signed `confirmToken`; the same arguments plus
+`confirm: true` and that token commit. The user sees the preview because the model has to relay it to
+get a token it can confirm with.
+
+```ts
+import {
+  AGENT_CONFIRM_TOKEN_STORE,
+  type ConfirmTokenStore,
+  defineConfirmedTool,
+  provideAgentTool,
+} from '@dudousxd/nestjs-agent';
+
+@Module({
+  providers: [
+    provideAgentTool(
+      (store: ConfirmTokenStore, config: ConfigService, orders: OrdersService) =>
+        defineConfirmedTool(
+          {
+            name: 'refund_order',
+            description: 'Refund an order.',
+            input: z.object({ orderId: z.string() }),
+            secret: () => config.getOrThrow('CONFIRM_SECRET'),
+            store,
+          },
+          {
+            // The SAME rules the commit relies on. Runs for the preview and again on confirmation.
+            prepare: ({ orderId }, ctx) => orders.loadRefundable(orderId, ctx.actor),
+            preview: (order) => ({ summary: `Refund ${order.total} to ${order.customer}?`, data: order }),
+            commit: async (order) => ({ summary: 'Refunded.', data: await orders.refund(order) }),
+          },
+        ),
+      [AGENT_CONFIRM_TOKEN_STORE, ConfigService, OrdersService],
+    ),
+  ],
+})
+export class OrdersModule {}
+```
+
+- **The token** is an HMAC-SHA256 (keyed by `secret`) over the tool, `ctx.actor.id`,
+  `ctx.actor.tenantRef`, the expiry (`ttlMs`, default 15 minutes) and the canonical arguments — key
+  order does not matter, a changed value does. Another actor, tenant or tool, or a changed argument,
+  gets `ConfirmTokenError('invalid')` before your `prepare` runs.
+- **Single use** comes from a `ConfirmTokenStore`: the token is claimed right before `commit` (a
+  refusal in `prepare` does not spend it) and released if `commit` throws, so the same preview can be
+  confirmed again. A second confirmation is `ConfirmTokenError('used')`. `DrizzleAgentStoreModule` and
+  `MikroOrmAgentStoreModule` bind one to `AGENT_CONFIRM_TOKEN_STORE` (table `agent_confirm_token`,
+  only the token's SHA-256, the actor and the tool are kept; `purgeExpired()` from a schedule drops
+  dead rows). `InMemoryConfirmTokenStore` is for one replica. **Without a store a token commits as
+  many times as it is sent until it expires.**
+- **The model sees** your schema plus `confirm` / `confirmToken` (`withConfirmFields`). A Zod 3
+  schema keeps its real shape: the AI SDK adapter and the MCP server convert it with their own
+  converters and add the two fields. `messages` overrides the three sentences the tool says to the
+  model (`{minutes}` is replaced in `confirm`).
+
+### Preflight: checking an action before and after approval
+
+An `action` tool can implement `preflight(input, ctx, { phase })`, a **read-only** check of your
+domain state. It runs after authorization and input validation, twice:
+
+- `phase: 'prepare'`: before the approval prompt is shown.
+- `phase: 'execute'`: right before `execute`, after the approval.
+
+```ts
+@AiTool({
+  kind: 'action',
+  description: 'Refund an order.',
+  input: z.object({ orderId: z.string() }),
+  presentation: { label: 'Refund', confirm: { title: 'Refund order {orderId}?', verb: 'Refund' } },
+})
+export class RefundOrderTool implements ToolHandler<{ orderId: string }> {
+  constructor(private readonly orders: OrdersService) {}
+
+  async preflight({ orderId }: { orderId: string }, ctx: AiToolCtx, { phase }: ToolPreflightOptions) {
+    const order = await this.orders.find(orderId, ctx.actor);
+    if (!order) return { status: 'denied', reason: 'No such order' } as const;
+    if (order.refundId) return { status: 'completed', output: { refundId: order.refundId } } as const;
+    return phase === 'prepare'
+      ? ({
+          status: 'ready',
+          confirmation: { title: `Refund ${order.total} to ${order.customer}?`, verb: 'Refund' },
+        } as const)
+      : ({ status: 'ready' } as const);
+  }
+
+  async execute({ orderId }: { orderId: string }, ctx: AiToolCtx) {
+    return this.orders.refund(orderId, { idempotencyKey: ctx.idempotencyKey });
+  }
+}
+```
+
+| Result | Effect |
+| --- | --- |
+| `{ status: 'ready', confirmation? }` | Go on: show the prompt, or run. A `confirmation` (`{ title, verb, detail? }`, plain strings, not templates) replaces `presentation.confirm` for this call. It is streamed on `approval-requested`, stored on the tool call and shown again after a reload. |
+| `{ status: 'denied', reason }` | Nothing runs and nobody is asked. The model gets the reason as a refusal. |
+| `{ status: 'completed', output }` | The work is already done: `output` is the call's result, with no approval and no `execute`. The tool's `present` hook still runs on it. |
+
+The result of each phase is journaled, so a durable replay takes the same branch and never reruns a
+denied mutation. The `execute` phase also runs when the tool is invoked through `registry.invoke`
+or the [MCP server](/docs/agent/packages/mcp-server). Neither a remembered approval nor the approval
+policy skips it. `read` tools have no preflight.
+
+A functional tool passes `preflight` next to `execute` in `defineTool({ … })`.
+
+---
+
+## Several `read` calls at once
+
+When a model asks for more than one tool in a single turn and all of them are `read`s, their
+invocations run **concurrently** — the turn costs its slowest call rather than the sum. A turn that
+contains an `action` or an `agent` call runs one call at a time. Nothing in your handler changes;
+see [The agent loop](/docs/agent/concepts/the-agent-loop#several-tool-calls-in-one-turn) for why the
+line is drawn there.
+
+## The `ToolHandler` interface
+
+The contract is one required method, plus optional hooks:
+
+```ts
+export interface ToolHandler<I = unknown, O = unknown> {
+  execute(input: I, ctx: AiToolCtx): Promise<O>;
+  present?(output: O, ctx: AiToolCtx): ComponentPresentation | ComponentPresentation[] | undefined; // or a Promise of it
+  preflight?(input: I, ctx: AiToolCtx, options: { phase: 'prepare' | 'execute' }): ToolPreflightResult<O>;
+  isEnabled?(): boolean | Promise<boolean>;
+  canUse?(actor: Actor): boolean | Promise<boolean>;
+  describe?(scope: ToolDescribeScope): ToolDescription | undefined; // or a Promise of it
+}
+```
+
+- `input` — the parsed, schema-validated input (the `I` generic).
+- `ctx` — the per-invocation `AiToolCtx` (below).
+- return — anything JSON-serializable; it's fed back to the model as the tool result.
+- `present` turns a successful result into components. See
+  [Component registries and server rendering](/docs/agent/guides/component-rendering) and
+  [One answer, every surface](/docs/agent/guides/rendering-everywhere).
+- `preflight` checks an `action` before and after approval. See [above](#preflight-checking-an-action-before-and-after-approval).
+- `isEnabled` and `canUse` are the per-turn gates (see [Authorization gates](#authorization-gates)).
+- `describe` changes what the model is told about the tool for one turn (the genui tools use it for
+  per-tenant catalogs and [UI capabilities](/docs/agent/guides/rendering-everywhere#what-changes-for-the-model)).
+
+Throwing from `execute` surfaces the error to the loop rather than crashing the turn — return a
+structured error shape if you want the model to reason about the failure.
+
+---
+
+## Per-tool timeout
+
+By default a tool call runs until it resolves — nothing bounds it. Set
+`AgentModule.forRoot({ toolTimeoutMs })` to cap every tool call's wall-clock time: a call that runs
+longer is aborted and recorded as a failed tool call, with the timeout fed back to the model as the
+result, so it can adapt (retry narrower input, try a different tool, or tell the user) instead of the
+turn hanging indefinitely.
+
+```ts
+AgentModule.forRoot({
+  model: myModelProvider,
+  actorResolver: new HeaderActorResolver(),
+  toolTimeoutMs: 30_000, // no tool call may run longer than 30s
+});
+```
+
+See [Configuration](/docs/agent/reference/configuration) for the full option reference.
+
+---
+
+## The tool context (`AiToolCtx`)
+
+The second argument gives you everything about the invocation without reaching for request-scoped
+globals. It's the same context whether the turn runs inline or as a durable workflow.
+
+| Field | Type | What it is |
+|---|---|---|
+| `actor` | `Actor` | The full caller — `{ id, roles?, tenantRef? }`. Your source of truth for scoping and identity. |
+| `threadId` | `string` | The conversation thread this turn belongs to. |
+| `runId` | `string` | This turn's run id. |
+| `requestId` | `string` | The originating request id. |
+| `agentName` | `string?` | The name of the agent running this turn — provenance a tool can scope on (e.g. capability sets). |
+| `persona` | `string?` | The [persona](/docs/agent/guides/personas) the turn runs under, when it runs under one. |
+| `pageContext` | `PageContext?` | Host-supplied context about where the turn was started. |
+| `host` | `unknown?` | An optional host handle (e.g. an ORM `EntityManager`) the app threads through. |
+| `toolCallId` | `string?` | The id of the tool call this invocation serves. Absent outside a turn (the MCP server, a direct `registry.invoke`). |
+| `idempotencyKey` | `string?` | `<runId>:<toolCallId>` — the same for every execution of this call, and for no other. See [Making a tool safe to run twice](#making-a-tool-safe-to-run-twice). |
+| `emitUi` | `(component, props, options?) => Promise<{ id }>` | Push a component into the answer. Always present; a no-op where there is no conversation. See [Generative UI](/docs/agent/guides/generative-ui#3-pushing-from-your-own-tools-ctxemitui). |
+| `uiCapabilities` | `UiCapabilities?` | The components the client said it can draw, when it said. See [One answer, every surface](/docs/agent/guides/rendering-everywhere). |
+| `onPresentationError` | `(error, { toolName }) => void` | Set by a host to hear about a `present` hook that failed after a successful `execute`. |
+
+The actor is the load-bearing field, and the only source of identity: read `ctx.actor.id` and
+`ctx.actor.tenantRef` rather than any top-level shorthand. Never derive scope from tool input — derive
+it from `ctx.actor`.
+
+```ts
+async execute(input: { customerId: string }, ctx: AiToolCtx) {
+  // Scope to the caller's tenant — from the context, not the input.
+  return this.orders.findOpen({
+    customerId: input.customerId,
+    tenantRef: ctx.actor.tenantRef,
+  });
+}
+```
+
+<Callout type="warn" title="Scope from the actor, never from the input">
+The model composes tool input from the conversation, so treating an input field as authority lets a
+prompt widen its own scope. Read `id` / `roles` / `tenantRef` off `ctx.actor` — the actor is
+resolved server-side by your `ActorResolver`, not by the model.
+</Callout>
+
+### Making a tool safe to run twice
+
+A tool's side effect and the checkpoint that records it are two writes. Under the durable runner a
+worker that dies between them leaves a call the journal does not know ran, and the runtime's
+recovery runs the step again; an in-step transient retry (`toolTransientRetry`)
+re-invokes it too. No library can make your write atomic with its journal, so every tool is handed the key
+that makes the second attempt recognisable:
+
+```ts
+async execute(input: ChargeInput, ctx: AiToolCtx) {
+  // The same value on the first attempt and on every re-execution of this call.
+  return this.payments.charge(input, { idempotencyKey: ctx.idempotencyKey });
+}
+```
+
+Pass it as the provider's `Idempotency-Key`, store it in a unique column on the row you insert, or
+use it as the `id` of the workflow you start — whichever makes a repeat land on the first attempt's
+result. It is stable across replays and across pods: the run id is the run's own, and the call id
+comes out of the journaled model step.
+
+---
+
+## Authorization gates
+
+A tool declares **one** of two gates. Both are enforced by the loop before `execute` runs, so an
+unauthorized call never reaches your code.
+
+<Tabs items={['roles', 'ability']}>
+<Tab value="roles">
+Built-in role policy. The actor passes if any of its `roles` intersects the tool's. Omit `roles`
+and the tool inherits the module's `defaultRoles`.
+
+```ts
+@AiTool({
+  name: 'listUsers',
+  kind: 'read',
+  description: 'List users in the org.',
+  input: z.object({}),
+  roles: ['ADMIN', 'SUPPORT'],
+})
+export class ListUsersTool implements ToolHandler { /* … */ }
+```
+</Tab>
+<Tab value="ability">
+Delegated policy. With `AgentAuthzModule` wired, `ability` is checked via
+`gate.forUser(actor).allows(ability)` — your `@dudousxd/nestjs-authz` abilities decide. Tools
+without an `ability` fall back to the role policy, so non-authz apps are unaffected. Without
+`AgentAuthzModule`, a tool that declares an `ability` and no `roles` is refused: the built-in policies
+cannot evaluate an ability, so it fails closed.
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action',
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+  ability: 'cache.purge',
+})
+export class PurgeCacheTool implements ToolHandler { /* … */ }
+```
+</Tab>
+</Tabs>
+
+The full model — the `ActorResolver` (anonymous by default), login, and roles vs abilities — is
+in [Identity & Authorization](/docs/agent/guides/identity-and-authorization).
+
+---
+
+## Tools you didn't write
+
+A tool does not have to be a class in your codebase. An [MCP](https://modelcontextprotocol.io)
+server's tools can be imported wholesale with
+[`@dudousxd/nestjs-agent-mcp`](/docs/agent/packages/mcp) — they register into the same registry and
+go through every gate on this page. Because their effects are not visible from your repository, an
+imported tool is `kind: 'action'` unless you widen it explicitly.
+
+```ts
+AgentMcpModule.forRoot({
+  servers: [{ name: 'github', transport: { type: 'stdio', command: 'mcp-github' }, roles: ['ADMIN'] }],
+});
+```
+
+The other direction — letting an external MCP client reach *these* tools — is
+[`@dudousxd/nestjs-agent-mcp-server`](/docs/agent/packages/mcp-server). It serves the same registry
+and the same policy, and refuses the kinds that only mean something inside a turn: an `action` tool
+needs a human to approve it, and an MCP caller has no human.
+
+---
+
+## Related
+
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — `ActorResolver`, the actor, roles vs abilities
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — how an `action` tool suspends and resumes
+- [Multi-agent](/docs/agent/guides/multi-agent) — the synthesized `agent`-kind delegate tools
+- [Governed SQL](/docs/agent/guides/governed-sql) — a prebuilt read-only SQL tool
+- [MCP](/docs/agent/packages/mcp) — importing an external MCP server's tools instead of writing a class for each
+- [MCP server](/docs/agent/packages/mcp-server) — the other direction: exposing these same tools to an external MCP client
+- [Getting Started](/docs/agent/getting-started) — install, first tool, first turn

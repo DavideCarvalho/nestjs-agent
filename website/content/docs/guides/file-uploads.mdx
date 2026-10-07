@@ -1,0 +1,255 @@
+---
+title: File uploads
+icon: Paperclip
+description: Attach images and PDFs to a chat turn — ready-made on Aviary media with resumable tus uploads, or on storage you bring yourself.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A chat turn carries a file by **`mediaId` only**. The server turns that id back into something the
+model provider can read through the `AttachmentStagingStore` bound to `AGENT_ATTACHMENT_STAGING`,
+and refuses the id when it is not the caller's. Everything in this guide is about the two halves of
+that: getting the bytes somewhere (the upload), and resolving an id back into bytes (the staging
+store).
+
+There are two ways to fill them in:
+
+| | With Aviary media | Bring your own storage |
+|---|---|---|
+| Server | `AgentMediaAttachmentsModule` from `@dudousxd/nestjs-agent/media` | your `AttachmentStagingStore` on `AGENT_ATTACHMENT_STAGING` |
+| Upload | resumable tus, straight to nestjs-media's own endpoint | `POST /agent/attachments` (buffered multipart) or your own route |
+| Client | `<AgentProvider attachments={{ upload: mediaAttachments() }}>` | nothing (multipart), `<AgentProvider attachments={{ upload: yourStrategy }}>`, or `useAttachments({ upload })` |
+| Extra packages | `@dudousxd/nestjs-media` (+ `-client` in the browser) | none |
+
+Both media packages are **optional peers** used only by the `/media` subpaths. Nothing on the root
+entries imports them.
+
+## With Aviary media
+
+### Minimal
+
+Add one module on the server, next to a `MediaModule` that has `store`, `uploadSessions` and `tus`:
+
+```ts title="app.module.ts"
+@Module({
+  imports: [
+    MediaModule.forRoot({ /* disks, store, uploadSessions, tus — your media setup */ }),
+    AgentModule.forRoot({ /* … */ }),
+    AgentMediaAttachmentsModule.forRoot(), // ← the whole integration
+  ],
+})
+export class AppModule {}
+// main.ts — nestjs-media's own requirement for tus PATCH bodies:
+app.useBodyParser('raw', { type: 'application/offset+octet-stream' });
+```
+
+On the client it takes one prop:
+
+```tsx
+import { AgentProvider } from '@dudousxd/nestjs-agent-react';
+import { mediaAttachments } from '@dudousxd/nestjs-agent-react/media';
+
+<AgentProvider attachments={{ upload: mediaAttachments() }}>
+  <App />
+</AgentProvider>;
+
+// then, anywhere below: chat.composer.files (or useAttachments()) uploads resumably
+```
+
+With these defaults:
+- files go to the media default disk, in collection `agent-attachments`, owned by the actor;
+- the limit is 20 MiB, and the accepted types are png/jpeg/gif/webp images, pdf, text and csv —
+  and the module is the **only** source of those limits while it is imported (`AgentModule`'s own
+  `attachments` option is ignored). `GET /agent/config` serves them, with `upload: 'resumable'`, and
+  the React file tray takes its `accept` / `maxBytes` / `maxFiles` defaults from it;
+- the model gets a presigned URL, re-minted by `mediaId` whenever a thread is read, so an old turn
+  never shows an expired link;
+- uploads reuse the client's own origin, `path`, headers and credentials.
+
+<Callout type="warn" title="Guard the tus routes">
+  nestjs-media mounts its tus routes without auth. Pass `guards` to `MediaModule` (or use a global
+  guard) before you expose it. See the [media docs](/docs/media).
+</Callout>
+
+### Extended
+
+Override any of the defaults when you need to:
+
+```ts
+AgentMediaAttachmentsModule.forRoot({
+  maxBytes: 50 * 1024 * 1024,
+  allowedContentTypes: ['image/png', 'image/jpeg', 'application/pdf'],
+  collection: 'chat-files',
+  canAccess: ({ allowed, actor }) => allowed || actor.roles?.includes('support') === true,
+  resolveUrl: (record) => signMyProxyUrl(record.id),
+  indexForRag: true,
+  guards: [SessionGuard],
+});
+```
+
+```tsx
+<AgentProvider path="api/agent" attachments={{ upload: mediaAttachments({ chunkSize: 2 * 1024 * 1024 }) }} />;
+new AgentClient({ ...connection, attachments: { upload: mediaAttachments() } }); // your own client
+const backend: AgentBackend = { …, uploadAttachment: createMediaUpload(connection) }; // your own backend
+useAttachments({ upload: createMediaUpload(connection) }); // a bare upload function
+```
+
+`MediaUploadError` carries the HTTP `status` (`413`, `415`, …). The client packages are headless:
+no markup, no styles.
+
+### How an upload flows
+
+The bytes never pass through the agent:
+
+| Step | Request | Served by |
+|---|---|---|
+| 1. Open | `POST /agent/attachments/uploads` `{ filename, contentType, size }` → `{ mediaId, uploadId, location }` | agent: checks type and size, opens a tus session the actor owns |
+| 2. Bytes | `PATCH <location>`, chunked, progress, abortable | **nestjs-media** |
+| 3. Complete | `POST /agent/attachments/uploads/:mediaId/complete` → `MessageAttachment` | agent: checks the bytes landed at the declared size (`409` still missing, `422` wrong size) |
+| Remove | `DELETE /agent/attachments/uploads/:mediaId` | agent: aborts the session, deletes bytes and record |
+
+`remove` in `useAttachments` aborts step 2 and sends the Remove request. A failed upload is discarded the same
+way. Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …).
+
+The resumable routes are **the** upload path with this module. The buffered multipart
+`POST /agent/attachments` still stages into the same store (its `stage()` writes a media record too),
+but it is not the documented path here. `GET /agent/attachments` lists attachments from either.
+
+### What the model receives
+
+| Disk / option | `resolve` returns |
+|---|---|
+| can presign (S3), `visibility: 'private'` (default) | a presigned url, `urlExpiresInSeconds` (default 7 days) |
+| `visibility: 'public'` | the disk's stable `url()` |
+| neither (local disk in development) | the bytes inline as a `data:` url. A warning is logged once, and the url is stored with the message |
+| `resolveUrl(record, { disk })` | whatever you return. It overrides everything above |
+
+<Callout type="warn" title="Who may use an id">
+  The actor may use media they own, and media that a message in one of **their own** threads already
+  carries (a fork, a regenerate). Any other id resolves `null`, and the chat route answers `403` the
+  same way for an unknown id and for another person's id.
+</Callout>
+
+### Cleanup
+
+Records are created at step 1, so an upload abandoned half-way is still in the actor's inventory. It
+ages into `collectableAttachments` like any other unsent file. A file on a message still waiting in a
+thread's [queue](/docs/agent/guides/message-queue) counts as referenced, so it is never offered. Delete it through the store so the tus
+session is aborted too:
+
+```ts
+import { MediaAttachmentStaging } from '@dudousxd/nestjs-agent/media';
+
+const media = app.get(MediaAttachmentStaging);
+const olderThan = new Date(Date.now() - 48 * 60 * 60 * 1000);
+for (const entry of await agents.collectableAttachments(actor, { olderThan })) {
+  await media.remove(entry.mediaId);
+}
+```
+
+### Searching attachments with RAG
+
+`indexForRag: true` announces every ready attachment on `aviary:media:attach` and every removal on
+`aviary:media:delete`. [`@dudousxd/nestjs-agent-rag-media`](/docs/agent/packages/rag-media) then
+indexes and un-indexes them. It is off by default because a chat attachment belongs to the person
+who sent it. Turn it on only when retrieval is filtered by owner (`FilteredRetriever` on
+`ownerType`/`ownerId`), and limit rag-media's `collections` to the ones you mean.
+
+### Options
+
+| Option | Default | |
+|---|---|---|
+| `collection` | `'agent-attachments'` | media collection |
+| `ownerType` | `'agent-actor'` | record owner type (owner id is the actor's id) |
+| `disk` | media's default disk | where the bytes land |
+| `maxBytes` | 20 MiB | per file |
+| `allowedContentTypes` | png, jpeg, gif, webp, pdf, text, csv | |
+| `visibility` | `'private'` | see the table above |
+| `urlExpiresInSeconds` | 7 days | presigned url lifetime |
+| `canAccess` | owner, or own thread carries it | `({ record, actor, allowed }) => boolean` |
+| `resolveUrl` | — | mint the url yourself |
+| `tusBasePath` | `'/media/uploads'` | media's `tus.basePath` including the global prefix, used to build `location` |
+| `indexForRag` | `false` | publish attach/delete for rag-media |
+| `path` | `'agent'` | must match `AgentModule`'s `path` |
+| `guards` | `[]` | guards for the upload routes |
+| `routes` | `true` | `false` binds the store without mounting the routes |
+
+`forRootAsync({ imports, inject, useFactory, path, guards, routes })` takes the same options. `path`,
+`guards` and `routes` stay static.
+
+## Bring your own storage
+
+Implement `AttachmentStagingStore` over your own storage and bind it:
+
+```ts title="s3-staging.ts"
+import type {
+  AttachmentStagingStore,
+  ResolveAttachmentInput,
+  StageAttachmentInput,
+} from '@dudousxd/nestjs-agent-core';
+
+@Injectable()
+export class S3Staging implements AttachmentStagingStore {
+  async stage({ data, filename, contentType, actor }: StageAttachmentInput) {
+    const mediaId = randomUUID();
+    await this.s3.put(`chat/${actor.id}/${mediaId}`, data, { contentType });
+    await this.files.insert({ mediaId, owner: actor.id, filename, contentType });
+    return { mediaId, url: '', contentType, name: filename };
+  }
+
+  async resolve({ mediaId, actor }: ResolveAttachmentInput) {
+    const row = await this.files.find(mediaId);
+    if (!row || row.owner !== actor.id) return null; // unknown and foreign look the same
+    const url = await this.s3.presign(`chat/${actor.id}/${mediaId}`, 3600);
+    return { mediaId, url, contentType: row.contentType, name: row.filename };
+  }
+}
+```
+
+```ts title="app.module.ts"
+@Global()
+@Module({
+  providers: [{ provide: AGENT_ATTACHMENT_STAGING, useClass: S3Staging }],
+  exports: [AGENT_ATTACHMENT_STAGING],
+})
+class StagingModule {}
+
+// Binding the store is what turns POST /agent/attachments on (it calls your stage()), limited by
+// AgentModule's `attachments: { maxBytes, allowedContentTypes }` — or by your store's own
+// `describe()` when it declares them. Or skip it and upload through a route of your own.
+```
+
+On the client, `chat.composer.files` (or `useAttachments()`) uses the multipart route by default.
+To upload some other way, plug your own strategy in once. It receives the client's connection:
+
+```tsx
+<AgentProvider
+  attachments={{
+    upload: async (file, { signal, onProgress }, connection) => {
+      const { mediaId } = await myUpload(file, { signal, onProgress, headers: await connection.headers() });
+      return { mediaId, url: '', contentType: file.type, name: file.name };
+    },
+  }}
+>
+```
+
+`useAttachments({ upload })` does the same for a single composer.
+
+The only contract is that `resolve` recognises the `mediaId` you return. `list` is optional. You
+need it only for `GET /agent/attachments` and for sweeping (see
+[Persistence](/docs/agent/guides/persistence#which-media-a-message-still-references-optional)).
+
+<Callout type="info" title="Whichever path you choose">
+  `resolve` is the **only** place a url the model fetches can come from. Build it from your own
+  records and never from the request. The chat route accepts attachments only as `{ mediaId }` refs
+  (anything more is a `400`).
+</Callout>
+
+## Limits the client reads
+
+`GET /agent/config` serves the rules in force as `attachments`:
+`{ enabled, upload: 'multipart' | 'resumable' | null, maxBytes, allowedContentTypes, maxPerMessage }`.
+`enabled` is false (and `upload` `null`) when no staging store is bound — `POST /agent/attachments`
+then answers `501`. `maxPerMessage` is 10: a send naming more attachments is refused with `400`.
+`useAttachments` (and `chat.composer.files`) takes its `accept`, `maxBytes` and `maxFiles` defaults
+from this answer; pass them to override. `useAgentConfig()` reads it for anything else.

@@ -1,0 +1,171 @@
+---
+title: Structured output
+icon: Braces
+description: Constrain an agent's final answer to a schema — how it composes with tool calling, what an invalid reply costs, and why the extra pass is unconditional.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+Every answer this library produces is free text. When the caller needs a *value* — a row count, a
+chart spec, a classification — the usual workaround is to declare a tool whose only job is to receive
+it, so structure can be smuggled past the prose. `outputSchema` removes the need for that tool.
+
+```ts
+import { z } from 'zod';
+
+const Report = z.object({ headline: z.string(), rows: z.number() });
+
+@Agent({
+  name: 'analyst',
+  systemPrompt: 'You answer questions about the warehouse.',
+  outputSchema: Report,
+})
+@Injectable()
+export class AnalystAgent {}
+```
+
+Any [Standard Schema](https://standardschema.dev) works — Zod, Valibot, ArkType — the same contract
+`@AiTool({ input })` already uses.
+
+## What you get back
+
+- **`object` on the run's result** — the validated value. Typed when you drive the loop yourself:
+  `runAgentLoop<Report>(deps, input, hooks)` infers it from `deps.outputSchema`.
+- **A synthetic `structured_output` tool call** on the assistant message, carrying the same value as
+  its output. That is the device inject-mode retrieval already uses for its passages, so the value
+  reaches every thread reader and the frontend's existing tool-output rendering with no store gaining
+  a column and no message field to migrate. It is delivered exactly as any other tool call is: on
+  the message's `toolCalls`/`toolResults`, as an `agent_tool_call` row, and live on the stream as a
+  `tool-input-available` + `tool-output` pair.
+- **The prose is still the message.** The user read an answer; the schema is a restatement of it for
+  the calling code, not a replacement for it.
+
+<Callout type="info" title="Declared on the agent, not per request">
+  A schema is a live object with a `~standard.validate` function on it, and `AgentRunInput` crosses a
+  JSON boundary on its way into a durable workflow — so there is no per-request override on the HTTP
+  surface, and there cannot be one. A consumer calling `runAgentLoop` directly passes `outputSchema`
+  per call, because nothing is serialized on that path.
+</Callout>
+
+## How it composes with tool calling
+
+**As a separate formatting pass, always.**
+
+The turn runs its model → tools → model iteration exactly as it would without a schema. Once a step
+comes back with no tool calls — the turn's final answer — the loop makes one extra, non-streamed call
+carrying the schema and `tools: []`, and that call's reply is what gets validated.
+
+```text
+stream:step-start:0
+llm:0                          ← the model asks for a tool
+tool:call-1  …
+stream:step-start:1
+llm:1                          ← the final answer, in prose
+structured:1:0                 ← the formatting pass: schema, no tools
+persist:usage:structured:1:0
+persist:assistant:1
+persist:structured:<messageId>
+```
+
+Two reasons it is a pass rather than a constraint on the turn's own calls:
+
+1. **Most providers cannot serve a response format and a tool set in the same request**, and the ones
+   that accept both stop calling tools. Asking for structure inline would silently cost you the tool
+   loop.
+2. **Skipping the pass for an agent that has no tools would be a determinism bug.** That decision
+   would have to read the tool registry of whichever process is running the loop body — and under
+   durable replay that is not necessarily the process that ran it first. A pod whose registry differs
+   would take the other branch and ask for a checkpoint position the history has no room for. So the
+   pass is unconditional, and it costs one model call per turn.
+
+The pass restates the answer that survived the [output gate](/docs/agent/guides/processors), never
+the model's raw reply, and its instruction tells the model to use only what the conversation already
+contains — the structured value is meant to be a translation of the answer, not a second route out of
+the model.
+
+**So it is shown what a translation needs, and nothing else: the question, and the gated answer.**
+Handing it the whole selected transcript instead would make declaring an `outputSchema` roughly
+double what a turn costs — on a 30-turn thread with 8 KB tool outputs, 64,826 prompt tokens become
+129,922 — and prompt caching does not soften it, because the pass swaps `system` for the
+structured-output instruction and the system block is the cache prefix. The question comes off the
+**processed** prompt rather than the raw user text, so a question your
+[input chain](/docs/agent/guides/processors) masked cannot reappear in the clear on this second call.
+
+<Callout title="`outputFromTranscript` for an answer that cannot stand alone">
+  `AgentLoopDeps.outputFromTranscript: true` gives the pass the turn's whole transcript again, at the
+  cost above. It is for the case where the prose genuinely cannot be restated from its own words — an
+  agent that reports on rows a tool returned and names only their total. Off by default. Like
+  `outputInstruction`, it is a loop dependency only: neither `AgentModule.forRoot` nor `@Agent`
+  exposes it.
+</Callout>
+
+An instruction is not a control, though, so the pass **also goes through the gate itself**: the chain
+rules on each attempt's restated text before the schema validates it, at
+`process:output:structured:<step>:<attempt>`. What the schema validates, what is persisted as the
+synthetic `structured_output` call, and what reaches the client is the gated version — and where the
+chain rewrote the text, a provider-reported parsed `object` is discarded and the gated text re-parsed,
+because that object describes the answer the gate just changed. A rejection fails the run with
+`OutputRejectedError`, exactly as it would on the prose.
+
+It is billed as its own ledger row with `purpose: 'structured_output'`, so the cost is visible in
+spend like any other call. See [Cost & Governance](/docs/agent/guides/cost-and-governance).
+
+## When the reply doesn't validate
+
+An invalid reply is a defined outcome, not a crash.
+
+```ts
+@Agent({ name: 'analyst', outputSchema: Report, outputRepairAttempts: 2 })
+```
+
+The loop re-asks, showing the model the previous attempt's validation issues, up to
+`outputRepairAttempts` times (**default 1**, so two calls in the worst case). Every attempt is its own
+checkpoint with its own usage row, so a suspend between two attempts resumes on the reply the first
+one got rather than paying for a third.
+
+When the bound is exhausted the run fails with a `StructuredOutputError` carrying:
+
+| Field | |
+|---|---|
+| `issues` | The Standard Schema issues from the last attempt — empty when the reply wasn't JSON at all. |
+| `text` | What the model actually said, verbatim. |
+| `attempts` | How many model calls were spent. |
+
+The subscriber sees a `structured_output_invalid` stream error, distinct from `run_failed`. Set
+`outputRepairAttempts: 0` to fail on the first invalid reply — the bound exists because a model that
+cannot satisfy a schema usually cannot satisfy it on the fourth try either, and every attempt is
+billed.
+
+## What a provider has to do
+
+Nothing, to be correct — and one thing, to be reliable.
+
+`ModelTurnArgs` gains `outputSchema` and `ModelTurnResult` gains `object`. A provider that can
+constrain generation should map the schema onto its JSON/response-format mode and may report the
+parsed value on `object`; the bundled AI SDK adapter maps it onto `streamText`'s
+`output: Output.object(...)`.
+
+**The loop validates the result regardless.** "The provider says it matched" is not the same claim as
+"it matches", and a provider that ignored `outputSchema` entirely has to fail where the failure is
+repairable rather than somewhere downstream. A provider that cannot constrain generation at all still
+works: the loop reads the JSON out of the reply text, tolerating code fences and lead-in prose.
+
+## Building blocks
+
+| Export (`-core`) | What it is |
+|---|---|
+| `StructuredOutputError` | The defined failure, with `issues` / `text` / `attempts`. |
+| `validateStructured(schema, text, reported)` | One attempt's validation — prefers a provider's parsed value, validates it either way. |
+| `extractJson(text)` | Pull a JSON value out of a reply, fences and prose included. |
+| `DEFAULT_STRUCTURED_OUTPUT_INSTRUCTION`, `repairInstruction(instruction, issues)` | The formatting pass's prompt, and the repair variant. Override with `AgentLoopDeps.outputInstruction`. |
+| `AgentLoopDeps.outputFromTranscript` | Show the pass the turn's whole transcript instead of the question and the answer. Off by default. |
+| `AgentLoopResult<T>` | `{ text, object? }` — what `runAgentLoop` and the `agent.run` workflow resolve to. |
+
+## Where to go next
+
+<Cards>
+  <Card title="Input & output processors" href="/docs/agent/guides/processors" description="The gate the formatting pass restates the output of." />
+  <Card title="Tools" href="/docs/agent/guides/tools" description="Where structure used to have to live." />
+  <Card title="Cost & Governance" href="/docs/agent/guides/cost-and-governance" description="The `structured_output` usage purpose and how it rolls up." />
+</Cards>

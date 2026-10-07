@@ -1,0 +1,262 @@
+---
+title: Asking the user
+icon: MessageCircleQuestion
+description: Collect the scope before the work — an authored intake the turn passes through, or a model-callable `ask` tool — both parking the run on the same durable signal an approval uses.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[Human-in-the-loop](/docs/agent/guides/human-in-the-loop-and-durability) settles work the agent has
+already proposed: the model wants to purge a cache, a human says yes or no. This is the other
+direction. The agent has been handed a request it could satisfy three different ways, and the cheapest
+moment to find out which one you meant is *before* it starts.
+
+```text
+Three questions before I start. I have pre-picked what I would choose,
+so confirming is enough.
+
+  Question 1 of 3 — How much should I cover?
+    [a] ▣ This file
+    [b] ▢ The whole module
+    [c] ▢ Everything that imports it
+
+  ⏎ confirm    s  skip and use my picks
+```
+
+There are two ways that form gets on screen, and **they produce the same persisted row, the same
+stream frame and the same resume path**. Nothing downstream — a consumer, an auditor, a UI — has to
+know which one asked.
+
+---
+
+## 1. A configured intake
+
+The agent declares its questions. The turn passes through them before it starts working.
+
+```ts
+@Agent({
+  name: 'refactorer',
+  systemPrompt: 'You refactor TypeScript.',
+  intake: {
+    preamble: 'Three questions before I start. I have pre-picked what I would choose, so confirming is enough.',
+    questions: [
+      {
+        id: 'scope',
+        prompt: 'How much should I cover?',
+        options: [
+          { value: 'file', label: 'This file', hotkey: 'a' },
+          { value: 'module', label: 'The whole module', hotkey: 'b' },
+        ],
+        defaults: ['module'],
+      },
+      {
+        id: 'tests',
+        prompt: 'Which tests should I touch?',
+        multiple: true,
+        options: [
+          { value: 'unit', label: 'Unit' },
+          { value: 'e2e', label: 'End to end' },
+        ],
+        defaults: ['unit'],
+      },
+    ],
+  },
+})
+@Injectable()
+export class RefactorerAgent {}
+```
+
+`when: 'thread-start'` (the default) asks once, on the first turn of a thread. `when: 'every-turn'`
+asks before each one. `multiple: true` allows more than one option; `allowFreeText: true` accepts a
+value that is not among the options.
+
+**It costs nothing.** The questions, their options and their pre-picked answers are all authored on
+the agent, so no model call produces them and no usage row is written for them. That is also what
+makes `questions.length` knowable before the first question is shown — which is the only way a client
+can honestly render "Question 1 of 3" instead of discovering a fourth halfway through.
+
+## 2. A model-callable `ask`
+
+For the case an intake cannot anticipate: the model itself judges the scope is missing.
+
+```ts
+AgentModule.forRoot({ /* … */ ask: true })   // or @Agent({ ask: true }) for one persona
+```
+
+The model now sees an `ask` tool whose schema **requires** a `defaults` array on every question that
+picks from options, and caps a call at five questions (`MAX_ASK_QUESTIONS`). A question with nothing
+pre-picked is refused before it ever reaches a user, because "I have pre-picked
+what I would choose" is the claim the whole surface rests on, and a schema is the only place to make
+it mandatory rather than aspirational.
+
+`ask` is deliberately **not a registered tool**. It has no handler — the loop settles it against a
+person — so it never reaches the `ToolRegistry`, no `RolesPolicy` gates it (asking a question performs
+nothing), and its kind can never be decided by a process-local registry lookup. The loop appends its
+definition from module config, which is uniform across every pod of a deployment.
+
+A malformed question set comes back to the model as an ordinary tool failure carrying the validation
+issues, so it can fix its own mistake. It does not fail the run and it does not park anyone.
+
+---
+
+## Typed questions
+
+A question does not have to be a pick from options. Give it an `input` and it asks for a value — a
+count, a date, an email, a sentence:
+
+```ts
+intake: {
+  questions: [
+    {
+      id: 'seats',
+      prompt: 'How many seats?',
+      description: 'Between 1 and 9.',
+      input: { type: 'number', min: 1, max: 9, required: true, placeholder: 'e.g. 2' },
+      defaults: ['2'],
+    },
+    { id: 'contact', prompt: 'Who should we email?', input: { type: 'email', required: true } },
+    { id: 'notes', prompt: 'Anything else?', input: { type: 'textarea', max: 500 } },
+  ],
+}
+```
+
+`input.type` is `text` · `textarea` · `number` · `boolean` · `date` · `email` · `url` · `select`;
+`select` picks from `options` like a plain question. `min`/`max` mean the smallest/largest number, the
+shortest/longest text, or the earliest/latest `YYYY-MM-DD`; `pattern` is a regex the whole value must
+match. A typed question may leave `options` and `defaults` out — there is no honest default for "who
+should we email?" — but any default it does declare has to pass its own rules. The model's `ask` tool
+takes the same fields.
+
+**Answers stay `string[]`**, in one canonical form per type: numbers as decimals (`"42"`), booleans as
+`"true"`/`"false"`, dates as `YYYY-MM-DD`, everything else as typed. `POST /agent/tool-call/answer`
+checks them against the parked questions and answers `400` — `answers["seats"] must be at most 9` —
+for a value a question refuses or a `required` question left with neither an answer nor a default,
+so the person hears why instead of the agent silently proceeding without it. The loop applies the
+same rules when it settles, dropping anything it cannot use.
+
+On the client, the transcript's questions carry `description`, `input`, `value`, `setValue(raw)`
+(coerced with the headless `coerceAnswer`) and `error`, and the block carries `isValid` — see
+[Bring your own UI](/docs/agent/guides/bring-your-own-ui). A runner that is not this library's loop
+maps its own forms onto the same shape; the [stream reference](/docs/agent/reference/stream-events#asking-the-user)
+has the mapping for an OpenCode `question` tool.
+
+---
+
+## Answering
+
+```bash
+# confirm the pre-picked answers — an empty body is a valid submission
+curl -X POST http://localhost:3000/agent/tool-call/answer \
+  -H 'content-type: application/json' \
+  -d '{ "toolCallId": "intake-<runId>" }'
+
+# answer explicitly
+curl -X POST http://localhost:3000/agent/tool-call/answer \
+  -H 'content-type: application/json' \
+  -d '{ "toolCallId": "intake-<runId>", "answers": { "scope": ["file"] } }'
+
+# decline, and let the agent proceed on its own assumptions
+curl -X POST http://localhost:3000/agent/tool-call/skip \
+  -H 'content-type: application/json' \
+  -d '{ "toolCallId": "intake-<runId>" }'
+```
+
+Same ownership check as `approve`/`reject`: the acting actor must own the tool call's thread.
+
+<Callout type="info" title="Approve and Reject settle a question set too">
+  The row is parked as a `pending_approval` action, which is what puts it in the approvals inbox you
+  already have — so an operator can reach it there and press the buttons that inbox offers. Both mean
+  something here, and both are the honest reduction of a yes/no channel:
+
+  - **Approve** → every question takes its own pre-picked default. Exactly what "just submit" means.
+  - **Reject** → a skip, which is already this surface's word for declining to answer.
+
+  The reduction is applied where the reply is *consumed*, not by the hook the host happens to have
+  wired, so it holds on every path: the inline runner, the durable runner, and a host that only ever
+  implemented `awaitApproval`.
+</Callout>
+
+**An omitted question takes its own pre-picked default.** That resolution happens server-side, against
+the request the run already holds — not in the client. So "the user just pressed enter" and "the user
+picked exactly what was pre-picked" persist as the same answers, and a client that never rendered the
+defaults cannot accidentally submit a blank. The settled outcome records `defaulted: string[]`, so an
+auditor can still tell which questions the human actually touched.
+
+<Callout type="info" title="Skipping is not confirming">
+  A skip lands on the same values a confirmation would — the agent proceeds on its own picks either
+  way. It persists differently on purpose: `executed` for an answer, **`rejected`** for a skip, with
+  the assumed values still on the row. Proceeding on an assumption the user declined to confirm and
+  proceeding on one they chose are not the same fact, and only the second is evidence of intent.
+</Callout>
+
+### Nobody answers
+
+The run stays parked. Indefinitely, exactly as a pending approval does — under `durable: true` it is a
+real suspend in the state store, not a held socket, so nothing is consumed while it waits and a
+restart does not lose it. There is no intake timeout, deliberately: a timeout that "helpfully" applied
+the defaults would manufacture consent from silence, and the whole point of asking was that the answer
+mattered. A caller who wants a bound puts one on the run, where cancelling is already an operation.
+
+---
+
+## What gets persisted, either way
+
+One pending tool-call row, named `ask`, recorded with `toolType: 'action'` and
+`status: 'pending_approval'` — so it surfaces in the existing approvals inbox rather than needing one
+of its own. When it settles, the row carries the outcome as its output:
+
+```jsonc
+{
+  "answers":   { "scope": ["file"], "tests": ["unit"] },
+  "skipped":   false,
+  "defaulted": ["tests"],           // questions filled from their own defaults
+  "summary":   "The user answered:\nHow much should I cover? → This file\n…"
+}
+```
+
+`summary` renders the chosen options by **label**, not by their opaque `value`s — it is what the model
+reads back, and a model shown `{"scope":["b"]}` has been told nothing.
+
+The live stream carries an `elicitation` frame (`{ kind, id, request }`) when the question set is
+posted and the ordinary `tool-output` frame under the same `id` when it settles. Both surfaces emit
+both frames, from the loop, so a client renders one form and never learns to recognise a tool name.
+
+On the client, `AgentChatTransport` turns that pair into one tool part, `useChatTranscript` exposes it
+as an `elicitation` block with the questions, the pre-picked defaults and `answer`/`skip` as state
+machines, and the registry's `ChatElicitation` renders the form inline in the turn that asked — see
+[chat components](/docs/agent/guides/chat-components#when-the-run-stops-for-a-person).
+
+---
+
+## Checkpoints
+
+An **intake** spends one position for the verdict, plus two more on the turns it actually asks:
+
+```text
+persist:run:start
+intake:ask                     ← posts the questions, AND returns whether it asked
+signal:tool:<runId>:intake-<runId>
+intake:answers
+stream:step-start:0            ← the turn's first model call, now scoped
+```
+
+The verdict comes *out of* `intake:ask` rather than being recomputed, and that is not a stylistic
+choice. By the time a resumed run replays this turn, the first attempt has already appended the
+intake's own assistant message to the thread — so a process that asked "has this thread been asked
+yet?" would answer **no** on the way in and **yes** on the way back, and land `stream:step-start:0`
+where the history holds `signal:tool:`. Same reasoning as [resolving a tool's kind inside its persist
+checkpoint](/docs/agent/concepts/the-agent-loop).
+
+An **`ask`** reuses the approval path's own names, and adds exactly one:
+
+```text
+persist:toolcall:<callId>      ← same name, same position; kind 'ask' journaled here
+stream:elicitation:<callId>    ← the one new position
+signal:tool:<runId>:<callId>   ← the SAME signal an approval waits on
+persist:toolexec:<callId>      ← or persist:toolreject:<callId> for a skip
+```
+
+No `patched` marker is spent for either. A marker exists for a shape change that lands on *existing*
+configs; neither of these can. An intake is reachable only through `@Agent({ intake })`, and an `ask`
+only through a journaled `kind: 'ask'` that no run recorded before the kind existed. Declare neither
+and a turn's checkpoint sequence is byte-identical to what it always was.

@@ -1,0 +1,312 @@
+---
+title: Chat components (shadcn registry)
+icon: LayoutTemplate
+description: First-party, good-looking chat components over the transcript model — copied into your project as source with `shadcn add`, never installed as a compiled dependency.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[Bring your own UI](/docs/agent/guides/bring-your-own-ui) says the model renders nothing and you
+write the markup. That is still true — but "write your own markup" should not mean "start from a
+blank file". This page is the third layer: designed, accessible components that consume
+`useChatTranscript` and nothing else, distributed as **copy-in source** through a shadcn registry.
+
+---
+
+## Four layers, not three
+
+| Layer | What it owns | Where it lives |
+|---|---|---|
+| `useAgentChat` + `AgentChatTransport` | SSE, resume, threads, quota, HITL | `@dudousxd/nestjs-agent-react` |
+| `useChatTranscript` / `useTranscriptItem` | The transcript model — blocks, derived values, action state machines, windowing, stick-to-bottom | `@dudousxd/nestjs-agent-react` |
+| `MessageList` / `MessageItem` / `ChatInput` | The minimal default renderers — no styles, every hook a `classNames` prop | `@dudousxd/nestjs-agent-react` |
+| **`agent-chat`** | Designed Tailwind components over the model — yours to edit after install | **this registry** |
+| Your own markup | Anything the above does not fit | your repo |
+
+The registry layer is **not a package**. Nothing in it is exported from
+`@dudousxd/nestjs-agent-react`, and installing it adds no runtime dependency beyond the ones you
+already have.
+
+<Callout type="info" title="Why source and not exports">
+A published component carrying Tailwind classes forces every consumer to configure Tailwind to scan
+`node_modules`, and then leaves them unable to change a single class without a fork. Copy-in source
+puts the classes where Tailwind is already looking — your own tree — and the file is yours the
+moment it lands. It is the reason shadcn works this way, and it is the reason these do too.
+</Callout>
+
+---
+
+## Install
+
+Requires a project already running **Tailwind v4** with shadcn initialised (`npx shadcn@latest init`
+— that is what writes `components.json` and the `cn` helper at `@/lib/utils`).
+
+```bash
+npx shadcn@latest add https://davidecarvalho.github.io/aviary/r/agent-chat.json
+```
+
+That lands seventeen files under `components/agent-chat/` and adds `@dudousxd/nestjs-agent-react`,
+`ai`, `clsx` and `tailwind-merge` to your dependencies. The composer alone, without the transcript:
+
+```bash
+npx shadcn@latest add https://davidecarvalho.github.io/aviary/r/agent-chat-composer.json
+```
+
+The manifest of every item is at
+[`/r/registry.json`](https://davidecarvalho.github.io/aviary/r/registry.json).
+
+---
+
+## Use
+
+`AgentChat` is the whole surface. Hand it an AI SDK v7 chat and it decides — from the model — whether
+to show the welcome state or the transcript:
+
+```tsx
+import { useState } from 'react';
+import { useAgentChat } from '@dudousxd/nestjs-agent-react';
+import { AgentChat } from '@/components/agent-chat/agent-chat';
+import { FileText, PenLine, Video, Search } from 'lucide-react';
+
+const MODES = [
+  { id: 'digest', label: 'Digest', icon: <FileText />, description: 'Summarise what changed' },
+  { id: 'draft', label: 'Draft', icon: <PenLine />, description: 'Write it for me' },
+  { id: 'recap', label: 'Recap', icon: <Video />, description: 'Walk me through the meeting' },
+  { id: 'audit', label: 'Audit', icon: <Search />, description: 'Check it against the record' },
+];
+
+export function Chat() {
+  const chat = useAgentChat();
+  const [mode, setMode] = useState('digest');
+
+  return (
+    <AgentChat
+      messages={chat.messages}
+      status={chat.status}
+      onSubmit={(text) => chat.sendMessage({ text }, { body: { mode } })}
+      queue={chat.queue} // messages sent mid-turn, waiting their turn
+      onStop={() => chat.cancel()}
+      editable
+      onEditSubmit={({ text }) => chat.sendMessage({ text })}
+      regeneratable
+      onRegenerate={() => chat.regenerate()}
+      welcomeTitle="What should I look through?"
+      modes={MODES}
+      mode={mode}
+      onModeChange={(next) => setMode(next.id)}
+      contextSources={[{ id: 'drive', label: 'Drive' }, { id: 'slack', label: 'Slack' }]}
+      contextTotal={9}
+      onAddContext={openSourcePicker}
+      // approve / reject / answer / skip settle through the provider's backend by default;
+      // pass chat.approve (etc.) — same object shape — or null to opt out.
+    />
+  );
+}
+```
+
+A mode is a **mode**, not a canned prompt: picking one changes how the turn runs, so the pill stays
+selected after sending rather than filling the box. What "digest" means is your server's business —
+the component reports the selection and nothing else.
+
+---
+
+## The pieces
+
+Every component below takes model values as props. None of them holds chat state.
+
+| Component | What it consumes from the model |
+|---|---|
+| `AgentChat` | Calls `useChatTranscript` itself, with `sources: true`; branches on `showEmptyState` |
+| `ChatTranscriptView` | `items`, `window.{canLoadEarlier,hiddenCount,loadEarlier}`, `showTypingIndicator`, `showFollowUps`, `scroll.{getContainerProps,showJumpToLatest,scrollToBottom}` |
+| `ChatMessage` | One `TranscriptItem`: `blocks`, `isUser`, `copy`, `edit`, `fork`, `regenerate`, `usage`, `timestamp` |
+| `ChatReasoning` | A `reasoning` block: `isOpen`, `toggle()`, `text`, `isStreaming` |
+| `ChatSources` / `ChatSourceChips` | A `sources` block: `sources[]`, `passageCount`, `query` |
+| `ChatToolGroup` / `ChatToolCard` | A `tools` block's `calls` — the run the model already grouped, each call with `isAwaitingApproval` and its `approve`/`reject` machines |
+| `ChatElicitation` | An `elicitation` block: `preamble`, `questions[].{position,prompt,options,selected,isPristine}`, `questionCount`, `outcome`, `error`, `answer`/`skip`. Renders option picks; for [typed questions](/docs/agent/guides/asking-the-user#typed-questions) (`questions[].input`, `setValue`, `error`) render your own controls from the block |
+| `ChatComposer` | `stop.{available,isStopping,stop}` — the submit control becomes the cancel control, and Enter still sends (`useAgentChat` queues it; `whileBusy="block"` refuses instead); `useComposerAutocomplete` when given `autocompleteSources` |
+| `ChatQueue` | `transcript.queued` (each item's `text`, `state`, `remove`) and `transcript.queuePaused` — waiting messages as dimmed bubbles above the composer, with *Resume* while paused ([Typing ahead](/docs/agent/guides/message-queue)) |
+| `ChatCommandPalette` | Either a hand-supplied `suggestions` list, or the autocomplete's `items`/`activeIndex` with its `getListboxProps`/`getOptionProps` — the same rows, wired as a combobox listbox |
+| `ChatFiles` | A `files` block's `files` — images inline, everything else a labelled chip |
+| `ChatFollowUps`, `ChatModePills`, `ChatContextStrip`, `ChatWelcome`, `ChatPanel` | Presentation only — they report events and hold no chat state |
+
+If you find yourself editing one of these files to group parts, derive copyable text or track edit
+state, stop: the model already does it, and the file is meant to shrink, not grow.
+
+---
+
+## When the run stops for a person
+
+Two things park a run on a human, and both now render where the turn is rather than in a panel
+somewhere else on the page.
+
+**A question set** — an agent's [intake or the model's own `ask`](/docs/agent/guides/asking-the-user)
+— arrives as an `elicitation` block and `ChatElicitation` draws it inline: the agent's picks already
+checked, a letter hotkey per option, "Question 2 of 3", Confirm and Skip. It works with nothing
+passed — the answer goes to the in-scope backend's `POST /agent/tool-call/answer`. Pass
+`onAnswer={chat.answer}` to route it yourself (it takes `{ toolCallId, answers }`), or
+`onAnswer={null}` to leave question sets as plain tool cards.
+
+```tsx
+<AgentChat messages={chat.messages} status={chat.status} onSubmit={(text) => chat.sendMessage({ text })} />
+```
+
+Only the questions the user **touched** are submitted. The rest are omitted deliberately, so the
+server applies the same defaults it showed and the settled row still records which ones a human
+actually decided. Once the run settles the set, the same form keeps rendering read-only, showing what
+was chosen.
+
+**A tool call awaiting approval** is the other half. An `action` tool's input lands and its output
+never follows on its own — the loop is waiting between the two — so `ChatToolCard` reads that as the
+pending approval, says "Needs approval" rather than "Running", and offers Approve / Reject — through
+the backend by default, or your `onApprove` / `onReject` (`({ toolCallId, target? })`; `null` hides
+them). The decision row shows the call's `call.description.confirm` (the per-call wording a tool's
+`preflight` or `presentation.confirm` supplies): its title and detail, and its verb on the approve
+button. For an [action proposal](/docs/agent/guides/action-proposals) the badge follows the proposal
+— *Awaiting approval*, *Queued*, *Executing*, *Succeeded*, *Failed*, *Rejected*, … — rather than the
+receipt's "Done". It is your file: edit it to change the copy.
+
+To draw either yourself, `renderToolPart` hands you the whole call — the part plus its decision
+state — and you render what you like:
+
+```tsx
+<AgentChat
+  /* … */
+  renderToolPart={(call) =>
+    call.isAwaitingApproval ? (
+      <MyApprovalCard
+        key={call.toolCallId}
+        title={call.description.confirm?.title ?? call.description.phrase}
+        verb={call.description.confirm?.verb ?? 'Approve'}
+        onApprove={() => call.approve.run()}
+      />
+    ) : (
+      <MyToolCard key={call.toolCallId} part={call.part} />
+    )
+  }
+/>
+```
+
+<Callout type="warn" title="A refusal has to land somewhere">
+`answer`, `skip`, `approve` and `reject` all go through the same ownership check, and a 403 comes back
+as a rejected promise. The model catches it and puts it on `block.error` / `call.error`, which the
+components render as a `role="alert"` line with the form still usable. A host wiring its own markup
+should render those fields: a button that silently does nothing is indistinguishable from a broken
+one.
+</Callout>
+
+---
+
+## Provenance, rendered
+
+Inject-mode RAG persists its retrieval as an auto-executed tool call whose output is `{ passages }`
+(see [RAG](/docs/agent/guides/rag)), and `createRetrievalTool` does the same for agentic retrieval.
+Set `sources: true` on the transcript and the model lifts those parts out of the tool run into a
+`sources` block, aggregated by origin:
+
+```tsx
+const transcript = useChatTranscript({ messages, status, sources: true });
+```
+
+```tsx
+// inside your own message renderer
+{item.blocks.map((block) =>
+  block.kind === 'sources' ? <ChatSources key={block.key} block={block} /> : null,
+)}
+```
+
+Detection is **structural**, not by tool name — inject mode records `retrieve`, and
+`createRetrievalTool` lets you rename `search_knowledge` to anything, so the model looks at the
+output shape instead. `ChatMessage` renders the card above the answer body wherever the tool part
+happens to sit in the message.
+
+<Callout type="warn" title="Off by default">
+`sources` defaults to `false`, so a renderer already drawing tool cards keeps receiving retrieval as
+the tool call it is. `MessageItem` and `MessageList` do not opt in, and their behaviour is unchanged.
+</Callout>
+
+---
+
+## Completing as you type
+
+Typing `/` in the composer opens a filtered, keyboard-driven menu. The state machine behind it —
+which trigger the caret is inside, the query, the items, the highlight, what a pick does to the text
+and the caret — is `useComposerAutocomplete` in `@dudousxd/nestjs-agent-react`; `ChatComposer` and
+`ChatCommandPalette` are one rendering of it, the same way `ChatMessage` is one rendering of a
+transcript item.
+
+It knows nothing about skills. A host supplies **sources**, each with a trigger character, so `@`
+for a mention is another entry in the array rather than a second component:
+
+```tsx
+<AgentChat
+  messages={chat.messages}
+  status={chat.status}
+  onSubmit={send}
+  autocompleteSources={[
+    {
+      id: 'skills',
+      label: 'Skills',
+      trigger: '/',
+      position: 'start',
+      getItems: async (query, signal) => listSkills(query, signal),
+      filter: (items) => items,
+    },
+  ]}
+/>
+```
+
+`createSkillsSource({ backend: chat.backend, getThreadId })` is the concrete one behind `/`: it reads
+`GET /agent/skills`, the scope-resolved list of what this actor can invoke, built by the same call
+that offers the catalog to the model — so what a user can type and what the agent can reach cannot
+drift apart. Each row shows where its skill came from — `tenant:berlin`, or
+`tenant:berlin · overrides global` when one shadows another, since `shadows` is set only on a clash
+— and the raw `{ scope, shadows? }` stays on the item's `data` for a host that draws it its own way.
+The list keeps the order it arrived in, because that order is the precedence. Everything else about
+the menu is the same for it as for any other source.
+
+`position` says where the trigger may fire and has no default. `'start'` means the first character
+of the input only — `/deploy` is a command and `src/foo` is a path. `'word'` means the start of any
+word, so `@ada` mid-sentence is a mention and `ada@example` is an address. Picking wrong breaks the
+thing people type most, which is why the source has to state it.
+
+Accepting replaces the token, keeps the trigger and appends a space (`/rollback `), leaving whatever
+was to the right of the caret alone; the space closes the menu so the rest of the line is free text.
+↑/↓ move and wrap, Enter and Tab accept, Escape closes for that token, and Shift+Tab still moves
+focus. Every key the menu takes is `preventDefault`ed, which is how the composer knows not to send.
+
+An async source is asked with an `AbortSignal` per query; an answer the user has already typed past
+is dropped instead of overwriting a newer list, and a source that throws shows its message in the
+menu while typing and sending carry on untouched.
+
+<Callout title="One palette, two ways to drive it">
+`ChatCommandPalette` is the same component it always was. Handed `suggestions` it is a static list
+of buttons; handed the autocomplete's `getListboxProps`/`getOptionProps` it becomes the popup half
+of a combobox — the rows turn into `option`s the textarea's `aria-activedescendant` points at, and
+stop being focus stops, so focus never leaves the composer mid-query. Its `↑↓ navigate · Enter
+select · Esc` hint row finally describes keys that work.
+</Callout>
+
+---
+
+## Reasoning duration
+
+`ChatReasoning` renders a named, collapsible segment with its duration derived from the block: a
+live ticker (`useElapsed`) while it streams, then `block.durationMs` — the server's measurement,
+the same after a reload. `duration` overrides the label, and `null` hides it:
+
+```tsx
+<ChatReasoning block={block} label="Trust Elements" duration="a while" />
+```
+
+A block with no recorded duration renders without one.
+
+---
+
+## Editing what you installed
+
+The files are yours. They ship as ordinary React with Tailwind classes, `data-slot` attributes on
+the structural elements (the shadcn convention, and a stable hook for your own CSS), inline SVG
+icons rather than an icon-library dependency, and no `forwardRef` ceremony. Restyle them, delete the
+parts you don't want, or keep only `ChatComposer` and write the transcript yourself.
+
+Re-running `shadcn add` overwrites them, so once you have edited a file, treat it as your own code.

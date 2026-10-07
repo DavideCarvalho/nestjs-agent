@@ -1,0 +1,190 @@
+---
+title: "@dudousxd/nestjs-agent-react"
+icon: Atom
+description: useAgentChat, the AgentChatTransport and AgentClient, the headless transcript model, styling-agnostic chat components, dictation, and the markdown subpath.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-react ai @ai-sdk/react
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-react ai @ai-sdk/react
+    ```
+  </Tab>
+</Tabs>
+
+`@dudousxd/nestjs-agent-react` connects a React app to the `/agent` endpoints. `<AgentProvider>`
+holds the connection once; `useAgentChat` wraps the Vercel AI SDK v7 `useChat` with a transport that
+speaks the backend's SSE protocol, loads a thread's history, re-attaches a streaming turn, gates on
+quota, and returns a bound transcript, composer and model picker. `useChatTranscript` turns the streamed
+messages into a renderable model, and the components are one rendering of it — they ship unstyled,
+every class yours via `classNames`.
+
+```tsx
+import { useAgentChat, ChatInput, MessageList } from '@dudousxd/nestjs-agent-react';
+
+function Assistant() {
+  const chat = useAgentChat(); // same origin, `/agent`; <AgentProvider> for anything else
+
+  return (
+    <div>
+      <MessageList messages={chat.messages} status={chat.status} queue={chat.queue} />
+      <ChatInput onSubmit={(text) => chat.sendMessage({ text })} />
+    </div>
+  );
+}
+```
+
+## Exports
+
+| Export | What it is |
+|---|---|
+| `useAgentUiCapabilities()` | The enclosing provider's `uiCapabilities` (or `undefined`), for your own send path. |
+| `AgentProvider` / `useAgentBackend()` | The connection (`baseUrl`, `path`, headers, credentials, upload strategy, `onHttpError`, `genui`, `uiCapabilities`) once, for every hook below it / the backend in scope. |
+| `useAgentChat(options?)` | The hook — the AI SDK `useChat` result plus `transcript`, `composer`, `models`, `quota`, `queue`, `proposals`, `runError`, cancel/approve/reject/answer/skip/fork. Sends made mid-turn queue on the thread (`whileRunning: 'queue' \| 'interrupt' \| 'block'`) — [Typing ahead](/docs/agent/guides/message-queue). Independent action proposals are read and merged into `messages` by itself — [Frontend](/docs/agent/guides/frontend#approvals-that-do-not-hold-the-turn). |
+| `useActionProposals(backend, threadId, setMessages, refreshKey, pollMs?)` | That proposal reconciliation as a standalone hook (`{ items, error, refresh() }`), for a chat on the SDK's `useChat`; `reconcileProposalMessages` / `proposalNeedsPolling` are its pure pieces. |
+| `UiCapabilities` | `{ components: { name, version }[] }` — what `uiCapabilities` on the provider / `useAgentChat` takes ([Which components this client can draw](/docs/agent/guides/frontend#which-components-this-client-can-draw)). |
+| `useAgentConfig(options?)` | `GET /agent/config` — attachment limits and upload mode, and which features are on; shared per backend. |
+| `AgentBackend` | The interface every hook talks to — implement it over your own client ([Your own backend](/docs/agent/guides/frontend#your-own-backend)). |
+| `AgentClient` | The default `AgentBackend`: a framework-agnostic REST client over this library's routes; usable standalone. |
+| `AgentHttpError` | What `AgentClient` throws on an error answer: `status`, `code`, the parsed `body`, and the server's `message` as its own `message` — so a hook showing `error.message` shows the server's words. `onHttpError` (on the provider or the client) sees each one first, for app-wide reactions like "401 → sign in again". |
+| `useThreads(options?)` | The thread list, kept current by chats on the same backend; optimistic rename/remove. |
+| `useModels(options?)` / `useAgents(options?)` | The model catalog (grouped, flattened, `find`, `defaultModel`, `locked` when the agent always runs on one model) and the agent list (`lockedModel`, each agent's `personasOf(agent)` / `defaultPersonaOf(agent)`), for pickers. `useAgentChat({ persona })` sends a persona per turn and reports the thread's pin as `threadPersona`. |
+| `useAttachments(options?)` | A composer's staged files, headless: validation, uploads with progress/cancel/retry, previews, and input/drop/paste handlers. `messageFiles(message)` reads files back off a message. |
+| `useQuota(options?)` | Budget windows (`day`/`month`), usage vs ceilings, `blocked`, and `warning` (the fullest window past its `warnAt` soft limit) — `useAgentChat` gates on it by itself. |
+| `useMessageFeedback(options?)` | Thumbs-up/down (+ comment) state and calls for messages, optimistic. |
+| `AgentChatTransport` | The `useChat` transport implementing the `/agent/chat` SSE protocol. |
+| `agUiChatStream(request, { url })` | An `openChatStream` over an AG-UI 1.0 producer, re-framed into this protocol ([AG-UI](/docs/agent/guides/ag-ui)). |
+| `useApprovalCountdown(expiresAt)` / `approvalCountdown` | `{ remainingMs, isExpired }` for an approval's `expiresAt`. |
+| `useToolCatalog(options?)` / `ALL_AGENTS` | Tool presentations for one agent, or with `agent: ALL_AGENTS` every tool the actor reaches through any agent. |
+| `useChatTranscript(options)` | The transcript model — messages normalized into items with their parts grouped into text/reasoning/tool blocks, per-message derived values, each action a state machine, plus list windowing and stick-to-bottom. Renders nothing. |
+| `useTranscriptItem(options)` | The same model for a single message, for a host that lays out the list itself. |
+| `useStickToBottom(options)` | Follow-the-stream-while-at-the-bottom, standalone. Also on `transcript.scroll`. |
+| `ChatInput` | The composer — Enter submits, Shift+Enter newlines, optional dictation, optional stop. |
+| `MessageList` | Windows the thread; typing indicator, error+retry banner, follow-up chips, reasoning and files, tool calls through `renderToolPart` / `renderToolGroup` (no approval or question markup of its own); with `queue={chat.queue}`, the messages waiting in the thread's queue and a resume control. |
+| `MessageItem` | A single message, if you want to lay out the list yourself. |
+| `MessageItemView` | The default markup for one item you modelled yourself. |
+| `useSpeechRecognition` | Browser dictation hook backing `ChatInput`'s optional mic button. |
+| `SPEECH_LANGUAGES` / `DEFAULT_SPEECH_LANG` | The dictation language catalog and default. |
+| `storedThreadToUiMessages(messages)` | Converts a thread's full `StoredMessage[]` history into `UIMessage[]` for hydrating a reloaded chat — see [Hydrating from history](#hydrating-from-history) below. |
+| `storedMessageToUiMessage` | The 1:1 row → message adapter `storedThreadToUiMessages` is built on; use it directly if you don't want turn-merging. |
+
+Subpath `@dudousxd/nestjs-agent-react/markdown` exports `AgentMarkdown` — a streaming-aware GFM +
+KaTeX + Mermaid renderer for `renderText`, behind its own peers so a plain-text app never pulls them
+in.
+
+Subpath `@dudousxd/nestjs-agent-react/genui` exports `GenuiProvider`, `GenerativeUI`,
+`useGenerativeUI`, `GenerativeUIScope` and `GenuiTree` — the headless renderer for server-pushed
+components (registry, optional catalog validation, versioned `resolveComponent`, per-item error
+boundaries, `genui:tree` frames). Put `<GenuiProvider>` at the root and `MessageItem` draws pushed
+components with no `renderUi`. It also exports `createReactComponentRegistry`, one registry for the
+browser and server rendering. `/genui/json-render` exports the same provider with a `jsonRender`
+option; `/genui/server` (`createReactServerRenderer`) and `/genui/server/playwright`
+(`createPlaywrightCaptureAdapter`) render components outside the browser. See the
+[Generative UI guide](/docs/agent/guides/generative-ui) and
+[Component rendering](/docs/agent/guides/component-rendering).
+
+Subpath `@dudousxd/nestjs-agent-react/media` exports `mediaAttachments()`, `createMediaUpload` and
+`MediaUploadError` — resumable uploads through nestjs-media ([File uploads](/docs/agent/guides/file-uploads)).
+
+## Headless, in the TanStack sense
+
+The components are style-agnostic, but style-agnostic is not headless: a `classNames` map lets you
+restyle the markup this package chose, not replace it. `useChatTranscript` is the model under that
+markup — grouped part runs, per-message derived values, actions as state machines, windowing,
+stick-to-bottom — with nothing drawn and no class named:
+
+```tsx
+const transcript = useChatTranscript({
+  messages: chat.messages,
+  status: chat.status,
+  onStop: () => chat.cancel(),
+});
+
+transcript.items[0].blocks;        // [{ kind: 'text' | 'reasoning' | 'tools' | 'files' | 'ui' | 'elicitation' | 'sources', … }]
+transcript.items[0].copy;          // { available, copied, copy() }
+transcript.items[0].edit;          // { isEditing, draft, canSave, save(), getTextareaProps() }
+transcript.window;                 // { hiddenCount, canLoadEarlier, loadEarlier() }
+transcript.scroll;                 // { isAtBottom, showJumpToLatest, getContainerProps() }
+transcript.stop;                   // { available, isStopping, stop() }
+```
+
+`MessageList` and `MessageItem` are one rendering of exactly this and keep their existing props, so
+adopting the model is additive: a host can move to it screen by screen. The full walkthrough — blocks,
+reasoning, stopping a turn, stick-to-bottom — is in
+[Bring your own UI](/docs/agent/guides/bring-your-own-ui#the-transcript-model).
+
+## Hydrating from history
+
+`storedMessageToUiMessage` maps one persisted `StoredMessage` row to one `UIMessage`, but the loop
+persists one row per model iteration — a turn with tool calls is 2-3 rows (a "checking that..." row,
+tool-call rows, a final-answer row). Loading a thread with that adapter renders 2-3 separate
+assistant bubbles, each with its own cost/tokens footer, for what the live stream rendered as one
+continuous response.
+
+`storedThreadToUiMessages(messages)` merges consecutive assistant rows (no user message between
+them) into a single `UIMessage` per turn, concatenating parts in step order — a reloaded thread
+matches the live stream bubble-for-bubble. The merged message carries `metadata.usage` with summed
+tokens and cost (`costUsd` is `null` only when every merged row's cost is unknown — unknown is never
+coerced to `0`). `useAgentChat({ threadId })` does this for you; use it yourself to seed
+`initialMessages` from history you already have (SSR, a cache):
+
+```tsx
+const thread = await backend.getThread(threadId);
+const chat = useAgentChat({ threadId, initialMessages: storedThreadToUiMessages(thread.messages) });
+```
+
+## Reconciling after a run settles
+
+`useAgentChat({ onRunSettled })` fires exactly once per run — `{ runId, status: 'completed' | 'failed' }`
+— when its stream settles, on both the send and the `resume` paths. By the time it fires the server
+has already persisted the thread's title and the run's terminal state, which is the signal `onFinish`
+doesn't give you: `onFinish` only means "a turn rendered here," not "the server is done writing." Use
+it to refetch thread/list queries so a header or sidebar showing "Untitled" picks up the derived
+title:
+
+```tsx
+const chat = useAgentChat({
+  threadId,
+  onRunSettled: ({ status }) => {
+    if (status === 'completed') queryClient.invalidateQueries({ queryKey: threadListQueryKey });
+  },
+});
+```
+
+This matters more than it used to: under a durable backend, `AgentModule.forRoot({ durable: true })`
+dispatches a turn's model call and tool executions as routed durable steps — the actual LLM/tool work
+can
+run on a different worker than the pod holding this SSE connection, and results flow back through a
+cross-process token sink (e.g. Redis) instead of an in-process buffer. The `/agent/chat` SSE contract
+this package speaks doesn't change, but a run can keep progressing, or finish, on infrastructure this
+tab has no direct line to — `onRunSettled` (and `resume`, for reattaching to a run still in flight on
+mount) are the client-side hooks that make that invisible.
+
+## Peer dependencies
+
+| Peer | Required for |
+|---|---|
+| `react` (>=18) | Always. |
+| `ai`, `@ai-sdk/react` | The hook — `useAgentChat` returns the SDK's own `useChat` result, extended. |
+| `streamdown`, `@streamdown/code`, `@streamdown/math`, `@streamdown/mermaid`, `react-markdown`, `remark-gfm`, `remark-math`, `rehype-katex`, `rehype-sanitize`, `katex`, `prism-react-renderer`, `unist-util-visit` | Optional — only if you import the `/markdown` subpath. |
+| `@json-render/react` (>=0.21) | Optional — only if you import the `/genui/json-render` subpath. |
+| `@dudousxd/nestjs-media-client` (>=0.3) | Optional — only if you import the `/media` subpath (`mediaAttachments`, `createMediaUpload`; see [File uploads](/docs/agent/guides/file-uploads)). |
+| `react-dom` (>=18) | Optional — only for the `/genui/server` subpath. |
+| `playwright-core` (>=1.48) | Optional — only for the `/genui/server/playwright` subpath. |
+
+## When to use it
+
+Reach for `-react` when the frontend is React and you want the streaming + HITL + thread machinery
+handled for you. Apps on another framework, or wanting full control over the wire protocol, can build
+directly against `AgentClient` or the raw `/agent/*` REST + SSE surface described in
+[Endpoints](/docs/agent/reference/endpoints).
+
+See [Frontend](/docs/agent/guides/frontend) for the full hook option table, wiring headers to
+identity, rendering approve/reject, and reopening an existing thread.

@@ -1,0 +1,26 @@
+{
+  "title": "Packages",
+  "icon": "Boxes",
+  "pages": [
+    "index",
+    "core",
+    "nestjs",
+    "ai-sdk",
+    "react",
+    "genui",
+    "data",
+    "rag",
+    "rag-media",
+    "mcp",
+    "mcp-server",
+    "evals",
+    "dashboard",
+    "store-mikro-orm",
+    "store-drizzle",
+    "transport-redis",
+    "telescope",
+    "authz",
+    "codegen",
+    "testing"
+  ]
+}

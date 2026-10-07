@@ -1,0 +1,418 @@
+---
+title: Input & output processors
+icon: ShieldCheck
+description: Rewrite the prompt on its way to the model, and gate the answer on its way back — including what that costs you in live streaming, and how to buy some of it back.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+A turn has exactly two boundaries with the provider: the prompt going out and the answer coming back.
+Processors are the seams on each of them.
+
+```ts
+AgentModule.forRoot({
+  model,
+  actorResolver,
+  inputProcessors: [maskIdentifiers],
+  outputProcessors: [refuseRawCustomerRows],
+});
+```
+
+Both lists are module-wide and apply to every agent. There is no per-agent override on purpose: a
+control one persona can opt out of is not a control.
+
+## Input: rewriting the prompt
+
+```ts
+import type { InputProcessor } from '@dudousxd/nestjs-agent-core';
+
+const maskIdentifiers: InputProcessor = {
+  name: 'mask-identifiers',
+  process: (prompt) => ({
+    system: prompt.system,
+    messages: prompt.messages.map((message) => ({
+      ...message,
+      content: message.content.replace(/\b\d{3}-\d{2}-\d{4}\b/g, '[ssn]'),
+    })),
+  }),
+};
+```
+
+It runs **before every model call of a turn**, not once per run. The transcript grows between steps —
+a tool result is appended and the loop calls the model again — so a redactor that only ever saw the
+opening prompt would wave through whatever that tool brought back.
+
+What it returns is a *derived* prompt. The loop's own transcript is untouched, and so is the store: a
+redaction is what leaves the process, never the thread's memory of what was said.
+
+<Callout type="warn" title="This is not a second `HistoryPolicy`">
+  Selection — *which* of the thread's messages ride into the turn, and what stands in for the rest —
+  belongs to [`history` / `historyPolicy`](/docs/agent/guides/conversation-history). Processors run on
+  whatever selection produced and own *transformation* — what those messages say.
+
+  The split is load-bearing, not stylistic. `select` is contractually pure and runs **outside** any
+  checkpoint, which is exactly what lets a window exist without moving a checkpoint position. A
+  processor is allowed to call a model and therefore runs **inside** one. Split the same decision
+  across both and neither can be reasoned about alone — and the cheap knob stops being the whole
+  answer to "why did this turn cost that much".
+</Callout>
+
+## Output: gating the answer
+
+```ts
+import type { OutputProcessor } from '@dudousxd/nestjs-agent-core';
+
+const refuseRawCustomerRows: OutputProcessor = {
+  name: 'sql-guard',
+  process: async (answer) => {
+    if (looksLikeADump(answer.text)) {
+      return { action: 'reject', reason: 'answer contains raw customer rows' };
+    }
+    return { action: 'replace', text: redactEmails(answer.text) };
+  },
+};
+```
+
+Each processor sees the answer as the previous one left it and returns one of three verdicts:
+
+| Verdict | Effect |
+|---|---|
+| `{ action: 'pass' }` | Hand the text on unchanged. |
+| `{ action: 'replace', text }` | Hand it on rewritten. A redaction is a replacement. |
+| `{ action: 'reject', reason }` | End the chain **and the run**. The text is never streamed, never persisted, never becomes the next step's context. |
+
+A rejection fails the run with an `OutputRejectedError` carrying the processor and the reason, and
+the subscriber gets an `output_rejected` stream error — its own code, distinct from `run_failed`, so
+a client that retries on a model failure does not retry a refusal and nobody is paged for the control
+doing its job. The first rejection stops the chain: a later processor has nothing to add about text
+that is going nowhere, and running it would bill a moderation call for a turn already refused.
+
+The refused turn still records its `chat` usage row. Those tokens were genuinely spent, and a gate
+that hid its own cost could burn a budget invisibly.
+
+## What the chain actually sees
+
+A turn can produce model text in four places, not one. Three of them are calls the *loop* makes for
+itself, and they are not streamed — which is why they read as invisible until you go looking.
+
+| Model output | Gated? | Notes |
+|---|---|---|
+| The turn's streamed answer | **yes** | The main path, per model step, at `process:output:<step>`. |
+| The [structured-output](/docs/agent/guides/structured-output) formatting pass | **yes** | Ruled on *before* the schema validates, at `process:output:structured:<step>:<attempt>`. A rejection fails the run. |
+| Follow-up suggestions (`followUps`) | **yes** | One pass per suggestion, at `process:output:followups:<step>`. A rejection **drops that suggestion**, see below. |
+| The folded [history summary](/docs/agent/guides/conversation-history) | **no — by design** | It is prompt, not an answer. See below. |
+
+### The structured pass
+
+`outputSchema` asks the model to restate the finished answer as a schema. That is a second route out
+of the model, and an ungated one would undo the chain completely: anything held back from the prose
+can be restated into a field. So the chain runs over the restated **text** before it is validated,
+and what the schema validates — and what is persisted as the synthetic `structured_output` call and
+pushed to the client — is the gated version.
+
+One consequence worth stating: a provider that constrained its own generation reports a parsed
+`object` alongside the text. Once the chain rewrites the text the two disagree, so the gated text is
+re-parsed and the provider's object is discarded. Trusting it would hand the reader exactly the value
+the gate had just removed.
+
+A rejection here fails the run with `OutputRejectedError`, same as on the streamed answer.
+
+### Follow-up suggestions
+
+Each suggestion goes through the chain on its own — one at a time, so a refusal is confined to the
+one that earned it and a `replace` cannot smear across a neighbour.
+
+<Callout type="info" title="A refused suggestion is dropped, not a failed run">
+  This is the one place a `reject` does not end the run, and the deviation is deliberate. Follow-ups
+  are generated *after* the turn's answer has already cleared the same chain. Retracting a cleared
+  answer because a question nobody asked for was refused would make a run's outcome depend on a
+  by-product. Dropping the suggestion removes it just as completely, which is what the refusal was
+  for. A processor that replaces a suggestion with an empty string drops it too.
+</Callout>
+
+### The history summary is not gated
+
+When a `historyPolicy` folds old messages into a summary, that summary is model-generated — and it is
+deliberately **not** put through the output chain.
+
+It never reaches a reader. It is re-injected as the leading `system` message of the next prompt, which
+makes it *input*, and the input seam already owns it: `inputProcessors` see the summary on every step
+of every turn that carries one, because it is part of `prompt.messages`. Running answer-shaped
+controls over prompt text would apply a contract the processor's author never agreed to — and the
+seam that does apply is already there.
+
+If you want to constrain what a summary may say, write an `InputProcessor`.
+
+<Callout type="warn" title="Incremental declarations do not apply to the three non-streamed passes">
+  `incremental` is a promise about a *streamed* answer: it buys the reader an early prefix. The
+  structured pass and the follow-ups call are never streamed, so there is no prefix and nothing to
+  release. Both always run the whole-answer pass, whatever the chain declared.
+</Callout>
+
+## The streaming trade
+
+<Callout type="warn" title="Registering an output processor takes the turn's model call off the run's sink">
+  A gate that has to read the whole answer cannot run *after* the answer has already reached the
+  reader. There is no version of "stream it and check it afterwards" that is a control rather than a
+  notification.
+
+  So when at least one output processor is registered, the turn's model call stops writing straight
+  to the run's sink. **How much that costs the reader is the one thing a processor can declare** —
+  see [Incremental gating](#incremental-gating-keeping-the-stream) below.
+</Callout>
+
+By default — any processor that does not declare otherwise — the call writes to a **buffer**, and the
+loop releases it only once the chain has passed, as a single `text` frame carrying the gated answer.
+
+What a subscriber still receives live: `step-start` / `step-finish` boundaries, and the turn's
+tool-call frames (`tool-input-start`, `tool-input-delta`, `tool-input-available`), in their original
+order relative to the answer. What it loses:
+
+- **Token-by-token text.** The answer arrives in one frame, once the gate has decided.
+- **Anything the gate cannot classify.** The sink is a byte channel, and a model provider outside the
+  `AgentStreamEvent` vocabulary may write bare bytes into it. Those frames are dropped, and the text
+  is reconstructed from the gated answer instead — forwarding bytes it cannot read would not be a
+  gate. Adapters that speak the vocabulary (including the bundled AI SDK one) are unaffected.
+
+Register no output processor and the turn streams exactly as it always did, frame for frame.
+
+## Incremental gating: keeping the stream
+
+An LLM judge has to read the whole answer. A pattern redactor does not — it can rule on a prefix and
+let that prefix go. Declaring `incremental` says so, and the turn keeps streaming:
+
+```ts
+const redactEmails: OutputProcessor = {
+  name: 'redact-emails',
+  // Wide enough for the longest pattern this matches. Costs ~81 tokens of latency before the
+  // reader sees anything, and an answer shorter than this streams nothing at all — see below.
+  incremental: { lookbackChars: 320 },
+  process: (answer) => ({
+    action: 'replace',
+    text: answer.text.replace(EMAIL, '[email]'),
+  }),
+};
+```
+
+The chain sees the **growing prefix**, not each new chunk, so it always gets well-formed text and
+never has to reassemble a pattern split across frames. After every prefix, the loop releases what the
+chain produced *minus* the trailing `lookbackChars` characters, which stay held so the processor can
+still change them. The rest arrives when the whole-answer pass runs.
+
+<Callout type="warn" title="Undeclared means whole-answer, and a chain is incremental only if every processor declares it">
+  A processor without `incremental` was written against the complete text, and running it on a prefix
+  would hand it an input its author never agreed to read. One undeclared member puts the whole chain
+  back on the buffered path — a neighbour can never downgrade what another author was given.
+</Callout>
+
+### What you promise by declaring it
+
+1. **A rejection is decidable from a prefix.** The refusal you would return for the whole answer is
+   already returned for the first prefix that contains the reason.
+2. **A replacement is prefix-stable outside the window.** Once a character of your output is more
+   than `lookbackChars` from the end of that output, it never changes as the prefix grows.
+
+Both promises are checked rather than trusted, because the whole-answer pass is still authoritative
+for the stream *and* the store — the incremental release only emits its prefix early. Once it
+settles, the loop asserts the final text `startsWith` what was already released and raises
+`ProcessorFailedError` if it does not:
+
+```text
+output processor "redact-emails" failed: the gated answer is not an extension of the 412 characters
+this chain already released — a processor that declares "incremental" promises its result on a
+prefix stays a prefix of its result on the whole answer, outside the last lookbackChars
+```
+
+That is what a window too short for your pattern looks like: a failed run, not a redaction that
+quietly did not happen. A window that truncates silently would be worse than having no incremental
+path at all.
+
+### Choosing `lookbackChars`
+
+It is per-processor, defaults to `DEFAULT_INCREMENTAL_LOOKBACK_CHARS` (64), and the gate uses the
+**widest** value in the chain — a release safe for the shortest-sighted processor is not safe for the
+one matching longer patterns. Set it to the length of the longest text your processor can act on.
+
+It is also the answer's minimum latency tail: those characters are only released once the turn's last
+model chunk has arrived, so "as large as possible" is not the safe choice either. Measured, with the
+first text frame reaching the reader only after that many characters have been gated:
+
+| `lookbackChars` | Answer | Reader sees the first frame after | Streamed live |
+|---:|---:|---|---:|
+| 64 | 120 chars | 68 chars (~17 tokens) | 56 / 120 |
+| 64 | 2,000 chars | 68 chars (~17 tokens) | 1,936 / 2,000 |
+| 320 | **120 chars** | **never — the whole answer is held to the gate step** | **0 / 120** |
+| 320 | 2,000 chars | 324 chars (~81 tokens) | 1,680 / 2,000 |
+
+<Callout type="warn" title="A window wider than the answer streams nothing">
+  An answer shorter than `lookbackChars` never has a releasable prefix, so it degrades silently to
+  whole-answer buffering — the exact behaviour `incremental` exists to avoid, on the short replies a
+  reader notices most. Nothing warns. Prefer the 64-character default unless a processor genuinely
+  matches longer text, and size the window against your *shortest* answers, not your longest.
+</Callout>
+
+<Callout type="warn" title="The cost of opting in">
+  A rejection that only emerges from the complete answer — a tool call the step had not settled yet,
+  a total that only makes sense at the end — still fails the run with `OutputRejectedError` and still
+  persists nothing. But a prefix has already reached the reader, and there is no un-sending bytes.
+  Do not declare `incremental` on a control whose verdict genuinely needs the whole answer.
+</Callout>
+
+Non-text frames (tool cards, reasoning) are forwarded live in arrival order, and frames the gate
+cannot decode are dropped — the same rule the buffered path applies, for the same reason. The chain
+runs once per streamed `text` frame, over the prefix so far, which is why an `incremental` processor
+should be cheap and local.
+
+## Under the durable runner
+
+Both chains run inside a checkpoint — `process:input:<step>` and `process:output:<step>` — so a
+processor may call a model, and a replay reads the result back rather than deciding again. Three
+consequences worth knowing:
+
+- **The held frames ride the `llm:<step>` checkpoint**, not a variable in the process that ran the
+  model. A run that suspends between the model call and the gate resumes in a process that never saw
+  the stream; a buffer held in memory would leave the turn's whole answer unstreamed.
+- **The release happens inside the gate's own checkpoint**, so "refused" and "nothing was streamed"
+  are one journaled fact rather than two a suspend could separate — and a replay does not flush the
+  same answer into the stream a second time.
+- **Under `durable: true`** the model runs on another worker, whose sink the loop cannot wrap. The
+  envelope therefore carries a `bufferOutput` flag and `AgentRunSteps.llm` hands the held frames
+  back on its step result. Without that, the gate would be bypassed on exactly
+  the deployment that needs it. **An incremental chain falls back to full buffering here** — there is
+  no prefix to release, because the model wrote its chunks into a sink on the far side of the
+  dispatch.
+- **An incremental turn journals its released prefix** on `llm:<step>` as `releasedText`, and the
+  gate step reads *which* release it still owes from that value rather than from the chain the
+  resuming process happens to be configured with. So a run that suspended under an incremental chain
+  cannot flush the whole answer again under a re-declared one. A refusal reached from a prefix rides
+  the same checkpoint as `gateRejection`, and is raised only after `persist:usage:<step>` and
+  `quota:bump:<step>` — the same ordering a whole-answer refusal has always had.
+
+`process:output:<step>` keeps its name and its position in all three modes, so changing a
+declaration never moves a checkpoint. Configure neither list and the loop's checkpoint names and
+positions are byte-identical to before, so a run already in flight when you ship the config keeps
+replaying.
+
+The two non-streamed passes take checkpoints of their own —
+`process:output:structured:<step>:<attempt>` and `process:output:followups:<step>` — and both are
+reachable only when an output chain is registered *and* the feature they gate is configured. Each
+sits immediately after the usage row for the call it is ruling on, so a refusal can never hide the
+tokens it already spent.
+
+## When a processor throws
+
+It surfaces as `ProcessorFailedError`, carrying `phase` (`'input'` | `'output'`), `processor` (the
+processor's `name`) and the original error as `cause`:
+
+```text
+output processor "moderation" failed: judge timed out
+```
+
+Wrapped deliberately: the model call is the only other thing that can fail at that point in the turn,
+and a bare `TypeError` from a classifier that would otherwise read as the provider going down is the
+kind of ambiguity that costs an hour at 3am.
+
+## Guardrails
+
+`@dudousxd/nestjs-agent-core/guardrails` (re-exported as `@dudousxd/nestjs-agent/guardrails`) ships
+PII, secret, prompt-injection and tool-poisoning detection as a ready-made pair of processors:
+
+```ts
+import { createGuardrails } from '@dudousxd/nestjs-agent/guardrails';
+
+const guardrails = createGuardrails({
+  pii: 'redact',                 // reversible: the model sees [EMAIL_1], the reader the address
+  secrets: 'block',
+  injection: { threshold: 0.6 }, // default action: block
+  toolPoisoning: true,           // for guardrails.screenTool, see below
+  rules: (ctx) => rulesForTenant(ctx.actor?.tenantRef), // more rules, resolved per scan
+  onEvent: (event) => audit.write(event),               // hits carry fingerprints, never values
+  fingerprint: (value) => hmac(value),
+});
+
+AgentModule.forRoot({
+  model,
+  inputProcessors: [guardrails.input],
+  outputProcessors: [guardrails.output],
+});
+```
+
+Each shorthand takes an action (`'allow' | 'log' | 'redact' | 'approve' | 'block'`) or an object
+(`{ action, types?, stages? }`; `pii` also takes `restore`, default `true`). The loop has no approval
+flow for guardrails, so `approve` is enforced as `block`.
+
+| Stage | Seen by | `redact` | `block` / `approve` |
+|---|---|---|---|
+| `llm_request` (system, messages, earlier tool-call arguments) | `guardrails.input`, every step | placeholders, restorable | the run fails: `ProcessorFailedError` whose `cause` is a `GuardrailBlockedError` |
+| `tool_result` | `guardrails.input`, one result at a time (`match.tools` applies) | placeholders, restorable | the result is **withheld**: the model is told why and the turn goes on |
+| `llm_response` | `guardrails.output` | one-way placeholders; the thread's own placeholders are then restored | `reject`, so `OutputRejectedError` |
+| `tool_args` | `guardrails.output` (read-only there) and `guardrails.wrapTool(name, handler)` | only through `wrapTool` | the step is rejected, or `wrapTool` throws and the model reads the tool's failure |
+| `tool_description` | `guardrails.screenTool(tool)` | n/a | `{ allowed: false, reason }` |
+
+- **Streaming stays on.** `guardrails.output` declares `incremental` with a 256-character lookback.
+  `incremental: { lookbackChars }` widens it; `incremental: false` gates the whole answer.
+- **Placeholders live per thread** in a `VaultStore` (option `vaults`, default `InMemoryVaultStore`,
+  bounded to 1,000 threads). A run resumed in another process finds no vault, so its placeholders
+  reach the reader unrestored; the values still never reach the model. `Vault.toJSON()` /
+  `Vault.fromJSON()` back a shared store, which then holds the raw values.
+- **`wrapTool`** is the only place a tool's arguments can be rewritten: it restores the thread's
+  placeholders (the tool needs the address, not `[EMAIL_1]`) and runs the `tool_args` rules on what
+  the tool receives. That is why the `pii` shorthand does not cover `tool_args`; `secrets` does.
+- **Injection** is scored on what the user typed and what tools returned, not on your system prompt.
+- **Custom rules** are `{ id, stages, detectors, action, match?: { sources?, tools? }, when?, options? }`.
+  Detectors are `pii`, `secrets`, `injection`, `tool_poisoning`, `regex`, `keywords`, or
+  `{ kind: 'custom', name, detect }` for a classifier or LLM judge. A detector that throws follows the
+  rule's `options.failMode` (`'open'` by default).
+
+`onEvent` is awaited, and a throw from it is swallowed: an audit sink cannot change a decision. Each
+hit is reported once per turn, since every step re-sends the prompt.
+
+### Tool poisoning on MCP
+
+A remote tool's description never enters the transcript, so no processor sees it. `AgentMcpModule`
+takes a `screen` (module-wide, or per server) that runs on every listed definition before import;
+`screenTool` has its shape:
+
+```ts
+import { createGuardrails } from '@dudousxd/nestjs-agent-core/guardrails';
+
+const guardrails = createGuardrails({ toolPoisoning: true });
+
+AgentMcpModule.forRoot({
+  servers: [{ name: 'docs', transport: { type: 'http', url } }],
+  screen: guardrails.screenTool, // bound to its instance, so it can be passed as is
+});
+```
+
+A refused tool is skipped and logged, and a screen that throws skips the tool too. `McpToolsService.refresh()`
+re-screens. It is a heuristic, not a proof.
+
+### Without the loop
+
+Everything but `Guardrails` is standalone (no NestJS, no Node-only API), for a gateway proxying raw
+provider traffic: `scan`, `Vault`, `StreamGuard` (OpenAI / Anthropic stream chunks), the `*Slots`
+helpers, and the detectors `detectPii`, `detectSecrets`, `scoreInjection`, `scoreToolText`,
+`screenToolDefinition`.
+
+## Building blocks
+
+| Export (`-core`) | What it is |
+|---|---|
+| `InputProcessor`, `OutputProcessor`, `OutputVerdict`, `ProcessorContext`, `ProcessedPrompt`, `ModelAnswer` | The SPI types. |
+| `IncrementalGating`, `DEFAULT_INCREMENTAL_LOOKBACK_CHARS` | The opt-in declaration and its default window. |
+| `OutputRejectedError`, `ProcessorFailedError` | The two defined failures. |
+| `createFrameBuffer()`, `releaseGatedFrames(frames, text)` | How the loop holds and releases a gated model stream — also what a custom runner's dispatched-step handler needs. |
+| `createIncrementalGate(options)`, `gateTail(processors, released, text)` | The incremental half: the sink the model writes through, and the tail the authoritative pass still owes. |
+| `gateFollowUps(processors, followUps, ctx)` | Run the chain over each suggestion and keep what survives — the drop-not-fail rule above. |
+| `resolveOutputGateMode(processors)`, `resolveGateLookback(processors)`, `OutputGateMode` | Which of `off` / `whole` / `incremental` a chain resolves to, and the window it releases behind. |
+| `decodeStreamEvent(line)` | Read one NDJSON stream frame back, or `null` for a chunk that is not one. |
+| `agentFailureCode(error)` | The stream error code for a failed run. |
+
+## Where to go next
+
+<Cards>
+  <Card title="Conversation history" href="/docs/agent/guides/conversation-history" description="The other half of the boundary: which messages reach the model at all." />
+  <Card title="Structured output" href="/docs/agent/guides/structured-output" description="Constrain the gated answer to a schema." />
+  <Card title="The agent loop" href="/docs/agent/concepts/the-agent-loop" description="Where each checkpoint sits in a turn." />
+</Cards>

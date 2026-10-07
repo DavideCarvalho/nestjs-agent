@@ -1,0 +1,430 @@
+---
+title: Human-in-the-loop & Durability
+icon: UserCheck
+description: Action tools pause for a human decision — and under the durable runner that pause is a real durable signal, so the run suspends in the state store and resumes on approval, surviving restarts.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Some tools are safe to run on the model's say-so; some are not. A `read` tool auto-executes. An
+`action` tool never does — the loop **pauses** for an explicit approve/reject. How that pause is
+implemented is the difference between the inline runner and the durable runner, but the wire
+protocol your frontend speaks is identical either way.
+
+---
+
+## The approval flow
+
+Declare a tool `kind: 'action'` and it becomes gated:
+
+```ts
+@AiTool({
+  name: 'purgeCache',
+  kind: 'action', // never auto-executes — the run pauses here
+  description: 'Purge a cache key.',
+  input: z.object({ key: z.string() }),
+})
+export class PurgeCacheTool implements ToolHandler<{ key: string }> {
+  async execute(input: { key: string }) {
+    await this.cache.purge(input.key);
+    return { purged: input.key };
+  }
+}
+```
+
+When the model calls `purgeCache`, the loop stops before `execute` and waits. A human resolves it
+through the REST endpoints:
+
+```bash
+# approve
+curl -X POST http://localhost:3000/agent/tool-call/approve \
+  -H 'content-type: application/json' \
+  -H 'x-actor-id: u1' -H 'x-actor-role: ADMIN' \
+  -d '{ "toolCallId": "..." }'
+
+# reject (with an optional reason the model sees)
+curl -X POST http://localhost:3000/agent/tool-call/reject \
+  -H 'content-type: application/json' \
+  -H 'x-actor-id: u1' -H 'x-actor-role: ADMIN' \
+  -d '{ "toolCallId": "...", "reason": "not now" }'
+```
+
+On approval the tool executes and the turn continues; on rejection the loop resumes with the
+rejection (and any reason) fed back to the model, which adapts instead of running the action.
+
+A decision carries only the `toolCallId`: the server derives the exact run awaiting it (the tool
+call's thread's active stream), so no run id is sent or trusted. That is also what lets a **delegated
+sub-agent's** action tool be approved — a sub-agent streams into the top-level run the human is
+watching, and the same `toolCallId` resolves to the sub-agent's own child run.
+
+Both endpoints are ownership-scoped: the acting actor must own the tool call's run, or the request
+gets a `403` (`404` if the tool call doesn't exist at all).
+
+Before the prompt is shown, and again right before `execute`, the tool's optional
+[`preflight`](/docs/agent/guides/tools#preflight-checking-an-action-before-and-after-approval) checks
+your domain state. It can refuse the call, report it already done, or give this one call its own
+prompt wording (`confirmation`), which is streamed on `approval-requested` and stored on the call.
+
+<Callout type="info" title="Not blocking the conversation">
+This page describes the default, **blocking** mode: the turn waits for the decision. With
+`actionApprovalMode: 'independent'` the call becomes a proposal, the turn ends, and the decision can
+arrive later from the web, a text message ("yes"), AG-UI or a console, with a background worker
+running the approved action. See [Action proposals](/docs/agent/guides/action-proposals).
+</Callout>
+
+<Callout type="info" title="The frontend wraps this">
+`useAgentChat` surfaces pending approvals and exposes approve/reject callbacks, so a UI renders an
+"Approve?" prompt inline in the conversation. See [Frontend](/docs/agent/guides/frontend).
+</Callout>
+
+## Who approves, and for how long
+
+By default every `action` call waits on the person chatting, forever. An `ApprovalPolicy` answers,
+per call, whether anyone has to approve it, **who**, and **until when**:
+
+```ts
+AgentModule.forRoot({
+  // …
+  approvalPolicy: {
+    requirementFor: (tool, actor, thread) =>
+      tool.name === 'issueRefund'
+        ? { required: true, approver: 'finance', ttlMs: 15 * 60_000 }
+        : { required: true, approver: 'requester' },
+    // Optional — the default: 'requester' is the thread's own actor, anything else is a role the
+    // decider must hold. Plug an authz Gate here for abilities.
+    // canDecide: (actor, { approver, requesterRef, toolCallId }) => …,
+  },
+});
+```
+
+- **`required: false`** runs the call straight away; it is still recorded as an action.
+- **`approver`** is streamed on `approval-requested` and persisted on the call. The approve/reject
+  routes enforce it: a caller who is not the approver gets `403`, and the decider — not the
+  requester — is recorded as `executedByRef`.
+- **`ttlMs`** bounds the wait. The durable runner hands it to `ctx.waitForSignal(…, { timeoutMs })`
+  (the runtime journals the deadline and wakes the run); the inline runner arms a timer. When it
+  lapses the call settles as `expired`: the model is told the approval expired (not that someone
+  said no), the stream gets `tool-output-denied` with `reason: "approval expired"` plus
+  `approval-settled { status: 'expired' }`, and a late approve gets `410 Gone`.
+- **`remember`** — `POST /agent/tool-call/approve { toolCallId, remember: true }` approves later calls
+  of the same tool in the same thread without asking (they settle with `decidedVia: 'remembered'`).
+- **`via`** names the surface the decision came through (`'web'` by default, `'slack'`, …) and is
+  stored as `decided_via`.
+
+The answer is taken inside the call's own `persist:toolcall` checkpoint, together with the thread's
+remembered approvals, so a durable replay reads it back instead of re-asking a policy that changed
+while the run was parked. A run that was already parked when you deploy this keeps waiting on the
+requester with no timeout.
+
+The tool-call row gains `approver`, `expires_at`, `remember` and `decided_via` (the Drizzle and
+MikroORM stores add them in `ensureAgentSchema`), and a reloaded thread carries them as
+`StoredMessage.approvals` — the React transcript exposes the whole record as `call.approval`, see
+[Frontend](/docs/agent/guides/frontend).
+
+---
+
+## Two runners, one protocol
+
+The same pause is backed two ways, chosen by the `durable` flag on `AgentModule.forRoot`:
+
+| | Inline runner (default) | Durable runner (`durable: true`) |
+|---|---|---|
+| The pause | an in-process runner holds the turn open | a real durable **suspend** — the run is checkpointed to the state store |
+| Surviving a restart | no — the pending turn is lost | yes — the run resumes from cache on approval |
+| Requires | nothing extra | `AgentDurableModule` + a configured `DurableModule` |
+| Wire protocol | identical | identical |
+
+Because the protocol is identical, you can develop against the inline runner and flip to durable in
+production without touching your frontend or your tools.
+
+---
+
+## Under the durable runner
+
+With `durable: true`, each agent turn runs as a `@dudousxd/nestjs-durable` workflow (the
+`agent.run` workflow). Every model call and every tool call is a **checkpointed step** — so a crash
+mid-turn replays from cache rather than re-charging the model or re-running a side effect.
+
+```ts
+AgentModule.forRoot({
+  model: myModelProvider,
+  store: myAgentStore,
+  actorResolver: new HeaderActorResolver(),
+  durable: true, // each turn is the durable `agent.run` workflow
+  // ...
+});
+```
+
+`durable: true` on its own configures the agent to expect the durable runner; the runner itself lives
+in `AgentDurableModule`, which you import alongside a configured `DurableModule`. The
+`agentDurable(options)` helper from `@dudousxd/nestjs-agent/durable` collapses those two imports into
+one — it wires `AgentModule.forRoot({ ...options, durable: true })` and `AgentDurableModule` together,
+so you spread it into `imports`:
+
+```ts
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { agentDurable } from '@dudousxd/nestjs-agent/durable';
+
+@Module({
+  imports: [
+    DurableModule.forRoot({ /* store, transport, … */ }),
+    ...agentDurable({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+      // ...same options as AgentModule.forRoot, minus `durable`
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+The longhand — `AgentModule.forRoot({ durable: true })` plus a separate `AgentDurableModule` import —
+still works; `agentDurable` is just the one-import shortcut.
+
+The human-in-the-loop pause becomes a durable **signal**: on the approval boundary the run suspends
+into the state store (via the durable `waitForSignal` primitive) instead of holding a connection
+open. An approve/reject POST delivers the signal and the run resumes — minutes or restarts later —
+replay-safe.
+
+<Callout type="warn" title="Streaming and durability compose, they don't fight">
+Live tokens don't go through the durable checkpoint path — they flow on a separate data plane (a
+`TokenStreamSink`). So you get resumable, replay-safe orchestration *and* token-by-token streaming
+at once, rather than trading one for the other.
+</Callout>
+
+---
+
+## Dispatched steps: the run isn't pinned to a pod
+
+Under `durable: true`, the turn's two long steps — the model call and each tool execution — dispatch
+as routed durable steps (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of running in the
+workflow body. Always: this is what `ctx.step` means in [`nestjs-durable`](/docs/durable), which
+deliberately offers no placement choice, and the agent follows it.
+
+```ts
+agentDurable({
+  model: myModelProvider,
+  store: myAgentStore,
+  actorResolver: new HeaderActorResolver(),
+});
+```
+
+`AgentRunSteps.llm` and `.tool` are registered as worker groups by `AgentDurableModule` under every
+surface but `'http'`, so the routed groups are served wherever a run may be driven. Each dispatched
+step re-resolves its own dependencies from whichever worker picks it up (its own DI, via
+`AGENT_DEPS_FACTORY.forAgent`), so a run can leave its originating pod for the model call and come
+back to a different one for a tool execution; the retry policy differs by step too — the `llm` step
+retries (`@Step({ retries: 3 })`), the `tool` step doesn't, since tool idempotency is your domain, not
+the runtime's.
+
+<Callout type="warn" title="Your @AiTool handlers need their own execution context">
+A dispatched step's handler has nothing of the originating request ambient around it. Anything your
+tool resolves per invocation from its caller's context — a request-scoped ORM EntityManager, an
+AsyncLocalStorage tenant, a CLS transaction — it has to establish itself:
+`@CreateRequestContext()` / `@EnsureRequestContext()` on the handler under MikroORM, exactly as every
+`@Step` handler in this ecosystem already does. It matters most on an `action` tool, because HITL
+exists to promise that approving one runs it: a handler that cannot resolve its context throws, the
+loop records the call `failed` and hands the error to the model, the turn completes — and the human's
+approval has been spent on an action that never happened.
+</Callout>
+
+<Callout type="info" title="A run journaled before dispatch finishes on the names it holds">
+Whether a turn writes the routed names or the in-process `llm:<i>`/`tool:<callId>` is answered by the
+run's own journal — `ctx.patched('agent:dispatched-steps')` — and never by configuration or by which
+pod happens to be replaying. A fresh run records the marker and dispatches; a run recorded by a
+release that ran those steps in the body keeps finishing on them.
+</Callout>
+
+<Callout type="warn" title="Multi-pod fleets need a cross-process token sink">
+A dispatched step can run on any worker in the fleet — not necessarily the pod holding the SSE
+connection. Wire a cross-process `TokenStreamSink` (e.g. `RedisTokenStreamSink`) so streamed tokens
+reach the right connection regardless of which pod executes the step. A boot warning fires when
+`durable: true` is set with the default in-process sink.
+</Callout>
+
+<Callout type="info" title="A suspend is never mispersisted as a tool failure">
+The durable runner's suspend/continue-as-new signals — thrown when a `waitForSignal` (an `action`
+tool's approval pause, among others) fires — carry a `Symbol.for('aviary:durable:control-flow')`
+marker, and every classification site keys off that marker rather than `instanceof`: the workflow's
+own catch, the agent loop's tool catch, the transient-retry loop, and the runner's start-suspend
+swallow. `instanceof` would only recognize a signal thrown by the same class the checking code
+imported, which the BullMQ thin worker's separate `Suspend` class is not.
+
+The loop reads the marker off the error **itself**, so this holds even for a host that wires no
+`isControlFlowError` hook — that hook is an override for a runner whose signals carry no marker, not
+the thing that makes detection work. It also holds whether the suspending step ran in-process or
+dispatched, so you never need to special-case a suspend in your own tool code.
+</Callout>
+
+---
+
+## Approving from a console, not just chat
+
+Approve/reject don't have to originate from the chat UI watching the run. A separate surface — a
+governance console, an ops dashboard — can bind `AGENT_APPROVAL_PORT` (`AgentApprovalPort`), an SPI
+the agent runtime implements and provides, routing through the exact **same** decision path the chat
+endpoints use (the durable signal, or the inline in-memory resolution) **without** re-running the
+ownership check the chat endpoints do — the console's own guards are expected to front it instead.
+
+```ts
+interface AgentApprovalPort {
+  approve(
+    toolCallId: string,
+    opts?: { executedByRef?: string; remember?: boolean; decidedVia?: string },
+  ): Promise<void>;
+  reject(
+    toolCallId: string,
+    opts?: { executedByRef?: string; reason?: string; decidedVia?: string },
+  ): Promise<void>;
+}
+```
+
+<AgentFlow variant="hitl" caption="Chat and the dashboard's approvals inbox are two different callers of the same signal — AgentRunner.signal resolves the suspended tool call either way, and the decider on the resulting Decision is executedByRef when the console supplied one, the run's own actor otherwise." />
+
+`executedByRef` records who actually decided. It lands on the tool call's persisted decision
+(`decision.executedByRef ?? the run's own actor`) on both the executed and the rejected path, so a
+console operator's approval is attributable even though the run's own actor never touched the
+request. `@dudousxd/nestjs-agent-dashboard`'s approvals inbox stamps this from the live console
+request via an `approvalActorRef` dashboard option that — as of `@dudousxd/nestjs-agent` 0.7.0 —
+defaults to the same `ActorResolver` the agent module is already configured with, so a console whose
+auth matches chat auth needs no extra wiring; override `approvalActorRef` only when the console's
+request shape differs. See [Cost & Governance](/docs/agent/guides/cost-and-governance) for the
+approvals inbox itself (`pendingApprovals`, the dashboard section, the `501` a port-less console gets).
+
+---
+
+## Resuming a stream
+
+Durability also covers the transport. A dropped SSE connection reconnects and replays the buffered
+tokens for the in-flight run:
+
+```bash
+# resume an in-flight run's stream
+curl -N http://localhost:3000/agent/chat/$RUN_ID/stream \
+  -H 'x-actor-id: u1' -H 'x-actor-role: ADMIN'
+```
+
+---
+
+## Cancelling a run
+
+```bash
+curl -X POST http://localhost:3000/agent/chat/$RUN_ID/cancel \
+  -H 'content-type: application/json' \
+  -H 'x-actor-id: u1' -H 'x-actor-role: ADMIN'
+```
+
+Cancel is ownership-scoped, same as approve/reject: the acting actor must own the run, or the
+request gets a `403` (`404` if the run doesn't exist). This is what the Stop control in
+`@dudousxd/nestjs-agent-react` is wired to.
+
+### A cancelled run is its own outcome
+
+Not a failure and not a completion — a third terminal, visible in both places a consumer looks:
+
+| | Where | Value |
+|---|---|---|
+| Store | `AgentStore.recordRunEnd` | `status: 'cancelled'`, with no `errorCode` / `errorMessage` |
+| Stream | the last `AgentStreamEvent` | `{ kind: 'cancelled' }`, then a normal `end()` — never a `fail()` |
+
+That split is the point. A failure rate computed over agent runs must be able to leave a user
+pressing Stop out of it, and a client that retries a failed stream must not retry one the user
+deliberately stopped. A stream that simply ends wrote everything it had; one that ends after a
+`cancelled` frame did not, which is how a reader tells a truncated answer from a complete one.
+
+### Where a run actually stops
+
+The loop reads the cancel flag at the points where stopping is safe and cheap — **between steps,
+before the next model call, and before the turn's tool calls are dispatched** — and unwinds from
+there through the same path a durable suspend uses.
+
+<Callout type="warn" title="A tool already executing is not interrupted">
+  There is no un-executing a side effect. A tool that has started runs to completion and is recorded
+  exactly as it would have been; the cancel is observed at the next point instead. So a cancel that
+  lands mid-tool costs you that one tool, and nothing after it — the turn never makes its next model
+  call, and no further tool is dispatched.
+
+  Abandoning it is not on the table under the durable runner either: a dispatched step dropped
+  mid-flight leaves the journal holding a dispatch whose result never lands.
+</Callout>
+
+### Under each runner
+
+**Inline.** The request is held in-process (this runner is single-replica by construction) and the
+loop observes it at the next safe point. A turn parked on a human is a special case: nobody is going
+to resolve that wait, so `cancel` rejects it outright and the run unwinds through the identical path.
+
+**Durable.** `cancel` calls the runtime's own cancel in its compensating form, which does two things
+at once: it moves the run to `cancelling` — the status the workflow's cancel observation reads — and
+re-drives it, so a turn executing in-process unwinds at its next safe point rather than finishing.
+Child runs (`ctx.child` delegations) cascade with it. A turn parked on `waitForSignal` cannot observe
+anything, because it is suspended inside a checkpoint its journal already holds; the runtime settles
+that one `cancelled` on its own.
+
+<Callout type="info" title="Why the answer is journaled">
+  The loop only ever asks "was this cancelled?" *inside* a checkpoint. The first process to reach a
+  given position writes the answer there, and every later replay reads it back. So a cancel that
+  arrives between two replays is seen at the first position the history does not yet hold — it can
+  never change the branch a replayed position already took, which is what would otherwise make the
+  journal diverge.
+
+  The positions themselves are gated behind `ctx.patched('agent:cancellation')`, so a run already in
+  flight when you deploy this keeps replaying against the sequence it recorded.
+</Callout>
+
+### What settles what
+
+`cancel` settles the run row and the subscriber's stream — both are keyed by the run id alone. The
+thread's `activeStreamId` is released by the run body when it observes the cancel, because only the
+body knows which thread the run was streaming. For the one case the body cannot observe — a turn
+parked on a human under the durable runner — the thread stays marked active until its next turn;
+reattaching to it replays a stream that has already ended.
+
+<Callout type="info" title="A failed durable run surfaces the same way as an inline one">
+Durable runs emit `event: error` on a failure (e.g. quota exceeded) exactly like the inline runner —
+the HTTP stream ends with the structured error frame instead of hanging. Durability changes how the
+run is checkpointed, not how a failure is reported to the client.
+</Callout>
+
+---
+
+## A turn that dies mid-step
+
+A run that fails — the runtime refused a checkpoint position, a store write threw, the provider
+errored — settles what it left behind, under both runners:
+
+- the calls it had put to a person become `failed`, so no approval card waits on a run that will
+  not come back (`AgentStore.failUnsettledToolCalls`, optional on a custom store);
+- its run row is settled and its thread released — also on a replay refusal, where nothing can be
+  journaled and the three are written straight to the store;
+- the next turn on the thread is shown a result for every tool call the dead one made: the real
+  output where the call's row says it ran (`AgentStore.toolCallOutcomes`, optional), otherwise
+  "never completed — check before doing it again". A provider refuses a prompt in which a tool
+  call has no result after it, which is how one dead turn used to break every later one;
+- a decision on a dead run's card answers `409 { code: 'run_not_active' }`;
+- the error frame carries a stable `code` (`replay_diverged`, `model_no_output`, `run_failed`)
+  and, in production, a generic message — see
+  [Error codes](/docs/agent/reference/stream-events#error-codes).
+
+What it cannot settle is a tool that ran and whose checkpoint was never written — see
+[Making a tool safe to run twice](/docs/agent/guides/tools#making-a-tool-safe-to-run-twice).
+
+---
+
+## Observability
+
+Every stage of a run is announced on Node's `diagnostics_channel` under `aviary:agent:*`
+(`run.started`, `message`, `tool-call`, `delegated`, `quota.exceeded`, `run.failed`, `run.finished`). The
+telescope extension consumes them for the "Agent" tab; under the durable runner, runs also appear in
+the durable "Workflows" tab for free. See [Cost & Governance](/docs/agent/guides/cost-and-governance).
+
+---
+
+## Related
+
+- [Asking the user](/docs/agent/guides/asking-the-user) — the other direction: collecting the scope *before* the work, on the same durable signal
+- [Tools](/docs/agent/guides/tools) — declaring `read` vs `action` tools
+- [Multi-agent](/docs/agent/guides/multi-agent) — a delegated sub-agent is a durable child run
+- [Frontend](/docs/agent/guides/frontend) — rendering the approve/reject prompt in the UI
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the diagnostics events and run history

@@ -1,0 +1,220 @@
+---
+title: '@dudousxd/nestjs-agent-rag-media'
+icon: Image
+description: Auto-ingest nestjs-media uploads into agent RAG — extract, chunk, embed, index, owner-scoped, delete-synced. Couples via the diagnostics channel, no hard media dependency.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Attach a file through [`@dudousxd/nestjs-media`](/docs/media) and it becomes searchable by the agent
+automatically: extract text, chunk, embed, index — scoped to its owner, with delete kept in sync.
+
+It couples to the media library through the **diagnostics channel** — the same `aviary:media:*` seam
+[Telescope](/docs/agent/packages/telescope) rides — so it has **no hard dependency on
+`@dudousxd/nestjs-media`**. You supply a one-line `readFile`; the integration listens for attach and
+delete events.
+
+## Install
+
+```bash
+pnpm add @dudousxd/nestjs-agent-rag-media @dudousxd/nestjs-agent-rag @dudousxd/nestjs-agent-core
+```
+
+## Wire it
+
+```ts
+import { AgentMediaIngestionModule } from '@dudousxd/nestjs-agent-rag-media';
+
+@Module({
+  imports: [
+    AgentMediaIngestionModule.forRoot({
+      store,                           // any VectorStore — Pg, Redis, Memory
+      embedder,                        // any EmbeddingProvider
+      collections: ['knowledge-base'], // omit = every collection
+      readFile: (disk, path) => media.disk(disk).get(path), // the only glue
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+Every file attached to `knowledge-base` is now chunked, embedded, and indexed with
+`{ mediaId, ownerType, ownerId, collection, size }` metadata (`size` is the real byte length, the
+fingerprint the reconciler compares); deleting the record removes its chunks. Add your own keys
+(e.g. an ACL `audience`) with `metadata: (event) => ({ … })` — merged over the defaults.
+
+<Callout type="warn" title="Owner comes from the server, never the client">
+  The owner stamped onto each chunk is taken from the **server-side attach record**
+  (`AttachPayload.ownerId`), not from any client-supplied key or path. That's what makes owner-scoped
+  retrieval a real trust boundary rather than a hint.
+</Callout>
+
+## API
+
+| Export | What it is |
+|---|---|
+| `AgentMediaIngestionModule.forRoot(options)` | Registers `AgentMediaIngestionService`, which subscribes to the media channels on boot. Options: `{ readFile, embedder, store, collections?, extractor?, chunk?, maxBytes?, statFile?, metadata?, conversions?, enqueue? }`. |
+| `AgentMediaIngestionService` | The subscriber. `settle()` awaits in-flight ingestion (graceful shutdown / tests); `handleAttach` / `handleDelete` / `handleConversion` are the entry points. |
+| `ingestMediaFile(event, deps)` | The pure ingest function — size-gate (`statFile` if given) → read → real-size check → extract → `remove` → chunk → embed → upsert. Returns `{ status: 'ingested' \| 'skipped', … }`; throws on failure. |
+| `removeMedia(event, { store })` | The delete-sync half — drops a record's chunks. |
+| `reconcileMediaRag(query, deps)` | Drift repair — diff a `MediaSource` against the index; returns `{ ingested, reingested, removed }` (document ids). |
+| `applyMediaIngestJob(job, deps)` | Runs one `MediaIngestJob` and throws on failure — call it from your durable worker when using the `enqueue` hook, so the queue retries. |
+| `runMediaIngestJob(job, deps)` | Same, but never throws: returns a `MediaIngestOutcome` and publishes `media.failed` with the failing phase (`kind`: `read` / `extract` / `embed` / `store` / `unknown`) and the original error as `cause` (in-process only). |
+| `mediaIngestFailureKind(error)` | The failing phase of an error thrown by `ingestMediaFile` / `applyMediaIngestJob`, for your own retry policy. |
+| `TextExtractor` / `MimeTextExtractor` / `defaultTextExtractor()` | Bytes → text, dispatched by mime type (media type only, case-insensitive). `text/*`, JSON, HTML shipped; register your own for PDF/DOCX. Unregistered types throw `UnsupportedMimeTypeError` → skipped. |
+| `MediaAttachEvent` / `MediaDeleteEvent` / `MediaConversionEvent` | The channel payload shapes (mirroring media's `AttachPayload` / `DeletePayload` / conversion payload). |
+
+`maxBytes` defaults to 25 MB. `MediaAttachEvent.size` is a declared value and can only reject early;
+the real byte length is re-checked after the read. Wire `statFile: (disk, path) => Promise<number>`
+(S3 `HeadObject`, `fs.stat`) so an oversized object is never downloaded — `reconcileMediaRag` uses it
+too, keeping its size fingerprint comparison real-vs-real.
+
+## Owner-scoped retrieval
+
+Ingestion stamps the owner onto every chunk, so a per-user / per-tenant retriever is one wrapper —
+[`FilteredRetriever`](/docs/agent/packages/rag) from `-rag`:
+
+```ts
+import { EmbeddingRetriever, FilteredRetriever } from '@dudousxd/nestjs-agent-rag';
+
+const base = new EmbeddingRetriever(embedder, store);
+const forThisUser = new FilteredRetriever(base, { ownerId: actor.id });
+```
+
+Pass `forThisUser` to `createRetrievalTool(...)` or `forRoot({ retrieval })` and the agent only ever
+retrieves that owner's documents. The fixed filter takes precedence, so a crafted query can't widen
+the scope.
+
+## Custom extractors
+
+`defaultTextExtractor()` decodes `text/*` and JSON, strips `text/html`, and **skips** anything else
+(unsupported types are dropped, not indexed as binary garbage). Register a parser to add a format:
+
+```ts
+import { defaultTextExtractor } from '@dudousxd/nestjs-agent-rag-media';
+import pdfParse from 'pdf-parse';
+
+const extractor = defaultTextExtractor().register('application/pdf', async (bytes) =>
+  (await pdfParse(bytes)).text,
+);
+
+AgentMediaIngestionModule.forRoot({ store, embedder, readFile, extractor });
+```
+
+## Ingesting conversions (PDF, OCR)
+
+For binary formats, the better move is to let the media library's own conversion pipeline produce the
+text and ingest **that** — no PDF/OCR parser on the RAG side. Point `conversions` at the conversion
+names you want; `resolve` maps the (owner-less) conversion event back to an ingestable descriptor,
+reusing the media record's `id` so the derived text shares the original's document id.
+
+```ts
+AgentMediaIngestionModule.forRoot({
+  store,
+  embedder,
+  readFile,
+  conversions: {
+    names: ['text'], // media conversion names to ingest; others ignored
+    resolve: async ({ id, path }) => {
+      const record = await mediaLibrary.find(id);
+      if (!record) return null;
+      return {
+        id, // same document id as the original
+        ownerType: record.ownerType,
+        ownerId: record.ownerId,
+        collection: record.collection,
+        disk: record.conversions.text.disk,
+        path,
+        mimeType: 'text/plain',
+        size: record.conversions.text.size,
+      };
+    },
+  },
+});
+```
+
+<Callout type="info" title="Same id is deliberate">
+  Ingesting the conversion under the original's `id` means delete-sync (`remove(id)`) covers it, and
+  because a skipped ingestion never calls `remove`, the binary original re-attaching (unsupported →
+  skipped) won't wipe the conversion-derived chunks. One searchable representation per media record.
+</Callout>
+
+## Keeping the index in sync
+
+Ingestion rides the diagnostics channel, so it's eventual and best-effort: the vectors update just
+after the media event fires. That covers the normal `MediaLibrary.attach()` / `delete()` path — but
+an event can be missed if the process was down when it fired, or if a record was deleted straight in
+the database, bypassing the library. `reconcileMediaRag` repairs that drift by diffing the source of
+truth against the index:
+
+```ts
+import { reconcileMediaRag } from '@dudousxd/nestjs-agent-rag-media';
+
+const { ingested, removed } = await reconcileMediaRag(
+  { ownerType: 'user', ownerId: actor.id, collection: 'knowledge-base' },
+  {
+    store,
+    embedder,
+    readFile,
+    // your source of truth — the media records currently attached
+    source: {
+      listMedia: ({ ownerType, ownerId, collection }) =>
+        mediaLibrary.list(ownerType, ownerId, collection),
+    },
+  },
+);
+```
+
+It ingests media that isn't indexed yet, re-ingests media whose content changed (the indexed `size`
+fingerprint no longer matches — catching a file replaced while nobody was listening), and removes
+indexed documents whose media record is gone — touching only the difference, so it's cheap to run on
+a schedule or at boot. The result also lists `reingested` ids. It uses
+`VectorStore.listDocuments(filter?)` to enumerate what's indexed for the owner.
+
+## At-least-once ingestion
+
+`AgentMediaIngestionModule` ingests inline. For large files or an at-least-once guarantee, pass an
+`enqueue` hook — attach/delete are then handed to your durable queue instead of ingested inline, and a
+worker replays them with `applyMediaIngestJob`. This keeps durability **opt-in**: the package pulls in
+no durable dependency of its own.
+
+```ts
+import { applyMediaIngestJob } from '@dudousxd/nestjs-agent-rag-media';
+
+AgentMediaIngestionModule.forRoot({
+  store,
+  embedder,
+  readFile,
+  enqueue: (job) => durableQueue.add('media-rag', job), // { type: 'ingest' | 'remove', event }
+});
+
+// in the durable worker — pass the same config object you gave the module:
+async function handle(job) {
+  await applyMediaIngestJob(job, { store, embedder, readFile }); // throws → the queue retries
+}
+```
+
+If the enqueue call itself throws, the service logs it and publishes `media.failed`.
+
+## Observability
+
+Each file emits an `aviary:rag:media.*` diagnostics event — `media.ingested` (with chunk count),
+`media.removed`, `media.skipped` (`unsupported-type` / `too-large` / `empty-text`), `media.failed`
+(with `error` and, when a phase ran, `kind`). Payloads carry `mediaId`, `ownerType` and `ownerId`;
+outcomes of an attach also carry `collection`, `source`, `size` and `mimeType`. The Telescope bridge
+captures them automatically.
+
+## Chat attachments
+
+Files users attach in the chat through `AgentMediaAttachmentsModule` (`@dudousxd/nestjs-agent/media`)
+are media records too (`ownerType: 'agent-actor'`, `ownerId` = the actor's id, collection
+`agent-attachments` by default). With `indexForRag: true` that module publishes each ready attachment
+on `aviary:media:attach` (and its removal on `aviary:media:delete`), so this package indexes it like
+any other upload. Scope retrieval by owner (`FilteredRetriever` on `ownerType` / `ownerId`) and list
+the attachment collection in `collections`. See [File uploads](/docs/agent/guides/file-uploads).
+
+## Related
+
+- [`@dudousxd/nestjs-agent-rag`](/docs/agent/packages/rag) — the RAG package this builds on
+- [RAG guide](/docs/agent/guides/rag) — modes, citations, hybrid + reranking, owner scoping
+- [`@dudousxd/nestjs-media`](/docs/media) — the upload library it ingests from

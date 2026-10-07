@@ -1,0 +1,359 @@
+---
+title: Multi-agent
+icon: Waypoints
+description: Declare named agents as @Agent classes, let an orchestrator hand off to sub-agents via handoff, and run each delegation as a durable child run — awaited, or detached so the chat stays free.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A single agent answers with its own prompt and tools. A **multi-agent** setup splits that into
+named specialists — an *orchestrator* that coordinates, and *sub-agents* it hands off to. You
+declare each one as an `@Agent`-decorated provider, name which agents an orchestrator may call via
+`handoff`, and the library does the wiring: at boot it discovers the classes, synthesizes an
+`ask_<name>` tool per handoff edge, and when the model calls it the loop runs the sub-agent as a
+durable child run (or a nested in-process loop when you're not durable).
+
+A handoff edge can also be declared **detached** — the delegate is started and the orchestrator's
+turn ends without its answer, which arrives in the conversation later. See
+[Delegate without waiting](#delegate-without-waiting).
+
+The **mechanism** is the library; the roster — which agents exist, what each one is for, who may
+call whom — is policy you supply.
+
+---
+
+## Declare named agents
+
+An agent is an ordinary Nest provider decorated with `@Agent({ name, ... })`. Register the classes
+as providers alongside `AgentModule.forRoot`; a `DiscoveryService` sweep at boot reads their metadata
+and populates the shared `AgentRegistry`. There is no `forFeature([definitions])` and no inline
+config array — being a class means each agent gets constructor DI (its retriever, a schema service, a
+policy) instead of a static blob, and a dynamic prompt is a `@SystemPrompt()` method rather than a
+string.
+
+```ts
+// src/app.module.ts
+import { Module, Injectable } from '@nestjs/common';
+import { Agent, AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { GetWeatherTool } from './tools/get-weather.tool.js';
+
+/** A focused specialist — restricted to the `getWeather` tool. */
+@Agent({
+  name: 'weather-analyst',
+  systemPrompt: 'You answer weather questions using the getWeather tool.',
+  tools: ['getWeather'],
+})
+@Injectable()
+class WeatherAnalystAgent {}
+
+/** An orchestrator that hands off to the specialist (via the synthesized `ask_weather_analyst`). */
+@Agent({
+  name: 'ops-orchestrator',
+  systemPrompt: 'You coordinate specialists. Delegate weather questions to weather-analyst.',
+  handoff: [WeatherAnalystAgent],
+})
+@Injectable()
+class OpsOrchestratorAgent {}
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+      defaultAgent: 'ops-orchestrator', // which agent an unqualified turn runs
+      // durable: true,   // makes each handoff a durable child run — see below
+    }),
+  ],
+  providers: [GetWeatherTool, WeatherAnalystAgent, OpsOrchestratorAgent],
+})
+export class AppModule {}
+```
+
+The orchestrator has no `tools` of its own — its only capability is delegation. The specialist has
+no `handoff` — it's a leaf that answers with `getWeather`. Nothing stops an agent from having both.
+`handoff` takes **class references**, not names, so a typo is a compile error rather than a runtime
+one. Set `defaultAgent` to pick which agent an unqualified turn runs; with more than one agent
+registered there's no single-agent fallback.
+
+<Callout type="info" title="Dynamic prompts and app-wide prompt sections">
+Replace the flat `systemPrompt` string with a `@SystemPrompt()` method on the class to build the base
+prompt per turn from its `PromptContext` (actor, agent name, page context). A
+`@SystemPromptContributor()` method on *any* provider appends a section after **every** agent's base
+prompt app-wide — the way to inject a mentions legend or a schema hint without touching each agent.
+</Callout>
+
+<Callout type="warn" title="handoff targets are validated at boot">
+Referencing an unregistered agent throws at startup — it no longer silently creates a handoff to an
+unrestricted phantom agent.
+</Callout>
+
+<Callout type="info" title="Cycles and depth are refused at runtime">
+A delegation that would put the same agent on one chain twice (`A → B → A`) is refused as a cycle;
+`maxAgentAppearances` (default `1`, `DEFAULT_MAX_AGENT_APPEARANCES`) raises that, counting
+appearances, so `2` admits one deliberate return. A chain longer than `maxDelegationDepth` (default
+`5`, `MAX_DELEGATION_DEPTH`) is refused too. Both are per-agent `@Agent` options. A refusal does not
+fail the run: the delegate tool's result is the reason, e.g.
+`(delegation cycle: alpha → beta → alpha — alpha 2 times on one chain)`, and the model goes on.
+</Callout>
+
+---
+
+## The synthesized `ask_<name>` tool
+
+Every `handoff` target becomes a real `agent`-kind tool in the registry. The name is
+`ask_` + the target agent's name with non-alphanumeric runs collapsed to `_`:
+
+| Target agent name | Edge | Synthesized tool | Input schema |
+|---|---|---|---|
+| `weather-analyst` | awaited | `ask_weather_analyst` | `{ task: string }` |
+| `billing.ops` | awaited | `ask_billing_ops` | `{ task: string }` |
+| `deep-research` | detached | `start_deep_research` | `{ task: string }` |
+
+The tool's description is generated for the model — `Delegate a task to the "weather-analyst" agent
+and get its answer.` — and, when the target's `systemPrompt` is a flat string, that prompt is
+appended (`It is: …`) so the orchestrator's model knows what the specialist is *for*. A detached
+edge's description says instead that the call returns a receipt, not an answer. (A `PromptBuilder` prompt is
+per-request and would stringify to source, so it's skipped.)
+
+The orchestrator's effective tool allow-list is its own `tools` **plus** these synthesized delegate
+tools:
+
+```ts
+// effective allow-list for ops-orchestrator:
+['ask_weather_analyst']            // tools: [] + handoff: [WeatherAnalystAgent]
+// for an agent with both:
+['refundOrder', 'ask_billing_ops'] // tools: ['refundOrder'] + handoff: [BillingOpsAgent]
+```
+
+<Callout type="info" title="You never write the delegate tool">
+There is no `@AiTool` for delegation. The discovery service synthesizes one `agent`-kind entry per
+edge at startup and logs `registered N AI tool(s), F functional tool(s) and M delegate tool(s)`. The handler is never
+called — delegation is resolved at the loop level, not by a tool handler.
+</Callout>
+
+---
+
+## Target an agent per request
+
+A turn runs against exactly one agent. Pick it with the `agent` field in the chat body; omit it and
+the module's default agent runs.
+
+```bash
+curl -N http://localhost:3000/agent/chat \
+  -H 'content-type: application/json' \
+  -H 'x-actor-id: u1' -H 'x-actor-role: ADMIN' \
+  -d '{ "message": "What is the weather in Lisbon?", "agent": "ops-orchestrator" }'
+```
+
+```json
+{ "message": "…", "threadId": "…", "agent": "ops-orchestrator" }
+```
+
+The orchestrator's model sees `ask_weather_analyst`, calls it with `{ "task": "weather in Lisbon" }`,
+the loop runs `weather-analyst` (which calls `getWeather`), and its answer flows back to the
+orchestrator as the tool result — which then streams the final reply. From the client's point of
+view it's one turn on one thread; the delegation happens inside the loop.
+
+---
+
+## What each agent gets
+
+Model, store, sink, and governance are shared from `forRoot`. Everything on the `@Agent({ ... })`
+decorator is per-agent and overrides the shared defaults for that agent's turns:
+
+| Option | Type | Effect |
+|---|---|---|
+| `name` | `string` | The identifier used in the `agent` body field and recorded as each message's provenance. Required. |
+| `description` | `string` | Human summary, shown to an orchestrator that may hand off to this agent, and surfaced in the `GET /agent/agents` catalog. |
+| `systemPrompt` | `string` | This agent's flat base prompt. For a dynamic prompt add a `@SystemPrompt()` method instead. A flat string is also surfaced in the `ask_` tool's description. |
+| `tools` | `string[]` | Allow-list of tool names this agent may use (a subset of all registered tools). Omit → every tool its role allows. |
+| `handoff` | `(Type \| { agent: Type; detached?: boolean })[]` | Other `@Agent` classes this agent may hand off to. A bare class becomes an `ask_<name>` tool the turn waits on; `{ agent, detached: true }` becomes a `start_<name>` tool the turn does not. |
+| `model` | `string` | Accounting/label override for this agent's turns (the model provider itself is shared). |
+| `maxSteps` | `number` | Tool-calling step cap for this agent's loop (default `8`). |
+| `maxDelegationDepth` | `number` | How deep delegation may nest below this agent (default `5`). |
+| `maxAgentAppearances` | `number` | How many times one agent may appear on a single delegation chain (default `1`). |
+| `history` | `AgentHistoryWindow` | Per-agent history ceiling — see [Conversation history](/docs/agent/guides/conversation-history). |
+| `outputSchema`, `outputRepairAttempts` | `StandardSchemaV1`, `number` | See [Structured output](/docs/agent/guides/structured-output). |
+| `intake`, `ask` | `AgentIntake`, `boolean` | See [Asking the user](/docs/agent/guides/asking-the-user). |
+| `personas`, `defaultPersona` | `Persona[]`, `string` | See [Personas](/docs/agent/guides/personas). |
+
+So each agent runs its **own system prompt, its own model label, and its own tool allow-list** —
+and that allow-list is further **intersected with the actor's role/ability gate** on each tool. An
+agent can only reach tools it lists *and* the caller is authorized for.
+
+<Callout type="info" title="Delegation respects the roster, not the actor's ambition">
+A sub-agent can't be reached unless some orchestrator names it in `handoff`, and it can only use
+the tools *it* declares — not the orchestrator's. Scoping a specialist down to one tool is how you
+keep a broad orchestrator from smuggling capability into a narrow task.
+</Callout>
+
+---
+
+## Delegation is a child run
+
+When the model calls an `ask_<name>` tool, the loop handles it directly (not via a handler) because
+the execution mode differs by runner:
+
+- **`durable: true`** — the sub-agent runs as a **durable child run**. The durable runner maps it to
+  `ctx.child`, a ctx-level suspend point, so a sub-agent that pauses on a human-in-the-loop `action`
+  tool suspends and resumes just like a top-level run — replay-safe, surviving restarts.
+- **inline (no durable)** — the sub-agent runs as a **nested in-process loop**, awaited to
+  completion before the orchestrator's turn continues.
+
+Either way the sub-agent's result comes back as `{ text }` and is persisted as the delegate tool's
+output. Delegation is reachable only through a `handoff` edge: a tool handler's `AiToolCtx` carries no
+way to start another agent.
+
+<Callout type="warn" title="Wire durability before you rely on it">
+The durable child run needs `durable: true` plus `AgentDurableModule` and a configured
+`DurableModule`. Without them the loop still delegates — as a nested in-process loop — but a
+sub-agent's HITL pause is held open in memory, not checkpointed. See
+[Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability).
+</Callout>
+
+<Callout type="info" title="A child run dispatches its steps too">
+A delegated child run is still an `agent.run` workflow — so a sub-agent's own model call and tool
+executions dispatch through the same
+`AgentRunSteps.llm` / `.tool` worker groups as a top-level run, landing on whichever worker in the
+fleet picks them up rather than staying pinned to the pod that started the parent. See
+[Dispatched steps](/docs/agent/guides/human-in-the-loop-and-durability#dispatched-steps-the-run-isnt-pinned-to-a-pod).
+</Callout>
+
+---
+
+## Delegate without waiting
+
+An awaited delegation holds the conversation open for as long as the specialist takes. For a
+specialist that takes minutes — a deep research pass, a long report — that is the wrong shape: the
+user is stuck watching a spinner for work they did not need to sit through.
+
+Declare the edge **detached** and the orchestrator's turn ends without the answer:
+
+```ts
+@Agent({
+  name: 'deep-research',
+  systemPrompt: 'You research a question thoroughly and write it up.',
+  tools: ['searchCorpus', 'readDocument'],
+})
+@Injectable()
+class DeepResearchAgent {}
+
+@Agent({
+  name: 'ops-orchestrator',
+  systemPrompt: 'You coordinate specialists.',
+  handoff: [
+    WeatherAnalystAgent,                            // awaited  -> ask_weather_analyst
+    { agent: DeepResearchAgent, detached: true },   // detached -> start_deep_research
+  ],
+})
+@Injectable()
+class OpsOrchestratorAgent {}
+```
+
+The model calls `start_deep_research`, the loop starts the run and hands the call back a **receipt**
+rather than an answer:
+
+```json
+{
+  "detached": true,
+  "status": "started",
+  "agent": "deep-research",
+  "runId": "…",
+  "note": "The \"deep-research\" agent is now working on this in the background. Its answer is NOT part of this turn and will arrive in this conversation as a separate message when it is ready. Tell the user the work has started; do not state or guess what it will find."
+}
+```
+
+The turn finishes on the orchestrator's own words ("I've put the research agent on it"), the chat is
+free, and when the delegate finishes it posts its answer into the same thread as its **own message**,
+stamped with its own `runId` and `agentName` — so a client renders it as *the research agent
+finished*, not as the assistant's next reply.
+
+<Callout type="warn" title="The author declares it, not the model">
+Detachment is a property of the EDGE, set by whoever wired it. A model that can choose to detach can
+choose to detach the one thing the user is sitting there waiting for, and it has no way to know which
+that is. The same specialist can be both — `ask_deep_research` and `start_deep_research` are separate
+tools, so an orchestrator may wait when it matters and background when it does not.
+</Callout>
+
+### What a detached run does differently
+
+| | Awaited (`ask_<name>`) | Detached (`start_<name>`) |
+|---|---|---|
+| The parent turn | suspends until the child answers | ends; the child keeps running |
+| Durable primitive | `ctx.child` (suspend + join) | a journaled `detach:<toolCallId>` step that starts an independent run (no suspend, not a child) |
+| The call's result | the child's `{ text }` | a `DetachedDelegationReceipt` |
+| Streaming | forwards into the parent's sink, so the human watching sees it | its own sink, on its own run id |
+| An `action` tool it hits | an approval card in the live turn | the [pending-approvals inbox](/docs/agent/guides/cost-and-governance), routed by the call's own run |
+| The answer | the parent's tool result | a message in the delegating thread |
+
+Streaming is the reason the two cannot share a sink: the turn that started a detached run has
+already ended, and writing its tokens — or its approval card — into that stream would put them in
+front of a reader who has already seen `done`, or in whatever unrelated turn happens to be open
+next. It is subscribable on its own id (`GET /agent/chat/:runId/stream`, ownership-scoped like any
+other run), which is what lets a client show a background agent working rather than a frozen card.
+
+### Lifecycle
+
+- **It needs an approval nobody gives.** It parks, exactly as a top-level run does, and its call
+  shows up in the approvals inbox against its own run. Nothing times it out: a deadline on a human
+  decision is a policy the host owns, and the run is visible and cancellable in the meantime.
+- **Nobody comes back.** The answer is a persisted message. It is there on the next read of the
+  thread, whether that is in five minutes or next week.
+- **Someone stops it.** `POST /agent/chat/:runId/cancel` on its own id — the receipt carries it.
+  Stopping it while it is parked on a human settles its card `cancelled` and posts a "stopped"
+  message. Stopping the turn that STARTED it does **not** stop it: under the durable runner it is
+  started as a run of its own rather than a child, so the runtime's cancel cascade does not reach it
+  (it still records `parentRunId`). A run that journaled the older `spawn:` step before this change
+  replays unchanged.
+- **The thread is deleted.** The run is not resurrected into a conversation nobody kept — delivery
+  is skipped when the thread is gone. The work already done cannot be un-done, only undelivered.
+- **It dies before answering.** The runner posts a message saying so and settles the delegation's
+  row. `started` is the one state a reader can neither wait on nor act on, so it is never left.
+
+### Rolling it up
+
+A detached run outlives the turn that started it, so nothing in the transcript pairs them. Both the
+awaited and the detached child therefore record `parentRunId` on `AgentStore.recordRunStart`, which
+is what lets a governance surface roll a delegation's cost up to the turn that asked for it. A store
+that persists nothing for it still works — it loses the tree, not the run.
+
+<Callout type="info" title="The branch comes out of the journal">
+Whether a delegation detaches is settled inside the call's `persist:toolcall` checkpoint, next to its
+kind and its target — never from a registry lookup in whichever process happens to be replaying. So
+flipping an edge to detached changes what NEW runs do and nothing about a run already in flight,
+which keeps replaying the branch its history holds. The loop writes the same checkpoint names either
+way; only the runner's own positions differ (`ctx.child` for an awaited edge; `detach:<toolCallId>`,
+behind the `agent:detached-unlinked` patch marker, for a detached one).
+</Callout>
+
+---
+
+## Observing delegation
+
+Every delegation emits an `aviary:agent:delegated` diagnostics event on Node's
+`diagnostics_channel`, carrying who called whom:
+
+```ts
+interface AgentDelegated {
+  runId: string;
+  fromAgent?: string; // omitted when the orchestrator is the default agent
+  toAgent: string;
+  detached?: boolean; // the delegate was STARTED, not awaited
+}
+```
+
+`@dudousxd/nestjs-agent-telescope` consumes it for the Agent dashboard tab; any app can subscribe to
+build an orchestration graph, count delegations per specialist, or alert on a runaway fan-out — the
+library instruments nothing in your code. See
+[Cost & Governance](/docs/agent/guides/cost-and-governance) for the rest of the `aviary:agent:*`
+channel.
+
+---
+
+## Related
+
+- [Tools](/docs/agent/guides/tools) — the `@AiTool` surface a specialist delegates *to*, `read` vs `action`, and the handler context
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — why a durable child run makes a sub-agent's approval pause replay-safe
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — the role/ability gate every delegated tool is still checked against
+- [Cost & Governance](/docs/agent/guides/cost-and-governance) — the `aviary:agent:*` diagnostics channel and the governance console

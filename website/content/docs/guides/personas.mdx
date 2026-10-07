@@ -1,0 +1,130 @@
+---
+title: Personas
+icon: Drama
+description: Named variants of one agent — their own prompt and a narrower tool allow-list — picked per send, pinned on the thread, and resolved once per run so a parked turn resumes on the persona it started with.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A **persona** is a named variant of ONE agent: its own prompt and, optionally, a narrower tool
+allow-list. Everything else — the model, the access rules, the handoffs, the history window — stays
+the agent's. That is the line between a persona and another [`@Agent`](/docs/agent/guides/multi-agent):
+a variant that needs its own tools, its own access rules or its own model is a separate agent; one
+that only answers differently is a persona.
+
+No `personas` → nothing on this page happens, and a turn is identical to one before the feature.
+
+## Declare them on the agent
+
+```ts
+import { Injectable } from '@nestjs/common';
+import { Agent, SystemPrompt } from '@dudousxd/nestjs-agent';
+import type { PromptContext } from '@dudousxd/nestjs-agent-core';
+
+@Agent({
+  name: 'assistant',
+  defaultPersona: 'general',
+  personas: [
+    { id: 'general', label: 'General' },
+    {
+      id: 'sql',
+      label: 'SQL focused',
+      description: 'Writes the query first',
+      systemPrompt: (ctx) => `${ctx.basePrompt}\nWrite the query before explaining it.`,
+    },
+    { id: 'read-only', label: 'Read only', allowedTools: ['executeSql', 'renderResult'] },
+  ],
+})
+@Injectable()
+export class AssistantAgent {
+  constructor(private readonly schema: SchemaService) {}
+
+  @SystemPrompt()
+  prompt(ctx: PromptContext): string {
+    // A persona prompt that needs DI branches here, on ctx.persona, instead of carrying a prompt.
+    return buildPrompt(ctx.persona?.id ?? 'general', this.schema);
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Unique within the agent — what a send names and what a message records. |
+| `label`, `description?` | What a picker shows. |
+| `systemPrompt?` | A flat string **stands in for** the agent's base prompt; a builder gets that base as `ctx.basePrompt` and can wrap it. Omit → the base prompt, with `ctx.persona` set. `@SystemPromptContributor()` sections follow either way. |
+| `allowedTools?` | Only these tool names are offered **and** may be invoked under the persona. |
+| `aliases?` | Agent names this persona answers for — see [Folding agents into personas](#folding-agents-into-personas). |
+
+Boot fails on a `defaultPersona` that names no persona, a persona id declared twice, an alias two
+personas claim, or an alias that is a registered agent's name.
+
+## Picking one
+
+```ts
+// React
+const { personasOf, defaultPersonaOf } = useAgents();
+const chat = useAgentChat({ agent: 'assistant', persona });       // read per send
+chat.sendMessage({ text }, { body: { persona: 'sql' } });           // one send only
+chat.threadPersona;                                                 // the thread's pin
+```
+
+On the wire it is `POST /agent/chat { persona }` (AG-UI: `forwardedProps.persona`). A turn's persona
+is, most specific first:
+
+1. the send's `persona` — refused with `400 { code: 'persona_not_found' }` when the agent does not
+   declare it, before anything is created;
+2. the thread's pinned `persona`, when this turn's agent declares it;
+3. the agent's `defaultPersona`;
+4. none.
+
+A persona a send **names** is pinned on the thread (`ThreadSummary.persona`), so later sends — and a
+reopened thread's picker — keep it. One the send fell back to is not pinned. `PATCH
+/agent/threads/:id { persona }` pins one explicitly; `null` clears it. `GET /agent/agents` lists each
+agent's `personas` (`{ id, label, description? }`) and its `defaultPersona`.
+
+## What the allow-list governs
+
+`allowedTools` is the last filter layer: after the agent's own `tools`, `enabled`, the roles policy and
+`canUse`. It only narrows. A tool the persona was not offered — a handoff included — fails as
+forbidden if the model names it anyway, on the in-process path and on a dispatched tool step alike.
+Tools see the persona as `ctx.persona`; input/output processors as `ctx.persona`.
+
+## Provenance
+
+Every message a turn writes — the user's, each assistant step, an intake question — records
+`persona`. `useChatTranscript` / `storedThreadToUiMessages` put it on `message.metadata.persona` (with
+`agentName`), so a transcript can say which persona answered.
+
+## Durability
+
+<Callout type="info" title="Resolved once, per run">
+  The service resolves the persona **before** the run starts, so it is part of the run's own input —
+  and of a [queued message](/docs/agent/guides/message-queue), which starts under the persona it was
+  sent with. The loop then resolves the persona's definition (id, label, allow-list, and its prompt
+  with the base it wraps) once, in a `persona:resolve` checkpoint, and every replay reads that back.
+</Callout>
+
+So a run parked on an approval finishes on the prompt and allow-list it started with, even after the
+persona was edited or removed by the deploy that resumes it — the dispatched model and tool steps
+carry the recorded allow-list rather than the worker's current config. A run that names no persona
+spends no checkpoint on one, which is every run started before personas existed: those replay on the
+sequence they recorded after the upgrade.
+
+An [independent action proposal](/docs/agent/guides/action-proposals) is executed outside any run,
+by the proposal worker, so it does not read that checkpoint: it records the agent and persona it was
+proposed under, and execution resolves both against the configuration in force at that moment —
+applying that persona's current allow-list, and failing when either has been removed.
+
+## Folding agents into personas
+
+An app that modelled variants as separate agents can fold them into one agent's personas without a
+data migration: give each persona the old agent name as an alias.
+
+```ts
+personas: [{ id: 'sql-focused', label: 'SQL focused', aliases: ['sql-focused'] /* … */ }]
+```
+
+The old name then resolves to this agent + persona wherever it was recorded — a stale client's
+`{ agent: 'sql-focused' }`, a thread whose `defaultAgent` is the old name, a queued message, and a
+durable run journaled under it (served with the persona applied as config, since its input predates
+personas). Rows keep the `agentName` they were written with; new ones record the agent and the persona.

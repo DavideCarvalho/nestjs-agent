@@ -1,0 +1,17 @@
+---
+title: Recipes
+icon: UtensilsCrossed
+description: Copy-pasteable cookbook for @dudousxd/nestjs-agent — a hand-rolled ModelProvider, flipping the inline runner to durable, DI-powered functional tools, a billing export off the governance read-model, and exercising the whole loop offline.
+---
+
+Every recipe here is a complete, working example built against the real SPIs — the same interfaces the shipped adapters (`aiSdkModel`, the MikroORM/Drizzle stores, `InlineAgentRunner`) implement. Read the problem statement, copy the code, adapt the clearly-marked sketch parts to your stack.
+
+| Recipe | When you reach for it |
+|---|---|
+| [Custom `ModelProvider`](/docs/agent/recipes/custom-model-provider) | You're not going through the Vercel AI SDK — implement the `ModelProvider` SPI by hand against your own gateway or client, streaming to the sink and returning tool calls without ever executing them. |
+| [Inline → durable](/docs/agent/recipes/inline-to-durable) | You started with the in-process runner and now want checkpointed, replay-safe turns and a real HITL suspend — flip `durable: true`, same wire protocol, and pick a cross-process sink (Redis or SQL). |
+| [Functional tools with DI](/docs/agent/recipes/functional-tools-with-di) | A tool needs constructor-injected dependencies but you don't want a whole `@AiTool` class — register it as data + handler via `provideAgentTool` (or `defineTool`), including action preflight and per-call confirmations. |
+| [Billing export](/docs/agent/recipes/billing-export) | Beyond the shipped dashboard/telescope surfaces, you want your own CSV/JSON spend export off the same governance read-model. |
+| [Offline testing](/docs/agent/recipes/offline-testing) | Unit- or e2e-test tool calling, HITL and independent approvals, and RAG with zero API key, zero Redis, fully in-memory — plus the contract suites for a store you write yourself. |
+
+Each recipe links back to the concept or guide page that explains the mechanism — the recipes are the *how*, the guides are the *why*.

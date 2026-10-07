@@ -1,0 +1,258 @@
+---
+title: Inline → durable
+icon: ArrowRightLeft
+description: "Durable is the production posture — every model call and tool execution becomes a checkpointed, worker-served step the moment durable is true. This recipe covers getting to durable: true, and what your tool handlers owe once their work leaves the pod."
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`durable: true` is one dependency and one flag away from the default in-process runner, and it brings
+one thing with it that is not optional: **the turn's two long steps — the model call and each tool
+execution — are dispatched** as durable steps (`AgentRunSteps.llm` / `AgentRunSteps.tool`), served by
+whichever worker picks them up rather than pinned to the pod that started the run. The llm step gets
+engine retry, and the run isn't stuck if its originating pod dies. Your store and your frontend are
+unaffected; **your tool handlers are not** — see [What your tools
+owe](#what-your-tool-handlers-owe-once-the-work-leaves-the-pod) below.
+
+---
+
+## Before — inline (default)
+
+```ts
+// src/agents/ops.agent.ts
+import { Agent } from '@dudousxd/nestjs-agent';
+
+@Agent({ name: 'ops', systemPrompt: 'You are a helpful ops assistant.' })
+export class OpsAgent {}
+```
+
+```ts
+// src/app.module.ts
+import { AgentModule, HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { Module } from '@nestjs/common';
+import { OpsAgent } from './agents/ops.agent.js';
+import { myAgentStore } from './store.js';
+import { myModelProvider } from './model.js';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+    }),
+  ],
+  providers: [OpsAgent],
+})
+export class AppModule {}
+```
+
+Every turn runs in-process via `InlineAgentRunner`. It works, but a pod restart mid-turn loses the
+turn, and an `action` tool's approval pause is just a connection held open in memory.
+
+---
+
+## After — durable, with dispatched steps
+
+Add `@dudousxd/nestjs-durable`, then spread the one-import `agentDurable(options)` helper into
+`imports` alongside a configured `DurableModule`:
+
+```ts
+// src/app.module.ts
+import { agentDurable } from '@dudousxd/nestjs-agent/durable';
+import { HeaderActorResolver } from '@dudousxd/nestjs-agent';
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { Module } from '@nestjs/common';
+import { OpsAgent } from './agents/ops.agent.js';
+import { myStateStore, myTransport } from './durable-infra.js';
+import { myAgentStore } from './store.js';
+import { myModelProvider } from './model.js';
+
+@Module({
+  imports: [
+    DurableModule.forRoot({ store: myStateStore, transport: myTransport }),
+    ...agentDurable({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+      // same AgentModuleOptions as before, minus `durable` — agentDurable sets it for you.
+    }),
+  ],
+  providers: [OpsAgent],
+})
+export class AppModule {}
+```
+
+That's it — there is no separate flag for dispatching, and no flag that turns it off. `AgentRunSteps`
+(the `llm`/`tool` worker groups) is registered by `AgentDurableModule` under every surface but
+`'http'`, so the routed steps are never left unserved.
+
+`agentDurable(options)` is exactly the longhand below, collapsed to one import — from
+[`agent-durable.ts`](https://github.com/DavideCarvalho/nestjs-agent/blob/master/packages/nestjs/src/durable/agent-durable.ts):
+
+```ts
+export function agentDurable(options: AgentModuleOptions): DynamicModule[] {
+  return [
+    AgentModule.forRoot({ ...options, durable: true }),
+    AgentDurableModule.forRoot(options.surface !== undefined ? { surface: options.surface } : {}),
+  ];
+}
+```
+
+Spelled out by hand, it's the same two imports (if you split pods with `surface`, pass it to
+**both** — `AgentDurableModule.forRoot({ surface: 'http' })` is the form that skips registering
+`AgentRunSteps` on an API pod):
+
+```ts
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
+
+@Module({
+  imports: [
+    DurableModule.forRoot({ store: myStateStore, transport: myTransport }),
+    AgentModule.forRoot({ /* same options as above */ durable: true }),
+    AgentDurableModule,
+  ],
+})
+export class AppModule {}
+```
+
+<Callout type="warn" title="Forgetting AgentDurableModule fails loudly, not silently">
+`AgentModule.forRoot({ durable: true })` binds `AGENT_RUNNER` to whatever `AgentDurableModule`
+provides via `AGENT_DURABLE_RUNNER` — optional injection, so a missing import throws a clear error
+at boot ("requires importing `AgentDurableModule` from `@dudousxd/nestjs-agent/durable`") instead of
+an opaque unresolved-dependency crash. `agentDurable(options)` can't hit this: it always imports both
+together.
+</Callout>
+
+---
+
+## What your tool handlers owe once the work leaves the pod
+
+A dispatched step is served by a worker that never entered the request that started the turn, so an
+`@AiTool` handler is in the same position as any `@Step` handler: nothing is ambient around it.
+Anything it resolves per invocation from its caller's execution context — a request-scoped ORM
+EntityManager, an AsyncLocalStorage tenant, a CLS transaction — it must establish itself. Under
+MikroORM that is `@CreateRequestContext()` (or `@EnsureRequestContext()`) on the handler:
+
+```ts
+@AiTool({ name: 'closeWorkOrder', kind: 'action', description: '…', input: z.object({ id: z.string() }) })
+export class CloseWorkOrderTool implements ToolHandler<{ id: string }> {
+  constructor(private readonly em: EntityManager) {}
+
+  @CreateRequestContext()
+  async execute(input: { id: string }) {
+    /* … */
+  }
+}
+```
+
+<Callout type="warn" title="An action tool is where skipping this costs most">
+  HITL exists to promise that approving a call runs it. A handler that cannot resolve its context
+  throws inside the worker: the loop records the call `failed`, hands the error to the model, and the
+  turn completes — so a human's approval has been spent on an action that never happened. Under
+  MikroORM with `allowGlobalContext: false` that is exactly the failure you get, and it is reported
+  as an ordinary tool error rather than as a misconfiguration.
+</Callout>
+
+<Callout type="warn" title="Multi-pod fleets need a cross-process sink">
+  Wire a cross-process `TokenStreamSink` via `sink` under `durable: true`: the turn runs on
+  whichever worker takes `agent.run` and dispatches its model call from there, so the process
+  writing tokens is generally not the pod holding the SSE connection. A boot warning fires when
+  `durable: true` is on with the default `InProcessTokenStreamSink`.
+</Callout>
+
+Two kinds of cross-process sink ship. With Redis, `RedisTokenStreamSink` from
+`@dudousxd/nestjs-agent-transport-redis` (or `@dudousxd/nestjs-agent/sink-redis`). Without Redis,
+the database the store already uses:
+
+```ts
+import { DrizzleTokenStreamSink } from '@dudousxd/nestjs-agent-store-drizzle';
+
+imports: [
+  DurableModule.forRoot({ store: myStateStore, transport: myTransport }),
+  ...agentDurable({ model: myModelProvider, store: myAgentStore, sink: new DrizzleTokenStreamSink(db) }),
+],
+
+// MikroORM: MikroOrmTokenStreamSink(em) from @dudousxd/nestjs-agent-store-mikro-orm,
+// built inside AgentModule.forRootAsync({ inject: [EntityManager], useFactory: ... })
+```
+
+The SQL sinks write one row per frame to `agent_stream_frame` (created by `ensureAgentSchema` or
+your migration), and every replica polls it (`pollIntervalMs` 250 ms, 1 s once the run has been
+quiet for 5 s). Consecutive `text` frames are coalesced at write time (`flushMs` 50 ms). Rows expire
+`ttlSeconds` (1 h) after the run's last write. A run parked on an approval for longer than that
+loses its buffered frames, but the persisted thread still has everything. There's no
+`LISTEN`/`NOTIFY`.
+
+<Callout type="info" title="A run journaled by an older release finishes the way it started">
+  Dispatching decides which checkpoint names a turn writes, so the answer comes from the run's own
+  journal (`ctx.patched('agent:dispatched-steps')`), never from configuration: a fresh run dispatches,
+  and a turn already recorded under the in-process `llm:<i>`/`tool:<callId>` names finishes on them.
+  In-flight turns survive the upgrade; what does not follow automatically is that your handlers
+  establish their own context, and that the workers serving the routed groups exist.
+</Callout>
+
+---
+
+## Approvals that don't hold the turn
+
+By default an `action` call suspends the run until someone decides (above). With
+`actionApprovalMode: 'independent'` the call becomes a persisted **action proposal** instead: the
+originating turn finishes (`{ proposalId, status: 'pending', executed: false }`), the conversation
+accepts new messages, and a proposal worker runs the approved action later:
+
+```ts
+...agentDurable({
+  model: myModelProvider,
+  store: myAgentStore, // must support scoped proposals + leases: the Drizzle/MikroORM stores do
+  actionApprovalMode: 'independent',
+  backgroundActorResolver: {
+    // Reload the requester's current Actor (id, tenant, roles); null if they're gone.
+    resolve: async ({ actorRef, tenantRef }) => findCurrentActor(actorRef, tenantRef),
+  },
+  actionProposalWorker: { pollIntervalMs: 1_000, leaseMs: 30_000, maxConcurrency: 1 },
+}),
+```
+
+If the store lacks the capabilities, startup fails. `pollIntervalMs` must be under a third of
+`leaseMs`. Execution is at-least-once, so the `ctx.idempotencyKey` advice above still applies.
+Proposals are decided over `GET|POST <base>/threads/:threadId/action-proposals[/:proposalId/approve|reject]`,
+not `/tool-call/approve`. Runs already journaled in blocking mode stay blocking. See
+[Action proposals](/docs/agent/guides/action-proposals).
+
+---
+
+## Same wire protocol, same frontend
+
+Nothing downstream of `AgentModule` needs to know which runner is active. The `POST /agent/chat` SSE
+stream, the `POST /agent/tool-call/approve` / `/reject` endpoints, and `useAgentChat` on the frontend
+are identical either way: only *how* the pause, the checkpoint, and the model/tool execution are
+implemented differs. (The base path is `agent` by default; `actionApprovalMode: 'independent'` swaps
+the approval routes as described above, under either runner.)
+
+| | Inline (default) | Durable |
+|---|---|---|
+| The pause on an `action` tool | an in-process runner holds the turn open | a real durable **suspend** via `waitForSignal`, checkpointed to the state store |
+| Surviving a restart | no — the pending turn is lost | yes — resumes from cache on approval |
+| Where the model/tool call runs | the pod that started the run | whichever worker serves `AgentRunSteps.llm`/`.tool` — may not be the originating pod |
+| What a tool handler may assume | its caller's execution context | nothing; it establishes its own |
+| Wire protocol | identical | identical |
+
+So you can develop against the inline runner locally and move to durable without touching a frontend
+component — and with your tool handlers responsible for their own execution context.
+
+---
+
+## Related
+
+- [Runners](/docs/agent/concepts/runners) — `AgentRunner` as the SPI seam, and what "checkpointed
+  step" means under the hood.
+- [Configuration](/docs/agent/reference/configuration) — `durable` and every other durable-related
+  option.
+- [Diagnostics events](/docs/agent/reference/diagnostics-events) — the `llm.turn`/`tool.execution`
+  trace spans, emitted from whichever worker actually executes a dispatched step.
+- [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — the full
+  approval flow, the durable signal, and resuming a dropped SSE stream.
+- [Offline testing](/docs/agent/recipes/offline-testing) — exercising the inline runner (the
+  default, and the one worth testing against) with zero infrastructure.
