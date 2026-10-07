@@ -1,6 +1,0 @@
----
-"@dudousxd/nestjs-agent": minor
-"@dudousxd/nestjs-agent-opencode": minor
----
-
-The OpenCode engine serves the module's tools on its own MCP endpoint (`POST <agent path>/opencode/mcp`, mounted by the engine through the new `AgentEngine.controllers`), not on `AgentMcpServerModule`: `tools: { url, secret, ttlMs }` replaces `tools.headers`, and the engine registers each session with a token it signs (actor, OpenCode server, expiry). A call runs only while the token's actor has a turn running on the calling session, under the agent's and persona's allow-list and roles, and an `action` only against an approval granted in that turn — one call per approval — so a caller that skips OpenCode's permission rules is refused. `remember` is served there only and no longer added to the shared tool registry (`AgentMcpServerModule`, `/tools`). A form answer or skip sent to an approval is refused with a 409 (`OpenCodeReplyMismatchError`) instead of rejecting the action. OpenCode's own error text reaches the stream only outside production (the library's `streamFailure` rule); it is logged and on the run row everywhere. The event stream counts as open once the server's first event arrives, so nothing a prompt causes is lost to a slow connect. A durable `begin` run again after a crash writes the run's user message once.
