@@ -14,20 +14,23 @@ pnpm add @dudousxd/nestjs-agent-store-mikro-orm @mikro-orm/core @mikro-orm/nestj
 ## Use
 
 ```ts
-import { MikroOrmAgentStoreModule } from '@dudousxd/nestjs-agent-store-mikro-orm';
+import { AGENT_ENTITIES, MikroOrmAgentStoreModule } from '@dudousxd/nestjs-agent-store-mikro-orm';
 
 @Module({
   imports: [
-    MikroOrmModule.forRoot(/* your config */),
-    MikroOrmAgentStoreModule.forFeature(), // registers the agent entities + binds AGENT_STORE
-    AgentModule.forRoot({ /* store comes from AGENT_STORE */ model, modelId, store }),
+    // The agent entities go in YOUR MikroORM config: `forFeature()` does not register them.
+    // `agentEntities({ collation })` for another collation, or none (SQLite).
+    MikroOrmModule.forRoot({ /* your config */ entities: [...yourEntities, ...AGENT_ENTITIES] }),
+    MikroOrmAgentStoreModule.forFeature(), // binds AGENT_STORE (+ governance, pricing, memory)
+    AgentModule.forRoot({ model }), // no `store`: AgentModule finds the AGENT_STORE bound above
   ],
 })
 export class AppModule {}
 ```
 
-The package ships the entities (`EntitySchema`) and `MikroOrmAgentStore`. Run your normal MikroORM
-migrations to create the tables, or use the exported schema helper for a quick start.
+The package ships the entities (`EntitySchema`) and `MikroOrmAgentStore`. By default
+`forFeature()` reconciles the agent tables at boot (`ensureAgentSchema`); pass
+`{ autoSchema: false }` and run your normal MikroORM migrations instead.
 
 Upgrading from a release before reasoning was persisted: `agent_message` gained three nullable
 columns — `reasoning` (text), `reasoning_ms` (integer) and `ui` (json). `ensureAgentSchema` adds them
@@ -267,12 +270,13 @@ SQLite also serializes this process's writes to the same database file to avoid 
 loop while an asynchronous transaction awaits another statement. Database locks, exact scope checks,
 and version CAS remain the authority across replicas and restarts; the local queue stores no durable state.
 
-## License
-
-MIT © Davide Carvalho
-
+## Action confirmations
 
 Action preflight confirmations persist in the nullable `agent_tool_call.confirmation` JSON column.
 The schema helper adds this column to existing databases. Hosts managing their own migrations must
 add it before upgrading (`JSONB` on PostgreSQL, `JSON` on MySQL, JSON text on SQLite). The stored
 confirmation is returned in `StoredMessage.approvals` so a reload uses the same wording.
+
+## License
+
+MIT © Davide Carvalho

@@ -49,5 +49,10 @@ export function agentEntities(options: { collation?: string } = {}): EntitySchem
   ];
 }
 
-/** The canonical entity set registered by {@link MikroOrmAgentStoreModule} (MySQL collation). */
+/**
+ * The canonical entity set (MySQL collation), for the host's own MikroORM config:
+ * `entities: [...yourEntities, ...AGENT_ENTITIES]`. `MikroOrmAgentStoreModule.forFeature()` does not
+ * register entities — the shared ORM's discovery has to see them, and only the host's config feeds it.
+ * Use {@link agentEntities} for another collation, or none (SQLite).
+ */
 export const AGENT_ENTITIES = agentEntities({ collation: AGENT_COLLATION });

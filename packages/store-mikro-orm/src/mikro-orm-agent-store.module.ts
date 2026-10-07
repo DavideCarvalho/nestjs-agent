@@ -54,8 +54,7 @@ class AgentSchemaInitializer implements OnApplicationBootstrap {
 }
 
 /**
- * Registers the MikroORM agent entities and binds {@link MikroOrmAgentStore} to the
- * {@link AGENT_STORE} token consumed by `@dudousxd/nestjs-agent`, plus
+ * Binds {@link MikroOrmAgentStore} to the {@link AGENT_STORE} token consumed by `@dudousxd/nestjs-agent`, plus
  * {@link MikroOrmGovernanceQueries} to {@link AGENT_GOVERNANCE_QUERIES} (the read-model the
  * dashboard/telescope surfaces consume) and {@link MikroOrmPricingStore} to
  * {@link AGENT_PRICING_STORE} (the write side of the same pricing table).

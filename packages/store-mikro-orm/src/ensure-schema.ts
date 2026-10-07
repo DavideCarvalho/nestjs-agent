@@ -362,7 +362,7 @@ async function withSchemaLock(
     try {
       await run(
         dialect === 'mysql'
-          ? `select get_lock('${SCHEMA_LOCK_NAME}', 10)`
+          ? `select get_lock('${SCHEMA_LOCK_NAME}', 30)`
           : `select pg_advisory_xact_lock(hashtext('${SCHEMA_LOCK_NAME}'))`,
       );
     } catch (error) {
