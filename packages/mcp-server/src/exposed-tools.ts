@@ -1,4 +1,4 @@
-import type { ToolKind } from '@dudousxd/nestjs-agent-core';
+import type { ToolKind, ToolPresentation } from '@dudousxd/nestjs-agent-core';
 
 /**
  * What an `action` tool means on a surface with no human on it.
@@ -33,6 +33,8 @@ export interface McpExposureInput {
   actions: McpActionPolicy;
   /** Names this deployment exposes over MCP. `undefined` → every tool of an exposable kind. */
   allowedTools?: string[];
+  /** The tool's presentation — a result shown `elsewhere` keeps it off MCP. */
+  presentation?: ToolPresentation;
 }
 
 /**
@@ -52,11 +54,18 @@ export interface McpExposureInput {
  * - `ask`, `skill` and `memory` are served by the loop against a run and are never registered at
  *   all, so no `ToolSpec` should carry them — refusing them keeps that true of this surface even if
  *   something registers one out of band.
+ *
+ * A tool whose result is shown elsewhere (`presentation.result.kind === 'elsewhere'` — the
+ * generative-UI `ui__show_*`, `ui__show` and tree tools) is refused too: all it does is push a
+ * component, an MCP client has no screen to push it to, and the model would get nothing back.
  */
 export function mcpExposureRefusal(input: McpExposureInput): string | undefined {
   const { name, kind, actions, allowedTools } = input;
   if (allowedTools !== undefined && !allowedTools.includes(name)) {
     return 'this deployment does not list it among the tools it exposes over MCP';
+  }
+  if (input.presentation?.result?.kind === 'elsewhere') {
+    return 'its result is shown elsewhere (a generative-UI component), and an MCP client has no screen to show it on';
   }
   if (kind === 'read') {
     return undefined;

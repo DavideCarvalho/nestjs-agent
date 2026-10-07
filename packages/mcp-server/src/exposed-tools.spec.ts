@@ -44,6 +44,26 @@ describe('mcpExposureRefusal', () => {
     ).toMatch(/does not list it/);
   });
 
+  it('refuses a tool whose result is shown elsewhere, and keeps one with another result view', () => {
+    const shown = { label: 'Chart', running: 'Showing', done: 'Showed' };
+    expect(
+      mcpExposureRefusal({
+        name: 'ui__show_chart',
+        kind: 'read',
+        actions: 'execute',
+        presentation: { ...shown, result: { kind: 'elsewhere' } },
+      }),
+    ).toMatch(/shown elsewhere/);
+    expect(
+      mcpExposureRefusal({
+        name: 'search',
+        kind: 'read',
+        actions: 'deny',
+        presentation: { ...shown, result: { kind: 'note', text: 'Found' } },
+      }),
+    ).toBeUndefined();
+  });
+
   it('exposes a listed tool', () => {
     expect(
       isToolExposedOverMcp({
