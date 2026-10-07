@@ -1,5 +1,27 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.34.2
+
+### Patch Changes
+
+- [#324](https://github.com/DavideCarvalho/nestjs-agent/pull/324) [`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - AG-UI from React follows the run past an approval or a question, like the native stream.
+
+  - `POST <path>/ag-ui` writes the run's own sequence number as each event's SSE `id:` (`agUiEvents({ cursor })`, `agUiSse(event, id)`, `frameSeq`), so a consumer can continue on `chat/:runId/stream?after=<id>` exactly where the AG-UI run ended.
+  - `agUiChatStream`: an interrupt the chat already shows (approval card, question form) ends the stream without `done`, so the transport re-attaches to the parked run on the native route and what the run does after the person decides streams into the same message. The re-attach cursor is the run's own sequence (before, the client numbered re-framed frames itself, so `?after=` pointed at the wrong frame).
+  - The `AgUiInterrupt` ui part is written only for interrupts nothing in the stream showed.
+  - `agora.action-proposal-decision` becomes the transient `data-proposal-decision` part a native text decision answers with.
+
+- [#324](https://github.com/DavideCarvalho/nestjs-agent/pull/324) [`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - AG-UI: a React app on `agUiChatStream` now gets what the native stream gives it.
+
+  - Attachments: the send's staged `attachments` (`{ mediaId }`) go out as `file` content parts with `provider: 'nestjs-agent'` (`AG_UI_MEDIA_PROVIDER`); `POST <path>/ag-ui` resolves them for the caller exactly like the native `chat` route (a mediaId another actor owns is refused with 403). Before, the composer's attachments were silently dropped.
+  - Regenerate: `regenerate: true` rides `forwardedProps` and the route re-runs the thread's last exchange instead of appending a new turn (400 on a thread that does not exist yet).
+  - Question sets: `agora.elicitation` now carries the tool-call `id`, and the React client turns it into the native `elicitation` frame, so the question form renders.
+  - Per-step usage: `agora.step-usage` is folded into the preceding `step-finish` (`usage`, `costUsd`, `reasoningMs`) instead of being ignored.
+  - Tool kinds: `TOOL_CALL_START.metadata` carries `agora.toolKind` (and `agora.parentId`); the React client uses them instead of marking every call `read`, so approval affordances and nested calls work over AG-UI.
+
+- Updated dependencies [[`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96), [`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96), [`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96)]:
+  - @dudousxd/nestjs-agent-core@0.42.1
+
 ## 0.34.1
 
 ### Patch Changes
