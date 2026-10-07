@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-opencode
 
+## 0.1.1
+
+### Patch Changes
+
+- [#324](https://github.com/DavideCarvalho/nestjs-agent/pull/324) [`d516616`](https://github.com/DavideCarvalho/nestjs-agent/commit/d51661667fe477f11c2cca25483ded3678d53f96) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs: explain what `tools.url` must point at — it is passed verbatim to OpenCode and called back by the OpenCode server, so it is an address of the app as seen from there (same machine / Compose / Kubernetes / public URL), must reach a process that mounts controllers, and every process behind it needs the same `tools.secret`.
+
 ## 0.1.0
 
 ### Minor Changes
