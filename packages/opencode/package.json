@@ -52,6 +52,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "@standard-schema/spec": "1.1.0"
+  },
   "peerDependencies": {
     "@dudousxd/nestjs-agent": ">=1.21.0 <2.0.0",
     "@dudousxd/nestjs-agent-core": ">=0.40.0 <1.0.0",
@@ -79,8 +83,7 @@
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
     "@nestjs/event-emitter": "12.0.1",
     "zod": "3.25.76",
-    "@opencode/client": "2.0.18",
-    "@dudousxd/nestjs-agent-mcp-server": "workspace:*"
+    "@opencode/client": "2.0.18"
   },
   "peerDependenciesMeta": {
     "@dudousxd/nestjs-durable": {

@@ -1,5 +1,11 @@
-import type { Actor, AgentRunInput } from '@dudousxd/nestjs-agent-core';
+import type {
+  Actor,
+  AgentRunInput,
+  AgentUiComponent,
+  StoredMessage,
+} from '@dudousxd/nestjs-agent-core';
 import type { OpenCodeClient, OpenCodePromptFile, OpenCodeSessionCreate } from './client.js';
+import type { PendingAsk, TurnOutcome } from './turn.js';
 
 /**
  * Where a turn runs and how its OpenCode session is set up — the part only the host knows. The
@@ -30,8 +36,16 @@ export interface OpenCodeHost {
   ): Promise<Record<string, string>>;
 
   /**
+   * What the session is prompted with, when it is more than the user message: documents read into
+   * the text, images as files the model can see. Omit → the user message, and `files`.
+   */
+  promptFor?(
+    context: OpenCodeTurnContext & { sessionId: string },
+  ): Promise<{ text: string; files?: OpenCodePromptFile[] }>;
+
+  /**
    * The user message's attachments (`input.attachments`) in the form `session.prompt` takes them.
-   * Omit → attachments are not sent to OpenCode.
+   * Omit → attachments are not sent to OpenCode. Not asked when `promptFor` answers.
    */
   files?(context: OpenCodeTurnContext): Promise<OpenCodePromptFile[]>;
 
@@ -42,6 +56,72 @@ export interface OpenCodeHost {
   prepare?(
     context: OpenCodeTurnContext & { sessionId: string; client: OpenCodeClient },
   ): Promise<void>;
+
+  /**
+   * `openCodeDurable()` only: the turn's workflow start options (tags, search attributes, a
+   * concurrency quota) — like `settings.durable.start`, from a host that has its services in DI.
+   */
+  startOptions?(input: AgentRunInput, runId: string): Promise<Record<string, unknown>>;
+
+  /** `openCodeDurable()` only: what a refused start becomes (e.g. a concurrency limit → a 429). */
+  startError?(error: unknown, input: AgentRunInput): unknown;
+
+  /**
+   * May this turn keep the thread's session? Asked when the session is still on its server; `false`
+   * opens a new one (told the conversation so far) — e.g. the person the session's tools act for
+   * changed. Omit → always reuse.
+   */
+  reuse?(context: OpenCodeTurnContext & { session: OpenCodeSessionRef }): Promise<boolean>;
+
+  /**
+   * Every turn, once the session is known (`created`: opened for this turn) and before the prompt:
+   * bring it up to date — the turn's model, permission rules that changed, tools, skills.
+   */
+  beforePrompt?(
+    context: OpenCodeTurnContext & { sessionId: string; client: OpenCodeClient; created: boolean },
+  ): Promise<void>;
+
+  /**
+   * A person was asked something (an approval or a question form): post it where else they are —
+   * a Slack thread, a Teams chat — or wake whoever waits on the run. May run again for the same ask
+   * after a restart: make it idempotent.
+   */
+  onAsk?(context: OpenCodeTurnContext & { sessionId: string; ask: PendingAsk }): Promise<void>;
+
+  /** A tool pushed a component into the run (`ctx.emitUi` over MCP). */
+  onUi?(context: OpenCodeTurnContext & { component: AgentUiComponent }): Promise<void>;
+
+  /**
+   * The run is over and about to settle: the last word on the answer — components appended to it
+   * (a guardrail notice), and for a failed run the error the person reads instead of OpenCode's.
+   */
+  beforeSettle?(result: OpenCodeRunResult): Promise<OpenCodeAmendment | undefined>;
+
+  /**
+   * The run settled (the stream ended, the thread moved on): deliver the answer elsewhere, record
+   * spend and telemetry. Errors are logged, never the run's.
+   */
+  onSettled?(result: OpenCodeRunResult): Promise<void>;
+}
+
+/** What a run produced, as the host's settle hooks see it. */
+export interface OpenCodeRunResult {
+  runId: string;
+  input: AgentRunInput;
+  outcome: TurnOutcome;
+  /** The run's answer: its assistant messages' text, in order. */
+  text: string;
+  /** The run's assistant messages, as stored. */
+  messages: StoredMessage[];
+  usage: { inputTokens: number; outputTokens: number; costUsd: number };
+  durationMs: number;
+}
+
+/** See {@link OpenCodeHost.beforeSettle}. */
+export interface OpenCodeAmendment {
+  ui?: AgentUiComponent[];
+  /** For a failed run: what the person reads. */
+  error?: string;
 }
 
 export interface OpenCodeServer {
@@ -65,6 +145,14 @@ export interface OpenCodeSessionRef {
   sessionId: string;
   serverKey: string;
   bootId?: string;
+  /** The session's directory (`location.directory`), when it has one. */
+  directory?: string;
+  /**
+   * The agent (and persona id) the thread's latest turn ran as — what the tools endpoint checks a
+   * call against when it lands on a process that is not following the turn.
+   */
+  agentName?: string;
+  persona?: string;
 }
 
 /**

@@ -30,6 +30,11 @@ export interface CreateThreadInput {
   id?: string;
   /** The persona the thread's turns run under when a send names none. See {@link ThreadSummary.persona}. */
   persona?: string;
+  /**
+   * The agent the send that creates the thread names (already resolved: an explicit pick, else the
+   * default). A store that keeps an agent per thread starts it there; others ignore it.
+   */
+  agentName?: string;
 }
 
 export interface AppendMessageInput {

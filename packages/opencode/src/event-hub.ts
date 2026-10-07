@@ -7,7 +7,10 @@ interface Stream {
   client: OpenCodeClient;
   controller: AbortController;
   listeners: Map<string, Set<Listener>>;
-  /** Resolves once the subscription is open, so a turn never prompts before it can hear the answer. */
+  /**
+   * Resolves once the server has sent the stream's first event (OpenCode opens every subscription
+   * with `server.connected`), so a turn never prompts before the server can deliver the answer.
+   */
   ready: Promise<void>;
 }
 
@@ -17,15 +20,29 @@ export function sessionOf(event: OpenCodeEvent): string | undefined {
   return typeof id === 'string' ? id : undefined;
 }
 
+/** How long `listen` waits for a new stream's first event before it lets the turn go on anyway. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
 /**
  * One event subscription per OpenCode server, fanned out to the turns listening on its sessions. A
  * server's stream closes when its last listener leaves; a stream that drops reconnects with backoff.
+ *
+ * `subscribe()` only describes the request: the client connects when the stream is first iterated,
+ * and the server registers the subscriber some time after that. A stream is therefore open when its
+ * first event arrives, not when it was asked for — events a prompt causes before then would be lost
+ * (the catch-up recovers permissions and forms, not text, tools or the end of the execution).
  */
 export class OpenCodeEventHub {
   private readonly logger = new Logger(OpenCodeEventHub.name);
   private readonly streams = new Map<string, Stream>();
 
-  /** Listen to one session's events on a server. Resolves once the server's stream is open. */
+  constructor(private readonly options: { connectTimeoutMs?: number } = {}) {}
+
+  /**
+   * Listen to one session's events on a server. Resolves once the server's stream is open (its first
+   * event arrived), or after the connect timeout — the turn's safety nets cover a stream that is
+   * slow to open.
+   */
   async listen(
     serverKey: string,
     client: OpenCodeClient,
@@ -72,6 +89,15 @@ export class OpenCodeEventHub {
     const ready = new Promise<void>((resolve) => {
       opened = resolve;
     });
+    const timeoutMs = this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      this.logger.warn(`event stream of ${serverKey} not open after ${timeoutMs}ms; going on`);
+      opened();
+    }, timeoutMs);
+    timer.unref?.();
+    void ready.then(() => clearTimeout(timer));
+    // A stream closed before it opened has nothing to wait for.
+    controller.signal.addEventListener('abort', () => opened(), { once: true });
     const stream: Stream = {
       client,
       controller,
@@ -93,8 +119,9 @@ export class OpenCodeEventHub {
     while (!stream.controller.signal.aborted) {
       try {
         const events = client.event.subscribe({ signal: stream.controller.signal });
-        opened();
         for await (const event of events) {
+          // The first event (`server.connected`) says the server is delivering to this stream.
+          opened();
           backoff = 500;
           const sessionId = sessionOf(event);
           if (sessionId === undefined) continue;

@@ -47,7 +47,7 @@ export interface AgentMcpServerModuleOptions {
   routes?: McpRouteExposureOptions;
   /**
    * Ties a call to the conversation it serves, from the request's `_meta` — e.g. an agent engine
-   * that knows which turn an OpenCode session is running (`OpenCodeTurns.toolContext`), so a tool's
+   * that knows which turn an OpenCode session is running, so a tool's
    * `ctx.emitUi` reaches that turn's stream. See {@link McpToolContextResolver}.
    */
   context?: McpToolContextResolver;

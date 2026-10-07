@@ -15,7 +15,7 @@ import {
   encodeStreamEvent,
   settleElicitation,
 } from '@dudousxd/nestjs-agent-core';
-import type { Logger } from '@nestjs/common';
+import { ConflictException, type Logger } from '@nestjs/common';
 import type {
   OpenCodeClient,
   OpenCodeEvent,
@@ -70,6 +70,11 @@ export interface OpenCodeTurnArgs {
   /** The model label usage is recorded under. */
   modelLabel: string;
   logger: Logger;
+  /**
+   * An action OpenCode was allowed to run (a person approved it, or the policy did): the approval
+   * the tools endpoint spends when OpenCode calls it. Called BEFORE OpenCode is told yes.
+   */
+  onGranted?: (action: string, permissionId: string) => void;
 }
 
 const ASK_TOOL_NAME = 'ask';
@@ -100,8 +105,25 @@ function emptySegment(): Segment {
   return { text: '', reasoning: '', reasoningMs: 0, calls: [], results: [], ui: [] };
 }
 
-function isDecision(reply: HumanReply): reply is Decision {
+export function isDecision(reply: HumanReply): reply is Decision {
   return typeof (reply as Decision).approved === 'boolean';
+}
+
+/**
+ * Answers (a form reply, a skip) sent to a call waiting for an approve/reject. They say nothing
+ * about whether the action should run — and treating them as a "no" would record a rejection the
+ * person never made — so the reply is refused (409) and the call keeps waiting.
+ */
+export class OpenCodeReplyMismatchError extends ConflictException {
+  constructor(
+    readonly runId: string,
+    readonly toolCallId: string,
+  ) {
+    super(
+      `Tool call "${toolCallId}" on run "${runId}" is waiting for an approve/reject, not for answers`,
+    );
+    this.name = 'OpenCodeReplyMismatchError';
+  }
 }
 
 /**
@@ -619,6 +641,7 @@ export class OpenCodeTurn {
     // No one needs to decide: the policy does not require it, or it was approved "for this
     // conversation" earlier. OpenCode asked because a rule said `ask`; the answer is yes.
     if (!requirement.required || remembered) {
+      this.a.onGranted?.(action, req.id);
       await client.permission.reply({ sessionID: sessionId, requestID: req.id, decision: 'once' });
       this.segment.calls.push({ id: req.id, name: action, input: args, kind: 'action' });
       this.segment.results.push({ id: req.id, name: action, output: { approved: true } });
@@ -691,10 +714,13 @@ export class OpenCodeTurn {
     reply: HumanReply,
     tell: boolean,
   ) {
-    const decision: Decision = isDecision(reply) ? reply : { approved: false };
+    // Answers are not a decision: the runners refuse them before they get here.
+    if (!isDecision(reply)) throw new OpenCodeReplyMismatchError(this.a.runId, ask.id);
+    const decision: Decision = reply;
     const { client, sessionId, store } = this.a;
     const { id, action } = ask;
     const status = decision.approved ? 'approved' : decision.expired ? 'expired' : 'rejected';
+    if (decision.approved) this.a.onGranted?.(action, id);
     if (tell)
       await client.permission.reply({
         sessionID: sessionId,

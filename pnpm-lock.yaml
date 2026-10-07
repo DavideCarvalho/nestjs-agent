@@ -551,6 +551,13 @@ importers:
         version: 5.9.3
 
   packages/opencode:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.31.0
+        version: 1.31.0(zod@3.25.76)
+      '@standard-schema/spec':
+        specifier: 1.1.0
+        version: 1.1.0
     devDependencies:
       '@dudousxd/nestjs-agent':
         specifier: workspace:*
@@ -558,9 +565,6 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
-      '@dudousxd/nestjs-agent-mcp-server':
-        specifier: workspace:*
-        version: link:../mcp-server
       '@dudousxd/nestjs-agent-testing':
         specifier: workspace:*
         version: link:../testing

@@ -665,6 +665,7 @@ export class DrizzleAgentStore
       actor: input.actor,
       content: input.content,
       uiCapabilities: input.uiCapabilities ?? null,
+      hostContext: input.hostContext ?? null,
       attachments:
         input.attachments !== undefined && input.attachments.length > 0 ? input.attachments : null,
       agentName: input.agentName ?? null,
@@ -1211,6 +1212,7 @@ export class DrizzleAgentStore
 function toQueuedMessage(row: AgentQueuedMessageRow): QueuedMessage {
   return {
     ...(row.uiCapabilities !== null ? { uiCapabilities: row.uiCapabilities } : {}),
+    ...(row.hostContext != null ? { hostContext: row.hostContext } : {}),
     id: row.id,
     threadId: row.threadId,
     actor: row.actor,

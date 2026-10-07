@@ -47,6 +47,11 @@ export class FakeOpenCode implements OpenCodeClient {
   private readonly userMessages = new Map<string, string[]>();
   private readonly idleWaiters: Array<() => void> = [];
   private idle = false;
+  /**
+   * How long a subscription takes to reach the server after the stream is first iterated (the
+   * request's round trip). Events emitted before then are not delivered to it — as with OpenCode.
+   */
+  connectDelayMs = 0;
 
   /** The sessions go idle: `session.wait` resolves (until the next prompt). */
   goIdle(): void {
@@ -223,17 +228,25 @@ export class FakeOpenCode implements OpenCodeClient {
   };
 
   event = {
+    /**
+     * As the real client: nothing happens until the stream is iterated; then the request reaches
+     * the server (after {@link connectDelayMs}), which registers the subscriber and opens the stream
+     * with `server.connected`. Only events emitted after that are delivered.
+     */
     subscribe: (args: { signal: AbortSignal }): AsyncIterable<OpenCodeEvent> => {
-      const queue: OpenCodeEvent[] = [];
-      let wake: (() => void) | undefined;
-      const listener = (event: OpenCodeEvent) => {
-        queue.push(event);
-        wake?.();
-      };
-      this.listeners.add(listener);
-      const listeners = this.listeners;
+      const fake = this;
       return {
         async *[Symbol.asyncIterator]() {
+          const queue: OpenCodeEvent[] = [{ type: 'server.connected', data: {} }];
+          let wake: (() => void) | undefined;
+          const listener = (event: OpenCodeEvent) => {
+            queue.push(event);
+            wake?.();
+          };
+          if (fake.connectDelayMs > 0)
+            await new Promise((resolve) => setTimeout(resolve, fake.connectDelayMs));
+          if (args.signal.aborted) return;
+          fake.listeners.add(listener);
           try {
             while (!args.signal.aborted) {
               const event = queue.shift();
@@ -248,7 +261,7 @@ export class FakeOpenCode implements OpenCodeClient {
               wake = undefined;
             }
           } finally {
-            listeners.delete(listener);
+            fake.listeners.delete(listener);
           }
         },
       };

@@ -17,6 +17,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
@@ -131,6 +132,7 @@ export const agentQueuedMessage = mysqlTable(
   'agent_queued_message',
   {
     uiCapabilities: json('ui_capabilities').$type<UiCapabilities>(),
+    hostContext: json('host_context').$type<AgentHostContext>(),
     id: key('id').primaryKey(),
     threadId: key('thread_id')
       .notNull()
