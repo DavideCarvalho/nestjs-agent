@@ -42,6 +42,35 @@ describe('KeywordRetriever (BM25)', () => {
   });
 });
 
+describe('KeywordRetriever — accented text', () => {
+  const docs = [
+    { id: 'pt', text: 'A operação de manutenção do caminhão começa às 6h.' },
+    { id: 'es', text: 'La facturación electrónica se envía cada día.' },
+    { id: 'en', text: 'Quarterly revenue report for the board.' },
+  ];
+
+  it('keeps accented words whole, so a Portuguese or Spanish query finds its document', async () => {
+    const retriever = new KeywordRetriever();
+    retriever.add(docs);
+    expect((await retriever.retrieve('manutenção'))[0]?.id).toBe('pt');
+    expect((await retriever.retrieve('facturación electrónica'))[0]?.id).toBe('es');
+  });
+
+  it('folds accents, so a query typed without them still matches', async () => {
+    const retriever = new KeywordRetriever();
+    retriever.add(docs);
+    expect((await retriever.retrieve('caminhao manutencao'))[0]?.id).toBe('pt');
+    expect((await retriever.retrieve('facturacion'))[0]?.id).toBe('es');
+  });
+
+  it('no longer matches the fragments the ASCII tokenizer left behind', async () => {
+    const retriever = new KeywordRetriever();
+    retriever.add(docs);
+    // `[a-z0-9]+` split "operação" into "opera" + "o" — so "opera" used to hit the Portuguese doc.
+    expect(await retriever.retrieve('opera')).toEqual([]);
+  });
+});
+
 describe('KeywordRetriever.remove (delete-sync with the vector store)', () => {
   it('a removed document is gone from retrieve — every chunk of it, text and all', async () => {
     const keyword = new KeywordRetriever();
