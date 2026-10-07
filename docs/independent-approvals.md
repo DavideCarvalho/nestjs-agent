@@ -85,7 +85,7 @@ uiCapabilities: {
 
 Use the names and versions actually defined in your catalog. `components: []` requests text only. Omitting capabilities preserves the legacy catalog behavior. The server intersects capabilities with the authorized catalog; client declarations never create components or grant permissions. Only supported components are offered to the model. Unsupported validated emissions and trees become their complete text representation.
 
-Capabilities travel through native HTTP, queued messages, proposal execution context and AG-UI forwarded properties. Shared React can derive capabilities from its renderer registration or accept `uiCapabilities` explicitly. Drawable emissions retain `fallbackText` so stored history remains readable when a component renderer is removed, its version changes or rendering fails. A custom renderer fallback can override the default text display.
+Capabilities travel through native HTTP, queued messages, proposal execution context and AG-UI forwarded properties. React does not derive capabilities from the renderers you register: declare them explicitly, on `<AgentProvider uiCapabilities={…}>` for the whole tree or `useAgentChat({ uiCapabilities })` for one chat (which wins over the provider's). Read the provider's with `useAgentUiCapabilities()`. Drawable emissions retain `fallbackText` so stored history remains readable when a component renderer is removed, its version changes or rendering fails. A custom renderer fallback can override the default text display.
 
 ## Database rollout
 
