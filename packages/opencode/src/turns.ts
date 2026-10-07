@@ -11,6 +11,7 @@ import {
   AGENT_SKILLS,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
+  type Actor,
   type AgentRunInput,
   type AgentStore,
   type AgentUiComponent,
@@ -21,10 +22,9 @@ import {
   type HumanReply,
   type MemoryConfig,
   type PromptContext,
-  REMEMBER_TOOL_DESCRIPTION,
-  REMEMBER_TOOL_NAME,
   RUN_ENDED_BEFORE_TOOL_CALL,
   type RememberToolInput,
+  type RolesPolicy,
   type ScopeContext,
   type SkillsConfig,
   type StoredMessage,
@@ -37,18 +37,11 @@ import {
   memoryWriteVerdict,
   publishAgentRunFailed,
   releaseThreadRun,
-  rememberInputSchema,
   resolveMemoryDigest,
   resolveSkillCatalog,
+  streamFailure,
 } from '@dudousxd/nestjs-agent-core';
-import {
-  Inject,
-  Injectable,
-  Logger,
-  type OnApplicationShutdown,
-  type OnModuleInit,
-  Optional,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnApplicationShutdown, Optional } from '@nestjs/common';
 import type { OpenCodeClient, OpenCodePermissionRule } from './client.js';
 import { OpenCodeEventHub } from './event-hub.js';
 import type {
@@ -56,9 +49,16 @@ import type {
   OpenCodeHost,
   OpenCodeRunResult,
   OpenCodeServer,
+  OpenCodeSessionRef,
   OpenCodeSessionStore,
 } from './host.js';
-import { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
+import { LOOP_SERVED_KINDS, type OpenCodeToolsTokens } from './mcp.js';
+import {
+  OPENCODE_HOST,
+  OPENCODE_OPTIONS,
+  OPENCODE_SESSIONS,
+  OPENCODE_TOOLS_TOKENS,
+} from './tokens.js';
 import {
   type Milestone,
   OpenCodeTurn,
@@ -67,19 +67,29 @@ import {
   errorText,
 } from './turn.js';
 
-/** The module's `@AiTool`s, served to sessions over MCP (`@dudousxd/nestjs-agent-mcp-server`). */
+/**
+ * The module's `@AiTool`s, served to sessions over the engine's own MCP endpoint
+ * (`POST <agent path>/opencode/mcp`, mounted by the engine — not `AgentMcpServerModule`).
+ */
 export interface OpenCodeToolsOptions {
   /**
-   * The URL OpenCode reaches the app's MCP endpoint at (`AgentMcpServerModule`, mounted with
-   * `actions: 'execute'` — OpenCode's `ask` rules put the person in front of every `action` tool).
+   * The URL OpenCode reaches that endpoint at — from where OpenCode runs (a sandbox reaches the app
+   * at an internal address), e.g. `http://app.internal:3000/agent/opencode/mcp`.
    */
   url: string;
-  /** Headers authenticating the session as the turn's actor (e.g. a short-lived bearer token). */
-  headers?: (
-    actor: AgentRunInput['actor'],
-  ) => Record<string, string> | Promise<Record<string, string>>;
   /** The MCP server's name in OpenCode; its tools are `<server>.<tool>` / `<server>_<tool>`. Default `'aviary'`. */
   server?: string;
+  /**
+   * The secret the endpoint's bearer tokens are signed with — the same in every process that serves
+   * the agent. Omit → a random per-process secret (one process only; a warning says so).
+   */
+  secret?: string;
+  /**
+   * How long a token OpenCode is given stays valid. A token only ever reaches a turn of its own
+   * actor that is running on the session that calls, and it is re-issued on a kept session's turns
+   * once it is half-way through. Default 7 days.
+   */
+  ttlMs?: number;
 }
 
 export interface OpenCodeEngineSettings {
@@ -120,6 +130,24 @@ export interface SessionHandle {
   directory?: string;
 }
 
+/** What the engine's MCP endpoint tells the turns about the call it is serving. */
+export interface OpenCodeToolCall {
+  actor: Actor;
+  /** The OpenCode server the endpoint's token was issued for. */
+  serverKey: string;
+  /** The MCP request id, so two calls' unnamed components stay apart. */
+  requestId?: string;
+  /** The call's `_meta` — OpenCode names its session there (`ai.opencode/sessionID`). */
+  meta: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** The turn a tool call over MCP belongs to — see {@link OpenCodeTurns.callContext}. */
+export interface OpenCodeCallContext {
+  input: AgentRunInput;
+  runId: string;
+  ctx: Pick<AiToolCtx, 'threadId' | 'runId' | 'emitUi'>;
+}
+
 interface LiveTurn {
   turn: OpenCodeTurn;
   input: AgentRunInput;
@@ -128,7 +156,14 @@ interface LiveTurn {
   stop: () => void;
 }
 
+/** One action OpenCode was allowed to run in a run: an approval the MCP endpoint may spend. */
+interface Grant {
+  id: string;
+  action: string;
+}
+
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_TOOLS_TTL_MS = 7 * 24 * 60 * 60_000;
 
 /**
  * The steps of an OpenCode turn — `begin` (thread, session, instructions), `prompt`, `observe`
@@ -138,10 +173,15 @@ const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
  * the session, catching up on what OpenCode asked while nobody listened.
  */
 @Injectable()
-export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
+export class OpenCodeTurns implements OnApplicationShutdown {
   private readonly logger = new Logger('OpenCodeTurns');
   private readonly events = new OpenCodeEventHub();
   private readonly live = new Map<string, LiveTurn>();
+  /** Actions approved per run, and the approvals the MCP endpoint already spent. */
+  private readonly grants = new Map<string, Grant[]>();
+  private readonly spent = new Set<string>();
+  /** When the tools endpoint was last registered for a location (`server|boot|directory|actor`). */
+  private readonly toolsIssued = new Map<string, number>();
 
   constructor(
     @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
@@ -150,53 +190,63 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
     @Inject(AGENT_DEPS_FACTORY) private readonly deps: AgentDepsFactory,
-    @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
+    @Inject(AGENT_TOOL_REGISTRY) readonly registry: ToolRegistry,
     @Optional() @Inject(AGENT_SKILLS) private readonly skills?: SkillsConfig,
     @Optional() @Inject(AGENT_MEMORY) private readonly memory?: MemoryConfig,
     @Optional() @Inject(AGENT_CHAT_QUEUE) private readonly queue?: ChatQueueService,
+    @Optional()
+    @Inject(OPENCODE_TOOLS_TOKENS)
+    private readonly toolsTokens?: OpenCodeToolsTokens | null,
   ) {}
 
-  /**
-   * With the module's tools served over MCP and a memory provider that writes, OpenCode gets the
-   * `remember` tool the loop would have offered: one fact, at the actor's own scope only.
-   */
-  onModuleInit(): void {
-    if (!this.memoryWritable() || this.registry.has(REMEMBER_TOOL_NAME)) return;
-    this.registry.register(
-      {
-        name: REMEMBER_TOOL_NAME,
-        kind: 'read',
-        description: REMEMBER_TOOL_DESCRIPTION,
-        inputSchema: rememberInputSchema,
-        roles: [],
-      },
-      { execute: (input, ctx) => this.remember(input as RememberToolInput, ctx) },
-    );
+  /** The tools server's name in OpenCode. */
+  get toolsServer(): string {
+    return this.settings.tools?.server ?? 'aviary';
   }
 
-  private memoryWritable(): boolean {
+  /** The roles policy a turn's tools are gated by (the agent's own). */
+  rolesPolicyFor(input: Pick<AgentRunInput, 'agentName'>): RolesPolicy {
+    return this.deps.forAgent(input.agentName).rolesPolicy;
+  }
+
+  /** The tools a turn may reach: the agent's allow-list, narrowed by its persona's. */
+  allowedTools(input: Pick<AgentRunInput, 'agentName' | 'persona'>): string[] | undefined {
+    const deps = this.deps.forAgent(input.agentName);
+    const agent = deps.toolAllowList;
+    const persona =
+      input.persona !== undefined
+        ? deps.personas?.find((p) => p.id === input.persona)?.allowedTools
+        : undefined;
+    if (agent === undefined) return persona === undefined ? undefined : [...persona];
+    if (persona === undefined) return [...agent];
+    return agent.filter((name) => persona.includes(name));
+  }
+
+  /**
+   * Whether the tools endpoint serves `remember`: the module's tools are served and the memory
+   * provider writes. Served by the engine's own endpoint only — never put in the module's shared
+   * registry, where every MCP client and the `/tools` catalog would see it.
+   */
+  memoryWritable(): boolean {
     return this.settings.tools !== undefined && this.memory?.provider.write !== undefined;
   }
 
-  private async remember(input: RememberToolInput, ctx: AiToolCtx): Promise<string> {
+  /** `remember` for a turn: one fact, at the actor's own scope only — as the loop serves it. */
+  async remember(input: RememberToolInput, turn: OpenCodeCallContext): Promise<string> {
     const memory = this.memory;
     const write = memory?.provider.write?.bind(memory.provider);
     if (memory === undefined || write === undefined) return 'Memory is read-only here.';
     const max = memory.maxFactChars ?? DEFAULT_MAX_FACT_CHARS;
     if (input.fact.length > max) return `Not recorded: a fact is at most ${max} characters.`;
+    const actor = turn.input.actor;
     const scopeCtx = {
-      actor: ctx.actor,
-      threadId: ctx.threadId,
-      ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+      actor,
+      threadId: turn.ctx.threadId,
+      ...(turn.input.agentName !== undefined ? { agentName: turn.input.agentName } : {}),
     };
     const scopes = await (memory.scopes ?? defaultScopeResolver).resolve(scopeCtx);
-    const scope = actorScope(ctx.actor);
-    const verdict = memoryWriteVerdict({
-      scope,
-      scopes,
-      actor: ctx.actor,
-      author: { kind: 'agent' },
-    });
+    const scope = actorScope(actor);
+    const verdict = memoryWriteVerdict({ scope, scopes, actor, author: { kind: 'agent' } });
     if (!verdict.allowed) return `Not recorded: ${verdict.reason}`;
     await write({
       key: input.key,
@@ -204,10 +254,9 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       scope,
       origin: {
         author: 'agent',
-        actorRef: ctx.actor.id,
-        // An MCP call no turn claimed carries synthetic `mcp:` ids: provenance names real ones only.
-        ...(ctx.threadId.startsWith('mcp:') ? {} : { threadId: ctx.threadId }),
-        ...(ctx.runId.startsWith('mcp:') ? {} : { runId: ctx.runId }),
+        actorRef: actor.id,
+        threadId: turn.ctx.threadId,
+        runId: turn.runId,
       },
       ctx: scopeCtx,
     });
@@ -215,57 +264,116 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
-   * The context of a tool call made over MCP by one of this engine's sessions — for
-   * `AgentMcpServerModule`'s `context` option. OpenCode names its session in the call's `_meta`
-   * (`ai.opencode/sessionID`); the call is then the turn's: its thread and run, and `ctx.emitUi`
-   * pushes into the turn's stream and message. A session this process is not following is found
-   * through OpenCode (`session.get` → the thread it was created for → the thread's running turn):
-   * its components still reach the stream, as a message of their own.
+   * The turn a tool call over the engine's MCP endpoint belongs to, or `undefined` when it belongs
+   * to none — which the endpoint refuses: it exists only to serve turns. OpenCode names its session in
+   * every call's `_meta` (`ai.opencode/sessionID`); the call is that session's running turn's, and
+   * only when the endpoint's caller is the person that turn runs for, on the server the token was
+   * issued for. A session this process is not following is found through OpenCode (`session.get` →
+   * the thread it was created for → the thread's running turn); its components still reach the
+   * stream, as a message of their own.
    */
-  async toolContext(input: {
-    actor: AiToolCtx['actor'];
-    requestId?: string;
-    meta: Readonly<Record<string, unknown>> | undefined;
-  }): Promise<Partial<Pick<AiToolCtx, 'threadId' | 'runId' | 'emitUi'>> | undefined> {
-    const sessionId = sessionOfMeta(input.meta);
+  async callContext(call: OpenCodeToolCall): Promise<OpenCodeCallContext | undefined> {
+    const sessionId = sessionOfMeta(call.meta);
     if (sessionId === undefined) return undefined;
-    // `_meta` is the client's to write: a session id ties the call to a turn only when the caller is
-    // the person that turn runs for.
-    const scope = (runId: string) => `${runId}:${input.requestId ?? randomUUID()}`;
+    const scope = (runId: string) => `${runId}:${call.requestId || randomUUID()}`;
     for (const [runId, live] of this.live) {
       if (live.handle.sessionId !== sessionId) continue;
-      if (live.input.actor.id !== input.actor.id) return undefined;
+      if (live.input.actor.id !== call.actor.id || live.handle.serverKey !== call.serverKey) {
+        return undefined;
+      }
       return {
-        threadId: live.input.threadId,
+        input: live.input,
         runId,
-        emitUi: uiEmitter(scope(runId), async (component) => {
-          await live.turn.pushUi(component);
-          await this.uiPushed(live.input, runId, component);
-        }),
+        ctx: {
+          threadId: live.input.threadId,
+          runId,
+          emitUi: uiEmitter(scope(runId), async (component) => {
+            await live.turn.pushUi(component);
+            await this.uiPushed(live.input, runId, component);
+          }),
+        },
       };
     }
-    const threadId = await this.threadOfSession(input.actor, sessionId);
+    const threadId = await this.threadOfSession(call.actor, sessionId);
     if (threadId === undefined) return undefined;
-    if ((await this.store.ownerOfThread(threadId)) !== input.actor.id) return undefined;
-    const runId = (await this.store.activeRunForThread?.(threadId)) ?? null;
-    if (runId === null) return { threadId };
-    return {
+    if ((await this.store.ownerOfThread(threadId)) !== call.actor.id) return undefined;
+    const known = await this.sessions.get(threadId);
+    if (known === null || known.sessionId !== sessionId || known.serverKey !== call.serverKey) {
+      return undefined;
+    }
+    const runId = await this.activeRun(threadId);
+    if (runId === null) return undefined;
+    // Followed elsewhere: what this call knows of the run.
+    const input: AgentRunInput = {
       threadId,
-      runId,
-      emitUi: uiEmitter(scope(runId), async (component) => {
-        const writer = await this.sink.open(runId);
-        await writer.write(encodeStreamEvent({ kind: 'ui', ...component }));
-        await this.store.appendMessage({
-          threadId,
-          role: 'assistant',
-          content: '',
-          runId,
-          ui: [component],
-        });
-        // Followed elsewhere: the host gets what this call knows of the run.
-        await this.uiPushed({ threadId, actor: input.actor, userText: '' }, runId, component);
-      }),
+      actor: call.actor,
+      userText: '',
+      ...(known.agentName !== undefined ? { agentName: known.agentName } : {}),
+      ...(known.persona !== undefined ? { persona: known.persona } : {}),
     };
+    return {
+      input,
+      runId,
+      ctx: {
+        threadId,
+        runId,
+        emitUi: uiEmitter(scope(runId), async (component) => {
+          const writer = await this.sink.open(runId);
+          await writer.write(encodeStreamEvent({ kind: 'ui', ...component }));
+          await this.store.appendMessage({
+            threadId,
+            role: 'assistant',
+            content: '',
+            runId,
+            ui: [component],
+          });
+          await this.uiPushed(input, runId, component);
+        }),
+      },
+    };
+  }
+
+  /**
+   * Spend one approval of `tool` in `runId` — what the MCP endpoint asks before it runs an `action`.
+   * OpenCode asks the person (or the policy answers) before it calls an action tool; the endpoint
+   * runs it only against an approval this engine saw granted, so a caller that skipped OpenCode's
+   * permission rules (a model in code mode that read the endpoint's headers, anything else that got
+   * hold of the token) cannot run an action unapproved. One approval, one call. The approval is the
+   * run's own: live in this process, else read off the run's persisted calls (spent marks are kept
+   * per process).
+   */
+  async spendApproval(
+    runId: string,
+    tool: string,
+    input: Pick<AgentRunInput, 'threadId'>,
+  ): Promise<boolean> {
+    const names = new Set([tool, `${this.toolsServer}.${tool}`, `${this.toolsServer}_${tool}`]);
+    const local = (this.grants.get(runId) ?? []).find(
+      (grant) => names.has(grant.action) && !this.spent.has(grant.id),
+    );
+    if (local !== undefined) {
+      this.spent.add(local.id);
+      return true;
+    }
+    const thread = await this.store.getThread(input.threadId);
+    for (const message of thread?.messages ?? []) {
+      if (message.runId !== runId) continue;
+      for (const call of message.toolCalls ?? []) {
+        if (!names.has(call.name) || this.spent.has(call.id)) continue;
+        const result = message.toolResults?.find((r) => r.id === call.id);
+        const approved = (result?.output as { approved?: unknown } | undefined)?.approved === true;
+        if (approved) {
+          this.spent.add(call.id);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private async activeRun(threadId: string): Promise<string | null> {
+    if (this.store.activeRunForThread !== undefined) return this.store.activeRunForThread(threadId);
+    return (await this.store.getThread(threadId))?.activeRunId ?? null;
   }
 
   private async uiPushed(input: AgentRunInput, runId: string, component: AgentUiComponent) {
@@ -276,7 +384,7 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
 
   /**
    * Push a component into the run an OpenCode session is serving, for the host's own trusted
-   * callers (no caller check — {@link toolContext} is the one for MCP requests). `false` when no run
+   * callers (no caller check — {@link callContext} is the one for MCP requests). `false` when no run
    * is live on that session.
    */
   async pushToSession(sessionId: string, component: AgentUiComponent): Promise<boolean> {
@@ -318,7 +426,8 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
 
   /**
    * Persist the user message (or rewind the thread for a regenerate), find or create the thread's
-   * session, and refresh what the session is told this turn.
+   * session, and refresh what the session is told this turn. Safe to run again for the same run (a
+   * durable `begin` re-run after a crash): the run's user message is written once.
    */
   async begin(runId: string, input: AgentRunInput): Promise<SessionHandle> {
     const earlier = await this.prepareThread(runId, input);
@@ -332,11 +441,24 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     let handle: SessionHandle;
     let created = false;
     if (known !== null && reusable) {
-      handle = known;
+      handle = {
+        sessionId: known.sessionId,
+        serverKey: known.serverKey,
+        ...(known.bootId !== undefined ? { bootId: known.bootId } : {}),
+        ...(known.directory !== undefined ? { directory: known.directory } : {}),
+      };
       if (input.regenerate === true) await this.revertLastExchange(server.client, handle.sessionId);
+      await this.addTools(input, server, handle.directory, false);
     } else {
       handle = await this.createSession(runId, input, server, earlier);
       created = true;
+    }
+    if (created || known?.agentName !== input.agentName || known?.persona !== input.persona) {
+      await this.sessions.set(input.threadId, {
+        ...handle,
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.persona !== undefined ? { persona: input.persona } : {}),
+      });
     }
     await this.host.beforePrompt?.({
       input,
@@ -384,8 +506,8 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       ...(server.bootId !== undefined ? { bootId: server.bootId } : {}),
       ...(directory !== undefined ? { directory } : {}),
     };
-    await this.sessions.set(input.threadId, handle);
-    await this.addTools(input, client, directory);
+    await this.sessions.set(input.threadId, handle satisfies OpenCodeSessionRef);
+    await this.addTools(input, server, directory, true);
     await this.host.prepare?.({ ...context, sessionId, client });
     const transcript = transcriptOf(earlier, this.settings.historyMessages ?? 20);
     if (transcript || note) {
@@ -421,6 +543,10 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
         await this.store.truncateFrom(input.threadId, firstDropped.id);
       return messages.slice(0, Math.max(lastUser, 0));
     }
+    // Already written by an earlier attempt at this step (a durable `begin` re-run after a crash):
+    // the run's user message is keyed by its run id, and what came before it is the history.
+    const mine = messages.findIndex((m) => m.role === 'user' && m.runId === runId);
+    if (mine >= 0) return messages.slice(0, mine);
     await this.store.appendMessage({
       threadId: input.threadId,
       role: 'user',
@@ -546,19 +672,20 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
    * Permission rules for the module's tools: the MCP server allowed as a whole (OpenCode offers a
    * server's tools only when the server itself is allowed), then each `action` tool asked — the last
    * matching rule wins, so an action still lands on an approval card. Tools outside the agent's
-   * allow-list are denied.
+   * (and persona's) allow-list, and the kinds only the loop serves, are denied. The endpoint enforces
+   * all of it again on every call: these rules are what OpenCode offers, not what keeps a call out.
    */
   private toolRules(input: AgentRunInput): OpenCodePermissionRule[] {
-    const tools = this.settings.tools;
-    if (tools === undefined) return [];
-    const server = tools.server ?? 'aviary';
-    const allow = this.deps.forAgent(input.agentName).toolAllowList;
+    if (this.settings.tools === undefined) return [];
+    const server = this.toolsServer;
+    const allow = this.allowedTools(input);
     const both = (name: string) => [`${server}.${name}`, `${server}_${name}`];
     const rules: OpenCodePermissionRule[] = [
       { action: `${server}*`, resource: '*', effect: 'allow' },
     ];
     for (const spec of this.registry.allSpecs()) {
-      const offered = allow === undefined || allow.includes(spec.name);
+      const offered =
+        (allow === undefined || allow.includes(spec.name)) && !LOOP_SERVED_KINDS.has(spec.kind);
       if (offered && spec.kind === 'read') continue;
       const effect = offered && spec.kind === 'action' ? 'ask' : 'deny';
       for (const action of both(spec.name)) rules.push({ action, resource: '*', effect });
@@ -566,27 +693,40 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     return rules;
   }
 
+  /**
+   * Register the tools endpoint at the session's location, with a bearer token for the turn's actor
+   * on this server. On a new session always; on a kept one when this process has not registered it
+   * yet or its token is half-way through its life.
+   */
   private async addTools(
     input: AgentRunInput,
-    client: OpenCodeClient,
+    server: OpenCodeServer,
     directory: string | undefined,
+    fresh: boolean,
   ): Promise<void> {
     const tools = this.settings.tools;
-    if (tools === undefined) return;
+    const tokens = this.toolsTokens;
+    if (tools === undefined || tokens == null) return;
+    const { client } = server;
     if (client.mcp === undefined) {
       this.logger.warn('`tools` is set but the OpenCode client cannot add MCP servers (`mcp.add`)');
       return;
     }
+    const key = `${server.key}|${server.bootId ?? ''}|${directory ?? ''}|${input.actor.id}`;
+    const issued = this.toolsIssued.get(key);
+    const ttl = tools.ttlMs ?? DEFAULT_TOOLS_TTL_MS;
+    if (!fresh && issued !== undefined && Date.now() - issued < ttl / 2) return;
     await client.mcp.add({
-      server: tools.server ?? 'aviary',
+      server: this.toolsServer,
       ...(directory !== undefined ? { location: { directory } } : {}),
       config: {
         type: 'remote',
         url: tools.url,
-        headers: (await tools.headers?.(input.actor)) ?? {},
+        headers: { Authorization: `Bearer ${tokens.mint(input.actor, server.key)}` },
         oauth: false,
       },
     });
+    this.toolsIssued.set(key, Date.now());
   }
 
   // ---- prompt / observe / reply --------------------------------------------------------------
@@ -743,6 +883,11 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
         }),
       modelLabel: input.model ?? 'opencode',
       logger: this.logger,
+      onGranted: (action, id) => {
+        const grants = this.grants.get(runId) ?? [];
+        grants.push({ action, id });
+        this.grants.set(runId, grants);
+      },
     });
     const stop = await this.events.listen(server.key, server.client, handle.sessionId, (event) =>
       turn.handle(event),
@@ -757,6 +902,13 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
   drop(runId: string): void {
     this.live.get(runId)?.stop();
     this.live.delete(runId);
+  }
+
+  /** Stop following a run and drop the approvals it was granted: it is over. */
+  private forget(runId: string): void {
+    this.drop(runId);
+    for (const grant of this.grants.get(runId) ?? []) this.spent.delete(grant.id);
+    this.grants.delete(runId);
   }
 
   // ---- settle --------------------------------------------------------------------------------
@@ -847,7 +999,7 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
       await this.settleFailed(runId, input, outcome.error, durationMs);
       return;
     }
-    this.drop(runId);
+    this.forget(runId);
     const writer = await this.sink.open(runId);
     const result = await this.runResult(runId, input, outcome, durationMs);
     await this.amend(writer, result);
@@ -876,10 +1028,14 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     error: string,
     durationMs = 0,
   ): Promise<void> {
-    this.drop(runId);
+    this.forget(runId);
     const writer = await this.sink.open(runId);
     const result = await this.runResult(runId, input, { status: 'failed', error }, durationMs);
-    const message = (await this.amend(writer, result)).error ?? error;
+    const worded = (await this.amend(writer, result)).error;
+    // The host's wording is for the person and shown as is. OpenCode's own error follows the
+    // library's rule for a provider's: logged and on the run row everywhere, on the stream only
+    // outside production (or with `exposeStreamErrorDetails(true)`).
+    const message = worded ?? streamFailure(new Error(error)).message;
     this.logger.error(`agent run ${runId} failed: ${error}`);
     publishAgentRunFailed({ runId, code: 'opencode_failed', message: error });
     await this.store.recordRunEnd?.({
@@ -891,10 +1047,10 @@ export class OpenCodeTurns implements OnModuleInit, OnApplicationShutdown {
     await Promise.resolve(
       this.store.failUnsettledToolCalls?.(runId, RUN_ENDED_BEFORE_TOOL_CALL),
     ).catch(() => 0);
-    await this.handoff(writer, input, runId, 'failed', message);
+    await this.handoff(writer, input, runId, 'failed', error);
     await releaseThreadRun(this.store, input.threadId, runId);
     await writer.fail({ code: 'opencode_failed', message });
-    await this.settled({ ...result, outcome: { status: 'failed', error: message } });
+    await this.settled({ ...result, outcome: { status: 'failed', error: worded ?? error } });
   }
 
   /** Starts the next queued message of the thread; set by the runner (it owns `start`). */

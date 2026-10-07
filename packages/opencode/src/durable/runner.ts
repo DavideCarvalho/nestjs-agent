@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  AgentRunInput,
-  AgentRunStartOptions,
-  AgentRunner,
-  HumanReply,
+import {
+  AGENT_STORE,
+  type AgentRunInput,
+  type AgentRunStartOptions,
+  type AgentRunner,
+  type AgentStore,
+  type HumanReply,
 } from '@dudousxd/nestjs-agent-core';
 import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
 import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { OpenCodeHost } from '../host.js';
 import { OPENCODE_HOST, OPENCODE_OPTIONS } from '../tokens.js';
+import { OpenCodeReplyMismatchError, isDecision } from '../turn.js';
 import { type OpenCodeEngineSettings, OpenCodeTurns } from '../turns.js';
 import { OpenCodeRunWorkflow, decisionToken } from './workflow.js';
 
@@ -38,6 +41,7 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
     private readonly turns: OpenCodeTurns,
     @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
     @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
+    @Inject(AGENT_STORE) private readonly store: AgentStore,
   ) {
     turns.startNext = (next, runId) => this.start(next, { runId });
   }
@@ -86,7 +90,18 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
     }
   }
 
+  /**
+   * Signal a person's reply into the run. Answers addressed at an approval (a call recorded with an
+   * approver; questions have none) are refused ({@link OpenCodeReplyMismatchError}, a 409) before
+   * they reach the workflow, which would otherwise spend its wait on them.
+   */
   async signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void> {
+    if (!isDecision(reply)) {
+      const call = await this.store.toolCallApproval?.(toolCallId);
+      if (call != null && call.approver !== null) {
+        throw new OpenCodeReplyMismatchError(runId, toolCallId);
+      }
+    }
     await this.workflows.signal(decisionToken(runId, toolCallId), reply);
   }
 

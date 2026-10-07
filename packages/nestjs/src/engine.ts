@@ -1,4 +1,4 @@
-import type { InjectionToken, Provider } from '@nestjs/common';
+import type { InjectionToken, Provider, Type } from '@nestjs/common';
 
 /**
  * Something other than this library's loop that runs a turn — what `engine` on
@@ -20,4 +20,10 @@ export interface AgentEngine {
   runner: InjectionToken;
   /** Providers the app may inject too (the module is global): e.g. what an MCP surface hooks into. */
   exports?: InjectionToken[];
+  /**
+   * Controllers the engine mounts under the agent's path (e.g. the endpoint its own runtime calls
+   * back into). Not mounted on `surface: 'engine'`, and the module's `guards` are NOT applied: an
+   * engine's controller authenticates its own callers, which are not the app's users.
+   */
+  controllers?: Type<object>[];
 }

@@ -1,5 +1,5 @@
 import type { AgentEngine } from '@dudousxd/nestjs-agent';
-import { type OpenCodeEngineOptions, openCodeProviders } from '../engine.js';
+import { type OpenCodeEngineOptions, openCodeControllers, openCodeProviders } from '../engine.js';
 import { OPENCODE_TURNS } from '../tokens.js';
 import { OpenCodeTurns } from '../turns.js';
 import { DurableOpenCodeAgentRunner } from './runner.js';
@@ -16,6 +16,7 @@ export function openCodeDurable(options: OpenCodeEngineOptions): AgentEngine {
     providers: [...openCodeProviders(options), OpenCodeRunWorkflow, DurableOpenCodeAgentRunner],
     runner: DurableOpenCodeAgentRunner,
     exports: [OpenCodeTurns, OPENCODE_TURNS],
+    controllers: openCodeControllers(options),
   };
 }
 

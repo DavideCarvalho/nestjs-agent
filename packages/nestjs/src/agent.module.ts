@@ -330,13 +330,16 @@ function adapterProviders(adapters: AgentProtocolAdapter[] | undefined): Provide
 
 /**
  * `surface: 'engine'` mounts NO controllers — a worker pod never receives HTTP traffic. Otherwise
- * the native ones and whatever the protocol adapters contribute.
+ * the native ones, whatever the protocol adapters contribute, and the engine's own.
  */
 function controllersForSurface(
   surface: AgentSurface | undefined,
   adapters: AgentProtocolAdapter[] | undefined,
+  engine?: AgentEngine,
 ): Type<object>[] {
-  return surface === 'engine' ? [] : [...BASE_CONTROLLERS, ...adapterControllers(adapters)];
+  return surface === 'engine'
+    ? []
+    : [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])];
 }
 
 /**
@@ -410,7 +413,7 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersForSurface(options.surface, options.adapters),
+      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false, options.engine),
@@ -431,7 +434,7 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersForSurface(options.surface, options.adapters),
+      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
       providers: [
         {
           provide: AGENT_OPTIONS,

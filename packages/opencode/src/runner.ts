@@ -8,7 +8,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable } from '@nestjs/common';
 import { OPENCODE_OPTIONS } from './tokens.js';
-import { errorText } from './turn.js';
+import { OpenCodeReplyMismatchError, errorText, isDecision } from './turn.js';
 import { type OpenCodeEngineSettings, OpenCodeTurns } from './turns.js';
 
 /**
@@ -24,7 +24,11 @@ export class OpenCodeAgentRunner implements AgentRunner {
   private readonly cancelled = new Set<string>();
   private readonly pending = new Map<
     string,
-    { resolve: (reply: HumanReply) => void; reject: (error: unknown) => void }
+    {
+      on: 'approval' | 'answers';
+      resolve: (reply: HumanReply) => void;
+      reject: (error: unknown) => void;
+    }
   >();
 
   constructor(
@@ -59,10 +63,18 @@ export class OpenCodeAgentRunner implements AgentRunner {
     return { runId };
   }
 
+  /**
+   * Deliver a person's reply. Answers addressed at an approval are refused
+   * ({@link OpenCodeReplyMismatchError}, a 409) and the approval keeps waiting: they say nothing
+   * about whether the action should run.
+   */
   async signal(runId: string, toolCallId: string, reply: HumanReply): Promise<void> {
     const key = `${runId}:${toolCallId}`;
     const waiter = this.pending.get(key);
     if (waiter === undefined) return;
+    if (waiter.on === 'approval' && !isDecision(reply)) {
+      throw new OpenCodeReplyMismatchError(runId, toolCallId);
+    }
     this.pending.delete(key);
     waiter.resolve(reply);
   }
@@ -97,7 +109,12 @@ export class OpenCodeAgentRunner implements AgentRunner {
           await this.turns.settle(runId, input, milestone.outcome, Date.now() - started);
           return;
         }
-        const reply = await this.park(runId, milestone.ask.id, milestone.timeoutMs);
+        const reply = await this.park(
+          runId,
+          milestone.ask.id,
+          milestone.ask.kind === 'approval' ? 'approval' : 'answers',
+          milestone.timeoutMs,
+        );
         handle = await this.turns.reply(runId, input, handle, milestone.ask, reply);
       }
     } catch (error) {
@@ -113,10 +130,15 @@ export class OpenCodeAgentRunner implements AgentRunner {
   }
 
   /** Wait for a person's answer; a lapsed approval answers itself as expired. */
-  private park(runId: string, toolCallId: string, timeoutMs?: number): Promise<HumanReply> {
+  private park(
+    runId: string,
+    toolCallId: string,
+    on: 'approval' | 'answers',
+    timeoutMs?: number,
+  ): Promise<HumanReply> {
     const key = `${runId}:${toolCallId}`;
     const waiting = new Promise<HumanReply>((resolve, reject) => {
-      this.pending.set(key, { resolve, reject });
+      this.pending.set(key, { on, resolve, reject });
     });
     if (timeoutMs === undefined) return waiting;
     let timer: ReturnType<typeof setTimeout> | undefined;

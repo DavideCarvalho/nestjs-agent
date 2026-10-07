@@ -145,6 +145,14 @@ export interface OpenCodeSessionRef {
   sessionId: string;
   serverKey: string;
   bootId?: string;
+  /** The session's directory (`location.directory`), when it has one. */
+  directory?: string;
+  /**
+   * The agent (and persona id) the thread's latest turn ran as — what the tools endpoint checks a
+   * call against when it lands on a process that is not following the turn.
+   */
+  agentName?: string;
+  persona?: string;
 }
 
 /**

@@ -9,7 +9,12 @@ export type {
   OpenCodePermissionRule,
   OpenCodeSessionCreate,
 } from './client.js';
-export { type OpenCodeEngineOptions, openCode, openCodeProviders } from './engine.js';
+export {
+  type OpenCodeEngineOptions,
+  openCode,
+  openCodeControllers,
+  openCodeProviders,
+} from './engine.js';
 export { OpenCodeEventHub, sessionOf } from './event-hub.js';
 export { FormAnswerError, toElicitation, toFormAnswer, toQuestion } from './forms.js';
 export {
@@ -24,11 +29,33 @@ export {
   type OpenCodeSessionStore,
   type OpenCodeTurnContext,
 } from './host.js';
-export { OpenCodeAgentRunner } from './runner.js';
-export { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS, OPENCODE_TURNS } from './tokens.js';
-export { type Milestone, OpenCodeTurn, type PendingAsk, type TurnOutcome } from './turn.js';
+export { OpenCodeMcpController } from './mcp.controller.js';
 export {
+  OpenCodeMcpEndpoint,
+  OpenCodeToolRefusedError,
+  type OpenCodeToolsClaims,
+  OpenCodeToolsTokens,
+} from './mcp.js';
+export { OpenCodeAgentRunner } from './runner.js';
+export {
+  OPENCODE_HOST,
+  OPENCODE_MCP_ENDPOINT,
+  OPENCODE_OPTIONS,
+  OPENCODE_SESSIONS,
+  OPENCODE_TOOLS_TOKENS,
+  OPENCODE_TURNS,
+} from './tokens.js';
+export {
+  type Milestone,
+  OpenCodeReplyMismatchError,
+  OpenCodeTurn,
+  type PendingAsk,
+  type TurnOutcome,
+} from './turn.js';
+export {
+  type OpenCodeCallContext,
   type OpenCodeEngineSettings,
+  type OpenCodeToolCall,
   type OpenCodeToolsOptions,
   OpenCodeTurns,
   type SessionHandle,

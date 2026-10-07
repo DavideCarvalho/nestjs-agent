@@ -1,13 +1,5 @@
 import 'reflect-metadata';
-import {
-  AGENT_TOOL_REGISTRY,
-  type Actor,
-  type AiToolCtx,
-  DefaultRolesPolicy,
-  type MemoryProvider,
-  type StoreMemoryInput,
-  type ToolRegistry,
-} from '@dudousxd/nestjs-agent-core';
+import type { Actor } from '@dudousxd/nestjs-agent-core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openCode } from './engine.js';
 import { keyValueOpenCodeSessionStore } from './host.js';
@@ -46,9 +38,9 @@ describe('openCode engine: follow-ups', () => {
     await framesUntil(h.service, runId, (f) => f.kind === 'text');
 
     const turns = h.app.get(OpenCodeTurns);
-    const ctx = await turns.toolContext({ actor, meta: meta('ses_1') });
-    expect(ctx).toMatchObject({ threadId, runId });
-    await ctx?.emitUi?.('Chart', { series: [1, 2] }, { id: 'chart-1' });
+    const ctx = await turns.callContext({ actor, serverKey: 'tenant-1', meta: meta('ses_1') });
+    expect(ctx).toMatchObject({ runId, ctx: { threadId, runId } });
+    await ctx?.ctx.emitUi('Chart', { series: [1, 2] }, { id: 'chart-1' });
     gate.release?.();
     const fs = await frames(h.service, runId);
 
@@ -74,9 +66,9 @@ describe('openCode engine: follow-ups', () => {
     const saved = new Map(live);
     live.clear();
 
-    const ctx = await turns.toolContext({ actor, meta: meta('ses_1') });
-    expect(ctx).toMatchObject({ threadId, runId });
-    await ctx?.emitUi?.('Chart', { series: [3] }, { id: 'chart-2' });
+    const ctx = await turns.callContext({ actor, serverKey: 'tenant-1', meta: meta('ses_1') });
+    expect(ctx).toMatchObject({ runId, ctx: { threadId, runId } });
+    await ctx?.ctx.emitUi('Chart', { series: [3] }, { id: 'chart-2' });
     expect(h.fake.callsOf('session.get')[0]?.args).toEqual({ sessionID: 'ses_1' });
     const messages = (await h.store.getThread(threadId))?.messages ?? [];
     expect(messages.at(-1)?.ui).toEqual([
@@ -96,15 +88,25 @@ describe('openCode engine: follow-ups', () => {
     await framesUntil(h.service, runId, (f) => f.kind === 'text');
     const turns = h.app.get(OpenCodeTurns);
     const stranger: Actor = { id: 'u2', roles: ['ADMIN'] };
-    expect(await turns.toolContext({ actor: stranger, meta: meta('ses_1') })).toBeUndefined();
+    expect(
+      await turns.callContext({ actor: stranger, serverKey: 'tenant-1', meta: meta('ses_1') }),
+    ).toBeUndefined();
 
     // Through OpenCode too (a session this process does not follow).
     const live = (turns as unknown as { live: Map<string, unknown> }).live;
     const saved = new Map(live);
     live.clear();
-    expect(await turns.toolContext({ actor: stranger, meta: meta('ses_1') })).toBeUndefined();
+    expect(
+      await turns.callContext({ actor: stranger, serverKey: 'tenant-1', meta: meta('ses_1') }),
+    ).toBeUndefined();
     // Only OpenCode's own key names a session.
-    expect(await turns.toolContext({ actor, meta: { sessionId: 'ses_1' } })).toBeUndefined();
+    expect(
+      await turns.callContext({ actor, serverKey: 'tenant-1', meta: { sessionId: 'ses_1' } }),
+    ).toBeUndefined();
+    // Nor on a server other than the one the token was issued for.
+    expect(
+      await turns.callContext({ actor, serverKey: 'tenant-2', meta: meta('ses_1') }),
+    ).toBeUndefined();
     for (const [k, v] of saved) live.set(k, v);
     gate.release?.();
     await frames(h.service, runId);
@@ -116,10 +118,20 @@ describe('openCode engine: follow-ups', () => {
     const { runId, threadId } = await h.service.chat({ actor, message: 'two charts' });
     await framesUntil(h.service, runId, (f) => f.kind === 'text');
     const turns = h.app.get(OpenCodeTurns);
-    const first = await turns.toolContext({ actor, requestId: 'mcp:s:1', meta: meta('ses_1') });
-    const second = await turns.toolContext({ actor, requestId: 'mcp:s:2', meta: meta('ses_1') });
-    await first?.emitUi?.('Chart', { n: 1 });
-    await second?.emitUi?.('Chart', { n: 2 });
+    const first = await turns.callContext({
+      actor,
+      serverKey: 'tenant-1',
+      requestId: 'mcp:s:1',
+      meta: meta('ses_1'),
+    });
+    const second = await turns.callContext({
+      actor,
+      serverKey: 'tenant-1',
+      requestId: 'mcp:s:2',
+      meta: meta('ses_1'),
+    });
+    await first?.ctx.emitUi('Chart', { n: 1 });
+    await second?.ctx.emitUi('Chart', { n: 2 });
     gate.release?.();
     await frames(h.service, runId);
     const ui = (await h.store.getThread(threadId))?.messages.at(-1)?.ui ?? [];
@@ -127,75 +139,15 @@ describe('openCode engine: follow-ups', () => {
     expect(new Set(ui.map((c) => c.id)).size).toBe(2);
   });
 
-  it('leaves a call from an unknown session standing on its own', async () => {
+  it('claims no call from an unknown session', async () => {
     h = await bootEngine({ engine: (host) => openCode({ host }) });
     const turns = h.app.get(OpenCodeTurns);
-    expect(await turns.toolContext({ actor, meta: undefined })).toBeUndefined();
-    expect(await turns.toolContext({ actor, meta: meta('ses_nope') })).toBeUndefined();
-  });
-
-  it('serves remember over MCP when memory writes, at the actor scope only', async () => {
-    const written: StoreMemoryInput[] = [];
-    const provider: MemoryProvider = {
-      list: () => [],
-      forget: () => false,
-      write: (input) => {
-        written.push(input);
-        return { id: 'm1', ...input, updatedAt: '2026-10-06T00:00:00.000Z' };
-      },
-    };
-    h = await bootEngine({
-      engine: (host) => openCode({ host, tools: { url: 'https://app.test/mcp' } }),
-      options: { memory: { provider } },
-    });
-    const registry = h.app.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
-    expect(registry.spec('remember')?.kind).toBe('read');
-
-    const { runId, threadId } = await h.service.chat({ actor, message: 'hi' });
-    await frames(h.service, runId);
-    expect(h.fake.callsOf('session.create')[0]?.args.permissions).toContainEqual({
-      action: 'aviary*',
-      resource: '*',
-      effect: 'allow',
-    });
-
-    const ctx = {
-      actor,
-      threadId,
-      runId,
-      requestId: 'r1',
-      emitUi: async () => ({ id: 'x' }),
-    } as AiToolCtx;
-    const out = await registry.invoke(
-      'remember',
-      { key: 'email.tone', fact: 'Prefers short emails' },
-      ctx,
-      new DefaultRolesPolicy(),
-    );
-    expect(out).toBe('Recorded "email.tone".');
-    expect(written).toEqual([
-      expect.objectContaining({
-        key: 'email.tone',
-        text: 'Prefers short emails',
-        scope: 'actor:u1',
-        origin: { author: 'agent', actorRef: 'u1', threadId, runId },
-      }),
-    ]);
-    // A call no turn claimed: its synthetic ids are not provenance.
-    await registry.invoke(
-      'remember',
-      { key: 'k2', fact: 'Works in UTC' },
-      { ...ctx, threadId: 'mcp:s', runId: 'mcp:s:9' },
-      new DefaultRolesPolicy(),
-    );
-    expect(written[1]?.origin).toEqual({ author: 'agent', actorRef: 'u1' });
-    const tooLong = await registry.invoke(
-      'remember',
-      { key: 'k', fact: 'x'.repeat(500) },
-      ctx,
-      new DefaultRolesPolicy(),
-    );
-    expect(String(tooLong)).toContain('at most');
+    expect(
+      await turns.callContext({ actor, serverKey: 'tenant-1', meta: undefined }),
+    ).toBeUndefined();
+    expect(
+      await turns.callContext({ actor, serverKey: 'tenant-1', meta: meta('ses_nope') }),
+    ).toBeUndefined();
   });
 
   it('keeps sessions in a shared key-value store', async () => {
