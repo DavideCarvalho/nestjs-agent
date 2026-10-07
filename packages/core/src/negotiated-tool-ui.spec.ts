@@ -65,3 +65,28 @@ it('snapshots emission props before asynchronous catalog resolution', async () =
   await emission;
   expect(collector.components()[0]?.props).toEqual({ text: 'Original' });
 });
+it('degrades without a server catalog instead of throwing when the client declared capabilities', async () => {
+  const written: unknown[] = [];
+  const collector = createNegotiatedUiCollector(
+    'c',
+    {
+      actor: { id: 'a' },
+      threadId: 't',
+      uiCapabilities: { components: [{ name: 'Chart', version: 1 }] },
+    },
+    undefined,
+    (event) => void written.push(event),
+  );
+  // Declared by the client: drawn.
+  await collector.emit('Chart', { points: [1] });
+  // Not declared, with a fallback: its text instead.
+  await collector.emit('Map', { at: 'here' }, { fallbackText: 'Lisbon' });
+  // Not declared, no fallback: nothing at all — and still no throw.
+  await collector.emit('Gauge', { value: 3 });
+  // A version the client did not declare is not the component it declared.
+  await collector.emit('Chart', { points: [2] }, { version: 2, fallbackText: 'Two points' });
+
+  expect(collector.components().map((component) => component.component)).toEqual(['Chart']);
+  expect(collector.text()).toBe('Lisbon\nTwo points');
+  expect(written).toContainEqual({ kind: 'text', text: 'Lisbon' });
+});
