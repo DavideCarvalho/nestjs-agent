@@ -54,6 +54,33 @@ describe('text action proposal decisions', () => {
     });
   });
   it.each([
+    ['yes', 'approved'],
+    ['Approve!', 'approved'],
+    ['confirm #send-123', 'approved'],
+    ['no', 'rejected'],
+    ['reject.', 'rejected'],
+    ['Cancel #send-123', 'rejected'],
+  ] as const)('accepts the English command %s', (text, decision) => {
+    expect(resolveTextActionProposalDecision(text, pending)).toEqual({
+      status: 'decision',
+      proposalId: 'send-123',
+      decision,
+      remember: false,
+    });
+  });
+  it('remembers in English too, and only for an approval', () => {
+    expect(
+      resolveTextActionProposalDecision('approve always in this conversation #send-123', pending),
+    ).toMatchObject({ status: 'decision', decision: 'approved', remember: true });
+    expect(
+      resolveTextActionProposalDecision('reject always in this conversation', pending),
+    ).toEqual({ status: 'unmatched' });
+  });
+  it.each([
+    'yes, but change the recipient',
+    'can you confirm?',
+    'no thanks',
+    'not now',
     'não confirmar',
     'sim, mas altera o destino',
     'pode confirmar?',
