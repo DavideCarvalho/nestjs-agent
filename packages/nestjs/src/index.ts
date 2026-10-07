@@ -115,4 +115,7 @@ export * from '@dudousxd/nestjs-agent-core';
 export { RunNotActiveException } from './run-not-active.exception.js';
 export { ActionProposalService } from './proposals/action-proposal.service.js';
 export { ActionProposalController } from './proposals/action-proposal.controller.js';
-export { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
+export {
+  type ActionProposalSettledListener,
+  ActionProposalWorkerService,
+} from './proposals/action-proposal-worker.service.js';

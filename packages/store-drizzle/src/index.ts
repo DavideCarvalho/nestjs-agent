@@ -7,6 +7,7 @@ export * from './drizzle-memory-provider.js';
 export * from './drizzle-pricing-store.js';
 export * from './drizzle-token-stream-sink.js';
 export * from './drizzle-confirm-token-store.js';
+export * from './drizzle-channel-store.js';
 export * from './drizzle-rag-ingestion-log.js';
 export * from './drizzle-agent-store.module.js';
 export { pgAgentSchema } from './schema-pg.js';

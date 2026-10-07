@@ -5,6 +5,7 @@ describe('agentManagedTables', () => {
   it('returns every table this store owns', () => {
     expect(agentManagedTables().sort()).toEqual([
       'agent_action_proposal',
+      'agent_channel_state',
       'agent_confirm_token',
       'agent_memory',
       'agent_message',

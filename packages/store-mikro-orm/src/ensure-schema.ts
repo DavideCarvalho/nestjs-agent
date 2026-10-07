@@ -18,6 +18,7 @@ const AGENT_TABLE_NAMES = new Set([
   'rag_ingestion_log',
   'agent_stream_frame',
   'agent_confirm_token',
+  'agent_channel_state',
 ]);
 
 /**

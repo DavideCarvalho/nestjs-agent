@@ -124,6 +124,7 @@ const RESET_ORDER = [
   'agent_memory',
   'rag_ingestion_log',
   'agent_confirm_token',
+  'agent_channel_state',
   'agent_stream_frame',
 ];
 

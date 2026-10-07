@@ -166,12 +166,22 @@ Where it applies:
   client handles this answer and refreshes the proposals.
 - **`AgentService.send(…)`** returns the same object, for a channel you run in-process. See
   [a text channel in-process](/docs/agent/guides/rendering-everywhere#a-text-channel-in-process).
+- **WhatsApp and Telegram** through [`@dudousxd/nestjs-agent-channels`](/docs/agent/guides/channels),
+  which also offers Confirm/Cancel buttons where the channel has them (decided with `via` set to
+  the channel's name) and relays the outcome to the conversation once the worker runs it.
 - **AG-UI**: the run is answered with `RUN_STARTED`, a `CUSTOM aviary.action-proposal-decision`
   event, the receipt as a text message, and `RUN_FINISHED`. No model run is created.
 
 `AgentService.chat(…)` does not look for decisions.
 
 ### Operators and other integrations
+
+`AgentService.decideActionProposal(actor, threadId, proposalId, { decision, via })` decides one
+through the same scoped, policy-checked service (and answers the configured reply text);
+`listActionProposals(actor, threadId)` lists what that actor may see. To act when a proposal settles
+— post its outcome somewhere the turn's stream no longer reaches — pass
+`actionProposalWorker: { onSettled(proposal) }`, or subscribe from a module with
+`ActionProposalWorkerService.onSettled(listener)`; both run where the worker runs.
 
 `AGENT_APPROVAL_PORT` (bound by `AgentModule`) has `approveActionProposal(actor, { kind: 'proposal',
 threadId, proposalId }, { remember?, decidedVia? })` and `rejectActionProposal(…, { reason?,

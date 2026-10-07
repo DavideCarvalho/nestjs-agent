@@ -1,4 +1,5 @@
 import {
+  AGENT_CHANNEL_STORE,
   AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
   AGENT_PRICING_STORE,
@@ -7,6 +8,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
+import { DrizzleChannelStore } from './drizzle-channel-store.js';
 import { DrizzleConfirmTokenStore } from './drizzle-confirm-token-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
 import { DrizzleMemoryProvider } from './drizzle-memory-provider.js';
@@ -46,7 +48,8 @@ export interface DrizzleAgentStoreModuleOptions {
  * `@dudousxd/nestjs-agent`, plus {@link DrizzleGovernanceQueries} to
  * {@link AGENT_GOVERNANCE_QUERIES} (the read-model the dashboard/telescope surfaces consume) and
  * {@link DrizzlePricingStore} to {@link AGENT_PRICING_STORE} (the write side of that pricing table),
- * and {@link DrizzleConfirmTokenStore} to {@link AGENT_CONFIRM_TOKEN_STORE} (confirmed writes).
+ * {@link DrizzleConfirmTokenStore} to {@link AGENT_CONFIRM_TOKEN_STORE} (confirmed writes), and
+ * {@link DrizzleChannelStore} to {@link AGENT_CHANNEL_STORE} (text channels' state).
  * The host app supplies an already-opened Drizzle db — this module never opens a connection itself.
  *
  * The returned module is global, so {@link AGENT_STORE}, {@link AGENT_GOVERNANCE_QUERIES} and
@@ -104,6 +107,9 @@ export class DrizzleAgentStoreModule {
           useFactory: () => new DrizzleConfirmTokenStore(options.db),
         },
         { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: DrizzleConfirmTokenStore },
+        // Text channels' state (`@dudousxd/nestjs-agent-channels`), shared by every replica.
+        { provide: DrizzleChannelStore, useFactory: () => new DrizzleChannelStore(options.db) },
+        { provide: AGENT_CHANNEL_STORE, useExisting: DrizzleChannelStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [DrizzleRagIngestionLog]),
@@ -116,6 +122,8 @@ export class DrizzleAgentStoreModule {
         AGENT_PRICING_STORE,
         DrizzleConfirmTokenStore,
         AGENT_CONFIRM_TOKEN_STORE,
+        DrizzleChannelStore,
+        AGENT_CHANNEL_STORE,
       ],
     };
   }

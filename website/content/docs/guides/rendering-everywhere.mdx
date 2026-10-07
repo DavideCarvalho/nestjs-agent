@@ -447,6 +447,11 @@ To send a table as an image instead of text, take the stored component off the m
 `ui`, with its `fallbackText`) and render it with `createReactServerRenderer(…).images(item)` in your
 delivery code. Receiving a component never sends an attachment by itself.
 
+For WhatsApp (Evolution API, Cloud API) and Telegram, [`@dudousxd/nestjs-agent-channels`](/docs/agent/guides/channels)
+does all of this for you: it verifies and deduplicates the webhook, answers in the background,
+converts the reply's markdown and splits it at the channel's limit, attaches the person's media, asks
+questions as text, and offers proposals as buttons.
+
 ## MCP
 
 The [MCP server](/docs/agent/packages/mcp-server) exposes the same registry, with no conversation

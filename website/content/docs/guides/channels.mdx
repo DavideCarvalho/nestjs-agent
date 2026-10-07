@@ -1,0 +1,547 @@
+---
+title: Text channels
+icon: MessageCircle
+description: Put the agent on WhatsApp (Evolution API or the Cloud API) and Telegram — one webhook route per channel that verifies, deduplicates, answers in the background, converts markdown, splits long replies, attaches media, asks questions as text, turns proposals into Confirm/Cancel buttons and relays their outcomes.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`@dudousxd/nestjs-agent-channels` connects the agent to messaging apps. You give it an **adapter**
+(how one provider's webhooks and API look) and two functions — who the sender is, and which thread
+the conversation continues — and it mounts a webhook route for it:
+
+```ts
+AgentChannelsModule.forRoot({ channels: [{ adapter: telegram({ … }), actor, thread }] })
+// POST /channels/telegram
+```
+
+**Backend only.** There is no frontend of yours: the messaging app is the client.
+
+For every webhook the route:
+
+1. **Verifies** it is the provider's (a shared token, a signature) — `401` otherwise.
+2. **Parses** the person's message; delivery receipts, the bot's own messages and groups are ignored.
+3. **Deduplicates** by the provider's message id, so a retried webhook starts one turn.
+4. **Answers `200` at once.** The turn runs after the response, so a slow model never makes the
+   provider time out and retry.
+5. **Attaches media** — an image, a voice note, a document — after downloading it and staging it in
+   the [attachment store](/docs/agent/guides/file-uploads), or answers why it cannot.
+6. Sends the message to the agent with **text-only capabilities**: every component arrives as its
+   `fallbackText` ([Rendering everywhere](/docs/agent/guides/rendering-everywhere)). A
+   [text decision](/docs/agent/guides/action-proposals#text) ("yes", "confirm #ID") is answered with
+   its reply instead of starting a turn.
+7. Collects the reply, **converts its markdown** to the channel's dialect, **splits** it at the
+   channel's length limit (on paragraph, line or sentence boundaries) and sends it.
+8. Sends a **question** the turn asks (the `ask` tool, an intake) as text with numbered options, and
+   reads the person's next messages as the answers.
+9. Puts any **proposal** the turn left pending to the person — with Confirm/Cancel **buttons** where
+   the channel has them, else with a text instruction in the configured vocabulary — and, once one
+   is approved and executed, relays its outcome.
+
+<Callout type="warn" title="Use independent approvals">
+A text channel wants [`actionApprovalMode: 'independent'`](/docs/agent/guides/action-proposals). In
+the default blocking mode an `action` call holds its turn open until someone decides it, which a text
+channel cannot do: the route sends the text produced so far plus `texts.blockingApproval` ("This
+action needs an approval that can only be given in the app.") and stops reading the run, which stays
+parked until it is decided in the app or expires. Buttons and text decisions work only on
+independent proposals.
+</Callout>
+
+## Install
+
+```bash
+pnpm add @dudousxd/nestjs-agent-channels
+```
+
+It needs `@dudousxd/nestjs-agent` and `@dudousxd/nestjs-agent-core` (peers) and nothing else: the
+adapters talk to the providers with the global `fetch`.
+
+## Setup
+
+### The raw body
+
+WhatsApp Cloud signs the raw body of each webhook. Create the app with `rawBody: true` so Nest keeps
+it next to the parsed JSON (the other adapters do not need it, and it costs nothing else):
+
+```ts title="Backend — api/src/main.ts"
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+const app = await NestFactory.create(AppModule, { rawBody: true });
+await app.listen(3000);
+```
+
+A WhatsApp Cloud webhook that arrives without a raw body is refused with `401`.
+
+Nest's JSON body parser stops at 100 kB. That is plenty for text, but Evolution's "webhook base64"
+setting puts the media itself in the webhook: raise the limit to your attachment limit (or turn that
+setting off, and the adapter downloads the file instead):
+
+```ts title="Backend — api/src/main.ts"
+const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+app.useBodyParser('json', { limit: '25mb' });
+```
+
+### The agent
+
+```ts title="Backend — api/src/app.module.ts"
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { ptBrActionProposalText } from '@dudousxd/nestjs-agent-core';
+import { Module } from '@nestjs/common';
+import { ChannelsModule } from './channels/channels.module';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({
+      // … model, store, actorResolver for the web
+      actionApprovalMode: 'independent',
+      backgroundActorResolver: { resolve: ({ actorRef }) => findCurrentActor(actorRef) },
+      // optional: "sim" / "não" and Portuguese replies for text decisions
+      actionProposalText: ptBrActionProposalText,
+      // optional: let the model ask clarifying questions — they arrive as text
+      ask: true,
+    }),
+    ChannelsModule,
+  ],
+})
+export class AppModule {}
+```
+
+### Who is writing, and which thread
+
+The sender is a phone number (or a Telegram user id). Map it to one of your accounts — only numbers
+someone verified (a code sent to that number, say) — and keep one thread per conversation. The
+`actor` function **is** the authentication of every message: `AgentModule`'s `actorResolver` is not
+used on these routes.
+
+```ts title="Backend — api/src/channels/channels.module.ts"
+import { AgentChannelsModule, evolutionApi } from '@dudousxd/nestjs-agent-channels';
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { AccountsModule } from '../accounts/accounts.module';
+import { AccountsService } from '../accounts/accounts.service';
+import { ChannelThreadsService } from './channel-threads.service';
+
+@Module({
+  imports: [
+    AgentChannelsModule.forRootAsync({
+      imports: [AccountsModule],
+      inject: [ConfigService, AccountsService, ChannelThreadsService],
+      useFactory: (config: ConfigService, accounts: AccountsService, threads: ChannelThreadsService) => ({
+        channels: [
+          {
+            adapter: evolutionApi({
+              url: config.getOrThrow('EVOLUTION_URL'),
+              instance: config.getOrThrow('EVOLUTION_INSTANCE'),
+              apiKey: config.getOrThrow('EVOLUTION_API_KEY'),
+              // a long random string — the only proof a webhook came from your Evolution server
+              webhookToken: config.getOrThrow('EVOLUTION_WEBHOOK_TOKEN'),
+            }),
+            // `from` is the sender's number in international format, digits only: 5511999990000
+            actor: async (message) => {
+              const user = await accounts.findByVerifiedWhatsapp(message.from);
+              return user ? { id: user.id, roles: user.roles } : null;
+            },
+            thread: (actor, message) => threads.find('whatsapp', message.conversation, actor.id),
+            onThreadCreated: (threadId, actor, message) =>
+              threads.save('whatsapp', message.conversation, actor.id, threadId),
+            texts: {
+              approve: 'Confirmar',
+              reject: 'Cancelar',
+              instruction: ({ approve, reject }) =>
+                `Responda *${approve}* para confirmar ou *${reject}* para cancelar.`,
+              unknownSender: 'Vincule seu WhatsApp na sua conta para conversar comigo.',
+            },
+          },
+        ],
+      }),
+    }),
+  ],
+  providers: [ChannelThreadsService],
+})
+export class ChannelsModule {}
+```
+
+`ChannelThreadsService` is yours: a table of `(channel, conversation, actor) → threadId`. `thread`
+returning `null` starts a new thread, reported to `onThreadCreated`.
+
+<Callout type="info" title="Guards">
+The routes are public by design — each adapter verifies its own requests. A global guard
+(`APP_GUARD`) that requires a session also runs on them: let `/channels/*` through it.
+</Callout>
+
+## WhatsApp with Evolution API
+
+[Evolution API](https://doc.evolution-api.com) v2 connects a WhatsApp number through WhatsApp Web.
+The adapter also works with hosts that serve the same routes under a prefix (Whatsmiau:
+`url: 'https://api.whatsmiau.dev/v2'`).
+
+```bash title="Backend — api/.env"
+EVOLUTION_URL=https://evolution.example.com
+EVOLUTION_INSTANCE=support
+EVOLUTION_API_KEY=…
+EVOLUTION_WEBHOOK_TOKEN=…
+```
+
+Set the instance's webhook (in the manager, or `POST {EVOLUTION_URL}/webhook/set/{instance}`) to
+
+```
+https://api.example.com/channels/whatsapp?token=<EVOLUTION_WEBHOOK_TOKEN>
+```
+
+with the event `MESSAGES_UPSERT` and "webhook by events" **off** (with it on, Evolution appends the
+event name to the path). Evolution signs nothing, so the token is what keeps anyone else from posting
+messages "from" any number. The adapter also reads it from the url (`/channels/whatsapp/<token>`), an
+`Authorization: Bearer` header or an `x-webhook-token` header. `webhookToken: false` turns the check
+off — only for a server nothing outside can reach.
+
+What the adapter reads: `messages.upsert` with `data.key.fromMe === false` (a missing `fromMe` is
+never taken as incoming), text from `message.conversation` or `message.extendedTextMessage.text`,
+button and list replies (`buttonsResponseMessage`, `templateButtonReplyMessage`,
+`listResponseMessage`, `interactiveResponseMessage`), and media (`imageMessage`, `audioMessage`,
+`videoMessage`, `documentMessage` — also inside `documentWithCaptionMessage` — and `stickerMessage`,
+with the caption as the text). Media is downloaded from the webhook's inline `base64` when Evolution's
+"webhook base64" setting is on, else from `mediaUrl` when the server stores media (S3/MinIO; the
+`apikey` is only sent when that url is on the Evolution server itself), else with
+`POST /chat/getBase64FromMediaMessage/{instance}`. It ignores the instance's own messages, other
+instances, broadcasts and newsletters, and groups unless `groups: true` (the sender is then the
+participant). A `@lid` chat answers to the jid; `from` is the phone number when Evolution sends it
+alongside (`remoteJidAlt` / `senderPn`), else the `@lid` jid.
+
+### Buttons on Evolution
+
+Evolution has a buttons endpoint (`POST /message/sendButtons/{instance}`), but WhatsApp does not
+reliably render buttons sent from a WhatsApp Web session. So the adapter sends **no buttons by
+default** — a proposal arrives as its summary and a text instruction ("Reply *yes* to confirm or *no*
+to cancel."), which always works. `evolutionApi({ …, buttons: true })` opts in; a definite refusal
+(`400`, `403`, `404`, `422`) from the buttons endpoint falls back to that same text, a timeout or `5xx`
+does not (the buttons may have been delivered). Test on your own instance before turning it on.
+
+## WhatsApp Cloud API
+
+Meta's [Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) signs every webhook and
+renders reply buttons (up to 3).
+
+```ts title="Backend — api/src/channels/channels.module.ts"
+import { whatsappCloud } from '@dudousxd/nestjs-agent-channels';
+
+// one more entry in `channels`
+{
+  adapter: whatsappCloud({
+    phoneNumberId: config.getOrThrow('WHATSAPP_PHONE_NUMBER_ID'),
+    accessToken: config.getOrThrow('WHATSAPP_ACCESS_TOKEN'),
+    appSecret: config.getOrThrow('WHATSAPP_APP_SECRET'), // X-Hub-Signature-256 is an HMAC under it
+    verifyToken: config.getOrThrow('WHATSAPP_VERIFY_TOKEN'), // what you type as "Verify token"
+    name: 'whatsapp-cloud', // the route: /channels/whatsapp-cloud (default name: 'whatsapp')
+  }),
+  actor, thread, onThreadCreated, // as above
+}
+```
+
+Point the app's webhook at `https://api.example.com/channels/whatsapp-cloud` and subscribe it to the
+`messages` field. The subscription check (`GET ?hub.mode=subscribe&hub.challenge=…`) reaches the same
+route and is answered with the challenge. The signature is computed over the raw body
+([`rawBody: true`](#the-raw-body)). Messages for another `phone_number_id` and status updates are
+ignored. Media (`image`, `audio`, `video`, `document`, `sticker`) is downloaded in two steps with the
+access token: `GET /{media-id}` for a short-lived url, then that url. Remember the
+[24-hour window](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-messages#customer-service-windows):
+the route only answers people who just wrote, so it stays inside it, but an outcome relayed much later
+may need a template.
+
+## Telegram
+
+```ts title="Backend — api/src/channels/channels.module.ts"
+import { telegram } from '@dudousxd/nestjs-agent-channels';
+
+{
+  adapter: telegram({
+    botToken: config.getOrThrow('TELEGRAM_BOT_TOKEN'),
+    secretToken: config.getOrThrow('TELEGRAM_WEBHOOK_SECRET'), // [A-Za-z0-9_-], 1–256 characters
+  }),
+  actor: (message) => accounts.findByTelegram(message.from), // from = the Telegram user id
+  thread, onThreadCreated,
+}
+```
+
+Register the webhook once:
+
+```bash
+curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://api.example.com/channels/telegram","secret_token":"'"$TELEGRAM_WEBHOOK_SECRET"'","allowed_updates":["message","callback_query"]}'
+```
+
+Telegram sends the secret back as `X-Telegram-Bot-Api-Secret-Token`. The adapter reads private-chat
+text messages, media (the largest `photo` size, `document`, `voice`, `audio`, `video`, `video_note`,
+`sticker`, with the caption as the text — downloaded through `getFile`, which serves files up to
+20 MB) and inline-keyboard presses (`groups: true` for groups), answers each press with
+`answerCallbackQuery` and removes the keyboard so it cannot be pressed twice. Replies are MarkdownV2
+with every reserved character escaped; when Telegram still refuses the formatting, the same text is
+sent again unformatted. `markdown: false` sends plain text throughout. The update id is the dedupe
+key.
+
+## What each channel can do
+
+| | `evolutionApi` | `whatsappCloud` | `telegram` |
+| --- | --- | --- | --- |
+| Verification | shared token (query, url segment or header) | `X-Hub-Signature-256` HMAC of the raw body; `GET` `hub.challenge` | `X-Telegram-Bot-Api-Secret-Token` |
+| Markdown | WhatsApp (`*bold*`, `_italic_`, `~strike~`, `` ``` ``) | WhatsApp | MarkdownV2, or none |
+| Message length | 4096 (`maxLength`) | 4096 | 4096 |
+| Proposal buttons | off by default (`buttons: true`, up to 3, text fallback) | reply buttons, up to 3 (20-character labels) | inline keyboard |
+| Inbound | text, extended text, button and list replies, media | text, interactive button/list replies, template quick replies, media | text, `callback_query`, media |
+| Media download | inline base64, `mediaUrl`, or `getBase64FromMediaMessage` | Graph API media id → url | `getFile` (≤ 20 MB) |
+| Ignored | own messages, broadcasts, groups (unless `groups`) | other numbers, statuses | bots, edits, groups (unless `groups`) |
+
+Markdown conversion reads the model's markdown and the components' Slack-style fallback text
+together: `**bold**` and `*bold*` both become the channel's bold, `[label](url)` becomes
+`label (url)` where the channel has no link syntax, headings become bold lines and `*`/`+` bullets
+become `-` (WhatsApp) or `•` (Telegram). Code is left alone. `toChannelMarkdown(text, 'whatsapp' |
+'telegram' | 'none')` and `splitMessage(text, maxLength)` are exported.
+
+## Proposals: buttons and text
+
+When a turn leaves a proposal pending, the route sends its confirmation (the title and detail the
+tool's preflight or presentation gave it) after the reply:
+
+- **With buttons** — `Confirm` and `Cancel` (`texts.approve` / `texts.reject`), whose ids are
+  `agora:approve:<ref>` / `agora:reject:<ref>` (`ref` is the proposal id's last 32 characters, so it
+  fits Telegram's 64-byte `callback_data`). A press is matched against the thread's proposals
+  (`AgentService.listActionProposals`) and decided through `AgentService.decideActionProposal` — the
+  same tenant-scoped, policy-checked decision the web's approve/reject routes make — recorded with
+  `via` set to the adapter's name (`'whatsapp'`, `'telegram'`). The reply is the configured
+  `actionProposalText.replies` text.
+- **Without buttons** — the confirmation plus `texts.instruction({ approve, reject })`, where
+  `approve`/`reject` are the first words of the configured vocabulary (`yes`/`no`, or `sim`/`não`
+  with `ptBrActionProposalText`), with `#<proposalId>` appended when the turn left more than one. The
+  person's reply goes through `AgentService.send` like any message and is recognized as a
+  [text decision](/docs/agent/guides/action-proposals#text) there (`via: 'text'`).
+
+After an approval (by button or text) the route waits up to `outcomeTimeoutMs` (default 60 s; `0`
+turns it off) for the worker to execute it, then sends what the tool's presentation said, else
+`texts.actionSucceeded` ("Done."), or `texts.actionFailed`.
+
+### Outcomes that settle later
+
+An action that runs after that wait — approved in the web app, retried by the worker, slow — is
+relayed when the proposal worker settles it. Nothing to wire: `AgentChannelsService` subscribes to
+`ActionProposalWorkerService.onSettled` on boot.
+
+Every turn the route starts carries `pageContext.channel = { name, conversation }` (merged into your
+`pageContext`), and a proposal records its turn's page context. When the worker settles a proposal,
+the module reads it, finds the channel configured under that name and sends the outcome text to that
+conversation. Proposals from other surfaces (no `channel`) and channels this process does not have
+are ignored, so it is safe next to a web chat. The route's own wait and the settled hook claim the
+same key in the channel store, so an outcome is sent once even when both see it — across replicas
+too, with a shared store.
+
+<Callout type="info" title="Where the worker runs">
+The worker runs in every replica except those with `surface: 'http'`. Import `AgentChannelsModule`
+(with the same channels) in the replicas that run it, or their outcomes are not relayed. Your own
+`actionProposalWorker: { onSettled }` hook still runs, next to the module's.
+`AgentChannelsService.deliverOutcome(proposal)` relays one by hand (`true` when it sent).
+</Callout>
+
+## Media
+
+A message with an image, a voice note, a video or a document is attached to the turn the way an
+upload in the web chat is: the route checks the file's type and declared size against the
+[attachment limits](/docs/agent/guides/file-uploads#limits-the-client-reads)
+(`AgentService.attachmentLimits()`), downloads it through the adapter — never past the size limit —
+stages it with `AgentService.stageAttachment(actor, file)` (the same checks as
+`POST /agent/attachments`) and sends the message (the caption, or nothing) with
+`attachments: [{ mediaId }]`. Bind an attachment store for this — `AgentMediaAttachmentsModule` or
+your own `AGENT_ATTACHMENT_STAGING` ([File uploads](/docs/agent/guides/file-uploads)).
+
+What cannot be attached gets a short answer instead (`texts.mediaRefused(reason, media, limits)`): no
+attachment store (`'disabled'`), a type outside the allowlist (`'type'` — a WhatsApp voice note is
+`audio/ogg`, which the default allowlist does not take, so the person is asked to type), a file past
+the size limit (`'size'`), or a failed download (`'failed'`). A caption still reaches the agent
+without its file; a file with no caption that could not be attached starts no turn.
+
+## Questions
+
+When a turn asks a question set — the [`ask` tool or an intake](/docs/agent/guides/asking-the-user)
+— the route sends the text produced so far, then the questions **one at a time**: the prompt in bold,
+numbered options, and how to answer.
+
+```
+Two quick questions.
+
+*(1/2) Which size?*
+
+1. Small
+2. Large
+
+Reply with the number of your choice.
+Reply *skip* to keep: Small.
+```
+
+The person's next message is the answer, not a new turn: a number or an option's label (several,
+separated by commas, for a multiple choice), a typed value for a typed question or one that allows
+free text, or `skip` to keep the pre-picked answers. An answer that does not fit is refused with the
+reason and the question is asked again. After the last one the route resumes the run with
+`AgentService.answer` (`answeredVia` = the adapter's name), and the turn's reply arrives as usual. A
+question nobody answers within `questionTimeoutMs` (default 30 minutes) is skipped
+(`AgentService.skip`), and the agent proceeds on its own assumptions. The question in progress lives
+in the channel store, so the answer may land on another replica. Wording: `texts.questions`
+(`pickOne`, `pickMany`, `orWrite`, `skipWord`, `keep`, `invalid`, `counter`).
+
+## Options
+
+`AgentChannelsModule.forRoot({ channels, store?, path? })` (or `forRootAsync({ imports, inject,
+useFactory, path? })`, where `useFactory` returns `{ channels, store? }`):
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `channels` | — | One entry per channel (below). Adapter names must be unique: the name is the route and the decision's `via`. |
+| `store` | `AGENT_CHANNEL_STORE` when bound, else in-process memory | Where message ids, questions in progress and relayed outcomes are kept (`ChannelStore`). |
+| `path` | `'channels'` | Routes are `/<path>/<name>` and `/<path>/<name>/:token`. `false` mounts none. |
+
+Each channel:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `adapter` | — | `evolutionApi(…)`, `whatsappCloud(…)`, `telegram(…)` or your own `ChannelAdapter`. |
+| `actor(message)` | — | The sender's `Actor`, or `null` to not answer. This is the authentication of every message. |
+| `thread(actor, message)` | — | The thread to continue, or `null`/`undefined` for a new one. |
+| `onThreadCreated(threadId, actor, message)` | — | A new thread was created for the conversation. |
+| `pageContext` | `{ kind: adapter.name }` | An object, or a function of the message. `channel: { name, conversation }` is added to it. |
+| `agentName` | the thread's, else the default | The agent that answers. |
+| `dedupeTtlMs` | 24 h | How long a message id is remembered. |
+| `timeoutMs` | 5 min | Stop waiting for a turn, cancel it and send what it produced. |
+| `outcomeTimeoutMs` | 60 s | How long to wait for an approved proposal to execute. |
+| `questionTimeoutMs` | 30 min | How long a question waits for its answer. |
+| `texts` | English | `approve`, `reject`, `proposal(p)`, `instruction(commands)`, `blockingApproval`, `failed`, `actionSucceeded`, `actionFailed`, `mediaRefused(reason, media, limits)`, `questions`, `unknownSender`. |
+| `onError(error, message)` | logged | A message whose handling threw (after the `200`). |
+
+Each turn is sent with `hostContext: { channel, conversation, messageId }`, for a runner or engine that
+reads it. A run that fails sends what it produced and `texts.failed`. A message that arrives while the
+conversation's previous turn is still running is [queued](/docs/agent/guides/message-queue) and
+answered when its turn runs.
+
+### A controller of your own
+
+`path: false` mounts no route; call the service from your controller instead — to put the webhook
+under your own path, guards or rate limits:
+
+```ts title="Backend — api/src/channels/webhooks.controller.ts"
+import { AgentChannelsService } from '@dudousxd/nestjs-agent-channels';
+import { All, Controller, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
+
+@Controller('webhooks')
+export class WebhooksController {
+  constructor(private readonly channels: AgentChannelsService) {}
+
+  @All('telegram')
+  telegram(@Req() req: Request, @Res() res: Response) {
+    return this.channels.handle('telegram', req, res); // Express or Fastify
+  }
+}
+```
+
+`handleRequest(name, request)` is the framework-free form: it takes a `ChannelRequest` (`method`,
+`url`, `header(name)`, `params`, `body`, `rawBody`) and returns `{ status, body, contentType? }`.
+
+### The channel store and several replicas
+
+The route keeps three short-lived things: the provider message ids it took (a retried webhook starts
+one turn), the question a conversation is answering, and the outcomes it relayed. Each entry expires.
+
+- **The SQL stores (the default with them).** `DrizzleAgentStoreModule` and
+  `MikroOrmAgentStoreModule` bind `DrizzleChannelStore` / `MikroOrmChannelStore` to
+  `AGENT_CHANNEL_STORE`, and the module picks it up: one row per key in `agent_channel_state` (`key`
+  primary key, `value`, `expires_at`, `created_at`). A claim is a single
+  `INSERT … ON CONFLICT DO NOTHING` (`INSERT IGNORE` on MySQL), so the primary key is the lock across
+  replicas; expired rows are deleted as claims come in (every 10 minutes by default,
+  `purgeEveryMs`) and by `purgeExpired()`. `ensureAgentSchema` creates the table, like the other
+  agent tables; with migrations, generate one from the updated schema / entities.
+- **Redis** — `RedisChannelStore` from `@dudousxd/nestjs-agent-transport-redis` takes an `ioredis`
+  client as is (`SET … PX … NX`, `GET`, `DEL`):
+
+  ```ts title="Backend — api/src/channels/channels.module.ts"
+  import { RedisChannelStore } from '@dudousxd/nestjs-agent-transport-redis';
+
+  AgentChannelsModule.forRoot({ channels, store: new RedisChannelStore(redis) });
+  ```
+- **In memory** otherwise (`InMemoryChannelStore`) — one process only.
+
+Anything implementing `ChannelStore` (`claim`, `get`, `set`, `delete`, with TTLs) works;
+`CHANNEL_STORE_CONTRACT` from `@dudousxd/nestjs-agent-testing` checks one. The turn itself runs on
+the replica that took the webhook; its frames reach it through whatever
+[token sink](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink) is configured.
+
+<Callout type="info" title="Background work and deploys">
+The route answers `200` before the turn runs, so a process that stops mid-turn loses that answer
+(the provider will not retry an acknowledged webhook). On shutdown the module waits for the turns it
+started (`onModuleDestroy`) — call `app.enableShutdownHooks()` so a `SIGTERM` gets there.
+`AgentChannelsService.drain()` waits for them on demand, in tests too.
+</Callout>
+
+## Writing an adapter
+
+Any object of the `ChannelAdapter` shape works:
+
+```ts title="Backend — api/src/channels/sms.adapter.ts"
+import type { ChannelAdapter } from '@dudousxd/nestjs-agent-channels';
+
+export const sms: ChannelAdapter = {
+  name: 'sms', // the route, the dedupe prefix and the decision's `via`
+  capabilities: { markdown: 'none', maxLength: 1600 }, // `buttons: n` when it has reply buttons
+  verify: (request) => checkSignature(request.header('x-signature'), request.rawBody),
+  parse(body) {
+    const { MessageSid, From, Body } = body as Record<string, string>;
+    if (!MessageSid || !Body) return null;
+    return { id: MessageSid, from: From, conversation: From, text: Body, raw: body };
+  },
+  async send(conversation, message) {
+    // `message.buttons` only arrives when `capabilities.buttons` is 2 or more;
+    // `message.fallbackText` is the same message as text, for when the buttons are refused.
+    await smsApi.send(conversation, message.buttons ? message.fallbackText : message.text);
+  },
+};
+```
+
+- `verify(request)` sees `method`, `url` (with the query string), `header(name)`, `params`, the parsed
+  `body` and the `rawBody` (a `Buffer` with `rawBody: true`, else `null`). Compare secrets in
+  constant time.
+- `parse(body)` returns one `InboundMessage`, an array, or `null`. `id` must be the provider's id for
+  the message — retries carry the same one. A button press sets `buttonId` to the pressed button's id.
+- `challenge(request)` (optional) answers a request that is not a message, such as a subscription
+  check, before `verify`.
+- `acknowledge(message)` (optional) runs in the background before the turn — Telegram's
+  `answerCallbackQuery`.
+- `parse` may put files on `message.media` (`{ kind, contentType?, filename?, sizeBytes?, ref }`);
+  `download(media, { maxBytes })` (optional) fetches one and throws `ChannelMediaTooLargeError` past
+  `maxBytes` without reading the rest. Without `download`, media is answered with
+  `texts.mediaRefused('disabled', …)`.
+- `send(conversation, message)` throws when the provider refused. `ChannelDeliveryError` (exported)
+  carries the status, and `definite` is true for a `400`/`403`/`404`/`422`, when sending something
+  else instead cannot duplicate the message.
+
+## Testing
+
+`AgentChannelsService.drain()` resolves once every turn the channels started has finished, so a test
+can post a webhook, drain, and look at what was sent. Every built-in adapter takes a `fetch` option
+for a fake:
+
+```ts title="Backend — api/test/telegram-webhook.e2e-spec.ts"
+const sent: unknown[] = [];
+const adapter = telegram({
+  botToken: 'test',
+  secretToken: 'secret',
+  fetch: async (_url, init) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return new Response('{"ok":true}');
+  },
+});
+// AgentChannelsModule.forRoot({ channels: [{ adapter, actor, thread, onThreadCreated }] }), then:
+await request(app.getHttpServer())
+  .post('/channels/telegram')
+  .set('x-telegram-bot-api-secret-token', 'secret')
+  .send({ update_id: 1, message: { message_id: 1, chat: { id: 42, type: 'private' }, from: { id: 42 }, text: 'hi' } })
+  .expect(200);
+await app.get(AgentChannelsService).drain();
+```
+
+With a [`FakeModelProvider`](/docs/agent/recipes/offline-testing) the whole flow runs without a model.

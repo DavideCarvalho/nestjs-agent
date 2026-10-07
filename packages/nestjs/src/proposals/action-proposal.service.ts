@@ -154,8 +154,15 @@ export class ActionProposalService {
   ) {
     return { threadId, proposalDecision: result, text: this.reply(result, decision) };
   }
+  /** The configured words a text decision is made of (`actionProposalText.vocabulary`). */
+  textVocabulary(): TextActionProposalVocabulary {
+    return this.vocabulary;
+  }
   /** The configured reply to a decision the store answered with `result`. */
-  reply(result: ActionProposalMutationView, decision: 'approved' | 'rejected'): string {
+  reply(
+    result: Pick<ActionProposalMutationView, 'status' | 'proposal'>,
+    decision: 'approved' | 'rejected',
+  ): string {
     return textActionProposalReply(result, decision, this.replies);
   }
 }
