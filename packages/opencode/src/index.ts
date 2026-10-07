@@ -25,7 +25,7 @@ export {
   type OpenCodeTurnContext,
 } from './host.js';
 export { OpenCodeAgentRunner } from './runner.js';
-export { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
+export { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS, OPENCODE_TURNS } from './tokens.js';
 export { type Milestone, OpenCodeTurn, type PendingAsk, type TurnOutcome } from './turn.js';
 export {
   type OpenCodeEngineSettings,

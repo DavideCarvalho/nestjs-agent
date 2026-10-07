@@ -104,7 +104,7 @@ AgentModule.forRoot({
   ...
 }),
 AgentMcpServerModule.forRootAsync({
-  inject: [OpenCodeTurns],
+  inject: [OPENCODE_TURNS],
   useFactory: (turns: OpenCodeTurns) => ({
     name: 'app', version: '1', auth: myBearerResolver,
     actions: 'execute', // OpenCode's `ask` rules put the person in front of action tools

@@ -6,7 +6,7 @@ import {
   type OpenCodeSessionStore,
 } from './host.js';
 import { OpenCodeAgentRunner } from './runner.js';
-import { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS } from './tokens.js';
+import { OPENCODE_HOST, OPENCODE_OPTIONS, OPENCODE_SESSIONS, OPENCODE_TURNS } from './tokens.js';
 import { type OpenCodeEngineSettings, OpenCodeTurns } from './turns.js';
 
 export interface OpenCodeEngineOptions extends OpenCodeEngineSettings {
@@ -46,7 +46,7 @@ export function openCode(options: OpenCodeEngineOptions): AgentEngine {
     name: 'opencode',
     providers: [...openCodeProviders(options), OpenCodeAgentRunner],
     runner: OpenCodeAgentRunner,
-    exports: [OpenCodeTurns],
+    exports: [OpenCodeTurns, OPENCODE_TURNS],
   };
 }
 
@@ -62,5 +62,6 @@ export function openCodeProviders(options: OpenCodeEngineOptions): Provider[] {
     ),
     { provide: OPENCODE_OPTIONS, useValue: settings },
     OpenCodeTurns,
+    { provide: OPENCODE_TURNS, useExisting: OpenCodeTurns },
   ];
 }

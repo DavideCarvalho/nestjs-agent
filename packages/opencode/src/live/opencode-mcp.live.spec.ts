@@ -16,7 +16,8 @@ import type { OpenCodeClient } from '../client.js';
 import { openCode } from '../engine.js';
 import type { OpenCodeHost, OpenCodeServer } from '../host.js';
 import { frames } from '../testing/harness.js';
-import { OpenCodeTurns } from '../turns.js';
+import { OPENCODE_TURNS } from '../tokens.js';
+import type { OpenCodeTurns } from '../turns.js';
 import { realClient } from './client-shape.js';
 
 /**
@@ -111,7 +112,7 @@ live('openCode tools over MCP against a real OpenCode 2 server', () => {
             actorResolver: new HeaderActorResolver(),
           }),
           AgentMcpServerModule.forRootAsync({
-            inject: [OpenCodeTurns],
+            inject: [OPENCODE_TURNS],
             useFactory: (turns: OpenCodeTurns) => ({
               name: 'live',
               version: '1.0.0',
