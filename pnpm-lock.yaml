@@ -573,7 +573,7 @@ importers:
         version: 8.23.1
       drizzle-orm:
         specifier: 0.45.3
-        version: 0.45.3(@types/better-sqlite3@7.6.13)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9)
+        version: 0.45.3(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9)
       pg:
         specifier: 8.23.1
         version: 8.23.1
@@ -728,8 +728,8 @@ importers:
         specifier: 12.0.4
         version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@types/better-sqlite3':
-        specifier: 7.6.13
-        version: 7.6.13
+        specifier: 9.6.0
+        version: 9.6.0
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
@@ -738,7 +738,7 @@ importers:
         version: 12.11.1
       drizzle-orm:
         specifier: 0.45.3
-        version: 0.45.3(@types/better-sqlite3@7.6.13)(@types/pg@8.23.1)(better-sqlite3@12.11.1)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9)
+        version: 0.45.3(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@12.11.1)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9)
       mysql2:
         specifier: 3.24.5
         version: 3.24.5(@types/node@22.20.5)
@@ -2542,8 +2542,8 @@ packages:
   '@types/babel__traverse@7.28.0':
     resolution: {integrity: sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==}
 
-  '@types/better-sqlite3@7.6.13':
-    resolution: {integrity: sha512-NMv9ASNARoKksWtsq/SHakpYAYnhBrQgGD8zkLYk/jaK8jUGn08CfEdTRgYhMypUQAfzSP8W6gNLe0q19/t4VA==}
+  '@types/better-sqlite3@9.6.0':
+    resolution: {integrity: sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==}
 
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
@@ -7279,9 +7279,9 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.7
 
-  '@types/better-sqlite3@7.6.13':
+  '@types/better-sqlite3@9.6.0':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/body-parser@1.19.6':
     dependencies:
@@ -7290,7 +7290,7 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/cookiejar@2.1.5': {}
 
@@ -7417,7 +7417,7 @@ snapshots:
 
   '@types/docker-modem@3.0.6':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
       '@types/ssh2': 1.15.5
 
   '@types/dockerode@4.0.1':
@@ -7512,7 +7512,7 @@ snapshots:
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/serve-static@2.2.0':
     dependencies:
@@ -7521,11 +7521,11 @@ snapshots:
 
   '@types/ssh2-streams@0.1.13':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
 
   '@types/ssh2@0.5.52':
     dependencies:
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
       '@types/ssh2-streams': 0.1.13
 
   '@types/ssh2@1.15.5':
@@ -8321,9 +8321,9 @@ snapshots:
 
   dotenv@8.6.0: {}
 
-  drizzle-orm@0.45.3(@types/better-sqlite3@7.6.13)(@types/pg@8.23.1)(better-sqlite3@12.11.1)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9):
+  drizzle-orm@0.45.3(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@12.11.1)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9):
     optionalDependencies:
-      '@types/better-sqlite3': 7.6.13
+      '@types/better-sqlite3': 9.6.0
       '@types/pg': 8.23.1
       better-sqlite3: 12.11.1
       kysely: 0.29.6
@@ -8331,9 +8331,9 @@ snapshots:
       pg: 8.23.1
       postgres: 3.4.9
 
-  drizzle-orm@0.45.3(@types/better-sqlite3@7.6.13)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9):
+  drizzle-orm@0.45.3(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@22.20.5))(pg@8.23.1)(postgres@3.4.9):
     optionalDependencies:
-      '@types/better-sqlite3': 7.6.13
+      '@types/better-sqlite3': 9.6.0
       '@types/pg': 8.23.1
       better-sqlite3: 13.0.3
       kysely: 0.29.6
@@ -9948,7 +9948,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
-      '@types/node': 22.20.4
+      '@types/node': 22.20.5
       long: 5.3.2
 
   proxy-addr@2.0.7:
