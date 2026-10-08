@@ -5,6 +5,7 @@ import {
   type ActionProposalOutcomeStore,
   type ActionProposalScope,
   type ActionProposalStore,
+  type ActionProposalView,
   type Actor,
   type AgentStore,
   DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES,
@@ -42,12 +43,16 @@ export class ActionProposalService {
   /** The words a text decision is made of, and what the agent answers — English unless configured. */
   private readonly vocabulary: TextActionProposalVocabulary;
   private readonly replies: TextActionProposalReplies;
+  private hasCapability(): boolean {
+    const store = this.store as Partial<ActionProposalStore>;
+    return (
+      typeof store.getThreadActionProposalScope === 'function' &&
+      typeof store.listActionProposals === 'function'
+    );
+  }
   private capability(): AgentStore & ActionProposalStore & ActionProposalOutcomeStore {
     const store = this.store as AgentStore & ActionProposalStore & ActionProposalOutcomeStore;
-    if (
-      typeof store.getThreadActionProposalScope !== 'function' ||
-      typeof store.listActionProposals !== 'function'
-    )
+    if (!this.hasCapability())
       throw new NotImplementedException('Action proposals are unavailable');
     return store;
   }
@@ -68,7 +73,18 @@ export class ActionProposalService {
       requesterRef: proposal.actorRef,
     });
   }
-  async listPage(threadId: string, actor: Actor, query: Pick<ListActionProposals, 'after'> = {}) {
+  /**
+   * One page of a thread's proposals this actor may see. A store without the proposal capability
+   * can only run blocking approvals, so a thread there has no proposals: an empty, final page rather
+   * than `501` — a client that lists by default (React's `useAgentChat`) needs no flag. Deciding one
+   * still answers `501`.
+   */
+  async listPage(
+    threadId: string,
+    actor: Actor,
+    query: Pick<ListActionProposals, 'after'> = {},
+  ): Promise<{ items: ActionProposalView[]; next?: NonNullable<ListActionProposals['after']> }> {
+    if (!this.hasCapability()) return { items: [] };
     const scope = await this.scope(threadId, actor);
     const rows = await this.capability().listActionProposals(scope, { limit: 1000, ...query });
     const visible = [];

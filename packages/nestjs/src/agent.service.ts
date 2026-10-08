@@ -243,12 +243,13 @@ export class AgentService {
 
   /**
    * The proposals of a thread this actor may see — the thread's own actor, or one the policy lets
-   * decide them; what `GET <base>/threads/:threadId/action-proposals` serves (its first page). `404`
-   * when independent approvals are not on.
+   * decide them; what `GET <base>/threads/:threadId/action-proposals` serves (its first page).
+   * Without independent approvals (the default blocking mode) there are none, so the read answers an
+   * empty list rather than refusing; deciding one still refuses.
    */
   async listActionProposals(actor: Actor, threadId: string): Promise<ActionProposalView[]> {
     if (this.options?.actionApprovalMode !== 'independent' || !this.proposals) {
-      throw new NotFoundException('Proposal not found');
+      return [];
     }
     return this.proposals.list(threadId, actor);
   }

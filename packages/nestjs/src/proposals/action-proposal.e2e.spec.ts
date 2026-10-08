@@ -226,3 +226,39 @@ it('never lets a lease token, idempotency key or execution address leave over HT
     await app.close();
   }
 });
+
+it('lists no proposals (200, []) in blocking mode where the store keeps none, and still refuses a decision (501)', async () => {
+  const actor = { id: 'a' };
+  const inner = new InMemoryAgentStore();
+  // A custom store without the proposal capability: it can only ever run blocking approvals.
+  const store = Object.assign(Object.create(inner) as InMemoryAgentStore, {
+    getThreadActionProposalScope: undefined,
+    listActionProposals: undefined,
+  });
+  const module = await Test.createTestingModule({
+    imports: [
+      AgentModule.forRoot({
+        store,
+        actorResolver: { resolve: () => actor },
+        model: new FakeModelProvider(() => ({ text: 'ok' })),
+      }),
+    ],
+  }).compile();
+  const app = module.createNestApplication<NestExpressApplication>();
+  await app.init();
+  try {
+    const server = app.getHttpServer();
+    const list = await request(server).get('/agent/threads/t1/action-proposals').expect(200);
+    expect(list.body).toEqual([]);
+    expect(list.headers['x-action-proposals-next']).toBeUndefined();
+    await request(server)
+      .post('/agent/threads/t1/action-proposals/p1/approve')
+      .send({})
+      .expect(501);
+    // In process too: blocking mode has no proposals to list, rather than a 404.
+    const { AgentService } = await import('../agent.service.js');
+    expect(await app.get(AgentService).listActionProposals(actor, 't1')).toEqual([]);
+  } finally {
+    await app.close();
+  }
+});
