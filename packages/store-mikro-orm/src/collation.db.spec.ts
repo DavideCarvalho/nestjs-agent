@@ -54,7 +54,7 @@ function renderColumnsWithoutCollation(): void {
     this: MySqlSchemaHelper,
     ...args: Parameters<typeof original>
   ) {
-    return original.apply(this, args).replace(/ collate [\w]+/gi, '');
+    return (original.apply(this, args) ?? '').replace(/ collate [\w]+/gi, '');
   });
 }
 
