@@ -17,7 +17,7 @@
     "telegram",
     "chatbot"
   ],
-  "description": "nestjs-agent on text channels — WhatsApp (Evolution API, Cloud API) and Telegram webhooks: verified, deduplicated, answered in the background, with proposals, questions and media",
+  "description": "nestjs-agent on text channels \u2014 WhatsApp (Evolution API, Whatsmiau, Cloud API) and Telegram webhooks: verified, deduplicated, answered durably and in order, with proposals, questions, media, files and hooks",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -48,12 +48,19 @@
     "@dudousxd/nestjs-agent": ">=1.24.0 <2.0.0",
     "@dudousxd/nestjs-agent-core": ">=0.43.0 <1.0.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
-    "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0"
+    "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
+    "@dudousxd/nestjs-durable-core": ">=0.72.0"
+  },
+  "peerDependenciesMeta": {
+    "@dudousxd/nestjs-durable-core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@dudousxd/nestjs-durable-core": "0.72.1",
     "@nestjs/common": "12.0.4",
     "@nestjs/core": "12.0.4",
     "@nestjs/platform-express": "12.0.4",

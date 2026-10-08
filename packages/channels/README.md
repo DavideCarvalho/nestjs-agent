@@ -8,6 +8,13 @@ limit. Pending proposals arrive as Confirm/Cancel buttons (or a text instruction
 numbered text, media as staged attachments, and late outcomes are relayed when the proposal worker
 settles them.
 
+When the agent runs durably (`durable: true` with `AgentDurableModule`), each message is a
+`@dudousxd/nestjs-durable` run: persisted before the `200`, handled one at a time per conversation,
+retried, and resumed after a crash without answering twice. Text decisions only decide cards
+delivered to that conversation, and hooks (`unknownSender`, `beforeTurn`, `canDeliver`, per-message
+`texts`, `renderComponent`, `prepareMedia`, `transformInbound`, `formatOutcome`, `onTurnStarted`,
+`onWebhook`) cover the app's own flows.
+
 ## Install
 
 ```bash

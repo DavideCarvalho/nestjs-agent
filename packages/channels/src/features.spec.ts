@@ -1,12 +1,14 @@
 import { AgentModule } from '@dudousxd/nestjs-agent';
 import {
   AGENT_CHANNEL_STORE,
+  AGENT_DURABLE_RUNNER,
   type ActionProposal,
   type ElicitationRequest,
   InMemoryAgentStore,
   InMemoryChannelStore,
 } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider } from '@dudousxd/nestjs-agent-testing';
+import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
 import {
   Global,
   Module,
@@ -147,6 +149,8 @@ describe('questions on a text channel', () => {
     };
     const handler = channel(adapter, service, { questionTimeoutMs: 50 });
     await handler.handle(request(inbound('order')));
+    // The turn parks on the question; nobody answering in time skips it and resumes the run.
+    await until(() => texts(outbox).at(-1) === 'Went with defaults.');
     await handler.drain();
     expect(service.skipped).toEqual([{ actor, toolCallId: 'ask-1', via: 'test' }]);
     expect(texts(outbox).at(-1)).toBe('Went with defaults.');
@@ -457,5 +461,69 @@ describe('the default store', () => {
         ],
       }).compile(),
     ).rejects.toThrow('Two channels are named "test"');
+  });
+});
+
+describe('durable processing, wired by the module', () => {
+  /** An app whose agent runs durably (its durable runner bound) on `engine` — or not. */
+  async function boot(options: { durableAgent: boolean; durable?: false }) {
+    const engine = new WorkflowEngine({ store: new InMemoryStateStore() });
+    @Global()
+    @Module({
+      providers: [
+        { provide: WorkflowEngine, useValue: engine },
+        ...(options.durableAgent ? [{ provide: AGENT_DURABLE_RUNNER, useValue: {} }] : []),
+      ],
+      exports: [WorkflowEngine, ...(options.durableAgent ? [AGENT_DURABLE_RUNNER] : [])],
+    })
+    class DurableStub {}
+    const { adapter, outbox } = fakeAdapter();
+    const module = await Test.createTestingModule({
+      imports: [
+        DurableStub,
+        AgentModule.forRoot({
+          store: new InMemoryAgentStore(),
+          actorResolver: { resolve: () => actor },
+          model: new FakeModelProvider(() => ({ text: 'Hello.' })),
+        }),
+        AgentChannelsModule.forRoot({
+          path: false,
+          ...(options.durable === false ? { durable: false as const } : {}),
+          channels: [{ adapter, actor: () => actor, thread: () => null }],
+        }),
+      ],
+    }).compile();
+    const app = module.createNestApplication();
+    await app.init();
+    return { app, engine, outbox, channels: app.get(AgentChannelsService) };
+  }
+
+  it('runs the channels on the app’s WorkflowEngine when the agent runs durably', async () => {
+    const { app, engine, outbox, channels } = await boot({ durableAgent: true });
+    try {
+      await channels.handleRequest('test', request(inbound('hi', { id: 'wamid.1' })));
+      await channels.drain();
+      expect((await engine.getRun('agora.channel:test:message:wamid.1'))?.status).toBe('completed');
+      expect(texts(outbox)).toEqual(['Hello.']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('stays in this process when the agent is not durable, or with durable: false', async () => {
+    for (const options of [
+      { durableAgent: false },
+      { durableAgent: true, durable: false as const },
+    ]) {
+      const { app, engine, outbox, channels } = await boot(options);
+      try {
+        await channels.handleRequest('test', request(inbound('hi', { id: 'wamid.1' })));
+        await channels.drain();
+        expect(await engine.getRun('agora.channel:test:message:wamid.1')).toBeNull();
+        expect(texts(outbox)).toEqual(['Hello.']);
+      } finally {
+        await app.close();
+      }
+    }
   });
 });

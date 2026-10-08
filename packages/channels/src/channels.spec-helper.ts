@@ -5,6 +5,7 @@ import {
   InMemoryChannelStore,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
+import type { ChannelWorkflowEngine } from './executor.js';
 import { ChannelHandler, type ChannelOptions, type ChannelTurnService } from './handler.js';
 import type {
   ChannelAdapter,
@@ -89,7 +90,8 @@ export function fakeService(
     cancelled: [],
     send: async (params: { threadId?: string }) => {
       service.sends.push(params);
-      return { runId: 'run-1', threadId: params.threadId ?? 'thread-new' };
+      // Every turn its own run, as the agent does: `run-1`, `run-2`…
+      return { runId: `run-${service.sends.length}`, threadId: params.threadId ?? 'thread-new' };
     },
     subscribe: (runId: string) => {
       service.subscribed.push(runId);
@@ -117,13 +119,18 @@ export function fakeService(
 export function channel(
   adapter: ChannelAdapter,
   service: ChannelTurnService,
-  options: Partial<Omit<ChannelOptions, 'adapter'>> & { store?: ChannelStore } = {},
+  options: Partial<Omit<ChannelOptions, 'adapter'>> & {
+    store?: ChannelStore;
+    engine?: ChannelWorkflowEngine;
+  } = {},
 ): ChannelHandler {
-  const { store, ...rest } = options;
+  const { store, engine, ...rest } = options;
   return new ChannelHandler(
     { actor: () => actor, thread: () => 't', ...rest, adapter },
     service,
     store ?? new InMemoryChannelStore(),
+    undefined,
+    engine,
   );
 }
 
