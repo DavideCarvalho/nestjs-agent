@@ -1,5 +1,15 @@
 # @dudousxd/nestjs-agent-channels
 
+## 0.2.1
+
+### Patch Changes
+
+- [#330](https://github.com/DavideCarvalho/nestjs-agent/pull/330) [`bb635d1`](https://github.com/DavideCarvalho/nestjs-agent/commit/bb635d19a7763024c13421f90aa21ca12c8fe58b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `whatsmiau()` / `evolutionApi()` read Whatsmiau's incoming messages, which carry no `fromMe` (Go `omitempty`) — a message without `fromMe` counts as incoming only with `status: 'received'`; `fromMe: true` and any other status stay ignored. `key.remoteLid` is recognized as the chat's LID alias. The handler now logs a webhook that parsed to no message on the `AgentChannels` logger (event and reason, no content; `warn` when it looked like a person's message, else `debug`), with the reason from the new optional `ChannelAdapter.ignored(body)`.
+
+  `whatsmiau()` no longer appends the text reply instruction to the buttons message (its buttons render); `evolutionApi({ buttons: true })` still does, and the text fallback (a 4xx, or buttons off) keeps the full instruction.
+
+  A Whatsmiau button press arrives without its id (`buttonsResponseMessage` with only the label): the adapter marks it `buttonWithoutId`, and the handler maps the label to the one still-pending proposal card it sent to that conversation (remembered in the channel store); with several, it falls back to the text decision.
+
 ## 0.2.0
 
 ### Minor Changes
