@@ -13,6 +13,7 @@ export type {
 } from './agent-channels.options.js';
 export { AGENT_CHANNELS_OPTIONS } from './tokens.js';
 export { type EvolutionApiOptions, evolutionApi } from './adapters/evolution-api.js';
+export { type WhatsmiauOptions, whatsmiau } from './adapters/whatsmiau.js';
 export { type TelegramOptions, telegram } from './adapters/telegram.js';
 export { type WhatsappCloudOptions, whatsappCloud } from './adapters/whatsapp-cloud.js';
 export {
