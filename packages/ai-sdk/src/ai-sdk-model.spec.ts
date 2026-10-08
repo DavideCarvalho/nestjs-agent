@@ -255,6 +255,73 @@ describe('aiSdkModel', () => {
     ]);
   });
 
+  it('never sends an empty assistant message or a blank text part', async () => {
+    // Anthropic and Bedrock refuse the whole request for either ("content … is empty").
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'ask' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'search', input: { q: 'x' } }],
+        toolResults: [{ id: 'c1', name: 'search', output: { hits: 2 } }],
+      },
+      {
+        role: 'assistant',
+        content: ' \n ',
+        toolCalls: [{ id: 'c2', name: 'renderResult', input: {} }],
+        toolResults: [{ id: 'c2', name: 'renderResult', output: 'shown' }],
+      },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'and now?' },
+      { role: 'assistant', content: '  \n' },
+      { role: 'user', content: 'again' },
+    ];
+
+    await aiSdkModel('openai/gpt-4o').runTurn({
+      system: '',
+      messages,
+      tools: [],
+      sink: createSink(),
+    });
+
+    const passed = streamTextMock.mock.calls[0]?.[0].messages;
+    expect(passed).toEqual([
+      { role: 'user', content: 'ask' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'search', input: { q: 'x' } }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'search',
+            output: { type: 'text', value: '{"hits":2}' },
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'renderResult', input: {} }],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c2',
+            toolName: 'renderResult',
+            output: { type: 'text', value: 'shown' },
+          },
+        ],
+      },
+      { role: 'user', content: 'and now?' },
+      { role: 'user', content: 'again' },
+    ]);
+  });
+
   it('maps a user message with attachments into image/file content parts', async () => {
     const messages: ModelMessage[] = [
       {

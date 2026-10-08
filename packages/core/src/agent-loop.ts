@@ -1049,13 +1049,44 @@ interface TurnHistory {
 
 /** The thread's stored rows as the model sees them — the store's own bookkeeping left behind. */
 function toModelMessages(messages: StoredMessage[]): ModelMessage[] {
-  return messages.map((message) => ({
-    role: message.role,
-    content: message.content,
-    ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
-    ...(message.toolResults !== undefined ? { toolResults: message.toolResults } : {}),
-    ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-  }));
+  return withoutBlankAssistantMessages(
+    messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.toolCalls !== undefined ? { toolCalls: message.toolCalls } : {}),
+      ...(message.toolResults !== undefined ? { toolResults: message.toolResults } : {}),
+      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+    })),
+  );
+}
+
+/**
+ * An assistant message that says nothing to the model: blank text, no tool call, no tool result.
+ *
+ * A step can end that way — the model stops right after a tool whose result IS the answer — and
+ * Anthropic and Bedrock reject a request that replays one ("content … is empty"), so a single such
+ * message fails every later turn on its thread. A tool-call-only message is NOT blank: it is the
+ * valid assistant half of a tool exchange and has to stay.
+ */
+function isBlankAssistantMessage(message: ModelMessage): boolean {
+  return (
+    message.role === 'assistant' &&
+    message.content.trim().length === 0 &&
+    (message.toolCalls?.length ?? 0) === 0 &&
+    (message.toolResults?.length ?? 0) === 0
+  );
+}
+
+/**
+ * The history with its blank assistant messages left out. Such a message carries nothing for the
+ * model, so dropping it changes no answer — and it heals a thread that already stored one (written
+ * before the loop stopped persisting them) on its next turn. Returns the same array when there is
+ * nothing to drop.
+ */
+function withoutBlankAssistantMessages(messages: ModelMessage[]): ModelMessage[] {
+  return messages.some(isBlankAssistantMessage)
+    ? messages.filter((message) => !isBlankAssistantMessage(message))
+    : messages;
 }
 
 /** Whose history this is, as the policy's two halves both see it. */
@@ -1116,7 +1147,13 @@ async function loadSelectedHistory(
   // Settled once more on the way out of the journal: a payload recorded before the read settled
   // dangling calls itself still has to reach the model as a prompt a provider accepts. A no-op —
   // the same array elements — on a payload that is already whole.
-  return { ...recorded, messages: settleDanglingToolCalls(recorded.messages) };
+  //
+  // Blank assistant messages are dropped here too: a payload journaled before `toModelMessages` left
+  // them out would otherwise replay one into the prompt.
+  return {
+    ...recorded,
+    messages: settleDanglingToolCalls(withoutBlankAssistantMessages(recorded.messages)),
+  };
 }
 
 /**
@@ -3543,7 +3580,10 @@ export async function runAgentLoop<TOutput = unknown>(
           () =>
             generateFollowUps(
               deps.model,
-              [...modelMessages, { role: 'assistant', content: turn.text }],
+              // A blank answer is left off: an empty assistant message gets the call refused.
+              turn.text.trim().length > 0
+                ? [...modelMessages, { role: 'assistant', content: turn.text }]
+                : modelMessages,
               count,
             ),
           (result) => ({
@@ -3615,24 +3655,38 @@ export async function runAgentLoop<TOutput = unknown>(
     const messageCalls = [...toolCallsWithKind, ...synthetic.map((entry) => entry.call)];
     const syntheticResults = synthetic.map((entry) => entry.result);
 
+    // A step that ended with no text and nothing else on it (no call, no pushed UI, no reasoning, no
+    // suggestions) is not written: the row would say nothing to a reader, and replayed on the next
+    // turn its empty content gets the WHOLE request refused by Anthropic and Bedrock. Such a step has
+    // no tool calls, so it is the final one, and nothing below needs its id. The checkpoint itself
+    // stays, holding `null`, so the turn's checkpoint sequence is unchanged.
+    const blankStep =
+      turn.text.trim().length === 0 &&
+      messageCalls.length === 0 &&
+      syntheticResults.length === 0 &&
+      (turn.ui === undefined || turn.ui.length === 0) &&
+      turn.reasoning === undefined &&
+      followUps === undefined;
     const assistant = await hooks.step(`persist:assistant:${i}`, () =>
-      deps.store.appendMessage({
-        threadId: input.threadId,
-        role: 'assistant',
-        content: turn.text,
-        // Stamps which turn wrote this message, so a reader does not have to infer it from
-        // timestamps — an inference a regenerate breaks, since it re-answers a surviving prompt.
-        runId: hooks.runId,
-        usage: { ...turn.usage, costUsd },
-        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
-        ...(input.persona !== undefined ? { persona: input.persona } : {}),
-        ...(turn.reasoning !== undefined ? { reasoning: turn.reasoning } : {}),
-        ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
-        ...(turn.ui !== undefined && turn.ui.length > 0 ? { ui: turn.ui } : {}),
-        ...(messageCalls.length > 0 ? { toolCalls: messageCalls } : {}),
-        ...(syntheticResults.length > 0 ? { toolResults: syntheticResults } : {}),
-        ...(followUps !== undefined ? { followUps } : {}),
-      }),
+      blankStep
+        ? Promise.resolve(null)
+        : deps.store.appendMessage({
+            threadId: input.threadId,
+            role: 'assistant',
+            content: turn.text,
+            // Stamps which turn wrote this message, so a reader does not have to infer it from
+            // timestamps — an inference a regenerate breaks, since it re-answers a surviving prompt.
+            runId: hooks.runId,
+            usage: { ...turn.usage, costUsd },
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            ...(input.persona !== undefined ? { persona: input.persona } : {}),
+            ...(turn.reasoning !== undefined ? { reasoning: turn.reasoning } : {}),
+            ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+            ...(turn.ui !== undefined && turn.ui.length > 0 ? { ui: turn.ui } : {}),
+            ...(messageCalls.length > 0 ? { toolCalls: messageCalls } : {}),
+            ...(syntheticResults.length > 0 ? { toolResults: syntheticResults } : {}),
+            ...(followUps !== undefined ? { followUps } : {}),
+          }),
     );
     // Tool results ride on the same assistant message that made the calls — the compact shape the
     // store persists and `mapMessages` (in every model adapter) expands into an assistant + tool
@@ -3644,6 +3698,23 @@ export async function runAgentLoop<TOutput = unknown>(
       ...(messageCalls.length > 0 ? { toolCalls: messageCalls } : {}),
       ...(syntheticResults.length > 0 ? { toolResults: syntheticResults } : {}),
     };
+    const finishFinalStep = (): Promise<void> =>
+      hooks.step(`stream:step-finish:${i}`, async () => {
+        await writer.write(
+          encodeStreamEvent({
+            kind: 'step-finish',
+            usage: turn.usage,
+            costUsd,
+            ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
+            ...(stepModel !== undefined ? { model: stepModel } : {}),
+          }),
+        );
+      });
+    // `null` only for a blank step — see `blankStep`. It is the last step and has nothing to replay.
+    if (assistant === null) {
+      await finishFinalStep();
+      break;
+    }
     modelMessages.push(assistantMessage);
 
     for (const entry of synthetic) {
@@ -3681,17 +3752,7 @@ export async function runAgentLoop<TOutput = unknown>(
     }
 
     if (isFinalTurn) {
-      await hooks.step(`stream:step-finish:${i}`, async () => {
-        await writer.write(
-          encodeStreamEvent({
-            kind: 'step-finish',
-            usage: turn.usage,
-            costUsd,
-            ...(turn.reasoningMs !== undefined ? { reasoningMs: turn.reasoningMs } : {}),
-            ...(stepModel !== undefined ? { model: stepModel } : {}),
-          }),
-        );
-      });
+      await finishFinalStep();
       break;
     }
 
@@ -3859,13 +3920,17 @@ export async function runAgentLoop<TOutput = unknown>(
         return;
       }
       const agent = input.agentName ?? 'default';
-      await deps.store.appendMessage({
-        threadId: delivery.threadId,
-        role: 'assistant',
-        content: lastText,
-        agentName: agent,
-        runId: hooks.runId,
-      });
+      // A run that ended on a blank step has no answer to deliver, and an empty assistant message
+      // would poison the delegating thread's next turn. The tool call is still settled below.
+      if (lastText.trim().length > 0) {
+        await deps.store.appendMessage({
+          threadId: delivery.threadId,
+          role: 'assistant',
+          content: lastText,
+          agentName: agent,
+          runId: hooks.runId,
+        });
+      }
       await deps.store.updateToolCall({
         toolCallId: delivery.toolCallId,
         status: 'executed',

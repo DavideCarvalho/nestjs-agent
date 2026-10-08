@@ -75,3 +75,8 @@ export {
   type ActionProposalWorkerContractSubject,
   type ActionProposalWorkerContractCase,
 } from './action-proposal-worker-store-contract.js';
+export {
+  BLANK_ASSISTANT_HISTORY_CONTRACT,
+  type BlankAssistantHistoryContractCase,
+  type BlankAssistantHistoryContractSubject,
+} from './blank-assistant-history-contract.js';
