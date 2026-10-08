@@ -243,9 +243,17 @@ status is `queued`, `executing`, `succeeded` or `failed`.
 `useAgentChat` reads the thread's proposals after each stream ends, polls while one is pending or
 running (`proposalPollMs`, default 1000 ms), and refreshes on focus, `online` and when the tab becomes
 visible. Late outcome messages merge into the transcript without replacing a turn in progress. The
-state is on the hook's `proposals` (`{ items, error, refresh }`). Set `proposals: false` to turn the
-reads off, or `true` to keep them on when `history` and `resume` are both off. See
+state is on the hook's `proposals` (`{ items, error, unsupported, refresh }`). Set `proposals: false`
+to turn the reads off, or `true` to keep them on when `history` and `resume` are both off. See
 [Frontend](/docs/agent/guides/frontend).
+
+A server that does not serve proposals (an app that mounts its own routes without this one) answers
+the list with `404`, `405` or `501`. The client takes the first such answer to mean "unsupported":
+`proposals.unsupported` turns `true` and nothing reads the route again for that client (no polling,
+no refetch on focus), so `onHttpError` hears about it once. The library's own `404` for a thread it
+does not know yet is not that: it is an error for that read only. Other failed reads (`5xx`, network)
+keep polling, waiting twice as long after each failure in a row (up to 30 s) and returning to
+`proposalPollMs` after the next success.
 
 ## Rolling it out
 
