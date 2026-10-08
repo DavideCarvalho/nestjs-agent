@@ -265,6 +265,10 @@ const OUTCOME_POLL_MS = 500;
 const OUTCOME_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const buttonRef = (proposalId: string) => proposalId.slice(-BUTTON_REF_LENGTH);
+/** How long the proposal cards sent to a conversation are remembered, and how many. */
+const CARDS_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_CARDS = 20;
+const foldLabel = (label: string) => label.trim().toLowerCase();
 
 /** The button ids for a proposal: what the handler maps back to its decision. */
 export function proposalButtonIds(proposalId: string): { approve: string; reject: string } {
@@ -448,6 +452,51 @@ export class ChannelHandler {
     return `${this.adapter.name}:question:${conversation}`;
   }
 
+  private cardsKey(conversation: string) {
+    return `${this.adapter.name}:cards:${conversation}`;
+  }
+
+  /** Remember a proposal card sent to `conversation` — for a press that comes back without its id. */
+  private async rememberCard(conversation: string, proposalId: string) {
+    const key = this.cardsKey(conversation);
+    const saved = await this.store.get(key);
+    const ref = buttonRef(proposalId);
+    const refs = saved === null ? [] : (JSON.parse(saved) as string[]);
+    const next = [...refs.filter((known) => known !== ref), ref].slice(-MAX_CARDS);
+    await this.store.set(key, JSON.stringify(next), CARDS_TTL_MS);
+  }
+
+  /**
+   * A button press the provider forwarded without its id — only the label (Whatsmiau): the id of
+   * the one card it can have come from — a card sent to this conversation whose proposal is still
+   * pending. Several such cards → `undefined`: never guess; the label then goes on as a text
+   * decision, which asks for the `#id`.
+   */
+  private async recoverButtonId(
+    actor: Actor,
+    threadId: string | null,
+    message: InboundMessage,
+  ): Promise<string | undefined> {
+    if (message.buttonId !== undefined || message.buttonWithoutId !== true) return undefined;
+    if (threadId === null || !this.service.listActionProposals) return undefined;
+    const label = foldLabel(message.text);
+    const action =
+      label === foldLabel(this.texts.approve)
+        ? 'approve'
+        : label === foldLabel(this.texts.reject)
+          ? 'reject'
+          : undefined;
+    if (action === undefined) return undefined;
+    const saved = await this.store.get(this.cardsKey(message.conversation));
+    if (saved === null) return undefined;
+    const refs = new Set(JSON.parse(saved) as string[]);
+    const live = (await this.service.listActionProposals(actor, threadId)).filter(
+      (proposal) => proposal.decision === 'pending' && refs.has(buttonRef(proposal.id)),
+    );
+    const only = live.length === 1 ? live[0] : undefined;
+    return only === undefined ? undefined : `agora:${action}:${buttonRef(only.id)}`;
+  }
+
   private commandsFor(proposalId: string, withId: boolean): { approve: string; reject: string } {
     const vocabulary =
       this.service.actionProposalVocabulary?.() ?? DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY;
@@ -479,6 +528,7 @@ export class ChannelHandler {
       instruction: toChannelMarkdown(instruction, capabilities.markdown),
     };
     await this.adapter.send(conversation, message);
+    await this.rememberCard(conversation, proposal.id);
   }
 
   /** Wait for an approved proposal to run, then relay what it said (or that it failed). */
@@ -749,16 +799,18 @@ export class ChannelHandler {
     return { text: parts.join('').trim(), proposals: [...proposals.values()], failed, blocked };
   }
 
-  private async handleMessage(message: InboundMessage) {
+  private async handleMessage(received: InboundMessage) {
     const { service, adapter, options } = this;
-    await adapter.acknowledge?.(message).catch(() => {});
-    const actor = await options.actor(message);
+    await adapter.acknowledge?.(received).catch(() => {});
+    const actor = await options.actor(received);
     if (actor === null) {
       if (this.texts.unknownSender !== undefined)
-        await this.deliver(message.conversation, this.texts.unknownSender);
+        await this.deliver(received.conversation, this.texts.unknownSender);
       return;
     }
-    const threadId = (await options.thread(actor, message)) ?? null;
+    const threadId = (await options.thread(actor, received)) ?? null;
+    const recovered = await this.recoverButtonId(actor, threadId, received);
+    const message = recovered === undefined ? received : { ...received, buttonId: recovered };
     const ours = message.buttonId !== undefined && BUTTON_ID.test(message.buttonId);
     if (!ours) {
       const waiting = await this.store.get(this.questionKey(message.conversation));

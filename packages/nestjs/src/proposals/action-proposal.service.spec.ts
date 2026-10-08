@@ -224,7 +224,7 @@ it('takes Portuguese commands and answers in Portuguese under the ptBr preset', 
   });
   expect(await service.handleTextDecision('t', { id: 'a' }, 'pode')).toMatchObject({
     proposalDecision: { status: 'applied' },
-    text: 'Proposta aprovada e enfileirada para execução.',
+    text: 'Confirmado! Já estou cuidando disso.',
   });
 });
 it('keeps English working under the ptBr preset', async () => {
@@ -232,6 +232,6 @@ it('keeps English working under the ptBr preset', async () => {
     actionProposalText: ptBrActionProposalText,
   });
   expect(await service.handleTextDecision('t', { id: 'a' }, 'cancel')).toMatchObject({
-    text: 'Proposta rejeitada; nenhuma ação foi executada.',
+    text: 'Tudo bem, cancelado. Nada foi feito.',
   });
 });
