@@ -44,7 +44,7 @@ export class ActionProposalService {
   private readonly vocabulary: TextActionProposalVocabulary;
   private readonly replies: TextActionProposalReplies;
   private hasCapability(): boolean {
-    const store = this.store as Partial<ActionProposalStore>;
+    const store = this.store as Partial<ActionProposalStore & ActionProposalOutcomeStore>;
     return (
       typeof store.getThreadActionProposalScope === 'function' &&
       typeof store.listActionProposals === 'function'
