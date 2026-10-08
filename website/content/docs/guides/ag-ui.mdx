@@ -110,7 +110,7 @@ What AG-UI has no event for travels as `CUSTOM` events, which a client that does
 | `name` | `value` |
 | --- | --- |
 | `agora.run` | `{ runId, threadId }` — the library's ids, e.g. for `POST /agent/chat/:runId/cancel` |
-| `agora.ui` | a [generative-UI](/docs/agent/guides/generative-ui) component `{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId? }`; a repeat `id` replaces. `fallbackText` is what a client that cannot draw the component shows instead; one that never draws it should leave it out of `uiCapabilities` and get the text as a text message |
+| `agora.ui` | a [generative-UI](/docs/agent/guides/generative-ui) component `{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId?, partial? }`; a repeat `id` replaces. `partial: true` is a preview of a tree the model is still writing (`streaming: 'partial'`): sent repeatedly under the id the final push replaces, withdrawn by one with empty `props`, and drawn by the React AG-UI backend like the native ones. `fallbackText` is what a client that cannot draw the component shows instead; one that never draws it should leave it out of `uiCapabilities` and get the text as a text message |
 | `agora.title` | `{ title }` |
 | `agora.step-usage` | `{ usage, costUsd, reasoningMs }` of one model step, right after its `STEP_FINISHED` |
 | `agora.approval-requested`, `agora.approval-settled` | the native frames, for a client that renders them live |

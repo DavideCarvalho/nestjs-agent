@@ -27,12 +27,12 @@ The whole setup is four pieces of consumer code:
 4. **`genui={{ registry, catalog }}`** on the client's `<AgentProvider>`. Nothing per message.
 
 <Callout type="info" title="The default push path">
-Two ways a component reaches the answer, and they are the defaults: the model calls a
-**per-component tool** (`ui__show_<component>`, one per model-facing component that takes no children, input = the props — what
-`AgentGenuiModule.forRoot({ catalog })` gives you), and **your own tools** call
-`ctx.emitUi(component, props)` when they already hold the data. Start there. The tree tool, the
-generic `ui__show` tool and per-request resolvers below are for composed layouts and per-tenant
-components.
+Two ways a component reaches the answer, and they are the defaults: the model calls **one tree
+tool**, `ui__render`, whose input is a component tree composed from the catalog — a single
+component is a valid tree, so it covers a lone table as well as a dashboard; that is what
+`AgentGenuiModule.forRoot({ catalog })` gives you — and **your own tools** call
+`ctx.emitUi(component, props)` when they already hold the data. Start there. Per-component tools,
+the generic `ui__show` tool and per-request resolvers below are the alternatives.
 </Callout>
 
 <Callout type="info">
@@ -105,17 +105,12 @@ That registers the tools the model uses to push components, each call validated 
 catalog. A refused call reaches the model as a tool error naming each problem, and the model can
 fix it. There are two shapes.
 
-**Per component** (the default), one tool per component, whose input *is* the props:
-`ui__show_data_table`, `ui__show_deal_card`, … `internal` components and layout components
-(`children: true`, e.g. `Stack`, `Card`) get no tool — flat props cannot carry children; they are
-reached through the tree tool. The generic `ui__show` tool leaves them out too.
-
-**Tree**, one tool whose input is a nested layout composed from the catalog:
+**Tree** (the default), one tool, `ui__render`, whose input is a nested layout composed from the
+catalog:
 
 ```ts
 AgentGenuiModule.forRoot({
   catalog,
-  mode: 'tree',
   treeToolName: 'renderResult',
   treeInstructions: 'Call this after reading the data, to present the answer.',
   terminal: true,
@@ -131,26 +126,44 @@ AgentGenuiModule.forRoot({
 
 The tree tool's description carries `catalogToModelText(catalog)`, so the model sees every
 component, its props and which ones take children. Each node is validated. A valid tree is pushed as
-one frame, `component: 'genui:tree'`, `props: { root }`.
+one frame, `component: 'genui:tree'`, `props: { root }`. A tree of a single component with no
+children — `{ "type": "DataTable", "props": { … } }` — is pushed as that component, exactly as its
+per-component tool would push it (same frame, version and `fallbackText`).
+
+The tool's input schema is exact: below the root, every node is a union by `type` (through `$defs`
+/ `$ref`) whose variants carry their component's own props schema, and only components that take
+children have `children`. The root itself is a plain object listing every `type` and every props
+schema, because OpenAI and Anthropic both refuse a union at the top level of a tool's parameters. A
+component whose props schema is not self-contained (it carries its own `$ref` / `$defs`) is
+described as a plain object. A provider that refuses `$ref` in tool parameters takes
+`treeSchema: 'loose'` — one generic node shape, the props described in the tool's text only.
+Whichever schema the model sees, the server validates every call.
+
+**Per component** (`mode: 'per-component'`), one tool per component, whose input *is* the props:
+`ui__show_data_table`, `ui__show_deal_card`, … `internal` components and layout components
+(`children: true`, e.g. `Stack`, `Card`) get no tool — flat props cannot carry children. The generic
+`ui__show` tool leaves them out too. Reach for it with small models that compose trees poorly, or
+when each tool should carry its own exact schema.
 
 `terminal: true` ends the turn once the call succeeds. When the UI *is* the answer, there is no
 model call to narrate it.
 
-| | Per component | Tree |
+| | Tree (default) | Per component |
 |---|---|---|
-| Tools | one per component | one |
-| Model effort | pick a tool, fill props | compose a layout |
-| Best for | "show this table", several independent pieces | one composed answer (dashboards, reports) |
-| Frame | `component: <Name>` | `component: 'genui:tree'` |
+| Tools | one | one per component |
+| Model effort | compose a layout (or name one component) | pick a tool, fill props |
+| Best for | one composed answer (dashboards, reports), and single components | small models; several independent pieces |
+| Frame | `component: 'genui:tree'`, or `<Name>` for a single node | `component: <Name>` |
 
-Options: `mode`, `terminal`, `treeToolName`, `treeInstructions`, `treeLimits`, `namePrefix`,
-`showTool`, `showInstructions`, `roles`, `presentation`, `resolver`. To build them from config:
+Options: `mode`, `treeSchema`, `streaming`, `streamingThrottleMs`, `terminal`, `treeToolName`,
+`treeInstructions`, `treeLimits`, `namePrefix`, `showTool`, `showInstructions`, `roles`,
+`presentation`, `resolver`. To build them from config:
 
 ```ts
 AgentGenuiModule.forRootAsync({
   imports: [ConfigModule],
   inject: [ConfigService],
-  useFactory: (config: ConfigService) => ({ catalog, mode: config.get('GENUI_MODE') }),
+  useFactory: (config: ConfigService) => ({ catalog, streaming: config.get('GENUI_STREAMING') }),
 });
 ```
 
@@ -200,8 +213,72 @@ In a test, `overrideProvider(GenuiCatalogResolver).useValue({ resolve: () => tes
 <Callout type="info">
 Under the hood this is the core's `ToolHandler.describe(scope)`: a hook any tool can implement to
 vary its model-facing description and schema per turn. Without Nest, `genuiTools(catalog, {
-resolveCatalog, showTool })` from `@dudousxd/nestjs-agent-core/genui` returns the same tools.
+resolveCatalog, showTool })` from `@dudousxd/nestjs-agent-core/genui` returns the same tools. A tool
+whose `describe` answers `available: false` for a turn is hidden from the model, and a call to it
+anyway is refused as an unknown tool.
 </Callout>
+
+### Drawing a tree while the model writes it
+
+A model-composed layout is one `ui__render` call, and its arguments stream for as long as the model
+writes them — seconds, for a dashboard. By default nothing is drawn until the call has run; then the
+validated tree appears whole. With `streaming: 'partial'` the layout fills in as it is written:
+
+```ts
+AgentGenuiModule.forRoot({ catalog, streaming: 'partial' }); // tree mode, the default
+```
+
+The server reads the streaming arguments (`tool-input-delta`) as far as they go and pushes the tree
+so far as `ui` frames marked `partial: true`, under the id the final push uses
+(`<toolCallId>:ui:0`). Each one replaces the last in place; the call's own push, validated as
+always, replaces the last preview. What a partial frame is, and is not:
+
+- **Not validated.** A preview's props are whatever the model has written so far. Only the final
+  tree goes through the catalog, and an invalid one is refused to the model as before (it retries
+  under a new call). A preview the call does not replace — the tree was invalid, or degrades to
+  text for this client — is **withdrawn** with a partial frame whose `props` are `{}`, before the
+  call's outcome.
+- **Not persisted.** The message keeps the final tree only; a reloaded thread draws it. Under the
+  durable runner the previews a step showed ride its journaled result, so a replay withdraws the
+  same ones.
+- **Not for text.** A preview carries no `fallbackText`, a [text channel](/docs/agent/guides/channels)
+  skips it, and a turn whose client cannot draw the tree (its
+  [UI capabilities](/docs/agent/guides/rendering-everywhere#declaring-what-a-client-can-draw) leave
+  a node out) gets no previews at all — only the final text.
+- **Throttled.** At most one preview every `streamingThrottleMs` (100 ms) per call, and only when
+  it changed, so a long tree costs the stream (and the Redis or SQL sink buffering it) a bounded
+  number of snapshots.
+
+A node appears once its `type` has arrived and names a component this client draws. Every node of a
+partial tree carries its position as `id` (`root`, `root.0`, `root.1.2` — the same rule that names
+the final tree's nodes, so a renderer keyed on it never remounts), and `incomplete: true` while the
+model is still writing it:
+
+```json
+{ "kind": "ui", "id": "c1:ui:0", "component": "genui:tree", "partial": true, "version": 1,
+  "props": { "root": { "id": "root", "type": "Card", "props": { "title": "Sales" }, "incomplete": true,
+    "children": [{ "id": "root.0", "type": "KpiCards", "props": { "items": [{ "label": "Rev" }] }, "incomplete": true }] } } }
+```
+
+**Per component.** A component that cannot draw half its data opts out on its definition:
+
+```ts
+defineComponent({ ...Chart, streaming: 'complete' });
+```
+
+While the model writes it, such a node is sent as a placeholder,
+`{ id, type, props: {}, incomplete: true, held: true }`, without its children; it is drawn once its
+whole subtree has arrived and its props pass its schema. `streaming: 'partial'` on a definition does
+the opposite — previews a component in a tree that defaults to `complete`, though a `complete`
+layout above it still holds it back. The default stays `complete` because a renderer written for
+validated props would be handed half-written ones: opting in is saying your renderers cope (see
+[Streaming trees on the client](#streaming-trees-on-the-client)).
+
+The mechanism is a hook any tool can implement: `ToolHandler.previewInput(scope)` answers how to
+preview a streamed call (`render(partialInput)` → a frame, `undefined` for nothing new, `null` to
+withdraw), and the loop does the parsing (`parsePartialJson`, exported from the core), the
+throttling and the withdrawal. The wire format is the AdonisJS sibling's (`@adonis-agora/agent`), so
+either client draws either server's previews.
 
 ## 3. Pushing from your own tools: `ctx.emitUi`
 
@@ -290,6 +367,32 @@ without `AgentProvider` or a subtree with its own registry.
 - Tell the server what this app draws with `<AgentProvider uiCapabilities={{ components: [...] }}>`.
   It is not derived from `registry`. Omitted, the server offers and sends every catalog component.
 - `genui:tree` frames render node by node through the same registry.
+
+### Streaming trees on the client
+
+A partial tree frame renders node by node like a final one, keyed by node position, so nodes stay
+mounted while they fill in and when the final frame replaces the preview. A node the model is still
+writing is not validated against the catalog (its props are half there); its renderer can ask with
+`useGenuiNode()`, which answers `{ id, type, incomplete, held }` inside a tree and `null` outside
+one:
+
+```tsx
+import { useGenuiNode } from '@dudousxd/nestjs-agent-react/genui';
+
+function KpiCards({ items = [] }: { items?: Kpi[] }) {
+  const node = useGenuiNode();
+  if (node?.incomplete && items.length === 0) return <KpiSkeleton />;
+  return <Kpis items={items.filter((item) => item?.label)} />;
+}
+```
+
+Props of an incomplete node can be missing or half-built (an array still growing, its last item
+partial), so a renderer opted into previews defaults what it reads. A `held` node
+(`streaming: 'complete'`) never reaches its renderer: `<GenerativeUI>` draws `placeholder` instead —
+a node, or `(node) => ReactNode` — defaulting to `loading`, and settable once on `<GenuiProvider>`
+(or `genui` on `<AgentProvider>`). A withdrawn preview draws nothing, and the transcript drops a
+preview whose call settled without replacing it. `incomplete` only ever means "the model has not
+finished writing this node"; it is not a loading state for data.
 
 For your own transcript markup, `<GenerativeUI part={block} />` draws one component with the
 provider's settings (any prop you pass wins), `useGenerativeUI(part)` gives you the state for custom

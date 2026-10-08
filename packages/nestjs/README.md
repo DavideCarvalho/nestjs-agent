@@ -109,13 +109,15 @@ import { BUILTIN_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
 export const catalog = defineCatalog([...BUILTIN_COMPONENTS, DealCard]);
 
 // app.module.ts
-AgentGenuiModule.forRoot({ catalog, mode: 'tree', terminal: true });
+AgentGenuiModule.forRoot({ catalog, terminal: true });
 ```
 
-It registers the tools (`ui__show_<component>` per component by default, one `ui__render` in `tree`
-mode, plus a generic `ui__show` taking `{ component, props }` with `showTool: true`), validating
-every call against the catalog. Options: `mode`, `terminal`, `treeToolName`, `treeInstructions`,
-`treeLimits`, `namePrefix`, `showTool`, `showInstructions`, `roles`, `presentation`.
+It registers the tools (one `ui__render` tree tool by default, `ui__show_<component>` per component
+with `mode: 'per-component'`, plus a generic `ui__show` taking `{ component, props }` with
+`showTool: true`), validating every call against the catalog. Options: `mode`, `treeSchema`,
+`streaming` (`'partial'` draws the tree while the model writes it), `streamingThrottleMs`,
+`terminal`, `treeToolName`, `treeInstructions`, `treeLimits`, `namePrefix`, `showTool`,
+`showInstructions`, `roles`, `presentation`.
 `forRootAsync({ imports, inject, useFactory })` builds them from config. The catalog is injectable
 (`@InjectGenuiCatalog()`, token `GENUI_CATALOG`) and replaceable in a test with
 `overrideProvider(GENUI_CATALOG)` — the tools are built from the injected one.

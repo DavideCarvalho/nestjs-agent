@@ -52,7 +52,10 @@ browser.
 
 | Option | Default | |
 |---|---|---|
-| `mode` | `'per-component'` | One `ui__show_<snake>` tool per model-facing component except layout ones (`children: true`), or `'tree'`: one tool taking `{ type, props, children? }`. |
+| `mode` | `'tree'` | One `ui__render` tool taking `{ type, props, children? }` (a single node is pushed as that component), or `'per-component'`: one `ui__show_<snake>` tool per model-facing component except layout ones (`children: true`). |
+| `treeSchema` | `'strict'` | `ui__render`'s input schema: a `$defs` / `$ref` union by `type` with each component's props schema (root a plain object), or `'loose'`: one generic node shape. |
+| `streaming` | `'complete'` | Tree mode: `'partial'` streams the tree as `partial` ui frames while the model writes it. A component's own `streaming` overrides it. |
+| `streamingThrottleMs` | `100` | Least time between two partial frames of one call. |
 | `terminal` | `false` | The turn ends once a call succeeds. |
 | `showTool` | off | Also one generic tool taking `{ component, props }`. `true` names it `ui__show`; a string names it. |
 | `showInstructions` | | Prepended to the show tool's description. |

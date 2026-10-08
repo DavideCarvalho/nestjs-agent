@@ -63,7 +63,7 @@ import { catalog } from './catalog';
 @Module({
   imports: [
     AgentModule.forRoot({ /* … */ }),
-    AgentGenuiModule.forRoot({ catalog }), // or { catalog, mode: 'tree' }
+    AgentGenuiModule.forRoot({ catalog }), // tree mode; or { catalog, mode: 'per-component' }
   ],
 })
 export class AppModule {}
@@ -115,9 +115,9 @@ What the model gets depends on `mode` (and `showTool`) on `AgentGenuiModule`:
 
 | | Content builtins, `Heading`, `Text`, `Badge`, `Link`, `Image` | `Stack`, `Card` (`children: true`) |
 |---|---|---|
-| `mode: 'per-component'` (default) | One tool each, `ui__show_<snake_case name>`: `ui__show_data_table`, `ui__show_kpi_cards`, `ui__show_heading`, … Input = the props. | **No tool.** |
+| `mode: 'tree'` (default, `ui__render`) | Listed in the tool's description with a one-line props signature, and each one's props schema is a variant of the input schema's node union. A tree of one of them is pushed as that component. | Listed and marked "takes children". |
+| `mode: 'per-component'` | One tool each, `ui__show_<snake_case name>`: `ui__show_data_table`, `ui__show_kpi_cards`, `ui__show_heading`, … Input = the props. | **No tool.** |
 | `showTool: true` (`ui__show`) | Offered: `{ component, props }`, `component` is one of them. | **Not offered** (not in the `component` enum; refused if sent). |
-| `mode: 'tree'` (`ui__render`) | Listed in the tool's description with a one-line props signature. | Listed and marked "takes children". |
 
 A per-component tool's description is `Show the user a <title> (<name>). <description>`, and its
 input schema is the props schema below. A flat input (a per-component tool or `ui__show`) has no way
@@ -132,6 +132,20 @@ do not want those five as tools either, leave the list out or pick them individu
 
 Your own tools can push any catalog component, builtins included, with
 `ctx.emitUi('Chart', props)`, validated against the catalog.
+
+**While the model writes a tree.** No builtin sets `streaming`, so each follows the module's
+default (`streaming`, `'complete'` unless you choose `'partial'` — see
+[Drawing a tree while the model writes it](/docs/agent/guides/generative-ui#drawing-a-tree-while-the-model-writes-it)).
+With `'partial'`, a builtin is drawn as its props arrive, its node flagged `incomplete`, and its
+renderer gets whatever has arrived (a missing `rows`, a half-written last item) — default what you
+read, and draw a skeleton while `useGenuiNode()?.incomplete` is `true`. To hold one back until its
+whole subtree has arrived — a `Chart` whose renderer cannot draw half a series — override it:
+
+```ts title="Backend — src/agent/catalog.ts"
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS]).extend([
+  { ...Chart, streaming: 'complete' }, // a placeholder until the chart's JSON has closed
+]);
+```
 
 ## Frontend: render them
 
@@ -329,7 +343,9 @@ their props), and their children's text still follows.
 
 ## What the model sends
 
-A per-component call takes the props directly. `ui__show_kpi_cards`:
+A single node takes the props under `props` — in tree mode `ui__render` with
+`{ "type": "KpiCards", "props": … }`, or with `mode: 'per-component'` the props directly, as
+`ui__show_kpi_cards`:
 
 ```json
 {

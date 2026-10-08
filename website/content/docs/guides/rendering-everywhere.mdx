@@ -272,10 +272,14 @@ Where the declaration travels:
 
 The genui tools describe themselves per turn from the negotiated catalog:
 
-- A per-component tool (`ui__show_<name>`) whose component the client did not declare is removed
-  from that turn's tool list.
-- The tree tool and the `ui__show` tool list only declared components, and are removed when none are
-  left.
+- The tree tool (`ui__render`) and the `ui__show` tool list only declared components — the tree
+  tool's input schema too — and are removed when none are left.
+- With `mode: 'per-component'`, a tool (`ui__show_<name>`) whose component the client did not
+  declare is removed from that turn's tool list.
+- A call to a tool removed this way is refused as an unknown tool, even if the model names it.
+- A [streaming tree](/docs/agent/guides/generative-ui#drawing-a-tree-while-the-model-writes-it) is
+  previewed only for a client that draws every node of it; anyone else gets the final push (or its
+  text) alone.
 
 With `components: []` the model sees no UI tool at all and answers in prose.
 
@@ -326,7 +330,7 @@ AgentModule.forRoot({
 
 The route reads `forwardedProps.uiCapabilities` (a malformed value is a `400`) and negotiates exactly
 as above. A drawable component arrives as the `CUSTOM` event `agora.ui` with
-`{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId? }`, so an AG-UI
+`{ id, component, props, version?, fallbackText?, componentVersions?, toolCallId?, partial? }`, so an AG-UI
 client that cannot draw it after all can still show the text. An undeclared one arrives as text,
 inside the run's `TEXT_MESSAGE_*` events.
 
