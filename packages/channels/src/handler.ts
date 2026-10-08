@@ -9,7 +9,9 @@ import {
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type ElicitationQuestion,
   type PageContext,
+  type TextActionProposalVocabulary,
   type ToolConfirmation,
+  ptBrActionProposalText,
 } from '@dudousxd/nestjs-agent-core';
 import { agUiFramesFromNdjson } from '@dudousxd/nestjs-agent-core/ag-ui';
 import { HttpException } from '@nestjs/common';
@@ -20,6 +22,7 @@ import {
   DEFAULT_CHANNEL_QUESTION_TEXTS,
   formatChannelQuestion,
   parseChannelAnswer,
+  ptBrChannelQuestionTexts,
 } from './questions.js';
 import { splitMessage } from './split.js';
 import type {
@@ -58,7 +61,11 @@ export interface ChannelProposal {
 /** Why a media message could not be attached. */
 export type ChannelMediaRefusal = 'disabled' | 'type' | 'size' | 'failed';
 
-/** Everything the channel says on its own (not the model). English defaults; override any. */
+/**
+ * Everything the channel says on its own (not the model). English by default, Brazilian Portuguese
+ * ({@link ptBrChannelTexts}) when the agent's `actionProposalText` is `ptBrActionProposalText`;
+ * override any.
+ */
 export interface ChannelTexts {
   /** The Confirm button's label. */
   approve: string;
@@ -123,7 +130,53 @@ export const DEFAULT_CHANNEL_TEXTS: ChannelTexts = {
   questions: DEFAULT_CHANNEL_QUESTION_TEXTS,
 };
 
-/** `texts` as a channel takes it: any part, `questions` too. */
+/**
+ * Brazilian Portuguese channel texts — the default when the agent's `actionProposalText` is
+ * `ptBrActionProposalText`, so the reply words and what the channel says agree.
+ */
+export const ptBrChannelTexts: ChannelTexts = {
+  approve: 'Confirmar',
+  reject: 'Cancelar',
+  proposal: ({ confirmation, toolName }) =>
+    confirmation
+      ? `*${confirmation.title}*${confirmation.detail ? `\n${confirmation.detail}` : ''}`
+      : `*Executar ${toolName}?*`,
+  instruction: ({ approve, reject }) =>
+    `Responda *${approve}* para confirmar ou *${reject}* para cancelar.`,
+  blockingApproval: 'Esta ação precisa de uma aprovação que só pode ser dada no app.',
+  failed: 'Desculpe, algo deu errado. Tente de novo, por favor.',
+  actionSucceeded: 'Pronto.',
+  actionFailed: 'Não foi possível concluir a ação.',
+  mediaRefused: (reason, media, limits) =>
+    reason === 'disabled'
+      ? 'Por aqui eu só consigo ler mensagens de texto.'
+      : reason === 'size'
+        ? `Esse arquivo é grande demais${limits ? ` (o limite é ${readableSize(limits.maxBytes)})` : ''}.`
+        : reason === 'failed'
+          ? 'Não consegui baixar esse arquivo. Envie de novo, por favor.'
+          : media.kind === 'audio'
+            ? 'Não consigo ouvir mensagens de áudio. Escreva sua mensagem, por favor.'
+            : `Não consigo ler esse tipo de arquivo${media.contentType ? ` (${media.contentType})` : ''}.`,
+  questions: ptBrChannelQuestionTexts,
+};
+
+/**
+ * The channel texts that speak the language of the agent's text-decision words: {@link
+ * ptBrChannelTexts} for `ptBrActionProposalText` (or any vocabulary whose `language` is Portuguese),
+ * else {@link DEFAULT_CHANNEL_TEXTS}.
+ */
+export function channelTextsFor(vocabulary?: TextActionProposalVocabulary | null): ChannelTexts {
+  if (!vocabulary) return DEFAULT_CHANNEL_TEXTS;
+  const portuguese =
+    /^pt(-|$)/i.test(vocabulary.language ?? '') ||
+    vocabulary.approve === ptBrActionProposalText.vocabulary.approve;
+  return portuguese ? ptBrChannelTexts : DEFAULT_CHANNEL_TEXTS;
+}
+
+/**
+ * `texts` as a channel takes it: any part, `questions` too — over the texts in the language of the
+ * agent's `actionProposalText` (see {@link channelTextsFor}).
+ */
 export type ChannelTextsOverrides = Partial<Omit<ChannelTexts, 'questions'>> & {
   questions?: Partial<ChannelQuestionTexts>;
 };
@@ -166,6 +219,10 @@ export interface ChannelOptions {
   outcomeTimeoutMs?: number;
   /** How long a question waits for its answer before the agent proceeds without it. Default 30 min. */
   questionTimeoutMs?: number;
+  /**
+   * What the channel says on its own. Omitted parts come from {@link channelTextsFor}: Brazilian
+   * Portuguese when the agent's `actionProposalText` is `ptBrActionProposalText`, else English.
+   */
   texts?: ChannelTextsOverrides;
   /** A message whose handling failed. Default: logged. */
   onError?(error: unknown, message: InboundMessage): void;
@@ -215,10 +272,14 @@ export function proposalButtonIds(proposalId: string): { approve: string; reject
   return { approve: `agora:approve:${ref}`, reject: `agora:reject:${ref}` };
 }
 
-export const mergeChannelTexts = (overrides: ChannelTextsOverrides = {}): ChannelTexts => ({
-  ...DEFAULT_CHANNEL_TEXTS,
+/** `overrides` over `base` (default: the English texts), `questions` merged too. */
+export const mergeChannelTexts = (
+  overrides: ChannelTextsOverrides = {},
+  base: ChannelTexts = DEFAULT_CHANNEL_TEXTS,
+): ChannelTexts => ({
+  ...base,
   ...overrides,
-  questions: { ...DEFAULT_CHANNEL_QUESTION_TEXTS, ...overrides.questions },
+  questions: { ...base.questions, ...overrides.questions },
 });
 
 /** What an executed proposal tells the person; `null` when it did not execute. */
@@ -291,7 +352,11 @@ export class ChannelHandler {
     private readonly logError: (error: unknown, message: InboundMessage) => void = () => {},
   ) {
     this.adapter = options.adapter;
-    this.texts = mergeChannelTexts(options.texts);
+    // The agent's reply words pick the language the channel speaks; `texts` overrides part by part.
+    this.texts = mergeChannelTexts(
+      options.texts,
+      channelTextsFor(service.actionProposalVocabulary?.() ?? null),
+    );
     this.dedupeTtlMs = options.dedupeTtlMs ?? 24 * 60 * 60 * 1000;
     this.timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
     this.outcomeTimeoutMs = options.outcomeTimeoutMs ?? 60_000;
@@ -394,6 +459,7 @@ export class ChannelHandler {
         { id: ids.reject, label: this.texts.reject },
       ],
       fallbackText: asText.slice(0, capabilities.maxLength),
+      instruction: toChannelMarkdown(instruction, capabilities.markdown),
     };
     await this.adapter.send(conversation, message);
   }

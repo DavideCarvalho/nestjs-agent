@@ -96,7 +96,8 @@ import { ChannelsModule } from './channels/channels.module';
       // … model, store, actorResolver for the web
       actionApprovalMode: 'independent',
       backgroundActorResolver: { resolve: ({ actorRef }) => findCurrentActor(actorRef) },
-      // optional: "sim" / "não" and Portuguese replies for text decisions
+      // optional: "sim" / "não" and Portuguese replies for text decisions — and, on text
+      // channels, Portuguese channel texts by default (see "Language" below)
       actionProposalText: ptBrActionProposalText,
       // optional: let the model ask clarifying questions — they arrive as text
       ask: true,
@@ -145,11 +146,8 @@ import { ChannelThreadsService } from './channel-threads.service';
             thread: (actor, message) => threads.find('whatsapp', message.conversation, actor.id),
             onThreadCreated: (threadId, actor, message) =>
               threads.save('whatsapp', message.conversation, actor.id, threadId),
+            // with `actionProposalText: ptBrActionProposalText`, every other text is already in Portuguese
             texts: {
-              approve: 'Confirmar',
-              reject: 'Cancelar',
-              instruction: ({ approve, reject }) =>
-                `Responda *${approve}* para confirmar ou *${reject}* para cancelar.`,
               unknownSender: 'Vincule seu WhatsApp na sua conta para conversar comigo.',
             },
           },
@@ -173,8 +171,8 @@ The routes are public by design — each adapter verifies its own requests. A gl
 ## WhatsApp with Evolution API
 
 [Evolution API](https://doc.evolution-api.com) v2 connects a WhatsApp number through WhatsApp Web.
-The adapter also works with hosts that serve the same routes under a prefix (Whatsmiau:
-`url: 'https://api.whatsmiau.dev/v2'`).
+For [Whatsmiau](#whatsapp-with-whatsmiau), an Evolution-compatible server whose buttons render, use
+`whatsmiau()`.
 
 ```bash title="Backend — api/.env"
 EVOLUTION_URL=https://evolution.example.com
@@ -205,17 +203,62 @@ with the caption as the text). Media is downloaded from the webhook's inline `ba
 `apikey` is only sent when that url is on the Evolution server itself), else with
 `POST /chat/getBase64FromMediaMessage/{instance}`. It ignores the instance's own messages, other
 instances, broadcasts and newsletters, and groups unless `groups: true` (the sender is then the
-participant). A `@lid` chat answers to the jid; `from` is the phone number when Evolution sends it
-alongside (`remoteJidAlt` / `senderPn`), else the `@lid` jid.
+participant).
+
+A chat WhatsApp addresses by LID (`key.remoteJid: '<id>@lid'`, `key.addressingMode: 'lid'`) is read
+by its phone number when Evolution sends it alongside (`key.remoteJidAlt: '<phone>@s.whatsapp.net'`,
+older versions `senderPn`): `from` is the phone's digits and `conversation` the phone jid — so
+replies go to the phone (`sendText`'s `number` is a phone number), and the chat keeps one
+`conversation` whether a message arrives addressed by phone or by LID. Without the phone, both are the
+`@lid` jid.
 
 ### Buttons on Evolution
 
-Evolution has a buttons endpoint (`POST /message/sendButtons/{instance}`), but WhatsApp does not
-reliably render buttons sent from a WhatsApp Web session. So the adapter sends **no buttons by
-default** — a proposal arrives as its summary and a text instruction ("Reply *yes* to confirm or *no*
-to cancel."), which always works. `evolutionApi({ …, buttons: true })` opts in; a definite refusal
-(`400`, `403`, `404`, `422`) from the buttons endpoint falls back to that same text, a timeout or `5xx`
-does not (the buttons may have been delivered). Test on your own instance before turning it on.
+Evolution has a buttons endpoint (`POST /message/sendButtons/{instance}`), but WhatsApp may not
+render buttons sent from a WhatsApp Web session. **Evolution (Baileys) interactive buttons were not
+rendered in our test with Evolution API 2.3.7** (Android recipient): they go out as a
+`viewOnceMessage` › `interactiveMessage` (`nativeFlow`), and the phone showed nothing at all — not
+the buttons, not the text. Evolution still stores the message as sent (status `PENDING` /
+`SERVER_ACK`), so its delivery status cannot tell you it was not shown.
+
+So `evolutionApi` sends **no buttons by default**: a proposal arrives as its summary and a text
+instruction ("Reply *yes* to confirm or *no* to cancel."), which always works. Leave them off.
+`buttons: true` opts in; then the buttons message carries the text instruction too (in its
+description, under the summary), so a phone that shows the message but not its buttons can still
+answer by text — text decisions work whether buttons are on or not. A definite refusal (`400`,
+`403`, `404`, `422`) from the buttons endpoint falls back to the text-only message; a timeout or
+`5xx` does not (the buttons may have been delivered).
+
+## WhatsApp with Whatsmiau
+
+[Whatsmiau](https://github.com/verbeux-ai/whatsmiau) is an Evolution-compatible server built on
+whatsmeow (a fork, [verbeux-ai/whatsmeow](https://github.com/verbeux-ai/whatsmeow)) instead of
+Baileys — and its buttons render: given the same `sendButtons` payload that the phone never showed
+from Evolution, Whatsmiau delivered a buttons card with Confirmar/Cancelar. `whatsmiau()` is the Evolution
+adapter with two different defaults:
+
+- **Buttons on** (`buttons: false` turns them off). The buttons message carries the text instruction
+  too, and a `4xx` still falls back to text.
+- **The route prefix is added for you.** Self-hosted Whatsmiau serves Evolution's routes under `/v1`
+  (`/v1/message/sendText/{instance}`, `/v1/message/sendButtons/{instance}`,
+  `/v1/webhook/set/{instance}`), so `url` is the host alone; a url that already ends in a version
+  (`/v1`, or the hosted service's `https://api.whatsmiau.dev/v2`) is used as is.
+
+Everything else — the options, the webhook token, what is parsed (LID chats included), media — is
+`evolutionApi`'s, and the adapter is named `'whatsapp'` too. Point the instance's webhook
+(`POST /v1/webhook/set/{instance}`, event `MESSAGES_UPSERT`) at the route with the token.
+
+```ts
+import { whatsmiau } from '@dudousxd/nestjs-agent-channels';
+
+// a channel in AgentChannelsModule's `channels`, as above
+adapter: whatsmiau({
+  url: config.getOrThrow('WHATSMIAU_URL'), // http://whatsmiau:8080 → http://whatsmiau:8080/v1/…
+  instance: config.getOrThrow('WHATSMIAU_INSTANCE'),
+  apiKey: config.getOrThrow('WHATSMIAU_API_KEY'),
+  webhookToken: config.getOrThrow('WHATSMIAU_WEBHOOK_TOKEN'),
+}),
+```
 
 ## WhatsApp Cloud API
 
@@ -282,12 +325,12 @@ key.
 
 ## What each channel can do
 
-| | `evolutionApi` | `whatsappCloud` | `telegram` |
+| | `evolutionApi` / `whatsmiau` | `whatsappCloud` | `telegram` |
 | --- | --- | --- | --- |
 | Verification | shared token (query, url segment or header) | `X-Hub-Signature-256` HMAC of the raw body; `GET` `hub.challenge` | `X-Telegram-Bot-Api-Secret-Token` |
 | Markdown | WhatsApp (`*bold*`, `_italic_`, `~strike~`, `` ``` ``) | WhatsApp | MarkdownV2, or none |
 | Message length | 4096 (`maxLength`) | 4096 | 4096 |
-| Proposal buttons | off by default (`buttons: true`, up to 3, text fallback) | reply buttons, up to 3 (20-character labels) | inline keyboard |
+| Proposal buttons | off for `evolutionApi`, on for `whatsmiau` (`buttons`, up to 3, text instruction included) | reply buttons, up to 3 (20-character labels) | inline keyboard |
 | Inbound | text, extended text, button and list replies, media | text, interactive button/list replies, template quick replies, media | text, `callback_query`, media |
 | Media download | inline base64, `mediaUrl`, or `getBase64FromMediaMessage` | Graph API media id → url | `getFile` (≤ 20 MB) |
 | Ignored | own messages, broadcasts, groups (unless `groups`) | other numbers, statuses | bots, edits, groups (unless `groups`) |
@@ -378,13 +421,39 @@ Reply *skip* to keep: Small.
 
 The person's next message is the answer, not a new turn: a number or an option's label (several,
 separated by commas, for a multiple choice), a typed value for a typed question or one that allows
-free text, or `skip` to keep the pre-picked answers. An answer that does not fit is refused with the
+free text, or `skip` (`pular` in Portuguese) to keep the pre-picked answers. An answer that does not fit is refused with the
 reason and the question is asked again. After the last one the route resumes the run with
 `AgentService.answer` (`answeredVia` = the adapter's name), and the turn's reply arrives as usual. A
 question nobody answers within `questionTimeoutMs` (default 30 minutes) is skipped
 (`AgentService.skip`), and the agent proceeds on its own assumptions. The question in progress lives
 in the channel store, so the answer may land on another replica. Wording: `texts.questions`
 (`pickOne`, `pickMany`, `orWrite`, `skipWord`, `keep`, `invalid`, `counter`).
+
+## Language
+
+Everything the channel says on its own — the Confirm/Cancel labels, the reply instruction, how
+questions are worded, media refusals, the blocking-mode notice, outcome and failure texts — comes from
+`texts`, and two sets ship:
+
+- `DEFAULT_CHANNEL_TEXTS` — English.
+- `ptBrChannelTexts` — Brazilian Portuguese ("Responda *sim* para confirmar ou *não* para
+  cancelar.", "Responda com o número da sua escolha.", `pular`, …; its questions alone are
+  `ptBrChannelQuestionTexts`).
+
+The reply words come from the agent's `actionProposalText.vocabulary`, so the two must speak the same
+language. They do by default: when the agent's `actionProposalText` is `ptBrActionProposalText` (its
+vocabulary carries `language: 'pt-BR'`), each channel starts from `ptBrChannelTexts`; otherwise from
+the English texts. What you pass as `texts` overrides that base part by part — `texts: {
+unknownSender: '…' }` keeps everything else in Portuguese. A vocabulary of your own can set
+`language` (`'pt-BR'`, `'en'`) to pick the base; `channelTextsFor(vocabulary)` returns the set it
+picks. For another language, pass a full `texts`.
+
+```ts
+import { ptBrChannelTexts } from '@dudousxd/nestjs-agent-channels';
+
+// in a channel's options
+texts: { ...ptBrChannelTexts, actionSucceeded: 'Feito! ✅' },
+```
 
 ## Options
 
@@ -401,7 +470,7 @@ Each channel:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `adapter` | — | `evolutionApi(…)`, `whatsappCloud(…)`, `telegram(…)` or your own `ChannelAdapter`. |
+| `adapter` | — | `evolutionApi(…)`, `whatsmiau(…)`, `whatsappCloud(…)`, `telegram(…)` or your own `ChannelAdapter`. |
 | `actor(message)` | — | The sender's `Actor`, or `null` to not answer. This is the authentication of every message. |
 | `thread(actor, message)` | — | The thread to continue, or `null`/`undefined` for a new one. |
 | `onThreadCreated(threadId, actor, message)` | — | A new thread was created for the conversation. |
@@ -411,7 +480,7 @@ Each channel:
 | `timeoutMs` | 5 min | Stop waiting for a turn, cancel it and send what it produced. |
 | `outcomeTimeoutMs` | 60 s | How long to wait for an approved proposal to execute. |
 | `questionTimeoutMs` | 30 min | How long a question waits for its answer. |
-| `texts` | English | `approve`, `reject`, `proposal(p)`, `instruction(commands)`, `blockingApproval`, `failed`, `actionSucceeded`, `actionFailed`, `mediaRefused(reason, media, limits)`, `questions`, `unknownSender`. |
+| `texts` | English, or Brazilian Portuguese with `ptBrActionProposalText` | `approve`, `reject`, `proposal(p)`, `instruction(commands)`, `blockingApproval`, `failed`, `actionSucceeded`, `actionFailed`, `mediaRefused(reason, media, limits)`, `questions`, `unknownSender`. |
 | `onError(error, message)` | logged | A message whose handling threw (after the `200`). |
 
 Each turn is sent with `hostContext: { channel, conversation, messageId }`, for a runner or engine that
@@ -496,7 +565,8 @@ export const sms: ChannelAdapter = {
   },
   async send(conversation, message) {
     // `message.buttons` only arrives when `capabilities.buttons` is 2 or more;
-    // `message.fallbackText` is the same message as text, for when the buttons are refused.
+    // `message.fallbackText` is the same message as text, for when the buttons are refused;
+    // `message.instruction` the reply instruction alone, for buttons that may not render.
     await smsApi.send(conversation, message.buttons ? message.fallbackText : message.text);
   },
 };

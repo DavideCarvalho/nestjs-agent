@@ -13,7 +13,12 @@ import {
   request,
   texts,
 } from './channels.spec-helper.js';
-import { proposalButtonIds } from './handler.js';
+import {
+  DEFAULT_CHANNEL_TEXTS,
+  channelTextsFor,
+  proposalButtonIds,
+  ptBrChannelTexts,
+} from './handler.js';
 
 describe('ChannelHandler — the route', () => {
   it('refuses an unverified request and acknowledges a verified one before the turn ends', async () => {
@@ -193,6 +198,7 @@ describe('ChannelHandler — the route', () => {
         ],
         fallbackText:
           '*Refund order A-1?*\nAmount: 10.00\n\nReply *yes* to confirm or *no* to cancel.',
+        instruction: 'Reply *yes* to confirm or *no* to cancel.',
       },
     ]);
     // Telegram's callback_data holds 64 bytes.
@@ -218,6 +224,53 @@ describe('ChannelHandler — the route', () => {
       'I prepared the refund.',
       '*Refund order A-1?*\nAmount: 10.00\n\nResponda *sim* ou *não*.',
     ]);
+  });
+
+  it('speaks Brazilian Portuguese by default when the vocabulary is ptBrActionProposalText', async () => {
+    const { adapter, outbox } = fakeAdapter({ buttons: 3 });
+    const service = fakeService(proposalFrames, {
+      actionProposalVocabulary: () => ({
+        ...DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
+        ...ptBrActionProposalText.vocabulary,
+      }),
+    });
+    const handler = channel(adapter, service);
+    await handler.handle(request(inbound('reembolso')));
+    await handler.drain();
+    const ids = proposalButtonIds(proposalId);
+    expect(outbox[1]?.message).toEqual({
+      text: '*Refund order A-1?*\nAmount: 10.00',
+      buttons: [
+        { id: ids.approve, label: 'Confirmar' },
+        { id: ids.reject, label: 'Cancelar' },
+      ],
+      fallbackText:
+        '*Refund order A-1?*\nAmount: 10.00\n\nResponda *sim* para confirmar ou *não* para cancelar.',
+      instruction: 'Responda *sim* para confirmar ou *não* para cancelar.',
+    });
+  });
+
+  it('keeps the pt-BR base under partial overrides, and English for other vocabularies', async () => {
+    const { adapter, outbox } = fakeAdapter();
+    const service = fakeService([{ kind: 'fail', code: 'run_failed', message: 'boom' }], {
+      actionProposalVocabulary: () => ptBrActionProposalText.vocabulary,
+    });
+    const handler = channel(adapter, service, {
+      actor: (message) => (message.from === 'stranger' ? null : actor),
+      texts: { unknownSender: 'Não conheço este número.' },
+    });
+    await handler.handle(request(inbound('oi', { id: 'm1', from: 'stranger' })));
+    await handler.handle(request(inbound('oi', { id: 'm2' })));
+    await handler.drain();
+    expect(texts(outbox)).toEqual([
+      'Não conheço este número.',
+      'Desculpe, algo deu errado. Tente de novo, por favor.',
+    ]);
+    expect(channelTextsFor(DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY)).toBe(DEFAULT_CHANNEL_TEXTS);
+    expect(channelTextsFor({ ...DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY, language: 'pt-PT' })).toBe(
+      ptBrChannelTexts,
+    );
+    expect(channelTextsFor(null)).toBe(DEFAULT_CHANNEL_TEXTS);
   });
 
   it('names each proposal by #ID when the turn left several, and the tool when it has no confirmation', async () => {

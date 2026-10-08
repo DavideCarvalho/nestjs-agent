@@ -13,6 +13,7 @@ export type {
 } from './agent-channels.options.js';
 export { AGENT_CHANNELS_OPTIONS } from './tokens.js';
 export { type EvolutionApiOptions, evolutionApi } from './adapters/evolution-api.js';
+export { type WhatsmiauOptions, whatsmiau } from './adapters/whatsmiau.js';
 export { type TelegramOptions, telegram } from './adapters/telegram.js';
 export { type WhatsappCloudOptions, whatsappCloud } from './adapters/whatsapp-cloud.js';
 export {
@@ -26,9 +27,11 @@ export {
   type ChannelTextsOverrides,
   type ChannelTurnService,
   channelOfProposal,
+  channelTextsFor,
   DEFAULT_CHANNEL_TEXTS,
   mergeChannelTexts,
   proposalButtonIds,
+  ptBrChannelTexts,
 } from './handler.js';
 export {
   type ChannelHttpReply,
@@ -48,6 +51,7 @@ export {
   DEFAULT_CHANNEL_QUESTION_TEXTS,
   formatChannelQuestion,
   parseChannelAnswer,
+  ptBrChannelQuestionTexts,
 } from './questions.js';
 export { splitMessage } from './split.js';
 export type {

@@ -43,7 +43,8 @@ export class AppModule {}
 // POST /channels/telegram
 ```
 
-Adapters: `evolutionApi({ url, instance, apiKey, webhookToken })`, `whatsappCloud({ phoneNumberId,
+Adapters: `evolutionApi({ url, instance, apiKey, webhookToken })`, `whatsmiau({ url, instance,
+apiKey, webhookToken })` (Evolution-compatible, buttons on), `whatsappCloud({ phoneNumberId,
 accessToken, appSecret, verifyToken })`, `telegram({ botToken, secretToken })`, or any
 `ChannelAdapter`. The channels' state (message ids, questions in progress, relayed outcomes) lives in
 the `ChannelStore` bound to `AGENT_CHANNEL_STORE` — the Drizzle and MikroORM store modules bind one on
