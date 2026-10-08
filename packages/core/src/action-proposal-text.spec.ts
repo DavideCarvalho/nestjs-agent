@@ -146,7 +146,7 @@ describe('the ptBr preset', () => {
       typeof textActionProposalReply
     >[2];
     expect(textActionProposalReply({ status: 'applied' }, 'approved', replies)).toBe(
-      'Proposta aprovada e enfileirada para execução.',
+      'Confirmado! Já estou cuidando disso.',
     );
   });
 });

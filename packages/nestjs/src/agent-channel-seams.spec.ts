@@ -61,7 +61,7 @@ describe('AgentService — approvals, for surfaces without a web UI', () => {
     const portuguese = service({ actionProposalText: ptBrActionProposalText });
     expect(portuguese.actionProposalVocabulary().approve[0]).toBe('sim');
     expect(portuguese.actionProposalReply({ status: 'applied' }, 'rejected')).toBe(
-      'Proposta rejeitada; nenhuma ação foi executada.',
+      'Tudo bem, cancelado. Nada foi feito.',
     );
   });
 

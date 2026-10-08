@@ -1,8 +1,11 @@
 import {
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
+  parseTextActionProposalCommand,
   ptBrActionProposalText,
 } from '@dudousxd/nestjs-agent-core';
-import { describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { describe, expect, it, vi } from 'vitest';
+import { whatsmiau } from './adapters/whatsmiau.js';
 import {
   type ScriptedFrame,
   actor,
@@ -21,6 +24,54 @@ import {
 } from './handler.js';
 
 describe('ChannelHandler — the route', () => {
+  it('logs a webhook that carried no message — event and reason, never the content', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
+    try {
+      const handler = channel(
+        whatsmiau({
+          url: 'http://whatsmiau:8080',
+          instance: 'main',
+          apiKey: 'k',
+          webhookToken: false,
+        }),
+        fakeService([]),
+      );
+      const upsert = (key: Record<string, unknown>, status: string) => ({
+        event: 'messages.upsert',
+        instance: 'main',
+        data: { key, status, message: { conversation: 'secret text' } },
+      });
+      expect(
+        await handler.handle(
+          request(upsert({ remoteJid: '5511999990000@s.whatsapp.net', id: 'a' }, 'PENDING')),
+        ),
+      ).toEqual({ status: 200, body: { ok: true } });
+      await handler.handle(
+        request(
+          upsert(
+            { remoteJid: '5511999990000@s.whatsapp.net', id: 'b', fromMe: true },
+            'SERVER_ACK',
+          ),
+        ),
+      );
+      await handler.handle(request({ event: 'connection.update', instance: 'main' }));
+      expect(warn.mock.calls).toEqual([
+        [
+          'Webhook on "whatsapp" ignored (event messages.upsert): fromMe missing and status PENDING',
+        ],
+      ]);
+      expect(debug.mock.calls).toEqual([
+        ['Webhook on "whatsapp" ignored (event messages.upsert): own message'],
+        ['Webhook on "whatsapp" ignored (event connection.update): not a messages.upsert event'],
+      ]);
+      expect(JSON.stringify([warn.mock.calls, debug.mock.calls])).not.toContain('secret');
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
+  });
+
   it('refuses an unverified request and acknowledges a verified one before the turn ends', async () => {
     const { adapter, outbox } = fakeAdapter();
     let release!: () => void;
@@ -203,6 +254,102 @@ describe('ChannelHandler — the route', () => {
     ]);
     // Telegram's callback_data holds 64 bytes.
     expect(Buffer.byteLength(ids.approve)).toBeLessThanOrEqual(64);
+  });
+
+  it('maps a press that lost its button id (only the label) to the one pending card it can be from', async () => {
+    const setup = (pending: string[]) => {
+      const { adapter, outbox } = fakeAdapter({ buttons: 3 });
+      const service = fakeService(proposalFrames, {
+        listActionProposals: async () =>
+          pending.map((id) => ({ id, decision: 'pending', execution: null })),
+        decideActionProposal: async (...args: unknown[]) => {
+          service.decided.push(args);
+          return { proposalDecision: { status: 'applied' }, text: 'approved!' };
+        },
+      });
+      const handler = channel(adapter, service, { outcomeTimeoutMs: 0 });
+      return { handler, service, outbox };
+    };
+    // A proposal made elsewhere is pending too: the label alone would be ambiguous as text.
+    const one = setup([proposalId, 'proposal-from-the-web']);
+    await one.handler.handle(request(inbound('refund A-1')));
+    await one.handler.drain();
+    await one.handler.handle(request(inbound(' confirm ', { buttonWithoutId: true })));
+    await one.handler.drain();
+    expect(one.service.decided).toEqual([
+      [actor, 't', proposalId, { decision: 'approved', via: 'test' }],
+    ]);
+    expect(one.service.sends.map((send) => send.message)).toEqual(['refund A-1']);
+
+    // Not a label of ours, or no card remembered: the text goes on as a message (text decisions).
+    const other = setup([proposalId]);
+    await other.handler.handle(request(inbound('Confirm', { buttonWithoutId: true })));
+    await other.handler.drain();
+    await other.handler.handle(request(inbound('refund A-1')));
+    await other.handler.drain();
+    await other.handler.handle(request(inbound('Maybe', { buttonWithoutId: true })));
+    await other.handler.drain();
+    expect(other.service.decided).toEqual([]);
+    expect(other.service.sends.map((send) => send.message)).toEqual([
+      'Confirm',
+      'refund A-1',
+      'Maybe',
+    ]);
+  });
+
+  it('reads its own button labels as decisions in the matching vocabulary', () => {
+    for (const [texts, vocabulary] of [
+      [DEFAULT_CHANNEL_TEXTS, DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY],
+      [
+        ptBrChannelTexts,
+        { ...DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY, ...ptBrActionProposalText.vocabulary },
+      ],
+    ] as const) {
+      expect(parseTextActionProposalCommand(texts.approve, vocabulary)).toMatchObject({
+        status: 'command',
+        decision: 'approved',
+      });
+      expect(parseTextActionProposalCommand(texts.reject, vocabulary)).toMatchObject({
+        status: 'command',
+        decision: 'rejected',
+      });
+    }
+  });
+
+  it('never guesses between two pending cards for a press without its id', async () => {
+    const { adapter, outbox } = fakeAdapter({ buttons: 3 });
+    const second = `proposal-${'c'.repeat(64)}`;
+    const service = fakeService(
+      [
+        ...proposalFrames,
+        { kind: 'tool-input-start', id: 'call-2', name: 'refund', toolKind: 'action' },
+        {
+          kind: 'approval-requested',
+          id: 'call-2',
+          approver: 'requester',
+          target: { kind: 'proposal', proposalId: second },
+        },
+      ],
+      {
+        listActionProposals: async () => [
+          { id: proposalId, decision: 'pending', execution: null },
+          { id: second, decision: 'pending', execution: null },
+        ],
+        decideActionProposal: async (...args: unknown[]) => {
+          service.decided.push(args);
+          return { proposalDecision: { status: 'applied' }, text: 'approved!' };
+        },
+      },
+    );
+    const handler = channel(adapter, service);
+    await handler.handle(request(inbound('two refunds')));
+    await handler.drain();
+    expect(outbox.filter((item) => item.message.buttons !== undefined)).toHaveLength(2);
+    await handler.handle(request(inbound('Cancel', { buttonWithoutId: true })));
+    await handler.drain();
+    expect(service.decided).toEqual([]);
+    // It goes on as text, where the vocabulary's decision asks which proposal (#id).
+    expect(service.sends.map((send) => send.message)).toEqual(['two refunds', 'Cancel']);
   });
 
   it('without buttons, tells the person what to reply — in the configured vocabulary', async () => {

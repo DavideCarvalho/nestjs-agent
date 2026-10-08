@@ -63,7 +63,9 @@ the same way.
 With `actionApprovalMode: 'independent'`, an `action` that needs approval is recorded as an action
 proposal, the model's tool result is `{ proposalId, status: 'pending', executed: false }`, and the turn
 ends at the end of that step without another model call. The proposal is decided and executed outside
-the turn; its outcome is added to the thread as an assistant message, with no model continuation. See
+the turn; its outcome is added to the thread as an assistant message, with no model continuation —
+the tool's presentation text first when it has one, then a summary for the model
+(`Action "refund" completed. Result: {…}`, no proposal id). See
 [Action proposals](/docs/agent/guides/action-proposals).
 </Callout>
 
