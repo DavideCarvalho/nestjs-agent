@@ -10,6 +10,7 @@ import type {
 import {
   ACTION_PROPOSAL_STORE_CONTRACT,
   ACTION_PROPOSAL_WORKER_STORE_CONTRACT,
+  PROPOSED_TOOL_CALL_CONTRACT,
 } from '@dudousxd/nestjs-agent-testing';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
@@ -91,6 +92,24 @@ describeEachDialect(
             now = value;
           },
         });
+      });
+    }
+
+    for (const contract of PROPOSED_TOOL_CALL_CONTRACT) {
+      it(`tool-call record: ${contract.name}`, async () => {
+        let now = 1000;
+        try {
+          await contract.run({
+            store: new DrizzleAgentStore(handle.db, { clock: () => now }),
+            setNow: (value) => {
+              now = value;
+            },
+          });
+        } finally {
+          // The conversations it made; later cases count threads.
+          for (const table of ['agent_tool_call', 'agent_message', 'agent_thread'])
+            await handle.run(`delete from ${table}`);
+        }
       });
     }
 

@@ -182,7 +182,11 @@ async function assertNoConflicts(
   const uniques = new Map<string, { table: string; index: string; columns: string[] }>();
   for (const row of uniqueRows) {
     const id = `${row.table_name}.${row.index_name}`;
-    const entry = uniques.get(id) ?? { table: row.table_name, index: row.index_name, columns: [] };
+    const entry: { table: string; index: string; columns: string[] } = uniques.get(id) ?? {
+      table: row.table_name,
+      index: row.index_name,
+      columns: [],
+    };
     entry.columns.push(row.column_name);
     uniques.set(id, entry);
   }

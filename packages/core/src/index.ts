@@ -165,6 +165,7 @@ export * from './spi/action-proposal-outcome-store.js';
 export * from './action-proposal-outcome.js';
 export * from './action-proposal-text.js';
 export * from './action-proposal-view.js';
+export * from './action-proposal-tool-call.js';
 export * from './action-proposal-receipt.js';
 export * from './action-proposal-executor.js';
 export * from './action-proposal-worker.js';

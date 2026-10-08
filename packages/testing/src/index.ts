@@ -66,6 +66,11 @@ export {
   type ActionProposalContractSubject,
 } from './action-proposal-store-contract.js';
 export {
+  PROPOSED_TOOL_CALL_CONTRACT,
+  type ProposedToolCallContractCase,
+  type ProposedToolCallContractSubject,
+} from './proposed-tool-call-contract.js';
+export {
   ACTION_PROPOSAL_WORKER_STORE_CONTRACT,
   type ActionProposalWorkerContractSubject,
   type ActionProposalWorkerContractCase,

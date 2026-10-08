@@ -88,9 +88,18 @@ export class InMemoryActionProposalStore implements ActionProposalStore, ActionP
     const row = this.rows.get(id);
     if (!row || !actionProposalScopeMatches(row, scope)) return { status: 'not_found' };
     const result = transition(row, this.clock());
-    if (result.proposal) this.rows.set(id, snapshotActionProposal(result.proposal));
+    if (result.proposal) {
+      this.rows.set(id, snapshotActionProposal(result.proposal));
+      this.proposalChanged(row, result.proposal);
+    }
     return result;
   }
+  /**
+   * Called after every proposal transition, with the row before and after — synchronously, so no
+   * reader sees one without the other. {@link InMemoryAgentStore} settles the proposal's tool-call
+   * record here (see `toolCallUpdateForTransition`).
+   */
+  protected proposalChanged(_previous: ActionProposal, _next: ActionProposal): void {}
   async decideActionProposal(
     scope: ActionProposalScope,
     id: string,
@@ -223,7 +232,11 @@ export class InMemoryActionProposalStore implements ActionProposalStore, ActionP
         if (result.proposal) replacements.push(result.proposal);
       }
     this.rows.set(proposal.id, proposal);
-    for (const row of replacements) this.rows.set(row.id, row);
+    for (const row of replacements) {
+      const previous = this.rows.get(row.id);
+      this.rows.set(row.id, row);
+      if (previous) this.proposalChanged(previous, row);
+    }
     return { status: 'created', proposal: snapshotActionProposal(proposal) };
   }
   async supersedeActionProposal(

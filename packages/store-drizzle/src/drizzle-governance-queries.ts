@@ -71,6 +71,7 @@ const DEFAULT_AGENT_BUCKET = '(default)';
 // match a row anyway (the column only ever holds these literals), so the paged method short-circuits
 // to an empty page instead of querying with a value that would trivially return nothing.
 const TOOL_CALL_STATUSES: readonly string[] = [
+  'proposed',
   'auto_executed',
   'pending_approval',
   'executed',

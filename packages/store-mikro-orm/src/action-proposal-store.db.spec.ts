@@ -6,6 +6,7 @@ import type { CreateActionProposal } from '@dudousxd/nestjs-agent-core';
 import {
   ACTION_PROPOSAL_STORE_CONTRACT,
   ACTION_PROPOSAL_WORKER_STORE_CONTRACT,
+  PROPOSED_TOOL_CALL_CONTRACT,
 } from '@dudousxd/nestjs-agent-testing';
 import { IsolationLevel } from '@mikro-orm/core';
 import { MikroORM, SqliteDriver } from '@mikro-orm/sqlite';
@@ -78,6 +79,9 @@ describeEachDialect('MikroOrmAgentStore action proposals', (dialect) => {
   }
   for (const contract of ACTION_PROPOSAL_WORKER_STORE_CONTRACT) {
     it(contract.name, async () => contract.run(await fresh()));
+  }
+  for (const contract of PROPOSED_TOOL_CALL_CONTRACT) {
+    it(`tool-call record: ${contract.name}`, async () => contract.run(await fresh()));
   }
   it('paginates creation ties by the indexed exact Unicode logical id', async () => {
     await fresh();
