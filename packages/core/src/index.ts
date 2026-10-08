@@ -6,6 +6,8 @@ export * from './spi/model-catalog.js';
 export * from './spi/token-stream-sink.js';
 export * from './stream-events.js';
 export * from './turn-frames.js';
+export * from './tool-input-preview.js';
+export { type PartialJson, parsePartialJson } from './partial-json.js';
 export * from './tool-ui.js';
 export * from './tool-presentation.js';
 export * from './spi/agent-store.js';

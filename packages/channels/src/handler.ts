@@ -1199,6 +1199,9 @@ export class ChannelHandler {
             parts.push(frame.text);
             break;
           case 'ui': {
+            // A preview of a layout the model is still writing: a channel gets the final
+            // component (or its fallback text) and nothing before it.
+            if (frame.partial === true) break;
             const component: ChannelComponent = {
               id: frame.id,
               name: frame.component,

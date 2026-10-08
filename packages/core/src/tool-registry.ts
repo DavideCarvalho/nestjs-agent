@@ -4,7 +4,14 @@ import {
   snapshotActionProposal,
 } from './action-proposal-transitions.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
-import type { AiToolCtx, ToolDescribeScope, ToolHandler, ToolPreflightResult } from './spi/tool.js';
+import type {
+  AiToolCtx,
+  ToolDescribeScope,
+  ToolHandler,
+  ToolInputPreview,
+  ToolInputPreviewScope,
+  ToolPreflightResult,
+} from './spi/tool.js';
 import {
   canActorUseTool,
   filterToolsByAllowList,
@@ -136,6 +143,23 @@ export class ToolRegistry {
    */
   unregister(name: string): boolean {
     return this.entries.delete(name);
+  }
+
+  /**
+   * How a streamed call of `name` is previewed while its input arrives (`ToolHandler.previewInput`),
+   * or `undefined`. A preview that fails to build is no preview: it never fails the turn.
+   */
+  async previewInput(
+    name: string,
+    scope: ToolInputPreviewScope,
+  ): Promise<ToolInputPreview | undefined> {
+    const handler = this.entries.get(name)?.handler;
+    if (handler?.previewInput === undefined) return undefined;
+    try {
+      return (await handler.previewInput(scope)) ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   spec(name: string): ToolSpec | undefined {

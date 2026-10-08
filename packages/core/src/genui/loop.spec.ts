@@ -71,7 +71,7 @@ async function run(
 describe('genui tools in the agent loop', () => {
   it('a per-component call lands on the message as that component', async () => {
     const model = new CallingModel('ui__show_callout', { text: 'Heads up', tone: 'warning' });
-    const [first] = await run(genuiTools(catalog), model);
+    const [first] = await run(genuiTools(catalog, { mode: 'per-component' }), model);
     expect(first?.ui).toEqual([
       {
         id: 'c1:ui:0',

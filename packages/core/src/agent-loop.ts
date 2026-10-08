@@ -124,6 +124,11 @@ import {
   repairInstruction,
   validateStructured,
 } from './structured-output.js';
+import {
+  previewToolInputs,
+  registryInputPreviews,
+  withdrawPreviewEvent,
+} from './tool-input-preview.js';
 import type { ToolRegistry } from './tool-registry.js';
 import { invokeWithTransientRetry, resolveToolTransientRetryNumbers } from './tool-retry.js';
 import type { ToolTransientRetrySetting } from './tool-retry.js';
@@ -3363,9 +3368,21 @@ export async function runAgentLoop<TOutput = unknown>(
               })
             : undefined;
         const buffer = gateMode === 'whole' ? createFrameBuffer() : undefined;
+        // A tool that previews its input (genui's streaming tree) gets partial `ui` frames while
+        // the model writes its arguments. Added BELOW the observer: a preview is shown, never part
+        // of what the turn persists.
+        const previews = previewToolInputs(
+          incremental?.writer ?? buffer?.writer ?? writer,
+          registryInputPreviews(deps.registry, tools, {
+            actor: input.actor,
+            threadId: input.threadId,
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+          }),
+        );
         // Reasoning and pushed UI are read off the frames INSIDE the checkpoint, so they are
         // journaled with the turn and a replay persists the same thinking instead of none.
-        const frames = observeTurnFrames(incremental?.writer ?? buffer?.writer ?? writer);
+        const frames = observeTurnFrames(previews.writer);
         // Stamped from THIS process's registry, which is the one that built `tools` above — and
         // stamped inside the checkpoint, so the kinds are journaled with the calls they describe
         // rather than re-derived by whatever process replays this turn.
@@ -3386,16 +3403,23 @@ export async function runAgentLoop<TOutput = unknown>(
           ),
           deps,
         );
+        // Journaled with the turn, so whichever process settles the calls withdraws the same
+        // previews the stream showed.
+        const shownPreviews = previews.shown();
+        const previewed = shownPreviews.length > 0 ? { previews: shownPreviews } : {};
         if (incremental !== undefined) {
           await incremental.settled();
           const refusal = incremental.rejection();
           return {
             ...result,
+            ...previewed,
             releasedText: incremental.released(),
             ...(refusal !== undefined ? { gateRejection: refusal } : {}),
           };
         }
-        return buffer === undefined ? result : { ...result, bufferedFrames: buffer.frames() };
+        return buffer === undefined
+          ? { ...result, ...previewed }
+          : { ...result, ...previewed, bufferedFrames: buffer.frames() };
       });
     }
     // The gate runs before ANYTHING downstream: before the held frames reach the subscriber, before
@@ -3774,6 +3798,15 @@ export async function runAgentLoop<TOutput = unknown>(
       const toolUi = toolCallsWithKind.flatMap((call) => turnCalls.toolUi.get(call.id) ?? []);
       if (toolUi.length > 0) {
         await deps.store.setMessageUi?.(assistant.id, mergeUi(turn.ui, toolUi));
+      }
+      // A preview of a call's input that the call's own push did not replace (it failed, was
+      // refused, or degraded to text) is withdrawn before its outcome: a live client never keeps a
+      // half-written layout the message will not have.
+      for (const preview of turn.previews ?? []) {
+        const pushed = turnCalls.toolUi.get(preview.toolCallId) ?? [];
+        if (!pushed.some((component) => component.id === preview.id)) {
+          await writer.write(encodeStreamEvent(withdrawPreviewEvent(preview)));
+        }
       }
       for (const result of results) {
         await writer.write(encodeStreamEvent(outputFrame(result)));

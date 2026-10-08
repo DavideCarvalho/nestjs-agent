@@ -50,6 +50,13 @@ export interface AgentUiComponent {
    * stream showed it. Absent for a component pushed outside a tool.
    */
   toolCallId?: string;
+  /**
+   * A PREVIEW, drawn from a tool call's arguments while the model is still writing them (genui
+   * `streaming: 'partial'`): unvalidated, never persisted, and replaced in place by the final push
+   * under the same `id` — or withdrawn by a partial frame with empty `props`, which a client renders
+   * as nothing. A text surface skips it. Absent on every final frame.
+   */
+  partial?: true;
 }
 
 /**
