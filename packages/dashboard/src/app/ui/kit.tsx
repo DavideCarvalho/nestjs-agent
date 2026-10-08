@@ -123,7 +123,7 @@ export function statusTone(status: string): StatusTone {
   if (/^(ok|completed|success|succeeded|executed|auto_executed|approved)$/.test(normalized)) {
     return 'good';
   }
-  if (/^(running|pending|pending_approval|queued)$/.test(normalized)) return 'live';
+  if (/^(running|pending|pending_approval|proposed|queued)$/.test(normalized)) return 'live';
   if (/^(forbidden|denied|failed|error|rejected|cancelled|canceled|timeout)$/.test(normalized)) {
     return 'bad';
   }

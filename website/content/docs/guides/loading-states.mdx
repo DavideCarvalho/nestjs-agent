@@ -1,0 +1,419 @@
+---
+title: Loading states and skeletons
+icon: LoaderCircle
+description: Two ways a generative UI answer shows that it is on its way — a tool that pushes a skeleton and replaces it in place with the data, an empty state or an error, and a ui__render tree drawn while the model writes it (streaming 'partial' | 'complete', useGenuiNode). Plus how to draw skeletons that do not shift the layout, follow dark mode and reduced motion, and announce themselves.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A component answer can take a while to arrive. Two different things can be slow, and each one
+has its own pattern:
+
+| What is slow | Pattern | Who draws the skeleton |
+|---|---|---|
+| **Your data.** A tool waits on a database, a report service, an API. | [A tool-driven skeleton](#a-tool-driven-skeleton): the tool pushes the component in a loading state, then pushes it again, under the same `id`, with the data. | Your renderer, from a prop your tool sets (`loading: true`). |
+| **The model.** It is writing a `ui__render` layout, which streams for seconds. | [Progressive trees](#progressive-trees): `streaming: 'partial'` draws the tree while the model writes it. | Your renderer, while `useGenuiNode()?.incomplete` is `true`, or the provider's `placeholder` for a node held back. |
+
+Both build on [Generative UI](/docs/agent/guides/generative-ui). Read that first for the catalog,
+`AgentGenuiModule` and the client `registry`. The tree tool, `ui__render` (`mode: 'tree'`), is the
+default way the model pushes components, and this page assumes it. Per-component tools
+(`mode: 'per-component'`) are the alternative. They have no streaming previews, but tool-driven
+skeletons work the same with either mode.
+
+## A tool-driven skeleton
+
+A tool that already knows which component it will show can push that component at once in a
+loading state, before it fetches anything. It then pushes the same `id` again with the result. The
+second push **replaces** the first in place, both live and on the stored message.
+
+### 1. A component that has a loading state
+
+The server validates every push against the catalog, the loading one included. So the component's
+props schema has to accept the loading shape. Here the data props have defaults, and `loading` and
+`error` are optional:
+
+```ts title="catalog.ts"
+import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
+import { z } from 'zod';
+
+export const orderRow = z.object({ id: z.string(), status: z.string(), total: z.number() });
+
+export const ordersTableProps = z.object({
+  loading: z.boolean().optional(),
+  error: z.string().optional(),
+  rows: z.array(orderRow).default([]),
+});
+export type OrdersTableProps = z.infer<typeof ordersTableProps>;
+
+const OrdersTable = defineComponent<OrdersTableProps>({
+  name: 'OrdersTable',
+  title: 'Orders',
+  description: 'A customer’s recent orders, pushed by the listOrders tool.',
+  internal: true, // only our tool pushes it: the model is never offered it
+  props: ordersTableProps,
+  fallbackText: (p) =>
+    p.error
+      ? `Could not load the orders: ${p.error}`
+      : p.rows.length === 0
+        ? 'No orders yet.'
+        : p.rows.map((row) => `• ${row.id}: ${row.status} (${row.total})`).join('\n'),
+});
+
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS, OrdersTable]);
+```
+
+`internal: true` keeps the component out of `ui__render` and every `ui__show_*` tool, so the model
+cannot draw a skeleton that nothing will ever fill. A tool can still push it with `ctx.emitUi`.
+Leave it off if the model should also compose the component into its own layouts.
+
+### 2. The tool: skeleton, then data, empty or error
+
+```ts title="orders/list-orders.tool.ts"
+import { Injectable } from '@nestjs/common';
+import { AiTool, type AiToolCtx, type ToolHandler } from '@dudousxd/nestjs-agent';
+import { z } from 'zod';
+import type { OrdersTableProps } from '../catalog';
+import { OrdersService, OrdersUnavailableError } from './orders.service';
+
+/** Whether this turn's client draws `component`. No declaration means it draws the whole catalog. */
+function draws(ctx: AiToolCtx, component: string, version = 1): boolean {
+  const declared = ctx.uiCapabilities?.components;
+  return declared === undefined || declared.some((c) => c.name === component && c.version === version);
+}
+
+@Injectable()
+@AiTool({
+  description: 'List a customer’s recent orders and show them to the user.',
+  input: z.object({ customerId: z.string() }),
+})
+export class ListOrdersTool implements ToolHandler<{ customerId: string }> {
+  constructor(private readonly orders: OrdersService) {}
+
+  async execute({ customerId }: { customerId: string }, ctx: AiToolCtx) {
+    // One id per call: two calls in the same step never share a component, and a retry of this
+    // call replaces what the failed attempt pushed.
+    const id = `${ctx.toolCallId}:orders`;
+
+    // A skeleton only where it will be drawn (see "Never to text channels" below).
+    if (draws(ctx, 'OrdersTable')) {
+      await ctx.emitUi('OrdersTable', { loading: true, rows: [] }, { id });
+    }
+
+    // What replaces the skeleton unless the fetch succeeds.
+    let shown: OrdersTableProps = { rows: [], error: 'The order service did not answer.' };
+    try {
+      const rows = await this.orders.recent(customerId, { signal: ctx.abortSignal });
+      shown = { rows }; // [] → the renderer's empty state, not a stuck skeleton
+      return { count: rows.length, orders: rows };
+    } catch (error) {
+      if (!(error instanceof OrdersUnavailableError)) throw error; // `finally` still runs
+      return { error: 'orders_unavailable' }; // the model is told, and can say so
+    } finally {
+      // Always replace the skeleton: with the data, an empty state, or an error.
+      await ctx.emitUi('OrdersTable', shown, { id });
+    }
+  }
+}
+```
+
+`OrdersService` is an ordinary `@Injectable()` provider. List both in the module's `providers`,
+as for any [tool](/docs/agent/guides/tools).
+
+What makes this work:
+
+- **Same `id`, same place.** A repeated `id` updates the component where it first appeared. On the
+  stream it is the same `ui` frame id, so the client updates its part in place. The message keeps
+  the first position and the **last props** for each `id`. Without an `id`, each push gets the
+  next `<toolCallId>:ui:<n>` and draws a **second** component under the skeleton.
+- **Replaced on every path.** `finally` runs whether the fetch succeeded, came back empty, or threw.
+  A skeleton left on screen reads as a hang, so never leave one in place.
+- **Expected failures are results.** An error the tool catches and returns ends the call
+  successfully, so its error state is persisted with the message, and the model reads
+  `{ error: … }` and can explain it. A tool that **throws** fails the call, and nothing it pushed is
+  persisted: the replacement in `finally` stays on screen for the rest of the live stream, and a
+  reload shows no component for that call.
+- **Stops are cut short.** Pass `ctx.abortSignal` to whatever the tool waits on, so a Stop does not
+  wait for the fetch. A step the Stop cut short is not persisted.
+
+### Never to text channels
+
+A push the client cannot draw is not dropped. It is sent **as its `fallbackText`**, as a text
+frame, and a text frame cannot be replaced by `id`. On WhatsApp, Slack or SMS, the loading push's
+text ("No orders yet." for the props above, or whatever your `fallbackText` writes for a loading
+state) ends up in the reply next to the real answer.
+
+So check the turn's `ctx.uiCapabilities` before you push a loading frame, as `draws()` above does:
+
+| `ctx.uiCapabilities` | What it means | Skeleton? |
+|---|---|---|
+| `undefined` | The client declared nothing. The server treats it as drawing the whole catalog (a web app that does not declare). | Yes |
+| `{ components: [] }` | A [text channel](/docs/agent/guides/channels). The channels handler sends this by default. | No |
+| lists `OrdersTable` (at its `version`) | The client draws it. | Yes |
+| does not list it | It gets the text. | No |
+
+The tool context carries no channel name, so the capability is what to check. A channel that does
+draw components (its `renderComponent` turns them into an image or a PDF) declares them, and then
+gets every frame for a declared component, the loading one included. Its handler keeps only the
+last render per `id`, so the skeleton costs a render (an image, a PDF) that is never sent. Keep
+skeletons for clients that draw live: declare the component only on the web client, or skip the
+loading frame for that channel's agent or persona. See
+[One answer, every surface](/docs/agent/guides/rendering-everywhere#declaring-what-a-client-can-draw).
+
+The final push needs no check. A client that cannot draw it gets its text, which is what a text
+channel should show.
+
+### What is stored
+
+The loop persists a step's components once its tools have settled (`AgentStore.setMessageUi`),
+deduplicated by `id`, with the last props for each. A reloaded thread draws the **final**
+component (the data, the empty state or the error), never the skeleton. Under the durable runner
+the pushes ride the tool step's journaled result, so a replay neither re-streams nor re-persists
+them. The same holds for text: for a client that got the component as text, only the last text
+for each `id` is stored.
+
+<Callout type="info" title="Not for `present`">
+A tool's [`present` hook](/docs/agent/guides/component-rendering) runs after `execute` has
+returned, so it can only show the final component. A skeleton has to be pushed from `execute`,
+before the slow part starts.
+</Callout>
+
+### 3. The renderer
+
+The renderer draws all four states from props. The skeleton has the same footprint as the table it
+stands in for (see [Skeletons that behave](#skeletons-that-behave)):
+
+```tsx title="genui/orders-table.tsx"
+import type { OrdersTableProps } from '../catalog';
+
+export function OrdersTable({ loading, error, rows = [] }: OrdersTableProps) {
+  if (loading) return <TableSkeleton rows={5} columns={3} label="Loading orders" />;
+  if (error) return <p role="alert" className="genui-error">{error}</p>;
+  if (rows.length === 0) return <p className="genui-empty">No orders yet.</p>;
+  return (
+    <table className="genui-table">
+      <thead><tr><th>Order</th><th>Status</th><th>Total</th></tr></thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.id}><td>{row.id}</td><td>{row.status}</td><td>{row.total}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+```
+
+Register it under `OrdersTable` in the `genui` registry, and list it in `uiCapabilities` if the
+client declares its components.
+
+## Progressive trees
+
+When the model composes the answer, through `ui__render`, the slow part is the model itself. A
+dashboard's arguments can stream for seconds. By default nothing is drawn until the call has run.
+With `streaming: 'partial'`, the tree is drawn while the model writes it. The details of the frames
+are in
+[Drawing a tree while the model writes it](/docs/agent/guides/generative-ui#drawing-a-tree-while-the-model-writes-it).
+This section covers how to draw them.
+
+### On the server
+
+```ts title="app.module.ts"
+AgentGenuiModule.forRoot({
+  catalog,
+  streaming: 'partial',     // default 'complete': the tree appears whole, once validated
+  streamingThrottleMs: 100, // the default: at most one preview every 100 ms per call
+});
+```
+
+`streaming` applies to tree mode (`ui__render`, the default `mode`). Per-component tools have no
+previews.
+
+A component overrides the module's default **on its definition**, with the same two values:
+
+```ts title="catalog.ts"
+import { BUILTIN_COMPONENTS, Chart, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
+
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS]).extend([
+  { ...Chart, streaming: 'complete' }, // held back until its whole subtree has arrived
+]);
+```
+
+| Component's `streaming` | While the model writes it | Your renderer gets |
+|---|---|---|
+| `'partial'` | Drawn as soon as its `type` is known. Its props fill in as they arrive. | Unvalidated, half-written props, and `useGenuiNode().incomplete === true` until the node closes. |
+| `'complete'` | Sent as a placeholder, `{ id, type, props: {}, incomplete: true, held: true }`, with no children. | Nothing. The provider's `placeholder` is drawn instead, until the node has closed and its props pass the schema. |
+| absent | The module's `streaming`. | |
+
+A `complete` layout node holds back its whole subtree, including `partial` children. With the
+module at `'complete'`, a component marked `streaming: 'partial'` still gets previews. None of it
+reaches a text channel, or a client that cannot draw every node of the tree: they get only the
+final answer.
+
+### On the client: `useGenuiNode()`
+
+Inside a tree, `useGenuiNode()` answers `{ id, type, incomplete, held }`. Outside one it answers
+`null`, for example for a single component pushed on its own, or by a tool:
+
+| Field | Meaning |
+|---|---|
+| `id` | The node's position (`root`, `root.0`, `root.1.2`). It stays the same from the first preview to the final frame, so the node stays mounted. |
+| `type` | The component name. |
+| `incomplete` | The model has not finished writing this node. Its props and children may still grow. |
+| `held` | The node is a placeholder for a `streaming: 'complete'` component. Only a placeholder sees `true`, because a held node never reaches its renderer. |
+
+`incomplete` means "still being written" and nothing else. It is not a loading state for data:
+data that is slow to load is a [tool-driven skeleton](#a-tool-driven-skeleton).
+
+A renderer for a `partial` component has to cope with half-built props: a missing array, or an
+array whose last item has only some of its fields. Give everything it reads a default, and show a
+skeleton until there is something worth drawing:
+
+```tsx title="genui/kpi-cards.tsx"
+import { useGenuiNode } from '@dudousxd/nestjs-agent-react/genui';
+
+type Kpi = { label?: string; value?: string | number; delta?: string };
+
+export function KpiCards({ title, items = [] }: { title?: string; items?: Kpi[] }) {
+  const node = useGenuiNode();
+  const ready = items.filter((item) => item?.label !== undefined && item.value !== undefined);
+  if (node?.incomplete && ready.length === 0) {
+    return <CardsSkeleton count={3} title={title} label="Loading key figures" />;
+  }
+  return (
+    <section aria-busy={node?.incomplete ?? false}>
+      {title ? <h3>{title}</h3> : null}
+      <ul className="genui-kpis">
+        {ready.map((item, index) => (
+          <li key={index}><span>{item.label}</span> <strong>{item.value}</strong> {item.delta}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+```
+
+```tsx title="genui/data-table.tsx"
+export function DataTable({
+  columns = [],
+  rows = [],
+}: { columns?: { key?: string; label?: string }[]; rows?: Record<string, unknown>[] }) {
+  const node = useGenuiNode();
+  const cols = columns.filter((c): c is { key: string; label: string } => !!c?.key && !!c?.label);
+  if (node?.incomplete && cols.length === 0) return <TableSkeleton rows={5} columns={3} />;
+  return (
+    <table className="genui-table" aria-busy={node?.incomplete ?? false}>
+      <thead><tr>{cols.map((c) => <th key={c.key}>{c.label}</th>)}</tr></thead>
+      <tbody>
+        {rows.map((row, i) => (
+          <tr key={i}>{cols.map((c) => <td key={c.key}>{String(row?.[c.key] ?? '')}</td>)}</tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+```
+
+For a held node, set `placeholder` once, on `genui` of `<AgentProvider>` (or on `<GenuiProvider>`).
+It can be a node, or a function of the node's state, so each component can have a placeholder of
+its own size. Without it, the provider's `loading` is drawn (default: nothing):
+
+```tsx title="main.tsx"
+import type { GenuiNodeState } from '@dudousxd/nestjs-agent-react/genui';
+
+const placeholder = (node: GenuiNodeState) =>
+  node.type === 'Chart' ? <ChartSkeleton label="Loading chart" /> : <BlockSkeleton />;
+
+<AgentProvider genui={{ registry, catalog, placeholder }}>
+  <App />
+</AgentProvider>;
+```
+
+A preview whose call ends without replacing it (the final tree was invalid, so the model retries
+under a new call) is withdrawn, and the client draws nothing for it.
+
+## Skeletons that behave
+
+The library draws no skeletons itself, so how they look is up to you. A good one has four
+properties.
+
+**Reserve the final footprint.** Give the skeleton the size the real component will take: the same
+number of rows at the same row height, the chart's aspect ratio, the card grid's columns. When the
+data replaces it, nothing below it moves. Avoid skeletons that collapse to one line, or that grow
+while they wait.
+
+**Follow the theme.** Use your design tokens or `currentColor` at a low opacity, never a fixed
+light grey, so the skeleton suits dark mode.
+
+**Respect `prefers-reduced-motion`.** A pulse or shimmer is decoration. Turn it off for users who
+asked for less motion.
+
+**Announce it.** Mark the busy region `aria-busy="true"` and give it a label, so assistive
+technology knows content is on its way. Hide the decorative bars with `aria-hidden`. When the data
+replaces the skeleton, the region is no longer busy.
+
+```tsx title="genui/skeletons.tsx"
+export function TableSkeleton({
+  rows,
+  columns,
+  label = 'Loading',
+}: { rows: number; columns: number; label?: string }) {
+  return (
+    <div className="genui-skeleton" role="status" aria-busy="true" aria-label={label}>
+      {Array.from({ length: rows + 1 }, (_, r) => (
+        <div key={r} className="genui-skeleton-row" aria-hidden="true">
+          {Array.from({ length: columns }, (_, c) => <span key={c} className="genui-skeleton-bar" />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function ChartSkeleton({ label = 'Loading chart' }: { label?: string }) {
+  return (
+    <div className="genui-skeleton genui-skeleton-chart" role="status" aria-busy="true" aria-label={label}>
+      <span className="genui-skeleton-bar" aria-hidden="true" />
+    </div>
+  );
+}
+```
+
+```css title="genui/skeletons.css"
+.genui-skeleton { --bar: color-mix(in srgb, currentColor 12%, transparent); }
+.genui-skeleton-row {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 0.75rem;
+  height: 2.5rem;          /* the table's row height: no shift when rows arrive */
+  align-items: center;
+}
+.genui-skeleton-bar {
+  display: block;
+  height: 0.75rem;
+  border-radius: 0.25rem;
+  background: var(--bar);  /* follows light and dark themes through currentColor */
+  animation: genui-pulse 1.4s ease-in-out infinite;
+}
+.genui-skeleton-chart { aspect-ratio: 16 / 9; } /* the chart's own ratio */
+.genui-skeleton-chart .genui-skeleton-bar { height: 100%; }
+
+@keyframes genui-pulse { 50% { opacity: 0.5; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .genui-skeleton-bar { animation: none; }
+}
+```
+
+If your app themes by class rather than by `currentColor`, set `--bar` per theme, for example
+`.dark .genui-skeleton { --bar: … }`.
+
+## Summary
+
+- **Slow data:** push the component with `loading: true` and an explicit `id`, then push the same
+  `id` with the data, an empty state or an error, in a `finally`. Push the skeleton only when
+  `ctx.uiCapabilities` says the client draws the component. Reloads show the final component only.
+- **Slow model:** `AgentGenuiModule.forRoot({ catalog, streaming: 'partial' })`. Use
+  `streaming: 'complete'` on a component definition that cannot draw half its data. In renderers,
+  give props defaults and show a skeleton while `useGenuiNode()?.incomplete` is `true`. Set
+  `placeholder` for held nodes.
+- **Every skeleton:** keep the final size, use theme colours, turn the animation off under
+  `prefers-reduced-motion`, and mark the region `aria-busy`.

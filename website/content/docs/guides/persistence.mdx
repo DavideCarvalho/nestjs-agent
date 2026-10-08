@@ -414,7 +414,12 @@ export class AppModule {}
 
 By default (`autoSchema: true`) the module runs `ensureAgentSchema(orm)` on application bootstrap — a
 non-destructive `getUpdateSchemaSQL({ safe: true })` over the agent tables only: create +
-add-column, never a drop or alter. Pass `forFeature({ autoSchema: false })` when your own MikroORM
+add-column, never a drop. The boot heal owns these tables, collations included: on MySQL it also
+corrects any string column whose collation differs from the one its entity declares (MikroORM before
+7.2 created them in the table default, so a binary key like a provider message id came out
+case-insensitive), after checking that no row would collide under the declared collation, and it
+throws `AgentSchemaCollationError` without altering anything when one would. An app on the default
+needs no migrations for the agent tables. Pass `forFeature({ autoSchema: false })` when your own MikroORM
 migrations own the tables (`agentSchemaSql(this.config)` renders the DDL inside a `Migration`), and
 call the helper yourself if you want it:
 

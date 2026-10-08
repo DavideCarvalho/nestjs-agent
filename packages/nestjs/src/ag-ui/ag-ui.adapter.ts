@@ -40,7 +40,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import type { AgentModuleOptions } from '../agent.options.js';
-import { AgentService } from '../agent.service.js';
+import { AgentService, NO_USER_MESSAGE_CODE } from '../agent.service.js';
 import { attachmentLimits } from '../attachment-limits.js';
 import { answers as boundedAnswers, rejectReason } from '../controller/tool-call.controller.js';
 import type { AgentProtocolAdapter } from '../protocol-adapter.js';
@@ -142,7 +142,7 @@ export class AgUiRunHandler {
 
     const turn = readUserTurn(input.messages);
     if (turn === null) {
-      throw invalid('no_user_message', 'messages carries no user message to answer');
+      throw invalid(NO_USER_MESSAGE_CODE, 'messages carries no user message to answer');
     }
     warnings.push(...turn.dropped);
     // The consumer names the conversation. A thread it already has is continued (its owner checked,
@@ -178,8 +178,9 @@ export class AgUiRunHandler {
     // Attachments the consumer staged with this library already are named by mediaId; `chat`
     // resolves them for this actor and refuses one it does not own, as the native route does.
     const refs = await this.stage(actor, turn.media, warnings, turn.staged);
-    if (turn.text.trim().length === 0 && refs.length === 0) {
-      throw invalid('no_user_message', 'the user message to answer is empty');
+    // A regenerate re-answers the thread's last message and adds none, as on `chat`.
+    if (turn.text.trim().length === 0 && refs.length === 0 && forwarded.regenerate !== true) {
+      throw invalid(NO_USER_MESSAGE_CODE, 'the user message to answer is empty');
     }
     const context = readContext(input.context);
     const pageContext: PageContext | undefined =

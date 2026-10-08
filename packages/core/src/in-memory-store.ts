@@ -2,6 +2,7 @@ import {
   actionProposalOutcomeFenceValid,
   actionProposalOutcomeText,
 } from './action-proposal-outcome.js';
+import { toolCallUpdateForTransition } from './action-proposal-tool-call.js';
 import { snapshotActionProposal } from './action-proposal-transitions.js';
 import type { ToolCallOutcome } from './dangling-tool-calls.js';
 import { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
@@ -9,7 +10,7 @@ import type {
   ActionProposalOutcomeLease,
   ActionProposalOutcomeStore,
 } from './spi/action-proposal-outcome-store.js';
-import type { ActionProposalScope } from './spi/action-proposal-store.js';
+import type { ActionProposal, ActionProposalScope } from './spi/action-proposal-store.js';
 import {
   type AgentStore,
   type AppendMessageInput,
@@ -858,6 +859,17 @@ export class InMemoryAgentStore
   }
 
   async updateToolCall(input: UpdateToolCallInput): Promise<void> {
+    this.applyToolCallUpdate(input);
+  }
+
+  /** An independent proposal moved: its `proposed` tool-call record follows it. */
+  protected override proposalChanged(previous: ActionProposal, next: ActionProposal): void {
+    const update = toolCallUpdateForTransition(previous, next);
+    if (update === null || this.toolCalls.get(update.toolCallId)?.proposalId !== next.id) return;
+    this.applyToolCallUpdate(update);
+  }
+
+  private applyToolCallUpdate(input: UpdateToolCallInput): void {
     const row = this.toolCalls.get(input.toolCallId);
     if (row === undefined) {
       return;

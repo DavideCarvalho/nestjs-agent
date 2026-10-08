@@ -13,6 +13,7 @@ export type {
 } from './agent.options.js';
 export {
   AgentService,
+  NO_USER_MESSAGE_CODE,
   type ChatParams,
   type ChatSendMode,
   type ChatSendResult,

@@ -25,6 +25,7 @@ import {
   claimActionProposalOutcome,
   initialActionProposal,
   snapshotActionProposal,
+  toolCallUpdateForTransition,
   transitionActionProposalClaim,
   transitionActionProposalDecision,
   transitionActionProposalLease,
@@ -40,6 +41,7 @@ import type { EntityManager } from '@mikro-orm/core';
 import { AgentActionProposal } from './entities/agent-action-proposal.entity';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentThread } from './entities/agent-thread.entity';
+import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { coordinateSqliteWrite } from './sqlite-write-coordinator';
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -511,6 +513,28 @@ export class MikroOrmActionProposals
       transitionActionProposalSupersession(row, replacement, command, now),
     );
   }
+  /**
+   * The proposal's `proposed` tool-call record follows the transition just written — in the caller's
+   * transaction when there is one — so the dashboard and run detail show `executed` / `failed` /
+   * `rejected` / `expired` rather than `proposed` forever.
+   */
+  private async settleToolCall(previous: ActionProposal, next: ActionProposal): Promise<void> {
+    const update = toolCallUpdateForTransition(previous, next);
+    if (update === null) return;
+    await this.em.fork({ keepTransactionContext: true }).nativeUpdate(
+      AgentToolCall,
+      { id: update.toolCallId, proposalId: next.id },
+      {
+        status: update.status,
+        ...(update.output !== undefined ? { output: update.output } : {}),
+        ...(update.error !== undefined ? { error: update.error } : {}),
+        ...(update.executedByRef !== undefined ? { executedByRef: update.executedByRef } : {}),
+        ...(update.decidedVia !== undefined ? { decidedVia: update.decidedVia } : {}),
+        ...(update.remember !== undefined ? { remember: update.remember } : {}),
+        ...(update.status === 'executed' ? { executedAt: new Date(this.clock()) } : {}),
+      },
+    );
+  }
   private async load(scope: ActionProposalScope, id: string): Promise<AgentActionProposal | null> {
     const row = await this.em
       .fork({ keepTransactionContext: true })
@@ -554,7 +578,10 @@ export class MikroOrmActionProposals
           ...discoveryProjection(next),
         },
       );
-      if (touched === 1) return outcome;
+      if (touched === 1) {
+        await this.settleToolCall(row.payload, next);
+        return outcome;
+      }
     }
     // REPEATABLE READ can retain an old snapshot after losing a current-row CAS. Bound retries
     // so a caller transaction returns a conflict instead of waiting forever on its own snapshot.

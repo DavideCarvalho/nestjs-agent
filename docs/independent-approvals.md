@@ -87,6 +87,20 @@ Use the names and versions actually defined in your catalog. `components: []` re
 
 Capabilities travel through native HTTP, queued messages, proposal execution context and AG-UI forwarded properties. React does not derive capabilities from the renderers you register: declare them explicitly, on `<AgentProvider uiCapabilities={…}>` for the whole tree or `useAgentChat({ uiCapabilities })` for one chat (which wins over the provider's). Read the provider's with `useAgentUiCapabilities()`. Drawable emissions retain `fallbackText` so stored history remains readable when a component renderer is removed, its version changes or rendering fails. A custom renderer fallback can override the default text display.
 
+## The tool-call record
+
+The turn records the call as `proposed`. The call's own record then follows the proposal. Each proposal transition settles it, in the same
+write path as the proposal (the caller's transaction when there is one): an executed action marks
+the call `executed` with its output, a failed execution `failed` with the error, a rejection
+`rejected`, and a proposal that lapses undecided (the expiry sweep, or a decision that arrives too
+late) or that a newer proposal supersedes `expired`. An approved action stays `proposed` while it is
+queued or running. The dashboard's tool-call list, the run detail and anything else reading
+`agent_tool_call` therefore show what happened to the action, and filter on `proposed` and `expired`
+like any other status. Rows written before this release keep the status they had; the proposal row
+(`GET /agent/threads/:id/action-proposals`) is the source of truth for those.
+
+Stores implement this on their proposal transitions with `toolCallUpdateForTransition(previous, next)` from core; `PROPOSED_TOOL_CALL_CONTRACT` in `@dudousxd/nestjs-agent-testing` is the contract a store runs to prove it.
+
 ## Database rollout
 
 Apply the additive runtime schema before enabling independent mode. Existing deployments need proposal discovery/delivery/replacement indexes and metadata, outcome storage on messages, proposal pointers on tool calls, and capabilities on queued messages. Agora ships a forward migration through its configure workflow; Drizzle and MikroORM consumers should generate/apply their database migrations from the updated schemas/entities.

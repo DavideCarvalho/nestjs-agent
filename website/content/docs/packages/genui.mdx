@@ -83,10 +83,11 @@ A genui tool returns `{ shown, id }` to the model: what it pushed, and the frame
 
 | Export | What it is |
 |---|---|
-| `GenuiProvider` | `{ registry, catalog?, resolveComponent?, fallback?, loading?, onError?, treeRenderer? }` at the root. Without `fallback`, a component that cannot be drawn shows its stored `fallbackText`. `MessageItem` / `MessageList` draw pushed components inside it with no `renderUi`. |
+| `GenuiProvider` | `{ registry, catalog?, resolveComponent?, fallback?, loading?, placeholder?, onError?, treeRenderer? }` at the root. Without `fallback`, a component that cannot be drawn shows its stored `fallbackText`. `MessageItem` / `MessageList` draw pushed components inside it with no `renderUi`. |
 | `GenerativeUI` | `<GenerativeUI part />` — one pushed component, with the provider's settings; its own props win. |
 | `useGenerativeUI(part, options?)` | The state (`ready` / `loading` / `problem`) for custom chrome. |
 | `useGenuiProvider()` | The provider's settings. |
+| `useGenuiNode()` | Inside a tree node's renderer: `{ id, type, incomplete, held }` (`null` outside a tree). See [Loading states and skeletons](/docs/agent/guides/loading-states#on-the-client-usegenuinode). |
 | `GenerativeUIScope`, `GenuiTree` | Tree rendering for custom chrome. |
 | `/genui/json-render` | `GenuiProvider` with `jsonRender` (a json-render registry, or `true` to derive it from `registry`); `JsonRenderTree`, `jsonRenderTree`, `toJsonRenderRegistry`, `treeToJsonRenderSpec`. Optional peer `@json-render/react` >= 0.21. |
 

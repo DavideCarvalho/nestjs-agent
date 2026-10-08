@@ -70,8 +70,36 @@ migrations (`agentSchemaSql` renders the DDL), or call the helper yourself:
 ```ts
 import { ensureAgentSchema } from '@dudousxd/nestjs-agent-store-mikro-orm';
 
-await ensureAgentSchema(orm); // fingerprint-gated getUpdateSchemaSQL({ safe: true }) — create + add-column only
+await ensureAgentSchema(orm); // fingerprint-gated: creates, adds columns, corrects MySQL collations
 ```
+
+### The boot heal owns the schema
+
+With `autoSchema` on (the default) the store's boot heal is the whole schema story: it creates every
+`agent_*` table, adds the columns and indexes a later release declares, and keeps each column in the
+**type and collation its entity declares**. An app on this store writes no migrations for these
+tables (keep them out of your own migration differ with `agentManagedTables()`), and an upgrade needs
+nothing but a restart.
+
+Collations are part of that. The entities declare one on every MySQL string column
+(`AGENT_COLLATION`, `utf8mb4_unicode_ci`, and the binary `utf8mb4_bin` on the values compared exactly:
+actor and tenant refs, memory scopes, proposal keys, channel state keys such as provider message ids).
+MikroORM before 7.2 renders no `collate` clause in `create table` / `add column` and does not diff
+collations, so an earlier heal left those columns in the table default (`utf8mb4_0900_ai_ci` on
+MySQL 8, case-insensitive): `wamid.AbC` and `wamid.aBc` were one key. The heal now reads the actual
+collation of every agent column and corrects the ones that differ, one `alter table … modify` per
+table with foreign-key checks off on that connection (a referenced key and the columns pointing at it
+change together, and the foreign keys still hold afterwards). The schema fingerprint covers
+collations, so a database healed by an earlier version gets the correction on the first boot after
+the upgrade, once.
+
+The correction is safe on a populated table. Before altering anything it checks that no unique key
+would merge two rows under the declared collation (`'abc'` and `'ABC'` going to a case-insensitive
+column) and that no child row matched its parent only case-insensitively. If either would happen it
+alters nothing, records no fingerprint, and throws `AgentSchemaCollationError`, naming the key and an
+example value: merge, rename or delete those rows, and the next boot corrects the columns. Postgres
+and SQLite name no collation on these columns (their comparisons are already exact), so there the
+heal has nothing to correct.
 
 Upgrading from a release before Postgres/MySQL were tested for real: `agent_message` gains a nullable
 `seq` (per-thread append order); Postgres gains an index on `agent_tool_call.message_id`; on **MySQL**

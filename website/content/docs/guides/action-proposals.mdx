@@ -79,6 +79,16 @@ the usual
 deadline and the resolved `confirmation`. `useAgentChat` renders that as an approval card whose
 buttons call the proposal routes.
 
+The call's own record then follows the proposal. Each proposal transition settles it, in the same
+write path as the proposal (the caller's transaction when there is one): an executed action marks
+the call `executed` with its output, a failed execution `failed` with the error, a rejection
+`rejected`, and a proposal that lapses undecided (the expiry sweep, or a decision that arrives too
+late) or that a newer proposal supersedes `expired`. An approved action stays `proposed` while it is
+queued or running. The dashboard's tool-call list, the run detail and anything else reading
+`agent_tool_call` therefore show what happened to the action, and filter on `proposed` and `expired`
+like any other status. Rows written before this release keep the status they had; the proposal row
+(`GET /agent/threads/:id/action-proposals`) is the source of truth for those.
+
 Stopping the chat turn does not cancel a proposal.
 
 ## Checks around the approval

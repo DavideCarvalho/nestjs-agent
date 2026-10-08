@@ -151,6 +151,12 @@ With nothing bound to `AGENT_ATTACHMENT_STAGING` there is no way to tell whose m
 turn carrying attachments is refused with `501`. Text-only turns are unaffected. At most 10
 attachments per turn.
 
+A send must carry something to answer: a non-blank `message`, an attachment, or `regenerate: true`.
+Anything else (`{}`, a blank message) is `400 { code: 'no_user_message' }` (`NO_USER_MESSAGE_CODE`)
+before any thread, run or queue entry exists, on `POST /agent/chat`, the AG-UI route and
+`AgentService.send` / `chat` alike; a `message` that is not a string is `400 invalid_message`. An
+attachment-only send runs with an empty text.
+
 `POST /agent/attachments` (multipart, live whenever a staging store is bound — `501` otherwise)
 aborts a body larger than `HARD_MAX_ATTACHMENT_BYTES` (32 MiB) while it streams; the configured
 `maxBytes` narrows that ceiling at request time and cannot raise it. The limits come from ONE place:

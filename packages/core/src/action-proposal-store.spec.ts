@@ -1,4 +1,7 @@
-import { ACTION_PROPOSAL_STORE_CONTRACT } from '@dudousxd/nestjs-agent-testing';
+import {
+  ACTION_PROPOSAL_STORE_CONTRACT,
+  PROPOSED_TOOL_CALL_CONTRACT,
+} from '@dudousxd/nestjs-agent-testing';
 import { describe, it } from 'vitest';
 import { InMemoryActionProposalStore } from './in-memory-action-proposal-store.js';
 import { InMemoryAgentStore } from './in-memory-store.js';
@@ -18,3 +21,17 @@ for (const Store of [InMemoryActionProposalStore, InMemoryAgentStore]) {
     }
   });
 }
+
+describe('InMemoryAgentStore — the tool-call record follows its proposal', () => {
+  for (const test of PROPOSED_TOOL_CALL_CONTRACT) {
+    it(test.name, async () => {
+      let now = 1000;
+      await test.run({
+        store: new InMemoryAgentStore({ clock: () => now }),
+        setNow: (value) => {
+          now = value;
+        },
+      });
+    });
+  }
+});

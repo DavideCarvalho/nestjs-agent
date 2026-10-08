@@ -23,6 +23,7 @@ import {
   canonicalActionProposalJson,
   claimActionProposalOutcome,
   initialActionProposal,
+  toolCallUpdateForTransition,
   transitionActionProposalClaim,
   transitionActionProposalDecision,
   transitionActionProposalLease,
@@ -258,6 +259,8 @@ export class DrizzleActionProposalStore
         1
       )
         throw new Error('Replacement lost its locked proposal fence');
+      const settled = this.toolCallSettlement(db, old.proposal, next);
+      if (settled) yield { kind: 'write', query: settled };
     }
     return { status: 'created', proposal };
   }
@@ -657,6 +660,30 @@ export class DrizzleActionProposalStore
     return { status: 'applied', messageId };
   }
 
+  /**
+   * The update that settles the proposal's `proposed` tool-call record after a transition from
+   * `previous` to `next` (see `toolCallUpdateForTransition`), or `undefined` when its status stays —
+   * so the dashboard and run detail show `executed` / `failed` / `rejected` / `expired` instead of
+   * `proposed` forever.
+   */
+  private toolCallSettlement(db: AgentSqliteDb, previous: ActionProposal, next: ActionProposal) {
+    const update = toolCallUpdateForTransition(previous, next);
+    if (update === null) return undefined;
+    const toolCall = agentTablesFor(this.dialect).agentToolCall;
+    return db
+      .update(toolCall)
+      .set({
+        status: update.status,
+        ...(update.output !== undefined ? { output: update.output } : {}),
+        ...(update.error !== undefined ? { error: update.error } : {}),
+        ...(update.executedByRef !== undefined ? { executedByRef: update.executedByRef } : {}),
+        ...(update.decidedVia !== undefined ? { decidedVia: update.decidedVia } : {}),
+        ...(update.remember !== undefined ? { remember: update.remember } : {}),
+        ...(update.status === 'executed' ? { executedAt: new Date(this.clock()) } : {}),
+      })
+      .where(and(eq(toolCall.id, update.toolCallId), eq(toolCall.proposalId, next.id)));
+  }
+
   private async read(scope: ActionProposalScope, id: string): Promise<ProposalRow | undefined> {
     const [row] = await this.db
       .select()
@@ -706,7 +733,10 @@ export class DrizzleActionProposalStore
         this.table.id,
       );
       // Return this operation's winning fence, never a peer's later recovery token.
-      if (changed === 1) return result;
+      if (changed === 1) {
+        await this.toolCallSettlement(this.db, row.proposal, result.proposal);
+        return result;
+      }
     }
     const row = await this.read(scope, id);
     return row ? { status: 'conflict', proposal: row.proposal } : { status: 'not_found' };

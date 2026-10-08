@@ -100,6 +100,38 @@ export type ChatSendResult =
   | QueuedSend
   | { threadId: string; proposalDecision: unknown; text: string; queued?: undefined };
 
+/** The code of the `400` a send with nothing to answer gets (also AG-UI's, for the same case). */
+export const NO_USER_MESSAGE_CODE = 'no_user_message';
+
+/**
+ * `params` with its message checked, or a `400`. A send must carry something to answer: text, an
+ * attachment, or `regenerate` (which re-answers the thread's last message and adds none). A missing
+ * message is the empty one — so an attachment-only send never reaches the run with no text at all.
+ */
+function sendableParams(params: ChatParams): ChatParams {
+  const message: unknown = params.message;
+  if (message !== undefined && message !== null && typeof message !== 'string') {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'invalid_message',
+      message: 'message must be a string',
+    });
+  }
+  const text = typeof message === 'string' ? message : '';
+  if (
+    text.trim().length === 0 &&
+    (params.attachments?.length ?? 0) === 0 &&
+    params.regenerate !== true
+  ) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: NO_USER_MESSAGE_CODE,
+      message: 'nothing to answer: send a non-empty message, an attachment, or regenerate',
+    });
+  }
+  return text === message ? params : { ...params, message: text };
+}
+
 export interface ChatParams {
   uiCapabilities?: UiCapabilities;
   actor: Actor;
@@ -454,9 +486,12 @@ export class AgentService {
    * to run after it (see {@link ChatSendMode}). What `POST <base>/chat` calls.
    */
   async send(
-    params: ChatParams,
+    claimed: ChatParams,
     sendOptions: { textDecisions?: boolean } = {},
   ): Promise<ChatSendResult> {
+    // Before anything else — a text decision, the quota, a thread — so a send with nothing to answer
+    // is a 400 that leaves nothing behind, instead of a run that crashes on the missing text.
+    const params = sendableParams(claimed);
     if (
       sendOptions.textDecisions !== false &&
       this.options?.actionApprovalMode === 'independent' &&
