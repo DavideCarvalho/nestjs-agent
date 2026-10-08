@@ -2,7 +2,9 @@ import {
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   ptBrActionProposalText,
 } from '@dudousxd/nestjs-agent-core';
-import { describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { describe, expect, it, vi } from 'vitest';
+import { whatsmiau } from './adapters/whatsmiau.js';
 import {
   type ScriptedFrame,
   actor,
@@ -21,6 +23,54 @@ import {
 } from './handler.js';
 
 describe('ChannelHandler — the route', () => {
+  it('logs a webhook that carried no message — event and reason, never the content', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => {});
+    try {
+      const handler = channel(
+        whatsmiau({
+          url: 'http://whatsmiau:8080',
+          instance: 'main',
+          apiKey: 'k',
+          webhookToken: false,
+        }),
+        fakeService([]),
+      );
+      const upsert = (key: Record<string, unknown>, status: string) => ({
+        event: 'messages.upsert',
+        instance: 'main',
+        data: { key, status, message: { conversation: 'secret text' } },
+      });
+      expect(
+        await handler.handle(
+          request(upsert({ remoteJid: '5511999990000@s.whatsapp.net', id: 'a' }, 'PENDING')),
+        ),
+      ).toEqual({ status: 200, body: { ok: true } });
+      await handler.handle(
+        request(
+          upsert(
+            { remoteJid: '5511999990000@s.whatsapp.net', id: 'b', fromMe: true },
+            'SERVER_ACK',
+          ),
+        ),
+      );
+      await handler.handle(request({ event: 'connection.update', instance: 'main' }));
+      expect(warn.mock.calls).toEqual([
+        [
+          'Webhook on "whatsapp" ignored (event messages.upsert): fromMe missing and status PENDING',
+        ],
+      ]);
+      expect(debug.mock.calls).toEqual([
+        ['Webhook on "whatsapp" ignored (event messages.upsert): own message'],
+        ['Webhook on "whatsapp" ignored (event connection.update): not a messages.upsert event'],
+      ]);
+      expect(JSON.stringify([warn.mock.calls, debug.mock.calls])).not.toContain('secret');
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
+  });
+
   it('refuses an unverified request and acknowledges a verified one before the turn ends', async () => {
     const { adapter, outbox } = fakeAdapter();
     let release!: () => void;

@@ -14,7 +14,7 @@ import {
   ptBrActionProposalText,
 } from '@dudousxd/nestjs-agent-core';
 import { agUiFramesFromNdjson } from '@dudousxd/nestjs-agent-core/ag-ui';
-import { HttpException } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import { ChannelMediaTooLargeError } from './http.js';
 import { toChannelMarkdown } from './markdown.js';
 import {
@@ -344,6 +344,7 @@ export class ChannelHandler {
   private readonly questionTimeoutMs: number;
   private readonly buttons: boolean;
   private readonly inFlight = new Set<Promise<void>>();
+  private readonly logger = new Logger('AgentChannels');
 
   constructor(
     private readonly options: ChannelOptions,
@@ -379,6 +380,7 @@ export class ChannelHandler {
       return { status: 401, body: { error: 'unauthorized' } };
     const parsed = this.adapter.parse(request.body);
     const messages = parsed === null ? [] : Array.isArray(parsed) ? parsed : [parsed];
+    if (messages.length === 0) this.logIgnored(request.body);
     const fresh: InboundMessage[] = [];
     // Claimed before the 200: a store that is down answers 500, and the provider retries.
     for (const message of messages) {
@@ -394,6 +396,21 @@ export class ChannelHandler {
       );
     }
     return { status: 200, body: { ok: true } };
+  }
+
+  /**
+   * A verified webhook that carried no message to answer: logged (debug; warn when it looked like a
+   * person's message that could not be read) with the event and the reason — never the content — so
+   * a silently dropped message can be diagnosed.
+   */
+  private logIgnored(body: unknown): void {
+    const ignored = this.adapter.ignored?.(body) ?? null;
+    const event =
+      ignored?.event ??
+      (typeof body === 'object' && body !== null ? (body as { event?: unknown }).event : undefined);
+    const line = `Webhook on "${this.adapter.name}" ignored${typeof event === 'string' ? ` (event ${event})` : ''}: ${ignored?.reason ?? 'no message'}`;
+    if (ignored?.unexpected) this.logger.warn(line);
+    else this.logger.debug(line);
   }
 
   /** Resolves once every turn this handler started has been answered — for tests and shutdown. */
