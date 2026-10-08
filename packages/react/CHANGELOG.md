@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.35.3
+
+### Patch Changes
+
+- [#340](https://github.com/DavideCarvalho/nestjs-agent/pull/340) [`deb0715`](https://github.com/DavideCarvalho/nestjs-agent/commit/deb071574e19761794e34e05f97d359ebe2d238c) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The native genui tree renderer re-renders only the nodes that changed. The transcript keeps a pushed component's block, and the tree renderer keeps each node, the same object while it is structurally equal to the previous frame's, and tree nodes are memoized on that identity. Before, every node rendered again on each chat update (every token, every partial frame), and a renderer that set state in a layout effect (a chart that measures itself) could drive a fast stream into "Maximum update depth exceeded". A node whose props grew, or whose `incomplete`/`held` flag flipped, still renders.
+
+- [#340](https://github.com/DavideCarvalho/nestjs-agent/pull/340) [`deb0715`](https://github.com/DavideCarvalho/nestjs-agent/commit/deb071574e19761794e34e05f97d359ebe2d238c) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `useAgentChat` stops reading action proposals from a server that does not serve them. The first `404`, `405` or `501` from `GET threads/:id/action-proposals` (other than the library's own "thread not found") marks proposals unsupported for that client: no more polling or refetching, and `proposals.unsupported` is `true`. Transient failures keep polling, with a wait that doubles per failure up to 30 s.
+
 ## 0.35.2
 
 ### Patch Changes
