@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { Connection, EntityManager, MikroORM } from '@mikro-orm/core';
+import type { Connection, EntityManager, EntityMetadata, MikroORM } from '@mikro-orm/core';
+import { declaredCollations, reconcileMySqlCollations } from './mysql-collations';
 
 /**
  * The tables this store owns. The schema heal and fingerprint are scoped to exactly these, so
@@ -46,8 +47,12 @@ export function agentManagedTables(): string[] {
 const MARKER_TABLE = 'agent_schema_meta';
 const MARKER_ROW_ID = 'agent';
 const SCHEMA_LOCK_NAME = 'agent_schema';
-/** Bump to force a re-heal on the next boot even when the entity metadata is unchanged. */
-const SCHEMA_REVISION = 1;
+/**
+ * Bump to force a re-heal on the next boot even when the entity metadata is unchanged.
+ * 2: MySQL columns are reconciled to their declared collation (earlier heals left them in the table
+ * default), so a database healed before it gets the correction once.
+ */
+const SCHEMA_REVISION = 2;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the
@@ -65,7 +70,10 @@ const SCHEMA_REVISION = 1;
  * `agent_` in their own snapshot precisely because this owns those tables) — and applies only the
  * statements whose every table is an agent table, including the multi-statement table rebuild SQLite
  * uses in place of `add column`. `safe` means create + add-column only; existing columns are never
- * dropped or altered.
+ * dropped. The one alteration it makes is on MySQL: a string column whose collation differs from the
+ * one its entity declares (MikroORM before 7.2 created every column in the table default) is
+ * corrected — after checking no row would collide or lose its parent under the declared collation,
+ * and refusing with {@link AgentSchemaCollationError} when one would (see `mysql-collations.ts`).
  *
  * What the heal applied is then re-diffed, and a heal that left required structure pending throws
  * {@link AgentSchemaHealError} — the fingerprint is written only on the way out, so a boot that
@@ -108,6 +116,11 @@ export class AgentSchemaHealError extends Error {
 
 async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<void> {
   const connection = em.getConnection();
+  const collations =
+    dialect === 'mysql' ? declaredCollations(agentMetadata(em)) : new Map<string, string>();
+  // Existing columns first, so the diff below no longer asks for the bare `modify` MySQL refuses on
+  // a key a foreign key points at; then again for whatever the diff just created without its collation.
+  await reconcileMySqlCollations(em, collations);
   const statements = await agentUpdateStatements(em);
   if (statements.length === 0) {
     return;
@@ -131,10 +144,18 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   });
   // Ask the differ again rather than trust that every statement returning without an error means the
   // schema moved: a filtered, rewritten or silently-swallowed statement leaves no error to catch.
+  await reconcileMySqlCollations(em, collations);
   const pending = (await agentUpdateStatements(em)).filter(isRequiredStructure);
   if (pending.length > 0) {
     throw new AgentSchemaHealError(pending);
   }
+}
+
+/** The metadata of the tables this store owns, as the host registered them. */
+function agentMetadata(em: EntityManager): EntityMetadata[] {
+  return [...em.getMetadata().getAll().values()].filter((meta) =>
+    AGENT_TABLE_NAMES.has(meta.tableName),
+  );
 }
 
 /**
@@ -260,6 +281,7 @@ function computeExpectedFingerprint(orm: MikroORM): string {
         nullable: prop.nullable === true,
         primary: prop.primary === true,
         default: prop.default ?? null,
+        collation: (prop as { collation?: string }).collation ?? null,
       }));
     const indexes = [...meta.indexes]
       .map((index) => ({
