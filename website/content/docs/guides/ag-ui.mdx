@@ -146,6 +146,9 @@ waits for and re-attaches to it.
     "metadata": { "agora.toolName": "refund", "agora.input": { "id": 7 } } }] } }
 ```
 
+An approval's `message` is the tool's `confirmation.title` when it declares one (the same wording
+`agora.approval-requested` carries), else `Approve <tool>?`.
+
 The next `RunAgentInput` answers each interrupt in `resume`:
 
 | Interrupt `reason` | `status: 'resolved'` with `payload` | `status: 'cancelled'` |
