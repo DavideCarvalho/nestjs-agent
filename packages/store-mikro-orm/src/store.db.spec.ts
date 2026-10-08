@@ -7,7 +7,10 @@ import type {
   ThreadSummary,
   UpdateThreadInput,
 } from '@dudousxd/nestjs-agent-core';
-import { EVERY_MESSAGE_FIELD } from '@dudousxd/nestjs-agent-testing';
+import {
+  BLANK_ASSISTANT_HISTORY_CONTRACT,
+  EVERY_MESSAGE_FIELD,
+} from '@dudousxd/nestjs-agent-testing';
 import type { MikroORM } from '@mikro-orm/sqlite';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { agentSchemaSql } from './agent-schema-sql';
@@ -1230,5 +1233,13 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
       const [usage] = await orm.em.fork().find(AgentTokenUsage, { actorRef: 'cost-actor' });
       expect(usage?.costUsd).toBe(0.000123456);
     });
+  });
+
+  // The agent loop over this store's own read path: a blank model step is never stored, and a thread
+  // that already holds one (written before the loop stopped persisting them) still answers.
+  describe('blank assistant messages', () => {
+    for (const contractCase of BLANK_ASSISTANT_HISTORY_CONTRACT) {
+      it(contractCase.name, async () => contractCase.run({ store }));
+    }
   });
 });

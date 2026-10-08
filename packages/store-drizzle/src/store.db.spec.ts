@@ -7,7 +7,10 @@ import type {
   ThreadSummary,
   UpdateThreadInput,
 } from '@dudousxd/nestjs-agent-core';
-import { EVERY_MESSAGE_FIELD } from '@dudousxd/nestjs-agent-testing';
+import {
+  BLANK_ASSISTANT_HISTORY_CONTRACT,
+  EVERY_MESSAGE_FIELD,
+} from '@dudousxd/nestjs-agent-testing';
 import Database from 'better-sqlite3';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -1343,5 +1346,13 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
         await empty.close();
       }
     });
+  });
+
+  // The agent loop over this store's own read path: a blank model step is never stored, and a thread
+  // that already holds one (written before the loop stopped persisting them) still answers.
+  describe('blank assistant messages', () => {
+    for (const contractCase of BLANK_ASSISTANT_HISTORY_CONTRACT) {
+      it(contractCase.name, async () => contractCase.run({ store }));
+    }
   });
 });

@@ -334,9 +334,17 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
     }
 
     const toolCalls = message.toolCalls ?? [];
+    const toolResults = message.toolResults ?? [];
+    // Anthropic and Bedrock refuse a whole request carrying an assistant message with empty content
+    // or a whitespace-only text block. Blank text is therefore never sent as a part, and an assistant
+    // message with nothing else on it is left out: it says nothing the model needs.
+    const hasText = message.content.trim().length > 0;
+    if (!hasText && toolCalls.length === 0 && toolResults.length === 0) {
+      continue;
+    }
     if (toolCalls.length > 0) {
       const content: Array<TextPart | ToolCallPart> = [];
-      if (message.content.length > 0) {
+      if (hasText) {
         content.push({ type: 'text', text: message.content });
       }
       for (const call of toolCalls) {
@@ -348,11 +356,10 @@ function mapMessages(messages: ModelMessage[]): SdkModelMessage[] {
         });
       }
       out.push({ role: 'assistant', content: assistantContent(content) });
-    } else {
+    } else if (hasText) {
       out.push({ role: 'assistant', content: message.content });
     }
 
-    const toolResults = message.toolResults ?? [];
     if (toolResults.length > 0) {
       out.push({
         role: 'tool',
