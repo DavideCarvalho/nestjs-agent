@@ -1,5 +1,14 @@
 # @dudousxd/nestjs-agent
 
+## 1.25.1
+
+### Patch Changes
+
+- [#336](https://github.com/DavideCarvalho/nestjs-agent/pull/336) [`80630c6`](https://github.com/DavideCarvalho/nestjs-agent/commit/80630c660568a6d57c68effc50abdf85a1da8501) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A send with nothing to answer is refused up front. `POST <agent path>/chat` with `{}` (or a blank message) answered `201` and started a run that crashed on the missing text (`undefined.trim()`, or the provider's "text field is blank"). `AgentService.send` now checks the message before a text decision, the quota or a thread: no non-blank `message`, no attachment and no `regenerate` is `400 { code: 'no_user_message' }` (exported as `NO_USER_MESSAGE_CODE`), and a non-string `message` is `400 invalid_message`. Nothing is created or queued. This covers the HTTP route, `chat()`, `send()` and the queue. An attachment-only send now runs with an empty text instead of an undefined one, and the AG-UI route (which already answered `no_user_message`) now accepts a `regenerate` whose user message is empty, as `chat` does.
+
+- Updated dependencies [[`80630c6`](https://github.com/DavideCarvalho/nestjs-agent/commit/80630c660568a6d57c68effc50abdf85a1da8501)]:
+  - @dudousxd/nestjs-agent-core@0.45.1
+
 ## 1.25.0
 
 ### Minor Changes
