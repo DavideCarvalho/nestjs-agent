@@ -364,6 +364,9 @@ export interface ToolHandler<I = unknown, O = unknown> {
 - `isEnabled` and `canUse` are the per-turn gates (see [Authorization gates](#authorization-gates)).
 - `describe` changes what the model is told about the tool for one turn (the genui tools use it for
   per-tenant catalogs and [UI capabilities](/docs/agent/guides/rendering-everywhere#what-changes-for-the-model)).
+  `{ available: false }` hides the tool for that turn, and a call to it anyway is refused as an
+  unknown tool (`ToolNotFoundError`): the registry asks `describe` again on invoke, with the call's
+  actor, thread, agent and `uiCapabilities`.
 
 Throwing from `execute` surfaces the error to the loop rather than crashing the turn — return a
 structured error shape if you want the model to reason about the failure.
