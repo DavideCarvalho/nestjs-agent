@@ -340,7 +340,8 @@ before the next model call, and before the turn's tool calls are dispatched** �
 there through the same path a durable suspend uses.
 
 <Callout type="warn" title="A tool already executing is not interrupted">
-  There is no un-executing a side effect. A tool that has started runs to completion and is recorded
+  There is no un-executing a side effect. A tool that has started — unless it honours
+  `ctx.abortSignal` under the inline runner (below) — runs to completion and is recorded
   exactly as it would have been; the cancel is observed at the next point instead. So a cancel that
   lands mid-tool costs you that one tool, and nothing after it — the turn never makes its next model
   call, and no further tool is dispatched.
@@ -352,7 +353,13 @@ there through the same path a durable suspend uses.
 ### Under each runner
 
 **Inline.** The request is held in-process (this runner is single-replica by construction) and the
-loop observes it at the next safe point. A turn parked on a human is a special case: nobody is going
+loop observes it at the next safe point. What the run is in at that moment is also aborted: the
+runner keeps an `AbortController` per run and hands its signal to the model call
+(`ModelTurnArgs.abortSignal`, which `aiSdkModel` passes to the AI SDK) and to each tool
+(`ctx.abortSignal`). A model call cut short unwinds the turn as `cancelled` — not failed — and the
+step it was writing is not persisted; a tool that passes the signal on fails fast and is recorded
+failed, and the turn stops at the next safe point. A tool that ignores it runs to completion as
+above. A custom runner with no journal can do the same through `AgentLoopHooks.abortSignal`. A turn parked on a human is a special case: nobody is going
 to resolve that wait, so `cancel` rejects it outright and the run unwinds through the identical path.
 
 **Durable.** `cancel` calls the runtime's own cancel in its compensating form, which does two things

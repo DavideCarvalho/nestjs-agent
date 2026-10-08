@@ -408,6 +408,7 @@ globals. It's the same context whether the turn runs inline or as a durable work
 | `persona` | `string?` | The [persona](/docs/agent/guides/personas) the turn runs under, when it runs under one. |
 | `pageContext` | `PageContext?` | Host-supplied context about where the turn was started. |
 | `host` | `unknown?` | An optional host handle (e.g. an ORM `EntityManager`) the app threads through. |
+| `abortSignal` | `AbortSignal?` | Aborted when the run is stopped (inline runner). Pass it to whatever the tool waits on — `fetch`, a query, a child process — so a Stop does not wait for the tool. Absent under the durable runner and outside a turn. |
 | `toolCallId` | `string?` | The id of the tool call this invocation serves. Absent outside a turn (the MCP server, a direct `registry.invoke`). |
 | `idempotencyKey` | `string?` | `<runId>:<toolCallId>` — the same for every execution of this call, and for no other. See [Making a tool safe to run twice](#making-a-tool-safe-to-run-twice). |
 | `emitUi` | `(component, props, options?) => Promise<{ id }>` | Push a component into the answer. Always present; a no-op where there is no conversation. See [Generative UI](/docs/agent/guides/generative-ui#3-pushing-from-your-own-tools-ctxemitui). |

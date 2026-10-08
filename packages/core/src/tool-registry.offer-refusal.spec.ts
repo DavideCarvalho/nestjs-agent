@@ -84,7 +84,13 @@ describe('ToolRegistry.invoke refuses a tool describe() hid for this scope', () 
       scope.agentName === 'blocked' ? { available: false } : undefined,
     );
     registry.register(
-      { name: 'gated', kind: 'read', description: 'g', inputSchema: z.object({}), roles: ['ADMIN'] },
+      {
+        name: 'gated',
+        kind: 'read',
+        description: 'g',
+        inputSchema: z.object({}),
+        roles: ['ADMIN'],
+      },
       { execute, describe: describeTool },
     );
     const { ctx: base } = ctx();

@@ -571,6 +571,18 @@ export interface AgentLoopHooks {
    */
   cancelled?(): Promise<boolean>;
   /**
+   * Aborted when someone stops this run. Handed to the model call (`ModelTurnArgs.abortSignal`, the
+   * AI SDK's `abortSignal`) and to each tool (`AiToolCtx.abortSignal`), so a Stop cuts short what the
+   * run is waiting on instead of letting it run to the end of the step. A model call that returns or
+   * fails once the signal is aborted unwinds the turn with {@link RunCancelledError} before anything
+   * of that step is persisted; a tool that honours it settles failed, and the turn stops at its next
+   * safe point ({@link cancelled}).
+   *
+   * Only for a runner that records NO positions (the inline runner): the abort is observed live,
+   * outside any checkpoint, so a runner that replays a journal must leave it undefined.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Does this run take the loop shape guarded by `id`? A runner replaying against recorded
    * checkpoints answers `false` for a run that started before the shape changed, so that run keeps
    * replaying the shape its history holds (the durable runtime's `ctx.patched`, which consumes a
@@ -601,6 +613,28 @@ export class RunCancelledError extends Error {
     super('Run cancelled');
     this.name = 'RunCancelledError';
   }
+}
+
+/**
+ * Make a model call under the run's {@link AgentLoopHooks.abortSignal}. A call that fails once the
+ * run was stopped failed BECAUSE it was stopped (the AI SDK rejects with an `AbortError`, or with
+ * "no output" after an aborted stream), and one that returns after the Stop returns a step cut short:
+ * either way that is the run's cancel, not a failure and not an answer to persist.
+ */
+async function abortableModelCall<T>(
+  hooks: AgentLoopHooks,
+  call: (signal: { abortSignal?: AbortSignal }) => Promise<T>,
+): Promise<T> {
+  const signal = hooks.abortSignal;
+  let result: T;
+  try {
+    result = await call(signal !== undefined ? { abortSignal: signal } : {});
+  } catch (error) {
+    if (signal?.aborted === true) throw new RunCancelledError();
+    throw error;
+  }
+  if (signal?.aborted === true) throw new RunCancelledError();
+  return result;
 }
 
 /**
@@ -1316,13 +1350,16 @@ async function structureAnswer<TOutput>(
         { runId: hooks.runId, step, attempt },
         async (): Promise<StructuredAttempt> => {
           const discard: SinkWriter = { write: () => {}, end: () => {}, fail: () => {} };
-          const turn = await deps.model.runTurn({
-            system,
-            messages,
-            tools: [],
-            sink: discard,
-            outputSchema: schema,
-          });
+          const turn = await abortableModelCall(hooks, (signal) =>
+            deps.model.runTurn({
+              system,
+              messages,
+              tools: [],
+              sink: discard,
+              outputSchema: schema,
+              ...signal,
+            }),
+          );
           return {
             text: turn.text,
             usage: turn.usage,
@@ -1514,6 +1551,7 @@ function toolContext(deps: AgentLoopDeps, input: AgentRunInput, hooks: AgentLoop
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
     ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
     ...(deps.host !== undefined ? { host: deps.host } : {}),
+    ...(hooks.abortSignal !== undefined ? { abortSignal: hooks.abortSignal } : {}),
     // Replaced per tool call by the call's own collector (see the tool step); this one only serves
     // what runs outside a call — the elicitation wait.
     emitUi: createNoopEmitUi(hooks.runId),
@@ -1765,7 +1803,9 @@ const UNSERVED_SKILLS: SkillOffer = { scopes: [], entries: [], omitted: 0 };
  * A tool that is already executing is NOT interrupted. There is no un-executing a side effect, and
  * abandoning a dispatched step mid-flight would leave the journal holding a dispatch whose result
  * never lands — so an in-flight call finishes, is recorded exactly as it would have been, and the
- * cancel is observed at the next point instead.
+ * cancel is observed at the next point instead. A runner with no journal can cut the call short
+ * through {@link AgentLoopHooks.abortSignal}, which the tool receives as `ctx.abortSignal`; the call
+ * then settles (failed, if it honoured the signal) and is recorded like any other.
  */
 async function haltIfCancelled(
   hooks: AgentLoopHooks,
@@ -3332,12 +3372,15 @@ export async function runAgentLoop<TOutput = unknown>(
         const result = stampToolKinds(
           withTurnFrames(
             await traceLlmTurn(hooks.runId, i, () =>
-              deps.model.runTurn({
-                system: prompt.system,
-                messages: prompt.messages,
-                tools,
-                sink: frames.writer,
-              }),
+              abortableModelCall(hooks, (signal) =>
+                deps.model.runTurn({
+                  system: prompt.system,
+                  messages: prompt.messages,
+                  tools,
+                  sink: frames.writer,
+                  ...signal,
+                }),
+              ),
             ),
             frames.summary(),
           ),

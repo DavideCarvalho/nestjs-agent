@@ -46,6 +46,12 @@ export interface AiToolCtx {
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
   /**
+   * Aborted when the run this call belongs to is stopped. Pass it to whatever the tool waits on (a
+   * `fetch`, a query, a child process) so a Stop does not wait for the tool to finish. Absent where
+   * the runner cannot stop a call in flight (the durable runner) and outside a turn.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Push a component into the assistant message: streamed live as a `ui` frame and persisted on
    * the message, so a reload shows it where the live stream did. Resolves to the component's id.
    *
