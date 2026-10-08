@@ -393,6 +393,8 @@ a node, or `(node) => ReactNode` — defaulting to `loading`, and settable once 
 (or `genui` on `<AgentProvider>`). A withdrawn preview draws nothing, and the transcript drops a
 preview whose call settled without replacing it. `incomplete` only ever means "the model has not
 finished writing this node"; it is not a loading state for data.
+For a loading state for slow data (a tool that pushes a skeleton and replaces it), and for
+skeletons that keep the layout steady, see [Loading states and skeletons](/docs/agent/guides/loading-states).
 
 For your own transcript markup, `<GenerativeUI part={block} />` draws one component with the
 provider's settings (any prop you pass wins), `useGenerativeUI(part)` gives you the state for custom

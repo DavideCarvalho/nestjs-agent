@@ -27,6 +27,7 @@
     "chat-components",
     "generative-ui",
     "genui-builtins",
+    "loading-states",
     "component-rendering",
     "rendering-everywhere",
     "governed-sql"
