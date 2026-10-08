@@ -1,5 +1,14 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.28.4
+
+### Patch Changes
+
+- [#336](https://github.com/DavideCarvalho/nestjs-agent/pull/336) [`80630c6`](https://github.com/DavideCarvalho/nestjs-agent/commit/80630c660568a6d57c68effc50abdf85a1da8501) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - An independent proposal's tool-call record follows the proposal. In `actionApprovalMode: 'independent'` the turn records the call as `proposed` and ends; approving, executing, rejecting, expiring or superseding the proposal only changed the proposal row, so the dashboard (and anything reading `agent_tool_call`) showed an executed action as PROPOSED forever. Every store (in-memory, MikroORM, Drizzle) now settles the call on each proposal transition, in the same write path: `executed` with the output, `failed` with the error, `rejected`, or `expired` (lapsed, or superseded by a newer proposal). New in core: `toolCallUpdateForProposal` / `toolCallUpdateForTransition`; in testing: `PROPOSED_TOOL_CALL_CONTRACT`. The Drizzle read-model accepts the `proposed` status filter, and the dashboard shows `proposed` as live.
+
+- Updated dependencies [[`80630c6`](https://github.com/DavideCarvalho/nestjs-agent/commit/80630c660568a6d57c68effc50abdf85a1da8501)]:
+  - @dudousxd/nestjs-agent-core@0.45.1
+
 ## 0.28.3
 
 ### Patch Changes
