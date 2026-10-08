@@ -1,5 +1,44 @@
 # @dudousxd/nestjs-agent
 
+## 1.25.0
+
+### Minor Changes
+
+- [#334](https://github.com/DavideCarvalho/nestjs-agent/pull/334) [`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Generative UI: draw a `ui__render` tree while the model writes it.
+
+  - **`streaming: 'partial'`** (tree mode, on `genuiTools` and `AgentGenuiModule`). The server parses the streaming `ui__render` arguments and pushes the tree so far as `ui` frames marked `partial: true`, under the id the final push replaces (`<toolCallId>:ui:0`). Previews are throttled (`streamingThrottleMs`, default 100 ms, and only when changed), never validated, never persisted, carry no `fallbackText` and are skipped by text channels; a turn whose client cannot draw the tree gets none. Only the final tree goes through the catalog; a preview the call does not replace (an invalid tree, a text fallback) is withdrawn with a partial frame whose `props` are `{}`. The previews a step showed ride its journaled result (inline, and the durable runner's dispatched llm step), so a replay withdraws the same ones. AG-UI sends the previews as repeated `agora.ui` events with the same id. The default stays `streaming: 'complete'`, since renderers written for validated props would otherwise receive half-written ones. Wire format identical to `@adonis-agora/agent`'s.
+  - **Per component:** `defineComponent({ …, streaming: 'complete' })` holds a component back while its subtree is written — the node is a `{ held: true, props: {} }` placeholder until it closes — and `streaming: 'partial'` opts one in.
+  - **Stable nodes:** every node of a partial tree carries its position as `id` (`root`, `root.0`, …), the same rule that names the final tree's nodes, and `incomplete: true` while it is being written.
+  - **React:** `<GenerativeUI>` renders partial trees without remounting nodes, skips prop validation for incomplete nodes, exposes `useGenuiNode()` (`{ id, type, incomplete, held }`) for skeletons, and draws `placeholder` (new prop on `<GenerativeUI>` / `<GenuiProvider>` / `genui` on `<AgentProvider>`, default `loading`) for held nodes. The transport carries `partial` on the `data-ui` part; the transcript drops withdrawn previews and those whose call settled without replacing them; a json-render spec leaves held nodes out.
+  - **Tool SPI:** `ToolHandler.previewInput(scope)` lets any tool preview its streaming input (`ToolRegistry.previewInput`, `previewToolInputs`, `registryInputPreviews`); `parsePartialJson` is exported. `AgentUiComponent.partial` joins the stream vocabulary.
+  - **Channels:** a text channel never sends a preview, only the final component or its fallback text.
+
+- [#334](https://github.com/DavideCarvalho/nestjs-agent/pull/334) [`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Generative UI: tree mode is the default, with an exact `ui__render` schema.
+
+  **BREAKING:** `AgentGenuiModule.forRoot({ catalog })` (and `genuiTools`) now default to `mode: 'tree'`. An app that relied on the default gets ONE model tool, `ui__render`, instead of a `ui__show_<component>` tool per component:
+
+  - the model-facing tool names change (prompts, allow-lists, evals or approval policies naming `ui__show_*` must follow);
+  - the client needs a renderer for every layout component it lets the model use (`Stack`, `Card`, … from `LAYOUT_COMPONENTS`), since composed layouts now arrive as `genui:tree` frames;
+  - threads persisted before the upgrade keep rendering: their stored per-component `ui` parts are drawn by the same registry as before.
+
+  **Migration:** to keep the old behaviour, pass `mode: 'per-component'` — still fully supported, and the better fit for small models or when each tool should carry its own exact schema.
+
+  - **Exact schema.** `ui__render`'s input schema is now a recursive union by `type` (through `$defs` / `$ref`): each node variant carries its component's own props schema, and only components that take children have `children`. The root stays a plain object (OpenAI and Anthropic refuse a top-level union in tool parameters) listing every type and props schema. It follows the negotiated and per-request catalogs. A props schema that is not self-contained is described as a plain object. `treeSchema: 'loose'` restores the previous generic node shape for a provider that refuses `$ref`. `validateTree` remains the check every call goes through.
+  - **Single-node trees.** `{ type: 'DataTable', props }` is a valid tree and is pushed exactly as `ui__show_data_table` would push it (same component frame, version and `fallbackText`), so tree mode covers the one-component case.
+
+### Patch Changes
+
+- [#334](https://github.com/DavideCarvalho/nestjs-agent/pull/334) [`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fixes ported from the AdonisJS sibling's frontends comparison:
+
+  - **Hidden tools no longer run.** A tool whose `describe()` answers `available: false` for the turn (a genui `ui__render` or `ui__show_*` tool that `uiCapabilities` rule out) was left out of the tools offered to the model, but still ran when the model called it anyway. `ToolRegistry.invoke` (and `prepare`) now ask `describe()` again with the call's actor, thread, agent and `uiCapabilities`, and refuse the call as an unknown tool (`ToolNotFoundError`). The other offer filters (allow-list, `isEnabled`, roles, `canUse`) were already checked again on invoke.
+  - **No 501 from the proposals list where there can be none.** `GET <base>/threads/:id/action-proposals` answered `501` on a store without the proposal capability (one that can only run blocking approvals), and `AgentService.listActionProposals` threw `404` in blocking mode. Both answer an empty list now. `useAgentChat` reads that list by default, so every chat on such a store logged a failed request unless it passed `proposals: false`. Approving or rejecting a proposal still refuses.
+  - **AG-UI approval interrupt wording.** The `tool_approval` interrupt's `message` is now the tool's `confirmation.title` when the call has one, the same wording the `agora.approval-requested` event carries. Before, it was always `Approve <tool>?`.
+  - **`FakeModelProvider` tool call ids are unique.** Ids were `call-<turnIndex>-<name>`, so the same tool on the same turn of two threads got the same id; a tool call id is the store's primary key across threads. The first call still gets `call-<turnIndex>-<name>`. A repeat from the same provider instance gets the first free `-2`, `-3`… suffix.
+  - **A Stop aborts what the run is in.** Under the inline runner, cancelling a run aborts the in-flight model call (`ModelTurnArgs.abortSignal`, which `aiSdkModel` passes to the AI SDK) and hands tools the signal as the new `AiToolCtx.abortSignal`. Before, the model kept streaming to the end of the step. The run still ends `cancelled`, and the step the Stop cut short is not persisted. Custom runners can pass a signal through the new `AgentLoopHooks.abortSignal`. The durable runner is unchanged.
+
+- Updated dependencies [[`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0), [`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0), [`141715c`](https://github.com/DavideCarvalho/nestjs-agent/commit/141715cbba01263f28719edce62829a6b75d75d0)]:
+  - @dudousxd/nestjs-agent-core@0.45.0
+
 ## 1.24.2
 
 ### Patch Changes
