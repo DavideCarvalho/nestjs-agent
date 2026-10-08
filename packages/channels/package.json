@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-channels",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
@@ -17,7 +17,7 @@
     "telegram",
     "chatbot"
   ],
-  "description": "nestjs-agent on text channels \u2014 WhatsApp (Evolution API, Whatsmiau, Cloud API) and Telegram webhooks: verified, deduplicated, answered durably and in order, with proposals, questions, media, files and hooks",
+  "description": "nestjs-agent on text channels — WhatsApp (Evolution API, Whatsmiau, Cloud API) and Telegram webhooks: verified, deduplicated, answered durably and in order, with proposals, questions, media, files and hooks",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
