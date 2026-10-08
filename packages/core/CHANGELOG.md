@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.44.1
+
+### Patch Changes
+
+- [#330](https://github.com/DavideCarvalho/nestjs-agent/pull/330) [`bb635d1`](https://github.com/DavideCarvalho/nestjs-agent/commit/bb635d19a7763024c13421f90aa21ca12c8fe58b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The outcome message admitted to the thread leads with the tool's presentation text and no longer includes the proposal id (`Action "x" completed. Result: …`). Warmer pt-BR replies in `ptBrActionProposalText` ("Confirmado! Já estou cuidando disso.", "Tudo bem, cancelado. Nada foi feito.", "Esse pedido expirou; nada foi feito.").
+
 ## 0.44.0
 
 ### Minor Changes
