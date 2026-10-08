@@ -281,7 +281,8 @@ describe('ChannelHandler — the route', () => {
     ]);
     expect(one.service.sends.map((send) => send.message)).toEqual(['refund A-1']);
 
-    // Not a label of ours, or no card remembered: the text goes on as a message (text decisions).
+    // No card remembered: the label is a text decision with nothing of this conversation to
+    // decide (the pending proposal was never sent here). Not a label of ours: a message.
     const other = setup([proposalId]);
     await other.handler.handle(request(inbound('Confirm', { buttonWithoutId: true })));
     await other.handler.drain();
@@ -290,11 +291,8 @@ describe('ChannelHandler — the route', () => {
     await other.handler.handle(request(inbound('Maybe', { buttonWithoutId: true })));
     await other.handler.drain();
     expect(other.service.decided).toEqual([]);
-    expect(other.service.sends.map((send) => send.message)).toEqual([
-      'Confirm',
-      'refund A-1',
-      'Maybe',
-    ]);
+    expect(other.service.sends.map((send) => send.message)).toEqual(['refund A-1', 'Maybe']);
+    expect(texts(other.outbox)[0]).toBe('There is nothing waiting for your confirmation here.');
   });
 
   it('reads its own button labels as decisions in the matching vocabulary', () => {
@@ -348,8 +346,11 @@ describe('ChannelHandler — the route', () => {
     await handler.handle(request(inbound('Cancel', { buttonWithoutId: true })));
     await handler.drain();
     expect(service.decided).toEqual([]);
-    // It goes on as text, where the vocabulary's decision asks which proposal (#id).
-    expect(service.sends.map((send) => send.message)).toEqual(['two refunds', 'Cancel']);
+    // It goes on as a text decision, which asks which of this conversation's cards (#id).
+    expect(service.sends.map((send) => send.message)).toEqual(['two refunds']);
+    expect(texts(outbox).at(-1)).toBe(
+      `Which one? Reply *yes #ID* or *no #ID*: #${proposalId}, #${second}`,
+    );
   });
 
   it('without buttons, tells the person what to reply — in the configured vocabulary', async () => {
@@ -536,17 +537,21 @@ describe('ChannelHandler — the route', () => {
     expect(texts(outbox)).toEqual(['Partial']);
   });
 
-  it('reports a failing message to onError', async () => {
+  it('retries a failing phase, then reports it to onError', async () => {
     const { adapter } = fakeAdapter();
     const errors: unknown[] = [];
+    let calls = 0;
     const handler = channel(adapter, fakeService([]), {
+      retry: { attempts: 2, backoffMs: 1 },
       actor: () => {
+        calls += 1;
         throw new Error('directory down');
       },
       onError: (error) => errors.push(error),
     });
     await handler.handle(request(inbound('hi')));
     await handler.drain();
+    expect(calls).toBe(2);
     expect(errors).toEqual([new Error('directory down')]);
   });
 });
