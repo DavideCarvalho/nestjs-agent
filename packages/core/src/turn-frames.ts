@@ -60,7 +60,8 @@ export function observeTurnFrames(
       return;
     }
     closeBurst();
-    if (event.kind === 'ui') {
+    // A preview of a call's streaming input is shown, never kept: the call's own push is.
+    if (event.kind === 'ui' && event.partial !== true) {
       // A repeat id replaces the props but keeps the component where it first appeared, exactly as
       // the client's data part does.
       ui.set(event.id, {

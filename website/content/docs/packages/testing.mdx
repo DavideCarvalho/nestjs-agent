@@ -57,6 +57,11 @@ const script: FakeScript = (args, turnIndex) =>
 const model = new FakeModelProvider(script);
 ```
 
+A requested tool call's id is `call-<turnIndex>-<name>`. When the same provider instance already
+issued that id (the same turn of another thread, or the same tool twice in one turn) it gets the
+first free `-2`, `-3`… suffix, since a tool call id is the store's primary key across threads — so
+one provider can serve many threads.
+
 ## Exports
 
 | Export | Kind | Purpose |

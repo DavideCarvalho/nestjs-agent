@@ -5,7 +5,6 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { InMemoryAttachmentStagingStore } from '@dudousxd/nestjs-agent-testing';
 import {
-  NotFoundException,
   NotImplementedException,
   PayloadTooLargeException,
   UnsupportedMediaTypeException,
@@ -68,9 +67,6 @@ describe('AgentService — approvals, for surfaces without a web UI', () => {
   it('lists a thread’s proposals only under independent approvals', async () => {
     const store = new InMemoryAgentStore();
     const thread = await store.createThread({ actor });
-    await expect(service({}, { store }).listActionProposals(actor, thread.id)).rejects.toThrow(
-      NotFoundException,
-    );
     await store.createActionProposal({
       id: 'p1',
       tenantRef: null,
@@ -91,6 +87,8 @@ describe('AgentService — approvals, for surfaces without a web UI', () => {
       { store },
     ).listActionProposals(actor, thread.id);
     expect(listed.map((proposal) => proposal.id)).toEqual(['p1']);
+    // Blocking mode has no proposals to list: an empty list, not a refusal.
+    expect(await service({}, { store }).listActionProposals(actor, thread.id)).toEqual([]);
     // the public view: no idempotency key, no execution address
     expect(listed[0]).not.toHaveProperty('idempotencyKey');
   });

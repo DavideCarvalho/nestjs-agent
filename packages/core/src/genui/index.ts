@@ -13,9 +13,16 @@ export {
   defineCatalog,
   defineComponent,
   flatComponents,
+  type GenuiStreaming,
   toolNameFor,
   toSnakeCase,
 } from './catalog.js';
+export {
+  type GenuiPartialElement,
+  type PartialTreeOptions,
+  partialTree,
+  treeNodeId,
+} from './progressive.js';
 export {
   type AjvLike,
   ajvValidator,
@@ -57,6 +64,7 @@ export {
   type GenuiElement,
   type GenuiTreeProps,
   type TreeLimits,
+  type TreeSchemaMode,
   treeJsonSchema,
   treeToFlatSpec,
   validateTree,

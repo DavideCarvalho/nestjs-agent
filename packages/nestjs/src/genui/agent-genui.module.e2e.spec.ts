@@ -133,15 +133,26 @@ describe('AgentGenuiModule', () => {
     ]);
   });
 
-  it('per-component by default; the catalog is injectable', async () => {
+  it('tree by default: one ui__render tool, a single node pushed as its component', async () => {
+    const model = new CallingModel('ui__render', { type: 'Callout', props: { text: 'hey' } });
+    const { assistants } = await boot(model, AgentGenuiModule.forRoot({ catalog }));
+    const names = model.tools.map((tool) => tool.name);
+    expect(names).toContain('ui__render');
+    expect(names.some((name) => name.startsWith('ui__show_'))).toBe(false);
+    expect(assistants[0]?.ui?.[0]).toMatchObject({ component: 'Callout', props: { text: 'hey' } });
+  });
+
+  it('per-component on request; the catalog is injectable', async () => {
     @Injectable()
     class ReadsCatalog {
       constructor(@InjectGenuiCatalog() readonly catalog: Catalog) {}
     }
     const model = new CallingModel('ui__show_callout', { text: 'hey' });
-    const { assistants, app } = await boot(model, AgentGenuiModule.forRoot({ catalog }), {
-      providers: [ReadsCatalog],
-    });
+    const { assistants, app } = await boot(
+      model,
+      AgentGenuiModule.forRoot({ catalog, mode: 'per-component' }),
+      { providers: [ReadsCatalog] },
+    );
     // `Stack` takes children, which a flat `ui__show_*` input cannot carry: no tool for it.
     expect(model.tools.map((tool) => tool.name)).toContain('ui__show_callout');
     expect(model.tools.map((tool) => tool.name)).not.toContain('ui__show_stack');
@@ -154,7 +165,7 @@ describe('AgentGenuiModule', () => {
       defineComponent({ name: 'Badge', title: 'Badge', description: 'A badge.', props: {} }),
     ]);
     const model = new CallingModel('ui__show_badge', {});
-    await boot(model, AgentGenuiModule.forRoot({ catalog }), {
+    await boot(model, AgentGenuiModule.forRoot({ catalog, mode: 'per-component' }), {
       override: (builder) => {
         builder.overrideProvider(GENUI_CATALOG).useValue(other);
       },
@@ -171,7 +182,11 @@ describe('AgentGenuiModule', () => {
     }
     @Module({ providers: [GenuiConfig], exports: [GenuiConfig] })
     class ConfigModule {}
-    const root = { type: 'Callout', props: { text: 'async' } };
+    const root = {
+      type: 'Stack',
+      props: {},
+      children: [{ type: 'Callout', props: { text: 'async' } }],
+    };
     const model = new CallingModel('present', root);
     const { assistants } = await boot(
       model,

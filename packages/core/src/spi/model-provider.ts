@@ -87,6 +87,20 @@ export interface BufferedModelTurnResult extends ModelTurnResult {
    * mis-tuned chain burn a budget invisibly.
    */
   gateRejection?: { processor: string; reason: string };
+  /**
+   * Previews of streaming tool input the turn showed (`ToolHandler.previewInput`) and left standing.
+   * Journaled with the turn, so whichever process settles the calls withdraws the same previews the
+   * stream showed when a call's own push does not replace them.
+   */
+  previews?: ShownToolInputPreview[];
+}
+
+/** A preview a model turn showed: what the loop withdraws if the call's own push never replaces it. */
+export interface ShownToolInputPreview {
+  /** The `ui` id it was shown under: `<toolCallId>:ui:0`. */
+  id: string;
+  component: string;
+  toolCallId: string;
 }
 
 /**

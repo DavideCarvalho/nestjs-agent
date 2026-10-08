@@ -4,7 +4,14 @@ import {
   snapshotActionProposal,
 } from './action-proposal-transitions.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
-import type { AiToolCtx, ToolDescribeScope, ToolHandler, ToolPreflightResult } from './spi/tool.js';
+import type {
+  AiToolCtx,
+  ToolDescribeScope,
+  ToolHandler,
+  ToolInputPreview,
+  ToolInputPreviewScope,
+  ToolPreflightResult,
+} from './spi/tool.js';
 import {
   canActorUseTool,
   filterToolsByAllowList,
@@ -138,6 +145,23 @@ export class ToolRegistry {
     return this.entries.delete(name);
   }
 
+  /**
+   * How a streamed call of `name` is previewed while its input arrives (`ToolHandler.previewInput`),
+   * or `undefined`. A preview that fails to build is no preview: it never fails the turn.
+   */
+  async previewInput(
+    name: string,
+    scope: ToolInputPreviewScope,
+  ): Promise<ToolInputPreview | undefined> {
+    const handler = this.entries.get(name)?.handler;
+    if (handler?.previewInput === undefined) return undefined;
+    try {
+      return (await handler.previewInput(scope)) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   spec(name: string): ToolSpec | undefined {
     return this.entries.get(name)?.spec;
   }
@@ -221,6 +245,9 @@ export class ToolRegistry {
    * Run a tool. Re-checks that the tool is enabled and that the role allows it (defense-in-depth —
    * a call can reach here from a replayed durable step or an approval granted before the flag
    * moved, neither of which went through `definitionsFor` again) and re-parses the input via Zod.
+   * A tool whose `describe()` answers `available: false` for the call's scope (actor, thread, agent,
+   * `uiCapabilities`) is refused with {@link ToolNotFoundError}, as the unknown tool it was to the
+   * model.
    */
   async invoke(
     name: string,
@@ -305,6 +332,13 @@ export class ToolRegistry {
     if (options.allowedTools !== undefined && !options.allowedTools.includes(name)) {
       throw new ToolForbiddenError(name);
     }
+    // The offer also drops a tool whose `describe()` answers `available: false` for this scope (a
+    // genui tool the renderer cannot draw). A call to it is refused as the unknown tool it was to
+    // the model, so naming a tool it was not shown cannot run it.
+    if (entry.handler.describe !== undefined) {
+      const described = await entry.handler.describe(describeScopeOf(ctx));
+      if (described?.available === false) throw new ToolNotFoundError(name);
+    }
     const validation = await entry.spec.inputSchema['~standard'].validate(input);
     if (validation.issues !== undefined) {
       throw new ToolInputInvalidError(name, validation.issues);
@@ -315,6 +349,16 @@ export class ToolRegistry {
       typeof ctx.emitUi === 'function' ? ctx : { ...ctx, emitUi: createNoopEmitUi(ctx.requestId) };
     return { entry, value: validation.value, ctx: withEmit };
   }
+}
+
+/** The {@link ToolDescribeScope} a call's context stands for: what the offer was built for. */
+function describeScopeOf(ctx: AiToolCtx): ToolDescribeScope {
+  return {
+    actor: ctx.actor,
+    ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
+    ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
+    ...(ctx.uiCapabilities !== undefined ? { uiCapabilities: ctx.uiCapabilities } : {}),
+  };
 }
 
 /** Per-call narrowing for {@link ToolRegistry.invoke}. */

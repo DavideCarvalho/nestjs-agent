@@ -17,7 +17,9 @@ import {
   isControlFlowSignal,
   isReplayIntegrityError,
   observeTurnFrames,
+  previewToolInputs,
   publishAgentToolRetry,
+  registryInputPreviews,
   stampToolKinds,
   toolCallContext,
   traceLlmTurn,
@@ -162,7 +164,20 @@ export class AgentRunSteps {
     // exports the helper instead of wrapping the `hooks.dispatchLlm` CALL site itself.
     // Reasoning and pushed UI are read off the frames here, where the model actually runs, so they
     // ride this step's result into the journal — the same derivation core's inline branch makes.
-    const frames = observeTurnFrames(writer);
+    // Streaming previews of a tool's input (genui's partial tree) are drawn here, where the model
+    // streams, and ride the result as `previews` so the loop withdraws any the call does not replace.
+    const previews = previewToolInputs(
+      writer,
+      registryInputPreviews(deps.registry, tools, {
+        actor: input.actor,
+        ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.preflightContext?.uiCapabilities !== undefined
+          ? { uiCapabilities: input.preflightContext.uiCapabilities }
+          : {}),
+      }),
+    );
+    const frames = observeTurnFrames(previews.writer);
     const turn = withTurnFrames(
       await traceLlmTurn(input.runId, input.step, () =>
         deps.model.runTurn({
@@ -235,7 +250,9 @@ export class AgentRunSteps {
         };
       }
     }
-    return buffer === undefined ? stamped : { ...stamped, bufferedFrames: buffer.frames() };
+    const shown = previews.shown();
+    const previewed = shown.length > 0 ? { ...stamped, previews: shown } : stamped;
+    return buffer === undefined ? previewed : { ...previewed, bufferedFrames: buffer.frames() };
   }
 
   /**

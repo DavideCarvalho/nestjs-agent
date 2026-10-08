@@ -48,6 +48,11 @@ export class InlineAgentRunner implements AgentRunner {
    * running it. A cancelled id is dropped once the run settles, so the set tracks live runs only.
    */
   private readonly cancelled = new Set<string>();
+  /**
+   * Aborted by {@link cancel}: what cuts short the model call or tool a stopped run is in (the
+   * loop's `abortSignal` hook). Keyed like {@link cancelled}, and dropped with it.
+   */
+  private readonly aborts = new Map<string, AbortController>();
   /** Top-level runs this process is running now — what {@link isRunActive} answers from. */
   private readonly live = new Set<string>();
 
@@ -131,7 +136,7 @@ export class InlineAgentRunner implements AgentRunner {
         await writer.fail(streamFailure(error));
       })
       .finally(() => {
-        this.cancelled.delete(runId);
+        this.forgetCancel(runId);
         this.live.delete(runId);
       });
 
@@ -151,8 +156,10 @@ export class InlineAgentRunner implements AgentRunner {
    * Ask a run to stop, and settle whatever it was parked on.
    *
    * The loop observes the request at its next safe point (between steps, before the turn's tools) and
-   * unwinds from there — so a tool already executing is left to finish, and its result is recorded
-   * exactly as it would have been. What this cannot wait for is a turn parked on a human: that wait
+   * unwinds from there. What the run is in right now is aborted (its `abortSignal`): the model call
+   * streaming the answer ends at once and the step it was writing is not persisted, and a tool that
+   * passes `ctx.abortSignal` on is cut short and recorded failed; a tool that ignores the signal is
+   * left to finish, and its result is recorded exactly as it would have been. What this cannot wait for is a turn parked on a human: that wait
    * is a promise nobody is going to resolve, so it is REJECTED here with the same
    * {@link RunCancelledError} the loop would have thrown, and the run unwinds through the identical
    * path.
@@ -163,6 +170,8 @@ export class InlineAgentRunner implements AgentRunner {
    */
   async cancel(runId: string): Promise<void> {
     this.cancelled.add(runId);
+    // The model call or tool the run is in, cut short now rather than at the end of its step.
+    this.aborts.get(runId)?.abort(new RunCancelledError());
     for (const [key, waiter] of this.pending) {
       if (key.startsWith(`${runId}:`)) {
         this.pending.delete(key);
@@ -170,6 +179,22 @@ export class InlineAgentRunner implements AgentRunner {
       }
     }
     await Promise.resolve();
+  }
+
+  /** The signal {@link cancel} aborts for `runId` — one per run, shared by its awaited delegates. */
+  private abortSignalFor(runId: string): AbortSignal {
+    let controller = this.aborts.get(runId);
+    if (controller === undefined) {
+      controller = new AbortController();
+      this.aborts.set(runId, controller);
+    }
+    return controller.signal;
+  }
+
+  /** Drop a settled run's Stop: its flag and its abort controller. */
+  private forgetCancel(runId: string): void {
+    this.cancelled.delete(runId);
+    this.aborts.delete(runId);
   }
 
   /**
@@ -314,6 +339,7 @@ export class InlineAgentRunner implements AgentRunner {
       step: (_name, fn) => fn(),
       parallel: settleAll,
       cancelled: async () => this.cancelled.has(runId),
+      abortSignal: this.abortSignalFor(runId),
       runAgent: (agentName, task) =>
         this.runNested({
           agentName,
@@ -374,6 +400,7 @@ export class InlineAgentRunner implements AgentRunner {
       step: (_name, fn) => fn(),
       parallel: settleAll,
       cancelled: async () => this.cancelled.has(runId),
+      abortSignal: this.abortSignalFor(runId),
       runAgent: (childName, childTask) =>
         this.runNested({
           agentName: childName,
@@ -440,7 +467,7 @@ export class InlineAgentRunner implements AgentRunner {
         });
       })
       .finally(async () => {
-        this.cancelled.delete(runId);
+        this.forgetCancel(runId);
         await this.store.setActiveStream(subThread.id, null);
       });
     return { runId };
@@ -480,6 +507,8 @@ export class InlineAgentRunner implements AgentRunner {
       // A child stops when it is cancelled OR when the run a human is actually watching is: the
       // canceller names the top-level run, which is the only id that ever left the server.
       cancelled: async () => this.cancelled.has(runId) || this.cancelled.has(sinkRunId),
+      // Aborted by a Stop on the run the human is watching, which is the id a canceller names.
+      abortSignal: this.abortSignalFor(sinkRunId),
       runAgent: (childName, childTask) =>
         this.runNested({
           agentName: childName,

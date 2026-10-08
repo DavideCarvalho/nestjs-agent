@@ -8,6 +8,8 @@ import {
   encodeStreamEvent,
   unwrapToolStepOutput,
 } from '@dudousxd/nestjs-agent-core';
+import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
+import { LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
 import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { DurableModule } from '@dudousxd/nestjs-durable';
 import {
@@ -25,6 +27,7 @@ import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
+import { AgentGenuiModule } from '../genui/agent-genui.module.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 import { AgentDurableModule } from './agent-durable.module.js';
 import { AgentRunSteps } from './agent-run.steps.js';
@@ -206,6 +209,76 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
           preflight: { status: 'ready' },
         },
       ]);
+    } finally {
+      await moduleRef.close();
+    }
+  });
+
+  it('returns the input previews it showed, so the loop can withdraw one its call does not replace', async () => {
+    const tree = { type: 'Card', props: { title: 'Sales' }, children: [] };
+    class TreeModel implements ModelProvider {
+      async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
+        const json = JSON.stringify(tree);
+        await args.sink.write(
+          encodeStreamEvent({
+            kind: 'tool-input-start',
+            id: 'c0',
+            name: 'ui__render',
+            toolKind: 'read',
+          }),
+        );
+        for (let at = 0; at < json.length; at += 8) {
+          await args.sink.write(
+            encodeStreamEvent({
+              kind: 'tool-input-delta',
+              id: 'c0',
+              delta: json.slice(at, at + 8),
+            }),
+          );
+        }
+        return {
+          text: '',
+          toolCalls: [{ id: 'c0', name: 'ui__render', input: tree }],
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+    }
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        DurableModule.forRoot({
+          store: new InMemoryStateStore(),
+          transport: new EventEmitterTransport(new EventEmitter2()),
+        }),
+        AgentModule.forRoot({
+          model: new TreeModel(),
+          store: new InMemoryAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          durable: true,
+          defaultAgent: 'default',
+        }),
+        AgentDurableModule,
+        AgentGenuiModule.forRoot({
+          catalog: defineCatalog([...LAYOUT_COMPONENTS]),
+          streaming: 'partial',
+          streamingThrottleMs: 0,
+        }),
+      ],
+      providers: [DefaultAgent],
+    }).compile();
+    await moduleRef.init();
+    try {
+      const turn = await moduleRef.get(AgentRunSteps).llm({
+        system: 'dispatch test agent',
+        messages: [{ role: 'user', content: 'go' }],
+        actor: ACTOR,
+        runId: 'run-preview',
+        step: 0,
+        sinkRunId: 'run-preview',
+        childSink: false,
+      });
+      expect(turn.previews).toEqual([{ id: 'c0:ui:0', component: 'genui:tree', toolCallId: 'c0' }]);
+      // A preview is never what the turn persists.
+      expect(turn.ui).toBeUndefined();
     } finally {
       await moduleRef.close();
     }

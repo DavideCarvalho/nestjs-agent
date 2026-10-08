@@ -153,6 +153,42 @@ describe('ChannelHandler — the route', () => {
     ]);
   });
 
+  it('never sends a preview of a tree the model is still writing: only the final text', async () => {
+    const { adapter, outbox } = fakeAdapter();
+    const preview = (title: string) => ({
+      kind: 'ui' as const,
+      id: 'call-0:ui:0',
+      component: 'genui:tree',
+      props: { root: { id: 'root', type: 'Card', props: { title }, incomplete: true } },
+      toolCallId: 'call-0',
+      partial: true as const,
+    });
+    const rendered: unknown[] = [];
+    const service = fakeService([
+      preview('Sal'),
+      preview('Sales'),
+      {
+        kind: 'ui',
+        id: 'call-0:ui:0',
+        component: 'genui:tree',
+        props: { root: { type: 'Card', props: { title: 'Sales' } } },
+        toolCallId: 'call-0',
+        fallbackText: '*Sales*',
+      },
+      { kind: 'text', text: 'There.' },
+    ]);
+    const handler = channel(adapter, service, {
+      renderComponent: (component) => {
+        rendered.push(component.data);
+        return null;
+      },
+    });
+    await handler.handle(request(inbound('dashboard')));
+    await handler.drain();
+    expect(rendered).toEqual([{ root: { type: 'Card', props: { title: 'Sales' } } }]);
+    expect(texts(outbox)).toEqual(['*Sales*\n\nThere.']);
+  });
+
   it('creates a thread for a new conversation and reports it', async () => {
     const { adapter } = fakeAdapter();
     const service = fakeService([{ kind: 'text', text: 'hi' }]);

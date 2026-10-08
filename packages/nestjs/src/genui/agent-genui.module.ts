@@ -2,8 +2,10 @@ import type { ToolPresentation } from '@dudousxd/nestjs-agent-core';
 import type {
   Catalog,
   GenuiCatalogScope,
+  GenuiStreaming,
   GenuiToolsOptions,
   TreeLimits,
+  TreeSchemaMode,
 } from '@dudousxd/nestjs-agent-core/genui';
 import { defineCatalog, genuiTools } from '@dudousxd/nestjs-agent-core/genui';
 import {
@@ -48,8 +50,20 @@ export interface AgentGenuiOptions {
    * per-component tools — and may be empty. Default: an empty catalog.
    */
   catalog?: Catalog;
-  /** `per-component` (default): one `ui__show_<snake>` tool per component. `tree`: one tool taking a composed tree. */
+  /**
+   * `tree` (default): one `ui__render` tool taking a composed tree (a single node is pushed as that
+   * component). `per-component`: one `ui__show_<snake>` tool per component.
+   */
   mode?: 'per-component' | 'tree';
+  /** `ui__render`'s input schema: `'strict'` (default, a `$defs` union per component) or `'loose'`. */
+  treeSchema?: TreeSchemaMode;
+  /**
+   * Tree mode: `'complete'` (default) draws the tree once the call has run; `'partial'` streams it
+   * as `partial` ui frames while the model writes it. A component's own `streaming` overrides it.
+   */
+  streaming?: GenuiStreaming;
+  /** Least time between two partial tree frames of one call, in ms. Default 100. */
+  streamingThrottleMs?: number;
   /** End the model's turn once a genui call succeeds (no narrating follow-up call). */
   terminal?: boolean;
   /** Tool name in `tree` mode. Default `ui__render`. */
@@ -131,7 +145,8 @@ const EXPORTS = [GENUI_CATALOG, GENUI_OPTIONS];
 
 /**
  * Generative UI for the agent: registers the tools that let the model push catalog components
- * (`ui__show_<component>`, or one tree tool, or the generic `ui__show`), and makes the catalog
+ * (one `ui__render` tree tool, or `ui__show_<component>` per component, and/or the generic
+ * `ui__show`), and makes the catalog
  * injectable. Global, like `AgentModule`; import it once, next to it.
  *
  * ```ts

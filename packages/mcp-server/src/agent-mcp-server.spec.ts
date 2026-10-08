@@ -166,7 +166,11 @@ describe('createAgentMcpServer', () => {
   it('never lists or runs a generative-UI tool — over MCP its component reaches nobody', async () => {
     // `ui__show_*`, `ui__show` and the tree tool are `read` tools whose result is shown elsewhere:
     // all they do is push a component, and an MCP client has no screen to push it to.
-    const ui = genuiTools(defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS]));
+    const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENTS]);
+    const ui = [
+      ...genuiTools(catalog),
+      ...genuiTools(catalog, { mode: 'per-component', showTool: true }),
+    ];
     expect(ui.length).toBeGreaterThan(2);
     for (const tool of ui) registry.register(tool.spec, tool.handler);
     const client = await connect({ server: serverWith(), actor: ANALYST });

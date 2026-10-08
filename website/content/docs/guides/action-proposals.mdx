@@ -178,7 +178,8 @@ Where it applies:
 
 `AgentService.decideActionProposal(actor, threadId, proposalId, { decision, via })` decides one
 through the same scoped, policy-checked service (and answers the configured reply text);
-`listActionProposals(actor, threadId)` lists what that actor may see. To act when a proposal settles
+`listActionProposals(actor, threadId)` lists what that actor may see (an empty list in blocking mode,
+where there are none). To act when a proposal settles
 — post its outcome somewhere the turn's stream no longer reaches — pass
 `actionProposalWorker: { onSettled(proposal) }`, or subscribe from a module with
 `ActionProposalWorkerService.onSettled(listener)`; both run where the worker runs.

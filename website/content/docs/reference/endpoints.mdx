@@ -201,7 +201,7 @@ The run is derived server-side from the `toolCallId` — the call's own `runId` 
 ## Action proposals
 
 Used with `actionApprovalMode: 'independent'` — see [Action proposals](/docs/agent/guides/action-proposals).
-Mounted with the other routes, in either mode; on a store without proposal support they answer `501`.
+Mounted with the other routes, in either mode. On a store without proposal support there are none: the list answers `200 []`, and approve / reject answer `501`.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
