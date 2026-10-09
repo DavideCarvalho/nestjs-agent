@@ -430,3 +430,4 @@ export const LAYOUT_COMPONENTS: readonly ComponentDefinition<Props>[] = [
   Link,
   Image,
 ];
+export { defineSandbox, Sandbox } from './sandbox.js';

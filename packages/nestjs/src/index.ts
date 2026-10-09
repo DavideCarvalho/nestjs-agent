@@ -1,5 +1,6 @@
 export { AgentModule } from './agent.module.js';
 export { type AgUiAdapterOptions, AgUiRunHandler, agUiAdapter } from './ag-ui/index.js';
+export { type A2uiAdapterOptions, A2uiRunHandler, a2uiAdapter } from './a2ui/a2ui.adapter.js';
 export type { AgentProtocolAdapter } from './protocol-adapter.js';
 export type { AgentEngine } from './engine.js';
 export { AgentApprovalPortAdapter } from './approval-port.adapter.js';
@@ -92,6 +93,7 @@ export {
   type QueuedTurnStarter,
 } from './queue/chat-queue.service.js';
 export { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
+export { AGENT_SERVICE } from './agent-service.token.js';
 export { InProcessTokenStreamSink } from './in-process-sink.js';
 export {
   LedgerQuotaProvider,

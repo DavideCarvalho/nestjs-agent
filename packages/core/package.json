@@ -15,9 +15,10 @@
     "agent",
     "core",
     "guardrails",
-    "generative-ui"
+    "generative-ui",
+    "a2ui"
   ],
-  "description": "nestjs-agent core — agent loop, tool registry, governance SPIs",
+  "description": "nestjs-agent core \u2014 agent loop, tool registry, governance SPIs",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -73,6 +74,16 @@
       "require": {
         "types": "./dist/ag-ui/index.d.cts",
         "default": "./dist/ag-ui/index.cjs"
+      }
+    },
+    "./a2ui": {
+      "import": {
+        "types": "./dist/a2ui/index.d.ts",
+        "default": "./dist/a2ui/index.js"
+      },
+      "require": {
+        "types": "./dist/a2ui/index.d.cts",
+        "default": "./dist/a2ui/index.cjs"
       }
     }
   },

@@ -7,7 +7,12 @@ import type {
   TreeLimits,
   TreeSchemaMode,
 } from '@dudousxd/nestjs-agent-core/genui';
-import { defineCatalog, genuiTools } from '@dudousxd/nestjs-agent-core/genui';
+import {
+  type DefineSandboxOptions,
+  defineCatalog,
+  defineSandbox,
+  genuiTools,
+} from '@dudousxd/nestjs-agent-core/genui';
 import {
   type DynamicModule,
   type FactoryProvider,
@@ -85,6 +90,14 @@ export interface AgentGenuiOptions {
   roles?: string[];
   /** Override the generated presentation per component (or per tree / show tool name). */
   presentation?: (component: string) => ToolPresentation | undefined;
+  /**
+   * Add the sandbox component (`Sandbox`): the model may write HTML, CSS and JS for a one-off
+   * interactive answer when no catalog component fits. `true` for the defaults (no network), or
+   * the {@link DefineSandboxOptions} (a policy listing origins, extra instructions). Off by default.
+   * The browser's catalog should carry the same definition (`defineSandbox(...)` in the shared
+   * catalog file) so the renderer enforces the same policy.
+   */
+  sandbox?: boolean | DefineSandboxOptions;
 }
 
 type ResolverOption = Type<GenuiCatalogResolver> | GenuiCatalogResolver;
@@ -114,7 +127,7 @@ function toolOptions(
   options: AgentGenuiOptions,
   resolver: GenuiCatalogResolver | undefined,
 ): GenuiToolsOptions {
-  const { catalog: _catalog, ...rest } = options;
+  const { catalog: _catalog, sandbox: _sandbox, ...rest } = options;
   return {
     ...rest,
     ...(resolver !== undefined
@@ -123,11 +136,20 @@ function toolOptions(
   };
 }
 
+/** The configured catalog, with the sandbox component added when `sandbox` asks for it. */
+function withSandbox(options: AgentGenuiOptions): Catalog {
+  const base = options.catalog ?? defineCatalog([]);
+  const { sandbox } = options;
+  return sandbox === undefined || sandbox === false
+    ? base
+    : base.extend([defineSandbox(sandbox === true ? {} : sandbox)]);
+}
+
 function coreProviders(resolver: ResolverOption | undefined): Provider[] {
   return [
     {
       provide: GENUI_CATALOG,
-      useFactory: (options: AgentGenuiOptions) => options.catalog ?? defineCatalog([]),
+      useFactory: (options: AgentGenuiOptions) => withSandbox(options),
       inject: [GENUI_OPTIONS],
     },
     ...resolverProviders(resolver),

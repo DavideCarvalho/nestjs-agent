@@ -160,6 +160,42 @@ describe('AgentGenuiModule', () => {
     expect(app.get(ReadsCatalog).catalog).toBe(catalog);
   });
 
+  it('sandbox: true adds the Sandbox component, last in the catalog the model is shown', async () => {
+    @Injectable()
+    class ReadsCatalog {
+      constructor(@InjectGenuiCatalog() readonly catalog: Catalog) {}
+    }
+    const view = { title: 'Calc', summary: 'A calculator.', html: '<b>0</b>' };
+    const model = new CallingModel('ui__render', { type: 'Sandbox', props: view });
+    const { assistants, app } = await boot(
+      model,
+      AgentGenuiModule.forRoot({ catalog, sandbox: true, terminal: true }),
+      { providers: [ReadsCatalog] },
+    );
+    const shown = app.get(ReadsCatalog).catalog;
+    expect(shown.modelComponents().map((component) => component.name)).toEqual([
+      'Callout',
+      'Stack',
+      'Sandbox',
+    ]);
+    const description = model.tools.find((tool) => tool.name === 'ui__render')?.description ?? '';
+    expect(description.indexOf('Callout')).toBeLessThan(description.indexOf('Sandbox'));
+    expect(assistants[0]?.ui?.[0]).toMatchObject({ component: 'Sandbox', props: view });
+    expect(assistants[0]?.ui?.[0]?.fallbackText).toContain('A calculator.');
+  });
+
+  it('no sandbox unless asked for', async () => {
+    @Injectable()
+    class ReadsCatalog {
+      constructor(@InjectGenuiCatalog() readonly catalog: Catalog) {}
+    }
+    const model = new CallingModel('ui__render', { type: 'Callout', props: { text: 'hey' } });
+    const { app } = await boot(model, AgentGenuiModule.forRoot({ catalog }), {
+      providers: [ReadsCatalog],
+    });
+    expect(app.get(ReadsCatalog).catalog.has('Sandbox')).toBe(false);
+  });
+
   it('overrideProvider(GENUI_CATALOG) swaps the catalog the tools are built from', async () => {
     const other = defineCatalog([
       defineComponent({ name: 'Badge', title: 'Badge', description: 'A badge.', props: {} }),

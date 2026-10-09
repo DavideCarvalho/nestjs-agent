@@ -1,0 +1,224 @@
+---
+title: A2UI
+icon: Blocks
+description: Serve the agent's generative UI as A2UI v0.9 surfaces — a JSON Lines route any A2UI renderer draws, actions back as turns, and A2UI over AG-UI.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+[A2UI](https://a2ui.org) is Google's declarative agent-to-UI protocol: the agent sends a flat list
+of components per **surface**, and a renderer for the client's platform (Lit, Angular, Flutter,
+React) draws them from its own catalog. This library's [generative UI](/docs/agent/guides/generative-ui)
+maps onto it, so an A2UI client can talk to the agent without knowing this library.
+
+<Callout type="info" title="Version">
+This targets **A2UI v0.9** — every message is stamped `version: 'v0.9'` and validated, in this
+repo's tests, against the official `@a2ui/web_core` v0.9 schemas and rendered with `@a2ui/react`'s
+v0.9 renderer. v0.9.1, the current production release, is a patch of that family; v1.0 is a release
+candidate and is not targeted yet.
+</Callout>
+
+## Outbound: `ui` frames as surfaces
+
+Every `ui` frame — one component, or a composed `genui:tree` — becomes a surface whose id is the
+frame id (`<toolCallId>:ui:0`), created once (`createSurface`) and filled with `updateComponents`.
+Tree nodes keep their positional ids (`root`, `root.0`, `root.0.2`), the extra components a mapping
+needs take derived ids (`root.0~title`), and the root is always `root`.
+
+The library builtins map onto A2UI's basic catalog (`A2UI_BASIC_CATALOG_ID`):
+
+| Builtin | A2UI (basic catalog) |
+| --- | --- |
+| `Stack` | `Row` (`direction: 'row'`) or `Column`, children kept |
+| `Card` | `Card` → `Column` of a `Text` (h4) title, a caption subtitle, then the children |
+| `Heading` | `Text`, variant `h3` |
+| `Text` | `Text`, variant `body` (`caption` when `muted`) |
+| `Badge` | `Text`, variant `caption` |
+| `Callout` | `Card` → `Column` of title and text |
+| `Link` | borderless `Button` whose action is the `openUrl` function call, with a `Text` label |
+| `Image` | `Image` (`alt` → `description`) |
+| `CodeBlock` | `Text` with the code fenced (drawn as code by a renderer with markdown) |
+| `KpiCards` | `Row` of `Card`s, each a `Column` of label (caption), value (h3), delta (caption) |
+| `SourceCards` | `Row` of `Card`s: title (h5), snippet, source |
+| `DataTable` | `Column` of an optional title, a header `Row` and one `Row` of `Text` cells per row |
+| `Chart` | the same table, of its points: the basic catalog has no chart |
+
+A component nothing maps is drawn as its `fallbackText` in a `Text` (its children, if any, below
+it) — the sandbox included, which A2UI clients therefore get as its title and summary.
+
+### Your own components
+
+`A2uiOptions.components` maps a component by name — a function, or `'custom'`:
+
+```ts
+import { a2uiAdapter } from '@dudousxd/nestjs-agent/a2ui';
+
+a2uiAdapter({
+  components: {
+    // Drawn with basic-catalog components. The root must take ctx.id; extra ones ctx.derive(…).
+    OrderList: (props, ctx) => [
+      { id: ctx.id, component: 'Column', children: [ctx.derive('refund')] },
+      {
+        id: ctx.derive('refund'),
+        component: 'Button',
+        child: ctx.derive('label'),
+        action: { event: { name: 'refund', context: { orderId: props.orders[0].id } } },
+      },
+      { id: ctx.derive('label'), component: 'Text', text: 'Refund' },
+    ],
+    // Sent as is — a component of the client's own A2UI catalog, props flat.
+    OrderMap: 'custom',
+  },
+  catalogId: 'https://shop.example/a2ui/catalog.json', // the catalog those custom components live in
+});
+```
+
+`ctx` also carries `children` (the converted child ids), `incomplete` (a preview: props may be
+missing) and `text()` (the component's fallback text). A mapping that throws, or forgets the root
+id, draws the component's text instead of breaking the stream. `unmapped: 'custom'` sends every
+unmapped component through as a custom one, and `a2uiCatalog(catalog, { catalogId, only? })` builds
+the v0.9 inline catalog definition (`{ catalogId, components: { Name: JSON Schema } }`) of your
+genui catalog for a client to register. `theme` is passed as `createSurface.theme`.
+
+### Streaming
+
+A tree the model is still writing (`streaming: 'partial'`) is projected into the same surface on
+every preview: ids are stable from the first preview to the final frame, so the surface only grows.
+A node still held back (`streaming: 'complete'`) is left out — its parent references an id that
+arrives later, which A2UI renderers draw as a placeholder. A withdrawn preview becomes
+`deleteSurface`.
+
+## The route: `a2uiAdapter()`
+
+```ts title="Backend — src/app.module.ts"
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { a2uiAdapter } from '@dudousxd/nestjs-agent/a2ui';
+
+AgentModule.forRoot({
+  model,
+  adapters: [a2uiAdapter()], // a2uiAdapter({ path, quietMs, maxActionBytes, text, ...A2uiOptions })
+});
+```
+
+That mounts `POST /agent/a2ui`, behind the module's `guards`, with the actor from its
+`actorResolver`. The body is JSON:
+
+| Field | Meaning |
+| --- | --- |
+| `message` | the user's text |
+| `action` | an A2UI client message — v0.9 `{ version, action: { name, surfaceId, sourceComponentId, timestamp, context } }`, v0.8 `{ userAction }`, or the bare action. It becomes the turn (below) |
+| `threadId` | continue that thread (another actor's is a `403`), or start one under that id |
+| `uiCapabilities` | the components this client draws, as on `chat` |
+| `agent` | which agent answers |
+
+The answer is `application/jsonl`: one A2UI server-to-client message per line, until the run ends or
+stops to ask. `X-Agent-Thread-Id` and `X-Agent-Run-Id` name the library's ids. The assistant's text
+streams into a surface of its own (`text-<messageId>`): one `Text` bound to `/text`, updated with
+`updateDataModel` as tokens arrive (`text: 'omit'` leaves text out). A run error is a text surface.
+Malformed input — neither message nor action, an action that is too large or badly named — is a
+`400` and no stream. When `AgentGenuiModule` is imported, its catalog supplies the text of unmapped
+components (`catalog` in the options overrides it).
+
+```tsx title="Frontend — @a2ui/react"
+import { A2uiSurface, basicCatalog } from '@a2ui/react/v0_9';
+import { MessageProcessor } from '@a2ui/web_core/v0_9';
+
+const processor = new MessageProcessor([basicCatalog], (action) => {
+  // A button was pressed: send it back as the next turn.
+  void send({ threadId, action });
+});
+
+async function send(body: Record<string, unknown>) {
+  const response = await fetch('/agent/a2ui', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  threadId = response.headers.get('x-agent-thread-id') ?? threadId;
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    const messages = lines.filter(Boolean).map((line) => JSON.parse(line));
+    processor.processMessages(messages);
+    for (const message of messages) {
+      if (message.createSurface) addSurface(message.createSurface.surfaceId); // your state
+    }
+  }
+}
+
+// Render each surface id you collected:
+// <A2uiSurface surface={processor.model.surfacesMap.get(id)} />
+```
+
+### Actions in
+
+An A2UI `action` (v0.9), or `userAction` (v0.8), is read into a `UiAction` (`readA2uiAction`) and
+becomes the next user turn, on the thread you name: the text is `uiActionText(action)` — a sentence,
+then `[UI action "<name>" from A2UI, surface …, component …]` and the `context` as a JSON block,
+which the model reads. Actions are limited to `maxActionBytes` (default 8192) as JSON, with a short
+name. An action never calls a tool directly: whatever the model then does goes through roles,
+approvals and proposals like any other turn.
+
+### Approvals
+
+A run that parks on an approval ends its stream with a surface `interrupt-<id>`: the approval's
+message and **Approve** / **Reject** buttons whose actions are `agora.approve` / `agora.reject`
+(`A2UI_APPROVE_ACTION` / `A2UI_REJECT_ACTION`) with `context.interruptId`. Posting that action
+decides the approval — with the same checks an [AG-UI resume](/docs/agent/guides/ag-ui#interrupts-and-resume)
+makes (the run is the caller's and still waiting, the caller may decide this call) — and streams the
+rest of the run. Other interrupts (a question set) are a text surface asking the user to answer in
+the app.
+
+## A2UI over AG-UI (CopilotKit)
+
+AG-UI clients that understand A2UI — AG-UI's A2UI middleware, CopilotKit's A2UI renderer — read it
+as activities. Turn it on in the AG-UI adapter:
+
+```ts
+import { agUiAdapter } from '@dudousxd/nestjs-agent';
+
+AgentModule.forRoot({ model, adapters: [agUiAdapter({ a2ui: true })] }); // or a2ui: { components, … }
+```
+
+After each `agora.ui` custom event the stream then carries an `ACTIVITY_SNAPSHOT` with
+`activityType: 'a2ui-surface'`, `messageId: 'a2ui-surface-<surfaceId>'`, `replace: true` and the
+whole surface (`createSurface` + `updateComponents`) under `content.a2ui_operations` — so each
+preview of a streaming tree repaints the same activity in place. Inbound,
+`forwardedProps.a2uiAction` (an A2UI client message or `{ userAction }`) — or `forwardedProps.uiAction`
+(a `UiAction`, what a [sandbox](/docs/agent/guides/generative-ui-sandbox) hands back) — **is** the
+turn: no new user message is needed, and it is never read as a text decision on a pending proposal.
+A refused action is `400 invalid_ui_action`. These two inbound fields are read whether or not
+`a2ui` is on.
+
+## Building your own
+
+Everything above is framework-free, in `@dudousxd/nestjs-agent-core/a2ui` (and re-exported from
+`@dudousxd/nestjs-agent/a2ui`): `toA2uiComponents`, `a2uiSurfaceMessages`, `a2uiSurfaceId`,
+`A2uiProjector` (AG-UI events in, A2UI messages out — what the route runs), `a2uiActivityEvent`,
+`a2uiApprovalComponents`, `a2uiCatalog`, `readA2uiAction`, `A2UI_BUILTIN_MAPPERS`, and the constants
+`A2UI_VERSION`, `A2UI_BASIC_CATALOG_ID`, `A2UI_BASIC_COMPONENTS`, `A2UI_ACTIVITY_TYPE`,
+`A2UI_OPERATIONS_KEY`. `A2uiRunHandler` (from `@dudousxd/nestjs-agent/a2ui`) is the route's body,
+for extending under a path of your own.
+
+## Gaps
+
+- **Data binding is one-way and minimal.** Only the assistant's text uses the data model; component
+  props are literal values, and `sendDataModel` is never requested, so input components
+  (`TextField`, `CheckBox`, …) only matter through the `context` of an action you map.
+- **No chart, tabs or modal output.** The basic catalog has no chart (charts become tables), and no
+  builtin maps to `Tabs`, `Modal`, `Video` or `AudioPlayer`.
+- **Code blocks rely on markdown.** `CodeBlock` is fenced text; a renderer without a markdown
+  renderer shows the fences.
+- **Custom components need the client's catalog.** A `'custom'` component is drawn only by a client
+  that registered it under the `catalogId` you send.
+- **Question sets are not A2UI forms.** An elicitation is a text surface; answer it through the app.
+- **v1.0 is not targeted.**
+
+<Callout type="info">
+`@adonis-agora/agent` ships the same projection and route (`@adonis-agora/agent/a2ui`).
+</Callout>

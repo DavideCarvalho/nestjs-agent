@@ -12,7 +12,8 @@
   },
   "keywords": [
     "nestjs",
-    "agent"
+    "agent",
+    "a2ui"
   ],
   "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
   "license": "MIT",
@@ -81,6 +82,16 @@
         "types": "./dist/media/index.d.cts",
         "default": "./dist/media/index.cjs"
       }
+    },
+    "./a2ui": {
+      "import": {
+        "types": "./dist/a2ui/index.d.ts",
+        "default": "./dist/a2ui/index.js"
+      },
+      "require": {
+        "types": "./dist/a2ui/index.d.cts",
+        "default": "./dist/a2ui/index.cjs"
+      }
     }
   },
   "files": [
@@ -121,6 +132,7 @@
     }
   },
   "devDependencies": {
+    "@a2ui/web_core": "0.12.0",
     "@ag-ui/client": "1.0.1",
     "@ag-ui/core": "1.0.1",
     "@dudousxd/durable-worker": "0.10.1",
