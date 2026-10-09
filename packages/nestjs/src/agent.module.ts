@@ -62,6 +62,7 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import type { AgentEngine } from './engine.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { PricingBootService } from './pricing-boot.service.js';
 import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
 import { ActionProposalController } from './proposals/action-proposal.controller.js';
 import { ActionProposalService } from './proposals/action-proposal.service.js';
@@ -264,6 +265,9 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
     },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
+    // Seeds a configured model's missing price row from models.dev and warns about one that would
+    // record no cost (`priceCatalog`), once the app has bootstrapped.
+    PricingBootService,
     // Populates the registry + contributors (onModuleInit) BEFORE AiToolDiscoveryService synthesizes
     // handoff tools (onApplicationBootstrap) reads the registry.
     AgentDiscoveryService,
