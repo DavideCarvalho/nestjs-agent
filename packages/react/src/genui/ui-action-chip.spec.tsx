@@ -1,11 +1,13 @@
 import { sandboxAction, uiActionText } from '@dudousxd/nestjs-agent-core/genui';
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 import type { UIMessage } from 'ai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MessageItem } from '../components/message-item.js';
 import { buildTranscriptBlocks } from '../transcript/model.js';
 import { UiActionChip } from './index.js';
+
+import { useChatTranscript } from '../transcript/use-chat-transcript.js';
 
 const openAll = {
   isReasoningOpen: (_key: string, isStreaming: boolean) => isStreaming,
@@ -48,5 +50,17 @@ describe('a UI action in the transcript', () => {
     expect(container.textContent).toContain('Recalculate · people: 4, tip: 15');
     expect(container.textContent).not.toContain('```json');
     expect(container.textContent).not.toContain('Edit');
+  });
+
+  it('copies as its summary, not as the JSON block', async () => {
+    const writeClipboard = vi.fn(async () => undefined);
+    const { result } = renderHook(() =>
+      useChatTranscript({ messages: [user(said)], status: 'ready', writeClipboard }),
+    );
+    expect(result.current.items[0]?.uiAction).toMatchObject({ text: 'Recalculate' });
+    await act(async () => {
+      result.current.items[0]?.copy.copy();
+    });
+    expect(writeClipboard).toHaveBeenCalledWith('Recalculate · people: 4, tip: 15');
   });
 });

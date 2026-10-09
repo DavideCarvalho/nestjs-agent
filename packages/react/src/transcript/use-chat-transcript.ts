@@ -1,5 +1,5 @@
 import type { QueuePause } from '@dudousxd/nestjs-agent-core';
-import { readUiActionText } from '@dudousxd/nestjs-agent-core/genui';
+import { readUiActionText, uiActionSummary } from '@dudousxd/nestjs-agent-core/genui';
 import type { UIMessage } from 'ai';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -639,7 +639,11 @@ function useTranscriptItems({
       extractMessageText(latest.current.messages.find((message) => message.id === id)?.parts);
     const created: ItemCallbacks = {
       copy: () => {
-        const text = textFor();
+        // A UI action copies as what its chip says, not as the JSON block the model reads.
+        const raw = textFor();
+        const message = latest.current.messages.find((candidate) => candidate.id === id);
+        const action = message?.role === 'user' ? readUiActionText(raw) : null;
+        const text = action !== null ? uiActionSummary(action) : raw;
         if (!text) {
           return;
         }
