@@ -63,6 +63,7 @@ export {
   GENUI_TREE_COMPONENT,
   type GenuiElement,
   type GenuiTreeProps,
+  normalizeTreeInput,
   type TreeLimits,
   type TreeSchemaMode,
   treeJsonSchema,

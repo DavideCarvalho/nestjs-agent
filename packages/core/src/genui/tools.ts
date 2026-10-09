@@ -89,6 +89,15 @@ export interface GenuiToolsOptions {
   treeToolName?: string;
   /** Extra text prepended to the tree tool's description (when to call it, house rules). */
   treeInstructions?: string;
+  /**
+   * Tree mode: components that ALSO get a tool of their own whose input IS their props —
+   * `componentTools: ['Sandbox']` adds `ui__sandbox`. For a big component a model writes on its
+   * own (the sandbox): with no tree to nest it in, there is no `{ type, props }` envelope to leave
+   * out. It still streams (`partialProps`) and may still be nested in a `ui__render` tree.
+   */
+  componentTools?: readonly string[];
+  /** Tool-name prefix for {@link componentTools}. Default `ui__` (`Sandbox` → `ui__sandbox`). */
+  componentToolPrefix?: string;
   /** Size limits for `tree`. */
   treeLimits?: TreeLimits;
   /**
@@ -140,11 +149,33 @@ export function genuiTools(catalog: Catalog, options: GenuiToolsOptions = {}): G
   const tools =
     options.mode === 'per-component'
       ? flatComponents(catalog).map((component) => componentTool(catalog, component, options))
-      : [treeTool(catalog, options)];
+      : [
+          treeTool(catalog, options),
+          ...ownTools(catalog, options).map(({ component, prefix }) =>
+            componentTool(catalog, component, { ...options, namePrefix: prefix }),
+          ),
+        ];
   if (options.showTool !== undefined && options.showTool !== false) {
     tools.push(showTool(catalog, options));
   }
   return tools;
+}
+
+/** The {@link GenuiToolsOptions.componentTools} of a tree-mode set, checked against the catalog. */
+function ownTools(
+  catalog: Catalog,
+  options: GenuiToolsOptions,
+): { component: ComponentDefinition<unknown>; prefix: string; name: string }[] {
+  const prefix = options.componentToolPrefix ?? 'ui__';
+  return (options.componentTools ?? []).map((name) => {
+    const component = catalog.get(name);
+    if (component === undefined || component.internal === true || component.children === true) {
+      throw new Error(
+        `genui componentTools: "${name}" is not a model-facing component without children`,
+      );
+    }
+    return { component, prefix, name: toolNameFor(component.name, prefix) };
+  });
 }
 
 function scopeOf(input: {
@@ -300,11 +331,21 @@ function treeTool(catalog: Catalog, options: GenuiToolsOptions): GenuiTool {
     done: 'Laid out the answer',
     result: { kind: 'elsewhere' as const },
   };
-  const describeFor = (resolved: Catalog) =>
-    [
+  const own = ownTools(catalog, options);
+  const describeFor = (resolved: Catalog) => {
+    const offered = own.filter(({ component }) => resolved.get(component.name) !== undefined);
+    return [
       options.treeInstructions ?? 'Render a rich UI to present the answer to the user.',
+      ...(offered.length > 0
+        ? [
+            `On its own (not inside a layout), a ${offered
+              .map(({ component, name }) => `${component.name} has its own tool, \`${name}\``)
+              .join('; a ')}, taking its props directly — call that instead.`,
+          ]
+        : []),
       catalogToModelText(resolved, { mode: 'tree' }),
     ].join('\n');
+  };
   const dynamic = options.resolveCatalog !== undefined;
   const treeSchemaOptions = options.treeSchema !== undefined ? { schema: options.treeSchema } : {};
   const handler: ToolHandler = {

@@ -26,6 +26,7 @@ import {
   type ToolCallDescription,
   describeToolCall,
   groupToolActivity,
+  retriedCallIds,
 } from '../presentation/tool-activity.js';
 import { readReasoningMs } from '../reasoning/timing.js';
 
@@ -436,6 +437,12 @@ export interface BuildBlocksOptions {
   approval?: ApprovalBlockOptions;
   /** Server-declared tool presentations (`useToolCatalog`), for each call's `description`. */
   toolCatalog?: ToolCatalog;
+  /**
+   * Leave out a failed call the model retried at once with the same tool ({@link retriedCallIds}):
+   * the person sees the view the retry drew, not the refusal before it. Default `true`; `false`
+   * keeps every attempt (an operator's view).
+   */
+  hideRetriedFailures?: boolean;
 }
 
 /**
@@ -519,6 +526,10 @@ export function buildTranscriptBlocks(
     flushFiles();
   }
 
+  const retried =
+    options.hideRetriedFailures === false
+      ? new Set<string>()
+      : retriedCallIds((message.parts ?? []).filter(isToolUIPart));
   // Calls whose outcome has arrived: a preview of their input still standing is not the answer.
   const settledCalls = new Set<string>();
   for (const part of message.parts ?? []) {
@@ -534,6 +545,7 @@ export function buildTranscriptBlocks(
 
   for (const part of message.parts ?? []) {
     if (isToolUIPart(part)) {
+      if (retried.has(part.toolCallId)) continue;
       const elicitation = options.elicitation;
       if (elicitation !== undefined) {
         const request = readElicitationRequest(part);

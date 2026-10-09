@@ -160,6 +160,35 @@ describe('approvals v2 — the approval policy', () => {
     ]);
   });
 
+  it("fills the tool's confirm template on the server for an ordinary approval", async () => {
+    const h = await harness();
+    const reg = new ToolRegistry();
+    reg.register(
+      {
+        name: 'purgeCache',
+        kind: 'action',
+        description: 'purge',
+        inputSchema: z.object({ key: z.string() }),
+        presentation: {
+          label: 'Cache purge',
+          running: 'Purging {key}',
+          done: 'Purged {key}',
+          confirm: { title: 'Purge {key}?', verb: 'Purge', detail: 'Key {key} {missing}' },
+        },
+      },
+      { execute: async (input: { key: string }) => ({ purged: input.key }) },
+    );
+    const { events } = await run(h, { registry: reg });
+    const confirmation = { title: 'Purge cfg?', verb: 'Purge', detail: 'Key cfg' };
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: 'approval-requested', confirmation }),
+    );
+    const thread = await h.store.getThread(h.threadId);
+    expect(thread?.messages.flatMap((message) => message.approvals ?? [])).toEqual([
+      expect.objectContaining({ status: 'approved', confirmation }),
+    ]);
+  });
+
   it('parks on the approver and time to live the policy names', async () => {
     const h = await harness();
     const seen: unknown[] = [];

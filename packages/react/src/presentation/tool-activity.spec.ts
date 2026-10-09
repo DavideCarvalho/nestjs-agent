@@ -41,6 +41,8 @@ function toolBlock(parts: AnyToolUIPart[], toolCatalog?: ToolCatalog) {
     isReasoningOpen: () => false,
     toggleReasoning: () => undefined,
     ...(toolCatalog !== undefined ? { toolCatalog } : {}),
+    // Every attempt: these tests are about grouping, not about hiding a retried failure.
+    hideRetriedFailures: false,
   })[0];
   if (block?.kind !== 'tools') throw new Error('expected a tool block');
   return block;

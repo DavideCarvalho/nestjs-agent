@@ -76,6 +76,14 @@ export interface AgentGenuiOptions {
   /** Text prepended to the tree tool's description. */
   treeInstructions?: string;
   treeLimits?: TreeLimits;
+  /**
+   * Tree mode: components that ALSO get a flat tool whose input IS their props —
+   * `componentTools: ['Sandbox']` adds `ui__sandbox`, so a model writing a big component on its own
+   * has no `{ type, props }` envelope to leave out.
+   */
+  componentTools?: readonly string[];
+  /** Tool-name prefix for `componentTools`. Default `ui__` (`Sandbox` → `ui__sandbox`). */
+  componentToolPrefix?: string;
   /** Tool-name prefix in `per-component` mode. Default `ui__show_`. */
   namePrefix?: string;
   /**
