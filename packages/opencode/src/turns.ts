@@ -814,6 +814,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
           ? { files: await this.host.files({ input, runId }) }
           : {}),
       };
+      live.turn.setBaseline(await this.sessionUsage(live.client, handle.sessionId));
       await live.client.session.prompt({
         sessionID: handle.sessionId,
         text: prompt.text,
@@ -921,8 +922,18 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const live = await this.ensureLive(runId, input, handle, false, spent);
     // The old request's card settles as decided; OpenCode is told in the note.
     await live.turn.decide(ask, reply, { tellOpenCode: false });
+    live.turn.setBaseline(await this.sessionUsage(live.client, handle.sessionId));
     await live.client.session.prompt({ sessionID: handle.sessionId, text: note });
     return handle;
+  }
+
+  /** What a session spent so far (`session.get`), or nothing when OpenCode does not say. */
+  private async sessionUsage(client: OpenCodeClient, sessionId: string) {
+    try {
+      return await client.session.get?.({ sessionID: sessionId });
+    } catch {
+      return undefined;
+    }
   }
 
   /** Interrupt the thread's session (cancel). */
