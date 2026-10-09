@@ -7,11 +7,14 @@ import {
 import {
   AGENT_DEPS_FACTORY,
   AGENT_MEMORY,
+  AGENT_OPTIONS,
+  AGENT_PRICING_STORE,
   AGENT_SINK,
   AGENT_SKILLS,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   type Actor,
+  type AgentPricingStore,
   type AgentRunInput,
   type AgentStore,
   type AgentUiComponent,
@@ -21,6 +24,9 @@ import {
   DefaultApprovalPolicy,
   type HumanReply,
   type MemoryConfig,
+  type MessageUsage,
+  ModelPriceResolver,
+  type PriceCatalogOptions,
   type PromptContext,
   RUN_ENDED_BEFORE_TOOL_CALL,
   type RememberToolInput,
@@ -35,10 +41,12 @@ import {
   defaultScopeResolver,
   encodeStreamEvent,
   memoryWriteVerdict,
+  parseBedrockModelId,
   publishAgentRunFailed,
   releaseThreadRun,
   resolveMemoryDigest,
   resolveSkillCatalog,
+  resolveUsageCost,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, type OnApplicationShutdown, Optional } from '@nestjs/common';
@@ -62,8 +70,12 @@ import {
 import {
   type Milestone,
   OpenCodeTurn,
+  type OpenCodeUsage,
   type PendingAsk,
+  type StepCost,
+  type StepModel,
   type TurnOutcome,
+  emptyUsage,
   errorText,
 } from './turn.js';
 
@@ -123,6 +135,19 @@ export interface OpenCodeEngineSettings {
    * parked on a person is not observing: this bounds one stretch of OpenCode working on its own.
    */
   turnTimeoutMs?: number;
+  /**
+   * Whose figure a model call is recorded at. OpenCode prices each call itself, off its model
+   * catalog (the `cost` its config declares, else models.dev's list price):
+   *
+   * - `'reported'` (default) — OpenCode's figure when it has one (`cost_source` `'provider'`); a call
+   *   OpenCode priced at 0 (no price for the model) is estimated from the library's price instead
+   *   (`priceCatalog`, the pricing store, the built-in GovCloud Bedrock table, models.dev;
+   *   `cost_source` `'estimate'`).
+   * - `'estimate'` — the library's price whenever it has one, OpenCode's figure otherwise. For
+   *   models OpenCode prices at a list price that is not yours (Bedrock in GovCloud, a negotiated
+   *   rate) when you would rather not declare `cost` in OpenCode's config.
+   */
+  cost?: 'reported' | 'estimate';
 }
 
 /** A thread's session, as the steps of a turn pass it along (and a durable run journals it). */
@@ -200,7 +225,43 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     @Optional()
     @Inject(OPENCODE_TOOLS_TOKENS)
     private readonly toolsTokens?: OpenCodeToolsTokens | null,
-  ) {}
+    @Optional() @Inject(AGENT_PRICING_STORE) pricingStore?: AgentPricingStore,
+    @Optional()
+    @Inject(AGENT_OPTIONS)
+    agentOptions?: { priceCatalog?: PriceCatalogOptions | false },
+  ) {
+    this.prices = new ModelPriceResolver({
+      pricingStore,
+      catalog: agentOptions?.priceCatalog,
+      log: {
+        info: (message) => this.logger.log(message),
+        warn: (message) => this.logger.warn(message),
+      },
+    });
+  }
+
+  private readonly prices: ModelPriceResolver;
+
+  /**
+   * What a model call OpenCode made cost, by the same rule the library's loop records its own steps
+   * at: a reported figure wins, else an estimate off the model's price — see
+   * {@link OpenCodeEngineSettings.cost}.
+   */
+  async priceStep(step: {
+    model: StepModel | undefined;
+    usage: MessageUsage;
+    reportedCostUsd: number | undefined;
+  }): Promise<StepCost> {
+    const { model, usage, reportedCostUsd } = step;
+    const tokens = usage.inputTokens + usage.outputTokens;
+    const reported = reportedCostUsd !== undefined && (reportedCostUsd > 0 || tokens === 0);
+    if (reported && this.settings.cost !== 'estimate') {
+      return resolveUsageCost(usage, reportedCostUsd, undefined);
+    }
+    const price =
+      model !== undefined && tokens > 0 ? await this.prices.priceFor(priceRef(model)) : undefined;
+    return resolveUsageCost(usage, price === undefined ? reportedCostUsd : undefined, price);
+  }
 
   /** The tools server's name in OpenCode. */
   get toolsServer(): string {
@@ -735,8 +796,13 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   // ---- prompt / observe / reply --------------------------------------------------------------
 
   /** Start listening to the session (so nothing it says is missed), then send the user message. */
-  async prompt(runId: string, input: AgentRunInput, handle: SessionHandle): Promise<void> {
-    const live = await this.ensureLive(runId, input, handle, false);
+  async prompt(
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    spent?: OpenCodeUsage,
+  ): Promise<void> {
+    const live = await this.ensureLive(runId, input, handle, false, spent);
     try {
       const prompt = (await this.host.promptFor?.({
         input,
@@ -762,9 +828,17 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    * Wait for the turn's next milestone. In a process that was not following the turn (a resumed
    * durable run), the turn is rebuilt and first catches up on requests OpenCode raised meanwhile;
    * `session.wait` is the safety net for a terminal event that was missed.
+   *
+   * `spent` is what the run spent before (the sum of the `usage` of its earlier milestones): a turn
+   * rebuilt here starts from it, so the answer it persists carries the whole run's usage.
    */
-  async observe(runId: string, input: AgentRunInput, handle: SessionHandle): Promise<Milestone> {
-    const live = await this.ensureLive(runId, input, handle, true);
+  async observe(
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    spent?: OpenCodeUsage,
+  ): Promise<Milestone> {
+    const live = await this.ensureLive(runId, input, handle, true, spent);
     const { turn, client } = live;
     if (turn.hasMilestone()) return this.reached(runId, input, handle, await turn.next());
     // Set once this observation has its milestone: the safety nets below only act while it waits.
@@ -814,12 +888,13 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     handle: SessionHandle,
     ask: PendingAsk,
     reply: HumanReply,
+    spent?: OpenCodeUsage,
   ): Promise<SessionHandle> {
     const server = await this.host.server(input.actor);
     if (server.key !== handle.serverKey || server.bootId !== handle.bootId) {
-      return this.continueAfterRestart(runId, input, server, ask, reply);
+      return this.continueAfterRestart(runId, input, server, ask, reply, spent);
     }
-    const live = await this.ensureLive(runId, input, handle, false);
+    const live = await this.ensureLive(runId, input, handle, false, spent);
     await live.turn.decide(ask, reply);
     return handle;
   }
@@ -830,6 +905,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     server: OpenCodeServer,
     ask: PendingAsk,
     reply: HumanReply,
+    spent: OpenCodeUsage | undefined,
   ): Promise<SessionHandle> {
     const approved = 'approved' in reply && reply.approved === true;
     const note =
@@ -842,7 +918,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const handle = await this.createSession(runId, input, server, thread?.messages ?? [], note);
     await this.refreshInstructions(runId, input, server.client, handle.sessionId);
     this.drop(runId);
-    const live = await this.ensureLive(runId, input, handle, false);
+    const live = await this.ensureLive(runId, input, handle, false, spent);
     // The old request's card settles as decided; OpenCode is told in the note.
     await live.turn.decide(ask, reply, { tellOpenCode: false });
     await live.client.session.prompt({ sessionID: handle.sessionId, text: note });
@@ -863,6 +939,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     input: AgentRunInput,
     handle: SessionHandle,
     catchUp: boolean,
+    spent?: OpenCodeUsage,
   ): Promise<LiveTurn> {
     const current = this.live.get(runId);
     if (current !== undefined && current.handle.sessionId === handle.sessionId) return current;
@@ -885,6 +962,8 @@ export class OpenCodeTurns implements OnApplicationShutdown {
           ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         }),
       modelLabel: input.model ?? 'opencode',
+      priceStep: (step) => this.priceStep(step),
+      ...(spent !== undefined ? { carried: spent } : {}),
       logger: this.logger,
       onGranted: (action, id) => {
         const grants = this.grants.get(runId) ?? [];
@@ -931,23 +1010,22 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     return milestone;
   }
 
-  /** What the run produced, as the host's settle hooks see it. */
+  /**
+   * What the run produced, as the host's settle hooks see it. `usage` is what the run spent — the
+   * runner's sum of its milestones' usage, which a resumed run reads back from its journal — else
+   * what the turn this process follows saw.
+   */
   private async runResult(
     runId: string,
     input: AgentRunInput,
     outcome: TurnOutcome,
     durationMs: number,
+    usage: OpenCodeUsage,
   ): Promise<OpenCodeRunResult> {
     const thread = await this.store.getThread(input.threadId);
     const messages = (thread?.messages ?? []).filter(
       (m) => m.role === 'assistant' && m.runId === runId,
     );
-    const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
-    for (const m of messages) {
-      usage.inputTokens += m.usage?.inputTokens ?? 0;
-      usage.outputTokens += m.usage?.outputTokens ?? 0;
-      usage.costUsd += m.usage?.costUsd ?? 0;
-    }
     return {
       runId,
       input,
@@ -996,15 +1074,38 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     }
   }
 
-  /** End the run's stream and bookkeeping for how its execution ended. */
-  async settle(runId: string, input: AgentRunInput, outcome: TurnOutcome, durationMs: number) {
+  /**
+   * What the run spent: the runner's sum of its milestones, or what the turn this process follows
+   * saw (which starts from that sum) when it saw more — a run that failed or was cancelled between
+   * two milestones.
+   */
+  private spentBy(runId: string, spent: OpenCodeUsage | undefined): OpenCodeUsage {
+    const seen = this.live.get(runId)?.turn.totalUsage();
+    if (spent === undefined) return seen ?? emptyUsage();
+    if (seen === undefined) return spent;
+    const tokens = (u: OpenCodeUsage) => u.inputTokens + u.outputTokens;
+    return tokens(seen) > tokens(spent) ? seen : spent;
+  }
+
+  /**
+   * End the run's stream and bookkeeping for how its execution ended. `spent` is what the run spent
+   * (the sum of its milestones' `usage`); omit → what the turn this process follows saw.
+   */
+  async settle(
+    runId: string,
+    input: AgentRunInput,
+    outcome: TurnOutcome,
+    durationMs: number,
+    spent?: OpenCodeUsage,
+  ) {
     if (outcome.status === 'failed') {
-      await this.settleFailed(runId, input, outcome.error, durationMs);
+      await this.settleFailed(runId, input, outcome.error, durationMs, spent);
       return;
     }
+    const usage = this.spentBy(runId, spent);
     this.forget(runId);
     const writer = await this.sink.open(runId);
-    const result = await this.runResult(runId, input, outcome, durationMs);
+    const result = await this.runResult(runId, input, outcome, durationMs, usage);
     await this.amend(writer, result);
     if (outcome.status === 'interrupted') {
       this.logger.log(`agent run ${runId} cancelled`);
@@ -1030,10 +1131,18 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     input: AgentRunInput,
     error: string,
     durationMs = 0,
+    spent?: OpenCodeUsage,
   ): Promise<void> {
+    const usage = this.spentBy(runId, spent);
     this.forget(runId);
     const writer = await this.sink.open(runId);
-    const result = await this.runResult(runId, input, { status: 'failed', error }, durationMs);
+    const result = await this.runResult(
+      runId,
+      input,
+      { status: 'failed', error },
+      durationMs,
+      usage,
+    );
     const worded = (await this.amend(writer, result)).error;
     // The host's wording is for the person and shown as is. OpenCode's own error follows the
     // library's rule for a provider's: logged and on the run row everywhere, on the stream only
@@ -1130,4 +1239,16 @@ function uiEmitter(
     });
     return { id };
   };
+}
+
+/**
+ * The ids a step's model is priced under: `provider/model` (what usage is recorded under), the bare
+ * model id, and — for a gateway that names a Bedrock model under its own path
+ * (`flip-gateway/<server>/us-gov.anthropic.…`) — the Bedrock id at its end.
+ */
+function priceRef(model: StepModel): { modelId: string; provider: string; aliases: string[] } {
+  const aliases = [model.id];
+  const tail = model.id.slice(model.id.lastIndexOf('/') + 1);
+  if (tail !== model.id && parseBedrockModelId(tail) !== undefined) aliases.push(tail);
+  return { modelId: `${model.providerID}/${model.id}`, provider: model.providerID, aliases };
 }

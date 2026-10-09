@@ -4,6 +4,7 @@ import {
   type AgentStreamEvent,
   type AgentUiComponent,
   type ApprovalRequirement,
+  type CostSource,
   type Decision,
   type ElicitationReply,
   type ElicitationRequest,
@@ -53,10 +54,79 @@ export type PendingAsk =
       messageId?: string;
     };
 
-/** Where a turn stands: it needs a person, or it is over. */
+/**
+ * What a turn spent. `inputTokens` is the whole input side, cached input included (as the library's
+ * `MessageUsage` counts it — OpenCode's own `tokens.input` leaves the cache out); `cacheReadTokens`,
+ * `cacheWriteTokens` and `reasoningTokens` are subsets. `costUsd` sums every priced call.
+ */
+export interface OpenCodeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  costUsd: number;
+}
+
+export function emptyUsage(): OpenCodeUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    costUsd: 0,
+  };
+}
+
+/** `a + b`; a missing side (a milestone journaled before usage travelled) counts as nothing. */
+export function addUsage(
+  a: OpenCodeUsage | undefined,
+  b: OpenCodeUsage | undefined,
+): OpenCodeUsage {
+  const x = a ?? emptyUsage();
+  const y = b ?? emptyUsage();
+  return {
+    inputTokens: x.inputTokens + (y.inputTokens ?? 0),
+    outputTokens: x.outputTokens + (y.outputTokens ?? 0),
+    cacheReadTokens: (x.cacheReadTokens ?? 0) + (y.cacheReadTokens ?? 0),
+    cacheWriteTokens: (x.cacheWriteTokens ?? 0) + (y.cacheWriteTokens ?? 0),
+    reasoningTokens: (x.reasoningTokens ?? 0) + (y.reasoningTokens ?? 0),
+    costUsd: x.costUsd + (y.costUsd ?? 0),
+  };
+}
+
+function subUsage(a: OpenCodeUsage, b: OpenCodeUsage): OpenCodeUsage {
+  return {
+    inputTokens: a.inputTokens - b.inputTokens,
+    outputTokens: a.outputTokens - b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens - b.cacheReadTokens,
+    cacheWriteTokens: a.cacheWriteTokens - b.cacheWriteTokens,
+    reasoningTokens: a.reasoningTokens - b.reasoningTokens,
+    costUsd: a.costUsd - b.costUsd,
+  };
+}
+
+/** The model a step ran on, as OpenCode names it (`session.step.started`). */
+export interface StepModel {
+  providerID: string;
+  id: string;
+}
+
+/** What a model call cost, and where the figure came from. */
+export interface StepCost {
+  costUsd?: number;
+  costSource?: CostSource;
+}
+
+/**
+ * Where a turn stands: it needs a person, or it is over. `usage` is what the turn spent since its
+ * previous milestone — journaled with the milestone, so a run resumed in another process still adds
+ * up what every process saw.
+ */
 export type Milestone =
-  | { kind: 'ask'; ask: PendingAsk; timeoutMs?: number }
-  | { kind: 'finished'; outcome: TurnOutcome };
+  | { kind: 'ask'; ask: PendingAsk; timeoutMs?: number; usage?: OpenCodeUsage }
+  | { kind: 'finished'; outcome: TurnOutcome; usage?: OpenCodeUsage };
 
 export interface OpenCodeTurnArgs {
   runId: string;
@@ -67,8 +137,19 @@ export interface OpenCodeTurnArgs {
   store: AgentStore;
   /** What an action needs before it runs (the module's `ApprovalPolicy`). */
   approvalFor: (action: string) => Promise<ApprovalRequirement>;
-  /** The model label usage is recorded under. */
+  /** The model label usage is recorded under until OpenCode names the step's model. */
   modelLabel: string;
+  /**
+   * What a model call cost: OpenCode's reported figure, or the library's estimate. Omit → OpenCode's
+   * figure as reported.
+   */
+  priceStep?: (step: {
+    model: StepModel | undefined;
+    usage: MessageUsage;
+    reportedCostUsd: number | undefined;
+  }) => Promise<StepCost>;
+  /** What the run spent before this turn object existed (an earlier process, an earlier session). */
+  carried?: OpenCodeUsage;
   logger: Logger;
   /**
    * An action OpenCode was allowed to run (a person approved it, or the policy did): the approval
@@ -174,8 +255,11 @@ export class OpenCodeTurn {
   private readonly hidden = new Set<string>();
   private readonly milestones: Milestone[] = [];
   private waiting: ((m: Milestone) => void) | undefined;
-  private readonly usage: MessageUsage = { inputTokens: 0, outputTokens: 0 };
-  private costUsd: number | undefined;
+  /** What this turn object saw spent, and how much of it a milestone already reported. */
+  private spent = emptyUsage();
+  private reported = emptyUsage();
+  private priced = false;
+  private model: StepModel | undefined;
   private stepOpen = false;
   private sawText = false;
   private separator = false;
@@ -184,7 +268,14 @@ export class OpenCodeTurn {
   private ended = false;
   private stepError: string | undefined;
 
-  constructor(private readonly a: OpenCodeTurnArgs) {}
+  constructor(private readonly a: OpenCodeTurnArgs) {
+    this.model = modelOfLabel(a.input.model);
+  }
+
+  /** What the run spent so far: carried from before this turn object, plus what it saw. */
+  totalUsage(): OpenCodeUsage {
+    return addUsage(this.a.carried, this.spent);
+  }
 
   get sessionId(): string {
     return this.a.sessionId;
@@ -274,7 +365,10 @@ export class OpenCodeTurn {
     });
   }
 
-  private reach(milestone: Milestone): void {
+  private reach(reached: Milestone): void {
+    const usage = subUsage(this.spent, this.reported);
+    this.reported = { ...this.spent };
+    const milestone: Milestone = { ...reached, usage };
     const waiting = this.waiting;
     if (waiting !== undefined) {
       this.waiting = undefined;
@@ -405,9 +499,21 @@ export class OpenCodeTurn {
   }
 
   private async onEvent(e: OpenCodeEvent): Promise<void> {
-    if (this.ended) return;
     const d = e.data ?? {};
+    // A title or a compaction OpenCode ran is spent even when it lands after the execution ended.
+    if (e.type === 'session.usage.recorded') {
+      await this.usageRecorded(d);
+      return;
+    }
+    if (this.ended) return;
     switch (e.type) {
+      case 'session.step.started':
+      case 'session.model.selected': {
+        const model = d.model as Partial<StepModel> | undefined;
+        if (typeof model?.id === 'string' && typeof model.providerID === 'string')
+          this.model = { providerID: model.providerID, id: model.id };
+        return;
+      }
       case 'session.text.delta': {
         const delta = typeof d.delta === 'string' ? d.delta : '';
         if (!delta) return;
@@ -529,33 +635,63 @@ export class OpenCodeTurn {
     }
   }
 
-  private async stepEnded(d: Record<string, any>): Promise<void> {
-    const usage: MessageUsage = {
-      inputTokens: Number(d.tokens?.input) || 0,
-      outputTokens: Number(d.tokens?.output) || 0,
-      ...(Number(d.tokens?.cache?.read) ? { cacheReadTokens: Number(d.tokens.cache.read) } : {}),
-      ...(Number(d.tokens?.cache?.write) ? { cacheWriteTokens: Number(d.tokens.cache.write) } : {}),
-    };
-    const costUsd = typeof d.cost === 'number' ? d.cost : undefined;
-    this.usage.inputTokens += usage.inputTokens;
-    this.usage.outputTokens += usage.outputTokens;
-    if (costUsd !== undefined) this.costUsd = (this.costUsd ?? 0) + costUsd;
+  private modelId(): string {
+    return this.model !== undefined
+      ? `${this.model.providerID}/${this.model.id}`
+      : this.a.modelLabel;
+  }
+
+  /** One model call's usage and cost, into the ledger and the run's total. */
+  private async spend(
+    d: Record<string, any>,
+    purpose: 'chat' | 'title' | 'history_summary',
+  ): Promise<{ usage: MessageUsage; cost: StepCost }> {
+    const usage = usageOf(d.tokens);
+    const reportedCostUsd =
+      typeof d.cost === 'number' && Number.isFinite(d.cost) && d.cost >= 0 ? d.cost : undefined;
+    const fallback: StepCost =
+      reportedCostUsd !== undefined ? { costUsd: reportedCostUsd, costSource: 'provider' } : {};
+    let cost = fallback;
+    if (this.a.priceStep !== undefined) {
+      cost = await this.a
+        .priceStep({ model: this.model, usage, reportedCostUsd })
+        .catch(() => fallback);
+    }
+    this.spent = addUsage(this.spent, {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens ?? 0,
+      cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+      reasoningTokens: usage.reasoningTokens ?? 0,
+      costUsd: cost.costUsd ?? 0,
+    });
+    if (cost.costUsd !== undefined) this.priced = true;
     await this.a.store.recordUsage({
       threadId: this.a.input.threadId,
       actorRef: this.a.input.actor.id,
-      modelId: this.a.modelLabel,
-      purpose: 'chat',
+      modelId: this.modelId(),
+      purpose,
       usage,
-      ...(costUsd !== undefined ? { costUsd, costSource: 'provider' as const } : {}),
+      ...cost,
     });
+    return { usage, cost };
+  }
+
+  /** `session.usage.recorded`: a call OpenCode made besides the steps (the title, a compaction). */
+  private async usageRecorded(d: Record<string, any>): Promise<void> {
+    await this.spend(d, d.source === 'title' ? 'title' : 'history_summary');
+  }
+
+  private async stepEnded(d: Record<string, any>): Promise<void> {
+    const { usage, cost } = await this.spend(d, 'chat');
     if (!this.stepOpen) return;
     this.stepOpen = false;
     await this.write({
       kind: 'step-finish',
       usage,
-      costUsd: costUsd ?? null,
+      costUsd: cost.costUsd ?? null,
       ...(this.segment.reasoningMs > 0 ? { reasoningMs: this.segment.reasoningMs } : {}),
-      model: this.a.modelLabel,
+      model: this.modelId(),
     });
   }
 
@@ -575,14 +711,7 @@ export class OpenCodeTurn {
       role: 'assistant',
       content: s.text,
       runId: this.a.runId,
-      ...(final
-        ? {
-            usage: {
-              ...this.usage,
-              ...(this.costUsd !== undefined ? { costUsd: this.costUsd } : {}),
-            },
-          }
-        : {}),
+      ...(final ? { usage: this.messageUsage() } : {}),
       ...(this.a.input.agentName !== undefined ? { agentName: this.a.input.agentName } : {}),
       ...(this.a.input.persona !== undefined ? { persona: this.a.input.persona } : {}),
       ...(s.reasoning ? { reasoning: s.reasoning, reasoningMs: s.reasoningMs } : {}),
@@ -593,6 +722,19 @@ export class OpenCodeTurn {
     this.wroteMessage = true;
     this.messageResults.set(message.id, [...s.results]);
     return message.id;
+  }
+
+  /** The run's usage as its last message carries it: the whole run, cache tokens included. */
+  private messageUsage(): MessageUsage {
+    const total = this.totalUsage();
+    return {
+      inputTokens: total.inputTokens,
+      outputTokens: total.outputTokens,
+      ...(total.cacheReadTokens > 0 ? { cacheReadTokens: total.cacheReadTokens } : {}),
+      ...(total.cacheWriteTokens > 0 ? { cacheWriteTokens: total.cacheWriteTokens } : {}),
+      ...(total.reasoningTokens > 0 ? { reasoningTokens: total.reasoningTokens } : {}),
+      ...(this.priced || (this.a.carried?.costUsd ?? 0) > 0 ? { costUsd: total.costUsd } : {}),
+    };
   }
 
   /** A request recorded by an earlier process (a turn resumed after a restart). */
@@ -880,4 +1022,30 @@ export class OpenCodeTurn {
     }
     this.reach({ kind: 'finished', outcome });
   }
+}
+
+/** `provider/model` (the send's `model`) as a step model; `undefined` for a bare label. */
+function modelOfLabel(label: string | undefined): StepModel | undefined {
+  const slash = label?.indexOf('/') ?? -1;
+  if (label === undefined || slash <= 0 || slash === label.length - 1) return undefined;
+  return { providerID: label.slice(0, slash), id: label.slice(slash + 1) };
+}
+
+/**
+ * OpenCode's token counts as the library's `MessageUsage`. OpenCode reports the uncached input in
+ * `input` and the cache reads and writes beside it; the library counts the whole input side in
+ * `inputTokens`, the cache counts being subsets of it.
+ */
+export function usageOf(tokens: any): MessageUsage {
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const read = n(tokens?.cache?.read);
+  const write = n(tokens?.cache?.write);
+  const reasoning = n(tokens?.reasoning);
+  return {
+    inputTokens: n(tokens?.input) + read + write,
+    outputTokens: n(tokens?.output),
+    ...(read > 0 ? { cacheReadTokens: read } : {}),
+    ...(write > 0 ? { cacheWriteTokens: write } : {}),
+    ...(reasoning > 0 ? { reasoningTokens: reasoning } : {}),
+  };
 }

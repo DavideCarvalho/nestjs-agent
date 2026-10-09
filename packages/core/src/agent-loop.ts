@@ -56,6 +56,7 @@ import {
 } from './memory.js';
 import { type ResolveToolUiCatalog, createNegotiatedUiCollector } from './negotiated-tool-ui.js';
 import { findPersona, intersectAllowLists } from './personas.js';
+import { resolveUsageCost } from './pricing/resolve.js';
 import {
   createFrameBuffer,
   createIncrementalGate,
@@ -83,7 +84,7 @@ import type {
   ActionProposalStore,
   ActionProposalSupersessionStore,
 } from './spi/action-proposal-store.js';
-import type { AgentStore, CostSource, ThreadTurnReader } from './spi/agent-store.js';
+import type { AgentStore, ThreadTurnReader } from './spi/agent-store.js';
 import {
   type ApprovalPolicy,
   type ApprovalRequirement,
@@ -409,21 +410,8 @@ function resolveCostUsd(
   return price === undefined ? null : estimateCost(usage, price);
 }
 
-/**
- * The cost a usage row persists: the provider's figure (`'provider'`), else the estimate off the
- * turn's price row (`'estimate'`), else nothing (`cost_usd` NULL). Persisting the estimate is what lets
- * a USD quota and any reader of the ledger see the spend of a provider that reports no cost (Bedrock,
- * OpenAI, Anthropic direct); `cost_source` keeps it distinguishable from a reported figure.
- */
-function usageCost(
-  usage: MessageUsage,
-  reportedCostUsd: number | undefined,
-  price: CurrentModelPrice | undefined,
-): { costUsd?: number; costSource?: CostSource } {
-  if (reportedCostUsd !== undefined) return { costUsd: reportedCostUsd, costSource: 'provider' };
-  if (price === undefined) return {};
-  return { costUsd: estimateCost(usage, price), costSource: 'estimate' };
-}
+/** The cost a usage row persists — see {@link resolveUsageCost}. */
+const usageCost = resolveUsageCost;
 
 /** Renders retrieved passages as a numbered, citable context block for the system prompt. */
 function buildContextBlock(passages: Passage[]): string {

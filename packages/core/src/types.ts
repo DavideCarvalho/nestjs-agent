@@ -224,9 +224,16 @@ export interface MessageUsage {
  * extra call that proposes follow-up questions; `history_summary` is the extra call a
  * {@link import('./spi/history-policy.js').HistoryPolicy} makes to fold windowed-out messages into a
  * summary — so bounding context cost never becomes spend nothing accounts for; `structured_output`
- * is the formatting pass that restates a finished answer as `AgentLoopDeps.outputSchema` requires.
+ * is the formatting pass that restates a finished answer as `AgentLoopDeps.outputSchema` requires;
+ * `title` is a call that names the thread (an engine that titles threads with a model — OpenCode
+ * does — records it; the loop derives its titles from the first message and spends nothing).
  */
-export type UsagePurpose = 'chat' | 'follow_ups' | 'history_summary' | 'structured_output';
+export type UsagePurpose =
+  | 'chat'
+  | 'follow_ups'
+  | 'history_summary'
+  | 'structured_output'
+  | 'title';
 
 export interface QuotaState {
   usedTokens: number;

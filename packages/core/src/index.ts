@@ -19,6 +19,7 @@ export * from './spi/pricing-store.js';
 export * from './pricing/bedrock.js';
 export * from './pricing/models-dev.js';
 export * from './pricing/boot-pricing.js';
+export * from './pricing/resolve.js';
 export * from './spi/retriever.js';
 export * from './spi/history-policy.js';
 export * from './spi/processors.js';

@@ -8,7 +8,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable } from '@nestjs/common';
 import { OPENCODE_OPTIONS } from './tokens.js';
-import { OpenCodeReplyMismatchError, errorText, isDecision } from './turn.js';
+import { OpenCodeReplyMismatchError, addUsage, emptyUsage, errorText, isDecision } from './turn.js';
 import { type OpenCodeEngineSettings, OpenCodeTurns } from './turns.js';
 
 /**
@@ -99,14 +99,17 @@ export class OpenCodeAgentRunner implements AgentRunner {
   private async run(runId: string, input: AgentRunInput): Promise<void> {
     const started = Date.now();
     this.inputs.set(runId, input);
+    // What the run spent, milestone by milestone.
+    let spent = emptyUsage();
     try {
       let handle = await this.turns.begin(runId, input);
       if (this.cancelled.has(runId)) throw new RunCancelledError();
-      await this.turns.prompt(runId, input, handle);
+      await this.turns.prompt(runId, input, handle, spent);
       for (;;) {
-        const milestone = await this.turns.observe(runId, input, handle);
+        const milestone = await this.turns.observe(runId, input, handle, spent);
+        spent = addUsage(spent, milestone.usage);
         if (milestone.kind === 'finished') {
-          await this.turns.settle(runId, input, milestone.outcome, Date.now() - started);
+          await this.turns.settle(runId, input, milestone.outcome, Date.now() - started, spent);
           return;
         }
         const reply = await this.park(
@@ -115,15 +118,21 @@ export class OpenCodeAgentRunner implements AgentRunner {
           milestone.ask.kind === 'approval' ? 'approval' : 'answers',
           milestone.timeoutMs,
         );
-        handle = await this.turns.reply(runId, input, handle, milestone.ask, reply);
+        handle = await this.turns.reply(runId, input, handle, milestone.ask, reply, spent);
       }
     } catch (error) {
       if (error instanceof RunCancelledError) {
         await this.turns.interrupt(input).catch(() => undefined);
+        // Unset: the turn this process follows also saw what was spent since the last milestone.
         await this.turns.settle(runId, input, { status: 'interrupted' }, Date.now() - started);
         return;
       }
-      await this.turns.settleFailed(runId, input, errorText(error, 'the turn failed'));
+      await this.turns.settleFailed(
+        runId,
+        input,
+        errorText(error, 'the turn failed'),
+        Date.now() - started,
+      );
     } finally {
       this.inputs.delete(runId);
     }
