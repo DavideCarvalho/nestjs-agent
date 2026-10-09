@@ -1,0 +1,172 @@
+---
+title: Your design system in the sandbox
+description: "The sandbox drawn in your app's look: the host theme's CSS variables (light and dark), Tailwind utilities mapped to them, and your own components (shadcn components/ui) as a kit the model writes JSX with — bundled by a Vite plugin, documented from their types and found by AgentGenuiModule."
+icon: Palette
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The [sandbox](/docs/agent/guides/generative-ui-sandbox) runs the model's view in an isolated frame with no network. Out of the box that view looks like nothing in your app. Three opt-in levels close the gap, each building on the one before:
+
+| Level | Option | What the frame gets | Cost per frame |
+| --- | --- | --- | --- |
+| 1. Theme | `theme: 'inherit'` (**on by default**) | Your page's CSS custom properties (`--background`, `--primary`, `--radius`…), following light/dark | a few hundred bytes |
+| 2. Tailwind | `tailwind: true` | `@tailwindcss/browser` (v4) with an `@theme` mapped from your variables: `bg-primary`, `text-muted-foreground`, `rounded-lg` work offline | ≈280 KB (≈75 KB gzipped, fetched once per page) |
+| 3. Kit | `kit: true` | Your components (e.g. shadcn `components/ui`) + React, as one bundle; the model writes **JSX** with them | ≈230 KB + your components |
+
+## Security
+
+None of this loosens the [security model](/docs/agent/guides/generative-ui-sandbox#security-model). The frame stays what it was: `sandbox="allow-scripts"` without `allow-same-origin`, and a CSP with no network. Tailwind and the kit are **inlined** into the frame's document — the renderer fetches each once from **your own origin**, caches it, and puts it in the `srcdoc` — so the frame itself still loads nothing. The JSX is compiled inside the frame by a small transpiler inlined with it: no `'unsafe-eval'` is needed, and none is granted.
+
+What you put in the kit is code the generated view can call. Keep it to presentational components: a component that calls your API (with the user's session, from the host page) has no business in a kit — inside the frame it would have no cookies and no network anyway, so it would only fail.
+
+## 1. The theme (on by default)
+
+The renderer reads every custom property your stylesheets declare, takes their computed values on `:root`, and puts them on the frame's `:root`. When your page switches theme — a `dark` class, a `data-theme="dark|light"` attribute on `<html>`, a stylesheet swapped, or the system's `prefers-color-scheme` — it pushes the new values into the frame by `postMessage`, without reloading it. The frame mirrors the mode as both `class="dark"` and `data-theme`, and mirrors your root's `color-scheme` when you set one (a frame whose `color-scheme` differs from its page's is painted opaque, so it is left out when yours is `normal`).
+
+The model is told which variables exist, so it writes `background: var(--card)` instead of `#fff`. Turn it off per sandbox with `theme: false`.
+
+## 2. Tailwind
+
+```ts title="Backend — src/app.module.ts"
+AgentGenuiModule.forRoot({ catalog, sandbox: { tailwind: true } });
+```
+
+The Tailwind runtime is served by the Vite plugin below (`genuiSandboxKit()` — Tailwind is on in it by default). The renderer builds an `@theme inline` from your variables (colors become `--color-*`, bare shadcn v3 `H S% L%` channels are wrapped in `hsl()`, `--radius` gives `rounded-sm`…`rounded-xl`, `--font-*` stay fonts) and a `dark` variant matching both `.dark` and `[data-theme=dark]`.
+
+Your own Tailwind setup — custom variants (shadcn's `data-open:`, `data-horizontal:`, a `dark` variant on `data-theme`), `@utility`s, `@theme` keys — reaches the frame with `genuiSandboxKit({ tailwindCss: ['shadcn/tailwind.css', 'src/styles/globals.css'] })` (paths relative to the Vite root, absolute paths, or package specifiers): the plugin keeps those directives (never `@import`s, `@source`s or base styles), puts them on the descriptor as `tailwind.css`, and the renderer adds them to the frame's Tailwind.
+
+## 3. The kit
+
+Add the plugin to the Vite config of the frontend that talks to the agent:
+
+```ts title="Frontend — vite.config.ts"
+import react from '@vitejs/plugin-react';
+import { genuiSandboxKit } from '@dudousxd/nestjs-agent/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    // `include`: the component files whose exports are the kit — or `entry`: one module exporting it.
+    // Neither → the first `src/components/ui`, `components/ui`, `app/components/ui`…
+    genuiSandboxKit({ include: 'src/components/ui/*.tsx' }),
+  ],
+});
+```
+
+```ts title="Backend — src/app.module.ts"
+AgentGenuiModule.forRoot({ catalog, sandbox: { kit: true, tailwind: true } });
+```
+
+Or define it in the shared catalog — `AgentGenuiModule` resolves a catalog sandbox with `kit` or `tailwind` the same way, under its own name:
+
+```ts title="Shared — src/genui/catalog.ts"
+export const catalog = defineCatalog([...BUILTIN_COMPONENTS, defineSandbox({ kit: true, tailwind: true })]);
+```
+
+That is all — nobody runs a command:
+
+- **Dev**: the plugin builds the kit (your components, React and ReactDOM as one IIFE setting `window.Kit`), serves it with the Tailwind runtime under `/@genui-sandbox-kit/`, and writes the docs and urls to **`.genui/sandbox-kit.json`** (relative to the Vite root — add `.genui/` to `.gitignore`). When a component changes it rebuilds, and every open sandbox reloads with the new kit (HMR).
+- **Build**: it emits the bundle, the Tailwind runtime and `genui-sandbox-kit.json` (docs + urls) as hashed assets, listed in the Vite manifest under `genui-sandbox-kit.js`, `genui-sandbox-tailwind.js` and `genui-sandbox-kit.json`.
+- **Server**: no Vite runs in the Nest process, so `AgentGenuiModule` reads files: the dev descriptor `.genui/sandbox-kit.json` (relative to `process.cwd()`), or in production (`NODE_ENV=production`, read first) the Vite manifest. `GET /agent/config` then tells the renderer where the assets are (`genui.sandbox`), and the model is told the components.
+
+The asset urls are same-origin paths (`/@genui-sandbox-kit/kit.js?v=…` in dev, `/assets/genui-sandbox-kit-….js` in a build): serve the SPA and the agent from one origin (the Vite dev server proxying `/agent` to Nest, `ServeStaticModule` serving the build), or set `sandboxKit.kitUrl`.
+
+### Where the server looks: `sandboxKit`
+
+```ts title="Backend — src/app.module.ts"
+AgentGenuiModule.forRoot({
+  catalog,
+  sandbox: { kit: true, tailwind: true },
+  sandboxKit: {
+    root: join(__dirname, '..'),                  // default process.cwd(); the paths below resolve against it
+    descriptor: 'web/.genui/sandbox-kit.json',    // default .genui/sandbox-kit.json
+    manifest: { file: 'public/.vite/manifest.json', outDir: 'public' }, // the default; `false` for none
+    // kitUrl: 'https://app.example.com/assets/kit.js', // an SPA served from elsewhere
+    // production: true,                          // default NODE_ENV === 'production'
+  },
+});
+```
+
+The default manifest is **`public/.vite/manifest.json`**, its `file`s relative to **`public`** — what a Vite build with `build: { outDir: 'public', manifest: true }` writes. Point `manifest` at your build's real output (`client/dist/.vite/manifest.json` with `outDir: 'client/dist'`, …) otherwise. A kit or Tailwind asked for but not found is left out of what the browser is told, and the model is told of a kit only when docs exist, so a missing build degrades to the plain sandbox.
+
+### Without Vite in the same project
+
+When the Nest app and the frontend are separate projects (or the frontend is not built with this plugin), the server still needs the **docs**. [`@dudousxd/nestjs-codegen`](/docs/codegen)'s `genuiSandboxKit()` extension writes the same `.genui/sandbox-kit.json` on every codegen pass (one-off, `--watch`, and the module's watcher), from your components' types:
+
+```ts title="nestjs-codegen.config.ts"
+import { defineConfig, genuiSandboxKit } from '@dudousxd/nestjs-codegen';
+
+export default defineConfig({
+  contracts: { glob: 'src/**/*.controller.ts' },
+  codegen: { outDir: 'src/generated' },
+  extensions: [genuiSandboxKit({ include: 'web/components/ui/*.tsx', css: 'web/styles/globals.css' })],
+});
+```
+
+The same writer is exported for your own tooling: `writeSandboxKitDocs({ root, output, include, css })` from `@dudousxd/nestjs-agent-core/genui/kit`. Without a bundle the descriptor carries docs only, so the browser still needs the kit served from somewhere (`sandboxKit.kitUrl`).
+
+### The docs the model reads
+
+The **docs** are generated from your components' TypeScript types (the compiler API): each exported component, its props with their types, whether they are required, their JSDoc and `@default`, and the element whose native attributes it also takes. That is what the model reads, so it uses `variant="outline"` and not a prop that does not exist:
+
+```txt
+Kit components (the app design system — use these first; each is in scope by name, and on the global `Kit`):
+- <Button> A button in the app's style.
+    variant?: "default" | "outline" | "ghost" | "destructive" = "default" — How the button looks.
+    size?: "sm" | "md" | "lg" — Its size.
+    …and every <button> attribute (className, onClick, …)
+- <Slider> A range slider.
+    value: number[] — The current values (one thumb per value).
+    onValueChange?: (value: number[]) => void
+```
+
+<Callout type="info" title="TypeScript">
+The docs need TypeScript's JavaScript compiler API (5.x/6.x) — the project's own `typescript` is used (an optional peer). With only TypeScript 7 (the native compiler) installed, add `typescript5@npm:typescript@5` and pass `genuiSandboxKit({ typescript: await import('typescript5') })` — otherwise the docs list component names only.
+</Callout>
+
+### What the model writes
+
+With a kit, the sandbox takes a `jsx` field: plain JavaScript + JSX that defines `function App()`. Kit components and React's hooks are in scope by name:
+
+```jsx
+function App() {
+  const [people, setPeople] = useState(3)
+  const [total, setTotal] = useState(120)
+  const each = people > 0 ? total / people : 0
+  return (
+    <Card className="p-4">
+      <CardHeader><CardTitle>Split the bill</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <Input type="number" value={total} onChange={(e) => setTotal(Number(e.target.value) || 0)} />
+        <Slider min={1} max={12} value={[people]} onValueChange={(v) => setPeople(v[0])} />
+        <p className="text-muted-foreground">Each pays {each.toFixed(2)}</p>
+        <Button onClick={() => agent.send({ text: `Split ${total} between ${people}`, total, people })}>Settle</Button>
+      </CardContent>
+    </Card>
+  )
+}
+```
+
+It is compiled **inside the frame** and rendered into the frame's root. While the model writes it, the view keeps the skeleton → preview → live progression: a placeholder of `initialHeight`, then — every time what has arrived closes into code that parses and renders — a preview of it (a half-written attribute or conditional is held back, an open element is closed), then the live view once the call is complete. A version that does not parse or throws never replaces the last good one, so nothing is ever shown half broken; failed attempts while it streams are not reported as errors. `agent.send` only counts from the live view.
+
+### Drawing it in React
+
+`SandboxView` (from `@dudousxd/nestjs-agent-react/genui`) reads `GET /agent/config` through the enclosing `AgentProvider` and waits for it before deciding a JSX view has no kit. `createSandboxRenderer({ config, theme })` overrides that: `config` is an object (`{ theme, tailwind?: { url, css? }, kit?: { url, hash? } }`), a url answering it, or `false` (theme only). A JSX view on a page with no kit shows its `summary` instead.
+
+## Sizes
+
+Theme injection costs nothing measurable. Tailwind (≈280 KB) and the kit (≈230 KB of React + your components) are inlined into **every** sandbox frame that uses them — fetched over the network once per page, but parsed once per frame. Keep the kit to the components a generated view needs (`include` a curated list, or an `entry` re-exporting them) rather than your whole design system.
+
+## Reference
+
+| Export | From | |
+| --- | --- | --- |
+| `genuiSandboxKit(options)` | `@dudousxd/nestjs-agent/vite` | The Vite plugin: `entry`, `include`, `tailwind` (default `true`), `tailwindCss`, `descriptor` (default `.genui/sandbox-kit.json`), `tsconfig`, `typescript`, `plugins` |
+| `AgentGenuiModule.forRoot({ sandbox, sandboxKit })` | `@dudousxd/nestjs-agent/genui` | `sandbox: { theme, tailwind, kit }`; `sandboxKit: { root, descriptor, manifest, kitUrl, production }` |
+| `defineSandbox({ theme, tailwind, kit })` | `@dudousxd/nestjs-agent-core/genui` | `kit` also takes docs (or a function returning them) |
+| `createSandboxRenderer({ config, theme })` | `@dudousxd/nestjs-agent-react/genui` | `config`: an object, a url, or `false`; default the agent's `/config` |
+| `generateSandboxKitDocs`, `writeSandboxKitDocs`, `buildSandboxKitBundle`, `sandboxKitDiscovery`, `resolveSandboxServer` | `@dudousxd/nestjs-agent-core/genui/kit` | The Node half, for your own tooling |
+| `genuiSandboxKit()` (codegen extension) | `@dudousxd/nestjs-codegen` | Writes the descriptor on every codegen pass |
+| `transpileJsx`, `tailwindThemeCss`, `collectHostThemeVars` | `@dudousxd/nestjs-agent-core/genui` | The isomorphic pieces |

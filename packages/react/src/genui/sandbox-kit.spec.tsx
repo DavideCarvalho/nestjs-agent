@@ -52,7 +52,7 @@ describe('theme injection', () => {
     const View = createSandboxRenderer({ config: { theme: true } });
     render(<View html="<p>hi</p>" title="Split" />);
     const iframe = frame();
-    expect(iframe.srcdoc).toContain('<style id="agora-sandbox-theme">:root{color-scheme:light;');
+    expect(iframe.srcdoc).toContain('<style id="agora-sandbox-theme">:root{');
     expect(iframe.srcdoc).toContain('--primary:oklch(0.7 0.15 80)');
     expect(iframe.srcdoc).toContain('data-theme="light"');
 
@@ -75,7 +75,7 @@ describe('theme injection', () => {
       .at(-1) as {
       css: string;
     };
-    expect(last.css).toContain('color-scheme:dark');
+    expect(last.css).toContain('--primary:');
     // The frame was not rebuilt for it.
     expect(frame()).toBe(iframe);
   });

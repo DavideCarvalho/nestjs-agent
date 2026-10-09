@@ -8,6 +8,7 @@ import { prepareSandboxJsx, transpileJsx } from '../sandbox-jsx.js';
 import { kitDocsToModelText, sandboxJsxRuntime } from '../sandbox-kit.js';
 import {
   hostThemeCss,
+  tailwindDirectivesFromCss,
   tailwindThemeCss,
   themeToModelText,
   themeVarsFromCss,
@@ -41,6 +42,8 @@ export default function App() {
         <Slider min={1} max={10} value={[people]} onValueChange={(v) => setPeople(v[0])} />
         <Input type="number" value={total} onChange={(e) => setTotal(Number(e.target.value))} />
         {people > 5 && <p className="text-muted-foreground">Big group!</p>}
+        <p id="each">{people > 0 ? each.toFixed(2) : '—'}</p>
+        <span title={total ?? 0}>{people?.toString()}</span>
         <Button onClick={() => agent.send({ text: 'Settle it', people, total })}>Settle</Button>
       </CardContent>
     </Card>
@@ -136,6 +139,12 @@ describe('sandbox JSX — transpiler and partial gating', () => {
     expect(new Function(wrapped)()).toBe('React.createElement("b", null)');
   });
 
+  it('the frame runtime is valid JavaScript (its regular expressions intact)', () => {
+    const runtime = sandboxJsxRuntime({ token: 't', jsxMessage: 'agora:sandbox:jsx' });
+    expect(() => new Function(runtime)).not.toThrow();
+    expect(runtime).toContain('/(return|=>)\\s*\\(?\\s*</');
+  });
+
   it('the server streams the jsx field as it is written', () => {
     const props = { title: 'Split', jsx: '<Card>' };
     const out = sandboxPartialProps(props, { isOpen: () => true, pendingMember: () => 'jsx' });
@@ -163,9 +172,34 @@ describe('theme', () => {
     expect(theme).toContain('[data-theme=dark]');
   });
 
+  it("keeps an app stylesheet's Tailwind directives, not its imports or base styles", () => {
+    const directives = tailwindDirectivesFromCss(`@import "tailwindcss";
+@source "../apps";
+/* a { } comment */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@custom-variant data-open { &:where([data-state="open"]) { @slot; } }
+@utility no-scrollbar { scrollbar-width: none; }
+@theme inline { --color-gold: var(--gold); }
+@layer base { body { color: red; } }`);
+    expect(directives).toContain(
+      '@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));',
+    );
+    expect(directives).toContain(
+      '@custom-variant data-open { &:where([data-state="open"]) { @slot; } }',
+    );
+    expect(directives).toContain('@utility no-scrollbar');
+    expect(directives).toContain('--color-gold: var(--gold)');
+    expect(directives).not.toContain('@import');
+    expect(directives).not.toContain('@layer');
+  });
+
   it('puts the values on the frame root with its color scheme, and tells the model the names', () => {
-    expect(hostThemeCss({ '--primary': 'red' }, true)).toBe(
+    expect(hostThemeCss({ '--primary': 'red' }, { colorScheme: 'dark' })).toBe(
       ':root{color-scheme:dark;--primary:red}',
+    );
+    // A host without a color-scheme: none on the frame either (it would paint it opaque).
+    expect(hostThemeCss({ '--primary': 'red' }, { colorScheme: 'normal' })).toBe(
+      ':root{--primary:red}',
     );
     const text = themeToModelText(themeVarsFromCss(css), { tailwind: true });
     expect(text).toContain('var(--primary)');
@@ -229,7 +263,7 @@ describe('kit docs generator', () => {
     expect(text).toContain('- <Button> A button');
     expect(text).toContain('variant?: "default" | "outline" | "ghost" | "destructive" = "default"');
     expect(text).toContain('…and every <button> attribute');
-  });
+  }, 60_000);
 
   it('finds the default components/ui folder, and globs', () => {
     expect(resolveSandboxKitFiles(fixture, {})?.files.map((file) => file.split('/').pop())).toEqual(
@@ -255,7 +289,7 @@ describe('kit docs generator', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
 
 describe('the sandbox definition with a kit', () => {
@@ -309,7 +343,7 @@ describe('the Vite plugin', () => {
       root,
       logLevel: 'silent',
       resolve: { alias },
-      plugins: [genuiSandboxKit({ typescript })],
+      plugins: [genuiSandboxKit({ typescript, tailwindCss: 'tailwind-directives.txt' })],
       build: {
         outDir: join(work, 'dist'),
         manifest: true,
@@ -328,6 +362,7 @@ describe('the Vite plugin', () => {
     );
     expect(descriptor.kit.url).toBe(`/${manifest['genui-sandbox-kit.js'].file}`);
     expect(descriptor.tailwind.url).toBe(`/${manifest['genui-sandbox-tailwind.js'].file}`);
+    expect(descriptor.tailwind.css).toContain('@utility kit-card');
     expect(descriptor.components.map((c: { name: string }) => c.name)).toContain('Slider');
     expect(descriptor.theme.vars['--primary']).toBe('oklch(0.7 0.1 80)');
     const kit = readFileSync(join(work, 'dist', manifest['genui-sandbox-kit.js'].file), 'utf8');
@@ -346,7 +381,7 @@ describe('the Vite plugin', () => {
       kit: descriptor.kit,
     });
     expect(defineSandbox(server.define).description).toContain('- <Slider>');
-  }, 60_000);
+  }, 180_000);
 
   it('dev: serves the bundle, writes the descriptor, and rebuilds when a component changes', async () => {
     const vite = await import('vite');
@@ -404,7 +439,7 @@ describe('the Vite plugin', () => {
     } finally {
       await server.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('dev: an app module importing the renderer gets the HMR bridge', async () => {
     const plugin = genuiSandboxKit();

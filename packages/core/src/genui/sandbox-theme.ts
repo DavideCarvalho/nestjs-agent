@@ -107,13 +107,21 @@ export function themeToModelText(
   return parts.join(' ');
 }
 
-/** `:root { color-scheme; --x: value; … }` — the theme as the frame gets it. */
-export function hostThemeCss(vars: Record<string, string>, dark: boolean): string {
+/**
+ * `:root { --x: value; … }` — the theme as the frame gets it. `colorScheme` is the host root's
+ * computed `color-scheme`: mirrored when the host sets one (a frame whose scheme differs from its
+ * page's is painted opaque), left out when it is `normal`.
+ */
+export function hostThemeCss(
+  vars: Record<string, string>,
+  options: { colorScheme?: string } = {},
+): string {
   const body = Object.entries(vars)
     .filter(([name, value]) => !INTERNAL_VAR.test(name) && value.trim() !== '')
     .map(([name, value]) => `${name}:${value.replace(/[<>{}]/g, '')}`)
     .join(';');
-  return `:root{color-scheme:${dark ? 'dark' : 'light'};${body}}`;
+  const scheme = options.colorScheme?.trim();
+  return `:root{${scheme && scheme !== 'normal' ? `color-scheme:${scheme.replace(/[<>{};]/g, '')};` : ''}${body}}`;
 }
 
 /**
@@ -186,6 +194,43 @@ export interface ThemeDocument {
 interface ThemeMutationObserver {
   observe(target: object, options: Record<string, unknown>): void;
   disconnect(): void;
+}
+
+/**
+ * The Tailwind directives of an app stylesheet the sandbox's Tailwind should know too: its
+ * `@custom-variant`s (shadcn's `data-open:`, `data-horizontal:`…), `@utility`s and `@theme` blocks —
+ * not its `@import`s, `@source`s or base styles. What `genuiSandboxKit({ tailwindCss })` collects.
+ */
+export function tailwindDirectivesFromCss(css: string): string {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out: string[] = [];
+  const directive = /@(custom-variant|utility|theme)\b/g;
+  let depth = 0;
+  for (let index = 0; index < text.length; index++) {
+    const c = text[index];
+    if (c === '{') depth++;
+    else if (c === '}') depth = Math.max(0, depth - 1);
+    else if (c === '@' && depth === 0) {
+      directive.lastIndex = index;
+      const match = directive.exec(text);
+      if (match === null || match.index !== index) continue;
+      // One statement (`@custom-variant dark (&:where(.dark *));`) or one balanced block.
+      let end = index;
+      let inner = 0;
+      for (; end < text.length; end++) {
+        const ch = text[end];
+        if (ch === ';' && inner === 0) break;
+        if (ch === '{') inner++;
+        else if (ch === '}') {
+          inner--;
+          if (inner === 0) break;
+        }
+      }
+      out.push(text.slice(index, end + 1).trim());
+      index = end;
+    }
+  }
+  return out.join('\n');
 }
 
 /** Light or dark: the host's `dark` class / `data-theme`, else the system preference. */

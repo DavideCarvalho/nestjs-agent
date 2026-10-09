@@ -32,12 +32,7 @@ import {
   readForwardedProps,
   readUserTurn,
 } from '@dudousxd/nestjs-agent-core/ag-ui';
-import {
-  type Catalog,
-  WEB_CHANNEL,
-  stampChannel,
-  uiActionText,
-} from '@dudousxd/nestjs-agent-core/genui';
+import { type Catalog, uiActionText } from '@dudousxd/nestjs-agent-core/genui';
 import {
   BadRequestException,
   Body,
@@ -222,14 +217,13 @@ export class AgUiRunHandler {
       throw invalid(NO_USER_MESSAGE_CODE, 'the user message to answer is empty');
     }
     const context = readContext(input.context);
-    // An AG-UI client is a web page, unless its page context names another channel.
-    const pageContext: PageContext = stampChannel(
-      {
-        ...forwarded.pageContext,
-        ...(context !== undefined ? { agUiContext: context } : {}),
-      },
-      WEB_CHANNEL,
-    );
+    const pageContext: PageContext | undefined =
+      forwarded.pageContext !== undefined || context !== undefined
+        ? {
+            ...forwarded.pageContext,
+            ...(context !== undefined ? { agUiContext: context } : {}),
+          }
+        : undefined;
     const started = await this.agent.chat({
       actor,
       message: turn.text,
@@ -240,7 +234,7 @@ export class AgUiRunHandler {
       ...(forwarded.uiCapabilities !== undefined
         ? { uiCapabilities: forwarded.uiCapabilities }
         : {}),
-      pageContext,
+      ...(pageContext !== undefined ? { pageContext } : {}),
       ...(refs.length > 0 ? { attachments: refs } : {}),
       ...(forwarded.regenerate === true ? { regenerate: true } : {}),
     });

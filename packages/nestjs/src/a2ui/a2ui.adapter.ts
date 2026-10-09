@@ -19,7 +19,6 @@ import {
   type Catalog,
   type UiAction,
   type UiCapabilities,
-  WEB_CHANNEL,
   uiActionText,
   validateUiCapabilities,
 } from '@dudousxd/nestjs-agent-core/genui';
@@ -238,8 +237,6 @@ export class A2uiRunHandler {
       message: text,
       ...(threadId === undefined ? {} : owner !== null ? { threadId } : { newThreadId: threadId }),
       ...(agentName !== undefined ? { agentName } : {}),
-      // An A2UI client draws like a web page.
-      pageContext: { channel: WEB_CHANNEL },
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(dataModel !== undefined ? { pageContext: { a2uiDataModel: dataModel } } : {}),
     });

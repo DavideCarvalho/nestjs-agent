@@ -28,6 +28,8 @@
     "chat-components",
     "generative-ui",
     "generative-ui-sandbox",
+    "generative-ui-sandbox-kit",
+    "generative-ui-channels",
     "genui-builtins",
     "loading-states",
     "component-rendering",

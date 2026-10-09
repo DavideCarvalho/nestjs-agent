@@ -47,7 +47,6 @@ export {
   type ResolvedGenuiChannel,
   renderChannelMessages,
   resolveGenuiChannel,
-  stampChannel,
   textToHtml,
   turnChannel,
   WEB_CHANNEL,

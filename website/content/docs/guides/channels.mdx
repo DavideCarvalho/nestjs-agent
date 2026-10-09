@@ -368,6 +368,10 @@ together: `**bold**` and `*bold*` both become the channel's bold, `[label](url)`
 become `-` (WhatsApp) or `•` (Telegram). Code is left alone. `toChannelMarkdown(text, 'whatsapp' |
 'telegram' | 'none')` and `splitMessage(text, maxLength)` are exported.
 
+<Callout type="info" title="Components drawn natively">
+With [`AgentGenuiModule.forRoot({ channels })`](/docs/agent/guides/generative-ui-channels) configured for a channel's `kind` (`whatsapp`, `telegram`), components arrive as that channel's own messages — text, reply buttons, lists, chart images — and a pressed button is the user's next turn. Adapters report `kind` and `capabilities.lists`, and take a list `OutboundMessage`.
+</Callout>
+
 ## Proposals: buttons and text
 
 When a turn leaves a proposal pending, the route sends its confirmation (the title and detail the

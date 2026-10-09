@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelProvider, ModelTurnArgs, ModelTurnResult } from '@dudousxd/nestjs-agent-core';
-import { defineCatalog, defineComponent } from '@dudousxd/nestjs-agent-core/genui';
+import { defineCatalog, defineComponent, defineSandbox } from '@dudousxd/nestjs-agent-core/genui';
 import { InMemoryAgentStore, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
 import { Injectable } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -138,6 +138,28 @@ describe('AgentGenuiModule — channels and the sandbox kit', () => {
     expect(genui.base.sandbox).toMatchObject({ tailwind: true });
     expect(genui.catalog.get('Sandbox')?.description).toContain('- <Slider>');
     expect(genui.catalog.get('Sandbox')?.description).toContain('var(--primary)');
+  });
+
+  it('a kit sandbox in the catalog is resolved like `sandbox: { kit, tailwind }`, its name kept', async () => {
+    const { app: booted } = await boot(
+      new RecordingModel(),
+      AgentGenuiModule.forRoot({
+        catalog: defineCatalog([defineSandbox({ name: 'MiniApp', kit: true, tailwind: true })]),
+        sandboxKit: { root: work, production: false },
+      }),
+    );
+    const genui = booted.get<AgentGenui>(AGENT_GENUI);
+    expect(genui.sandboxClient?.()).toEqual({
+      theme: true,
+      tailwind: { url: '/@genui-sandbox-kit/tailwind.js' },
+      kit: { url: '/@genui-sandbox-kit/kit.js?v=abc', hash: 'abc' },
+    });
+    expect(genui.catalog.components).toHaveLength(1);
+    const sandbox = genui.catalog.get('MiniApp');
+    expect(
+      (sandbox?.props as { properties: Record<string, unknown> }).properties.jsx,
+    ).toBeDefined();
+    expect(sandbox?.description).toContain('- <Slider>');
   });
 
   it('no sandbox → no genui facts on GET /config', async () => {

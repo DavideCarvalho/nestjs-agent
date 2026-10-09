@@ -63,6 +63,8 @@ Use one or the other. The `sandbox` option replaces a definition of the same nam
 | `name` | The component name. Default `Sandbox`. |
 | `version` | The component version. |
 
+To draw the sandbox in your app's look — your theme's variables, Tailwind utilities, and your own components as a kit the model writes JSX with — see [Your design system in the sandbox](/docs/agent/guides/generative-ui-sandbox-kit) (`theme`, `tailwind`, `kit`).
+
 The generated description tells the model, besides the last-resort rule: the order to write the fields in, exactly which network the policy opens (or that there is none — inline SVG and `data:` URLs only), that there is no `<form>` submission and no top-level `await`, to validate numeric input and label units, and to call `agent.send(...)` from an explicit button click only — never on load, on a timer or on input.
 
 ## What the model writes
@@ -234,6 +236,8 @@ Send its actions back as the next run. Either put the action in `forwardedProps.
 or add a user message whose content is `uiActionText(action)` and run as usual. `forwardedProps.uiAction` is checked like any untrusted input: a plain object, a valid `name`, a JSON object `context`, at most 8192 bytes; anything else is a `400 { code: 'invalid_ui_action' }`.
 
 ## On text channels
+
+Which tools each channel is offered, and how components are delivered on WhatsApp and Telegram, is configurable per channel — see [Generative UI per channel](/docs/agent/guides/generative-ui-channels). The sandbox is never offered on a messaging channel there.
 
 [Text channels](/docs/agent/guides/channels) (WhatsApp, Telegram, e-mail) and every client that did not declare `Sandbox` in its [UI capabilities](/docs/agent/guides/rendering-everywhere#declaring-what-a-client-can-draw) receive the component's text fallback — its `title` and `summary`, never its code:
 

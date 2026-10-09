@@ -11,10 +11,12 @@ import type {
 } from '@dudousxd/nestjs-agent-core/genui';
 import {
   type DefineSandboxOptions,
+  type SandboxDefinition,
   assertGenuiChannels,
   defineCatalog,
   defineSandbox,
   genuiTools,
+  sandboxPolicyOf,
 } from '@dudousxd/nestjs-agent-core/genui';
 import {
   type DynamicModule,
@@ -179,6 +181,8 @@ function resolverProviders(resolver: ResolverOption | undefined): Provider[] {
 /** The sandbox and channels with the kit, Tailwind and theme names found ({@link GENUI_RESOLVED}). */
 interface ResolvedGenui {
   sandbox?: boolean | DefineSandboxOptions;
+  /** A kit or Tailwind sandbox the catalog itself defines, resolved (under its own name). */
+  catalogSandbox?: DefineSandboxOptions;
   channels?: GenuiChannels;
   sandboxClient?: () => SandboxClientConfig;
 }
@@ -217,6 +221,17 @@ async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> 
     return resolved.define;
   };
   const sandbox = await resolveSandbox(asked);
+  // A kit or Tailwind sandbox defined in the (shared) catalog itself: found the same way, and put
+  // back under its own name, so the browser's copy of the catalog validates what the model writes.
+  const own = options.catalog?.components.find((each) => sandboxPolicyOf(each) !== undefined) as
+    | SandboxDefinition
+    | undefined;
+  const ownOptions =
+    asked === undefined &&
+    own?.sandboxOptions !== undefined &&
+    (own.sandboxView?.kit === true || own.sandboxView?.tailwind === true)
+      ? await resolveSandbox({ ...own.sandboxOptions, name: own.name })
+      : undefined;
   let channels: GenuiChannels | undefined;
   if (askedChannels !== undefined) {
     channels = {};
@@ -228,6 +243,7 @@ async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> 
   }
   return {
     ...(sandbox !== undefined ? { sandbox } : {}),
+    ...(typeof ownOptions === 'object' ? { catalogSandbox: ownOptions } : {}),
     ...(channels !== undefined ? { channels } : {}),
     ...(clients.length > 0 ? { sandboxClient: () => mergeSandboxClients(clients) } : {}),
   };
@@ -263,10 +279,10 @@ function toolOptions(
 /** The configured catalog, with the sandbox component added when `sandbox` asks for it. */
 function withSandbox(options: AgentGenuiOptions, resolved: ResolvedGenui): Catalog {
   const base = options.catalog ?? defineCatalog([]);
-  const { sandbox } = resolved;
-  return sandbox === undefined || sandbox === false
-    ? base
-    : base.extend([defineSandbox(sandbox === true ? {} : sandbox)]);
+  const { sandbox, catalogSandbox } = resolved;
+  if (sandbox === undefined || sandbox === false)
+    return catalogSandbox !== undefined ? base.extend([defineSandbox(catalogSandbox)]) : base;
+  return base.extend([defineSandbox(sandbox === true ? {} : sandbox)]);
 }
 
 function coreProviders(resolver: ResolverOption | undefined): Provider[] {
