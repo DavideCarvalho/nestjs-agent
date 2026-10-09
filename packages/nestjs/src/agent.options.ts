@@ -2,7 +2,7 @@ import type {
   ActionApprovalMode,
   ActionProposal,
   BackgroundActorResolver,
-  ModelsDevOptions,
+  PriceCatalogOptions,
   TextActionProposalConfig,
 } from '@dudousxd/nestjs-agent-core';
 import type {
@@ -182,15 +182,31 @@ export interface AgentModuleOptions {
   /**
    * Where a configured model with no price row gets one, at boot. On application bootstrap every
    * model the `model` provider describes (`aiSdkModel` / `aiSdkModels`) that the bound
-   * `AGENT_PRICING_STORE` does not price gets the current [models.dev](https://models.dev) list price
-   * written as its row — only when it has none, so a price you set is never overwritten. A model that
-   * still has no price, and whose provider reports no cost (anything but OpenRouter / the Vercel AI
-   * Gateway), is named in one boot warning: it would record a `null` cost on every turn.
+   * `AGENT_PRICING_STORE` does not price gets a row — only when it has none, so a price you set is
+   * never overwritten — from, in order: `prices` (your own rate card), the built-in AWS GovCloud
+   * Bedrock table (for a GovCloud model), then the current [models.dev](https://models.dev) list price
+   * (commercial; never used for a GovCloud / China Bedrock model). A model that still has no price, and
+   * whose provider reports no cost (anything but OpenRouter / the Vercel AI Gateway), is named in one
+   * boot warning with the reason and the `prices` entry that fixes it.
+   *
+   * Bedrock ids are normalized: an entry for the base id or the `us-gov.` profile id also prices the
+   * inference-profile ARN a turn reports. The AWS partition comes from the id (ARN, `us-gov.` prefix),
+   * else `region`, else `AWS_REGION` / `AWS_DEFAULT_REGION`.
+   *
+   * ```ts
+   * priceCatalog: {
+   *   region: 'us-gov-west-1',
+   *   prices: [
+   *     { model: 'us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0', input: 3.6, output: 18, cacheRead: 0.36, cacheWrite: 4.5 },
+   *   ],
+   * }
+   * ```
    *
    * Omit → models.dev, except under `NODE_ENV=test` (no network from a test suite unless asked).
-   * `{ url, fetch }` points at a mirror; `false` never fetches (the warning still runs).
+   * `{ url, fetch }` points at a mirror; `modelsDev: false` never fetches; `false` turns off every
+   * source but the built-in table (the warning still runs).
    */
-  priceCatalog?: ModelsDevOptions | false;
+  priceCatalog?: PriceCatalogOptions | false;
   /**
    * Run turns on something other than this library's loop — e.g. `openCode({ host })`. The engine
    * binds `AGENT_RUNNER`; the routes, store, sink, approvals and queue stay the library's. STATIC

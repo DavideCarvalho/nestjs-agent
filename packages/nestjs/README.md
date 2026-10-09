@@ -418,6 +418,61 @@ AgentModule.forRoot({
 
 In anonymous mode the limits apply per browser (each is its own actor).
 
+### Pricing at boot: your own prices, and AWS Bedrock (GovCloud, China)
+
+On bootstrap `AgentModule` gives every configured model (`aiSdkModel` / `aiSdkModels` describe
+theirs) that the bound `AGENT_PRICING_STORE` has no row for a price row, so its turns record a
+`cost_usd`. It never overwrites a row that exists. The sources, in order: `priceCatalog.prices`, the
+built-in GovCloud Bedrock table, then the [models.dev](https://models.dev) list price. A model still
+unpriced gets one boot warning naming it, the reason, and the `priceCatalog.prices` entry that fixes it.
+
+Bedrock reports no cost, so a Bedrock turn is priced off the row for the exact model id the turn
+reports — often an inference-profile ARN. At boot each Bedrock id is normalized: an ARN
+(`arn:aws[-us-gov|-cn]:bedrock:<region>:<account>:(inference-profile|foundation-model|application-inference-profile)/<id>`)
+or a geo-prefixed profile (`us.`, `eu.`, `apac.`, `us-gov.`, `global.`, …) is looked up as the full
+id, then the profile id, then the base foundation-model id, and the row is written under the id the
+model is configured with (an ARN stays an ARN). An ARN is never looked up as an OpenRouter id.
+
+models.dev lists **commercial** Bedrock prices. For a model in **GovCloud** (`aws-us-gov`) or
+**China** (`aws-cn`) they are never seeded. The partition comes from the id (the ARN, or a `us-gov.`
+prefix), else `priceCatalog.region`, else `AWS_REGION` / `AWS_DEFAULT_REGION`. GovCloud models get
+a built-in table instead (`BEDROCK_BUILTIN_PRICES`: common Anthropic models, from the AWS Price List
+for us-gov-west-1). Any other model in those partitions is left unpriced, and the boot warning names
+the partition and the fix.
+
+`priceCatalog.prices` is your own rate card. Each entry seeds a row for its model, and for any
+configured model it matches by normalized id, when that model has **no** row yet (an existing row is
+never overwritten). Entries are checked before the built-in table and models.dev, so they win over
+both. An entry looks like `{ model, input, output, cacheRead?, cacheWrite?, currency?: 'USD', unit?:
+'1M tokens' | '1K tokens' }`. Only USD is accepted, because the ledger records `cost_usd`.
+
+A GovCloud app on Claude Sonnet 4.5 (us-gov-west-1 list price, USD per 1M tokens):
+
+```ts
+AgentModule.forRoot({
+  // …
+  priceCatalog: {
+    region: 'us-gov-west-1',
+    prices: [
+      {
+        // Also prices the ARN a turn reports:
+        // arn:aws-us-gov:bedrock:us-gov-west-1:<account>:inference-profile/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0
+        model: 'us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        input: 3.6,
+        output: 18,
+        cacheRead: 0.36,
+        cacheWrite: 4.5,
+      },
+    ],
+  },
+});
+```
+
+Set `modelsDev: false` to keep the app prices and never fetch models.dev.
+
+A row seeded before this existed (an earlier release priced a bare base id at the commercial price)
+is **not** replaced. Correct it with `upsertModelPrice` if you run in GovCloud.
+
 ### Who approves an action, and for how long
 
 Action handlers can implement an optional read-only `preflight(input, ctx, { phase })`. The
