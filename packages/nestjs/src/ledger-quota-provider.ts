@@ -5,6 +5,7 @@ import {
   type QuotaQuery,
   type QuotaReport,
   type QuotaWindow,
+  type UsageTotals,
   exhaustedWindow,
   quotaPeriodRange,
   quotaWarning,
@@ -29,6 +30,13 @@ export interface LedgerQuotaOptions {
    * Stamped on every window that has a ceiling. Omit → no warnings.
    */
   warnAt?: number;
+  /**
+   * Whether the USD windows count ESTIMATED cost (tokens × the price row, for a provider that reports
+   * none, e.g. Bedrock, OpenAI or Anthropic direct) as well as provider-reported cost. Default `true`:
+   * a USD ceiling that ignored estimates would read $0 and never block for every such provider, which
+   * is a budget that does not enforce. Set `false` to budget on provider-reported (gateway) cost only.
+   */
+  countEstimatedCost?: boolean;
 }
 
 /**
@@ -54,7 +62,7 @@ export class LedgerQuotaProvider implements QuotaProvider {
     if (this.store.usageBetween !== undefined) {
       const range = quotaPeriodRange('month', now);
       const used = await this.store.usageBetween(actorRef, range.fromDay, range.toDay);
-      windows.push(this.window('month', used.usedTokens, used.costUsd, range.resetsAt));
+      windows.push(this.window('month', used.usedTokens, this.usd(used), range.resetsAt));
     }
     const blocked = exhaustedWindow(windows);
     const warning = quotaWarning(windows);
@@ -67,8 +75,16 @@ export class LedgerQuotaProvider implements QuotaProvider {
 
   private async dayWindow(actorRef: string, now: Date): Promise<QuotaWindow> {
     const range = quotaPeriodRange('day', now);
-    const { usedTokens, costUsd } = await this.store.quotaToday(actorRef, range.fromDay);
-    return this.window('day', usedTokens, costUsd, range.resetsAt);
+    const used = await this.store.quotaToday(actorRef, range.fromDay);
+    return this.window('day', used.usedTokens, this.usd(used), range.resetsAt);
+  }
+
+  /** The window's USD: every priced row, or (with `countEstimatedCost: false`) reported cost only. */
+  private usd(used: UsageTotals): number {
+    if (this.options.countEstimatedCost === false) {
+      return Math.max(0, used.costUsd - (used.estimatedCostUsd ?? 0));
+    }
+    return used.costUsd;
   }
 
   private window(

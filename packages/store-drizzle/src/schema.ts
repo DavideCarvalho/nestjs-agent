@@ -16,7 +16,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext, CostSource } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   index,
@@ -199,8 +199,10 @@ export const agentTokenUsage = sqliteTable(
     cacheWriteTokens: integer('cache_write_tokens'),
     /** Subset of `inputTokens` served from the prompt cache this turn; null when not reported. */
     cacheReadTokens: integer('cache_read_tokens'),
-    /** Provider-reported actual USD cost for the turn; null when only tokens were reported. */
+    /** The turn's USD cost: provider-reported, or estimated from the price row (see `costSource`); null when unpriced. */
     costUsd: real('cost_usd'),
+    /** Where `cost_usd` came from: `'provider'` (reported) or `'estimate'` (tokens × the price row); null on rows from before it existed (reported). */
+    costSource: text('cost_source').$type<CostSource>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],

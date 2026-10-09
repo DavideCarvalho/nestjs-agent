@@ -1232,6 +1232,25 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
       });
       const [usage] = await orm.em.fork().find(AgentTokenUsage, { actorRef: 'cost-actor' });
       expect(usage?.costUsd).toBe(0.000123456);
+      // A reported cost without a source is stamped 'provider'.
+      expect(usage?.costSource).toBe('provider');
+
+      // An estimated row persists its cost and says so; the totals count it and split it out.
+      await store.recordUsage({
+        threadId: thread.id,
+        actorRef: 'cost-actor',
+        modelId: 'fractional',
+        purpose: 'chat',
+        usage: { inputTokens: 10_605, outputTokens: 5 },
+        costUsd: 0.038268,
+        costSource: 'estimate',
+      });
+      const day = new Date().toISOString().slice(0, 10);
+      const totals = await store.quotaToday('cost-actor', day);
+      expect(totals.costUsd).toBeCloseTo(0.000123456 + 0.038268, 9);
+      expect(totals.estimatedCostUsd).toBeCloseTo(0.038268, 9);
+      const rows = await orm.em.fork().find(AgentTokenUsage, { actorRef: 'cost-actor' });
+      expect(rows.map((row) => row.costSource).sort()).toEqual(['estimate', 'provider']);
     });
   });
 

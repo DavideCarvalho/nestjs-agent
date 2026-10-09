@@ -237,8 +237,8 @@ export interface QuotaState {
 /**
  * The read-model the quota-today endpoint returns to a client — a superset of {@link QuotaState}
  * for rendering a usage badge. `limitTokens` is `null` when no quota is configured (unlimited, so
- * `withinLimit` is always true); `costUsd` is the day's summed provider-reported USD spend (`0`
- * when only tokens were reported).
+ * `withinLimit` is always true); `costUsd` is the day's summed USD spend, provider-reported plus
+ * the loop's estimates for providers that report none (`0` when nothing was priced).
  */
 export interface QuotaView {
   usedTokens: number;

@@ -35,8 +35,10 @@ import {
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
+  type UsageTotals,
   canonicalActionProposalJson,
   mergeUi,
+  sumUsage,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import { type EntityManager, QueryOrder, raw } from '@mikro-orm/core';
@@ -1111,24 +1113,19 @@ export class MikroOrmAgentStore
       ...(input.usage.cacheReadTokens !== undefined
         ? { cacheReadTokens: input.usage.cacheReadTokens }
         : {}),
-      ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
+      ...(input.costUsd !== undefined
+        ? { costUsd: input.costUsd, costSource: input.costSource ?? 'provider' }
+        : {}),
     });
     em.persist(usage);
     await em.flush();
   }
 
-  async quotaToday(
-    actorRef: string,
-    day: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async quotaToday(actorRef: string, day: string): Promise<UsageTotals> {
     return this.usageBetween(actorRef, day, day);
   }
 
-  async usageBetween(
-    actorRef: string,
-    fromDay: string,
-    toDay: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
     const em = this.em.fork();
     const start = new Date(`${fromDay}T00:00:00.000Z`);
     const end = new Date(`${toDay}T23:59:59.999Z`);
@@ -1136,9 +1133,7 @@ export class MikroOrmAgentStore
       actorRef,
       createdAt: { $gte: start, $lte: end },
     });
-    const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
-    return { usedTokens, costUsd };
+    return sumUsage(rows);
   }
 
   private toSummary(thread: AgentThread, lastContent?: string): ThreadSummary {

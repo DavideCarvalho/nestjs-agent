@@ -62,8 +62,9 @@ the result the agent loop needs:
 - **Boot pricing** — `aiSdkModel` / `aiSdkModels` implement `describeModels()`, so on bootstrap
   `AgentModule` writes the [models.dev](https://models.dev) list price for any configured model the
   bound `AGENT_PRICING_STORE` has no row for (never overwriting one), and warns once about a model
-  that would record no cost. `priceCatalog: false` turns the fetch off; it is skipped under
-  `NODE_ENV=test` unless set.
+  that would record no cost. `priceCatalog.prices` supplies your own rates (GovCloud / China
+  Bedrock is never seeded at the commercial models.dev price; see the `@dudousxd/nestjs-agent`
+  README). `priceCatalog: false` turns the fetch off; it is skipped under `NODE_ENV=test` unless set.
 - **Model id** — the response's `modelId` is recorded with the turn for cost accounting.
 
 ## Several models: `aiSdkModels`

@@ -17,7 +17,7 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { AgentHostContext } from '@dudousxd/nestjs-agent-core';
+import type { AgentHostContext, CostSource } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
@@ -169,6 +169,8 @@ export const agentTokenUsage = mysqlTable(
     cacheWriteTokens: int('cache_write_tokens'),
     cacheReadTokens: int('cache_read_tokens'),
     costUsd: double('cost_usd'),
+    /** Where `cost_usd` came from: `'provider'` (reported) or `'estimate'` (tokens × the price row); null on rows from before it existed (reported). */
+    costSource: key('cost_source').$type<CostSource>(),
     createdAt: ts('created_at').notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],

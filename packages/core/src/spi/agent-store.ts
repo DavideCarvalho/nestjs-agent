@@ -133,8 +133,53 @@ export interface RecordUsageInput {
   modelId: string;
   purpose: UsagePurpose;
   usage: MessageUsage;
-  /** Provider-reported actual USD cost for this turn, when known (gateways report it). */
+  /**
+   * The turn's USD cost, when known: reported by the provider (a gateway), or estimated by the loop
+   * from the pricing table. {@link costSource} says which. Absent → unpriced (`cost_usd` NULL).
+   */
   costUsd?: number;
+  /**
+   * Where {@link costUsd} came from: `'provider'` (the provider reported it; the real figure) or
+   * `'estimate'` (tokens × the price row in effect for the turn, frozen at write time). Absent with a
+   * `costUsd` → treat as `'provider'` (rows written before the column existed only held reported cost).
+   */
+  costSource?: CostSource;
+}
+
+/** Where a usage row's `cost_usd` came from. See {@link RecordUsageInput.costSource}. */
+export type CostSource = 'provider' | 'estimate';
+
+/**
+ * An actor's spend over a window. `costUsd` sums every row's `cost_usd`, provider-reported AND
+ * estimated; `estimatedCostUsd` is the estimated share of it (`0` when none), so a reader that wants
+ * reported cost only takes `costUsd - estimatedCostUsd`. A store written before estimates were
+ * persisted may omit it (read as `0`).
+ */
+export interface UsageTotals {
+  usedTokens: number;
+  costUsd: number;
+  estimatedCostUsd?: number;
+}
+
+/** {@link UsageTotals} over usage rows: the one summing rule every store shares. */
+export function sumUsage(
+  rows: readonly {
+    inputTokens: number;
+    outputTokens: number;
+    costUsd?: number | null;
+    costSource?: string | null;
+  }[],
+): UsageTotals {
+  let usedTokens = 0;
+  let costUsd = 0;
+  let estimatedCostUsd = 0;
+  for (const row of rows) {
+    usedTokens += row.inputTokens + row.outputTokens;
+    const cost = row.costUsd === null || row.costUsd === undefined ? 0 : Number(row.costUsd);
+    costUsd += cost;
+    if (row.costSource === 'estimate') estimatedCostUsd += cost;
+  }
+  return { usedTokens, costUsd, estimatedCostUsd };
 }
 
 export interface RecordRunStartInput {
@@ -384,19 +429,15 @@ export interface AgentStore {
 
   recordUsage(input: RecordUsageInput): Promise<void>;
   /**
-   * The actor's spend for `day` (UTC): total tokens plus the summed provider-reported USD cost.
-   * `costUsd` is `0` when no turn on that day reported a cost (token-only providers). Feeds both
-   * quota enforcement (via {@link QuotaStore}) and the quota-today view.
+   * The actor's spend for `day` (UTC): total tokens plus the summed USD cost of its usage rows,
+   * provider-reported and estimated (see {@link UsageTotals}). `costUsd` is `0` when no row on that day
+   * is priced. Feeds both quota enforcement (via {@link QuotaStore}) and the quota-today view.
    */
-  quotaToday(actorRef: string, day: string): Promise<{ usedTokens: number; costUsd: number }>;
+  quotaToday(actorRef: string, day: string): Promise<UsageTotals>;
   /**
    * OPTIONAL: the actor's spend over the UTC days `fromDay`..`toDay` (`YYYY-MM-DD`, inclusive) —
    * {@link quotaToday} over a range. Feeds the monthly window of `GET <base>/quota`; absent → that
    * window is left out.
    */
-  usageBetween?(
-    actorRef: string,
-    fromDay: string,
-    toDay: string,
-  ): Promise<{ usedTokens: number; costUsd: number }>;
+  usageBetween?(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals>;
 }

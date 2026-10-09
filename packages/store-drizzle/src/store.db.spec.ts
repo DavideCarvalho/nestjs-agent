@@ -1289,6 +1289,28 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
         .from(handle.t.agentTokenUsage)
         .where(eq(handle.t.agentTokenUsage.actorRef, 'cost-actor'));
       expect(usage?.costUsd).toBe(0.000123456);
+      // A reported cost without a source is stamped 'provider'.
+      expect(usage?.costSource).toBe('provider');
+
+      // An estimated row persists its cost and says so; the totals count it and split it out.
+      await store.recordUsage({
+        threadId: thread.id,
+        actorRef: 'cost-actor',
+        modelId: 'fractional',
+        purpose: 'chat',
+        usage: { inputTokens: 10_605, outputTokens: 5 },
+        costUsd: 0.038268,
+        costSource: 'estimate',
+      });
+      const day = new Date().toISOString().slice(0, 10);
+      const totals = await store.quotaToday('cost-actor', day);
+      expect(totals.costUsd).toBeCloseTo(0.000123456 + 0.038268, 9);
+      expect(totals.estimatedCostUsd).toBeCloseTo(0.038268, 9);
+      const rows = await db
+        .select()
+        .from(handle.t.agentTokenUsage)
+        .where(eq(handle.t.agentTokenUsage.actorRef, 'cost-actor'));
+      expect(rows.map((row) => row.costSource).sort()).toEqual(['estimate', 'provider']);
     });
 
     it('tells actors apart by case, on every dialect', async () => {
@@ -1307,6 +1329,7 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
           agent_run: ['parent_run_id'],
           agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'seq', 'persona'],
           agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
+          agent_token_usage: ['cost_source'],
         };
         const agedStore = new DrizzleAgentStore(aged.db);
         const thread = await agedStore.createThread({ actor: { id: 'old' }, title: 'Old chat' });
