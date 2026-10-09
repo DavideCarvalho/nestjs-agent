@@ -7,6 +7,7 @@ import {
   type ModelTurnResult,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
+import { encodeInterruptId } from '@dudousxd/nestjs-agent-core/ag-ui';
 import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
 import { Card, KpiCards } from '@dudousxd/nestjs-agent-core/genui/builtins';
 import { InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
@@ -18,6 +19,7 @@ import { z } from 'zod';
 import { agUiAdapter } from '../ag-ui/ag-ui.adapter.js';
 import { assertConforms } from '../ag-ui/conformance.spec-helper.js';
 import { AgentModule } from '../agent.module.js';
+import type { AgentModuleOptions } from '../agent.options.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { AgentGenuiModule } from '../genui/agent-genui.module.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
@@ -106,6 +108,7 @@ afterEach(async () => {
 async function boot(
   script: Script,
   genui: Parameters<typeof AgentGenuiModule.forRoot>[0] = { catalog },
+  extra: Partial<AgentModuleOptions> = {},
 ): Promise<string> {
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -115,6 +118,7 @@ async function boot(
         actorResolver: new HeaderActorResolver(),
         followUps: false,
         adapters: [a2uiAdapter({ quietMs: 80 }), agUiAdapter({ quietMs: 80, a2ui: true })],
+        ...extra,
       }),
       AgentGenuiModule.forRoot(genui),
     ],
@@ -254,6 +258,73 @@ describe('a2uiAdapter()', () => {
     // An approval action without the interrupt it decides is refused.
     const blind = await a2ui(url, { action: { name: 'agora.reject', context: {} } });
     expect(blind.response.status).toBe(400);
+  });
+});
+
+describe('a2uiAdapter() and independent proposals', () => {
+  it('decides a proposal through the proposal service and answers with its reply', async () => {
+    const store = new InMemoryAgentStore();
+    const actor = { id: 'u1' };
+    const thread = await store.createThread({ id: crypto.randomUUID(), actor });
+    await store.createActionProposal({
+      id: 'proposal-a2ui',
+      threadId: thread.id,
+      actorRef: actor.id,
+      tenantRef: null,
+      originRunId: 'finished-origin',
+      originMessageId: 'origin-message',
+      originToolCallId: 'origin-call',
+      toolName: 'refund',
+      input: { id: 11 },
+      confirmation: { title: 'Refund?', verb: 'Refund' },
+      approver: 'requester',
+      expiresAt: null,
+      idempotencyKey: 'a2ui',
+    });
+    let modelCalls = 0;
+    const url = await boot(
+      () => {
+        modelCalls++;
+        return { text: 'Unexpected model run' };
+      },
+      { catalog },
+      {
+        store,
+        actionApprovalMode: 'independent',
+        backgroundActorResolver: { resolve: async () => actor },
+        actionProposalWorker: { pollIntervalMs: 60_000, leaseMs: 600_000 },
+      },
+    );
+    const interruptId = encodeInterruptId({
+      kind: 'proposal',
+      parked: 'finished-origin',
+      stream: 'finished-origin',
+      toolCallId: 'origin-call',
+      position: 4,
+      proposalId: 'proposal-a2ui',
+      threadId: thread.id,
+    });
+    // Somebody else's proposal is refused the way the native route refuses it.
+    const intruder = await a2ui(
+      url,
+      { action: { name: 'agora.reject', context: { interruptId } } },
+      'intruder',
+    );
+    expect(intruder.response.status).toBe(403);
+    const { response, messages } = await a2ui(url, {
+      action: { name: 'agora.reject', context: { interruptId } },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-agent-thread-id')).toBe(thread.id);
+    expect(modelCalls).toBe(0);
+    const reply = messages.filter((message) => message.updateDataModel !== undefined).at(-1);
+    expect(String(reply?.updateDataModel?.value).length).toBeGreaterThan(0);
+    const decided = await store.getActionProposal(
+      { threadId: thread.id, actorRef: actor.id, tenantRef: null },
+      'proposal-a2ui',
+    );
+    expect(decided?.decision).toBe('rejected');
+    expect(decided?.decisionAudit?.via).toBe('a2ui');
   });
 });
 

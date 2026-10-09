@@ -1,224 +1,339 @@
 ---
 title: Sandboxed generated UI
+description: "An opt-in catalog component the model fills with its own HTML, CSS and JavaScript for a one-off interactive answer — streamed in field order, drawn in an isolated iframe under a strict CSP, with a checked agent.send bridge back to the conversation."
 icon: Box
-description: Let the model write a small HTML, CSS and JavaScript view for a one-off interactive answer — streamed in field order, drawn in an isolated iframe, handing values back as the next turn.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-A [catalog](/docs/agent/guides/generative-ui) covers the answers you planned for: tables, charts,
-KPIs. Some answers are interactive and one-off — a bill splitter, a loan calculator, a small
-simulation — and no catalog component fits them. The **sandbox** component lets the model write that
-view itself, in HTML, CSS and JavaScript, and draws it in an isolated `iframe`. Code inside it can
-hand values back with `agent.send({ … })`, which becomes the user's next message.
+A [catalog](/docs/agent/guides/generative-ui#1-a-catalog) covers the answers you planned for: tables, charts, KPI cards, your own `OrderCard`. Some answers are one-offs nobody planned a component for — a tip calculator for this dinner, a loan amortization slider, a small simulation, a chart of a shape your `Chart` does not draw. The **sandbox** is the component for those: the model writes the view itself, in HTML, CSS and JavaScript, and the browser runs it in an isolated frame. It is the idea CopilotKit calls *Open Generative UI*, on this library's catalog, stream and security model.
 
-It is **opt-in** and described to the model as a **last resort**: tables, charts, KPIs and text
-still go in the catalog components.
+It is a last resort, and it is described to the model as one. The component's description tells the model to use it **only when no other component of the catalog can present the answer**, and that tables, charts, KPIs and text always go in the catalog components. With `AgentGenuiModule.forRoot({ sandbox: true })` it is also added last, after every other component the model is shown.
 
-## Turning it on
+<Callout type="warn" title="Opt-in">
+Nothing here is on by default. Without `sandbox` in `AgentGenuiModule.forRoot(...)` (or a `Sandbox` definition in your catalog) the model is never offered it, and a catalog that does not know it refuses it like any unknown component. Read the [security model](#security-model) before you turn it on.
+</Callout>
 
-On the server, add `sandbox` to `AgentGenuiModule`:
+## Enabling it
+
+The quickest way is one option on the server:
 
 ```ts title="Backend — src/app.module.ts"
 import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
 import { catalog } from './genui/catalog';
 
-AgentGenuiModule.forRoot({
-  catalog,
-  sandbox: true, // or { policy, instructions, name, description }
-});
+AgentGenuiModule.forRoot({ catalog, sandbox: true }); // no network, default limits
 ```
 
-`sandbox: true` extends the catalog with the builtin `Sandbox` component (no network, default
-limits); an object is `defineSandbox`'s options. Equivalently, put the definition in the shared
-catalog file yourself — which is what you want when the policy opens anything, so the browser
-enforces the same policy the model was told about:
+`sandbox: true` adds the builtin definition (`Sandbox`). Pass options instead of `true` to tune it — the same options `defineSandbox` takes.
+
+When the browser draws with a catalog too (it should: it validates props before drawing), put the definition in the **shared catalog file** instead, so the server tells the model and the browser enforces the very same policy:
 
 ```ts title="Shared — src/genui/catalog.ts"
-import { defineCatalog, defineSandbox } from '@dudousxd/nestjs-agent-core/genui';
-import { Card, Chart, DataTable } from '@dudousxd/nestjs-agent-core/genui/builtins';
+import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
+import {
+  BUILTIN_COMPONENTS,
+  LAYOUT_COMPONENTS,
+  defineSandbox,
+} from '@dudousxd/nestjs-agent-core/genui/builtins';
 
 export const catalog = defineCatalog([
-  Card,
-  Chart,
-  DataTable,
+  ...BUILTIN_COMPONENTS,
+  ...LAYOUT_COMPONENTS,
   defineSandbox({
-    policy: { allow: { images: ['https://tile.openstreetmap.org'] }, maxSends: 10 },
-    instructions: 'Use the brand colour #4f46e5.',
+    policy: { allow: { images: ['https://tile.openstreetmap.org'] } },
+    instructions: 'Use the brand color #4f46e5 for primary buttons.',
   }),
 ]);
 ```
 
-The sandbox works in both modes: as a node of a `ui__render` tree (where it is a leaf — it takes no
-children), and as `ui__show_sandbox` in `per-component` mode.
-
-## The policy
-
-`SandboxPolicy` says what the view may reach and how much it may send back:
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `allow.images` | none | `img-src` origins (map tiles, photos) |
-| `allow.connect` | none | `connect-src` origins (`fetch`, `XMLHttpRequest`, `WebSocket`) |
-| `allow.scripts` | none | `script-src` origins (a charting library from a CDN) |
-| `allow.styles` / `fonts` / `media` | none | `style-src` / `font-src` / `media-src` |
-| `maxPayloadBytes` | 8192 | largest `agent.send` payload, as JSON |
-| `minSendIntervalMs` | 1000 | least time between two accepted sends |
-| `maxSends` | 20 | most sends one view may make |
-| `maxHeight` | 1600 | tallest the frame may grow, in CSS pixels |
-
-**The default is no network at all.** Every origin must be a bare `https://host[:port]` or
-`https://*.host`; anything else (`http:`, a path, a CSP keyword such as `'unsafe-eval'`) throws when
-the definition is built. The model's description says exactly which origins are open.
-
-## Streaming
-
-The model writes the fields in a fixed order (`SANDBOX_FIELD_ORDER`): `initialHeight`,
-`placeholderMessages`, `title`, `summary`, `css`, `html`, `jsFunctions`, `jsExpressions`. While it
-writes, the view goes through three phases:
-
-1. **placeholder** — a box of `initialHeight` showing the placeholder lines, until there is CSS or
-   markup;
-2. **preview** — the styled markup, redrawn as it grows, with **no script running** (`<script>`,
-   `<style>` and `<head>` blocks and a half-written tag are stripped — `previewHtml`);
-3. **live** — once the markup is done: the frame runs `jsFunctions` and then each `jsExpressions`
-   entry as it closes. The document is built once per markup, so what the user did in it survives
-   the code that streams in after.
-
-Half-written CSS and code are never shown or run: the server previews only what has closed
-(`ComponentDefinition.partialProps`, which the sandbox sets to `sandboxPartialProps`), and the React
-renderer only streams code into a node the server trimmed (`GenuiNodeState.streamSafe`). Props from
-anywhere else (a client parsing tool arguments itself) wait for the whole view before any code runs.
-
-## The React renderer
-
-Register `SandboxView` under the component's name:
-
-```tsx title="Frontend — src/genui/registry.tsx"
-import { SandboxView } from '@dudousxd/nestjs-agent-react/genui';
-
-export const registry = { ...myRenderers, Sandbox: SandboxView };
+```ts title="Backend — src/app.module.ts"
+AgentGenuiModule.forRoot({ catalog }); // the catalog already has the sandbox: no `sandbox` option
 ```
 
-`SandboxView` takes its policy from the catalog definition the enclosing `GenuiProvider` holds. For
-more control, build one with `createSandboxRenderer`:
+Use one or the other. The `sandbox` option replaces a definition of the same name, so `sandbox: true` next to a catalog that already has `defineSandbox({ policy })` would swap your policy for the default one on the server only.
+
+`defineSandbox(options)`, also exported from `@dudousxd/nestjs-agent-core/genui`:
+
+| Option | Meaning |
+| --- | --- |
+| `policy` | What the frame may reach and how much it may send back — see [the policy](#the-policy). Origins are validated when the definition is built. Default: no network, the [default limits](#defaults). |
+| `instructions` | Extra rules appended to the model-facing description (house style, what the app wants from it). |
+| `description` | Replaces the model-facing description altogether. Keep the "last resort" rule in it. |
+| `name` | The component name. Default `Sandbox`. |
+| `version` | The component version. |
+
+The generated description tells the model, besides the last-resort rule: the order to write the fields in, exactly which network the policy opens (or that there is none — inline SVG and `data:` URLs only), that there is no `<form>` submission and no top-level `await`, to validate numeric input and label units, and to call `agent.send(...)` from an explicit button click only — never on load, on a timer or on input.
+
+## What the model writes
+
+The sandbox's props are the view, and the model writes them **in this order** (`SANDBOX_FIELD_ORDER`):
+
+| Prop | What it is | Limit |
+| --- | --- | --- |
+| `initialHeight` | Height in CSS pixels to reserve while the code streams. The frame then sizes to its content. | 40 – 2000, default 240 |
+| `placeholderMessages` | One to three short lines shown while the code streams ("Setting up the calculator…"). | 5 lines of 120 characters |
+| `title` | Short title: the frame's accessible name, and what text-only clients print. | 120 characters |
+| `summary` | One or two sentences on what the view shows — what a client that cannot run it prints. | 600 characters |
+| `css` | Styles, injected in a `<style>` before the markup. | 60 000 characters |
+| `html` | The body markup (required). Inline SVG for graphics; no `<script src>`, no form submission. | 120 000 characters |
+| `jsFunctions` | Function declarations, run once as one classic script after the markup. | 120 000 characters |
+| `jsExpressions` | Statements run in order after `jsFunctions`, each as its own classic script: wiring listeners, the first render. | 50 entries of 20 000 characters |
+
+```json
+{
+  "initialHeight": 320,
+  "placeholderMessages": ["Setting up the splitter…", "Wiring the buttons…"],
+  "title": "Bill splitter",
+  "summary": "Splits a bill between people, with tip.",
+  "css": ".total{font-weight:600}",
+  "html": "<div class=\"total\" id=\"out\">$0.00</div><button id=\"go\">Split it</button>",
+  "jsFunctions": "function split(t,n){return t/n}",
+  "jsExpressions": [
+    "document.getElementById('out').textContent = split(120, 3)",
+    "document.getElementById('go').onclick = () => agent.send({ text: 'Split it 3 ways', total: 120, people: 3 })"
+  ]
+}
+```
+
+## While the model writes it
+
+The order is what makes the view usable before it is finished: a box of the right size first, then styles before markup (so nothing ever draws unstyled), then behavior last. The definition streams as `partial`, and the server trims what it previews (`partialProps`, see below), so the user sees:
+
+1. **A placeholder** as soon as `initialHeight` has arrived: a busy box of that height, rotating through the `placeholderMessages` (prefixed with the `title` once it is there). Nothing below it moves when the view replaces it.
+2. **A preview** once `css` or `html` starts: the styled markup as it is written, with every `<script>` (whole or cut off) and the half-written tag at the end removed. No code runs in a preview.
+3. **The live view** once the markup is complete (the model has moved on to `jsFunctions` or `jsExpressions`). The frame is built once from the finished markup; then `jsFunctions` runs when its string closes, and each `jsExpressions` entry runs as soon as it closes, in order. What the user did in the frame stays: later code is posted in, the frame is not rebuilt.
+
+**Code never runs half written.** On the server, the sandbox definition's `partialProps` hook drops what must not be shown or run before it is whole: `css`, `title`, `summary` and `jsFunctions` until their string closes, a `jsExpressions` entry or a placeholder line until it closes, an `initialHeight` until its number ends. Only `html` streams as it is, and the preview strips it. `partialProps` is a general `ComponentDefinition` hook — any component can say what of its half-written props may be drawn.
+
+**Where it previews.** The sandbox definition is `streaming: 'partial'`, so it previews even when `AgentGenuiModule` keeps the default `streaming: 'complete'` — as long as nothing above it holds it back. Nested in a layout (a `Card` around it), that layout must stream `partial` too (`AgentGenuiModule.forRoot({ catalog, streaming: 'partial' })`, or `streaming: 'partial'` on the layout's definition); a `complete` layout holds its whole subtree back and the sandbox appears at once when the call ends. In `mode: 'per-component'`, `ui__show_sandbox` previews as well: a component with a `partialProps` hook is drawn while the call is written, as a one-node tree. See [Drawing a tree while the model writes it](/docs/agent/guides/generative-ui#drawing-a-tree-while-the-model-writes-it) for partial frames in general.
+
+## Drawing it in React
+
+Register the renderer under the component's name, from `@dudousxd/nestjs-agent-react/genui`:
+
+```tsx title="Frontend — src/genui/renderers.tsx"
+import { SandboxView, type GenuiRegistry } from '@dudousxd/nestjs-agent-react/genui';
+
+export const registry: GenuiRegistry = {
+  // …your renderers
+  Sandbox: SandboxView,
+};
+```
+
+`SandboxView` draws the frame, the placeholder and the preview, sizes the frame to its content (between 24 px and the policy's `maxHeight`), and takes its policy from the catalog definition of the enclosing `GenuiProvider` — the `defineSandbox({ policy })` in your shared catalog. For anything else, build your own with `createSandboxRenderer(options)`:
 
 ```tsx
-import { createSandboxRenderer } from '@dudousxd/nestjs-agent-react/genui';
-import { z } from 'zod';
+import { createSandboxRenderer } from '@dudousxd/nestjs-agent-react/genui'
+import { z } from 'zod'
 
 const Sandbox = createSandboxRenderer({
-  schema: z.object({ people: z.number().int().min(1) }), // any Standard Schema, or a JSON Schema
-  confirm: (action) => window.confirm(action.text ?? 'Send this?'),
-  onRefused: (refusal) => console.warn('sandbox refused', refusal),
+  schema: z.object({ total: z.number().positive(), people: z.number().int().min(1).max(50) }),
+  confirm: (action) => window.confirm(action.text ?? 'Send this to the assistant?'),
+  onRefused: (refusal) => console.warn('sandbox send refused', refusal),
   onError: (message) => console.warn('sandbox error', message),
-  placeholder: ({ height, messages }) => <Skeleton height={height} lines={messages} />,
-});
+  placeholder: ({ height, messages }) => <ViewSkeleton height={height} line={messages[0]} />,
+})
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `policy` | overrides the catalog definition's |
-| `schema` | checks every `agent.send` payload's values |
-| `confirm` | last word before an action is sent (falsy → dropped) |
-| `onAction` | where actions go (default: the enclosing `GenuiActionProvider`) |
-| `onRefused` | a send was refused: `too-large`, `too-soon`, `too-many`, `not-json`, `invalid`, `declined`, `no-handler` |
-| `onError` | an uncaught error in the generated code |
-| `placeholder`, `className`, `style` | presentation |
+| `policy` | The policy the frame runs under. Default: the catalog definition's (`defineSandbox({ policy })`), else none — no network, default limits. |
+| `schema` | Checks the values of every `agent.send(...)`: a Zod object, any Standard Schema, or a JSON Schema. A failing send is refused (`reason: 'invalid'`); a passing one carries the parsed values. |
+| `confirm` | `(action) => boolean \| Promise<boolean>` — the last word before an action is sent, e.g. a dialog. Falsy → dropped (`reason: 'declined'`). |
+| `onAction` | Where actions go. Default: the enclosing [`GenuiActionProvider`](#the-bridge-back-to-the-agent). |
+| `onRefused` | Something the frame sent was refused: `too-large`, `too-soon`, `too-many`, `not-json`, `invalid` (with the issues), `declined`, or `no-handler`. |
+| `onError` | An uncaught error (or unhandled rejection) in the generated code, as a message of at most 500 characters. |
+| `placeholder` | `({ height, messages, title }) => ReactNode` — what to draw before anything is drawable. Default: a dashed busy box with the rotating messages. |
+| `className`, `style` | On the `<iframe>`. |
 
-The frame sizes itself to its content (it reports its height; the host clamps it to `maxHeight`) and
-keeps the declared `initialHeight` until it has measured.
+## The bridge back to the agent
 
-## Handing values back: `agent.send`
+Code inside the frame has exactly one way out: `agent.send(values)`. It starts a new turn, as if the user had written it:
 
-Code inside the view calls `agent.send({ text, action?, ...values })` from an explicit user gesture:
-`text` is what the user is saying ("Split it three ways"), `action` optionally names it, every other
-field is a value. The host turns it into a `UiAction` (`sandboxAction`) and hands it to the action
-handler. Wire that handler to the chat:
+```js
+// inside the generated code, from a click handler
+agent.send({ text: 'Split it 3 ways', action: 'split', total: 120, people: 3 })
+```
 
-```tsx title="Frontend"
-import { useAgentChat } from '@dudousxd/nestjs-agent-react';
-import { GenuiActionProvider } from '@dudousxd/nestjs-agent-react/genui';
+- `text` is what the user says by clicking — shown as their message. Optional.
+- `action` names the action (letters, digits, `_ . : -`, up to 64). Default `send`.
+- Every other field is a value. The payload must be JSON (`agent.send` throws a `TypeError` otherwise).
+
+The host turns it into a `UiAction` (`{ source: 'sandbox', name, context, text?, componentId?, title?, timestamp }`) after [its checks](#the-bridge), and hands it to whatever handles actions. The usual handler is the chat's `sendUiAction`, which sends it as the next user message:
+
+```tsx title="Frontend — src/chat.tsx"
+import { useAgentChat } from '@dudousxd/nestjs-agent-react'
+import { GenerativeUI, GenuiActionProvider } from '@dudousxd/nestjs-agent-react/genui'
 
 function Chat() {
-  const chat = useAgentChat();
+  const chat = useAgentChat()
   return (
     <GenuiActionProvider onAction={chat.sendUiAction}>
-      <Transcript messages={chat.messages} />
+      {chat.transcript.items.map((item) => /* … <GenerativeUI part={block} /> … */ null)}
     </GenuiActionProvider>
-  );
+  )
 }
 ```
 
-`GenuiProvider`'s `onAction` prop does the same. `sendUiAction` sends the action as the next user
-message: the user's sentence, then a line naming the action and its source, and the values as a JSON
-block (`uiActionText`) — the model reads both. `useGenuiAction()` gives your own components the same
-handler, so an app component's button can hand back a `UiAction` too. Over AG-UI, send it as
-`forwardedProps.uiAction` instead of a user message: the route makes it the turn.
+`<GenuiProvider onAction={…}>` does the same for its whole tree. `useGenuiAction()` reads the handler, so your own components (a button in an `OrderCard`) can send actions the same way. Without a handler, a send is refused with `no-handler`.
 
-## Text channels
+What the model receives is plain user text, built by `uiActionText(action)` (exported from `@dudousxd/nestjs-agent-core/genui`): what the user said — or `I used "<name>" in <title>.` when the payload had no `text` — then where it came from, then the values as a JSON block:
 
-A client that cannot run the view (Slack, WhatsApp, email, a client that leaves `Sandbox` out of its
-`uiCapabilities`) gets the definition's `fallbackText`: the `title`, the `summary` and a note that
-the view is interactive. The code never reaches a text channel. Over [A2UI](/docs/agent/guides/a2ui),
-the sandbox is drawn as that same text unless you map it.
+````text
+Split it 3 ways
+
+[UI action "split" from interactive view, "Bill splitter", component root.0]
+```json
+{
+  "total": 120,
+  "people": 3
+}
+```
+````
+
+## Over AG-UI and CopilotKit
+
+The sandbox is an ordinary catalog component, so it travels over [AG-UI](/docs/agent/guides/ag-ui) like any other: in the `agora.ui` custom event, and in the tool call's arguments (`ui__render`, or `ui__show_sandbox` in per-component mode). A client that draws the tool call itself — CopilotKit's `useRenderTool` — renders the node with `SandboxView`, and must say whether the call is still streaming. Arguments parsed on the client are raw (the server's trim never touched them), so wrap the view in `GenuiNodeScope` with `incomplete: true` until the call is complete: the renderer then shows the preview and runs no code until the props are whole.
+
+```tsx title="Frontend — CopilotKit"
+import { GenuiActionProvider, GenuiNodeScope, SandboxView } from '@dudousxd/nestjs-agent-react/genui'
+
+useRenderTool({
+  name: 'ui__show_sandbox', // per-component mode; in tree mode, draw the Sandbox node of ui__render
+  parameters: z.any(),
+  render: ({ parameters, status }) => (
+    <GenuiNodeScope node={{ id: 'root', type: 'Sandbox', incomplete: status !== 'complete', held: false }}>
+      <SandboxView {...parameters} />
+    </GenuiNodeScope>
+  ),
+})
+```
+
+Send its actions back as the next run. Either put the action in `forwardedProps.uiAction` — it **is** the turn, and the `messages` only restate the conversation:
+
+```tsx
+<GenuiActionProvider onAction={(action) => agent.runAgent({ forwardedProps: { uiAction: action } })}>
+```
+
+or add a user message whose content is `uiActionText(action)` and run as usual. `forwardedProps.uiAction` is checked like any untrusted input: a plain object, a valid `name`, a JSON object `context`, at most 8192 bytes; anything else is a `400 { code: 'invalid_ui_action' }`.
+
+## On text channels
+
+[Text channels](/docs/agent/guides/channels) (WhatsApp, Telegram, e-mail) and every client that did not declare `Sandbox` in its [UI capabilities](/docs/agent/guides/rendering-everywhere#declaring-what-a-client-can-draw) receive the component's text fallback — its `title` and `summary`, never its code:
+
+```text
+*Bill splitter*
+Splits a bill between people, with tip. (interactive — open the app to use it)
+```
+
+Over [A2UI](/docs/agent/guides/a2ui), the sandbox has no basic-catalog equivalent and is drawn as that same text, unless you send it through as a custom component of your own catalog.
 
 ## Security model
 
-The view is untrusted code the model wrote, possibly steered by whatever the model read. It runs
-under these constraints:
+The sandbox runs code a model wrote, in your users' browsers. It is built so that this code can draw inside its box and say something to the conversation — and nothing else.
 
-- **An opaque origin.** The frame is a `srcdoc` iframe with `sandbox="allow-scripts"` and **never**
-  `allow-same-origin`. Its origin is `null`: it cannot read your cookies, storage, or the page's DOM,
-  and the page's same-origin APIs refuse it. It cannot open popups, submit forms, navigate the top
-  window or use `allow`-gated features (`allow=""`, `referrerpolicy="no-referrer"`).
-- **A strict CSP, no network by default.** The document's first element is a
-  `Content-Security-Policy` `<meta>` (`sandboxCsp`): `default-src 'none'`, inline scripts and styles
-  only, images and media from `data:`/`blob:`, `connect-src 'none'`, `frame-src`, `worker-src`,
-  `object-src`, `form-action` and `base-uri` all `'none'` — plus exactly the origins your policy
-  lists. There is **no `'unsafe-eval'`**: `eval` and `new Function` are blocked. Generated code that
-  contains `</script>` cannot close the element it is inlined in.
-- **One way out, checked by the host.** The bridge script the document starts with exposes only
-  `agent.send`, height reports and error reports. The host accepts a message only when
-  `event.source` is this frame's window, `event.origin` is `'null'` and it carries this frame's
-  random per-frame token; then the payload must be JSON within `maxPayloadBytes`, at least
-  `minSendIntervalMs` after the previous accepted send, within `maxSends`, past the optional
-  `schema` and the optional `confirm`. Anything else is dropped (and reported to `onRefused`).
-- **An action is just a user message.** `agent.send` never calls a tool. It starts a turn like
-  typing would, so every action tool the model then decides to call goes through the same roles,
-  approvals and [action proposals](/docs/agent/guides/action-proposals) as any other turn. On the
-  server, `readUiAction` / `readA2uiAction` re-check size, name and shape of whatever arrives.
+### The frame
 
-What the sandbox does **not** protect against:
+The view is an `<iframe srcdoc>` with `sandbox="allow-scripts"` and **never `allow-same-origin`**. Its origin is therefore opaque (`null`):
 
-- **It can draw anything inside its box.** Generated code can render a fake login form, a fake
-  "approve payment" dialog or misleading numbers — phishing-style content inside the frame. Treat
-  what it shows like any other model output, keep it visually framed as generated content, and never
-  ask users to type secrets into it.
-- **It must not be given secrets.** Do not put tokens, personal data or anything the model should
-  not see into its props or `instructions`: they are in the document, and in the conversation.
-- **Opened origins are opened.** Listing `allow.connect` lets the code send whatever it holds —
-  including what the user typed into it — to those origins. Open the fewest you can.
-- **The host page's CSP applies too.** A `srcdoc` frame inherits the embedding page's CSP; a page
-  whose own policy forbids inline scripts (or `frame-src`) will block the view. Allow what the
-  sandbox needs on the pages that render it.
-- **Denial of service is bounded, not prevented.** An infinite loop freezes its own frame (and, in
-  browsers that share the process, may slow the tab); the height is clamped, the send rate is
-  limited.
+- **No access to the host page.** No cookies, no `localStorage` / `sessionStorage` / IndexedDB of your origin, no `window.parent.document`, no calls to your API with the user's session.
+- **No navigation, no popups, no forms.** Without `allow-top-navigation`, `allow-popups` and `allow-forms`, it cannot navigate the page, open windows, or submit a form anywhere.
+- **No device features.** `allow=""` grants no Permissions Policy feature (camera, microphone, geolocation, …), and `referrerpolicy="no-referrer"` leaks no URL.
 
-## API
+### The CSP
 
-From `@dudousxd/nestjs-agent-core/genui` (isomorphic): `Sandbox`, `defineSandbox`,
-`DefineSandboxOptions`, `SandboxDefinition`, `SandboxPolicy`, `SandboxProps`, `sandboxPolicyOf`,
-`assertSandboxPolicy`, `sandboxCsp`, `buildSandboxDocument`, `previewHtml`, `sandboxPartialProps`,
-`SANDBOX_COMPONENT`, `SANDBOX_DEFAULTS`, `SANDBOX_FIELD_ORDER`, `SANDBOX_IFRAME_FLAGS`,
-`SANDBOX_MESSAGE`; and the action helpers `UiAction`, `readUiAction`, `sandboxAction`,
-`uiActionText`, `validateUiActionContext`, `jsonByteLength`, `UI_ACTION_MAX_BYTES`. `Sandbox` and
-`defineSandbox` are also exported from `/genui/builtins`.
+A Content-Security-Policy `<meta>` is the **first** element of the frame's document, before the bridge and before any generated byte:
 
-From `@dudousxd/nestjs-agent-react/genui`: `SandboxView`, `createSandboxRenderer`,
-`GenuiActionProvider`, `useGenuiAction`, `GenuiNodeScope`, `SandboxRefusal`,
-`SandboxRendererOptions`; `useAgentChat().sendUiAction` from the main entry.
+```text
+default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';
+img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none';
+frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'
+```
+
+- **Inline script and style only.** They are the generated UI; nothing is loaded from anywhere. There is no `'unsafe-eval'`: `eval` and `new Function` are blocked.
+- **No network.** `connect-src 'none'` blocks `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource`; images, fonts and media come only from `data:` and `blob:` URLs. Nothing the user types in the frame can be sent anywhere but through `agent.send`.
+- **No nested frames, workers or plugins; no form posts; no `<base>` tricks.**
+- Generated code cannot close the element it is inlined in: `</script` and `</style` inside it are escaped.
+
+#### The policy
+
+`policy.allow` opens origins **per kind**, and only those:
+
+| Kind | Directive | For |
+| --- | --- | --- |
+| `images` | `img-src` | map tiles, photos |
+| `connect` | `connect-src` | `fetch`, `XMLHttpRequest`, `WebSocket` |
+| `scripts` | `script-src` | a charting library from a CDN |
+| `styles` | `style-src` | a stylesheet |
+| `fonts` | `font-src` | web fonts |
+| `media` | `media-src` | audio, video |
+
+Every entry must be a bare **https** origin — `https://host`, `https://host:port` or `https://*.host` — no path, no scheme other than https, no `*` alone; anything else throws when the definition (or the CSP) is built. The model's description lists exactly what is open, so it does not try the rest. A map that draws OpenStreetMap tiles needs images from the tile servers and nothing else:
+
+```ts title="Shared — src/genui/catalog.ts"
+defineSandbox({
+  policy: {
+    allow: { images: ['https://tile.openstreetmap.org', 'https://*.tile.openstreetmap.org'] },
+  },
+  instructions: 'Draw maps with <img> tiles from tile.openstreetmap.org; credit "© OpenStreetMap contributors".',
+})
+```
+
+Each origin you open is a place generated code can load from — and, for `connect` and to a degree `images`, send to. Open as little as you can: `images` from a tile server is cheap; `connect` to your own API hands the generated code a way to call it (without the user's cookies, but still).
+
+<Callout type="info" title="Your page's CSP applies too">
+Browsers apply the embedding page's Content-Security-Policy to `srcdoc` documents as well, on top of the frame's own. Both must allow something for it to happen: if your page forbids inline scripts (a nonce- or hash-based `script-src`), the frame's code is blocked too, and the view never comes alive. A page CSP can only make the sandbox stricter, never looser.
+</Callout>
+
+### The bridge
+
+`agent.send`, content-height reports and error reports are `postMessage`s to the parent, addressed to the host page's origin. The host accepts a message only when **all** of these hold:
+
+- `event.source` is **that** iframe's window — not another frame, not another tab;
+- `event.origin` is `'null'` — the opaque origin of a sandboxed frame;
+- it carries the frame's **token** — 16 random bytes, new for every frame;
+- the payload is **JSON** (the frame JSON-clones it; the host measures it again);
+- it is at most `maxPayloadBytes` (default **8192**) as JSON;
+- at least `minSendIntervalMs` (default **1000**) since the last accepted send of this view;
+- this view has made fewer than `maxSends` (default **20**) sends;
+- it passes the renderer's `schema`, when you gave one (Zod, any Standard Schema, or a JSON Schema);
+- `confirm`, when you gave one, said yes.
+
+The host's own messages into the frame (preview redraws, the code that arrives while the model writes) carry the token too, and the frame only listens to its parent. A reported height is clamped to `maxHeight`.
+
+### What an action can do
+
+**An action is only a user message.** It reaches the server as the text of the next user turn — the same path as typing — and has no more power than typing it would. It does not call a tool, does not approve anything, and is not trusted by the server in any way. The model reads it, and whatever it decides to do next goes through the usual gates: [roles](/docs/agent/guides/tools), and the approval every `action` tool requires ([action proposals](/docs/agent/guides/action-proposals) included). A sandbox cannot approve its own refund.
+
+### What remains
+
+The isolation above keeps generated code away from the page, the user's session and the network. It does not make what the model draws true. Plan for:
+
+- **Convincing fake content inside the box.** A generated view can draw anything within its frame: a fake login form, a fake "approved" badge, a fake system message. It cannot leave its box, but the user may not know where the box ends. Keep the frame visually framed as generated content, and keep real confirmations (approvals, payments) in your own UI, never inside generated views.
+- **Spam within the limits.** A view may send up to `maxSends` actions, one per `minSendIntervalMs`. The model is told to send only from explicit clicks, but a bad view can still send on a timer. Lower the limits, or add `confirm`, if a stray turn costs you.
+- **Prompt injection.** Content the model read (a web page, a document, an e-mail) can steer it into building a view that asks the user for something — a password, a card number — and sends it back through `agent.send`, where it lands in the transcript and in the model's context. Never put secrets or personal data into a sandbox's props; tell users the views are generated; treat every action's values as untrusted user input on the server; and keep approvals on every side-effecting tool, so nothing a view sends can act on its own.
+
+### Defaults
+
+| Setting | Default | Where |
+| --- | --- | --- |
+| Network | none — inline code, `data:` / `blob:` only | `policy.allow` |
+| `iframe` flags | `allow-scripts` (no `allow-same-origin`, forms, popups or navigation) | fixed |
+| `initialHeight` | 240 px | the model's prop |
+| `maxHeight` | 1600 px | `policy.maxHeight` |
+| `maxPayloadBytes` | 8192 | `policy.maxPayloadBytes` |
+| `minSendIntervalMs` | 1000 | `policy.minSendIntervalMs` |
+| `maxSends` | 20 per view | `policy.maxSends` |
+| `forwardedProps.uiAction` size (AG-UI) | 8192 bytes | fixed |
+| Schema, confirmation | none | `createSandboxRenderer({ schema, confirm })` |
+
+## See also
+
+- [Generative UI](/docs/agent/guides/generative-ui) — the catalog, tree mode and partial frames the sandbox is built on.
+- [Loading states and skeletons](/docs/agent/guides/loading-states) — progressive trees, and how layouts around a sandbox stream.
+- [A2UI](/docs/agent/guides/a2ui) — the same UI frames as A2UI surfaces, and A2UI actions as turns.
+- [AG-UI](/docs/agent/guides/ag-ui) — `forwardedProps.uiAction` and the `agora.ui` event.
 
 <Callout type="info">
 The same component, policy and renderer ship in `@adonis-agora/agent` (`genui({ sandbox: true })`).

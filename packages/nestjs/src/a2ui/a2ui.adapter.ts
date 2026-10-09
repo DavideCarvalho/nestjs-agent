@@ -91,8 +91,35 @@ export class A2uiRunHandler {
     if (action?.name === A2UI_APPROVE_ACTION || action?.name === A2UI_REJECT_ACTION) {
       const interruptId = action.context.interruptId;
       const address = typeof interruptId === 'string' ? decodeInterruptId(interruptId) : undefined;
-      if (address === undefined || address === null || address.kind !== 'approval') {
+      if (address === undefined || address === null || address.kind === 'elicitation') {
         throw invalid('invalid_action', 'an approval action carries the interruptId it decides');
+      }
+      // An independent proposal: decided through the proposal service (its own run is not
+      // waiting), as an AG-UI resume decides it, and answered with the configured reply.
+      if (address.kind === 'proposal') {
+        if (address.proposalId === undefined || address.threadId === undefined) {
+          throw invalid('invalid_action', 'the interruptId names no proposal');
+        }
+        const decided = await this.agent.decideActionProposal(
+          actor,
+          address.threadId,
+          address.proposalId,
+          {
+            decision: action.name === A2UI_APPROVE_ACTION ? 'approved' : 'rejected',
+            via: A2UI_VIA,
+          },
+        );
+        this.writeHead(res, { 'X-Agent-Thread-Id': address.threadId });
+        const projector = new A2uiProjector(this.projection);
+        const messageId = `proposal-${address.proposalId}`;
+        for (const event of [
+          { type: 'TEXT_MESSAGE_START' as const, messageId, role: 'assistant' as const },
+          { type: 'TEXT_MESSAGE_CONTENT' as const, messageId, delta: decided.text },
+        ]) {
+          for (const message of projector.project(event)) res.write(`${JSON.stringify(message)}\n`);
+        }
+        res.end();
+        return;
       }
       // The same checks an AG-UI resume makes: the run is the actor's and still waiting, and the
       // actor may decide this call.
@@ -139,20 +166,27 @@ export class A2uiRunHandler {
     await this.stream(res, started.runId, { threadId: started.threadId });
   }
 
+  /** Open the JSON Lines response. */
+  protected writeHead(res: Response, extra: Record<string, string>): void {
+    res.status(200);
+    res.setHeader('Content-Type', 'application/jsonl; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    for (const [name, value] of Object.entries(extra)) res.setHeader(name, value);
+    res.flushHeaders();
+  }
+
   /** Write one run as A2UI JSON Lines, until it ends or stops to ask. */
   protected async stream(
     res: Response,
     runId: string,
     options: { threadId?: string; skip?: number; answered?: string[] },
   ): Promise<void> {
-    res.status(200);
-    res.setHeader('Content-Type', 'application/jsonl; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.setHeader('X-Agent-Run-Id', runId);
-    if (options.threadId !== undefined) res.setHeader('X-Agent-Thread-Id', options.threadId);
-    res.flushHeaders();
+    this.writeHead(res, {
+      'X-Agent-Run-Id': runId,
+      ...(options.threadId !== undefined ? { 'X-Agent-Thread-Id': options.threadId } : {}),
+    });
     const projector = new A2uiProjector(this.projection);
     const write = (messages: A2uiServerMessage[]) => {
       for (const message of messages) res.write(`${JSON.stringify(message)}\n`);
@@ -193,7 +227,8 @@ export class A2uiRunHandler {
  *  - `action` — an A2UI client message (`{ version: 'v0.9', action: { name, surfaceId,
  *    sourceComponentId, timestamp, context } }`, or v0.8's `{ userAction }`): it becomes the turn
  *    (`uiActionText`). `agora.approve` / `agora.reject` with `context.interruptId` decide the
- *    approval a previous stream ended on, and stream the rest of that run;
+ *    approval a previous stream ended on, and stream the rest of that run (an independent
+ *    proposal is decided through the proposal service and answered with its reply);
  *  - `threadId` — continue that thread (its owner is checked), or start one under that id.
  *
  * Response headers name the library's ids: `X-Agent-Thread-Id`, `X-Agent-Run-Id`. Authenticated by
