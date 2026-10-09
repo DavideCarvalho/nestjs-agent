@@ -1,5 +1,17 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.34.0
+
+### Minor Changes
+
+- [#344](https://github.com/DavideCarvalho/nestjs-agent/pull/344) [`e66d435`](https://github.com/DavideCarvalho/nestjs-agent/commit/e66d4353da2df32fa1bfc0937d14481769d77742) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The estimated cost now reaches the usage ledger, and the quota counts it.
+
+  For a provider that reports no cost (Bedrock, or OpenAI and Anthropic called directly), the loop's estimate (tokens times the price row) reached only the stream frame and `agent_message.usage.costUsd`. `agent_token_usage.cost_usd` stayed NULL, so the quota's USD windows read $0.
+
+  - **The ledger stores the estimate.** `agent_token_usage.cost_usd` now holds it, marked by the new `cost_source` column (`'provider' | 'estimate'`). The boot schema heal adds the column (Drizzle and MikroORM), so no app migration is needed. A provider-reported cost is unchanged, still wins, and is stamped `'provider'`. An unpriced turn keeps both columns NULL. Chat, structured-output and follow-up usage rows are covered.
+  - **SPI.** `RecordUsageInput.costSource` and `CostSource` are new. `quotaToday` / `usageBetween` return `UsageTotals` (`{ usedTokens, costUsd, estimatedCostUsd? }`), where `costUsd` includes estimates. `sumUsage` is new.
+  - **Quota.** The USD windows count estimates by default, because a USD ceiling on a provider that reports no cost would otherwise never block. `quota: { limits, countEstimatedCost: false }` counts provider-reported cost only.
+
 ## 0.33.1
 
 ### Patch Changes
