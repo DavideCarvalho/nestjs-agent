@@ -15,8 +15,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-/** `React.x` used as a value: not `foo.React.x`, not `$React.x`. */
-const USE = /(?<![\w$.])React\s*\.\s*[A-Za-z_$]/;
+/**
+ * `React.x` used as a value: not `foo.React.x`, not `$React.x`, and not code a module writes out as
+ * a string (`'React.Fragment'`, `` `React.createElement(…)` `` — the sandbox's JSX transpiler).
+ */
+const USE = /(?<![\w$.'"`])React\s*\.\s*[A-Za-z_$]/;
 /** Anything that binds the identifier `React` in the module. */
 const BINDINGS = [
   /\bimport\s+React\b/, // import React from 'react' / import React, { … }

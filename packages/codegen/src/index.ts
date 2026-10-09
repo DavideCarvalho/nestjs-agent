@@ -50,7 +50,8 @@ const THREAD_DETAIL = `${THREAD_SUMMARY.slice(0, -2)}; messages: ${STORED_MESSAG
 const CLIENT_CONFIG =
   "{ attachments: { enabled: boolean; upload: 'multipart' | 'resumable' | null; maxBytes: number; " +
   'allowedContentTypes: string[]; maxPerMessage: number }; models: { enabled: boolean }; ' +
-  'quota: { enforced: boolean }; identity: { anonymous: boolean } }';
+  'quota: { enforced: boolean }; identity: { anonymous: boolean }; ' +
+  'genui?: { sandbox?: { theme: boolean; tailwind?: { url: string }; kit?: { url: string; hash?: string } } } }';
 /** `GET /agent/quota` — mirrors `QuotaReport` in core/src/spi/quota-provider.ts. */
 const QUOTA_REPORT =
   "{ windows: { period: 'day' | 'month'; usedTokens?: number; limitTokens?: number; usedUsd: number; " +

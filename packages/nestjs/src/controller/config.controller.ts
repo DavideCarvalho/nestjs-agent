@@ -12,6 +12,7 @@ import { Controller, Get, Inject, Optional, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { attachmentLimits } from '../attachment-limits.js';
+import { AGENT_GENUI, type AgentGenui } from '../genui/agent-genui.token.js';
 import { AnonymousActorResolver } from '../resolver/anonymous-actor-resolver.js';
 
 @Controller('config')
@@ -25,6 +26,9 @@ export class ConfigController {
     @Optional()
     @Inject(AGENT_MODEL_CATALOG)
     private readonly models: ModelCatalog | undefined,
+    @Optional()
+    @Inject(AGENT_GENUI)
+    private readonly genui: AgentGenui | undefined,
   ) {}
 
   @Get()
@@ -37,6 +41,9 @@ export class ConfigController {
       models: { enabled: this.models !== undefined },
       quota: { enforced: this.options.quota !== undefined },
       identity: { anonymous: this.actorResolver instanceof AnonymousActorResolver },
+      ...(this.genui?.sandboxClient !== undefined
+        ? { genui: { sandbox: this.genui.sandboxClient() } }
+        : {}),
     };
   }
 }

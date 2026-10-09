@@ -45,8 +45,8 @@
     "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-agent": ">=1.24.0 <2.0.0",
-    "@dudousxd/nestjs-agent-core": ">=0.43.0 <1.0.0",
+    "@dudousxd/nestjs-agent": ">=1.29.0 <2.0.0",
+    "@dudousxd/nestjs-agent-core": ">=0.50.0 <1.0.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@dudousxd/nestjs-durable-core": ">=0.72.0"

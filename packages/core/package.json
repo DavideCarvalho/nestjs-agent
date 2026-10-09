@@ -66,6 +66,26 @@
         "default": "./dist/genui/builtins.cjs"
       }
     },
+    "./genui/chart-image": {
+      "import": {
+        "types": "./dist/genui/chart-image.d.ts",
+        "default": "./dist/genui/chart-image.js"
+      },
+      "require": {
+        "types": "./dist/genui/chart-image.d.cts",
+        "default": "./dist/genui/chart-image.cjs"
+      }
+    },
+    "./genui/kit": {
+      "import": {
+        "types": "./dist/genui/kit/index.d.ts",
+        "default": "./dist/genui/kit/index.js"
+      },
+      "require": {
+        "types": "./dist/genui/kit/index.d.cts",
+        "default": "./dist/genui/kit/index.cjs"
+      }
+    },
     "./ag-ui": {
       "import": {
         "types": "./dist/ag-ui/index.d.ts",
@@ -97,15 +117,37 @@
   },
   "dependencies": {
     "@dudousxd/nestjs-diagnostics": "0.7.2",
-    "@standard-schema/spec": "1.1.0"
+    "@standard-schema/spec": "1.1.0",
+    "@tailwindcss/browser": "4.3.3"
+  },
+  "peerDependencies": {
+    "@resvg/resvg-js": "^2.6.0",
+    "typescript": ">=5",
+    "vite": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "@resvg/resvg-js": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@ag-ui/client": "1.0.1",
     "@ag-ui/core": "1.0.1",
+    "@resvg/resvg-js": "2.6.2",
+    "@types/react": "19.3.0",
     "ajv": "8.20.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "rxjs": "7.8.2",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
+    "vite": "5.4.21",
     "zod": "3.25.76"
   }
 }

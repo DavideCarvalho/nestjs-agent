@@ -6,6 +6,7 @@ import {
   type ChannelStore,
   InMemoryChannelStore,
 } from '@dudousxd/nestjs-agent-core';
+import { AGENT_GENUI } from '@dudousxd/nestjs-agent/genui';
 import {
   Inject,
   Injectable,
@@ -19,6 +20,7 @@ import { ModuleRef } from '@nestjs/core';
 import type { AgentChannelsModuleOptions } from './agent-channels.options.js';
 import type { ChannelWorkflowEngine } from './executor.js';
 import {
+  type ChannelGenui,
   ChannelHandler,
   type ChannelHttpResponse,
   type ChannelTurnService,
@@ -54,6 +56,8 @@ export class AgentChannelsService implements OnModuleInit, OnModuleDestroy {
     @Inject(ActionProposalWorkerService)
     private readonly worker?: ActionProposalWorkerService,
     @Optional() @Inject(ModuleRef) private readonly moduleRef?: ModuleRef,
+    /** The app's genui setup (`AgentGenuiModule`): channels configured there draw natively. */
+    @Optional() @Inject(AGENT_GENUI) genui?: ChannelGenui,
   ) {
     const store = options.store ?? boundStore ?? new InMemoryChannelStore();
     for (const channel of options.channels) {
@@ -61,11 +65,17 @@ export class AgentChannelsService implements OnModuleInit, OnModuleDestroy {
       if (this.handlers.has(name)) throw new Error(`Two channels are named "${name}"`);
       this.handlers.set(
         name,
-        new ChannelHandler(channel, service, store, (error) =>
-          this.logger.error(
-            `A message on "${name}" failed: ${error instanceof Error ? error.message : String(error)}`,
-            error instanceof Error ? error.stack : undefined,
-          ),
+        new ChannelHandler(
+          channel,
+          service,
+          store,
+          (error) =>
+            this.logger.error(
+              `A message on "${name}" failed: ${error instanceof Error ? error.message : String(error)}`,
+              error instanceof Error ? error.stack : undefined,
+            ),
+          undefined,
+          genui,
         ),
       );
     }

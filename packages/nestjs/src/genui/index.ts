@@ -6,10 +6,13 @@
  * `@dudousxd/nestjs-agent-core/genui`, the isomorphic entry a browser imports too.
  */
 export {
+  AGENT_GENUI,
+  AgentGenui,
   AgentGenuiModule,
   type AgentGenuiModuleAsyncOptions,
   type AgentGenuiModuleOptions,
   type AgentGenuiOptions,
+  type AgentGenuiSandboxKitOptions,
   GENUI_CATALOG,
   GENUI_OPTIONS,
   GenuiCatalogResolver,

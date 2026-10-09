@@ -2,6 +2,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ClaimedActionApproval } from './action-proposal-approval.js';
 import type { AgentIntake, ElicitationReply } from './elicitation.js';
 import type { UiCapabilities } from './genui/capabilities.js';
+import type { SandboxClientConfig } from './genui/sandbox-kit.js';
 import type { ActionProposalOutcome } from './spi/action-proposal-outcome-store.js';
 import type { ChatQueueState } from './spi/chat-queue.js';
 import type { AgentHistoryWindow } from './spi/history-policy.js';
@@ -333,6 +334,8 @@ export interface PromptContext {
   agentName: string;
   pageContext?: PageContext;
   uiCapabilities?: UiCapabilities;
+  /** The channel the turn runs on (`web`, `whatsapp`, …) — see `turnChannel`. */
+  channel?: string;
   /**
    * The persona this turn runs under, when it runs under one — so an agent's own `@SystemPrompt`
    * (or a contributor) can vary by persona without the persona carrying a prompt of its own.
@@ -819,6 +822,11 @@ export interface AgentClientConfig {
   quota: { enforced: boolean };
   /** No `actorResolver`: every browser is its own anonymous actor. */
   identity: { anonymous: boolean };
+  /**
+   * Generative UI facts a renderer needs: the sandbox's theme, Tailwind runtime and kit bundle
+   * (same-origin urls). Absent without a configured sandbox.
+   */
+  genui?: { sandbox?: SandboxClientConfig };
 }
 
 /** The attachment rules in force — what the upload route enforces. */

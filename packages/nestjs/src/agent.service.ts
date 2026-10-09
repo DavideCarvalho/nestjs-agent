@@ -129,7 +129,10 @@ function sendableParams(params: ChatParams): ChatParams {
       message: 'nothing to answer: send a non-empty message, an attachment, or regenerate',
     });
   }
-  return text === message ? params : { ...params, message: text };
+  const { channel, ...rest } = params;
+  const stamped: ChatParams =
+    channel === undefined ? params : { ...rest, pageContext: { ...params.pageContext, channel } };
+  return text === message ? stamped : { ...stamped, message: text };
 }
 
 export interface ChatParams {
@@ -159,6 +162,13 @@ export interface ChatParams {
    */
   attachments?: AttachmentRef[];
   pageContext?: PageContext;
+  /**
+   * The channel this turn runs on — `web`, `mobile`, `whatsapp`… — over whatever its page context
+   * says. Stamped as `pageContext.channel`, which is what decides (`turnChannel`) which genui tools
+   * the turn is offered (`AgentGenuiModule.forRoot({ channels })`). Omitted → the page context's,
+   * else `web`.
+   */
+  channel?: string;
   /** Re-run the last exchange instead of adding a new message. Requires an existing `threadId`. */
   regenerate?: boolean;
   /**

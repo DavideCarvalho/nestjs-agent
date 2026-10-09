@@ -6,7 +6,12 @@ import {
   type PageContext,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
-import { type UiCapabilities, validateUiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
+import {
+  type UiCapabilities,
+  WEB_CHANNEL,
+  stampChannel,
+  validateUiCapabilities,
+} from '@dudousxd/nestjs-agent-core/genui';
 import {
   BadRequestException,
   Body,
@@ -139,7 +144,8 @@ export class ChatController {
         ? { personaId: body.persona }
         : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
-      ...(body.pageContext !== undefined ? { pageContext: body.pageContext } : {}),
+      // The HTTP chat serves a web page, unless the client's page context names its channel.
+      pageContext: stampChannel(body.pageContext, WEB_CHANNEL),
       ...(body.regenerate === true ? { regenerate: true } : {}),
       ...(body.transient === true ? { transient: true } : {}),
       ...(typeof body.model === 'string' && body.model.length > 0 ? { model: body.model } : {}),

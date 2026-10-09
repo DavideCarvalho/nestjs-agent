@@ -43,6 +43,8 @@ export interface AiToolCtx {
   /** The persona of {@link agentName} the turn runs under, when it runs under one. */
   persona?: string;
   pageContext?: PageContext;
+  /** The channel the turn runs on (`web`, `whatsapp`, …) — see `turnChannel`. */
+  channel?: string;
   /** Optional host handle (e.g. an ORM EntityManager) the app threads through options. */
   host?: unknown;
   /**
@@ -201,6 +203,11 @@ export interface ToolInputPreview {
 /** Who a turn's tool list is being built for — what {@link ToolHandler.describe} can vary on. */
 export interface ToolDescribeScope {
   uiCapabilities?: UiCapabilities;
+  /**
+   * The channel the turn runs on — `web`, `whatsapp`, `telegram`, `mobile`… (`turnChannel` of its
+   * page context). Absent where a list is built outside a turn (the MCP server's `tools/list`).
+   */
+  channel?: string;
   actor: Actor;
   /** Absent where the list is built outside a conversation (the MCP server's `tools/list`). */
   threadId?: string;

@@ -3,6 +3,7 @@ import {
   canonicalActionProposalJson,
   snapshotActionProposal,
 } from './action-proposal-transitions.js';
+import { turnChannel } from './genui/channels.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type {
   AiToolCtx,
@@ -358,6 +359,7 @@ function describeScopeOf(ctx: AiToolCtx): ToolDescribeScope {
     ...(ctx.threadId ? { threadId: ctx.threadId } : {}),
     ...(ctx.agentName !== undefined ? { agentName: ctx.agentName } : {}),
     ...(ctx.uiCapabilities !== undefined ? { uiCapabilities: ctx.uiCapabilities } : {}),
+    channel: ctx.channel ?? turnChannel(ctx.pageContext),
   };
 }
 
