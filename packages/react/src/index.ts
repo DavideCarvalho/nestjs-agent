@@ -154,6 +154,7 @@ export {
 } from './presentation/result-view.js';
 export {
   correctedCallIds,
+  retriedCallIds,
   type DescribeToolCallOptions,
   describeToolCall,
   type GroupToolActivityOptions,

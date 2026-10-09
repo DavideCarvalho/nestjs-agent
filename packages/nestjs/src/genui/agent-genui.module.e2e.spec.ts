@@ -179,9 +179,22 @@ describe('AgentGenuiModule', () => {
       'Sandbox',
     ]);
     const description = model.tools.find((tool) => tool.name === 'ui__render')?.description ?? '';
-    expect(description.indexOf('Callout')).toBeLessThan(description.indexOf('Sandbox'));
+    expect(description.indexOf('- Callout:')).toBeLessThan(description.indexOf('- Sandbox:'));
     expect(assistants[0]?.ui?.[0]).toMatchObject({ component: 'Sandbox', props: view });
     expect(assistants[0]?.ui?.[0]?.fallbackText).toContain('A calculator.');
+  });
+
+  it("componentTools: ['Sandbox'] adds a flat ui__sandbox beside ui__render", async () => {
+    const view = { title: 'Calc', summary: 'A calculator.', html: '<b>0</b>' };
+    const model = new CallingModel('ui__sandbox', view);
+    const { assistants } = await boot(
+      model,
+      AgentGenuiModule.forRoot({ catalog, sandbox: true, componentTools: ['Sandbox'] }),
+    );
+    expect(model.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['ui__render', 'ui__sandbox']),
+    );
+    expect(assistants[0]?.ui?.[0]).toMatchObject({ component: 'Sandbox', props: view });
   });
 
   it('no sandbox unless asked for', async () => {

@@ -31,7 +31,7 @@ const catalog: ToolCatalog = {
     running: 'Purging {key}',
     done: 'Purged {key}',
     tone: 'destructive',
-    confirm: { title: 'Purge {key}?', verb: 'Purge', detail: 'Clears {key} everywhere' },
+    confirm: { title: 'Purge {key}?', verb: 'Purge {key}', detail: 'Clears {key} everywhere' },
   },
 };
 
@@ -41,6 +41,8 @@ function toolBlock(parts: AnyToolUIPart[], toolCatalog?: ToolCatalog) {
     isReasoningOpen: () => false,
     toggleReasoning: () => undefined,
     ...(toolCatalog !== undefined ? { toolCatalog } : {}),
+    // Every attempt: these tests are about grouping, not about hiding a retried failure.
+    hideRetriedFailures: false,
   })[0];
   if (block?.kind !== 'tools') throw new Error('expected a tool block');
   return block;
@@ -106,7 +108,11 @@ describe('describeToolCall', () => {
       status: 'awaiting-approval',
       phrase: 'Purging sessions',
       tone: 'destructive',
-      confirm: { title: 'Purge sessions?', verb: 'Purge', detail: 'Clears sessions everywhere' },
+      confirm: {
+        title: 'Purge sessions?',
+        verb: 'Purge sessions',
+        detail: 'Clears sessions everywhere',
+      },
       result: null,
     });
   });

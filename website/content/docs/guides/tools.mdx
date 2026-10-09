@@ -156,7 +156,7 @@ sentence that mentions it:
 | `label` | Noun phrase: "Database query". Also what a phrase falls back to while its slots are still empty. |
 | `running` / `done` | Sentence templates. A `{slot}` with nothing behind it collapses with the space before it, so `"Reading {bucket}"` degrades to `"Reading"`, never to braces. |
 | `icon`, `detail`, `tone` | Glyph key, one explanatory line, `neutral` / `destructive`. |
-| `confirm` | `{ title, verb, detail? }` — the approval prompt for an `action` tool, templated over the input. A [preflight](#preflight-checking-an-action-before-and-after-approval) can replace it for one call. |
+| `confirm` | `{ title, verb, detail? }` — the approval prompt for an `action` tool, templated over the input. Filled on the server (`fillToolConfirmation`, the React package's `fillTemplate`), so every approval frame carries the resolved `confirmation` and AG-UI, A2UI, OpenUI and A2A clients word the prompt as the native page does. A [preflight](#preflight-checking-an-action-before-and-after-approval) can replace it for one call. |
 | `result` | How the output reads as content: `{ kind: 'metrics', fields }`, `{ kind: 'table', rows, columns, empty? }`, `{ kind: 'log', lines }`, `{ kind: 'note', text }`, or `{ kind: 'elsewhere' }` when it is drawn somewhere else already. Every variant names dotted paths, never shapes. |
 
 `GET /agent/tools?agent=<name>` serves `{ name, kind, presentation? }` for the tools the caller can
