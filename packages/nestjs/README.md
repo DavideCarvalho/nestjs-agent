@@ -418,6 +418,31 @@ AgentModule.forRoot({
 
 In anonymous mode the limits apply per browser (each is its own actor).
 
+### Estimated cost is persisted, and the quota counts it
+
+A provider that reports no cost, such as Bedrock or OpenAI and Anthropic called directly, still gets
+a cost for every turn: its tokens times the model's price row. That estimate is written to the usage
+ledger: `agent_token_usage.cost_usd`, with `cost_source = 'estimate'`. Before this, the estimate
+reached only the stream frame and the message, so the ledger held NULL and the quota's USD windows
+read $0. A cost the provider reports (OpenRouter, the Vercel AI Gateway) is written as before, with
+`cost_source = 'provider'`. That reported figure always wins over an estimate. A turn with neither
+keeps `cost_usd` NULL and `cost_source` NULL.
+
+- **Schema.** `cost_source` is a nullable column that the boot schema heal adds to an existing
+  `agent_token_usage`, with no app migration. Rows written before it existed keep `cost_source`
+  NULL. They only ever held a reported cost.
+- **Frozen at write time.** An estimate uses the price row in effect for that turn. Changing a price
+  later does not rewrite history. A row with NULL `cost_usd` is still estimated at read time by the
+  governance read-model, as before.
+- **Quota.** The USD windows (`limits.day.usd`, `limits.month.usd`) sum every priced row, estimates
+  included. That is the default because otherwise a USD ceiling on a provider that reports no cost
+  would read $0 and never block: the budget would exist but never enforce. To budget on
+  provider-reported (gateway) cost only, set `quota: { limits, countEstimatedCost: false }`.
+  `quotaToday` / `usageBetween` return `{ usedTokens, costUsd, estimatedCostUsd }`, where
+  `costUsd` includes the estimated share.
+- History-summary usage rows are written before the run reads its price list, so they stay
+  unpriced in the ledger. The governance read-model still estimates them.
+
 ### Pricing at boot: your own prices, and AWS Bedrock (GovCloud, China)
 
 On bootstrap `AgentModule` gives every configured model (`aiSdkModel` / `aiSdkModels` describe

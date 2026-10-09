@@ -14,6 +14,7 @@ import type { ActionProposal, ActionProposalScope } from './spi/action-proposal-
 import {
   type AgentStore,
   type AppendMessageInput,
+  type CostSource,
   type CreateThreadInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
@@ -21,6 +22,8 @@ import {
   type ToolCallApprovalState,
   type UpdateThreadInput,
   type UpdateToolCallInput,
+  type UsageTotals,
+  sumUsage,
 } from './spi/agent-store.js';
 import { toolCallApprovalFromRow } from './spi/approval-policy.js';
 import type {
@@ -81,6 +84,7 @@ interface UsageRow {
   cacheWriteTokens?: number;
   cacheReadTokens?: number;
   costUsd?: number;
+  costSource?: CostSource;
   day: string;
   createdAt: string;
 }
@@ -96,8 +100,10 @@ export interface GovernanceUsageRow {
   cacheWriteTokens?: number;
   /** Subset of `inputTokens` served from the prompt cache this turn; undefined when not reported. */
   cacheReadTokens?: number;
-  /** Provider-reported actual cost for the turn, when known; undefined → estimate from pricing. */
+  /** The turn's cost as recorded (reported, or estimated at write time); undefined → estimate from pricing. */
   costUsd?: number;
+  /** Where `costUsd` came from; undefined with a `costUsd` → a row from before estimates were stored (reported). */
+  costSource?: CostSource;
   day: string;
   createdAt: string;
 }
@@ -912,27 +918,21 @@ export class InMemoryAgentStore
         ? { cacheReadTokens: input.usage.cacheReadTokens }
         : {}),
       ...(input.costUsd !== undefined ? { costUsd: input.costUsd } : {}),
+      ...(input.costUsd !== undefined && input.costSource !== undefined
+        ? { costSource: input.costSource }
+        : {}),
     });
   }
 
-  async quotaToday(
-    actorRef: string,
-    day: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async quotaToday(actorRef: string, day: string): Promise<UsageTotals> {
     return this.usageBetween(actorRef, day, day);
   }
 
-  async usageBetween(
-    actorRef: string,
-    fromDay: string,
-    toDay: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
     const rows = this.usage.filter(
       (row) => row.actorRef === actorRef && row.day >= fromDay && row.day <= toDay,
     );
-    const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
-    return { usedTokens, costUsd };
+    return sumUsage(rows);
   }
 
   /** Test helper: read the recorded usage rows (modelId + token totals). */
@@ -957,6 +957,7 @@ export class InMemoryAgentStore
       ...(row.cacheWriteTokens !== undefined ? { cacheWriteTokens: row.cacheWriteTokens } : {}),
       ...(row.cacheReadTokens !== undefined ? { cacheReadTokens: row.cacheReadTokens } : {}),
       ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
+      ...(row.costSource !== undefined ? { costSource: row.costSource } : {}),
     }));
   }
 

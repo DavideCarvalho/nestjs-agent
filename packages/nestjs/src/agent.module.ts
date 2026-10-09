@@ -251,11 +251,12 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       useFactory: (o: AgentModuleOptions, store: AgentStore) =>
         isQuotaProvider(o.quota)
           ? o.quota
-          : new LedgerQuotaProvider(
-              store,
-              o.quota?.limits,
-              o.quota?.warnAt !== undefined ? { warnAt: o.quota.warnAt } : {},
-            ),
+          : new LedgerQuotaProvider(store, o.quota?.limits, {
+              ...(o.quota?.warnAt !== undefined ? { warnAt: o.quota.warnAt } : {}),
+              ...(o.quota?.countEstimatedCost !== undefined
+                ? { countEstimatedCost: o.quota.countEstimatedCost }
+                : {}),
+            }),
       inject: [AGENT_OPTIONS, AGENT_STORE],
     },
     {

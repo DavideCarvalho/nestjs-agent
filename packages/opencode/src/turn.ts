@@ -546,7 +546,7 @@ export class OpenCodeTurn {
       modelId: this.a.modelLabel,
       purpose: 'chat',
       usage,
-      ...(costUsd !== undefined ? { costUsd } : {}),
+      ...(costUsd !== undefined ? { costUsd, costSource: 'provider' as const } : {}),
     });
     if (!this.stepOpen) return;
     this.stepOpen = false;

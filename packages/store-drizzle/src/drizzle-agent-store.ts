@@ -30,7 +30,9 @@ import {
   type ToolResult,
   type UpdateThreadInput,
   type UpdateToolCallInput,
+  type UsageTotals,
   canonicalActionProposalJson,
+  sumUsage,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -1134,22 +1136,16 @@ export class DrizzleAgentStore
       cacheWriteTokens: input.usage.cacheWriteTokens ?? null,
       cacheReadTokens: input.usage.cacheReadTokens ?? null,
       costUsd: input.costUsd ?? null,
+      costSource: input.costUsd !== undefined ? (input.costSource ?? 'provider') : null,
       createdAt: new Date(),
     });
   }
 
-  async quotaToday(
-    actorRef: string,
-    day: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async quotaToday(actorRef: string, day: string): Promise<UsageTotals> {
     return this.usageBetween(actorRef, day, day);
   }
 
-  async usageBetween(
-    actorRef: string,
-    fromDay: string,
-    toDay: string,
-  ): Promise<{ usedTokens: number; costUsd: number }> {
+  async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
     const start = new Date(`${fromDay}T00:00:00.000Z`);
     const end = new Date(`${toDay}T23:59:59.999Z`);
     const rows = await this.db
@@ -1162,9 +1158,7 @@ export class DrizzleAgentStore
           lte(this.t.agentTokenUsage.createdAt, end),
         ),
       );
-    const usedTokens = rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-    const costUsd = rows.reduce((sum, row) => sum + (row.costUsd ?? 0), 0);
-    return { usedTokens, costUsd };
+    return sumUsage(rows);
   }
 
   private toSummary(thread: AgentThreadRow, lastContent?: string): ThreadSummary {

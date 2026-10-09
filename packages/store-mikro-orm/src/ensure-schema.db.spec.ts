@@ -393,6 +393,7 @@ const ADDED_LATER: Record<string, string[]> = {
   agent_run: ['parent_run_id'],
   agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'attachments', 'seq', 'persona'],
   agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
+  agent_token_usage: ['cost_source'],
 };
 
 /** The update DDL the differ still wants for agent tables — empty once the heal has landed. */
