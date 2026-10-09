@@ -6,8 +6,9 @@ import type { Provider, Type } from '@nestjs/common';
  * `path` and guarded by its `guards` exactly like the native routes; the runs, the store, the
  * approvals and the quota are the library's, unchanged.
  *
- * `agUiAdapter()` is the one that ships. Write your own the same way: a controller that injects
- * `AgentService` (and `AGENT_ACTOR_RESOLVER`) and translates.
+ * `agUiAdapter()` and `a2uiAdapter()` (`/a2ui`) are the ones that ship. Write your own the same
+ * way: a controller that injects `AgentService` (and `AGENT_ACTOR_RESOLVER`) and translates — by
+ * the `AGENT_SERVICE` token when it ships in an entry of its own.
  */
 export interface AgentProtocolAdapter {
   /** For logs and diagnostics. */

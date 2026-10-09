@@ -1,0 +1,33 @@
+/**
+ * `@dudousxd/nestjs-agent-core/a2ui` — A2UI (https://a2ui.org, v0.9) for this agent, framework-free:
+ * the `ui` frame → A2UI converter, the builtin → basic-catalog mappings, the catalog export, the
+ * stream projector and the inbound action reader. `@dudousxd/nestjs-agent/a2ui` serves it as
+ * `POST <path>/a2ui` (`adapters: [a2uiAdapter()]`); for A2UI over AG-UI, pass `a2ui: true` to
+ * `agUiAdapter()`.
+ */
+
+export { type UiAction, uiActionText } from '../genui/actions.js';
+export {
+  A2UI_ACTIVITY_TYPE,
+  A2UI_APPROVE_ACTION,
+  A2UI_BASIC_CATALOG_ID,
+  A2UI_BASIC_COMPONENTS,
+  A2UI_BUILTIN_MAPPERS,
+  A2UI_OPERATIONS_KEY,
+  A2UI_REJECT_ACTION,
+  A2UI_VERSION,
+  type A2uiComponent,
+  type A2uiMapContext,
+  type A2uiMapper,
+  type A2uiOptions,
+  A2uiProjector,
+  type A2uiServerMessage,
+  type A2uiStreamOptions,
+  a2uiActivityEvent,
+  a2uiApprovalComponents,
+  a2uiCatalog,
+  a2uiSurfaceId,
+  a2uiSurfaceMessages,
+  readA2uiAction,
+  toA2uiComponents,
+} from './core.js';

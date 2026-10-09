@@ -46,6 +46,11 @@ The same component reaches clients that cannot draw it as text. A client declare
 renders (`uiCapabilities`), and the server sends the rest as their `fallbackText`. See
 [One answer, every surface](/docs/agent/guides/rendering-everywhere).
 
+When no catalog component fits a one-off interactive answer, the opt-in
+[sandbox](/docs/agent/guides/generative-ui-sandbox) lets the model write a small HTML/CSS/JS view,
+drawn in an isolated iframe. And any A2UI client can draw the same components:
+see [A2UI](/docs/agent/guides/a2ui).
+
 ## 1. A catalog
 
 ```ts title="catalog.ts"

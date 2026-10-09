@@ -40,6 +40,7 @@ import {
 } from '@nestjs/common';
 import { DiscoveryModule, ModulesContainer, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
+import { AGENT_SERVICE } from './agent-service.token.js';
 import type { AgentModuleAsyncOptions, AgentModuleOptions, AgentSurface } from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
@@ -280,6 +281,7 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
     { provide: AGENT_CHAT_QUEUE, useExisting: ChatQueueService },
     InlineAgentRunner,
     AgentService,
+    { provide: AGENT_SERVICE, useExisting: AgentService },
     ActionProposalService,
     ActionProposalWorkerService,
     // Bound ALWAYS (durable or inline) — the console's cross-thread approvals inbox routes decisions
@@ -337,6 +339,7 @@ function exportsFor(engine?: AgentEngine): NonNullable<DynamicModule['exports']>
     AGENT_DEPS_FACTORY,
     AgentDepsFactory,
     AgentService,
+    AGENT_SERVICE,
     ActionProposalService,
     ActionProposalWorkerService,
     ChatQueueService,

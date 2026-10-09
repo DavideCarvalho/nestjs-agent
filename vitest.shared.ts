@@ -14,6 +14,9 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-core/genui/builtins': fileURLToPath(
     new URL('./packages/core/src/genui/builtins.ts', import.meta.url),
   ),
+  '@dudousxd/nestjs-agent-core/a2ui': fileURLToPath(
+    new URL('./packages/core/src/a2ui/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core/ag-ui': fileURLToPath(
     new URL('./packages/core/src/ag-ui/index.ts', import.meta.url),
   ),
@@ -47,6 +50,9 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-react': pkg('react'),
   '@dudousxd/nestjs-agent/genui': fileURLToPath(
     new URL('./packages/nestjs/src/genui/index.ts', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent/a2ui': fileURLToPath(
+    new URL('./packages/nestjs/src/a2ui/index.ts', import.meta.url),
   ),
   '@dudousxd/nestjs-agent/media': fileURLToPath(
     new URL('./packages/nestjs/src/media/index.ts', import.meta.url),

@@ -1,3 +1,5 @@
+import { readA2uiAction } from '../a2ui/core.js';
+import { type UiAction, readUiAction } from '../genui/actions.js';
 import { type UiCapabilities, validateUiCapabilities } from '../genui/capabilities.js';
 import { type InterruptAddress, decodeInterruptId } from './interrupt-id.js';
 import {
@@ -209,6 +211,12 @@ export interface ForwardedOptions {
   persona?: string;
   pageContext?: Record<string, unknown>;
   /**
+   * A UI action that IS this turn: `forwardedProps.uiAction` (a `UiAction` — a sandbox's
+   * `agent.send`) or `forwardedProps.a2uiAction.userAction` (A2UI's AG-UI binding). A string when
+   * one was sent but refused.
+   */
+  uiAction?: UiAction | string;
+  /**
    * Re-run the thread's last exchange instead of appending a turn — what the native `chat` body's
    * `regenerate: true` asks. The user message is the one being answered again.
    */
@@ -232,6 +240,11 @@ export function readForwardedProps(forwarded: unknown): ForwardedOptions {
     ...(model !== undefined ? { model } : {}),
     ...(persona !== undefined ? { persona } : {}),
     ...(isRecord(forwarded.pageContext) ? { pageContext: forwarded.pageContext } : {}),
+    ...(forwarded.uiAction !== undefined
+      ? { uiAction: readUiAction(forwarded.uiAction) }
+      : isRecord(forwarded.a2uiAction)
+        ? { uiAction: readA2uiAction(forwarded.a2uiAction) }
+        : {}),
     ...(forwarded.regenerate === true ? { regenerate: true } : {}),
   };
 }

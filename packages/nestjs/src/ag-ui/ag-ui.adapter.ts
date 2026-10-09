@@ -8,6 +8,7 @@ import {
   type AttachmentStagingStore,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
+import type { A2uiOptions } from '@dudousxd/nestjs-agent-core/a2ui';
 import {
   AG_UI_CUSTOM,
   type AgUiEvent,
@@ -26,6 +27,7 @@ import {
   readForwardedProps,
   readUserTurn,
 } from '@dudousxd/nestjs-agent-core/ag-ui';
+import { type Catalog, uiActionText } from '@dudousxd/nestjs-agent-core/genui';
 import {
   BadRequestException,
   Body,
@@ -43,6 +45,7 @@ import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService, NO_USER_MESSAGE_CODE } from '../agent.service.js';
 import { attachmentLimits } from '../attachment-limits.js';
 import { answers as boundedAnswers, rejectReason } from '../controller/tool-call.controller.js';
+import { GENUI_CATALOG } from '../genui/agent-genui.module.js';
 import type { AgentProtocolAdapter } from '../protocol-adapter.js';
 
 export interface AgUiAdapterOptions {
@@ -53,6 +56,14 @@ export interface AgUiAdapterOptions {
    * before it is reported interrupted. Default 750 ms.
    */
   quietMs?: number;
+  /**
+   * A2UI over AG-UI: every generative-UI frame is also sent as an `ACTIVITY_SNAPSHOT` of type
+   * `a2ui-surface` (the A2UI messages under `a2ui_operations`), so CopilotKit's A2UI renderer — or
+   * any client of AG-UI's A2UI binding — draws it. `true` maps the library builtins onto A2UI's
+   * basic catalog; pass {@link A2uiOptions} for the app's own mappings or catalog. Inbound,
+   * `forwardedProps.a2uiAction.userAction` is always read: the action becomes the user's turn.
+   */
+  a2ui?: boolean | A2uiOptions;
 }
 
 /** The surface an AG-UI resume decision is recorded as having come through. */
@@ -82,6 +93,8 @@ export class AgUiRunHandler {
     protected readonly options: AgentModuleOptions,
     protected readonly staging: AttachmentStagingStore | undefined,
     protected readonly quietMs: number | undefined,
+    /** A2UI over AG-UI ({@link AgUiAdapterOptions.a2ui}), its catalog already filled in. Off when undefined. */
+    protected readonly a2ui: A2uiOptions | undefined = undefined,
   ) {}
 
   async handle(req: Request, res: Response, body: unknown): Promise<void> {
@@ -140,7 +153,16 @@ export class AgUiRunHandler {
       }
     }
 
-    const turn = readUserTurn(input.messages);
+    // A UI action (a sandbox's `agent.send`, an A2UI button) IS the turn: the messages only
+    // restate the conversation so far.
+    const action = forwarded.uiAction;
+    if (typeof action === 'string') {
+      throw invalid('invalid_ui_action', action);
+    }
+    const turn =
+      action !== undefined
+        ? { text: uiActionText(action), media: [], staged: [], dropped: [] }
+        : readUserTurn(input.messages);
     if (turn === null) {
       throw invalid(NO_USER_MESSAGE_CODE, 'messages carries no user message to answer');
     }
@@ -158,6 +180,7 @@ export class AgUiRunHandler {
     if (
       owner !== null &&
       forwarded.regenerate !== true &&
+      action === undefined &&
       turn.media.length === 0 &&
       turn.staged.length === 0
     ) {
@@ -388,7 +411,8 @@ export class AgUiRunHandler {
     const cursor = { seq: 0 };
     try {
       const frames = agUiFramesFromNdjson(this.agent.subscribe(runId));
-      for await (const event of agUiEvents(frames, { ...options, cursor })) {
+      const a2ui = this.a2ui !== undefined ? { a2ui: this.a2ui } : {};
+      for await (const event of agUiEvents(frames, { ...options, ...a2ui, cursor })) {
         if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') terminal = true;
         res.write(agUiSse(event, cursor.seq));
       }
@@ -424,6 +448,12 @@ export class AgUiRunHandler {
 export function agUiAdapter(options: AgUiAdapterOptions = {}): AgentProtocolAdapter {
   const path = (options.path ?? 'ag-ui').replace(/^\/+|\/+$/g, '');
   const quietMs = options.quietMs;
+  const a2ui =
+    options.a2ui === undefined || options.a2ui === false
+      ? undefined
+      : options.a2ui === true
+        ? {}
+        : options.a2ui;
 
   @Controller()
   class AgUiController extends AgUiRunHandler {
@@ -432,8 +462,16 @@ export function agUiAdapter(options: AgUiAdapterOptions = {}): AgentProtocolAdap
       @Inject(AGENT_ACTOR_RESOLVER) actorResolver: ActorResolver,
       @Inject(AGENT_OPTIONS) moduleOptions: AgentModuleOptions,
       @Optional() @Inject(AGENT_ATTACHMENT_STAGING) staging?: AttachmentStagingStore,
+      @Optional() @Inject(GENUI_CATALOG) catalog?: Catalog,
     ) {
-      super(agent, actorResolver, moduleOptions, staging, quietMs);
+      super(
+        agent,
+        actorResolver,
+        moduleOptions,
+        staging,
+        quietMs,
+        a2ui !== undefined ? withCatalog(a2ui, catalog) : undefined,
+      );
     }
 
     @Post(path)
@@ -444,4 +482,10 @@ export function agUiAdapter(options: AgUiAdapterOptions = {}): AgentProtocolAdap
   }
 
   return { name: 'ag-ui', controllers: [AgUiController] };
+}
+
+/** The app's genui catalog under the A2UI options, for the text of components nothing maps. */
+function withCatalog(options: A2uiOptions, catalog: Catalog | undefined): A2uiOptions {
+  if (options.catalog !== undefined || catalog === undefined) return options;
+  return { ...options, catalog };
 }

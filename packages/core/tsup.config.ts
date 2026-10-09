@@ -12,6 +12,7 @@ const entry = {
   'genui/index': 'src/genui/index.ts',
   'genui/builtins': 'src/genui/builtins.ts',
   'ag-ui/index': 'src/ag-ui/index.ts',
+  'a2ui/index': 'src/a2ui/index.ts',
 };
 
 export default defineConfig([
