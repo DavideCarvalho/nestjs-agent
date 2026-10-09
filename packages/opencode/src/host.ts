@@ -5,7 +5,7 @@ import type {
   StoredMessage,
 } from '@dudousxd/nestjs-agent-core';
 import type { OpenCodeClient, OpenCodePromptFile, OpenCodeSessionCreate } from './client.js';
-import type { PendingAsk, TurnOutcome } from './turn.js';
+import type { OpenCodeUsage, PendingAsk, TurnOutcome } from './turn.js';
 
 /**
  * Where a turn runs and how its OpenCode session is set up — the part only the host knows. The
@@ -113,7 +113,12 @@ export interface OpenCodeRunResult {
   text: string;
   /** The run's assistant messages, as stored. */
   messages: StoredMessage[];
-  usage: { inputTokens: number; outputTokens: number; costUsd: number };
+  /**
+   * What the run spent, over every model call OpenCode made for it (its steps, the title, a
+   * compaction) and every process that ran a part of it. `inputTokens` counts cached input too;
+   * `cacheReadTokens`/`cacheWriteTokens` are subsets of it.
+   */
+  usage: OpenCodeUsage;
   durationMs: number;
 }
 

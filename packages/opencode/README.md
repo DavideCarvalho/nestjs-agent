@@ -53,7 +53,8 @@ export class AppModule {}
 | OpenCode | The library's protocol and store |
 | --- | --- |
 | `session.text.delta` / `session.reasoning.delta` | `text` / `reasoning` |
-| a step (`session.step.ended`) | `step-start` … `step-finish` with usage; usage recorded per step |
+| a step (`session.step.ended`) | `step-start` … `step-finish` with usage and cost; a `chat` usage row per step (see [Cost and usage](#cost-and-usage)) |
+| `session.usage.recorded` (the title, a compaction) | a `title` / `history_summary` usage row |
 | tools (`session.tool.*`) | `tool-input-*` / `tool-output*`, code-mode inner calls nested by `parentId` |
 | `permission.asked` | an `action` call + `approval-requested`, recorded `pending_approval`; `approve` / `reject` → `permission.reply` |
 | `form.created` | `elicitation`; `answer` / `skip` → `session.form.reply` / `cancel` |
@@ -63,6 +64,33 @@ export class AppModule {}
 
 Sessions: one per thread, kept by an `OpenCodeSessionStore` (in memory by default; persist it for
 several replicas) and recreated when the server's `bootId` changes, told the conversation so far.
+
+## Cost and usage
+
+Every model call OpenCode makes for a turn — each step, the title it gives the session, a
+compaction — goes to the same token-usage ledger the library's own loop writes (`recordUsage`:
+`agent_token_usage` with `cost_usd` and `cost_source`), so the ledger quota (`quota: { limits }`),
+the dashboard and `GET /quota` see an OpenCode turn like any other.
+
+- **Tokens.** OpenCode reports the uncached input in `tokens.input` and the cache beside it; the row
+  counts the whole input side in `inputTokens`, with `cacheReadTokens` / `cacheWriteTokens` as
+  subsets (the library's `MessageUsage`). The row's model is the one OpenCode names for the step
+  (`<providerID>/<model id>`, e.g. `amazon-bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+- **Cost.** OpenCode prices each call itself, off its model catalog. A call it priced (`cost > 0`) is
+  recorded at that figure, `cost_source: 'provider'`. A call it priced at 0 — no price for the model
+  in its catalog — is estimated from the library's price for the model, `cost_source: 'estimate'`:
+  the pricing store's row, else (seeded into the store once, as at boot) `priceCatalog.prices`, the
+  built-in GovCloud Bedrock table (`priceCatalog.region` / `AWS_REGION`, or a `us-gov.` id) and
+  models.dev. A model the library cannot price keeps OpenCode's 0.
+- `openCode({ cost: 'estimate' })` prefers the library's price whenever it has one — for models
+  OpenCode would price at a list price that is not yours (models.dev lists commercial Bedrock prices,
+  so Bedrock in GovCloud is priced too low unless OpenCode's config declares the model's `cost`).
+- **The run's total** (`OpenCodeRunResult.usage` for `beforeSettle` / `onSettled`, and the usage on
+  the turn's last message) is added up from the turn's own calls, not read back from the store: each
+  milestone carries what was spent since the last one, and a durable run journals it with the
+  milestone, so a run resumed in another process (an approval answered after a restart) still reports
+  the whole run, cache tokens included. A process that dies while OpenCode works loses the calls it
+  saw from that total (their ledger rows are already written).
 
 ## Durable turns
 

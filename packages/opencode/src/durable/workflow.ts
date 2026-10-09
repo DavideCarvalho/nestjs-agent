@@ -7,7 +7,7 @@ import {
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { errorText } from '../turn.js';
+import { addUsage, emptyUsage, errorText } from '../turn.js';
 import { OpenCodeTurns, type SessionHandle } from '../turns.js';
 
 export const OPENCODE_RUN_WORKFLOW = 'agent.opencode.run';
@@ -38,6 +38,9 @@ export class OpenCodeRunWorkflow {
   ) {}
 
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<{ outcome: string }> {
+    // What the run spent: every milestone carries its share, journaled with it, so a run resumed in
+    // another process adds up the same figure (a milestone journaled before usage travelled adds 0).
+    let spent = emptyUsage();
     try {
       const begun = await ctx.localStep('begin', async () => ({
         handle: await this.turns.begin(ctx.runId, input),
@@ -45,13 +48,16 @@ export class OpenCodeRunWorkflow {
       }));
       let handle: SessionHandle = begun.handle;
       await ctx.localStep('prompt', async () => {
-        await this.turns.prompt(ctx.runId, input, handle);
+        await this.turns.prompt(ctx.runId, input, handle, spent);
         return true;
       });
       for (let n = 0; ; n += 1) {
+        const before = spent;
         const milestone = await ctx.localStep(`observe:${n}`, () =>
-          this.turns.observe(ctx.runId, input, handle),
+          this.turns.observe(ctx.runId, input, handle, before),
         );
+        spent = addUsage(spent, milestone.usage);
+        const total = spent;
         if (milestone.kind === 'finished') {
           await ctx.localStep('finish', async () => {
             // A cancel settles the run itself (it may be parked where no step runs again).
@@ -62,6 +68,7 @@ export class OpenCodeRunWorkflow {
                 input,
                 milestone.outcome,
                 Date.now() - begun.startedAt,
+                total,
               );
             return true;
           });
@@ -79,13 +86,19 @@ export class OpenCodeRunWorkflow {
         }
         const ask = milestone.ask;
         handle = await ctx.localStep(`reply:${n}`, () =>
-          this.turns.reply(ctx.runId, input, handle, ask, reply),
+          this.turns.reply(ctx.runId, input, handle, ask, reply, total),
         );
       }
     } catch (error) {
       if (isWorkflowControlFlowSignal(error)) throw error;
       await ctx.localStep('fail', async () => {
-        await this.turns.settleFailed(ctx.runId, input, errorText(error, 'the turn failed'));
+        await this.turns.settleFailed(
+          ctx.runId,
+          input,
+          errorText(error, 'the turn failed'),
+          0,
+          spent,
+        );
         return true;
       });
       return { outcome: 'failed' };

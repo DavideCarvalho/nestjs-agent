@@ -46,11 +46,17 @@ export {
   OPENCODE_TURNS,
 } from './tokens.js';
 export {
+  addUsage,
+  emptyUsage,
   type Milestone,
   OpenCodeReplyMismatchError,
   OpenCodeTurn,
+  type OpenCodeUsage,
   type PendingAsk,
+  type StepCost,
+  type StepModel,
   type TurnOutcome,
+  usageOf,
 } from './turn.js';
 export {
   type OpenCodeCallContext,
