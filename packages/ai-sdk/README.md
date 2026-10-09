@@ -52,8 +52,18 @@ the result the agent loop needs:
 - **Usage** — SDK usage maps to `MessageUsage`, including `cacheReadTokens` / `cacheWriteTokens` /
   `reasoningTokens` when the provider reports them.
 - **Cost** — a real USD `costUsd` is pulled from `providerMetadata` when a gateway reports it
-  (Vercel AI Gateway `gateway.cost`, OpenRouter `total_cost`); a direct provider leaves it unset so
-  governance estimates from tokens.
+  (Vercel AI Gateway `gateway.cost`; OpenRouter `openrouter.usage.cost` from the official
+  `@openrouter/ai-sdk-provider` — the per-call cost of the provider the request was routed to). For
+  an OpenRouter model the adapter adds `providerOptions.openrouter.usage = { include: true }` (usage
+  accounting, which is what makes OpenRouter report cost; your own `openrouter.usage` wins) and warns
+  once per model if a call still returns no cost. OpenRouter reached through `@ai-sdk/openai` with a
+  custom `baseURL` reports no cost. A direct provider leaves it unset so governance estimates from
+  tokens × the pricing table.
+- **Boot pricing** — `aiSdkModel` / `aiSdkModels` implement `describeModels()`, so on bootstrap
+  `AgentModule` writes the [models.dev](https://models.dev) list price for any configured model the
+  bound `AGENT_PRICING_STORE` has no row for (never overwriting one), and warns once about a model
+  that would record no cost. `priceCatalog: false` turns the fetch off; it is skipped under
+  `NODE_ENV=test` unless set.
 - **Model id** — the response's `modelId` is recorded with the turn for cost accounting.
 
 ## Several models: `aiSdkModels`

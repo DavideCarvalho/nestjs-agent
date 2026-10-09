@@ -1,4 +1,5 @@
 import {
+  type DescribedModel,
   type MessageAttachment,
   type MessageUsage,
   type ModelCatalog,
@@ -57,7 +58,16 @@ export type AiSdkModelOptions = CallSettings & {
    * the guard with a plain fetch is the host's legitimate call.
    */
   experimental_download?: Experimental_DownloadFunction;
+  /**
+   * Provider-specific request options (`streamText`'s `providerOptions`). For an OpenRouter model the
+   * adapter adds `openrouter.usage = { include: true }` (usage accounting, which is what makes
+   * OpenRouter report each call's cost) unless you set `openrouter.usage` yourself.
+   */
+  providerOptions?: StreamProviderOptions;
 };
+
+/** `streamText`'s `providerOptions`, taken off its own signature. */
+type StreamProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
 /** The id a `LanguageModel` answers to: the gateway string itself, or the instance's `modelId`. */
 function idOf(model: LanguageModel): string | undefined {
@@ -73,9 +83,48 @@ function idOf(model: LanguageModel): string | undefined {
  * tools are handed to the SDK WITHOUT an `execute` fn, so the SDK returns tool-calls for the agent
  * loop to run as its own (replay-safe) steps.
  */
+/**
+ * The provider family of an AI SDK model, as models.dev names it: `openrouter.chat` → `openrouter`,
+ * `anthropic.messages` → `anthropic`. A bare string id is routed by the Vercel AI Gateway (`vercel`).
+ */
+function providerOf(model: LanguageModel): string | undefined {
+  if (typeof model === 'string') return 'vercel';
+  const provider = (model as { provider?: unknown }).provider;
+  if (typeof provider !== 'string' || provider.length === 0) return undefined;
+  const family = provider.split('.')[0] ?? provider;
+  return family === 'gateway' ? 'vercel' : family;
+}
+
+/** OpenRouter (`@openrouter/ai-sdk-provider`): reports the real, routed cost per call. */
+function isOpenRouter(model: LanguageModel): boolean {
+  return providerOf(model) === 'openrouter';
+}
+
+/**
+ * Whether a model's provider reports the call's real USD cost in its metadata — the Vercel AI
+ * Gateway (`providerMetadata.gateway.cost`) and OpenRouter (`providerMetadata.openrouter.usage.cost`).
+ */
+function reportsCost(model: LanguageModel): boolean {
+  const provider = providerOf(model);
+  return provider === 'vercel' || provider === 'openrouter';
+}
+
+function describeModel(model: LanguageModel, id = idOf(model)): DescribedModel[] {
+  if (id === undefined) return [];
+  const provider = providerOf(model);
+  return [
+    {
+      modelId: id,
+      ...(provider !== undefined ? { provider } : {}),
+      reportsCost: reportsCost(model),
+    },
+  ];
+}
+
 export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): ModelProvider {
   const own = idOf(model);
   return {
+    describeModels: () => describeModel(model, own),
     runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
       // One model, so a pick naming another cannot be honoured — and running this one instead
       // would answer on a model nobody chose. `aiSdkModels` is the provider for a picker.
@@ -186,6 +235,7 @@ export function aiSdkModels(
   };
   return {
     catalog: staticModelCatalog(view),
+    describeModels: () => entries.flatMap(([, entry]) => describeModel(entry.model)),
     runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
       const id = args.model ?? fallback;
       const entry = byId.get(id);
@@ -208,6 +258,7 @@ async function runTurnOn(
 ): Promise<ModelTurnResult> {
   const result = streamText({
     ...settings,
+    ...withOpenRouterUsageAccounting(model, settings.providerOptions),
     model,
     instructions: args.system,
     messages: mapMessages(args.messages),
@@ -284,6 +335,9 @@ async function runTurnOn(
 
   const modelId = finalStep.response.modelId;
   const costUsd = extractCostUsd(finalStep.providerMetadata);
+  if (costUsd === undefined && isOpenRouter(model)) {
+    warnOpenRouterCostMissing(idOf(model) ?? finalStep.response.modelId ?? 'unknown');
+  }
   const object = args.outputSchema ? await parsedOutput(result.output) : undefined;
 
   return {
@@ -540,10 +594,47 @@ function mapUsage(usage: LanguageModelUsage): MessageUsage {
 }
 
 /**
- * A gateway reports the ACTUAL spend for the turn; a direct provider (Anthropic/OpenAI/Bedrock)
- * doesn't, leaving this undefined so the governance read-model estimates from tokens. We read the
- * Vercel AI Gateway shape (`gateway.cost`) first, then OpenRouter (`openrouter.total_cost`, also
- * nested under `openrouter.usage.total_cost`).
+ * OpenRouter only reports cost in the response when usage accounting is asked for
+ * (`usage: { include: true }`). The OpenRouter provider forwards `providerOptions.openrouter` into the
+ * request body, so the adapter asks on every OpenRouter call — unless the app set its own `usage`,
+ * which wins. Any other model gets the options untouched.
+ */
+function withOpenRouterUsageAccounting(
+  model: LanguageModel,
+  providerOptions: StreamProviderOptions | undefined,
+): { providerOptions?: StreamProviderOptions } {
+  if (!isOpenRouter(model)) {
+    return providerOptions !== undefined ? { providerOptions } : {};
+  }
+  const own = providerOptions?.openrouter ?? {};
+  return {
+    providerOptions: { ...providerOptions, openrouter: { usage: { include: true }, ...own } },
+  };
+}
+
+const openRouterCostWarned = new Set<string>();
+
+/** Said once per model per process: an OpenRouter call came back without `usage.cost`. */
+function warnOpenRouterCostMissing(modelId: string): void {
+  if (openRouterCostWarned.has(modelId)) return;
+  openRouterCostWarned.add(modelId);
+  console.warn(
+    `[nestjs-agent] OpenRouter model "${modelId}" returned no cost (\`providerMetadata.openrouter.usage.cost\`). Cost falls back to the pricing table, which may have no row for it. Use \`@openrouter/ai-sdk-provider\` >= 1 (\`createOpenRouter(...).chat(id)\`); do not set \`usage: { include: false }\`.`,
+  );
+}
+
+/** Test seam: forget which models already warned. */
+export function resetOpenRouterCostWarnings(): void {
+  openRouterCostWarned.clear();
+}
+
+/**
+ * The provider-reported USD cost of the call, when a gateway reports one:
+ * - Vercel AI Gateway: `providerMetadata.gateway.cost` (a decimal string).
+ * - OpenRouter (`@openrouter/ai-sdk-provider`): `providerMetadata.openrouter.usage.cost` — what the
+ *   account was actually charged for the routed provider. `total_cost` (top level or under `usage`)
+ *   is the shape older integrations used, kept as a fallback.
+ * A direct provider reports neither, leaving this undefined so cost is estimated from tokens.
  */
 function extractCostUsd(metadata: ProviderMetadata | undefined): number | undefined {
   if (!metadata) {
@@ -562,7 +653,7 @@ function extractCostUsd(metadata: ProviderMetadata | undefined): number | undefi
     }
     const usage = asJsonObject(openrouter.usage);
     if (usage) {
-      const nested = toFiniteNumber(usage.total_cost);
+      const nested = toFiniteNumber(usage.cost) ?? toFiniteNumber(usage.total_cost);
       if (nested !== undefined) {
         return nested;
       }

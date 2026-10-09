@@ -2,6 +2,7 @@ import type {
   ActionApprovalMode,
   ActionProposal,
   BackgroundActorResolver,
+  ModelsDevOptions,
   TextActionProposalConfig,
 } from '@dudousxd/nestjs-agent-core';
 import type {
@@ -178,6 +179,18 @@ export interface AgentModuleOptions {
    * turns instead.
    */
   model?: ModelProvider;
+  /**
+   * Where a configured model with no price row gets one, at boot. On application bootstrap every
+   * model the `model` provider describes (`aiSdkModel` / `aiSdkModels`) that the bound
+   * `AGENT_PRICING_STORE` does not price gets the current [models.dev](https://models.dev) list price
+   * written as its row — only when it has none, so a price you set is never overwritten. A model that
+   * still has no price, and whose provider reports no cost (anything but OpenRouter / the Vercel AI
+   * Gateway), is named in one boot warning: it would record a `null` cost on every turn.
+   *
+   * Omit → models.dev, except under `NODE_ENV=test` (no network from a test suite unless asked).
+   * `{ url, fetch }` points at a mirror; `false` never fetches (the warning still runs).
+   */
+  priceCatalog?: ModelsDevOptions | false;
   /**
    * Run turns on something other than this library's loop — e.g. `openCode({ host })`. The engine
    * binds `AGENT_RUNNER`; the routes, store, sink, approvals and queue stay the library's. STATIC

@@ -16,6 +16,8 @@ export * from './spi/roles-policy.js';
 export * from './spi/quota-store.js';
 export * from './spi/quota-provider.js';
 export * from './spi/pricing-store.js';
+export * from './pricing/models-dev.js';
+export * from './pricing/boot-pricing.js';
 export * from './spi/retriever.js';
 export * from './spi/history-policy.js';
 export * from './spi/processors.js';
