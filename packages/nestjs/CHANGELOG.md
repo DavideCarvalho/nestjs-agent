@@ -1,5 +1,20 @@
 # @dudousxd/nestjs-agent
 
+## 1.28.0
+
+### Minor Changes
+
+- [#350](https://github.com/DavideCarvalho/nestjs-agent/pull/350) [`8fd6323`](https://github.com/DavideCarvalho/nestjs-agent/commit/8fd632324abf783d88b71384803745d71206e374) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Generative UI: sandboxed generated UI and an A2UI adapter.
+
+  - **Sandbox** (opt-in): `AgentGenuiModule.forRoot({ sandbox: true })` (or `Sandbox` / `defineSandbox({ policy })` from `@dudousxd/nestjs-agent-core/genui` in a catalog) lets the model write HTML, CSS and JS for a one-off interactive answer when no catalog component fits — described to the model as a last resort. It streams in field order (`initialHeight → placeholderMessages → css → html → jsFunctions → jsExpressions`): a placeholder of the declared height, a script-free preview of the markup, then the live view, with half-written CSS and code never shown or run (new `ComponentDefinition.partialProps`; per-component tools of such components preview their input as a one-node tree). The React renderer (`SandboxView`, `createSandboxRenderer` from `@dudousxd/nestjs-agent-react/genui`) draws it in a `srcdoc` iframe with `sandbox="allow-scripts"` (no `allow-same-origin`), a strict CSP (no network unless the policy lists origins) and auto-resize. Code inside calls `agent.send({ … })`; the host accepts it only from its own frame, opaque origin and token, within size / rate / count limits and an optional schema, and sends it as the next user turn (`GenuiActionProvider`, `GenuiProvider`'s `onAction`, `useAgentChat().sendUiAction`, `uiActionText`). Text channels get its `summary`.
+  - **A2UI** (v0.9): `a2uiAdapter()` from `@dudousxd/nestjs-agent/a2ui` serves `POST <path>/a2ui` as JSON Lines of A2UI messages (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`) — builtins mapped onto A2UI's basic catalog, app components through a mapping or as custom components, previews streamed into the same surface, approvals as Approve/Reject buttons decided with the AG-UI resume's checks. A2UI `action` / `userAction` messages become the next turn. The framework-free converter, projector and action reader are `@dudousxd/nestjs-agent-core/a2ui`. `agUiAdapter({ a2ui: true })` adds A2UI over AG-UI: an `a2ui-surface` `ACTIVITY_SNAPSHOT` per UI frame, and `forwardedProps.a2uiAction` (or `forwardedProps.uiAction`) as the turn (`400 invalid_ui_action` when refused).
+  - `AGENT_SERVICE`: `AgentService` under a `Symbol.for` token, for controllers shipped in a secondary entry.
+
+### Patch Changes
+
+- Updated dependencies [[`8fd6323`](https://github.com/DavideCarvalho/nestjs-agent/commit/8fd632324abf783d88b71384803745d71206e374)]:
+  - @dudousxd/nestjs-agent-core@0.49.0
+
 ## 1.27.1
 
 ### Patch Changes
