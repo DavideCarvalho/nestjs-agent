@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-opencode
 
+## 0.2.1
+
+### Patch Changes
+
+- [#348](https://github.com/DavideCarvalho/nestjs-agent/pull/348) [`545e500`](https://github.com/DavideCarvalho/nestjs-agent/commit/545e5006c95408f601cf8879ae6969ef5d506826) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Record the title OpenCode generates (and a compaction) even though OpenCode 2.0 does not stream those calls: a turn reads the session's spend (`session.get`) before it prompts and, when the execution ends, records what the session spent that its steps did not report as a `title` (or `history_summary`) usage row, counted in the run's usage. `OpenCodeClient.session.get` may return the session's `cost` and `tokens`.
+
 ## 0.2.0
 
 ### Minor Changes
