@@ -31,7 +31,7 @@ const catalog: ToolCatalog = {
     running: 'Purging {key}',
     done: 'Purged {key}',
     tone: 'destructive',
-    confirm: { title: 'Purge {key}?', verb: 'Purge', detail: 'Clears {key} everywhere' },
+    confirm: { title: 'Purge {key}?', verb: 'Purge {key}', detail: 'Clears {key} everywhere' },
   },
 };
 
@@ -108,7 +108,11 @@ describe('describeToolCall', () => {
       status: 'awaiting-approval',
       phrase: 'Purging sessions',
       tone: 'destructive',
-      confirm: { title: 'Purge sessions?', verb: 'Purge', detail: 'Clears sessions everywhere' },
+      confirm: {
+        title: 'Purge sessions?',
+        verb: 'Purge sessions',
+        detail: 'Clears sessions everywhere',
+      },
       result: null,
     });
   });
