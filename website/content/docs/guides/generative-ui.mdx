@@ -274,8 +274,9 @@ defineComponent({ ...Chart, streaming: 'complete' });
 While the model writes it, such a node is sent as a placeholder,
 `{ id, type, props: {}, incomplete: true, held: true }`, without its children; it is drawn once its
 whole subtree has arrived and its props pass its schema. `streaming: 'partial'` on a definition does
-the opposite — previews a component in a tree that defaults to `complete`, though a `complete`
-layout above it still holds it back. The default stays `complete` because a renderer written for
+the opposite — previews a component in a tree that defaults to `complete` — and a `complete` layout
+above it is drawn (`incomplete`, its children so far) once its own props are whole, instead of
+holding it back. The default stays `complete` because a renderer written for
 validated props would be handed half-written ones: opting in is saying your renderers cope (see
 [Streaming trees on the client](#streaming-trees-on-the-client)).
 

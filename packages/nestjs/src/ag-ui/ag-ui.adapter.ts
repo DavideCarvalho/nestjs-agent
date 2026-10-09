@@ -8,7 +8,12 @@ import {
   type AttachmentStagingStore,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
-import type { A2uiOptions } from '@dudousxd/nestjs-agent-core/a2ui';
+import {
+  A2UI_LEGACY_BASIC_CATALOG_ID,
+  type A2uiOptions,
+  negotiateA2uiCatalog,
+  readAgUiA2uiCatalogIds,
+} from '@dudousxd/nestjs-agent-core/a2ui';
 import {
   AG_UI_CUSTOM,
   type AgUiEvent,
@@ -62,6 +67,11 @@ export interface AgUiAdapterOptions {
    * any client of AG-UI's A2UI binding — draws it. `true` maps the library builtins onto A2UI's
    * basic catalog; pass {@link A2uiOptions} for the app's own mappings or catalog. Inbound,
    * `forwardedProps.a2uiAction.userAction` is always read: the action becomes the user's turn.
+   *
+   * The basic catalog goes under the id the client advertises — `forwardedProps
+   * .a2uiClientCapabilities`, or the "A2UI catalog capabilities" context entry CopilotKit sends —
+   * and, when it advertises none, under the id AG-UI's A2UI binding uses
+   * (`A2UI_LEGACY_BASIC_CATALOG_ID`: CopilotKit 1.77, `@ag-ui/a2ui-middleware`).
    */
   a2ui?: boolean | A2uiOptions;
 }
@@ -147,6 +157,7 @@ export class AgUiRunHandler {
           skip: first.address.position,
           answered: plan.decisions.map((decision) => decision.address.toolCallId),
           ...quiet,
+          ...this.a2uiFor(input),
           preamble: warningEvents(warnings),
         });
         return;
@@ -233,6 +244,7 @@ export class AgUiRunHandler {
       streamRunId: started.runId,
       streamThreadId: started.threadId,
       ...quiet,
+      ...this.a2uiFor(input),
       preamble: warningEvents(warnings),
     });
   }
@@ -392,6 +404,20 @@ export class AgUiRunHandler {
     res.end();
   }
 
+  /** A2UI for this request's client: the basic catalog under the id it advertises. Off when off. */
+  private a2uiFor(input: { forwardedProps?: unknown; context?: readonly unknown[] }): {
+    a2ui?: A2uiOptions;
+  } {
+    if (this.a2ui === undefined) return {};
+    return {
+      a2ui: negotiateA2uiCatalog(
+        this.a2ui,
+        readAgUiA2uiCatalogIds(input),
+        A2UI_LEGACY_BASIC_CATALOG_ID,
+      ),
+    };
+  }
+
   /**
    * Pipe a run to the client as AG-UI 1.0 over SSE: one event per `data:` line, from `RUN_STARTED`
    * to the run's terminal event. It ends when the run stops to ask — the library run stays parked,
@@ -411,8 +437,7 @@ export class AgUiRunHandler {
     const cursor = { seq: 0 };
     try {
       const frames = agUiFramesFromNdjson(this.agent.subscribe(runId));
-      const a2ui = this.a2ui !== undefined ? { a2ui: this.a2ui } : {};
-      for await (const event of agUiEvents(frames, { ...options, ...a2ui, cursor })) {
+      for await (const event of agUiEvents(frames, { ...options, cursor })) {
         if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') terminal = true;
         res.write(agUiSse(event, cursor.seq));
       }
