@@ -3,6 +3,7 @@ import {
   AGENT_OPTIONS,
   AGENT_PRICING_STORE,
   type AgentPricingStore,
+  type DescribedModel,
   type ModelProvider,
   ensureModelPricing,
 } from '@dudousxd/nestjs-agent-core';
@@ -49,7 +50,14 @@ export class PricingBootService implements OnApplicationBootstrap, OnApplication
 
   /** The check itself; resolves once it is done (exposed for tests). */
   async check(): Promise<void> {
-    const models = this.model?.describeModels?.() ?? [];
+    let models: DescribedModel[];
+    try {
+      models = this.model?.describeModels?.() ?? [];
+    } catch (error) {
+      // Pricing is bookkeeping, never a reason for the app to stay down.
+      logger.warn(`describeModels() threw; boot pricing skipped: ${String(error)}`);
+      return;
+    }
     if (models.length === 0) return;
     const catalog = this.options.priceCatalog;
     if (catalog === undefined && process.env.NODE_ENV === 'test') return;
