@@ -1,4 +1,9 @@
-export type { UiAction } from '@dudousxd/nestjs-agent-core/genui';
+export {
+  readUiActionText,
+  type UiAction,
+  type UiActionMessage,
+  uiActionSummary,
+} from '@dudousxd/nestjs-agent-core/genui';
 export {
   GenerativeUI,
   type GenerativeUIFallback,
@@ -46,3 +51,4 @@ export {
   SandboxView,
   useGenuiAction,
 } from './sandbox.js';
+export { UiActionChip, type UiActionChipProps } from './ui-action-chip.js';

@@ -7,6 +7,10 @@ import {
   type ModelTurnResult,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
+import {
+  A2UI_BASIC_CATALOG_ID,
+  A2UI_LEGACY_BASIC_CATALOG_ID,
+} from '@dudousxd/nestjs-agent-core/a2ui';
 import { encodeInterruptId } from '@dudousxd/nestjs-agent-core/ag-ui';
 import { defineCatalog } from '@dudousxd/nestjs-agent-core/genui';
 import { Card, KpiCards } from '@dudousxd/nestjs-agent-core/genui/builtins';
@@ -261,6 +265,81 @@ describe('a2uiAdapter()', () => {
   });
 });
 
+describe("a2uiAdapter(): the client's catalogs, its data model, a reopened thread", () => {
+  const createdWith = (messages: Record<string, Record<string, unknown>>[]) =>
+    messages.flatMap((message) =>
+      message.createSurface !== undefined ? [message.createSurface.catalogId] : [],
+    );
+
+  it('creates surfaces under the basic catalog id the client advertises', async () => {
+    const url = await boot((_args, turn) =>
+      turn === 0
+        ? { text: '', toolCall: { name: 'ui__render', input: tree } }
+        : { text: 'There you go.' },
+    );
+    const plain = await a2ui(url, { message: 'dashboard' });
+    expect(new Set(createdWith(plain.messages))).toEqual(new Set([A2UI_BASIC_CATALOG_ID]));
+    const legacy = await a2ui(url, {
+      message: 'dashboard',
+      metadata: {
+        a2uiClientCapabilities: { 'v0.9': { supportedCatalogIds: [A2UI_LEGACY_BASIC_CATALOG_ID] } },
+      },
+    });
+    expect(new Set(createdWith(legacy.messages))).toEqual(new Set([A2UI_LEGACY_BASIC_CATALOG_ID]));
+  });
+
+  it('hands a2uiClientDataModel to the prompt builder', async () => {
+    const seen: unknown[] = [];
+    const url = await boot(
+      () => ({ text: 'ok' }),
+      { catalog },
+      {
+        systemPrompt: (ctx) => {
+          seen.push(ctx.pageContext?.a2uiDataModel);
+          return 'You help.';
+        },
+      },
+    );
+    const { response } = await a2ui(url, {
+      message: 'what did I type?',
+      a2uiClientDataModel: { version: 'v0.9', surfaces: { s1: { name: 'Ada' } } },
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toContainEqual({ s1: { name: 'Ada' } });
+    const bad = await a2ui(url, { message: 'x', a2uiClientDataModel: { surfaces: 3 } });
+    expect(bad.response.status).toBe(400);
+  });
+
+  it('answers a stored thread as A2UI for a reload, owner-scoped', async () => {
+    const url = await boot((_args, turn) =>
+      turn === 0
+        ? { text: '', toolCall: { name: 'ui__render', input: tree } }
+        : { text: 'There you go.' },
+    );
+    const first = await a2ui(url, { message: 'dashboard' });
+    const threadId = first.response.headers.get('x-agent-thread-id') as string;
+    const get = (actor: string) =>
+      fetch(`${url}/agent/a2ui/threads/${threadId}`, { headers: { 'x-actor-id': actor } });
+    const response = await get('u1');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      threadId: string;
+      entries: { role: string; text?: string; messages?: Record<string, unknown>[] }[];
+    };
+    expect(body.threadId).toBe(threadId);
+    expect(body.entries[0]).toMatchObject({ role: 'user', text: 'dashboard' });
+    const surfaces = body.entries.flatMap((entry) => entry.messages ?? []);
+    for (const message of surfaces) expect(A2uiMessageSchema.safeParse(message).success).toBe(true);
+    expect(JSON.stringify(surfaces)).toContain('Revenue');
+    expect(JSON.stringify(surfaces)).toContain('There you go.');
+    expect([403, 404]).toContain((await get('u2')).status);
+    const unknown = await fetch(`${url}/agent/a2ui/threads/nope`, {
+      headers: { 'x-actor-id': 'u1' },
+    });
+    expect(await unknown.json()).toEqual({ threadId: 'nope', entries: [] });
+  });
+});
+
 describe('a2uiAdapter() and independent proposals', () => {
   it('decides a proposal through the proposal service and answers with its reply', async () => {
     const store = new InMemoryAgentStore();
@@ -376,6 +455,30 @@ describe('agUiAdapter({ a2ui: true })', () => {
     for (const message of activity.content.a2ui_operations) {
       expect(A2uiMessageSchema.safeParse(message).success).toBe(true);
     }
+  });
+
+  it("uses the AG-UI binding's basic catalog id, unless the client advertises another", async () => {
+    const url = await boot((_args, turn) =>
+      turn % 2 === 0
+        ? { text: '', toolCall: { name: 'ui__render', input: tree } }
+        : { text: 'Done.' },
+    );
+    const client = new HttpAgent({ url: `${url}/agent/ag-ui`, headers: { 'x-actor-id': 'u1' } });
+    const catalogOf = (events: BaseEvent[]) => {
+      const activity = events.find((event) => event.type === 'ACTIVITY_SNAPSHOT') as unknown as {
+        content: { a2ui_operations: { createSurface?: { catalogId: string } }[] };
+      };
+      return activity.content.a2ui_operations[0]?.createSurface?.catalogId;
+    };
+    client.addMessage({ id: 'm1', role: 'user', content: 'dashboard' });
+    expect(catalogOf(await run(client))).toBe(A2UI_LEGACY_BASIC_CATALOG_ID);
+    client.addMessage({ id: 'm2', role: 'user', content: 'again' });
+    const advertised = await run(client, {
+      forwardedProps: {
+        a2uiClientCapabilities: { 'v0.9': { supportedCatalogIds: [A2UI_BASIC_CATALOG_ID] } },
+      },
+    });
+    expect(catalogOf(advertised)).toBe(A2UI_BASIC_CATALOG_ID);
   });
 
   it('starts a turn from forwardedProps.a2uiAction, without a new user message', async () => {

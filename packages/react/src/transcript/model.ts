@@ -4,6 +4,7 @@ import {
   readElicitationInput,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
+import { type UiActionMessage, readUiActionText } from '@dudousxd/nestjs-agent-core/genui';
 import {
   type DataUIPart,
   type DynamicToolUIPart,
@@ -55,7 +56,16 @@ export interface TranscriptTextBlock {
   key: string;
   text: string;
   isStreaming: boolean;
+  /**
+   * A user message that is a UI action (a sandbox's `agent.send`, a component's button —
+   * `uiActionText`): its parts. Draw `uiAction.text` (or `uiActionSummary(uiAction)`) as a chip
+   * instead of `text`, whose JSON block is for the model. Absent on every other block.
+   */
+  uiAction?: TranscriptUiAction;
 }
+
+/** A UI action a user message carries ({@link TranscriptTextBlock.uiAction}). */
+export type TranscriptUiAction = UiActionMessage;
 
 /** One file on a message — an uploaded attachment, or one the model produced. */
 export interface TranscriptFile {
@@ -577,11 +587,13 @@ export function buildTranscriptBlocks(
       continue;
     }
     if (isTextUIPart(part)) {
+      const uiAction = message.role === 'user' ? readUiActionText(part.text) : null;
       blocks.push({
         kind: 'text',
         key: `${message.id}-text-${textCounter++}`,
         text: part.text,
         isStreaming: part.state === 'streaming',
+        ...(uiAction !== null ? { uiAction } : {}),
       });
       continue;
     }

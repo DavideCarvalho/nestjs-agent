@@ -242,6 +242,7 @@ export {
   type TranscriptSourcesBlock,
   type TranscriptStopState,
   type TranscriptTextBlock,
+  type TranscriptUiAction,
   type TranscriptToolBlock,
   type TranscriptToolCall,
   type TranscriptUiBlock,

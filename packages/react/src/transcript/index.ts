@@ -29,6 +29,7 @@ export {
   type TranscriptSourcesBlock,
   type TranscriptTextBlock,
   type TranscriptToolBlock,
+  type TranscriptUiAction,
   type TranscriptToolCall,
   type TranscriptUiBlock,
   type UsageSummary,

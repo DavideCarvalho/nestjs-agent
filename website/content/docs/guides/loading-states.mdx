@@ -244,8 +244,11 @@ export const catalog = defineCatalog([...BUILTIN_COMPONENTS, ...LAYOUT_COMPONENT
 | `'complete'` | Sent as a placeholder, `{ id, type, props: {}, incomplete: true, held: true }`, with no children. | Nothing. The provider's `placeholder` is drawn instead, until the node has closed and its props pass the schema. |
 | absent | The module's `streaming`. | |
 
-A `complete` layout node holds back its whole subtree, including `partial` children. With the
-module at `'complete'`, a component marked `streaming: 'partial'` still gets previews. None of it
+A `complete` layout node holds back its whole subtree — unless something inside it is marked
+`streaming: 'partial'` of its own accord (a `Sandbox`): then the layout is drawn as soon as its own
+props are whole, flagged `incomplete`, with its children so far, and each child follows its own mode.
+So with the module at `'complete'`, a component marked `streaming: 'partial'` gets previews, nested
+or not. None of it
 reaches a text channel, or a client that cannot draw every node of the tree: they get only the
 final answer.
 
