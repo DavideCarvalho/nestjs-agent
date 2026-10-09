@@ -54,7 +54,7 @@ export class AppModule {}
 | --- | --- |
 | `session.text.delta` / `session.reasoning.delta` | `text` / `reasoning` |
 | a step (`session.step.ended`) | `step-start` … `step-finish` with usage and cost; a `chat` usage row per step (see [Cost and usage](#cost-and-usage)) |
-| `session.usage.recorded` (the title, a compaction) | a `title` / `history_summary` usage row |
+| the title OpenCode generates, a compaction | a `title` / `history_summary` usage row (see [Cost and usage](#cost-and-usage)) |
 | tools (`session.tool.*`) | `tool-input-*` / `tool-output*`, code-mode inner calls nested by `parentId` |
 | `permission.asked` | an `action` call + `approval-requested`, recorded `pending_approval`; `approve` / `reject` → `permission.reply` |
 | `form.created` | `elicitation`; `answer` / `skip` → `session.form.reply` / `cancel` |
@@ -72,6 +72,11 @@ compaction — goes to the same token-usage ledger the library's own loop writes
 `agent_token_usage` with `cost_usd` and `cost_source`), so the ledger quota (`quota: { limits }`),
 the dashboard and `GET /quota` see an OpenCode turn like any other.
 
+- **The title and compactions.** OpenCode records those calls on the session without streaming
+  them. The turn reads what the session had spent (`session.get`) before it prompts, and when the
+  execution ends records what the session spent since that its steps did not report, as a `title`
+  row (`history_summary` when a compaction ran). A `session.usage.recorded` event, from an OpenCode
+  that streams it, is recorded as it arrives and not counted twice.
 - **Tokens.** OpenCode reports the uncached input in `tokens.input` and the cache beside it; the row
   counts the whole input side in `inputTokens`, with `cacheReadTokens` / `cacheWriteTokens` as
   subsets (the library's `MessageUsage`). The row's model is the one OpenCode names for the step

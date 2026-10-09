@@ -5,6 +5,7 @@ import type {
   OpenCodePermissionRequest,
   OpenCodePromptFile,
   OpenCodeSessionCreate,
+  OpenCodeTokens,
 } from '../client.js';
 
 export interface FakeCall {
@@ -52,6 +53,8 @@ export class FakeOpenCode implements OpenCodeClient {
    * request's round trip). Events emitted before then are not delivered to it — as with OpenCode.
    */
   connectDelayMs = 0;
+  /** What each session spent so far, as `session.get` reports it (set by a test). */
+  readonly usage = new Map<string, { cost: number; tokens: OpenCodeTokens }>();
 
   /** The sessions go idle: `session.wait` resolves (until the next prompt). */
   goIdle(): void {
@@ -111,7 +114,15 @@ export class FakeOpenCode implements OpenCodeClient {
     },
     get: async (args: { sessionID: string }) => {
       this.record('session.get', args);
-      return { id: args.sessionID, metadata: this.metadata.get(args.sessionID) ?? {} };
+      return {
+        id: args.sessionID,
+        metadata: this.metadata.get(args.sessionID) ?? {},
+        // A session that spent nothing yet reports zeros, as OpenCode does.
+        ...(this.usage.get(args.sessionID) ?? {
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      };
     },
     prompt: async (args: { sessionID: string; text: string; files?: OpenCodePromptFile[] }) => {
       this.record('session.prompt', args);
