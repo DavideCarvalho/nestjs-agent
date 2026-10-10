@@ -58,6 +58,7 @@ import {
 import {
   type ResolveToolUiCatalog,
   type ToolUiChannelGuide,
+  channelChoiceLimits,
   createNegotiatedUiCollector,
   withDelivered,
 } from './negotiated-tool-ui.js';
@@ -1618,12 +1619,15 @@ async function awaitElicitation(
  */
 export async function withChannelDelivery(
   deps: { uiChannelGuide?: ToolUiChannelGuide },
-  scope: ToolDescribeScope,
+  scope: ToolDescribeScope & { pageContext?: unknown },
   output: unknown,
   pushed: readonly AgentUiComponent[],
 ): Promise<unknown> {
+  const pageContext = scope.pageContext;
   if (deps.uiChannelGuide === undefined || pushed.length === 0) return output;
-  const delivered = await deps.uiChannelGuide.delivered(scope, pushed).catch(() => undefined);
+  const delivered = await deps.uiChannelGuide
+    .delivered(scope, pushed, channelChoiceLimits(pageContext))
+    .catch(() => undefined);
   return delivered === undefined ? output : withDelivered(output, delivered);
 }
 

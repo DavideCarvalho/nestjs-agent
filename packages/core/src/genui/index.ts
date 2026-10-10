@@ -24,6 +24,7 @@ export {
   assertGenuiChannels,
   type ChannelComponentInput,
   type ChannelConversion,
+  type ChannelChoiceLimits,
   type ChannelConversionSpec,
   type ChannelNativeButton,
   type ChannelNativeImage,
