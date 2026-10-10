@@ -94,6 +94,7 @@ export {
   streamFailure,
   exposeStreamErrorDetails,
   toolCallContext,
+  withChannelDelivery,
   RUN_FAILED_MESSAGE,
   withToolTimeout,
   settleAll,

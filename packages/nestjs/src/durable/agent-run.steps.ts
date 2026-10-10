@@ -25,6 +25,7 @@ import {
   traceLlmTurn,
   traceToolExecution,
   withAskTool,
+  withChannelDelivery,
   withMemoryTool,
   withSkillTool,
   withToolTimeout,
@@ -373,6 +374,8 @@ export class AgentRunSteps {
     }
     // Wrapped only when the dispatching loop asked for it (`collectUi`) AND something was pushed, so
     // a loop that predates this always reads the bare output it expects.
+    // On a channel the server draws for, the model reads what the user actually got there.
+    output = await withChannelDelivery(deps, input.ctx, output, ui.components());
     return input.collectUi === true
       ? wrapToolStepOutput(output, ui.components(), ui.text())
       : output;

@@ -1,4 +1,4 @@
-import type { ResolveToolUiCatalog } from '@dudousxd/nestjs-agent-core';
+import type { ResolveToolUiCatalog, ToolUiChannelGuide } from '@dudousxd/nestjs-agent-core';
 import type {
   AgentIntake,
   AgentPricingStore,
@@ -26,6 +26,8 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 /** Everything `runAgentLoop` needs, minus the per-run `day` the runner stamps. */
 export interface AgentDeps {
   resolveUiCatalog?: ResolveToolUiCatalog;
+  /** genui `channels`: the channel's prompt block, and what tool pushes were delivered as. */
+  uiChannelGuide?: ToolUiChannelGuide;
   actionApprovalMode?: 'blocking' | 'independent';
   model: ModelProvider;
   store: AgentStore;

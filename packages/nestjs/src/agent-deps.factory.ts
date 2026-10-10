@@ -1,7 +1,9 @@
 import {
   type ActionProposal,
   type Actor,
+  type ToolUiChannelGuide,
   assertIndependentActionCapabilities,
+  createToolUiChannelGuide,
 } from '@dudousxd/nestjs-agent-core';
 import {
   AGENT_MEMORY,
@@ -44,7 +46,12 @@ import type { Catalog } from '@dudousxd/nestjs-agent-core/genui';
 import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
-import { GENUI_CATALOG, GenuiCatalogResolver } from './genui/agent-genui.module.js';
+import {
+  AGENT_GENUI,
+  type AgentGenui,
+  GENUI_CATALOG,
+  GenuiCatalogResolver,
+} from './genui/agent-genui.module.js';
 
 /**
  * The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`.
@@ -88,6 +95,7 @@ export class AgentDepsFactory {
     private readonly memory: MemoryConfig | undefined,
     @Optional() @Inject(GENUI_CATALOG) private readonly uiCatalog?: Catalog,
     @Optional() private readonly uiCatalogResolver?: GenuiCatalogResolver,
+    @Optional() @Inject(AGENT_GENUI) private readonly genui?: AgentGenui,
   ) {
     if (options.actionApprovalMode === 'independent')
       assertIndependentActionCapabilities(store, options.backgroundActorResolver);
@@ -202,6 +210,37 @@ export class AgentDepsFactory {
     }
     return deps;
   }
+  /** The turn's UI catalog: the per-request resolver's, else the app's. */
+  private readonly resolveUiCatalog = (
+    scope: import('@dudousxd/nestjs-agent-core').ToolDescribeScope,
+  ) => {
+    const catalog =
+      this.uiCatalogResolver?.resolve({
+        ...scope,
+        ...(scope.actor.tenantRef !== undefined ? { tenant: scope.actor.tenantRef } : {}),
+      }) ?? this.uiCatalog;
+    if (!catalog) throw new Error('UI catalog unavailable');
+    return catalog;
+  };
+
+  #uiChannelGuide: ToolUiChannelGuide | null | undefined;
+  /** genui `channels`: what the model is told per channel. Built once; `undefined` without channels. */
+  private uiChannelGuide(): ToolUiChannelGuide | undefined {
+    if (this.#uiChannelGuide === undefined) {
+      const channels = this.genui?.channels;
+      this.#uiChannelGuide =
+        channels === undefined ||
+        (this.uiCatalog === undefined && this.uiCatalogResolver === undefined)
+          ? null
+          : createToolUiChannelGuide({
+              channels,
+              base: this.genui?.base ?? {},
+              resolveCatalog: this.resolveUiCatalog,
+            });
+    }
+    return this.#uiChannelGuide ?? undefined;
+  }
+
   forAgent(agentName?: string): AgentDeps {
     const name = agentName ?? this.defaultAgentName();
     if (agentName !== undefined && !this.agents.has(agentName)) {
@@ -218,6 +257,7 @@ export class AgentDepsFactory {
     const retrieval = this.options.retrieval;
     const historyPolicy = this.historyPolicy(definition);
     const ask = definition?.ask ?? this.options.ask;
+    const uiChannelGuide = this.uiChannelGuide();
     return {
       model: this.model,
       store: this.store,
@@ -231,18 +271,9 @@ export class AgentDepsFactory {
         : {}),
       registry: this.registry,
       ...(this.uiCatalog !== undefined || this.uiCatalogResolver !== undefined
-        ? {
-            resolveUiCatalog: (scope: import('@dudousxd/nestjs-agent-core').ToolDescribeScope) => {
-              const catalog =
-                this.uiCatalogResolver?.resolve({
-                  ...scope,
-                  ...(scope.actor.tenantRef !== undefined ? { tenant: scope.actor.tenantRef } : {}),
-                }) ?? this.uiCatalog;
-              if (!catalog) throw new Error('UI catalog unavailable');
-              return catalog;
-            },
-          }
+        ? { resolveUiCatalog: this.resolveUiCatalog }
         : {}),
+      ...(uiChannelGuide !== undefined ? { uiChannelGuide } : {}),
       promptContributors: this.promptContributors,
       systemPrompt:
         definition?.systemPrompt ?? this.options.systemPrompt ?? 'You are a helpful assistant.',
