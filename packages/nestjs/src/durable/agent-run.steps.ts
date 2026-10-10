@@ -32,6 +32,7 @@ import {
   wrapToolPreflightDenied,
   wrapToolStepOutput,
 } from '@dudousxd/nestjs-agent-core';
+import { turnChannel } from '@dudousxd/nestjs-agent-core/genui';
 import { Step } from '@dudousxd/nestjs-durable';
 import { Inject, Injectable } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
@@ -135,6 +136,7 @@ export class AgentRunSteps {
               ...(input.preflightContext?.uiCapabilities !== undefined
                 ? { uiCapabilities: input.preflightContext.uiCapabilities }
                 : {}),
+              channel: turnChannel(input.preflightContext?.pageContext),
               ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
             },
           ),
@@ -175,6 +177,7 @@ export class AgentRunSteps {
         ...(input.preflightContext?.uiCapabilities !== undefined
           ? { uiCapabilities: input.preflightContext.uiCapabilities }
           : {}),
+        channel: turnChannel(input.preflightContext?.pageContext),
       }),
     );
     const frames = observeTurnFrames(previews.writer);

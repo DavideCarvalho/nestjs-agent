@@ -92,6 +92,16 @@
         "types": "./dist/a2ui/index.d.cts",
         "default": "./dist/a2ui/index.cjs"
       }
+    },
+    "./vite": {
+      "import": {
+        "types": "./dist/vite/index.d.ts",
+        "default": "./dist/vite/index.js"
+      },
+      "require": {
+        "types": "./dist/vite/index.d.cts",
+        "default": "./dist/vite/index.cjs"
+      }
     }
   },
   "files": [
@@ -115,7 +125,8 @@
     "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/platform-express": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "ioredis": "^5.0.0",
-    "reflect-metadata": "^0.2.0"
+    "reflect-metadata": "^0.2.0",
+    "vite": ">=5"
   },
   "peerDependenciesMeta": {
     "@dudousxd/nestjs-durable": {
@@ -128,6 +139,9 @@
       "optional": true
     },
     "ioredis": {
+      "optional": true
+    },
+    "vite": {
       "optional": true
     }
   },

@@ -11,6 +11,12 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-core/guardrails': fileURLToPath(
     new URL('./packages/core/src/guardrails/index.ts', import.meta.url),
   ),
+  '@dudousxd/nestjs-agent-core/genui/chart-image': fileURLToPath(
+    new URL('./packages/core/src/genui/chart-image.ts', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent-core/genui/kit': fileURLToPath(
+    new URL('./packages/core/src/genui/kit/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core/genui/builtins': fileURLToPath(
     new URL('./packages/core/src/genui/builtins.ts', import.meta.url),
   ),
@@ -53,6 +59,9 @@ export const alias: Record<string, string> = {
   ),
   '@dudousxd/nestjs-agent/a2ui': fileURLToPath(
     new URL('./packages/nestjs/src/a2ui/index.ts', import.meta.url),
+  ),
+  '@dudousxd/nestjs-agent/vite': fileURLToPath(
+    new URL('./packages/nestjs/src/vite/index.ts', import.meta.url),
   ),
   '@dudousxd/nestjs-agent/media': fileURLToPath(
     new URL('./packages/nestjs/src/media/index.ts', import.meta.url),

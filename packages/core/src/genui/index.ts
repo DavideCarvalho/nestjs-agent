@@ -3,13 +3,16 @@
  * Schema or JSON Schema props), validation, model-facing catalog text, plain-text fallbacks and the
  * tools that push `ui` frames. Isomorphic: this entry imports nothing server-only, so the same
  * catalog file serves the NestJS app and the browser. Builtin definitions live at
- * `@dudousxd/nestjs-agent-core/genui/builtins`.
+ * `@dudousxd/nestjs-agent-core/genui/builtins`; charts as images for text channels at
+ * `@dudousxd/nestjs-agent-core/genui/chart-image`; the Node half of the sandbox kit (docs, bundle,
+ * discovery) at `@dudousxd/nestjs-agent-core/genui/kit`.
  */
 export {
   type Catalog,
   type CatalogOptions,
   COMPONENT_NAME,
   type ComponentDefinition,
+  type DefineComponentExtras,
   defineCatalog,
   defineComponent,
   flatComponents,
@@ -17,6 +20,37 @@ export {
   toolNameFor,
   toSnakeCase,
 } from './catalog.js';
+export {
+  assertGenuiChannels,
+  type ChannelComponentInput,
+  type ChannelConversion,
+  type ChannelNativeButton,
+  type ChannelNativeImage,
+  type ChannelNativeList,
+  type ChannelNativeListItem,
+  type ChannelNativeMessage,
+  type ChannelRenderedMessage,
+  type ChartImageRenderer,
+  type ComponentChannels,
+  canRenderOnChannel,
+  channelButtonAction,
+  channelCatalog,
+  channelInstructions,
+  DEFAULT_CHANNEL,
+  type GenuiChannelBase,
+  type GenuiChannelMode,
+  type GenuiChannelOptions,
+  type GenuiChannelRender,
+  type GenuiChannels,
+  isMessagingChannel,
+  MESSAGING_CHANNELS,
+  type ResolvedGenuiChannel,
+  renderChannelMessages,
+  resolveGenuiChannel,
+  textToHtml,
+  turnChannel,
+  WEB_CHANNEL,
+} from './channels.js';
 export {
   type GenuiPartialElement,
   type PartialTreeOptions,
@@ -124,9 +158,39 @@ export {
   Sandbox,
   type SandboxDefinition,
   type SandboxDocumentOptions,
+  type SandboxKitSource,
   type SandboxPolicy,
   type SandboxProps,
+  type SandboxThemeSource,
+  type SandboxView,
   sandboxCsp,
   sandboxPartialProps,
   sandboxPolicyOf,
 } from './sandbox.js';
+export { prepareSandboxJsx, transpileJsx } from './sandbox-jsx.js';
+export {
+  kitDocsToModelText,
+  kitJsxInstructions,
+  SANDBOX_ASSET_SIZES,
+  type SandboxClientConfig,
+  type SandboxKitComponentDoc,
+  type SandboxKitDescriptor,
+  type SandboxKitDocs,
+  type SandboxKitPropDoc,
+  sandboxJsxRuntime,
+  tailwindInstructions,
+} from './sandbox-kit.js';
+export {
+  collectHostThemeVars,
+  hostThemeCss,
+  isColorValue,
+  isHostDark,
+  isHslChannels,
+  type ThemeDocument,
+  type ThemeTokens,
+  tailwindThemeCss,
+  themeTokens,
+  themeToModelText,
+  themeVarsFromCss,
+  watchHostTheme,
+} from './sandbox-theme.js';

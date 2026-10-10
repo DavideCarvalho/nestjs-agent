@@ -42,6 +42,7 @@ import {
   normalizeElicitationReply,
   settleElicitation,
 } from './elicitation.js';
+import { turnChannel } from './genui/channels.js';
 import { estimateCost } from './governance/compute.js';
 import {
   type MemoryConfig,
@@ -837,6 +838,7 @@ function promptContext(input: AgentRunInput, persona: TurnPersona | undefined): 
     agentName: input.agentName ?? 'default',
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
     ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+    channel: turnChannel(input.pageContext),
     ...(persona !== undefined ? { persona: { id: persona.id, label: persona.label } } : {}),
   };
 }
@@ -1603,6 +1605,7 @@ function toolContext(deps: AgentLoopDeps, input: AgentRunInput, hooks: AgentLoop
     ...(input.persona !== undefined ? { persona: input.persona } : {}),
     ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
     ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+    channel: turnChannel(input.pageContext),
     ...(deps.host !== undefined ? { host: deps.host } : {}),
     ...(hooks.abortSignal !== undefined ? { abortSignal: hooks.abortSignal } : {}),
     // Replaced per tool call by the call's own collector (see the tool step); this one only serves
@@ -3399,6 +3402,7 @@ export async function runAgentLoop<TOutput = unknown>(
                 ...(input.uiCapabilities !== undefined
                   ? { uiCapabilities: input.uiCapabilities }
                   : {}),
+                channel: turnChannel(input.pageContext),
                 ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
               },
             ),
@@ -3433,6 +3437,7 @@ export async function runAgentLoop<TOutput = unknown>(
             threadId: input.threadId,
             ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
             ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+            channel: turnChannel(input.pageContext),
           }),
         );
         // Reasoning and pushed UI are read off the frames INSIDE the checkpoint, so they are

@@ -44,6 +44,12 @@ describe('the bare-React scan', () => {
     expect(bareReactUse('const a = import_react.React.version; const b = $React.x;')).toBeNull();
     expect(bareReactUse('const a = MyReact.createElement;')).toBeNull();
   });
+
+  it('does not mistake code written out as a string for a use', () => {
+    expect(
+      bareReactUse("const tag = 'React.Fragment'; const c = `React.createElement(${tag})`;"),
+    ).toBeNull();
+  });
 });
 
 // The built package is what this guards, so it needs a build. CI always has one (`pnpm build` runs
