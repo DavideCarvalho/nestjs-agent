@@ -199,7 +199,7 @@
     "ai": "7.0.16",
     "jsdom": "26.1.0",
     "katex": "0.16.45",
-    "playwright-core": "^1.63.0",
+    "playwright-core": "1.63.0",
     "prism-react-renderer": "2.4.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

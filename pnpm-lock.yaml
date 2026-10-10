@@ -827,7 +827,7 @@ importers:
         specifier: 0.16.45
         version: 0.16.45
       playwright-core:
-        specifier: ^1.63.0
+        specifier: 1.63.0
         version: 1.63.0
       prism-react-renderer:
         specifier: 2.4.1
