@@ -60,14 +60,20 @@ export async function filterToolsByCanUse<T extends { spec: ToolSpec; handler?: 
   return checked.filter((row) => row.allowed).map((row) => row.entry);
 }
 
-/** Third filter layer: drop tools the actor's role may not invoke. `can` may be async (authz). */
+/**
+ * Third filter layer: drop tools the actor's role may not be OFFERED — `canOffer` when the policy
+ * has one, else `can` (may be async: authz). Invoking re-checks `can`.
+ */
 export async function filterToolsByRole(
   tools: ToolSpec[],
   actor: Actor,
   policy: RolesPolicy,
 ): Promise<ToolSpec[]> {
   const checked = await Promise.all(
-    tools.map(async (tool) => ({ tool, allowed: await policy.can(actor, tool) })),
+    tools.map(async (tool) => ({
+      tool,
+      allowed: await (policy.canOffer ? policy.canOffer(actor, tool) : policy.can(actor, tool)),
+    })),
   );
   return checked.filter((entry) => entry.allowed).map((entry) => entry.tool);
 }

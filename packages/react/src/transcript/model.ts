@@ -1081,7 +1081,8 @@ function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
         isRecord(data.confirmation) &&
         typeof data.confirmation.title === 'string' &&
         typeof data.confirmation.verb === 'string' &&
-        (data.confirmation.detail === undefined || typeof data.confirmation.detail === 'string')
+        (data.confirmation.detail === undefined || typeof data.confirmation.detail === 'string') &&
+        (data.confirmation.link === undefined || typeof data.confirmation.link === 'string')
       ) {
         approval.confirmation = {
           title: data.confirmation.title,
@@ -1089,6 +1090,7 @@ function readApprovals(parts: UIMessage['parts']): Map<string, ApprovalParts> {
           ...(typeof data.confirmation.detail === 'string'
             ? { detail: data.confirmation.detail }
             : {}),
+          ...(typeof data.confirmation.link === 'string' ? { link: data.confirmation.link } : {}),
         };
       }
       approval.reason = typeof data.reason === 'string' ? data.reason : null;

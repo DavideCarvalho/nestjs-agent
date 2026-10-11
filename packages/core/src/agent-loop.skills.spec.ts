@@ -204,16 +204,16 @@ describe('agent loop — what skills put in front of the model', () => {
     expect(JSON.stringify(second?.messages)).toContain('STRIP-THE-SUFFIX');
   });
 
-  it('writes no block when the actor’s scopes yield nothing, but still offers the tool', async () => {
+  it('writes no block and offers no tool when the actor’s scopes yield nothing', async () => {
     const journal = new Journal();
     const { calls } = await pass(journal, () => ({ text: 'hi' }), {
       skills: { provider: provider({}, {}) },
     });
     expect(calls[0]?.system).not.toContain('<skills>');
-    // The tool's presence is module config, uniform across a deployment — the dispatched llm step
-    // re-derives the turn's tool list on a worker that has no catalog, and the two must agree on
-    // what was offered. What the model may LOAD comes from the prompt, which is empty here.
-    expect(calls[0]?.tools.map((tool) => tool.name)).toContain('skill');
+    // Nothing to load (an actor whose scopes yield no skill — a personal agent, say): offering the
+    // tool only invites a call that can only be refused. A dispatched llm step is told the same
+    // through the envelope's `builtins`, so the worker re-deriving the list agrees.
+    expect(calls[0]?.tools.map((tool) => tool.name)).not.toContain('skill');
   });
 
   it('refuses a skill the catalog never offered, as an ordinary tool failure', async () => {

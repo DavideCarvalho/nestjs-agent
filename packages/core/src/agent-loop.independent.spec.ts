@@ -1,6 +1,7 @@
 import { FakeModelProvider, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
+import { PENDING_ACTION_PROPOSAL_NOTE } from './action-proposal-receipt.js';
 import { type AgentLoopDeps, runAgentLoop } from './agent-loop.js';
 import { InMemoryAgentStore } from './in-memory-store.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -87,7 +88,12 @@ it('finishes the batch with a normalized pending receipt, no approval wait, effe
   });
   expect(required(required(await store.getThread(thread.id)).messages.at(-1)).toolResults).toEqual([
     expect.objectContaining({
-      output: { proposalId: required(proposals[0]).id, status: 'pending', executed: false },
+      output: {
+        proposalId: required(proposals[0]).id,
+        status: 'pending',
+        executed: false,
+        note: PENDING_ACTION_PROPOSAL_NOTE,
+      },
     }),
   ]);
 });

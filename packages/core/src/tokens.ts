@@ -93,3 +93,42 @@ export const AGENT_CONFIRM_TOKEN_STORE = Symbol.for('@dudousxd/nestjs-agent:conf
  * `agent_channel_state` table; unbound, `AgentChannelsModule` keeps it in memory.
  */
 export const AGENT_CHANNEL_STORE = Symbol.for('@dudousxd/nestjs-agent:channel-store');
+
+/**
+ * The `PoppyStore` Personal Agent Protocol conversations (`@dudousxd/nestjs-agent-poppy`,
+ * `AgentPoppyModule`) keep conversations, their event log and message receipts in. Bound by the
+ * store modules on the `agent_poppy_*` tables; unbound, `AgentPoppyModule` keeps them in memory.
+ *
+ * @experimental Personal Agent Protocol (Poppy) Draft 0.1.
+ */
+export const AGENT_POPPY_STORE = Symbol.for('@dudousxd/nestjs-agent:poppy-store');
+
+/**
+ * The `PoppyConnectionStore` Poppy connections (`AgentPoppyConnectionsModule`: this app's agent
+ * acting at other Poppy companies) keep their sealed connections and in-flight sign-ins in. Bound by
+ * the store modules on `agent_poppy_connection` / `agent_poppy_connect`; unbound, in memory.
+ *
+ * @experimental Personal Agent Protocol (Poppy) Draft 0.1.
+ */
+export const AGENT_POPPY_CONNECTION_STORE = Symbol.for(
+  '@dudousxd/nestjs-agent:poppy-connection-store',
+);
+
+/**
+ * Delivers a run a text channel did NOT start (a turn the server continued — after a sign-in that
+ * finished elsewhere, say) to the channel conversation its page context names. Bound by
+ * `AgentChannelsModule` (`AgentChannelsService`); optional for anyone injecting it.
+ */
+export const AGENT_CHANNEL_FOLLOWER = Symbol.for('@dudousxd/nestjs-agent:channel-follower');
+
+/** What {@link AGENT_CHANNEL_FOLLOWER} is bound to. */
+export interface ChannelFollower {
+  /**
+   * Deliver `run` to the conversation `address` names — a turn's `pageContext.channel` as a channel
+   * stamped it. `false` when no channel of that name is mounted in this process.
+   */
+  follow(
+    address: unknown,
+    run: { runId: string; threadId: string; actor: import('./types.js').Actor },
+  ): Promise<boolean>;
+}

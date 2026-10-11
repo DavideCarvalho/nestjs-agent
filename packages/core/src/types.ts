@@ -123,6 +123,12 @@ export interface ToolSpec {
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
   /**
+   * For `kind: 'action'` — how long its approval (or independent proposal) stays open, in ms, over
+   * the approval policy's `ttlMs`: an action whose card carries something with a lifetime of its own
+   * (a sign-in link) lives as long as that, not as long as a Confirm button does.
+   */
+  approvalTtlMs?: number;
+  /**
    * Whether the tool exists in this deployment. `false` (or a predicate returning `false`) drops it
    * before the role filter, so it is never offered to the model and cannot be invoked. Undefined →
    * enabled.
@@ -779,6 +785,12 @@ export interface LlmStepEnvelope {
    * intersects with the agent's own. Absent → no persona narrowing, as before personas existed.
    */
   personaAllowedTools?: string[];
+  /**
+   * Whether the loop offers the built-in `skill` / `remember` tools on this turn — `false` when the
+   * actor resolved nothing to load or nowhere to write (a personal agent, `personalAgentScopes`).
+   * The serving worker ANDs it with its own module config. Absent → module config alone, as before.
+   */
+  builtins?: { skills?: boolean; memory?: boolean };
 }
 
 /**

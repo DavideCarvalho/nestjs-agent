@@ -143,9 +143,9 @@ export class AgentRunSteps {
           ),
           ask: deps.ask,
         }),
-        enabled: deps.skills !== undefined,
+        enabled: deps.skills !== undefined && input.builtins?.skills !== false,
       }),
-      enabled: deps.memory?.provider.write !== undefined,
+      enabled: deps.memory?.provider.write !== undefined && input.builtins?.memory !== false,
     });
     // `bufferOutput` means the dispatching loop has an output gate to run and this worker's sink is
     // on the far side of it: streaming here would put the answer in front of the reader before the

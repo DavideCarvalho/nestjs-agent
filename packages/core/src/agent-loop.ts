@@ -2293,10 +2293,10 @@ async function claimApproval(
   if (remembered.includes(call.name)) {
     return { mode: 'remembered', approver: requirement.approver };
   }
+  // The tool's own lifetime (a sign-in link's) over the policy's.
+  const wanted = spec?.approvalTtlMs ?? requirement.ttlMs;
   const ttlMs =
-    requirement.ttlMs !== undefined && Number.isFinite(requirement.ttlMs) && requirement.ttlMs > 0
-      ? Math.floor(requirement.ttlMs)
-      : undefined;
+    wanted !== undefined && Number.isFinite(wanted) && wanted > 0 ? Math.floor(wanted) : undefined;
   return {
     mode: 'ask',
     approver: requirement.approver,
@@ -3405,6 +3405,11 @@ export async function runAgentLoop<TOutput = unknown>(
       );
     }
 
+    // Nothing to load (no skill for this actor — a personal agent, say), nothing to offer; nowhere to
+    // write (no memory scope: `personalAgentScopes`), no `remember` — offering it makes the model
+    // promise to remember what it cannot.
+    const offerSkill = skillOffer === undefined || skillOffer.entries.length > 0;
+    const offerMemory = memoryDigest === undefined || memoryDigest.scopes.length > 0;
     let turn: BufferedModelTurnResult;
     if (hooks.dispatchLlm) {
       // No definitionsFor here: the envelope carries only wire-safe data (a ToolDefinition holds a
@@ -3436,6 +3441,9 @@ export async function runAgentLoop<TOutput = unknown>(
         ...(persona?.allowedTools !== undefined
           ? { personaAllowedTools: persona.allowedTools }
           : {}),
+        ...(!offerSkill || !offerMemory
+          ? { builtins: { skills: offerSkill, memory: offerMemory } }
+          : {}),
       });
     } else {
       const tools = withMemoryTool({
@@ -3456,9 +3464,9 @@ export async function runAgentLoop<TOutput = unknown>(
             ),
             ask: deps.ask,
           }),
-          enabled: deps.skills !== undefined,
+          enabled: deps.skills !== undefined && offerSkill,
         }),
-        enabled: memoryIsWritable(deps),
+        enabled: memoryIsWritable(deps) && offerMemory,
       });
       turn = await hooks.step(`llm:${i}`, async () => {
         // Both of these ride the CHECKPOINT rather than a local variable: a run that suspends

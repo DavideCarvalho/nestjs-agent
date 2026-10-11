@@ -453,12 +453,22 @@ export class ClosedRolesPolicy extends DefaultRolesPolicy {
  */
 export function closeEmptyRoles(inner: RolesPolicy): RolesPolicy {
   const defaults = inner instanceof DefaultRolesPolicy ? inner.defaultRoles : [];
+  const closed = (tool: ToolSpec) =>
+    tool.ability === undefined && (tool.roles ?? defaults).length === 0;
   return {
     can(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
-      if (tool.ability === undefined && (tool.roles ?? defaults).length === 0) {
+      if (closed(tool)) {
         return false;
       }
       return inner.can(actor, tool);
     },
+    ...(inner.canOffer !== undefined
+      ? {
+          canOffer(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
+            if (closed(tool)) return false;
+            return (inner.canOffer as NonNullable<RolesPolicy['canOffer']>)(actor, tool);
+          },
+        }
+      : {}),
   };
 }

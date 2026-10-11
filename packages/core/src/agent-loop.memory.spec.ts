@@ -332,6 +332,16 @@ describe('agent loop — what memory puts in front of the model', () => {
     expect(calls[0]?.tools.map((tool) => tool.name)).toContain('remember');
   });
 
+  it('never offers the tool to an actor with no memory scope (a personal agent)', async () => {
+    const journal = new Journal();
+    const { calls } = await pass(journal, () => ({ text: 'hi' }), {
+      // What `personalAgentScopes` resolves for a personal agent: nowhere.
+      memory: { provider: provider([]), scopes: { resolve: () => [] } },
+    });
+    // It could write nowhere, and offering it makes the model promise to remember.
+    expect(calls[0]?.tools.map((tool) => tool.name)).not.toContain('remember');
+  });
+
   it('never offers the tool where the provider cannot write', async () => {
     const journal = new Journal();
     const { calls } = await pass(journal, () => ({ text: 'hi' }), {

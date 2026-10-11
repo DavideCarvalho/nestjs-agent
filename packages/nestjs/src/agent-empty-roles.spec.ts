@@ -40,8 +40,19 @@ describe('AgentModule — what an empty roles list means', () => {
     expect(await withDefaults.can(staff, bare)).toBe(true);
   });
 
-  it('leaves a rolesPolicy of your own alone', async () => {
-    const own: RolesPolicy = { can: () => true };
-    expect(await policyFor({ emptyRoles: 'deny', rolesPolicy: own })).toBe(own);
+  it('leaves a rolesPolicy of your own alone (behind the personal-agent gate only)', async () => {
+    const asked: string[] = [];
+    const own: RolesPolicy = {
+      can: (actor) => {
+        asked.push(actor.id);
+        return true;
+      },
+    };
+    const policy = await policyFor({ emptyRoles: 'deny', rolesPolicy: own });
+    // Not closed by `emptyRoles`: the tool with no roles reaches the actor your policy lets through.
+    expect(await policy.can(staff, bare)).toBe(true);
+    expect(asked).toEqual(['u1']);
+    // A personal agent reaches only tools written for it, whatever your policy says.
+    expect(await policy.can({ id: 'pa', roles: ['personal_agent'] }, bare)).toBe(false);
   });
 });

@@ -34,6 +34,8 @@ export * from './spi/approval-port.js';
 export * from './spi/approval-policy.js';
 export * from './governance/compute.js';
 export * from './tool-filters.js';
+export * from './personal-agent.js';
+export * from './poppy/index.js';
 export * from './personas.js';
 export * from './history.js';
 export * from './processors.js';
