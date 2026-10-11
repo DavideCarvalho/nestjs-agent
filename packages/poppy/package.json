@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent-poppy",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
@@ -17,7 +17,7 @@
     "personal-agent-protocol",
     "personal-agents"
   ],
-  "description": "Personal Agent Protocol (\"Poppy\", Draft 0.1 \u2014 experimental) for nestjs-agent: be the Company Agent of personal agents' conversations, and let your agent act at other Poppy companies for its users",
+  "description": "Personal Agent Protocol (\"Poppy\", Draft 0.1 — experimental) for nestjs-agent: be the Company Agent of personal agents' conversations, and let your agent act at other Poppy companies for its users",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
