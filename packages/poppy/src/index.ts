@@ -15,3 +15,5 @@ export {
   type PersonalAgentTurnService,
   runPersonalAgentTurn,
 } from './turn.js';
+export * from './company/index.js';
+export * from './connections/index.js';
