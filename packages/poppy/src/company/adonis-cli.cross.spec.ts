@@ -21,7 +21,7 @@ import type { PoppyAuthenticate } from './auth.js';
  * Nest endpoint, and the Nest app verifies the Session Token against the fake — DPoP proof
  * included, so a wrong public URL (`htu`) is a violation.
  *
-^ * Opt-in (it downloads a package): `POPPY_ADONIS_CLI=npx` resolves
+ * Opt-in (it downloads a package): `POPPY_ADONIS_CLI=npx` resolves
  * `poppy-agent` from `npx -p @adonis-agora/agent@<POPPY_ADONIS_VERSION, default 0.77.1>`; any other
  * value is the path of an installed `poppy-agent` binary.
  */
