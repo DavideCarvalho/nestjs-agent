@@ -6,6 +6,7 @@ import type {
   AgentPricingStore,
   ApprovalWhere,
   CurrentModelPrice,
+  GenuiStats,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
@@ -95,6 +96,12 @@ const APPROVAL_PORT_UNBOUND_MESSAGE =
   'Approve/reject is unavailable: no AGENT_APPROVAL_PORT is bound. Import AgentModule from ' +
   '@dudousxd/nestjs-agent alongside this dashboard to enable it — the approvals inbox stays ' +
   'read-only until then.';
+
+/** The message returned as a 501 when the bound read-model does not implement `genuiStats`. */
+const GENUI_STATS_UNSUPPORTED_MESSAGE =
+  'Generative UI telemetry is unavailable: the bound AGENT_GOVERNANCE_QUERIES store does not ' +
+  'implement genuiStats. Use a store adapter that records generative-UI calls (recordGenuiCalls) ' +
+  'to enable it.';
 
 /** One live agent event forwarded over SSE, flattened from the `aviary:agent:*` diagnostics envelope. */
 export interface LiveAgentEvent {
@@ -255,6 +262,19 @@ export class DashboardService {
   /** Per-tool call/failure/rejection/latency rollup for a day range, for the Tools section. */
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     return this.queries.toolStats(range);
+  }
+
+  /**
+   * Generative-UI telemetry for a day range — first-try success per tool/model, common errors, UI
+   * cost per day/turn and time-to-frame. `genuiStats` is OPTIONAL on the read-model (a store that
+   * does not record UI calls leaves it out), so an unsupported store 501s with a clear message, the
+   * same posture as an unbound pricing store — the console renders that as its own state.
+   */
+  async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
+    if (this.queries.genuiStats === undefined) {
+      throw new NotImplementedException(GENUI_STATS_UNSUPPORTED_MESSAGE);
+    }
+    return this.queries.genuiStats(range);
   }
 
   /**

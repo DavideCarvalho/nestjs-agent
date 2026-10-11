@@ -6,6 +6,7 @@ import type {
   AgentPricingStore,
   ApprovalWhere,
   CurrentModelPrice,
+  GenuiStats,
   GovernancePage,
   GovernanceRange,
   GovernanceRunDetail,
@@ -987,5 +988,126 @@ describe('AgentApiController approvals inbox + drill-downs', () => {
       { threadId: 'th1', messageLimit: 50, runLimit: 25 },
       { threadId: 'th1', messageLimit: 200, runLimit: 1 },
     ]);
+  });
+});
+
+/** A small, non-empty `GenuiStats` — what a store that records UI calls returns. */
+const GENUI_STATS: GenuiStats = {
+  totals: {
+    calls: 3,
+    turns: 2,
+    firstAttempts: 2,
+    firstTrySuccesses: 1,
+    firstTryRate: 0.5,
+    retried: 1,
+    failed: 1,
+    inputTokens: 900,
+    outputTokens: 300,
+    costUsd: 0.012,
+  },
+  byToolModel: [
+    {
+      toolName: 'ui__render',
+      modelId: 'gpt-4o',
+      mode: 'tree',
+      calls: 3,
+      firstAttempts: 2,
+      firstTrySuccesses: 1,
+      firstTryRate: 0.5,
+      retried: 1,
+      failed: 1,
+      costUsd: 0.012,
+    },
+  ],
+  errors: [
+    {
+      category: 'shape',
+      message: 'invalid UI tree: "…" is not a component',
+      toolName: 'ui__render',
+      count: 1,
+      lastAt: '2026-07-02T10:00:00.000Z',
+    },
+  ],
+  byDay: [
+    {
+      day: '2026-07-02',
+      calls: 3,
+      turns: 2,
+      inputTokens: 900,
+      outputTokens: 300,
+      costUsd: 0.012,
+      firstTryRate: 0.5,
+    },
+  ],
+  costPerTurn: { turns: 2, avgUsd: 0.006, p50Usd: 0.006, p95Usd: 0.008 },
+  latency: {
+    firstFrame: { samples: 2, p50Ms: 800, p95Ms: 1400 },
+    complete: { samples: 1, p50Ms: 2100, p95Ms: 2100 },
+  },
+};
+
+describe('DashboardService.genuiStats (Generative UI)', () => {
+  it('passes the range through to the read-model and returns its stats as-is', async () => {
+    const seen: GovernanceRange[] = [];
+    const service = new DashboardService({
+      ...fakeQueries(),
+      async genuiStats(range) {
+        seen.push(range);
+        return GENUI_STATS;
+      },
+    });
+
+    const stats = await service.genuiStats({ fromDay: '2026-07-01', toDay: '2026-07-05' });
+
+    expect(seen).toEqual([{ fromDay: '2026-07-01', toDay: '2026-07-05' }]);
+    expect(stats).toEqual(GENUI_STATS);
+  });
+
+  it('501s with a clear message when the bound store does not implement genuiStats', async () => {
+    const service = new DashboardService(fakeQueries());
+
+    await expect(
+      service.genuiStats({ fromDay: '2026-07-01', toDay: '2026-07-05' }),
+    ).rejects.toBeInstanceOf(NotImplementedException);
+    await expect(
+      service.genuiStats({ fromDay: '2026-07-01', toDay: '2026-07-05' }),
+    ).rejects.toThrow(/does not implement genuiStats/);
+  });
+});
+
+describe('AgentApiController GET genui', () => {
+  function controllerSeeing(seen: GovernanceRange[]): AgentApiController {
+    const service = new DashboardService({
+      ...fakeQueries(),
+      async genuiStats(range) {
+        seen.push(range);
+        return GENUI_STATS;
+      },
+    });
+    return new AgentApiController(service, undefined);
+  }
+
+  it('resolves from/to into the range the read-model sees', async () => {
+    const seen: GovernanceRange[] = [];
+    const stats = await controllerSeeing(seen).genui('2026-07-01', '2026-07-05');
+
+    expect(seen).toEqual([{ fromDay: '2026-07-01', toDay: '2026-07-05' }]);
+    expect(stats.totals.calls).toBe(3);
+  });
+
+  it('falls back to the last 30 UTC days for absent or junk bounds', async () => {
+    const seen: GovernanceRange[] = [];
+    await controllerSeeing(seen).genui(undefined, 'not-a-day');
+
+    const today = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
+    expect(seen).toEqual([{ fromDay: from, toDay: today }]);
+  });
+
+  it('surfaces the 501 for a store without genuiStats', async () => {
+    const controller = new AgentApiController(new DashboardService(fakeQueries()), undefined);
+    await expect(controller.genui('2026-07-01', '2026-07-05')).rejects.toBeInstanceOf(
+      NotImplementedException,
+    );
   });
 });

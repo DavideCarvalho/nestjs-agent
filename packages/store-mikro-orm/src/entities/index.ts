@@ -2,6 +2,7 @@ import type { EntitySchema } from '@mikro-orm/core';
 import { agentActionProposalSchema } from './agent-action-proposal.entity';
 import { agentChannelStateSchema } from './agent-channel-state.entity';
 import { agentConfirmTokenSchema } from './agent-confirm-token.entity';
+import { agentGenuiCallSchema } from './agent-genui-call.entity';
 import { agentMemorySchema } from './agent-memory.entity';
 import { agentMessageSchema } from './agent-message.entity';
 import { agentModelPricingSchema } from './agent-model-pricing.entity';
@@ -20,6 +21,7 @@ export * from './agent-message.entity';
 export * from './agent-queued-message.entity';
 export * from './agent-tool-call.entity';
 export * from './agent-token-usage.entity';
+export * from './agent-genui-call.entity';
 export * from './agent-model-pricing.entity';
 export * from './agent-run.entity';
 export * from './agent-stream-frame.entity';
@@ -42,6 +44,7 @@ export function agentEntities(options: { collation?: string } = {}): EntitySchem
     agentQueuedMessageSchema(options.collation),
     agentToolCallSchema(options.collation),
     agentTokenUsageSchema(options.collation),
+    agentGenuiCallSchema(options.collation),
     agentModelPricingSchema(options.collation),
     agentRunSchema(options.collation),
     agentMemorySchema(options.collation),

@@ -11,6 +11,7 @@ const REPOSITORY_NAMES = [
   'AgentMessageRepository',
   'AgentToolCallRepository',
   'AgentTokenUsageRepository',
+  'AgentGenuiCallRepository',
   'AgentModelPricingRepository',
   'AgentRunRepository',
   'RagIngestionLogRepository',

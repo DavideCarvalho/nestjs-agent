@@ -241,6 +241,22 @@ export function useThreadDetail(threadId: string) {
   });
 }
 
+// ─── Generative UI ──────────────────────────────────────────────────────────
+
+/**
+ * Generative-UI telemetry for a range. Plain `useQuery`, like {@link usePricing} and for the same
+ * reason: `genuiStats` is optional on the read-model, and a store that does not record UI calls
+ * makes this endpoint `501`. That is a deployment posture the section renders as its own state,
+ * not an outage for the error boundary.
+ */
+export function useGenuiStats(range: GovernanceRange) {
+  return useQuery({
+    queryKey: ['genui', range.fromDay, range.toDay],
+    queryFn: () => agentClient.genuiStats(range),
+    staleTime: STALE.aggregate,
+  });
+}
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 /**

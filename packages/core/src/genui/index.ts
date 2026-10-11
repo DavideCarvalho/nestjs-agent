@@ -13,6 +13,7 @@ export {
   COMPONENT_NAME,
   type ComponentDefinition,
   type DefineComponentExtras,
+  type GenuiCheck,
   defineCatalog,
   defineComponent,
   flatComponents,
@@ -92,6 +93,7 @@ export {
   GENUI_SHOW_TOOL,
   type GenuiAbility,
   type GenuiCatalogScope,
+  type GenuiTelemetryOptions,
   type GenuiTool,
   type GenuiToolOutput,
   type GenuiToolsOptions,
@@ -172,12 +174,20 @@ export {
   type SandboxProps,
   type SandboxThemeSource,
   type SandboxView,
+  sandboxCallExample,
   sandboxCsp,
   sandboxDrawsJsx,
   sandboxPartialProps,
   sandboxPolicyOf,
 } from './sandbox.js';
 export { prepareSandboxJsx, transpileJsx } from './sandbox-jsx.js';
+export {
+  type GenuiErrorCategory,
+  type SandboxCodeIssue,
+  type ValidateSandboxCodeOptions,
+  formatSandboxIssue,
+  validateSandboxCode,
+} from './sandbox-validate.js';
 export {
   kitDocsToModelText,
   kitHtmlInstructions,

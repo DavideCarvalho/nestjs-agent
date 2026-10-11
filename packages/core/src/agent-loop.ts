@@ -42,6 +42,7 @@ import {
   normalizeElicitationReply,
   settleElicitation,
 } from './elicitation.js';
+import { GenuiTurnTelemetry, observeGenuiFrames } from './genui-telemetry.js';
 import { turnChannel } from './genui/channels.js';
 import { estimateCost } from './governance/compute.js';
 import {
@@ -3185,7 +3186,16 @@ export async function runAgentLoop<TOutput = unknown>(
     modelMessages = await foldDroppedHistory(summarize, deps, input, hooks, history);
   }
 
-  const writer = await hooks.openSink();
+  // Generative-UI telemetry: when each UI call's frames reach the stream (only watched when the
+  // registry has a UI tool and the store records it).
+  const genuiOn =
+    deps.store.recordGenuiCalls !== undefined &&
+    deps.registry
+      .allSpecs()
+      .some((spec) => spec.genui !== undefined && spec.genui.telemetry !== false);
+  const genuiFrames = genuiOn ? observeGenuiFrames(await hooks.openSink()) : undefined;
+  const writer = genuiFrames?.writer ?? (await hooks.openSink());
+  const genuiTurn = new GenuiTurnTelemetry();
   let lastText = '';
   let steps = 0;
   let totalInput = 0;
@@ -3903,6 +3913,35 @@ export async function runAgentLoop<TOutput = unknown>(
         .join('\n'),
     );
     assistantMessage.toolResults = settledResults;
+    // Worked out OUTSIDE the checkpoint below (the attempt count carries across steps, and a replay
+    // must count the same), recorded inside it (a replay does not record twice).
+    const genuiRows =
+      genuiFrames === undefined
+        ? []
+        : genuiTurn.rows({
+            runId: hooks.runId,
+            threadId: input.threadId,
+            actorRef: input.actor.id,
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            step: i,
+            channel: turnChannel(input.pageContext),
+            modelId: resolvedModelId,
+            startedAt,
+            usage: turn.usage,
+            costUsd,
+            ...(costUsd !== null
+              ? {
+                  costSource: usageCost(turn.usage, turn.costUsd, priceByModel.get(resolvedModelId))
+                    .costSource,
+                }
+              : {}),
+            text: turn.text,
+            calls: toolCallsWithKind,
+            results,
+            markerOf: (name) => deps.registry.spec(name)?.genui,
+            frames: genuiFrames.times,
+            now: Date.now(),
+          });
 
     // Stream each tool's result so the client flips its live tool card from "running" to the
     // rendered output (renderResult → DataTable/Chart, executeSql → rows). One durable step keeps
@@ -3939,6 +3978,13 @@ export async function runAgentLoop<TOutput = unknown>(
       }
       for (const result of results) {
         await writer.write(encodeStreamEvent(outputFrame(result)));
+      }
+      if (genuiRows.length > 0) {
+        try {
+          await deps.store.recordGenuiCalls?.(genuiRows);
+        } catch {
+          // Telemetry is best-effort: it never fails the turn.
+        }
       }
     });
 

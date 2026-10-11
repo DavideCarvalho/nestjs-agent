@@ -216,7 +216,8 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
     @Inject(OPENCODE_SESSIONS) private readonly sessions: OpenCodeSessionStore,
     @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
-    @Inject(AGENT_STORE) private readonly store: AgentStore,
+    /** Read by the MCP endpoint too (genui telemetry of the calls OpenCode makes). */
+    @Inject(AGENT_STORE) readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
     @Inject(AGENT_DEPS_FACTORY) private readonly deps: AgentDepsFactory,
     @Inject(AGENT_TOOL_REGISTRY) readonly registry: ToolRegistry,

@@ -32,6 +32,7 @@
     "generative-ui-sandbox-react-native",
     "generative-ui-channels",
     "genui-builtins",
+    "generative-ui-telemetry",
     "loading-states",
     "component-rendering",
     "rendering-everywhere",

@@ -1,6 +1,7 @@
 import type {
   ActorResolver,
   CurrentModelPrice,
+  GenuiStats,
   GovernancePage,
   PendingApprovalRow,
   RecentRunRow,
@@ -258,6 +259,16 @@ export class AgentApiController {
   @Get('tools')
   tools(@Query('from') from?: string, @Query('to') to?: string): Promise<ToolStatRow[]> {
     return this.dashboard.toolStats(resolveRange(from, to));
+  }
+
+  /**
+   * Generative-UI telemetry for a day range (defaults to the last 30 days): `{ totals, byToolModel,
+   * errors, byDay, costPerTurn, latency }`. 501s (via `DashboardService.genuiStats`) when the bound
+   * store does not implement `genuiStats`.
+   */
+  @Get('genui')
+  genui(@Query('from') from?: string, @Query('to') to?: string): Promise<GenuiStats> {
+    return this.dashboard.genuiStats(resolveRange(from, to));
   }
 
   /** Most recent threads (default 50, max 200) with rolled-up counts. */

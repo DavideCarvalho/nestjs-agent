@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ActorsSection } from './ActorsSection';
 import { ApprovalsSection } from './ApprovalsSection';
 import { DetailDrawer } from './DetailDrawer';
+import { GenuiSection } from './GenuiSection';
 import { LiveSection } from './LiveSection';
 import { ModelsSection } from './ModelsSection';
 import { PricingSection } from './PricingSection';
@@ -17,6 +18,8 @@ import { LogoMark } from './icons';
 import {
   MOCK_APPROVALS_PAGE,
   MOCK_BUDGETS,
+  MOCK_GENUI_EMPTY,
+  MOCK_GENUI_STATS,
   MOCK_LIVE_EVENTS,
   MOCK_PRICES,
   MOCK_RELIABILITY,
@@ -128,6 +131,9 @@ function Preview() {
           <Group label="Tools">
             <ToolsSection rows={MOCK_TOOL_STATS} />
           </Group>
+          <Group label="Generative UI">
+            <GenuiSection stats={MOCK_GENUI_STATS} />
+          </Group>
           <Group label="Pricing">
             <PricingSection
               prices={MOCK_PRICES}
@@ -154,6 +160,8 @@ function Preview() {
                 onRetry={() => {}}
               />
               <SectionSkeleton label="Reliability" />
+              <GenuiSection stats={null} unavailable />
+              <GenuiSection stats={MOCK_GENUI_EMPTY} />
               <RunsToolsSection
                 toolCalls={MOCK_TOOL_CALLS}
                 toolCallsTable={failed(

@@ -3,6 +3,8 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   ApprovalWhere,
+  GenuiCallRow,
+  GenuiStats,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
@@ -37,11 +39,13 @@ import {
   bucketUsageTrend,
   dayBoundsUtc,
   rollupThreadUsage,
+  summarizeGenuiCalls,
   truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
 import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { sql } from '@mikro-orm/core';
+import { AgentGenuiCall } from './entities/agent-genui-call.entity';
 import { AgentMessage } from './entities/agent-message.entity';
 import type { AgentRunStatus } from './entities/agent-run.entity';
 import { AgentRun } from './entities/agent-run.entity';
@@ -144,6 +148,38 @@ function toRunToolCallRow(toolCall: AgentToolCall): RunToolCallRow {
 }
 
 /** Map a MikroORM usage entity onto the shared bucketer input (thread via relation, day via `createdAt`). */
+/** Map an `agent_genui_call` row onto the core row: a NULL column is an absent field. */
+function toGenuiCallRow(row: AgentGenuiCall): GenuiCallRow {
+  const present = <T>(value: T | null | undefined): value is T =>
+    value !== null && value !== undefined;
+  return {
+    toolCallId: row.id,
+    runId: row.runId,
+    threadId: row.thread.id,
+    actorRef: row.actorRef,
+    ...(present(row.agentName) ? { agentName: row.agentName } : {}),
+    step: Number(row.step),
+    toolName: row.toolName,
+    channel: row.channel,
+    mode: row.mode,
+    modelId: row.modelId,
+    attempt: Number(row.attempt),
+    outcome: row.outcome,
+    validity: row.validity,
+    ...(present(row.errorCategory) ? { errorCategory: row.errorCategory } : {}),
+    ...(present(row.errorMessage) ? { errorMessage: row.errorMessage } : {}),
+    inputTokens: Number(row.inputTokens),
+    outputTokens: Number(row.outputTokens),
+    ...(present(row.costUsd) ? { costUsd: Number(row.costUsd) } : {}),
+    ...(present(row.costSource) ? { costSource: row.costSource } : {}),
+    ...(present(row.firstFrameMs) ? { firstFrameMs: Number(row.firstFrameMs) } : {}),
+    ...(present(row.completeFrameMs) ? { completeFrameMs: Number(row.completeFrameMs) } : {}),
+    payloadBytes: Number(row.payloadBytes),
+    ...(present(row.payload) ? { payload: row.payload } : {}),
+    createdAt: new Date(Number(row.createdAt)),
+  };
+}
+
 function toUsageInput(row: AgentTokenUsage): GovernanceUsageInput {
   return {
     modelId: row.modelId,
@@ -194,6 +230,16 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const rows = await em.find(AgentTokenUsage, { createdAt: { $gte: start, $lte: end } });
     return rows.map(toUsageInput);
+  }
+
+  /** Generative-UI stats over the `agent_genui_call` rows created in the (UTC, inclusive) day range. */
+  async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
+    const em = this.em.fork();
+    const { start, end } = dayBoundsUtc(range);
+    const rows = await em.find(AgentGenuiCall, {
+      createdAt: { $gte: start.getTime(), $lte: end.getTime() },
+    });
+    return summarizeGenuiCalls(rows.map(toGenuiCallRow));
   }
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
