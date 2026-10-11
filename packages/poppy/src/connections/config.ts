@@ -114,6 +114,10 @@ export interface PoppyConnectionToolsOptions {
    * preview and a `confirmToken`): the write tool shows that preview on its card and, once the
    * person confirms, commits with the token. Detected by the tool's input schema having both
    * fields. `false` turns it off. Default `{ confirm: 'confirm', token: 'confirmToken' }`.
+   *
+   * Trust assumption: building the card CALLS the company tool (without `confirm`) before the
+   * person confirms. That is safe only for a company whose preview call really does nothing — turn
+   * this off (`false`) for one you do not trust to honour it, and the card shows the arguments only.
    */
   twoStep?: TwoStepConvention | false;
 }

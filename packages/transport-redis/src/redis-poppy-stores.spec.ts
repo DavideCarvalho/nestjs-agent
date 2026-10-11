@@ -88,6 +88,26 @@ describe('RedisPoppyStore — the Poppy store contract', () => {
     expect([...redis.values.keys()].every((key) => key.startsWith('app:'))).toBe(true);
   });
 
+  it('a keyed append whose writer died before numbering its event takes the lapsed claim over', async () => {
+    const redis = new FakeRedis();
+    const store = new RedisPoppyStore(redis, { prefix: 'app:' });
+    await store.createConversation(poppyConversationFixture('cnv_1'));
+    // The dead writer's claim, as it left it: `pending`, never resolved — lapsing soon.
+    await redis.set('app:evtkey:cnv_1:reply', 'pending', 'PX', 50, 'NX');
+    const taken = await store.appendEvent(
+      'cnv_1',
+      { type: 'user_requested', reason: 'x' },
+      { key: 'reply' },
+    );
+    expect(taken.created).toBe(true);
+    const again = await store.appendEvent(
+      'cnv_1',
+      { type: 'user_requested', reason: 'y' },
+      { key: 'reply' },
+    );
+    expect(again).toMatchObject({ created: false, event: { seq: taken.event.seq } });
+  });
+
   it('takes an ioredis client as is', () => {
     // Type-level: compiles only if the client has the slice the store uses.
     const fits = (client: Redis) => new RedisPoppyStore(client);

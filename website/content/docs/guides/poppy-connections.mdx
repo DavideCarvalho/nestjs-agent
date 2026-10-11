@@ -134,6 +134,13 @@ both fields: the card shows the company's preview (its `summary`/`resumo`/`messa
 the card makes the call and commits it with the fresh token — one confirmation, by the person, in
 your app. `tools.twoStep` renames the fields (`{ confirm, token, summary }`) or turns it off (`false`).
 
+<Callout type="warn">
+Building that card **calls the company's tool before the person confirms** (without `confirm`). It is
+safe only with a company whose preview call really changes nothing; for one you do not trust to honour
+that, set `tools.twoStep: false` — the card then shows the tool and its arguments, and the tool is
+called once, after the confirmation.
+</Callout>
+
 A company answer of `insufficient_scope`, `sign_in_required` or an `authorization` event comes back to
 the model as `needs_permission` / `not_connected` with the next step — `poppy_connect` with the scopes —
 never as a dead end. Opening the company's website for the person (§5 browser sessions) is not offered:

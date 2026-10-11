@@ -14,6 +14,9 @@ import {
  * The slice of a Redis client {@link RedisPoppyStore} uses. An `ioredis` client has it as is
  * (`new RedisPoppyStore(redis)`); adapt any other driver to these commands.
  */
+/** How long a keyed append's claim stays `pending` before another writer may take it over. */
+const PENDING_KEY_TTL_MS = 5_000;
+
 export interface RedisPoppyClient {
   get(key: string): Promise<string | null>;
   mget(...keys: string[]): Promise<(string | null)[]>;
@@ -88,10 +91,19 @@ export class RedisPoppyStore implements PoppyStore {
   ): Promise<{ event: StoredPoppyEvent; created: boolean }> {
     if (options.key !== undefined) {
       const dedupe = this.eventDedupeKey(conversationId, options.key);
-      if ((await this.redis.set(dedupe, 'pending', 'NX')) === null) {
+      // The claim is `pending` only for a while (PENDING_KEY_TTL_MS): a writer that dies between
+      // claiming the key and numbering its event lets it lapse, and the next append takes it over
+      // instead of waiting on a key nobody will ever resolve.
+      claim: for (let attempt = 0; ; attempt++) {
+        if ((await this.redis.set(dedupe, 'pending', 'PX', PENDING_KEY_TTL_MS, 'NX')) !== null) {
+          break;
+        }
         // Taken: answer the event it points at, once its writer has numbered it.
-        for (let i = 0; i < 100; i++) {
-          const seq = Number.parseInt((await this.redis.get(dedupe)) ?? '', 10);
+        const deadline = Date.now() + PENDING_KEY_TTL_MS * 2;
+        while (Date.now() < deadline) {
+          const value = await this.redis.get(dedupe);
+          if (value === null) continue claim; // lapsed: its writer died — claim it ourselves
+          const seq = Number.parseInt(value, 10);
           if (Number.isSafeInteger(seq)) {
             const raw = await this.redis.get(this.eventKey(conversationId, seq));
             if (raw !== null) {
@@ -100,7 +112,7 @@ export class RedisPoppyStore implements PoppyStore {
           }
           await sleep(10);
         }
-        throw new Error(`poppy: event key ${options.key} never resolved`);
+        if (attempt >= 2) throw new Error(`poppy: event key ${options.key} never resolved`);
       }
     }
     // A pruned conversation keeps its counter, so positions continue past the pruned ones.
