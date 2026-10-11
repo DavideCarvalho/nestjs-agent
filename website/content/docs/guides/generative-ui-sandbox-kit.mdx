@@ -101,6 +101,398 @@ genuiSandboxKit({
 })
 ```
 
+## Recipes by stack
+
+Complete setups for common stacks. Each one is the plugin's options, the files it points at, and the server line. The server line is the same everywhere:
+
+```ts title="Backend — src/app.module.ts"
+import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
+import { catalog } from './genui/catalog';
+
+@Module({
+  imports: [
+    // …
+    AgentGenuiModule.forRoot({ catalog, sandbox: { kit: true } }),
+  ],
+})
+export class AppModule {}
+```
+
+Where the server finds what the plugin built is [`sandboxKit`](#where-the-server-looks-sandboxkit): by default `.genui/sandbox-kit.json` in dev and `public/.vite/manifest.json` in production, relative to the working directory.
+
+The sizes below are what each frame inlines (see [Sizes](#sizes)). The theme's variables are always passed in, whatever the stack.
+
+### shadcn/ui + Tailwind v4
+
+The common case, and **zero config** when your components live in `components/ui` and your stylesheet is imported by your entry (or linked from `index.html`).
+
+```ts title="Frontend — vite.config.ts"
+import { fileURLToPath } from 'node:url';
+import tailwindcss from '@tailwindcss/vite';
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+import { genuiSandboxKit } from '@dudousxd/nestjs-agent/vite';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    // styles: src/index.css (imported by your entry, src/main.tsx); components: src/components/ui.
+    genuiSandboxKit(),
+  ],
+  // The alias your shadcn components import with (`@/lib/utils`): the kit's build uses it too.
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+});
+```
+
+```css title="src/index.css"
+@import "tailwindcss";
+@import "tw-animate-css";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --radius-lg: var(--radius);
+  /* …the rest of shadcn's tokens */
+}
+:root { --background: oklch(1 0 0); --primary: oklch(0.52 0.2 268); --radius: 0.625rem; }
+.dark { --background: oklch(0.17 0.015 265); --primary: oklch(0.7 0.15 268); }
+```
+
+No components entry and no wrapper: every component exported by a file in `src/components/ui` is in the kit, documented from its props. If the defaults don't match your layout, name them: `genuiSandboxKit({ styles: 'src/index.css', components: 'src/components/ui' })`. Your `@tailwindcss/vite` is reused for the kit's build.
+
+**The model writes** JSX with your components (`<Card>`, `<Button variant="outline">`) and Tailwind classes from your theme (`bg-primary`, `rounded-lg`, `text-muted-foreground`). **Size:** React (≈230 KB) plus your components, Tailwind's runtime (≈280 KB), and your compiled CSS.
+
+### Tailwind v3 with `tailwind.config`
+
+Tailwind v3 through PostCSS. The kit maps your config to the v4 runtime (see [Tailwind](#tailwind)).
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: 'src/index.css',
+  components: 'src/components/ui',
+})
+```
+
+```css title="src/index.css"
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+```js title="tailwind.config.js"
+export default {
+  darkMode: 'class',
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      colors: { brand: { DEFAULT: '#7c3aed', 50: '#f5f3ff', 900: '#4c1d95' } },
+      borderRadius: { lg: '0.75rem' },
+      fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+    },
+  },
+}
+```
+
+```js title="postcss.config.js"
+export default { plugins: { tailwindcss: {}, autoprefixer: {} } }
+```
+
+The CSS is compiled with your `postcss.config.*`, as in your build. `colors`, `borderRadius`, `fontFamily`, `fontSize`, `boxShadow`, `screens`, `spacing`, `keyframes` and `animation` (from `theme` and `theme.extend`) and `darkMode` reach the frame's runtime. Function values, `plugins` and `prefix` don't. Leave out `components` for a CSS-only kit.
+
+**The model writes** JSX with your components, or HTML without them, using your theme's classes (`bg-brand`, `bg-brand-50`) and v4 names where v3's differ (`shadow-xs`, `outline-hidden`). **Size:** as v4: Tailwind's runtime (≈280 KB) and your compiled CSS, plus React (≈230 KB) and your components with a kit.
+
+### Plain CSS / CSS modules
+
+A global stylesheet becomes a class vocabulary in the prompt:
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: 'src/index.css',
+  // Optional: when to use what.
+  stylesDocs: 'A view is a .panel; .button for actions, .button.is-primary for the main one; .stack for vertical layout.',
+})
+```
+
+```css title="src/index.css"
+:root { --accent: #2563eb; --radius: 10px; }
+.panel { padding: 16px; border-radius: var(--radius); background: var(--surface, #fff); }
+.button { padding: 6px 14px; border-radius: var(--radius); }
+.button.is-primary { background: var(--accent); color: #fff; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+```
+
+**CSS modules** hash their class names, so they are no vocabulary for the model. Put them behind components instead: the CSS the components import is bundled with the kit.
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: 'src/index.css',       // global styles, if any
+  components: 'src/components/kit', // Button.tsx imports './button.module.css', …
+})
+```
+
+**The model writes** HTML with your classes (`<div class="panel stack">`) when there are only styles, JSX with your components when there is a kit. **Size:** your compiled CSS (usually small) and inlined fonts. A kit adds React (≈230 KB) and your components.
+
+### Sass + Bootstrap 5
+
+CSS only: Bootstrap compiled from Sass with your overrides, and no components.
+
+```scss title="src/styles/sandbox.scss"
+$primary: #6d28d9;
+$border-radius: 0.65rem;
+$font-family-sans-serif: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+@import 'bootstrap/scss/bootstrap';
+
+// If your page switches dark mode with `data-theme`, give it Bootstrap's dark rules too
+// (the frame mirrors the page's `data-theme` and `data-bs-theme`).
+[data-theme='dark'] {
+  @extend [data-bs-theme='dark'];
+}
+```
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: 'src/styles/sandbox.scss',
+  stylesDocs:
+    'Wrap the view in a .card with a .card-body; .btn-primary for the main action, .btn-outline-primary for choices; Bootstrap spacing utilities (mb-3, gap-2) for layout.',
+})
+```
+
+Install `sass` (`npm i -D sass`). Your Vite config's `css.preprocessorOptions` apply. Bootstrap's class list is long: the prompt lists a capped selection, most used first, so `stylesDocs` is where you say which of them your app actually uses. It takes the text itself, or a markdown file (`stylesDocs: 'src/styles/SANDBOX.md'`).
+
+**The model writes** HTML with Bootstrap's classes (`<div class="card"><div class="card-body">`, `<button class="btn btn-primary">`). **Size:** the compiled CSS, ≈230 KB for all of Bootstrap. Import only the partials you use (`bootstrap/scss/functions`, `variables`, `mixins`, `root`, `reboot`, `buttons`, `card`, `forms`…) to cut it.
+
+### react-bootstrap components + Bootstrap CSS
+
+The same CSS, plus react-bootstrap's components as the kit:
+
+```ts title="src/sandbox/components.ts"
+export { Alert, Badge, Button, ButtonGroup, Card, Col, Form, InputGroup, ListGroup, Row, Stack, Table } from 'react-bootstrap'
+```
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: 'src/styles/sandbox.scss', // or the stock CSS: 'bootstrap/dist/css/bootstrap.min.css'
+  components: 'src/sandbox/components.ts',
+})
+```
+
+A re-export module keeps the kit to what a view needs. `components: 'react-bootstrap'` works too, but bundles and documents the whole library.
+
+**The model writes** JSX with react-bootstrap's components (`<Card><Card.Body>`, `<Button variant="primary">`, `<Form.Range>`) and Bootstrap's utility classes. **Size:** the Bootstrap CSS (≈230 KB in full), React (≈230 KB) and the react-bootstrap components you export.
+
+### MUI with a custom theme
+
+A theme and a provider, no stylesheet. The `wrapper` gives the model's App your `ThemeProvider` and `CssBaseline`:
+
+```ts title="src/sandbox/theme.ts"
+import { createTheme } from '@mui/material/styles'
+
+export function appTheme(mode: 'light' | 'dark') {
+  return createTheme({
+    palette: { mode, primary: { main: mode === 'dark' ? '#4db6ac' : '#00796b' } },
+    shape: { borderRadius: 14 },
+    typography: { button: { textTransform: 'none', fontWeight: 700 } },
+  })
+}
+```
+
+```tsx title="src/sandbox/wrapper.tsx"
+import CssBaseline from '@mui/material/CssBaseline'
+import { ThemeProvider } from '@mui/material/styles'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { appTheme } from './theme'
+
+/** Light or dark, as the frame's root says (it mirrors the page's `data-theme`). */
+function useMode(): 'light' | 'dark' {
+  const read = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
+  const [mode, setMode] = useState<'light' | 'dark'>(read)
+  useEffect(() => {
+    const observer = new MutationObserver(() => setMode(read()))
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+  return mode
+}
+
+export default function SandboxWrapper({ children }: { children?: ReactNode }) {
+  const mode = useMode()
+  const theme = useMemo(() => appTheme(mode), [mode])
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      {children}
+    </ThemeProvider>
+  )
+}
+```
+
+```tsx title="src/sandbox/components.tsx"
+import { styled } from '@mui/material/styles'
+
+export {
+  Alert, Box, Button, Card, CardActions, CardContent, CardHeader, Chip, Divider,
+  Menu, MenuItem, Slider, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography,
+} from '@mui/material'
+
+/** Your own styled() components join the kit like any other. */
+export const PriceTag = styled('span')(({ theme }) => ({
+  color: theme.palette.primary.main,
+  fontSize: '1.75rem',
+  fontWeight: 700,
+}))
+```
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  components: 'src/sandbox/components.tsx',
+  wrapper: 'src/sandbox/wrapper.tsx',
+  stylesDocs: 'A Card with a CardHeader; Stack for layout; the main action is a contained Button. Use sx for one-off spacing, never CSS.',
+})
+```
+
+Emotion inserts its styles into the frame's own document, so the theme, `CssBaseline` and every `styled()` component apply there. Portals (`Menu`, `Dialog`, `Popover`, `Tooltip`) mount into the frame's `<body>` and open inside the frame. Without the `useMode` hook, pass a fixed theme.
+
+**The model writes** JSX with MUI's components and your own (`<Card><CardHeader title="…" />`, `<Slider>`, `sx={{ mt: 2 }}`). **Size:** React (≈230 KB) plus ≈180 KB for a dozen MUI components with emotion and a theme. No stylesheet.
+
+### styled-components / emotion without MUI
+
+Your styled components as the kit, your theme in a wrapper:
+
+```tsx title="src/sandbox/wrapper.tsx"
+import type { ReactNode } from 'react'
+import { ThemeProvider } from 'styled-components' // or: import { ThemeProvider } from '@emotion/react'
+import { theme } from '../theme'
+
+export default function SandboxWrapper({ children }: { children?: ReactNode }) {
+  return <ThemeProvider theme={theme}>{children}</ThemeProvider>
+}
+```
+
+```ts title="src/sandbox/components.ts"
+export { Button } from '../components/button'
+export { Card, CardTitle } from '../components/card'
+export { Stack } from '../components/stack'
+```
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  components: 'src/sandbox/components.ts',
+  wrapper: 'src/sandbox/wrapper.tsx',
+})
+```
+
+Global styles (`createGlobalStyle`, emotion's `<Global>`) go in the wrapper too.
+
+**The model writes** JSX with your components and their props (`<Card><CardTitle>…</CardTitle><Button $variant="primary">`). **Size:** React (≈230 KB), the CSS-in-JS runtime, and your components.
+
+### Mantine or Chakra
+
+Their provider in the wrapper. Mantine also ships a stylesheet, which goes in `styles`:
+
+```tsx title="src/sandbox/wrapper.tsx"
+import { createTheme, MantineProvider } from '@mantine/core'
+import type { ReactNode } from 'react'
+
+const theme = createTheme({ primaryColor: 'violet', defaultRadius: 'md' })
+
+export default function SandboxWrapper({ children }: { children?: ReactNode }) {
+  return <MantineProvider theme={theme}>{children}</MantineProvider>
+}
+```
+
+```ts title="src/sandbox/components.ts"
+export { Badge, Button, Card, Group, NumberInput, Slider, Stack, Text, TextInput, Title } from '@mantine/core'
+```
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  styles: '@mantine/core/styles.css',
+  components: 'src/sandbox/components.ts',
+  wrapper: 'src/sandbox/wrapper.tsx',
+})
+```
+
+**Chakra** is CSS-in-JS (emotion), so it needs no `styles`: the wrapper is `<ChakraProvider value={system}>{children}</ChakraProvider>` (v3, with your `createSystem(defaultConfig, …)`), and `components` re-exports the Chakra components a view needs.
+
+**The model writes** JSX with the library's components (`<Card withBorder>`, `<Group>`, `<Slider>`). **Size:** React (≈230 KB) and the components you export. Mantine adds its stylesheet (every component's CSS; list its per-component files in `styles` instead to cut it). Chakra adds emotion and its theme.
+
+### Your own component library from a workspace package
+
+Components from a package name, styles from the package's CSS:
+
+```ts title="vite.config.ts"
+genuiSandboxKit({
+  components: '@acme/ui',          // the package's exports are the kit
+  styles: '@acme/ui/styles.css',   // a stylesheet the package exports
+  // wrapper: '@acme/ui/sandbox-wrapper', // if the library needs a provider
+})
+```
+
+The kit resolves the package from your app, like any import. Its props are documented from the package's types, so it needs its `.d.ts` (or its TypeScript sources) to resolve. The kit's build uses your app's single copy of React. A workspace package, linked or injected by pnpm (`dependenciesMeta: { '@acme/ui': { injected: true } }`), is followed to its real files: its stylesheets' `@import`s resolve from the package, and in dev an edit to it rebuilds the kit. A package export lists everything, so for a large library a re-export module (`components: 'src/sandbox/components.ts'`) keeps the frame small (the docs list at most 120 components).
+
+**The model writes** JSX with your library's components, or HTML with its classes if you pass only `styles`. **Size:** React (≈230 KB) plus everything the package exports and its CSS, unless you re-export a subset.
+
+### A separate SPA (no Vite in the server process)
+
+No Vite runs in the Nest process anyway: the frontend's Vite config runs the plugin, and the server reads files. When the SPA is its own project (`web/` beside the Nest app), point `sandboxKit` at what its plugin writes:
+
+```ts title="web/vite.config.ts"
+import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vite';
+import { genuiSandboxKit } from '@dudousxd/nestjs-agent/vite';
+
+export default defineConfig({
+  plugins: [react(), genuiSandboxKit({ styles: 'src/index.css', components: 'src/components/ui' })],
+  build: { outDir: 'dist', manifest: true },
+  // Dev: the page, the frame's assets and the agent on one origin.
+  server: { proxy: { '/agent': 'http://localhost:3000' } },
+});
+```
+
+```ts title="Backend — src/app.module.ts"
+import { join } from 'node:path';
+import { ServeStaticModule } from '@nestjs/serve-static';
+
+@Module({
+  imports: [
+    AgentGenuiModule.forRoot({
+      catalog,
+      sandbox: { kit: true },
+      sandboxKit: {
+        root: join(__dirname, '..'),
+        descriptor: 'web/.genui/sandbox-kit.json', // what the SPA's dev server writes
+        manifest: { file: 'web/dist/.vite/manifest.json', outDir: 'web/dist' }, // what its build writes
+      },
+    }),
+    // Production: the SPA's build (the kit's assets included) from the same origin.
+    ServeStaticModule.forRoot({ rootPath: join(__dirname, '..', 'web', 'dist') }),
+  ],
+})
+export class AppModule {}
+```
+
+**Serving the assets.** The asset urls are same-origin paths: `/@genui-sandbox-kit/kit.js?v=…` from the SPA's dev server, `/assets/genui-sandbox-kit-….js` from the build. In dev, open the app through the SPA's dev server (it proxies `/agent`). In production, serve the build from the Nest app (`ServeStaticModule`), or set `sandboxKit.kitUrl` when the SPA is served from elsewhere.
+
+When the frontend is not built with this plugin, or lives in another repo, the server still needs the **docs**. The [`@dudousxd/nestjs-codegen`](/docs/codegen) extension writes them on every codegen pass, see [Without Vite in-process](#without-vite-in-process):
+
+```ts title="nestjs-codegen.config.ts"
+import { defineConfig, genuiSandboxKit } from '@dudousxd/nestjs-codegen';
+
+export default defineConfig({
+  contracts: { glob: 'src/**/*.controller.ts' },
+  codegen: { outDir: 'src/generated' },
+  extensions: [genuiSandboxKit({ components: 'web/src/components/ui', styles: 'web/src/index.css' })],
+});
+```
+
+Its descriptor (`.genui/sandbox-kit.json`, the module's default) has docs and no asset urls. Point `sandboxKit.descriptor` at one file or the other.
+
+**The model writes** whatever the kit holds, as in the recipes above. **Size:** the same. Nothing changes in the frame.
+
 ## Tailwind
 
 Tailwind is **detected**, never configured. A style entry (or a file it `@import`s) that has `@import "tailwindcss"`, `@theme`, `@utility`, `@custom-variant` or `@tailwind`, or a compiled stylesheet with Tailwind's banner, turns it on.
@@ -244,7 +636,7 @@ With styles only, it writes `html` (and `jsFunctions`/`jsExpressions`), using yo
 
 ## Without Vite in-process
 
-No Vite runs in the Nest process anyway. When the Nest app and the frontend are separate projects (or the frontend is not built with this plugin), the server still needs the **docs**. [`@dudousxd/nestjs-codegen`](/docs/codegen)'s `genuiSandboxKit()` extension writes the same `.genui/sandbox-kit.json` on every codegen pass (one-off, `--watch`, and the module's watcher). It takes the same options as the plugin:
+No Vite runs in the Nest process anyway. When the Nest app and the frontend are separate projects, `sandboxKit` points at what the frontend's plugin writes (a complete setup: [A separate SPA](#a-separate-spa-no-vite-in-the-server-process)). When the frontend is not built with this plugin, the server still needs the **docs**. [`@dudousxd/nestjs-codegen`](/docs/codegen)'s `genuiSandboxKit()` extension writes the same `.genui/sandbox-kit.json` on every codegen pass (one-off, `--watch`, and the module's watcher). It takes the same options as the plugin:
 
 ```ts title="nestjs-codegen.config.ts"
 import { defineConfig, genuiSandboxKit } from '@dudousxd/nestjs-codegen';
@@ -267,25 +659,6 @@ The same writer is exported for your own tooling: `writeSandboxKitDocs({ root, o
 - `false` (theme only).
 
 A JSX view on a page with no kit shows its `summary` instead.
-
-## Migration (core 0.52 / nestjs-agent 1.31)
-
-The options are fewer and work for any stack. The old ones throw a message naming their replacement.
-
-| core 0.52 / nestjs-agent 1.31 | core 0.53 / nestjs-agent 1.32 |
-| --- | --- |
-| `genuiSandboxKit({ include: 'src/components/ui/*.tsx' })` | `genuiSandboxKit({ components: 'src/components/ui/*.tsx' })` |
-| `genuiSandboxKit({ entry: 'src/genui/kit.ts' })` | `genuiSandboxKit({ components: 'src/genui/kit.ts' })` |
-| `genuiSandboxKit({ tailwindCss: ['src/index.css', 'shadcn/tailwind.css'] })` | `genuiSandboxKit({ styles: 'src/index.css' })`: the files it `@import`s are read on their own |
-| `genuiSandboxKit({ tailwind: false })` | Leave Tailwind out of `styles` |
-| `defineSandbox({ kit: true, tailwind: true })` / `AgentGenuiModule.forRoot({ sandbox: { kit: true, tailwind: true } })` | `defineSandbox({ kit: true })` / `sandbox: { kit: true }`: Tailwind is detected |
-| `sandbox: { tailwind: true }` (Tailwind without a kit) | `genuiSandboxKit({ styles: '<your Tailwind stylesheet>' })` + `sandbox: { kit: true }` |
-| codegen `genuiSandboxKit({ include, entry, css })` | codegen `genuiSandboxKit({ components, styles })` |
-| `writeSandboxKitDocs({ include, entry, css, output })` | `writeSandboxKitDocs({ components, styles, output })` |
-| descriptor `{ version: 1, kit, tailwind }` | `{ version: 2, …docs, assets: { kit, css, tailwind } }`; `GET /agent/config` → `genui.sandbox` gains `css` |
-| Nest: a dev descriptor shadowed a newer build outside production | The newer of the two wins |
-
-`plugins` (with `@tailwindcss/vite`) is no longer needed when your app has that plugin. Keep `plugins` for anything else your styles or components need to compile.
 
 ## Sizes
 
