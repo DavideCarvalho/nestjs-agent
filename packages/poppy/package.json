@@ -66,6 +66,7 @@
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",
+    "@dudousxd/nestjs-agent-channels": "workspace:*",
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@dudousxd/nestjs-durable-core": "0.72.1",

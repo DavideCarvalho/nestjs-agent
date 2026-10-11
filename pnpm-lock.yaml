@@ -749,6 +749,9 @@ importers:
       '@dudousxd/nestjs-agent':
         specifier: workspace:*
         version: link:../nestjs
+      '@dudousxd/nestjs-agent-channels':
+        specifier: workspace:*
+        version: link:../channels
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core

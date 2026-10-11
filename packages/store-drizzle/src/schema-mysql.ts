@@ -396,6 +396,125 @@ export const agentActionProposal = mysqlTable(
   ],
 );
 
+/**
+ * Personal Agent Protocol (Poppy) conversations (`DrizzlePoppyStore`): who it is with, its status,
+ * the User's context and the identity its turns run as (JSON text), and the reader lease
+ * (`reader_holder` until `reader_until`, epoch-ms) that lets one replica at a time write a reply.
+ * `pruned_seq`: events at or below it were pruned.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConversation = mysqlTable('agent_poppy_conversation', {
+  id: key('id').primaryKey(),
+  clientId: varchar('client_id', { length: 2048 }).notNull(),
+  userId: key('user_id').notNull(),
+  accountRef: key('account_ref'),
+  agentName: key('agent_name').notNull(),
+  threadId: key('thread_id'),
+  parentId: key('parent_id'),
+  openDirectId: key('open_direct_id'),
+  status: key('status').notNull(),
+  responder: key('responder').notNull(),
+  context: longtext('context'),
+  activeRunId: key('active_run_id'),
+  turnSeq: bigint('turn_seq', { mode: 'number' }).notNull(),
+  grantInfo: longtext('grant_info'),
+  readerHolder: key('reader_holder'),
+  readerUntil: bigint('reader_until', { mode: 'number' }),
+  prunedSeq: bigint('pruned_seq', { mode: 'number' }).notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+});
+
+/**
+ * A Poppy conversation's events, append-only, numbered per conversation. The primary key is the
+ * position, so two appends racing for one cannot both win; `event_key` (unique per conversation)
+ * is what keeps a re-read turn from writing its reply twice. `event` is the event as JSON text.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyEvent = mysqlTable(
+  'agent_poppy_event',
+  {
+    conversationId: key('conversation_id').notNull(),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    id: key('id').notNull(),
+    type: key('type').notNull(),
+    event: longtext('event').notNull(),
+    eventKey: key('event_key'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.conversationId, table.seq] }),
+    uniqueIndex('agent_poppy_event_key_idx').on(table.conversationId, table.eventKey),
+    index('agent_poppy_event_id_idx').on(table.conversationId, table.id),
+  ],
+);
+
+/**
+ * Accepted Poppy messages, one row per (owner, message id) — the primary key is the idempotency lock
+ * that makes two deliveries of one message one (§7.3); `response` is what the first got, as JSON.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyMessage = mysqlTable(
+  'agent_poppy_message',
+  {
+    owner: key('owner').notNull(),
+    messageId: key('message_id').notNull(),
+    fingerprint: key('fingerprint').notNull(),
+    conversationId: key('conversation_id').notNull(),
+    response: longtext('response').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.owner, table.messageId] })],
+);
+
+/**
+ * This app's Poppy connections (`DrizzlePoppyConnectionStore`): one per (owner, Company issuer),
+ * holding the client state SEALED by the caller — never a token in the clear.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConnection = mysqlTable(
+  'agent_poppy_connection',
+  {
+    owner: key('owner').notNull(),
+    issuer: varchar('issuer', { length: 512 }).notNull(),
+    domain: key('domain').notNull(),
+    organization: key('organization').notNull(),
+    scope: longtext('scope').notNull(),
+    status: key('status').notNull(),
+    state: longtext('state').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.owner, table.issuer] })],
+);
+
+/**
+ * Poppy sign-ins in flight, started by the `connect` tool and completed on the connect page. `actor`
+ * is JSON text; `flow` the sealed per-method state.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConnect = mysqlTable('agent_poppy_connect', {
+  id: key('id').primaryKey(),
+  owner: key('owner').notNull(),
+  domain: key('domain').notNull(),
+  issuer: varchar('issuer', { length: 512 }).notNull(),
+  organization: key('organization').notNull(),
+  scope: longtext('scope').notNull(),
+  actor: longtext('actor'),
+  threadId: key('thread_id'),
+  runId: key('run_id'),
+  toolCallId: key('tool_call_id'),
+  flow: longtext('flow'),
+  status: key('status').notNull(),
+  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+});
+
 /** Every agent table, for `drizzle(pool, { schema: mysqlAgentSchema, mode: 'default' })` on MySQL. */
 export const mysqlAgentSchema = {
   agentActionProposal,
@@ -412,4 +531,9 @@ export const mysqlAgentSchema = {
   agentConfirmToken,
   agentChannelState,
   agentStreamFrame,
+  agentPoppyConversation,
+  agentPoppyEvent,
+  agentPoppyMessage,
+  agentPoppyConnection,
+  agentPoppyConnect,
 };

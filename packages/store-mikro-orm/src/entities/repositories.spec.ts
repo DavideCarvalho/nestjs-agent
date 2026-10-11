@@ -20,6 +20,11 @@ const REPOSITORY_NAMES = [
   'AgentMemoryRepository',
   'AgentStreamFrameRepository',
   'AgentQueuedMessageRepository',
+  'AgentPoppyConversationRepository',
+  'AgentPoppyEventRepository',
+  'AgentPoppyMessageRepository',
+  'AgentPoppyConnectionRepository',
+  'AgentPoppyConnectRepository',
 ] as const;
 
 /** Every `export class …Repository` the entity files declare, read off disk. */

@@ -85,3 +85,14 @@ export {
   type GenuiTelemetryStoreContractCase,
   type GenuiTelemetryStoreContractSubject,
 } from './genui-telemetry-store-contract.js';
+export {
+  POPPY_STORE_CONTRACT,
+  poppyConversationFixture,
+  type PoppyStoreContractCase,
+  type PoppyStoreContractSubject,
+} from './poppy-store-contract.js';
+export {
+  POPPY_CONNECTION_STORE_CONTRACT,
+  type PoppyConnectionStoreContractCase,
+  type PoppyConnectionStoreContractSubject,
+} from './poppy-connection-store-contract.js';

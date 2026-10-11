@@ -21,6 +21,11 @@ const AGENT_TABLE_NAMES = new Set([
   'agent_stream_frame',
   'agent_confirm_token',
   'agent_channel_state',
+  'agent_poppy_conversation',
+  'agent_poppy_event',
+  'agent_poppy_message',
+  'agent_poppy_connection',
+  'agent_poppy_connect',
 ]);
 
 /**

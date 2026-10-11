@@ -8,3 +8,13 @@ export {
   RedisChannelStore,
   type RedisChannelStoreOptions,
 } from './redis-channel-store.js';
+export {
+  type RedisPoppyClient,
+  RedisPoppyStore,
+  type RedisPoppyStoreOptions,
+} from './redis-poppy-store.js';
+export {
+  type RedisPoppyConnectionClient,
+  RedisPoppyConnectionStore,
+  type RedisPoppyConnectionStoreOptions,
+} from './redis-poppy-connection-store.js';
