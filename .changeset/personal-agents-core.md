@@ -1,6 +1,7 @@
 ---
 "@dudousxd/nestjs-agent-core": minor
 "@dudousxd/nestjs-agent": minor
+"@dudousxd/nestjs-agent-testing": minor
 ---
 
 Personal agents (for Personal Agent Protocol "Poppy", experimental):
@@ -12,3 +13,7 @@ Personal agents (for Personal Agent Protocol "Poppy", experimental):
 - `ActionProposalWorker` `onAdmitted` / `ActionProposalWorkerService.onAdmitted` and `actionProposalWorker.onAdmitted`: once a settled proposal's outcome is written to its thread — the moment to continue the conversation.
 - Poppy store SPIs (`PoppyStore`, `PoppyConnectionStore`, in-memory stores) and the tokens `AGENT_POPPY_STORE`, `AGENT_POPPY_CONNECTION_STORE`, `AGENT_CHANNEL_FOLLOWER`.
 - `closeEmptyRoles` keeps a policy's default roles through `personalAgentGate`.
+- The loop announces the tool calls a provider did not stream (`announcedToolCalls`, on the inline and the dispatched llm step), so a call's outcome is always attributable to its tool.
+- A personal agent's independent proposal records the roles it was proposed under (`ActionProposalExecutionContext.personalAgentRoles`); the worker runs it under those, never as the whole account `backgroundActorResolver` answers.
+- Delegation edges take `roles` / `ability` (`delegatesTo: [{ agent, roles }]`, `@Agent({ handoff: [{ agent, roles }] })`), carried onto the synthesized delegate tool.
+- The Poppy global-slot contracts (`PoppyAuthenticate`, `PoppyPrincipal`, `POPPY_AUTHENTICATE_SLOT`, `POPPY_ISSUER_SLOT`, `POPPY_ENDPOINTS_SLOT`, `globalPoppyAuthenticate`, `announcePoppyEndpoints`, …) live in core, shared by the Poppy package and the MCP server.

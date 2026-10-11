@@ -2,99 +2,14 @@ import {
   type Actor,
   type ActorResolver,
   PERSONAL_AGENT_ROLE,
+  type PoppyAuthenticate,
+  type PoppyPrincipal,
+  globalPoppyAuthenticate,
   scopeRole,
 } from '@dudousxd/nestjs-agent-core';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { McpChallengeException } from './mcp-challenge.js';
 import { requestUrl } from './protected-resource.js';
-
-/**
- * Who a Poppy request comes from: a Personal Agent (`clientId`) acting for one of its Users
- * (`userId`, the pairwise User ID — not an account) in one Session. `signedIn`, with the app
- * account (`accountId`) and `scopes`, once the User signed in here (§4.4); a signed-out token has
- * neither. The shape `@adonis-agora/authkit-server` answers.
- *
- * @experimental Tracks Personal Agent Protocol Draft 0.1.
- */
-export interface PoppyPrincipal {
-  /** The opaque, stable id the Personal Agent gave this User here. */
-  userId: string;
-  /** The app account, when the Session is signed in; `null` signed out. */
-  accountId: string | null;
-  /** The Personal Agent's `client_id` (its metadata document URL). */
-  clientId: string;
-  /** The token's account scopes (`poppy:read`, `poppy:write`, custom). Empty signed out. */
-  scopes: string[];
-  sessionId: string;
-  signedIn: boolean;
-  /** The `resource` the token was issued for (RFC 8707), or `null`. */
-  resource?: string | null;
-  tokenType?: 'DPoP' | 'Bearer';
-  /** What the app's `toActor` answered on the authorization server, when it has one. */
-  actor?: Actor;
-}
-
-/** The request a resolver verifies — the Session Token and its DPoP proof are in `headers`. */
-export interface PoppyAuthRequest {
-  method: string;
-  /** The full PUBLIC request URL (the DPoP `htu` is checked against it; the query is ignored). */
-  url: string;
-  /** The request's headers as received (lower-cased names) — `authorization` and `dpop` included. */
-  headers: Record<string, string | string[] | undefined>;
-}
-
-/** What a resolver may be asked to require besides a valid token. This resolver asks for none. */
-export interface PoppyAuthOptions {
-  scopes?: string[];
-  signedIn?: boolean;
-  resource?: string | null;
-}
-
-/** A refused token, with the challenge to answer it with. */
-export type PoppyAuthFailure = {
-  ok: false;
-  status: 400 | 401 | 403;
-  error:
-    | 'invalid_token'
-    | 'sign_in_required'
-    | 'insufficient_scope'
-    | 'invalid_dpop_proof'
-    | 'use_dpop_nonce'
-    | (string & {});
-  scope?: string;
-  /** The challenge to answer with, verbatim. */
-  wwwAuthenticate: string;
-  /** For logs and the body — never the token. */
-  description?: string;
-  /** Extra headers to answer with (`DPoP-Nonce`). */
-  headers?: Record<string, string>;
-};
-
-export type PoppyAuthResult = { ok: true; principal: PoppyPrincipal } | PoppyAuthFailure;
-
-/**
- * Verifies a request's Session Token. `@adonis-agora/authkit-server` installs one in
- * {@link POPPY_AUTHENTICATE_SLOT}; an app can pass its own.
- *
- * @experimental Tracks Personal Agent Protocol Draft 0.1 (https://personalagentprotocol.org/docs/spec),
- * a spec still in development: this API WILL change as the spec evolves.
- */
-export type PoppyAuthenticate = (
-  request: PoppyAuthRequest,
-  options?: PoppyAuthOptions,
-) => Promise<PoppyAuthResult>;
-
-/**
- * The contract with the authorization server is this global symbol, not a module: neither side
- * imports the other. The name is that contract, so it is kept exactly as the server writes it.
- */
-export const POPPY_AUTHENTICATE_SLOT = Symbol.for('@adonis-agora/poppy:authenticate');
-
-/** The resolver installed in the global slot, if any — read per request, so install order is free. */
-export function globalPoppyAuthenticate(): PoppyAuthenticate | undefined {
-  const value = (globalThis as Record<symbol, unknown>)[POPPY_AUTHENTICATE_SLOT];
-  return typeof value === 'function' ? (value as PoppyAuthenticate) : undefined;
-}
 
 /**
  * `actor` as a personal agent granted `scopes`: its roles plus `personal_agent` and one `scope:<id>`

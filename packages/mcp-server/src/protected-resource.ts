@@ -1,13 +1,8 @@
 import type { IncomingMessage } from 'node:http';
+import { announcedPoppyIssuer } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, NotFoundException, Req, type Type } from '@nestjs/common';
 import type { AgentMcpServerModuleOptions } from './agent-mcp-server.options.js';
 import { AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
-
-/**
- * Where `@adonis-agora/authkit-server` announces its Poppy issuer. A cross-process contract with the
- * authorization server — the name is the protocol, so it is kept exactly as the server writes it.
- */
-export const POPPY_ISSUER_SLOT = Symbol.for('@adonis-agora/poppy:issuer');
 
 /** The well-known prefix of an RFC 9728 protected-resource metadata document. */
 export const PROTECTED_RESOURCE_WELL_KNOWN = '.well-known/oauth-protected-resource';
@@ -29,15 +24,6 @@ export interface ProtectedResourceMetadata {
   bearer_methods_supported: string[];
   scopes_supported?: string[];
   resource_name?: string;
-}
-
-/**
- * The Poppy issuer announced in this process, if any — read on every request, so the authorization
- * server can install it after this module boots.
- */
-export function announcedPoppyIssuer(): string | undefined {
-  const value = (globalThis as Record<symbol, unknown>)[POPPY_ISSUER_SLOT];
-  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 /** Whether a metadata document is served: an `oauth` option, or an announced Poppy issuer. */

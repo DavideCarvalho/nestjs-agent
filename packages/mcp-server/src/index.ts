@@ -39,20 +39,23 @@ export {
 export { McpSessionStore, type McpSession } from './mcp-sessions.js';
 export {
   asPersonalAgent,
-  globalPoppyAuthenticate,
-  POPPY_AUTHENTICATE_SLOT,
   poppyActorResolver,
   type PoppyActorResolverOptions,
+} from './poppy-actor-resolver.js';
+// The Poppy slot contracts are core's (shared with `@dudousxd/nestjs-agent-poppy`), re-exported.
+export {
+  announcedPoppyIssuer,
+  globalPoppyAuthenticate,
+  POPPY_AUTHENTICATE_SLOT,
+  POPPY_ISSUER_SLOT,
   type PoppyAuthenticate,
   type PoppyAuthFailure,
   type PoppyAuthOptions,
   type PoppyAuthRequest,
   type PoppyAuthResult,
   type PoppyPrincipal,
-} from './poppy-actor-resolver.js';
+} from '@dudousxd/nestjs-agent-core';
 export {
-  announcedPoppyIssuer,
-  POPPY_ISSUER_SLOT,
   protectedResourceMetadata,
   type McpOAuthOptions,
   type ProtectedResourceMetadata,

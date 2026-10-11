@@ -1,6 +1,11 @@
 import type { Server as HttpServer } from 'node:http';
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
-import type { ActorResolver } from '@dudousxd/nestjs-agent-core';
+import {
+  type ActorResolver,
+  POPPY_AUTHENTICATE_SLOT,
+  POPPY_ISSUER_SLOT,
+  type PoppyAuthenticate,
+} from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -12,13 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentMcpServerModule } from './agent-mcp-server.module.js';
 import type { AgentMcpServerModuleOptions } from './agent-mcp-server.options.js';
-import {
-  POPPY_AUTHENTICATE_SLOT,
-  type PoppyAuthenticate,
-  asPersonalAgent,
-  poppyActorResolver,
-} from './poppy-actor-resolver.js';
-import { POPPY_ISSUER_SLOT } from './protected-resource.js';
+import { asPersonalAgent, poppyActorResolver } from './poppy-actor-resolver.js';
 
 const ran = vi.fn();
 

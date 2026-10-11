@@ -316,7 +316,12 @@ it('keeps the roles of a personal agent that proposed, for the worker to run it 
       actionApprovalMode: 'independent',
     },
     { threadId: thread.id, actor, userText: 'cancel' },
-    { runId: 'r', openSink: () => sink.open('r'), step: (_name, fn) => fn() },
+    {
+      runId: 'r',
+      openSink: () => sink.open('r'),
+      step: (_name, fn) => fn(),
+      awaitApproval: async () => ({ approved: true }),
+    },
   );
   const [proposal] = await store.listActionProposals({
     threadId: thread.id,

@@ -1,10 +1,7 @@
+import type { PoppyPrincipal } from '@dudousxd/nestjs-agent-core';
 import { describe, expect, it } from 'vitest';
 import { McpChallengeException } from './mcp-challenge.js';
-import {
-  type PoppyPrincipal,
-  asPersonalAgent,
-  poppyActorResolver,
-} from './poppy-actor-resolver.js';
+import { asPersonalAgent, poppyActorResolver } from './poppy-actor-resolver.js';
 
 const signedIn: PoppyPrincipal = {
   userId: 'u-1',
