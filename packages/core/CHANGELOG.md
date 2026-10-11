@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.54.1
+
+### Patch Changes
+
+- [#363](https://github.com/DavideCarvalho/nestjs-agent/pull/363) [`02956ae`](https://github.com/DavideCarvalho/nestjs-agent/commit/02956aed1e2da917d65a364bc97bb4b983fcf844) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The sandbox kit plugin now runs its dev rebuilds one at a time. Each rebuild reads the options when it starts. Before, a slower, older build could finish after a newer one and win. With Tailwind, the theme variables now come from the app's own stylesheets, not from Tailwind's compiled theme layer.
+
 ## 0.54.0
 
 ### Minor Changes
