@@ -386,8 +386,51 @@ describe('interrupts', () => {
 
     const plain = await collect(parked(upToApproval), { quietMs: 60_000 });
     expect((plain.at(-1) as Extract<AgUiEvent, { type: 'RUN_FINISHED' }>).outcome).toMatchObject({
-      interrupts: [{ message: 'Approve refund?' }],
+      // No confirmation: the tool's name in words, never the raw identifier.
+      interrupts: [{ message: 'Refund?' }],
     });
+  });
+
+  it("prefers the tool's confirmation title over a free-form reason, and never prints a raw identifier", async () => {
+    const interruptOf = async (event: StreamFrame) => {
+      const events = await collect(
+        parked([
+          ev({ kind: 'step-start' }),
+          ev({
+            kind: 'tool-input-available',
+            id: 'call-1',
+            name: 'refund_order',
+            input: { id: 7 },
+            toolKind: 'action',
+          }),
+          ev({ kind: 'step-finish', usage: { inputTokens: 5, outputTokens: 2 } }),
+          event,
+        ]),
+        { quietMs: 60_000 },
+      );
+      const finished = events.at(-1) as Extract<AgUiEvent, { type: 'RUN_FINISHED' }>;
+      return (finished.outcome as { interrupts: { message?: string }[] }).interrupts[0];
+    };
+    expect(
+      await interruptOf({
+        kind: 'approval-requested',
+        id: 'call-1',
+        approver: 'requester',
+        reason: 'policy says ask',
+        confirmation: { title: 'Refund order #7?', verb: 'Refund' },
+      }),
+    ).toMatchObject({ message: 'Refund order #7?' });
+    expect(
+      await interruptOf({
+        kind: 'approval-requested',
+        id: 'call-1',
+        approver: 'requester',
+        reason: 'policy says ask',
+      }),
+    ).toMatchObject({ message: 'policy says ask' });
+    expect(
+      await interruptOf({ kind: 'approval-requested', id: 'call-1', approver: 'requester' }),
+    ).toMatchObject({ message: 'Refund order?' });
   });
 
   it('waits out the quiet window while other announced work is still in flight', async () => {
@@ -725,7 +768,7 @@ describe('a sink that knows only the shared vocabulary', () => {
     const finished = events.at(-1) as unknown as { outcome: { interrupts: { id: string }[] } };
     expect(finished.outcome.interrupts[0]).toMatchObject({
       reason: 'tool_approval',
-      message: 'Approve refund?',
+      message: 'Refund?',
       metadata: { 'agora.toolName': 'refund', 'agora.input': { id: 7 }, 'agora.approver': 'admin' },
     });
     expect(decodeInterruptId(finished.outcome.interrupts[0]?.id)).toMatchObject({

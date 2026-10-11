@@ -37,6 +37,39 @@ class SendTool {
   }
 }
 
+@AiTool({
+  name: 'refund_order',
+  kind: 'action',
+  description: 'refund an order',
+  input: z.object({ order: z.string() }),
+  presentation: {
+    label: 'Refund',
+    running: 'Refunding',
+    done: 'Refunded',
+    confirm: { title: 'Refund order {order}?', verb: 'Refund' },
+  },
+})
+@Injectable()
+class RefundOrderTool {
+  async execute() {
+    return { refunded: true };
+  }
+}
+
+@AiTool({
+  name: 'archive_note',
+  kind: 'action',
+  description: 'archive a note',
+  input: z.object({}),
+  presentation: { label: 'Note archive', running: 'Archiving', done: 'Archived' },
+})
+@Injectable()
+class ArchiveNoteTool {
+  async execute() {
+    return { archived: true };
+  }
+}
+
 describe('openCode engine: the library seams', () => {
   let h: Harness | undefined;
   afterEach(async () => {
@@ -84,6 +117,57 @@ describe('openCode engine: the library seams', () => {
     expect(fs).toContainEqual(
       expect.objectContaining({ kind: 'approval-settled', id: 'per_send', status: 'expired' }),
     );
+  });
+
+  it("words an app tool's approval with its own confirm template, a built-in from its name", async () => {
+    h = await bootEngine({
+      engine: (host) =>
+        openCode({ host, tools: { url: 'https://app.test/mcp', secret: 'test-secret' } }),
+      providers: [RefundOrderTool, ArchiveNoteTool],
+      script: async (t) => {
+        t.emit('permission.asked', {
+          id: 'per_refund',
+          action: 'aviary_refund_order',
+          metadata: { input: { order: 'A-1' } },
+        });
+        await t.next('permission.reply');
+        t.emit('permission.asked', { id: 'per_archive', action: 'aviary.archive_note' });
+        await t.next('permission.reply');
+        t.emit('permission.asked', { id: 'per_bash', action: 'bash' });
+        await t.next('permission.reply');
+        t.succeed();
+      },
+    });
+    const { service } = h;
+    const { runId, threadId } = await service.chat({ actor, message: 'refund A-1' });
+    const requested = async (id: string) => {
+      const fs = await framesUntil(
+        service,
+        runId,
+        (f) => f.kind === 'approval-requested' && f.id === id,
+      );
+      return fs.find((f) => f.kind === 'approval-requested' && f.id === id);
+    };
+    expect(await requested('per_refund')).toMatchObject({
+      confirmation: { title: 'Refund order A-1?', verb: 'Refund' },
+    });
+    // Persisted with the call, so a reloaded thread words it the same.
+    const stored = (await h.store.getThread(threadId))?.messages
+      .flatMap((m) => m.approvals ?? [])
+      .find((a) => a.toolCallId === 'per_refund');
+    expect(stored?.confirmation).toEqual({ title: 'Refund order A-1?', verb: 'Refund' });
+    await h.service.approve(actor, 'per_refund');
+    // No `confirm`: its label, never the prefixed identifier.
+    expect(await requested('per_archive')).toMatchObject({
+      confirmation: { title: 'Note archive?', verb: 'Approve' },
+    });
+    await h.service.approve(actor, 'per_archive');
+    // OpenCode's own tool: no confirmation; adapters word it from its name.
+    const bash = await requested('per_bash');
+    expect(bash).toBeDefined();
+    expect(bash && 'confirmation' in bash ? bash.confirmation : undefined).toBeUndefined();
+    await h.service.approve(actor, 'per_bash');
+    await frames(h.service, runId);
   });
 
   it('rewinds the OpenCode session on a regenerate', async () => {
