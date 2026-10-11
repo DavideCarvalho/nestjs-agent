@@ -7,6 +7,7 @@
 import { resolve } from 'node:path';
 import {
   type SandboxKitDiscovery,
+  sandboxKitDescriptorPath,
   sandboxKitDiscovery,
 } from '@dudousxd/nestjs-agent-core/genui/kit';
 import { NEST_SANDBOX_KIT_DESCRIPTOR } from '../vite/index.js';
@@ -18,14 +19,19 @@ export const NEST_SANDBOX_KIT_MANIFEST = Object.freeze({
   outDir: 'public',
 });
 
-/** Find the kit for `AgentGenuiModule.forRoot({ sandbox: { kit: true } })`. */
+/**
+ * Find the kit for `AgentGenuiModule.forRoot({ sandbox: { kit: true } })` — a named kit's
+ * (`genuiSandboxKit({ name })`, `sandbox: { kit: true, kitName }`) with `name`.
+ */
 export function nestSandboxKitDiscovery(
   options: AgentGenuiSandboxKitOptions = {},
+  name?: string,
 ): SandboxKitDiscovery {
   const manifest = options.manifest ?? NEST_SANDBOX_KIT_MANIFEST;
   return sandboxKitDiscovery({
     root: resolve(options.root ?? process.cwd()),
-    descriptor: options.descriptor ?? NEST_SANDBOX_KIT_DESCRIPTOR,
+    ...(name !== undefined ? { name } : {}),
+    descriptor: sandboxKitDescriptorPath(options.descriptor ?? NEST_SANDBOX_KIT_DESCRIPTOR, name),
     ...(manifest !== false ? { manifest: { file: manifest.file, outDir: manifest.outDir } } : {}),
     ...(options.kitUrl !== undefined ? { kitUrl: options.kitUrl } : {}),
     ...(options.production !== undefined ? { production: options.production } : {}),

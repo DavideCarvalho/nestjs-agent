@@ -151,7 +151,10 @@ export interface AgentGenuiOptions {
 export interface AgentGenuiSandboxKitOptions {
   /** Default `process.cwd()`. */
   root?: string;
-  /** The dev descriptor `genuiSandboxKit()` writes. Default `.genui/sandbox-kit.json`. */
+  /**
+   * The dev descriptor `genuiSandboxKit()` writes. Default `.genui/sandbox-kit.json` — for a named
+   * kit (`genuiSandboxKit({ name })`, picked with `kitName`), `.genui/sandbox-kit.<name>.json`.
+   */
   descriptor?: string;
   /**
    * The production Vite manifest, and the directory its `file`s are relative to. Default
@@ -202,6 +205,8 @@ function mergeSandboxClients(clients: Array<() => SandboxClientConfig>): Sandbox
   for (const client of clients) {
     const one = client();
     merged.theme ||= one.theme;
+    if (one.name !== undefined && merged.kit === undefined && one.kit !== undefined)
+      merged.name = one.name;
     if (one.kit !== undefined) merged.kit ??= one.kit;
     if (one.css !== undefined) merged.css ??= one.css;
     if (one.tailwind !== undefined) merged.tailwind ??= one.tailwind;
@@ -215,7 +220,10 @@ async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> 
   assertGenuiChannels(askedChannels);
   // A sandbox's kit (styles, components, wrapper) and theme names are found through the app's Vite output.
   const clients: Array<() => SandboxClientConfig> = [];
-  let discovery: import('@dudousxd/nestjs-agent-core/genui/kit').SandboxKitDiscovery | undefined;
+  const discoveries = new Map<
+    string,
+    import('@dudousxd/nestjs-agent-core/genui/kit').SandboxKitDiscovery
+  >();
   const resolveSandbox = async (
     value: boolean | DefineSandboxOptions | undefined,
   ): Promise<boolean | DefineSandboxOptions | undefined> => {
@@ -225,7 +233,12 @@ async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> 
       import('./kit.js'),
       import('@dudousxd/nestjs-agent-core/genui/kit'),
     ]);
-    discovery ??= nestSandboxKitDiscovery(options.sandboxKit);
+    const kitName = value === true ? undefined : value.kitName;
+    let discovery = discoveries.get(kitName ?? '');
+    if (discovery === undefined) {
+      discovery = nestSandboxKitDiscovery(options.sandboxKit, kitName);
+      discoveries.set(kitName ?? '', discovery);
+    }
     const resolved = resolveSandboxServer(value, discovery);
     clients.push(resolved.client);
     return resolved.define;
