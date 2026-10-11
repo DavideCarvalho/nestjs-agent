@@ -2,6 +2,7 @@
 "@dudousxd/nestjs-agent-core": minor
 "@dudousxd/nestjs-agent": minor
 "@dudousxd/nestjs-agent-react": minor
+"@dudousxd/nestjs-agent-channels": minor
 ---
 
 The sandbox kit works with any styling or component stack, without presets (same API as `@adonis-agora/agent` 0.75).
@@ -23,3 +24,8 @@ Other fixes:
 - Theme variables are read from workspace packages linked into `node_modules`.
 
 **Breaking:** `tailwind`, `tailwindCss`, `entry` and `include` (now `components`), `writeSandboxKitDocs({ css })` (now `styles`), and `defineSandbox({ tailwind })` are removed. Passing them throws a migration message. The descriptor is `version: 2`, with assets under `assets`.
+
+Also:
+
+- `genuiTools({ ability })` / `AgentGenuiModule.forRoot({ ability })`: the authorization ability the UI tools (`ui__render`, `ui__sandbox`, the per-component tools, `ui__show`) declare. It is a string, a map by tool name, or a function of the tool. An ability-only policy can now offer them, and the policy still decides.
+- Channel conversions get the frame they convert: `convert(props, { channel, component, version, id, frame })`. `version` is the frame's (or, inside a tree, its `componentVersions` entry), so a v1 frame is converted as v1. `describe` may be a function of `{ channel, component, version }`. The channels handler passes each frame's version and component versions.

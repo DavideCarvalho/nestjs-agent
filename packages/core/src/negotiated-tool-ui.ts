@@ -67,6 +67,10 @@ export function createToolUiChannelGuide(options: {
           id: component.id,
           name: component.component,
           props: component.props,
+          ...(component.version !== undefined ? { version: component.version } : {}),
+          ...(component.componentVersions !== undefined
+            ? { componentVersions: component.componentVersions }
+            : {}),
           ...(component.partial === true ? { partial: true } : {}),
         })),
         channel,
