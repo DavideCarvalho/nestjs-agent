@@ -55,7 +55,13 @@ import {
   withMemoryTool,
   writeMemory,
 } from './memory.js';
-import { type ResolveToolUiCatalog, createNegotiatedUiCollector } from './negotiated-tool-ui.js';
+import {
+  type ResolveToolUiCatalog,
+  type ToolUiChannelGuide,
+  channelChoiceLimits,
+  createNegotiatedUiCollector,
+  withDelivered,
+} from './negotiated-tool-ui.js';
 import { findPersona, intersectAllowLists } from './personas.js';
 import { resolveUsageCost } from './pricing/resolve.js';
 import {
@@ -114,7 +120,7 @@ import type { QuotaStore } from './spi/quota-store.js';
 import type { Passage, Retriever } from './spi/retriever.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
 import type { SinkWriter, StreamError } from './spi/token-stream-sink.js';
-import type { AiToolCtx, ToolPreflightResult } from './spi/tool.js';
+import type { AiToolCtx, ToolDescribeScope, ToolPreflightResult } from './spi/tool.js';
 import {
   type AgentStreamEvent,
   type AgentUiComponent,
@@ -170,6 +176,12 @@ import type {
 export interface AgentLoopDeps<TOutput = unknown> {
   actionApprovalMode?: ActionApprovalMode;
   resolveUiCatalog?: ResolveToolUiCatalog;
+  /**
+   * genui `channels`: on a channel the server draws for (WhatsApp, Telegram, email), a prompt block
+   * saying how each component reaches the user there, and — on each tool result that pushed UI —
+   * `delivered`, what the user actually received. Undefined → neither.
+   */
+  uiChannelGuide?: ToolUiChannelGuide;
   model: ModelProvider;
   store: AgentStore;
   registry: ToolRegistry;
@@ -821,6 +833,20 @@ async function resolveSystemPrompt(
     if (section !== null && section.length > 0) {
       sections.push(section);
     }
+  }
+  // A turn on WhatsApp, Telegram or email: how each component reaches the user there. Derived from
+  // the genui config and the catalog, like the contributors above.
+  if (deps.uiChannelGuide !== undefined) {
+    const block = await deps.uiChannelGuide
+      .prompt({
+        actor: input.actor,
+        threadId: input.threadId,
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+        channel: turnChannel(input.pageContext),
+      })
+      .catch(() => undefined);
+    if (block !== undefined && block.length > 0) sections.push(block);
   }
   return sections.join('\n\n');
 }
@@ -1587,6 +1613,24 @@ async function awaitElicitation(
  * The per-CALL half of a tool's context: which call this is, and the key that stays the same for
  * every execution of it (see {@link AiToolCtx.idempotencyKey}).
  */
+/**
+ * `output` with `delivered` — what the pushes reached the user as — on a channel the server draws
+ * for (genui `channels`); `output` itself everywhere else.
+ */
+export async function withChannelDelivery(
+  deps: { uiChannelGuide?: ToolUiChannelGuide },
+  scope: ToolDescribeScope & { pageContext?: unknown },
+  output: unknown,
+  pushed: readonly AgentUiComponent[],
+): Promise<unknown> {
+  const pageContext = scope.pageContext;
+  if (deps.uiChannelGuide === undefined || pushed.length === 0) return output;
+  const delivered = await deps.uiChannelGuide
+    .delivered(scope, pushed, channelChoiceLimits(pageContext))
+    .catch(() => undefined);
+  return delivered === undefined ? output : withDelivered(output, delivered);
+}
+
 export function toolCallContext<T extends { runId: string }>(
   ctx: T,
   toolCallId: string,
@@ -2522,7 +2566,14 @@ async function invokeClaimedTool(
             return wrapToolPreflightDenied(error.message);
           throw error;
         }
-        return wrapToolStepOutput(output, ui.components(), ui.text());
+        // On a channel the server draws for, the model reads what the user actually got there (a
+        // pick-list, an image, text), not the web view the tool's description talks about.
+        // Inside the step: a replay reads back the same words.
+        return wrapToolStepOutput(
+          await withChannelDelivery(deps, ctx, output, ui.components()),
+          ui.components(),
+          ui.text(),
+        );
       });
       raw =
         deps.toolTimeoutMs !== undefined

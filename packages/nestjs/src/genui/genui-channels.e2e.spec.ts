@@ -36,8 +36,10 @@ class DefaultAgent {}
 /** Answers in prose; records the tools each turn was shown. */
 class RecordingModel implements ModelProvider {
   shown: string[][] = [];
+  systems: string[] = [];
   async runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
     this.shown.push(args.tools.map((tool) => tool.name));
+    this.systems.push(args.system);
     return { text: 'ok', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } };
   }
 }
@@ -110,6 +112,22 @@ describe('AgentGenuiModule — channels and the sandbox kit', () => {
     expect(model.shown[1]).toContain('ui__show_callout');
     expect(model.shown[1]).not.toContain('ui__render');
     expect(model.shown[1]).not.toContain('ui__show_sandbox');
+  });
+
+  it('tells the model, on WhatsApp only, how each component reaches the user there', async () => {
+    const model = new RecordingModel();
+    const { chat } = await boot(
+      model,
+      AgentGenuiModule.forRoot({
+        catalog,
+        channels: { web: { mode: 'tree' }, whatsapp: { mode: 'per-component' } },
+      }),
+    );
+    await chat();
+    await chat('whatsapp');
+    expect(model.systems[0]).not.toContain('## Channel');
+    expect(model.systems[1]).toContain('## Channel: WhatsApp');
+    expect(model.systems[1]).toContain('- Callout: a WhatsApp message of its own');
   });
 
   it('finds the kit through the dev descriptor and tells GET /config and the model', async () => {
