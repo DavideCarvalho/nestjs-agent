@@ -6,6 +6,7 @@ import {
   type UiAction,
   buildSandboxDocument,
   previewHtml,
+  sandboxDrawsJsx,
   sandboxPolicyOf,
 } from '@dudousxd/nestjs-agent-core/genui';
 import {
@@ -260,7 +261,7 @@ export function createNativeSandboxRenderer(
       () => (themeOn && themeInput ? nativeThemeCss(themeInput) : null),
       [themeKey],
     );
-    const jsxMode = typeof props.jsx === 'string';
+    const jsxMode = sandboxDrawsJsx(props);
     const tailwindConfig = client.config?.tailwind;
     const tailwindText = useNativeSandboxAsset(
       tailwindConfig !== undefined
