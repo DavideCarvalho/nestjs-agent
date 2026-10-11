@@ -1,5 +1,7 @@
 import type {
   ActorSpendRow,
+  GenuiDayRow,
+  GenuiStats,
   GovernancePage,
   ModelPrice,
   ModelSpendRow,
@@ -585,3 +587,183 @@ export const MOCK_LIVE_EVENTS: FeedEvent[] = [
     payload: { runId: 'r-8a1', steps: 7, inputTokens: 4200, outputTokens: 1100 },
   },
 ];
+
+function buildGenuiDays(): GenuiDayRow[] {
+  const days: GenuiDayRow[] = [];
+  for (let i = 29; i >= 0; i -= 1) {
+    const day = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
+    const wave = Math.sin(i / 4) * 0.4 + 1;
+    const turns = Math.round(26 * wave + (29 - i) * 0.6);
+    const calls = Math.round(turns * 1.28);
+    days.push({
+      day,
+      calls,
+      turns,
+      inputTokens: calls * 3_400,
+      outputTokens: calls * 1_150,
+      costUsd: Number((calls * 0.0123).toFixed(4)),
+      firstTryRate: Number((0.82 + Math.cos(i / 5) * 0.06).toFixed(3)),
+    });
+  }
+  return days;
+}
+
+const GENUI_DAYS = buildGenuiDays();
+
+/** Generative-UI telemetry for the preview: four tools across two models, a handful of error kinds. */
+export const MOCK_GENUI_STATS: GenuiStats = {
+  totals: {
+    calls: GENUI_DAYS.reduce((sum, day) => sum + day.calls, 0),
+    turns: GENUI_DAYS.reduce((sum, day) => sum + day.turns, 0),
+    firstAttempts: 1_014,
+    firstTrySuccesses: 842,
+    firstTryRate: 842 / 1_014,
+    retried: 131,
+    failed: 207,
+    inputTokens: GENUI_DAYS.reduce((sum, day) => sum + day.inputTokens, 0),
+    outputTokens: GENUI_DAYS.reduce((sum, day) => sum + day.outputTokens, 0),
+    costUsd: GENUI_DAYS.reduce((sum, day) => sum + (day.costUsd ?? 0), 0),
+  },
+  byToolModel: [
+    {
+      toolName: 'ui__render',
+      modelId:
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5',
+      mode: 'tree',
+      calls: 612,
+      firstAttempts: 498,
+      firstTrySuccesses: 461,
+      firstTryRate: 461 / 498,
+      retried: 41,
+      failed: 58,
+      costUsd: 6.84,
+    },
+    {
+      toolName: 'ui__sandbox',
+      modelId:
+        'arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5',
+      mode: 'sandbox',
+      calls: 284,
+      firstAttempts: 201,
+      firstTrySuccesses: 139,
+      firstTryRate: 139 / 201,
+      retried: 52,
+      failed: 93,
+      costUsd: 5.12,
+    },
+    {
+      toolName: 'ui__show_order_card',
+      modelId: 'gpt-4o-mini',
+      mode: 'per-component',
+      calls: 241,
+      firstAttempts: 232,
+      firstTrySuccesses: 221,
+      firstTryRate: 221 / 232,
+      retried: 7,
+      failed: 13,
+      costUsd: 0.41,
+    },
+    {
+      toolName: 'ui__show',
+      modelId: 'gpt-4o-mini',
+      mode: 'show',
+      calls: 108,
+      firstAttempts: 83,
+      firstTrySuccesses: 21,
+      firstTryRate: 21 / 83,
+      retried: 31,
+      failed: 43,
+      costUsd: null,
+    },
+  ],
+  errors: [
+    {
+      category: 'syntax',
+      message:
+        'invalid Sandbox code: jsx line 14:22: Unexpected token — check that every JSX tag is closed in order',
+      toolName: 'ui__sandbox',
+      count: 48,
+      lastAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+    },
+    {
+      category: 'shape',
+      message: 'invalid UI tree: children[2].props.columns: Expected array, received "…"',
+      toolName: 'ui__render',
+      count: 37,
+      lastAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+    },
+    {
+      category: 'unknown-component',
+      message:
+        'invalid UI tree code: children[0] jsx line 3:22: `<Slider>` is not a kit component — use one of `Button`, `Card`, or a plain element',
+      toolName: 'ui__render',
+      count: 21,
+      lastAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+    },
+    {
+      category: 'missing-app',
+      message:
+        'invalid Sandbox code: jsx: no `App` — rename `function Calculator` to `function App`; App is what gets drawn',
+      toolName: 'ui__sandbox',
+      count: 19,
+      lastAt: new Date(Date.now() - 5 * 3_600_000).toISOString(),
+    },
+    {
+      category: 'unavailable',
+      message: 'component "…" is not available here',
+      toolName: 'ui__show',
+      count: 14,
+      lastAt: new Date(Date.now() - 26 * 3_600_000).toISOString(),
+    },
+    {
+      category: 'bridge',
+      message:
+        'invalid Sandbox code: html line 1:18: `flippy.send` — the bridge is `agent.send(payload)`',
+      toolName: 'ui__sandbox',
+      count: 9,
+      lastAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    },
+    {
+      category: 'other',
+      message: 'Request timed out after 30000ms',
+      toolName: 'ui__show',
+      count: 3,
+      lastAt: new Date(Date.now() - 4 * 86_400_000).toISOString(),
+    },
+  ],
+  byDay: GENUI_DAYS,
+  costPerTurn: {
+    turns: GENUI_DAYS.reduce((sum, day) => sum + day.turns, 0),
+    avgUsd: 0.0157,
+    p50Usd: 0.0112,
+    p95Usd: 0.0441,
+  },
+  latency: {
+    firstFrame: { samples: 1_002, p50Ms: 740, p95Ms: 2_310 },
+    complete: { samples: 931, p50Ms: 3_480, p95Ms: 9_120 },
+  },
+};
+
+/** What a store that records UI calls returns for a range with none. */
+export const MOCK_GENUI_EMPTY: GenuiStats = {
+  totals: {
+    calls: 0,
+    turns: 0,
+    firstAttempts: 0,
+    firstTrySuccesses: 0,
+    firstTryRate: null,
+    retried: 0,
+    failed: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: null,
+  },
+  byToolModel: [],
+  errors: [],
+  byDay: [],
+  costPerTurn: { turns: 0, avgUsd: null, p50Usd: null, p95Usd: null },
+  latency: {
+    firstFrame: { samples: 0, p50Ms: null, p95Ms: null },
+    complete: { samples: 0, p50Ms: null, p95Ms: null },
+  },
+};

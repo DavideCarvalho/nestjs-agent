@@ -16,6 +16,7 @@ export const SECTION_KEYS = [
   'reliability',
   'approvals',
   'tools',
+  'genui',
   'pricing',
   'live',
 ] as const;

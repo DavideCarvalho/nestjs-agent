@@ -17,7 +17,14 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { AgentHostContext, CostSource } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentHostContext,
+  CostSource,
+  GenuiErrorCategory,
+  GenuiToolMarker,
+  GenuiValidity,
+  RecordGenuiCallInput,
+} from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
@@ -32,6 +39,7 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  varchar,
 } from 'drizzle-orm/pg-core';
 import type { AgentRunStatus, RagIngestionStatus } from './schema.js';
 
@@ -168,6 +176,47 @@ export const agentTokenUsage = pgTable(
     createdAt: ts('created_at').notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],
+);
+
+/**
+ * Generative-UI telemetry (`AgentStore.recordGenuiCalls`): one row per UI tool call, keyed by the
+ * tool call's id, so a replayed record replaces rather than duplicates. Metadata only — `payload`
+ * (the call's arguments) is filled solely when the tool samples payloads. `created_at` is epoch-ms.
+ */
+export const agentGenuiCall = pgTable(
+  'agent_genui_call',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id').notNull(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => agentThread.id, { onDelete: 'cascade' }),
+    actorRef: text('actor_ref').notNull(),
+    agentName: text('agent_name'),
+    step: integer('step').notNull(),
+    toolName: text('tool_name').notNull(),
+    channel: text('channel').notNull(),
+    mode: text('mode').$type<GenuiToolMarker['mode']>().notNull(),
+    modelId: text('model_id').notNull(),
+    attempt: integer('attempt').notNull(),
+    outcome: text('outcome').$type<RecordGenuiCallInput['outcome']>().notNull(),
+    validity: text('validity').$type<GenuiValidity>().notNull(),
+    errorCategory: text('error_category').$type<GenuiErrorCategory>(),
+    errorMessage: text('error_message'),
+    inputTokens: integer('input_tokens').notNull(),
+    outputTokens: integer('output_tokens').notNull(),
+    costUsd: doublePrecision('cost_usd'),
+    costSource: varchar('cost_source', { length: 16 }).$type<CostSource>(),
+    firstFrameMs: bigint('first_frame_ms', { mode: 'number' }),
+    completeFrameMs: bigint('complete_frame_ms', { mode: 'number' }),
+    payloadBytes: integer('payload_bytes').notNull(),
+    payload: text('payload'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    index('agent_genui_call_created_idx').on(table.createdAt),
+    index('agent_genui_call_run_idx').on(table.runId),
+  ],
 );
 
 export const agentModelPricing = pgTable('agent_model_pricing', {
@@ -350,6 +399,7 @@ export const pgAgentSchema = {
   agentQueuedMessage,
   agentToolCall,
   agentTokenUsage,
+  agentGenuiCall,
   agentModelPricing,
   agentRun,
   agentMemory,

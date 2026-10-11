@@ -13,6 +13,7 @@ const AGENT_TABLE_NAMES = new Set([
   'agent_queued_message',
   'agent_tool_call',
   'agent_token_usage',
+  'agent_genui_call',
   'agent_model_pricing',
   'agent_run',
   'agent_memory',
@@ -51,8 +52,9 @@ const SCHEMA_LOCK_NAME = 'agent_schema';
  * Bump to force a re-heal on the next boot even when the entity metadata is unchanged.
  * 2: MySQL columns are reconciled to their declared collation (earlier heals left them in the table
  * default), so a database healed before it gets the correction once.
+ * 3: `agent_genui_call` (generative-UI telemetry).
  */
-const SCHEMA_REVISION = 2;
+const SCHEMA_REVISION = 3;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the

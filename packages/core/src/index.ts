@@ -184,3 +184,26 @@ export {
   type FunctionalTool,
 } from './functional-tool.js';
 export { emitToolPresentations } from './tool-presentations.js';
+export {
+  GenuiRunRecorder,
+  GenuiTurnTelemetry,
+  classifyGenuiError,
+  genuiRowsInRange,
+  observeGenuiFrames,
+  scrubGenuiError,
+  summarizeGenuiCalls,
+} from './genui-telemetry.js';
+export type {
+  GenuiCallRow,
+  GenuiDayRow,
+  GenuiErrorCategory,
+  GenuiErrorRow,
+  GenuiFrameTimes,
+  GenuiLatency,
+  GenuiOutOfLoopCall,
+  GenuiStats,
+  GenuiStepFacts,
+  GenuiToolModelRow,
+  GenuiValidity,
+  RecordGenuiCallInput,
+} from './genui-telemetry.js';

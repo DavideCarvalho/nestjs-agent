@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SECTION, hashForSection, routeFromHash, sectionFromHash } from './hash-section';
+import {
+  DEFAULT_SECTION,
+  SECTION_KEYS,
+  hashForSection,
+  routeFromHash,
+  sectionFromHash,
+} from './hash-section';
 
 describe('sectionFromHash', () => {
   it('falls back to the default section for an empty hash', () => {
@@ -9,6 +15,7 @@ describe('sectionFromHash', () => {
   it('resolves a well-formed `#/<section>` hash', () => {
     expect(sectionFromHash('#/reliability')).toBe('reliability');
     expect(sectionFromHash('#/approvals')).toBe('approvals');
+    expect(sectionFromHash('#/genui')).toBe('genui');
   });
 
   it('resolves a hash missing the leading slash', () => {
@@ -25,6 +32,12 @@ describe('sectionFromHash', () => {
 
   it('ignores a query tail when resolving the section', () => {
     expect(sectionFromHash('#/reliability?threadId=th2')).toBe('reliability');
+  });
+});
+
+describe('SECTION_KEYS', () => {
+  it('includes the Generative UI section', () => {
+    expect(SECTION_KEYS).toContain('genui');
   });
 });
 
@@ -59,6 +72,7 @@ describe('hashForSection', () => {
   it('renders the `#/<section>` href for a section key', () => {
     expect(hashForSection('reliability')).toBe('#/reliability');
     expect(hashForSection('spend')).toBe('#/spend');
+    expect(hashForSection('genui')).toBe('#/genui');
   });
 
   it('appends a query tail when params are given', () => {

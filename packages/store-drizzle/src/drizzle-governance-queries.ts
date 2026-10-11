@@ -3,6 +3,8 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   ApprovalWhere,
+  GenuiCallRow,
+  GenuiStats,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
@@ -39,6 +41,7 @@ import {
   bucketUsageTrend,
   dayBoundsUtc,
   rollupThreadUsage,
+  summarizeGenuiCalls,
   truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, sql, sum } from 'drizzle-orm';
@@ -53,6 +56,7 @@ import {
 } from './dialect.js';
 import {
   type AgentRunStatus,
+  agentGenuiCall,
   agentMessage,
   agentRun,
   agentThread,
@@ -106,6 +110,36 @@ function dayEndUtc(day: string): Date {
 /** An empty page for the given query's page/pageSize — the shape every paged read falls back to. */
 function emptyPage<TRow>(query: GovernancePageQuery<unknown>): GovernancePage<TRow> {
   return { rows: [], total: 0, page: query.page, pageSize: query.pageSize };
+}
+
+/** Map an `agent_genui_call` row onto the core row: a NULL column is an absent field. */
+function toGenuiCallRow(row: typeof agentGenuiCall.$inferSelect): GenuiCallRow {
+  return {
+    toolCallId: row.id,
+    runId: row.runId,
+    threadId: row.threadId,
+    actorRef: row.actorRef,
+    ...(row.agentName !== null ? { agentName: row.agentName } : {}),
+    step: Number(row.step),
+    toolName: row.toolName,
+    channel: row.channel,
+    mode: row.mode,
+    modelId: row.modelId,
+    attempt: Number(row.attempt),
+    outcome: row.outcome,
+    validity: row.validity,
+    ...(row.errorCategory !== null ? { errorCategory: row.errorCategory } : {}),
+    ...(row.errorMessage !== null ? { errorMessage: row.errorMessage } : {}),
+    inputTokens: Number(row.inputTokens),
+    outputTokens: Number(row.outputTokens),
+    ...(row.costUsd !== null ? { costUsd: Number(row.costUsd) } : {}),
+    ...(row.costSource !== null ? { costSource: row.costSource } : {}),
+    ...(row.firstFrameMs !== null ? { firstFrameMs: Number(row.firstFrameMs) } : {}),
+    ...(row.completeFrameMs !== null ? { completeFrameMs: Number(row.completeFrameMs) } : {}),
+    payloadBytes: Number(row.payloadBytes),
+    ...(row.payload !== null ? { payload: row.payload } : {}),
+    createdAt: new Date(Number(row.createdAt)),
+  };
 }
 
 /** Map a run row onto the SPI row. Shared by `recentRuns`/`runsPage`/`runDetail`/`threadDetail`. */
@@ -907,6 +941,17 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         };
       }),
     };
+  }
+
+  /** Generative-UI stats over the `agent_genui_call` rows created in the (UTC, inclusive) day range. */
+  async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
+    const { start, end } = dayBoundsUtc(range);
+    const table = this.t.agentGenuiCall;
+    const rows = await this.db
+      .select()
+      .from(table)
+      .where(and(gte(table.createdAt, start.getTime()), lte(table.createdAt, end.getTime())));
+    return summarizeGenuiCalls(rows.map(toGenuiCallRow));
   }
 
   /** Tool-call counts for a set of messages in ONE grouped query — the detail view's no-N+1 guarantee. */

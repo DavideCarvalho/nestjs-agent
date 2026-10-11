@@ -2,6 +2,7 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   ApprovalWhere,
+  GenuiStats,
   GovernancePage,
   GovernancePageQuery,
   GovernanceRange,
@@ -34,7 +35,9 @@ import {
   bucketByModel,
   bucketByThread,
   bucketUsageTrend,
+  genuiRowsInRange,
   rollupThreadUsage,
+  summarizeGenuiCalls,
   truncateDetailContent,
 } from '@dudousxd/nestjs-agent-core';
 import type {
@@ -372,6 +375,10 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
    * `p50ExecutionMs`/`p95ExecutionMs` are computed over calls that recorded a non-null `executionMs`
    * (regardless of their final status); both `null` when none did.
    */
+  async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
+    return summarizeGenuiCalls(genuiRowsInRange(this.store.genuiCallRows(), range));
+  }
+
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const byTool = new Map<
       string,

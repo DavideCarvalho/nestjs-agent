@@ -1,13 +1,16 @@
 import 'reflect-metadata';
 import { Agent, AiTool } from '@dudousxd/nestjs-agent';
 import {
+  AGENT_STORE,
   AGENT_TOOL_REGISTRY,
   type Actor,
   type ApprovalPolicy,
+  type InMemoryAgentStore,
   type MemoryProvider,
   type StoreMemoryInput,
   type ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
+import { defineCatalog, defineSandbox, genuiTools } from '@dudousxd/nestjs-agent-core/genui';
 import { Injectable } from '@nestjs/common';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -339,5 +342,46 @@ describe('openCode engine: the tools endpoint', () => {
     gate.release?.();
     const fs = await frames(h.service, runId);
     expect(fs).toContainEqual({ kind: 'ui', id: 'c1', component: 'Chart', props: { n: 1 } });
+  });
+
+  it("records genui telemetry for the UI calls OpenCode's code mode makes", async () => {
+    const { gate, script } = askThenHold();
+    h = await boot(script);
+    const registry = h.app.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+    for (const tool of genuiTools(defineCatalog([defineSandbox()]), {
+      componentTools: ['Sandbox'],
+    })) {
+      if (!registry.has(tool.spec.name)) registry.register(tool.spec, tool.handler);
+    }
+    const { runId } = await h.service.chat({ actor, message: 'no-ask' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'text');
+    const auth = registeredAuth(h);
+    const bad = await callTool(h, auth, 'ui__sandbox', {
+      html: '<button onclick="flippy.send({})">Go</button>',
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.content[0]?.text).toContain(
+      'html line 1:18: `flippy.send` — the bridge is `agent.send(payload)`',
+    );
+    const good = await callTool(h, auth, 'ui__sandbox', {
+      html: '<button onclick="agent.send({ text: \'go\' })">Go</button>',
+    });
+    expect(good.isError).not.toBe(true);
+    const store = h.app.get<InMemoryAgentStore>(AGENT_STORE);
+    await eventually(() => store.genuiCallRows().length === 2, 'two genui rows');
+    expect(store.genuiCallRows()).toEqual([
+      expect.objectContaining({
+        runId,
+        toolName: 'ui__sandbox',
+        mode: 'sandbox',
+        attempt: 1,
+        validity: 'failed',
+        errorCategory: 'bridge',
+        inputTokens: 0,
+      }),
+      expect.objectContaining({ runId, attempt: 2, validity: 'retried', outcome: 'ok' }),
+    ]);
+    expect(store.genuiCallRows()[1]).not.toHaveProperty('payload');
+    gate.release?.();
   });
 });

@@ -1,4 +1,5 @@
 import type { ToolCallOutcome } from '../dangling-tool-calls.js';
+import type { RecordGenuiCallInput } from '../genui-telemetry.js';
 import type { AgentUiComponent } from '../stream-events.js';
 import type { ToolConfirmation } from '../tool-presentation.js';
 import type {
@@ -428,6 +429,13 @@ export interface AgentStore {
   referencedMediaIds?(actorRef: string, mediaIds: readonly string[]): Promise<string[]>;
 
   recordUsage(input: RecordUsageInput): Promise<void>;
+  /**
+   * OPTIONAL: record generative-UI telemetry — one row per UI tool call (see `genui-telemetry`),
+   * keyed by `toolCallId` (recording the same call again replaces its row). Metadata only unless
+   * the tool samples payloads. The loop calls it best-effort: a failure is swallowed, never the
+   * turn's. A store without it records nothing.
+   */
+  recordGenuiCalls?(rows: readonly RecordGenuiCallInput[]): Promise<void>;
   /**
    * The actor's spend for `day` (UTC): total tokens plus the summed USD cost of its usage rows,
    * provider-reported and estimated (see {@link UsageTotals}). `costUsd` is `0` when no row on that day

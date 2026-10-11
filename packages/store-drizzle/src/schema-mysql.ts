@@ -17,7 +17,14 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { AgentHostContext, CostSource } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentHostContext,
+  CostSource,
+  GenuiErrorCategory,
+  GenuiToolMarker,
+  GenuiValidity,
+  RecordGenuiCallInput,
+} from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   bigint,
@@ -174,6 +181,47 @@ export const agentTokenUsage = mysqlTable(
     createdAt: ts('created_at').notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],
+);
+
+/**
+ * Generative-UI telemetry (`AgentStore.recordGenuiCalls`): one row per UI tool call, keyed by the
+ * tool call's id, so a replayed record replaces rather than duplicates. Metadata only — `payload`
+ * (the call's arguments) is filled solely when the tool samples payloads. `created_at` is epoch-ms.
+ */
+export const agentGenuiCall = mysqlTable(
+  'agent_genui_call',
+  {
+    id: key('id').primaryKey(),
+    runId: key('run_id').notNull(),
+    threadId: key('thread_id')
+      .notNull()
+      .references(() => agentThread.id, { onDelete: 'cascade' }),
+    actorRef: key('actor_ref').notNull(),
+    agentName: key('agent_name'),
+    step: int('step').notNull(),
+    toolName: key('tool_name').notNull(),
+    channel: key('channel').notNull(),
+    mode: key('mode').$type<GenuiToolMarker['mode']>().notNull(),
+    modelId: key('model_id').notNull(),
+    attempt: int('attempt').notNull(),
+    outcome: key('outcome').$type<RecordGenuiCallInput['outcome']>().notNull(),
+    validity: key('validity').$type<GenuiValidity>().notNull(),
+    errorCategory: key('error_category').$type<GenuiErrorCategory>(),
+    errorMessage: longtext('error_message'),
+    inputTokens: int('input_tokens').notNull(),
+    outputTokens: int('output_tokens').notNull(),
+    costUsd: double('cost_usd'),
+    costSource: varchar('cost_source', { length: 16 }).$type<CostSource>(),
+    firstFrameMs: bigint('first_frame_ms', { mode: 'number' }),
+    completeFrameMs: bigint('complete_frame_ms', { mode: 'number' }),
+    payloadBytes: int('payload_bytes').notNull(),
+    payload: longtext('payload'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    index('agent_genui_call_created_idx').on(table.createdAt),
+    index('agent_genui_call_run_idx').on(table.runId),
+  ],
 );
 
 export const agentModelPricing = mysqlTable('agent_model_pricing', {
@@ -356,6 +404,7 @@ export const mysqlAgentSchema = {
   agentQueuedMessage,
   agentToolCall,
   agentTokenUsage,
+  agentGenuiCall,
   agentModelPricing,
   agentRun,
   agentMemory,

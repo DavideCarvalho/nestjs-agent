@@ -16,7 +16,14 @@ import type {
   ToolResult,
   UsagePurpose,
 } from '@dudousxd/nestjs-agent-core';
-import type { AgentHostContext, CostSource } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentHostContext,
+  CostSource,
+  GenuiErrorCategory,
+  GenuiToolMarker,
+  GenuiValidity,
+  RecordGenuiCallInput,
+} from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
   index,
@@ -206,6 +213,47 @@ export const agentTokenUsage = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],
+);
+
+/**
+ * Generative-UI telemetry (`AgentStore.recordGenuiCalls`): one row per UI tool call, keyed by the
+ * tool call's id, so a replayed record replaces rather than duplicates. Metadata only — `payload`
+ * (the call's arguments) is filled solely when the tool samples payloads. `created_at` is epoch-ms.
+ */
+export const agentGenuiCall = sqliteTable(
+  'agent_genui_call',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id').notNull(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => agentThread.id, { onDelete: 'cascade' }),
+    actorRef: text('actor_ref').notNull(),
+    agentName: text('agent_name'),
+    step: integer('step').notNull(),
+    toolName: text('tool_name').notNull(),
+    channel: text('channel').notNull(),
+    mode: text('mode').$type<GenuiToolMarker['mode']>().notNull(),
+    modelId: text('model_id').notNull(),
+    attempt: integer('attempt').notNull(),
+    outcome: text('outcome').$type<RecordGenuiCallInput['outcome']>().notNull(),
+    validity: text('validity').$type<GenuiValidity>().notNull(),
+    errorCategory: text('error_category').$type<GenuiErrorCategory>(),
+    errorMessage: text('error_message'),
+    inputTokens: integer('input_tokens').notNull(),
+    outputTokens: integer('output_tokens').notNull(),
+    costUsd: real('cost_usd'),
+    costSource: text('cost_source').$type<CostSource>(),
+    firstFrameMs: integer('first_frame_ms'),
+    completeFrameMs: integer('complete_frame_ms'),
+    payloadBytes: integer('payload_bytes').notNull(),
+    payload: text('payload'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    index('agent_genui_call_created_idx').on(table.createdAt),
+    index('agent_genui_call_run_idx').on(table.runId),
+  ],
 );
 
 /** Per-model token pricing, versioned by `effectiveFrom`; `isCurrent` flags the live row. */
@@ -461,6 +509,7 @@ export const agentSchema = {
   agentQueuedMessage,
   agentToolCall,
   agentTokenUsage,
+  agentGenuiCall,
   agentModelPricing,
   agentRun,
   agentMemory,

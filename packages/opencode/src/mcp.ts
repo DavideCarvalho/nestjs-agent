@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type Actor,
+  GenuiRunRecorder,
   REMEMBER_TOOL_DESCRIPTION,
   REMEMBER_TOOL_NAME,
   type RememberToolInput,
@@ -9,6 +10,7 @@ import {
   rememberInputSchema,
   schemaExtensionOf,
 } from '@dudousxd/nestjs-agent-core';
+import { turnChannel } from '@dudousxd/nestjs-agent-core/genui';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AnyObjectSchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
@@ -144,6 +146,9 @@ export class OpenCodeToolRefusedError extends Error {
  *   `ctx` is the turn's (thread, run, `emitUi` into its stream and message).
  */
 export class OpenCodeMcpEndpoint {
+  /** Genui telemetry of the UI calls OpenCode makes (its code mode calls tools here, not in the loop). */
+  private readonly genui = new GenuiRunRecorder();
+
   constructor(
     private readonly turns: OpenCodeTurns,
     private readonly tokens: OpenCodeToolsTokens,
@@ -271,21 +276,36 @@ export class OpenCodeMcpEndpoint {
         `"${name}" is an action and nobody approved this call; ask for the permission first.`,
       );
     }
-    return registry.invoke(
-      name,
-      args ?? {},
+    const invoke = () =>
+      registry.invoke(
+        name,
+        args ?? {},
+        {
+          actor,
+          threadId: turn.ctx.threadId,
+          runId: turn.runId,
+          requestId: `mcp:${turn.runId}:${requestId}`,
+          emitUi: turn.ctx.emitUi,
+          ...(turn.input.agentName !== undefined ? { agentName: turn.input.agentName } : {}),
+          ...(turn.input.persona !== undefined ? { persona: turn.input.persona } : {}),
+          ...(turn.input.pageContext !== undefined ? { pageContext: turn.input.pageContext } : {}),
+        },
+        this.turns.rolesPolicyFor(turn.input),
+        allowed !== undefined ? { allowedTools: allowed } : {},
+      );
+    return this.genui.track(
       {
-        actor,
-        threadId: turn.ctx.threadId,
+        store: this.turns.store,
+        marker: spec.genui,
         runId: turn.runId,
-        requestId: `mcp:${turn.runId}:${requestId}`,
-        emitUi: turn.ctx.emitUi,
+        threadId: turn.ctx.threadId,
+        actorRef: actor.id,
         ...(turn.input.agentName !== undefined ? { agentName: turn.input.agentName } : {}),
-        ...(turn.input.persona !== undefined ? { persona: turn.input.persona } : {}),
-        ...(turn.input.pageContext !== undefined ? { pageContext: turn.input.pageContext } : {}),
+        channel: turnChannel(turn.input.pageContext),
+        modelId: turn.input.model ?? 'opencode',
+        call: { id: `mcp:${turn.runId}:${requestId}`, name, input: args ?? {} },
       },
-      this.turns.rolesPolicyFor(turn.input),
-      allowed !== undefined ? { allowedTools: allowed } : {},
+      invoke,
     );
   }
 

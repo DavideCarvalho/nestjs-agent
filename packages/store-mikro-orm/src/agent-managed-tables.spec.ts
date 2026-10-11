@@ -7,6 +7,7 @@ describe('agentManagedTables', () => {
       'agent_action_proposal',
       'agent_channel_state',
       'agent_confirm_token',
+      'agent_genui_call',
       'agent_memory',
       'agent_message',
       'agent_model_pricing',

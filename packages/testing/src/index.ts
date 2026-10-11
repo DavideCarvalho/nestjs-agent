@@ -80,3 +80,8 @@ export {
   type BlankAssistantHistoryContractCase,
   type BlankAssistantHistoryContractSubject,
 } from './blank-assistant-history-contract.js';
+export {
+  GENUI_TELEMETRY_STORE_CONTRACT,
+  type GenuiTelemetryStoreContractCase,
+  type GenuiTelemetryStoreContractSubject,
+} from './genui-telemetry-store-contract.js';

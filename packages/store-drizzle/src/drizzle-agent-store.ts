@@ -15,6 +15,7 @@ import {
   type QueuePause,
   type QueuedMessage,
   type QueuedMessagePatch,
+  type RecordGenuiCallInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -60,6 +61,7 @@ import {
   agentDialectOf,
   agentTablesFor,
   asBuilder,
+  upsert,
 } from './dialect.js';
 import { DrizzleActionProposalStore } from './drizzle-action-proposal-store.js';
 import {
@@ -1139,6 +1141,46 @@ export class DrizzleAgentStore
       costSource: input.costUsd !== undefined ? (input.costSource ?? 'provider') : null,
       createdAt: new Date(),
     });
+  }
+
+  /**
+   * Generative-UI telemetry: one `agent_genui_call` row per UI tool call, upserted by its tool call
+   * id — a replayed record replaces the row (keeping the first `created_at`) rather than adding one.
+   */
+  async recordGenuiCalls(rows: readonly RecordGenuiCallInput[]): Promise<void> {
+    const table = this.t.agentGenuiCall;
+    for (const row of rows) {
+      const columns = {
+        runId: row.runId,
+        threadId: row.threadId,
+        actorRef: row.actorRef,
+        agentName: row.agentName ?? null,
+        step: row.step,
+        toolName: row.toolName,
+        channel: row.channel,
+        mode: row.mode,
+        modelId: row.modelId,
+        attempt: row.attempt,
+        outcome: row.outcome,
+        validity: row.validity,
+        errorCategory: row.errorCategory ?? null,
+        errorMessage: row.errorMessage ?? null,
+        inputTokens: row.inputTokens,
+        outputTokens: row.outputTokens,
+        costUsd: row.costUsd ?? null,
+        costSource: row.costSource ?? null,
+        firstFrameMs: row.firstFrameMs ?? null,
+        completeFrameMs: row.completeFrameMs ?? null,
+        payloadBytes: row.payloadBytes,
+        payload: row.payload ?? null,
+      };
+      await upsert(
+        this.dialect,
+        this.db.insert(table).values({ id: row.toolCallId, ...columns, createdAt: Date.now() }),
+        table.id,
+        columns,
+      );
+    }
   }
 
   async quotaToday(actorRef: string, day: string): Promise<UsageTotals> {

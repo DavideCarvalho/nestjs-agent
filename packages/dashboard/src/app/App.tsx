@@ -6,6 +6,7 @@ import { LiveSection } from './LiveSection';
 import { SectionBoundary } from './SectionBoundary';
 import { ActorsContainer } from './containers/ActorsContainer';
 import { ApprovalsContainer } from './containers/ApprovalsContainer';
+import { GenuiContainer } from './containers/GenuiContainer';
 import { ModelsContainer } from './containers/ModelsContainer';
 import { PricingContainer } from './containers/PricingContainer';
 import { ReliabilityContainer } from './containers/ReliabilityContainer';
@@ -20,6 +21,7 @@ import {
   ChipIcon,
   DollarIcon,
   InboxIcon,
+  LayoutIcon,
   LogoMark,
   ShieldIcon,
   TagIcon,
@@ -43,6 +45,7 @@ const NAV: { key: SectionKey; label: string; icon: ReactNode }[] = [
   { key: 'reliability', label: 'Reliability', icon: <ShieldIcon /> },
   { key: 'approvals', label: 'Approvals', icon: <InboxIcon /> },
   { key: 'tools', label: 'Tools', icon: <WrenchIcon /> },
+  { key: 'genui', label: 'Generative UI', icon: <LayoutIcon /> },
   { key: 'pricing', label: 'Pricing', icon: <TagIcon /> },
   { key: 'live', label: 'Live', icon: <ActivityIcon /> },
 ];
@@ -190,6 +193,8 @@ function ActiveSection({
       return <ApprovalsContainer />;
     case 'tools':
       return <ToolsContainer range={range} />;
+    case 'genui':
+      return <GenuiContainer range={range} />;
     case 'pricing':
       return <PricingContainer />;
     // The live feed has no container: its subscription belongs to the shell (see `App`), so this

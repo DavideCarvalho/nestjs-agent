@@ -139,6 +139,15 @@ export function CalendarIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   );
 }
+/** Generative UI: a window frame with a generated layout (a header block and two panels). */
+export function LayoutIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props} aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18M10 9v11M13.5 13h4M13.5 16h2.5" />
+    </svg>
+  );
+}
 
 /** The console brand mark — a governed-gateway glyph (a diamond gateway with a routed path). */
 export function LogoMark({ className }: { className?: string }) {

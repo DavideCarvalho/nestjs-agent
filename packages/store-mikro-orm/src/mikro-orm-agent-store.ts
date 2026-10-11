@@ -8,6 +8,7 @@ import type {
   ActionProposalStore,
   ActionProposalStoreOptions,
   ActionProposalWorkerStore,
+  RecordGenuiCallInput,
 } from '@dudousxd/nestjs-agent-core';
 import {
   type AgentStore,
@@ -42,6 +43,7 @@ import {
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
 import { type EntityManager, QueryOrder, raw } from '@mikro-orm/core';
+import { AgentGenuiCall } from './entities/agent-genui-call.entity';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentQueuedMessage } from './entities/agent-queued-message.entity';
 import { AgentRun } from './entities/agent-run.entity';
@@ -1093,6 +1095,47 @@ export class MikroOrmAgentStore
       }
     }
     return [...wanted].filter((mediaId) => found.has(mediaId));
+  }
+
+  /**
+   * Generative-UI telemetry: one `agent_genui_call` row per UI tool call, upserted by its tool call
+   * id — a replayed record replaces the row (keeping the first `created_at`) rather than adding one.
+   */
+  async recordGenuiCalls(rows: readonly RecordGenuiCallInput[]): Promise<void> {
+    if (rows.length === 0) return;
+    const em = this.em.fork();
+    for (const row of rows) {
+      await em.upsert(
+        AgentGenuiCall,
+        {
+          id: row.toolCallId,
+          runId: row.runId,
+          thread: row.threadId,
+          actorRef: row.actorRef,
+          agentName: row.agentName ?? null,
+          step: row.step,
+          toolName: row.toolName,
+          channel: row.channel,
+          mode: row.mode,
+          modelId: row.modelId,
+          attempt: row.attempt,
+          outcome: row.outcome,
+          validity: row.validity,
+          errorCategory: row.errorCategory ?? null,
+          errorMessage: row.errorMessage ?? null,
+          inputTokens: row.inputTokens,
+          outputTokens: row.outputTokens,
+          costUsd: row.costUsd ?? null,
+          costSource: row.costSource ?? null,
+          firstFrameMs: row.firstFrameMs ?? null,
+          completeFrameMs: row.completeFrameMs ?? null,
+          payloadBytes: row.payloadBytes,
+          payload: row.payload ?? null,
+          createdAt: Date.now(),
+        },
+        { onConflictExcludeFields: ['createdAt'] },
+      );
+    }
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {

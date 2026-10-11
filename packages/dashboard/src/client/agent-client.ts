@@ -351,6 +351,85 @@ export interface SpendOverview {
   trend: UsageTrendPoint[];
 }
 
+// ─── Generative UI telemetry ────────────────────────────────────────────────
+//
+// Mirrors core's `GenuiStats` (`genui-telemetry.ts`) — one row per UI tool call (`ui__render`,
+// `ui__sandbox`, `ui__show_*`), aggregated by the store's `genuiStats`.
+
+/** First-try success for one UI tool and model over a range. */
+export interface GenuiToolModelRow {
+  toolName: string;
+  modelId: string;
+  mode: string;
+  calls: number;
+  /** Turns whose first UI attempt used this tool. */
+  firstAttempts: number;
+  firstTrySuccesses: number;
+  /** `firstTrySuccesses / firstAttempts`; null when there is none. */
+  firstTryRate: number | null;
+  retried: number;
+  failed: number;
+  costUsd: number | null;
+}
+
+/** One recurring UI-tool error (category + scrubbed message) over a range. */
+export interface GenuiErrorRow {
+  category: string;
+  /** The (scrubbed) message, as recorded. */
+  message: string;
+  toolName: string;
+  count: number;
+  /** ISO timestamp of the most recent occurrence. */
+  lastAt: string;
+}
+
+/** One day of UI-tool calls. */
+export interface GenuiDayRow {
+  day: string;
+  calls: number;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  firstTryRate: number | null;
+}
+
+/** A latency distribution, per turn. */
+export interface GenuiLatency {
+  samples: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+}
+
+/** The `GET <api>/genui` response — what the Generative UI section shows. */
+export interface GenuiStats {
+  totals: {
+    calls: number;
+    turns: number;
+    firstAttempts: number;
+    firstTrySuccesses: number;
+    firstTryRate: number | null;
+    retried: number;
+    failed: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number | null;
+  };
+  byToolModel: GenuiToolModelRow[];
+  /** Most frequent first, at most 20. */
+  errors: GenuiErrorRow[];
+  byDay: GenuiDayRow[];
+  /** UI cost per turn (turns with at least one UI call). */
+  costPerTurn: {
+    turns: number;
+    avgUsd: number | null;
+    p50Usd: number | null;
+    p95Usd: number | null;
+  };
+  /** Per turn: turn start → its first UI frame, and → the first complete frame of an accepted call. */
+  latency: { firstFrame: GenuiLatency; complete: GenuiLatency };
+}
+
 /** One live agent event forwarded over SSE. */
 export interface LiveAgentEvent {
   event: string;
@@ -472,6 +551,14 @@ export const agentClient = {
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
     return http<ToolStatRow[]>(`/tools?${q.toString()}`);
+  },
+  /**
+   * Generative-UI telemetry for a day range (the Generative UI section). 501s (a plain `Error`
+   * whose message starts with `501`) when the host's store does not record UI-tool telemetry.
+   */
+  genuiStats(range: GovernanceRange): Promise<GenuiStats> {
+    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
+    return http<GenuiStats>(`/genui?${q.toString()}`);
   },
   /** Most recent threads (default 50). */
   threads(limit = 50): Promise<ThreadActivityRow[]> {

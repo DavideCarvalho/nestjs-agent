@@ -5,6 +5,7 @@ import type {
   GenuiCatalogScope,
   GenuiChannels,
   GenuiStreaming,
+  GenuiTelemetryOptions,
   GenuiToolsOptions,
   SandboxClientConfig,
   TreeLimits,
@@ -145,6 +146,14 @@ export interface AgentGenuiOptions {
    * manifest — in production the manifest first, otherwise whichever was written last.
    */
   sandboxKit?: AgentGenuiSandboxKitOptions;
+  /**
+   * Generative-UI telemetry, recorded by the loop for every UI call (the dashboard's "Generative UI"
+   * page): tool, channel, mode, attempt, validity, error category, tokens and cost, time to first and
+   * complete frame. Metadata only by default — the generated HTML/JSX and props are NEVER stored
+   * unless `samplePayloads: true` (debugging; keep it off where a view may show personal data).
+   * `false` records nothing. Needs a store that records it (`recordGenuiCalls`).
+   */
+  telemetry?: GenuiTelemetryOptions | false;
 }
 
 /** {@link AgentGenuiOptions.sandboxKit}. Relative paths resolve against `root`. */

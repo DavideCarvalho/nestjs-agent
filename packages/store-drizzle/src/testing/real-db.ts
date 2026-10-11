@@ -118,6 +118,7 @@ const RESET_ORDER = [
   'agent_message',
   'agent_queued_message',
   'agent_token_usage',
+  'agent_genui_call',
   'agent_run',
   'agent_thread',
   'agent_model_pricing',
