@@ -30,6 +30,9 @@ const external = [
   '@json-render/react',
   '@json-render/core',
   '@dudousxd/nestjs-media-client',
+  // The React Native entry's optional peers.
+  'react-native',
+  'react-native-webview',
 ];
 
 // JSX compiles to the automatic runtime (`react/jsx-runtime`), never to `React.createElement`: a
@@ -53,6 +56,7 @@ export default defineConfig([
       'genui-server-playwright': 'src/genui/playwright.ts',
       'genui-json-render': 'src/genui/json-render.tsx',
       media: 'src/media/index.ts',
+      'react-native-genui': 'src/react-native/genui/index.ts',
     },
     format: ['esm'],
     dts: true,
@@ -72,6 +76,7 @@ export default defineConfig([
       'genui-server-playwright': 'src/genui/playwright.ts',
       'genui-json-render': 'src/genui/json-render.tsx',
       media: 'src/media/index.ts',
+      'react-native-genui': 'src/react-native/genui/index.ts',
     },
     format: ['cjs'],
     dts: true,

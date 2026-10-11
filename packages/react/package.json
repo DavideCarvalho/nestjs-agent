@@ -97,6 +97,16 @@
         "types": "./dist/genui-server-playwright.d.cts",
         "default": "./dist/genui-server-playwright.cjs"
       }
+    },
+    "./react-native/genui": {
+      "import": {
+        "types": "./dist/react-native-genui.d.ts",
+        "default": "./dist/react-native-genui.js"
+      },
+      "require": {
+        "types": "./dist/react-native-genui.d.cts",
+        "default": "./dist/react-native-genui.cjs"
+      }
     }
   },
   "files": [
@@ -125,6 +135,8 @@
     "react": ">=18",
     "react-dom": ">=18",
     "react-markdown": "^10.1.0",
+    "react-native": ">=0.74",
+    "react-native-webview": ">=13",
     "rehype-katex": "^7.0.1",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
@@ -180,6 +192,12 @@
     },
     "playwright-core": {
       "optional": true
+    },
+    "react-native": {
+      "optional": true
+    },
+    "react-native-webview": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -204,6 +222,8 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-markdown": "10.1.0",
+    "react-native": "0.87.1",
+    "react-native-webview": "14.0.1",
     "rehype-katex": "7.0.1",
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",

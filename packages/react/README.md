@@ -489,6 +489,22 @@ provider's settings; wrap it in `<GenerativeUIScope>` when it may draw a tree.
 draws tree frames through json-render's `Renderer`. `JsonRenderTree`, `jsonRenderTree`,
 `toJsonRenderRegistry` and `treeToJsonRenderSpec` are exported for hand wiring.
 
+**React Native** (optional peers `react-native` >= 0.74, `react-native-webview` >= 13): import from
+`@dudousxd/nestjs-agent-react/react-native/genui`. `createNativeSandboxRenderer(options)` draws the
+sandbox component in a hardened `react-native-webview` (the web iframe's document and CSP, the same
+checked `agent.send` bridge, sized to its content, the app's tokens as CSS variables), and the entry
+re-exports the React Native-safe provider and components — `/genui` itself is not safe to load in
+React Native (its iframe renderer's assets module calls `window.addEventListener` as it loads).
+
+```tsx
+import { createNativeSandboxRenderer, GenuiProvider } from '@dudousxd/nestjs-agent-react/react-native/genui';
+
+const Sandbox = createNativeSandboxRenderer({ theme: { vars: tokens }, baseUrl: 'https://api.example.com/agent' });
+<GenuiProvider registry={{ Sandbox }} onAction={chat.sendUiAction}>…</GenuiProvider>;
+```
+
+See the [Sandbox in React Native guide](https://davidecarvalho.github.io/aviary/docs/agent/guides/generative-ui-sandbox-react-native).
+
 ### Designed components, as copy-in source
 
 `MessageList`/`MessageItem`/`ChatInput` are deliberately minimal. For a styled, accessible chat
