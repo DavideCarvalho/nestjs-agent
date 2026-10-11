@@ -158,6 +158,7 @@ What it returns, on top of the AI SDK chat (`messages`, `status`, `sendMessage`,
 | `models` | `{ list, providers, selected, pinned, defaultModel, locked, select(id), pinToThread(id), isLoading, error }` — fetched on first read. |
 | `threadPersona` | The persona pinned on the thread, or `null`. |
 | `proposals` | `{ items, error, refresh() }` — the thread's action proposals, already merged into `messages`. |
+| `followServerTurn()` | Look for a turn the server started on this thread (after an action's outcome — a sign-in finished elsewhere continues the request) and stream it. Called on its own when `proposals` sees a new outcome; see [Turns the server continues](#turns-the-server-continues). |
 | `quota` / `blocked` | The `useQuota` state; the window blocking sends right now. |
 | `approve` / `reject` / `answer` / `skip` | `({ toolCallId, … })` — routed by tool-call id, or by `target` for an action proposal. |
 | `fork` / `truncateFrom` / `promote` | `({ messageId, threadId? })` / `({ threadId? })` — default to this chat's thread. |
@@ -429,15 +430,27 @@ and the chat can take the next message while the decision waits. `useAgentChat` 
 - the assistant message the server writes with the outcome is appended to `messages` when it lands,
   without replacing what is on screen.
 
+### Turns the server continues
+
+The server may go on from an action's outcome with a turn this chat did not start — a sign-in
+completed at a link card's link continues the request. When `proposals` reads an outcome newly
+written to the thread (not one already there on the thread's first read), the chat calls
+`followServerTurn()`: it reads the thread for a few seconds (8 reads, 750 ms apart); a running turn
+found → its stream is attached to, then the thread is shown as stored (the turn's own user message
+included); a turn already over → the stored thread is shown. It does nothing while a turn of the
+chat's own is streaming. A chat with its own proposals list (not the hook's) calls
+`chat.followServerTurn()` when one of the thread's actions settles.
+
 A whole-message decision command the server recognises (`yes`, `approve`, `reject`, … with an
 optional `#ID`; see [Action proposals](/docs/agent/guides/action-proposals#text) for the words and
 the Portuguese preset) is settled without a model turn: it comes back as a short assistant text, and the
 proposals are re-read.
 
 For a chat not built on `useAgentChat` (the SDK's `useChat` over `AgentChatTransport`),
-`useActionProposals(backend, threadId, setMessages, refreshKey, pollMs?)` is the same
+`useActionProposals(backend, threadId, setMessages, refreshKey, pollMs?, onAdmitted?)` is the same
 reconciliation as a hook — `refreshKey` is any string that changes when a turn ends (`useAgentChat`
-passes its status and connection state) — and
+passes its status and connection state); `onAdmitted(proposalIds)` is told of outcomes newly
+written to the thread after its first read — and
 `reconcileProposalMessages(messages, proposals, facts)` / `proposalNeedsPolling(proposal)` are the
 pure pieces under it. See [Action proposals](/docs/agent/guides/action-proposals).
 

@@ -1,4 +1,5 @@
-import { type DynamicModule, Module } from '@nestjs/common';
+import { AGENT_CHANNEL_FOLLOWER } from '@dudousxd/nestjs-agent-core';
+import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { RouterModule } from '@nestjs/core';
 import { AgentChannelsController } from './agent-channels.controller.js';
 import type {
@@ -7,6 +8,12 @@ import type {
 } from './agent-channels.options.js';
 import { AgentChannelsService } from './agent-channels.service.js';
 import { AGENT_CHANNELS_OPTIONS } from './tokens.js';
+
+/**
+ * The channels as the follower another module (one that continues turns on the server) injects with
+ * `@Optional() @Inject(AGENT_CHANNEL_FOLLOWER)` — global, so it needs no import of this package.
+ */
+const FOLLOWER: Provider = { provide: AGENT_CHANNEL_FOLLOWER, useExisting: AgentChannelsService };
 
 /** Route the webhooks mount under when `path` is omitted. */
 const DEFAULT_PATH = 'channels';
@@ -41,14 +48,20 @@ export class AgentChannelsModule {
       module: AgentChannelsModule,
       imports: routing(path),
       controllers: path === false ? [] : [AgentChannelsController],
-      providers: [{ provide: AGENT_CHANNELS_OPTIONS, useValue: rest }, AgentChannelsService],
-      exports: [AgentChannelsService],
+      global: true,
+      providers: [
+        { provide: AGENT_CHANNELS_OPTIONS, useValue: rest },
+        AgentChannelsService,
+        FOLLOWER,
+      ],
+      exports: [AgentChannelsService, AGENT_CHANNEL_FOLLOWER],
     };
   }
 
   static forRootAsync(options: AgentChannelsModuleAsyncOptions): DynamicModule {
     return {
       module: AgentChannelsModule,
+      global: true,
       imports: [...routing(options.path), ...(options.imports ?? [])],
       controllers: options.path === false ? [] : [AgentChannelsController],
       providers: [
@@ -58,8 +71,9 @@ export class AgentChannelsModule {
           inject: options.inject ?? [],
         },
         AgentChannelsService,
+        FOLLOWER,
       ],
-      exports: [AgentChannelsService],
+      exports: [AgentChannelsService, AGENT_CHANNEL_FOLLOWER],
     };
   }
 }

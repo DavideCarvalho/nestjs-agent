@@ -93,7 +93,7 @@ function CustomChat({ threadId }: { threadId?: string }) {
 
 `chat` is the AI SDK v7 `useChat` return value (`messages`, `status`, `sendMessage`, `stop`, `error`,
 …) spread together with the agent extras: `transcript`, `composer`, `queue`, `models`, `quota` /
-`blocked`, `proposals`, `runId` / `activeRunId`, `runError`, `backend`, `fork` / `truncateFrom` /
+`blocked`, `proposals`, `followServerTurn`, `runId` / `activeRunId`, `runError`, `backend`, `fork` / `truncateFrom` /
 `promote`, `cancel`, HITL `approve` / `reject` / `answer` / `skip`, and `regenerate` — see [Frontend](/docs/agent/guides/frontend#useagentchat).
 The connection (`baseUrl`, `path`, headers, credentials) lives on `<AgentProvider>`.
 

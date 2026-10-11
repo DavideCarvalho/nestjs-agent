@@ -392,6 +392,16 @@ tool's preflight or presentation gave it) after the reply:
 5 minutes." — as the provider's footer where it has one (Evolution/Whatsmiau `sendButtons`, the Cloud
 API's interactive message), else under the text; the text fallback ends with it too.
 
+### Link cards
+
+A card whose action is opening a link — its confirmation sets `link` (`ToolConfirmation.link`, e.g. a
+sign-in at another service) — is sent as **one text message**: the summary (`texts.proposal`) with
+the full link appended unless the summary already shows it, then `texts.linkInstruction` ("Open the
+link to continue." / "Abra o link para continuar."), then — when the proposal expires —
+`texts.linkValidity(minutes)` ("The link works for up to 15 minutes." / "O link vale por até 15
+minutos.", from the approval's `expiresAt`). No buttons, no reply commands, no footer: finishing at
+the link decides it, so the card is not remembered for text decisions and a "yes" decides nothing.
+
 ### Text decisions are scoped to the conversation
 
 A text decision on a channel — "yes", "no #ID", a button label typed or forwarded without its id —
@@ -445,6 +455,26 @@ conversation. Proposals from other surfaces (no `channel`) and channels this pro
 are ignored, so it is safe next to a web chat. The route's own wait and the settled hook claim the
 same key in the channel store, so an outcome is sent once even when both see it — across replicas
 too, with a shared store.
+
+### Turns the server continues
+
+A turn the channel did not start — the server continued the conversation on its own, e.g. after a
+sign-in completed at a link card's link — is delivered with
+`AgentChannelsService.follow(address, { runId, threadId, actor })`: `address` is the channel address
+the conversation's turns carry (`pageContext.channel`, `{ name, conversation, … }`). The run's stream
+is read and delivered like a turn's (a resume-style job: durably under a durable engine, in order with
+the conversation's messages), once per `runId` however often it is asked. It answers `false` when no
+channel of that name is mounted in this process.
+
+The module binds the service to `AGENT_CHANNEL_FOLLOWER` (from `@dudousxd/nestjs-agent-core`), global,
+so the code that continues turns needs no import of this package:
+
+```ts
+constructor(@Optional() @Inject(AGENT_CHANNEL_FOLLOWER) private readonly follower?: ChannelFollower) {}
+
+// after starting the continued turn
+await this.follower?.follow(proposal.executionContext?.pageContext?.channel, { runId, threadId, actor });
+```
 
 <Callout type="info" title="Where the worker runs">
 The worker runs in every replica except those with `surface: 'http'`. Import `AgentChannelsModule`
@@ -610,6 +640,7 @@ Generic hooks for what an app does around the conversation — each optional, pe
 | `canDeliver(delivery)` | before **every** message sent — replies, cards, questions, relayed outcomes | `false` drops it. `delivery` has the `conversation`, the `outbound` message, `kind` (`reply`, `card`, `question`, `outcome`, `gate`, `notice`), the `actor` / `actorRef`, the inbound `message` and the `proposal`. Re-check that the number still belongs to the account. |
 | `texts` as a function | per message (and per relayed outcome) | the texts for `{ actor, message, proposal }` — the actor's locale. |
 | `onTurnStarted({ runId, threadId, actor, message, queued })` | a message started (or queued) a turn | — record its channel, start a meter. |
+| `onTurnEnded({ channel, conversation, actor, message, runId, threadId, outcome, error })` | **always**, once this process is done with a message (or with a run read without one: resumed after its question, or [followed](#turns-the-server-continues)), whatever it came to | — stop what you started for it (a "typing…" presence, a meter). `outcome`: `replied` (the stream ended — possibly having sent nothing), `failed` (a failed turn, or the job failed after its retries: `error` set), `timeout`, `blocked`, `parked` (waits for an answer; the resumed run ends with its own call, `message: null`), `stopped` (unknown sender or `beforeTurn` — no turn), `handled` (an answer, a press, a decision — no turn to read), `interrupted` (a durable engine took the job away mid-way). Per attempt: a durable job that runs again (a crash, a lease taken over) tells each process that ran it. Not called for a question's timer itself. What it throws is logged and ignored. |
 | `uiCapabilities` + `renderComponent(component, context)` | a component the turn drew | a file (a chart as an image), text, several, or nothing for its `fallbackText`. |
 | `mediaLimits`, `prepareMedia`, `transformInbound` | an inbound file / the message going to the agent | see [Media](#media). |
 | `formatOutcome(proposal, { text, texts })` | an executed proposal | the outcome and its follow-ups, in order. See [Proposals](#proposals-buttons-and-text). |
@@ -631,6 +662,7 @@ A hook's reply (`ChannelReply`) is a string in the model's markdown (converted a
     (await accounts.actorFor(phoneOf(conversation)))?.id === (actor?.id ?? actorRef),
   texts: ({ actor }) => textsIn(localeOf(actor)),
   onTurnStarted: ({ runId }) => usage.recordChannel(runId, 'whatsapp'),
+  onTurnEnded: ({ conversation }) => presence.stopTyping(conversation), // started in `acknowledge`
   onWebhook: ({ status, reason }) => health.record(status, reason),
   thread,
 }
@@ -690,7 +722,7 @@ Each channel:
 | `actor(message)` | — | The sender's `Actor`, or `null` to not answer. This is the authentication of every message. |
 | `thread(actor, message)` | — | The thread to continue, or `null`/`undefined` for a new one. |
 | `onThreadCreated(threadId, actor, message)` | — | A new thread was created for the conversation. |
-| `unknownSender`, `beforeTurn`, `canDeliver`, `onTurnStarted`, `renderComponent`, `mediaLimits`, `prepareMedia`, `transformInbound`, `formatOutcome`, `onWebhook` | — | See [Hooks](#hooks). |
+| `unknownSender`, `beforeTurn`, `canDeliver`, `onTurnStarted`, `onTurnEnded`, `renderComponent`, `mediaLimits`, `prepareMedia`, `transformInbound`, `formatOutcome`, `onWebhook` | — | See [Hooks](#hooks). |
 | `retry` | 3 attempts, from 1 s | `{ attempts, backoffMs, maxBackoffMs, retryable(error) }` per phase. |
 | `allowRemember` | `true` | `false` refuses "always in this conversation" in text decisions. |
 | `uiCapabilities` | `{ components: [] }` | What the turn may draw (with `renderComponent`). |
@@ -700,7 +732,7 @@ Each channel:
 | `timeoutMs` | 5 min | Stop waiting for a turn, cancel it and send what it produced. |
 | `outcomeTimeoutMs` | 60 s | How long to wait for an approved proposal to execute. |
 | `questionTimeoutMs` | 30 min | How long a question waits for its answer. |
-| `texts` | English, or Brazilian Portuguese with `ptBrActionProposalText` | An object, or a function of `{ actor, message, proposal }`: `approve`, `reject`, `proposal(p)`, `footer`, `instruction(commands)`, `blockingApproval`, `failed`, `actionSucceeded`, `actionFailed`, `noPendingConfirmation`, `ambiguousDecision(ids, commands)`, `rememberRefused`, `mediaRefused(reason, media, limits)`, `questions`, `unknownSender`, `componentsOnly(components)`. |
+| `texts` | English, or Brazilian Portuguese with `ptBrActionProposalText` | An object, or a function of `{ actor, message, proposal }`: `approve`, `reject`, `proposal(p)`, `footer`, `instruction(commands)`, `linkInstruction`, `linkValidity(minutes)`, `blockingApproval`, `failed`, `actionSucceeded`, `actionFailed`, `noPendingConfirmation`, `ambiguousDecision(ids, commands)`, `rememberRefused`, `mediaRefused(reason, media, limits)`, `questions`, `unknownSender`, `componentsOnly(components)`. |
 | `onError(error, message)` | logged | A message whose handling failed (after its retries). |
 
 Each turn is sent with `hostContext: { channel, conversation, messageId }`, for a runner or engine that
@@ -807,7 +839,8 @@ export const sms: ChannelAdapter = {
   the message — retries carry the same one. A button press sets `buttonId` to the pressed button's id.
 - `challenge(request)` (optional) answers a request that is not a message, such as a subscription
   check, before `verify`.
-- `acknowledge(message)` (optional) runs in the background before the turn — Telegram's
+- `acknowledge(message)` (optional) runs in the background before the turn — a "typing…" presence
+  (stop it in the channel's `onTurnEnded`, called however the message's handling ends), or Telegram's
   `answerCallbackQuery`.
 - `parse` may put files on `message.media` (`{ kind, contentType?, filename?, sizeBytes?, ref }`);
   `download(media, { maxBytes })` (optional) fetches one and throws `ChannelMediaTooLargeError` past

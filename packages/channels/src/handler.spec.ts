@@ -292,6 +292,88 @@ describe('ChannelHandler — the route', () => {
     expect(Buffer.byteLength(ids.approve)).toBeLessThanOrEqual(64);
   });
 
+  const link = 'https://app.example/poppy-agent/connect/3XEb1wnxbTv_kGG8_UwRU5Kurix3KGvf';
+  const linkFrames = (expiresAt?: string): ScriptedFrame[] => [
+    { kind: 'text', text: 'You need to sign in at Fake Co first.' },
+    { kind: 'tool-input-start', id: 'call-1', name: 'poppy_connect', toolKind: 'action' },
+    {
+      kind: 'approval-requested',
+      id: 'call-1',
+      approver: 'requester',
+      target: { kind: 'proposal', proposalId: `proposal-${'c'.repeat(64)}` },
+      confirmation: {
+        title: 'Connect your Fake Co account',
+        verb: 'I connected',
+        detail: 'Sign in to Fake Co:',
+        link,
+      },
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    },
+  ];
+
+  it('a card whose action is a link: the link in full and what to do, no buttons nor reply commands', async () => {
+    for (const buttons of [3, undefined]) {
+      const { adapter, outbox } = fakeAdapter(buttons === undefined ? {} : { buttons });
+      const handler = channel(adapter, fakeService(linkFrames()));
+      await handler.handle(request(inbound('order boots')));
+      await handler.drain();
+      expect(outbox.map((item) => item.message)).toEqual([
+        { text: 'You need to sign in at Fake Co first.' },
+        {
+          text: `*Connect your Fake Co account*\nSign in to Fake Co:\n${link}\n\nOpen the link to continue.`,
+        },
+      ]);
+    }
+  });
+
+  it('a link card that expires says how long the link works — in the agent language too', async () => {
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    const { adapter, outbox } = fakeAdapter({ buttons: 3 });
+    const handler = channel(adapter, fakeService(linkFrames(expiresAt)));
+    await handler.handle(request(inbound('order boots')));
+    await handler.drain();
+    expect(texts(outbox).at(-1)).toBe(
+      `*Connect your Fake Co account*\nSign in to Fake Co:\n${link}\n\nOpen the link to continue.\n\nThe link works for up to 15 minutes.`,
+    );
+
+    const ptBr = fakeAdapter();
+    const portuguese = channel(
+      ptBr.adapter,
+      fakeService(linkFrames(expiresAt), {
+        actionProposalVocabulary: () => ptBrActionProposalText.vocabulary,
+      }),
+    );
+    await portuguese.handle(request(inbound('comprar botas')));
+    await portuguese.drain();
+    expect(texts(ptBr.outbox).at(-1)).toBe(
+      `*Connect your Fake Co account*\nSign in to Fake Co:\n${link}\n\nAbra o link para continuar.\n\nO link vale por até 15 minutos.`,
+    );
+  });
+
+  it('a link card does not repeat a link its summary already shows, and a "yes" does not decide it', async () => {
+    const { adapter, outbox } = fakeAdapter();
+    const decided: unknown[] = [];
+    const service = fakeService(linkFrames(), {
+      listActionProposals: async () => [
+        { id: `proposal-${'c'.repeat(64)}`, decision: 'pending', execution: null },
+      ],
+      decideActionProposal: async (...args: unknown[]) => {
+        decided.push(args);
+        return { status: 'applied' };
+      },
+    });
+    const handler = channel(adapter, service, {
+      texts: { proposal: () => `Sign in: ${link}` },
+    });
+    await handler.handle(request(inbound('order boots')));
+    await handler.drain();
+    expect(texts(outbox).at(-1)).toBe(`Sign in: ${link}\n\nOpen the link to continue.`);
+    await handler.handle(request(inbound('yes')));
+    await handler.drain();
+    expect(decided).toEqual([]);
+    expect(texts(outbox).at(-1)).toBe(DEFAULT_CHANNEL_TEXTS.noPendingConfirmation);
+  });
+
   it('maps a press that lost its button id (only the label) to the one pending card it can be from', async () => {
     const setup = (pending: string[]) => {
       const { adapter, outbox } = fakeAdapter({ buttons: 3 });
