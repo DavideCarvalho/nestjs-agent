@@ -2,6 +2,8 @@ import {
   AGENT_CHANNEL_STORE,
   AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
+  AGENT_POPPY_CONNECTION_STORE,
+  AGENT_POPPY_STORE,
   AGENT_PRICING_STORE,
   AGENT_STORE,
   type AgentPricingStore,
@@ -12,6 +14,8 @@ import { DrizzleChannelStore } from './drizzle-channel-store.js';
 import { DrizzleConfirmTokenStore } from './drizzle-confirm-token-store.js';
 import { DrizzleGovernanceQueries } from './drizzle-governance-queries.js';
 import { DrizzleMemoryProvider } from './drizzle-memory-provider.js';
+import { DrizzlePoppyConnectionStore } from './drizzle-poppy-connection-store.js';
+import { DrizzlePoppyStore } from './drizzle-poppy-store.js';
 import { DrizzlePricingStore } from './drizzle-pricing-store.js';
 import { DrizzleRagIngestionLog } from './drizzle-rag-ingestion-log.js';
 import type { AgentDrizzleDb } from './schema.js';
@@ -49,7 +53,9 @@ export interface DrizzleAgentStoreModuleOptions {
  * {@link AGENT_GOVERNANCE_QUERIES} (the read-model the dashboard/telescope surfaces consume) and
  * {@link DrizzlePricingStore} to {@link AGENT_PRICING_STORE} (the write side of that pricing table),
  * {@link DrizzleConfirmTokenStore} to {@link AGENT_CONFIRM_TOKEN_STORE} (confirmed writes), and
- * {@link DrizzleChannelStore} to {@link AGENT_CHANNEL_STORE} (text channels' state).
+ * {@link DrizzleChannelStore} to {@link AGENT_CHANNEL_STORE} (text channels' state), and
+ * {@link DrizzlePoppyStore} / {@link DrizzlePoppyConnectionStore} to {@link AGENT_POPPY_STORE} /
+ * {@link AGENT_POPPY_CONNECTION_STORE} (Personal Agent Protocol conversations and connections).
  * The host app supplies an already-opened Drizzle db — this module never opens a connection itself.
  *
  * The returned module is global, so {@link AGENT_STORE}, {@link AGENT_GOVERNANCE_QUERIES} and
@@ -110,6 +116,14 @@ export class DrizzleAgentStoreModule {
         // Text channels' state (`@dudousxd/nestjs-agent-channels`), shared by every replica.
         { provide: DrizzleChannelStore, useFactory: () => new DrizzleChannelStore(options.db) },
         { provide: AGENT_CHANNEL_STORE, useExisting: DrizzleChannelStore },
+        // Personal Agent Protocol (Poppy) conversations and connections, shared by every replica.
+        { provide: DrizzlePoppyStore, useFactory: () => new DrizzlePoppyStore(options.db) },
+        { provide: AGENT_POPPY_STORE, useExisting: DrizzlePoppyStore },
+        {
+          provide: DrizzlePoppyConnectionStore,
+          useFactory: () => new DrizzlePoppyConnectionStore(options.db),
+        },
+        { provide: AGENT_POPPY_CONNECTION_STORE, useExisting: DrizzlePoppyConnectionStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [DrizzleRagIngestionLog]),
@@ -124,6 +138,10 @@ export class DrizzleAgentStoreModule {
         AGENT_CONFIRM_TOKEN_STORE,
         DrizzleChannelStore,
         AGENT_CHANNEL_STORE,
+        DrizzlePoppyStore,
+        AGENT_POPPY_STORE,
+        DrizzlePoppyConnectionStore,
+        AGENT_POPPY_CONNECTION_STORE,
       ],
     };
   }

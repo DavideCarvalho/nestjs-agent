@@ -135,7 +135,18 @@ export class AgentDiscoveryService implements OnModuleInit {
         );
         continue;
       }
-      edges.push(detached ? { agent: targetMeta.name, detached: true } : targetMeta.name);
+      const roles = typeof entry === 'function' ? undefined : entry.roles;
+      const ability = typeof entry === 'function' ? undefined : entry.ability;
+      edges.push(
+        detached || roles !== undefined || ability !== undefined
+          ? {
+              agent: targetMeta.name,
+              ...(detached ? { detached: true } : {}),
+              ...(roles !== undefined ? { roles } : {}),
+              ...(ability !== undefined ? { ability } : {}),
+            }
+          : targetMeta.name,
+      );
     }
     return edges;
   }

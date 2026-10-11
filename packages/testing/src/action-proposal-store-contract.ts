@@ -593,6 +593,7 @@ export const ACTION_PROPOSAL_STORE_CONTRACT: readonly ActionProposalContractCase
           agentName: 'billing',
           pageContext: { kind: 'order', selection: { id: 7 } },
           persona: 'careful',
+          personalAgentRoles: ['personal_agent', 'scope:poppy:write'],
           requestId: 'request',
         },
       });
@@ -629,6 +630,7 @@ export const ACTION_PROPOSAL_STORE_CONTRACT: readonly ActionProposalContractCase
         { persona: 'other' },
         { requestId: 'other' },
         { pageContext: { kind: 'other' } },
+        { personalAgentRoles: ['personal_agent'] },
       ]) {
         const replay = prepared();
         check(

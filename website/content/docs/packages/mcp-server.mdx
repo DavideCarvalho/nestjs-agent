@@ -256,7 +256,8 @@ session is **bound to its opener**.
 
 | Situation | Answer |
 |---|---|
-| No credential, or one the resolver does not know, on `POST` / `GET` / `DELETE` | `401` |
+| No credential, or one the resolver does not know, on `POST` / `GET` / `DELETE` | `401`, with a `WWW-Authenticate: Bearer` challenge |
+| A personal agent calling an offered tool whose scope it was not granted | `403` `insufficient_scope` — see [personal agents](#personal-agents-poppy) |
 | The host resolver threw a plain `Error`, or returned a non-actor | `401` |
 | A session id presented by a **different** actor | `403` |
 | A session id this process does not hold | `404` — the client re-initializes rather than retrying |
@@ -432,6 +433,102 @@ status the route chose.
 
 ---
 
+## OAuth discovery
+
+Give the module an `oauth` option and an OAuth-aware MCP client can find where to log in by itself:
+the module serves the [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) protected-resource metadata
+at the app **root**, and every `401` (and the `403` step-ups below) names it.
+
+```ts
+AgentMcpServerModule.forRoot({
+  name: 'Acme Agent',
+  version: '1.0.0',
+  auth: myTokenResolver,
+  oauth: { issuer: 'https://auth.acme.com', scopesSupported: ['orders:read'], resourceName: 'Acme' },
+  baseUrl: 'https://app.acme.com', // the public origin; default: the request's own
+});
+```
+
+```http
+GET /.well-known/oauth-protected-resource/mcp
+→ { "resource": "https://app.acme.com/mcp", "authorization_servers": ["https://auth.acme.com"], … }
+
+POST /mcp   (no token)
+→ 401  WWW-Authenticate: Bearer resource_metadata="https://app.acme.com/.well-known/oauth-protected-resource/mcp"
+```
+
+A `401` says `error="invalid_token"` when a token was sent. With neither `oauth` nor an announced
+Poppy issuer (below) there is no document (`404`) and the challenge is a bare `Bearer`. The document
+is built from `path` and `baseUrl`: an app with a global prefix should exclude the well-known route
+from it, or the document is not where clients look.
+
+---
+
+## Personal agents (Poppy)
+
+<Callout type="warn" title="Experimental — Personal Agent Protocol Draft 0.1">
+This tracks [Personal Agent Protocol](https://personalagentprotocol.org/docs/spec) ("Poppy")
+**Draft 0.1**, a spec still in development. Everything in this section WILL change as the spec
+evolves — possibly in breaking ways, outside semver majors while it is a draft.
+</Callout>
+
+A personal agent is a caller acting for a person from **outside** this app: its actor carries the
+`personal_agent` role plus one `scope:<id>` role per scope its user granted. The MCP server's policy is
+always wrapped in core's `personalAgentGate` (idempotent, also over `emptyRoles: 'deny'`), so for such
+an actor:
+
+- `tools/list` **offers** every tool written for personal agents — one whose `roles` name
+  `personal_agent` or a `scope:` role, granted or not;
+- `tools/call` **runs** only the tools whose roles it holds. A call to an offered tool whose scope was
+  not granted is refused **before it runs** with `403` and
+  `WWW-Authenticate: Bearer error="insufficient_scope", scope="<missing>"` (+ `resource_metadata`), the
+  MCP scope step-up — the agent asks its user for that scope instead of reading a tool error. Every
+  message of a batched body is checked;
+- a tool not written for personal agents (no roles, or app roles only) is never offered, and a call to
+  it is the server's ordinary refusal. Tools this surface does not expose (`actions`, `allowedTools`)
+  stay "not exposed", never a step-up.
+
+Every other actor is untouched.
+
+```ts
+@AiTool({ name: 'read_orders', kind: 'read', roles: ['scope:orders:read'], /* … */ })
+@AiTool({ name: 'cancel_order', kind: 'action', roles: ['scope:orders:write'], /* … */ })
+```
+
+### Poppy Session tokens: `poppyActorResolver`
+
+```ts
+import { poppyActorResolver } from '@dudousxd/nestjs-agent-mcp-server';
+
+AgentMcpServerModule.forRoot({ name: 'Acme', version: '1.0.0', auth: poppyActorResolver() });
+```
+
+It verifies the request's Bearer / DPoP Session Token with `authenticate` — default: the verifier the
+authorization server installs in `globalThis[Symbol.for('@adonis-agora/poppy:authenticate')]`, read
+per request — handing it `{ method, url, headers }` (`url`: the public URL of the request, or the
+`resource` option). A signed-in principal acts as `principal.actor ?? toActor(principal) ?? { id:
+accountId }`, made a personal agent of the token's scopes.
+
+| The token | Answer |
+|---|---|
+| none | `401` `Bearer` |
+| refused by the verifier | its status, its challenge verbatim (`invalid_token`, `invalid_dpop_proof`, `use_dpop_nonce`) and its headers (`DPoP-Nonce`) |
+| a **signed-out** Session's | `403` `Bearer error="sign_in_required"` (Poppy §4.3) — not `invalid_token`, which would only make the agent mint another token of the same kind |
+| no verifier configured at all | `501` |
+
+Verifying tokens yourself? `asPersonalAgent(actor, scopes)` turns any actor into a personal agent of
+those scopes; any resolver can throw `McpChallengeException(status, { error, scope, description,
+headers })` to pick the challenge a refusal reaches the client with.
+
+### The Poppy issuer (Poppy §6)
+
+A listed MCP server's protected-resource metadata must name the Poppy issuer. When the authorization
+server announces one in `globalThis[Symbol.for('@adonis-agora/poppy:issuer')]` (read per request), it is
+added to `authorization_servers` next to the `oauth` issuer, once — and the document is served with
+just that issuer when no `oauth` option is configured.
+
+---
+
 ## Options
 
 | Option | Default | What it does |
@@ -442,6 +539,8 @@ status the route chose.
 | `actions` | `'deny'` | `'execute'` lets `action` tools run with no human approval |
 | `allowedTools` | every exposable tool the actor may use | The names this surface exposes at all — on the list *and* on the call |
 | `routes.principal` | the resolved actor on `request.user` | How the MCP actor becomes the dispatched request's principal |
+| `oauth` | — | `{ issuer, scopesSupported?, resourceName? }`: serve the [protected-resource metadata](#oauth-discovery) and name it in challenges |
+| `baseUrl` | the request's origin | The public origin used in the metadata and challenges |
 
 ---
 
@@ -508,7 +607,11 @@ the parts it does not supply.
 | `routeInputSchema` · `McpRouteInput` · `readNestRoute` · `NestRoute` · `ROUTE_PARAM` | Route declarations → the schema and the arguments derived from them. |
 | `AGENT_MCP_ROUTE_TOOLS` | The DI token for the registry route-derived tools land in. |
 | `toMcpInputSchema` / `McpInputSchema` | Standard Schema → the JSON Schema `tools/list` advertises. |
-| `AGENT_MCP_SERVER_OPTIONS` | The options DI token. |
+| `AGENT_MCP_SERVER_OPTIONS` · `AGENT_MCP_SERVER_PATH` | The options and mount-path DI tokens. |
+| `McpChallengeException` · `McpChallengeFilter` · `McpChallenge` · `McpChallengeError` | A refusal carrying its `WWW-Authenticate` challenge, and the filter that answers it. |
+| `McpOAuthOptions` · `protectedResourceMetadata` · `ProtectedResourceMetadata` · `announcedPoppyIssuer` · `POPPY_ISSUER_SLOT` | The RFC 9728 document. |
+| `AgentMcpProtectedResourceModule` · `AgentMcpServerOptionsModule` | The modules serving the metadata at the app root, and sharing the options. |
+| `poppyActorResolver` · `asPersonalAgent` · `globalPoppyAuthenticate` · `POPPY_AUTHENTICATE_SLOT` · `PoppyAuthenticate` · `PoppyPrincipal` · `PoppyAuthRequest` · `PoppyAuthResult` · `PoppyAuthFailure` · `PoppyAuthOptions` · `PoppyActorResolverOptions` | Personal agents (Poppy, experimental). |
 
 ## Without the module
 

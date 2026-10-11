@@ -1,4 +1,8 @@
-import { InMemoryAgentStore, type ToolPreflightResult } from '@dudousxd/nestjs-agent-core';
+import {
+  InMemoryAgentStore,
+  PENDING_ACTION_PROPOSAL_NOTE,
+  type ToolPreflightResult,
+} from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider } from '@dudousxd/nestjs-agent-testing';
 import { Injectable } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -105,6 +109,7 @@ it('ends the origin SSE, accepts another turn, approves independently and persis
       proposalId: required(proposals[0]).id,
       status: 'pending',
       executed: false,
+      note: PENDING_ACTION_PROPOSAL_NOTE,
     });
     const template = required(proposals[0]);
     for (let index = 0; index < 1001; index++)

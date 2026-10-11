@@ -5,6 +5,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { resolveActionProposalApproval } from './action-proposal-approval.js';
 import { prepareActionProposal } from './action-proposal-preparation.js';
 import { type ActionApprovalMode, actionProposalReceipt } from './action-proposal-receipt.js';
+import { announcedToolCalls } from './announced-tool-calls.js';
 import { isControlFlowSignal } from './control-flow.js';
 import {
   type ToolCallOutcome,
@@ -63,6 +64,7 @@ import {
   createNegotiatedUiCollector,
   withDelivered,
 } from './negotiated-tool-ui.js';
+import { isPersonalAgent } from './personal-agent.js';
 import { findPersona, intersectAllowLists } from './personas.js';
 import { resolveUsageCost } from './pricing/resolve.js';
 import {
@@ -2163,6 +2165,11 @@ async function claimToolCall(
           ...(input.persona !== undefined ? { persona: input.persona } : {}),
           ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
           ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+          // A personal agent's proposal keeps the roles that gated it, so the worker — which
+          // re-resolves the requester as the whole account — runs it under the same gate.
+          ...(isPersonalAgent(input.actor)
+            ? { personalAgentRoles: [...(input.actor.roles ?? [])] }
+            : {}),
         },
         // The preflight's own words, else the tool's `confirm` filled by the shared filler, else
         // its label / name in words — the card a channel or the proposal inbox shows.
@@ -2293,10 +2300,10 @@ async function claimApproval(
   if (remembered.includes(call.name)) {
     return { mode: 'remembered', approver: requirement.approver };
   }
+  // The tool's own lifetime (a sign-in link's) over the policy's.
+  const wanted = spec?.approvalTtlMs ?? requirement.ttlMs;
   const ttlMs =
-    requirement.ttlMs !== undefined && Number.isFinite(requirement.ttlMs) && requirement.ttlMs > 0
-      ? Math.floor(requirement.ttlMs)
-      : undefined;
+    wanted !== undefined && Number.isFinite(wanted) && wanted > 0 ? Math.floor(wanted) : undefined;
   return {
     mode: 'ask',
     approver: requirement.approver,
@@ -3405,6 +3412,11 @@ export async function runAgentLoop<TOutput = unknown>(
       );
     }
 
+    // Nothing to load (no skill for this actor — a personal agent, say), nothing to offer; nowhere to
+    // write (no memory scope: `personalAgentScopes`), no `remember` — offering it makes the model
+    // promise to remember what it cannot.
+    const offerSkill = skillOffer === undefined || skillOffer.entries.length > 0;
+    const offerMemory = memoryDigest === undefined || memoryDigest.scopes.length > 0;
     let turn: BufferedModelTurnResult;
     if (hooks.dispatchLlm) {
       // No definitionsFor here: the envelope carries only wire-safe data (a ToolDefinition holds a
@@ -3436,6 +3448,9 @@ export async function runAgentLoop<TOutput = unknown>(
         ...(persona?.allowedTools !== undefined
           ? { personaAllowedTools: persona.allowedTools }
           : {}),
+        ...(!offerSkill || !offerMemory
+          ? { builtins: { skills: offerSkill, memory: offerMemory } }
+          : {}),
       });
     } else {
       const tools = withMemoryTool({
@@ -3456,9 +3471,9 @@ export async function runAgentLoop<TOutput = unknown>(
             ),
             ask: deps.ask,
           }),
-          enabled: deps.skills !== undefined,
+          enabled: deps.skills !== undefined && offerSkill,
         }),
-        enabled: memoryIsWritable(deps),
+        enabled: memoryIsWritable(deps) && offerMemory,
       });
       turn = await hooks.step(`llm:${i}`, async () => {
         // Both of these ride the CHECKPOINT rather than a local variable: a run that suspends
@@ -3478,8 +3493,9 @@ export async function runAgentLoop<TOutput = unknown>(
         // A tool that previews its input (genui's streaming tree) gets partial `ui` frames while
         // the model writes its arguments. Added BELOW the observer: a preview is shown, never part
         // of what the turn persists.
+        const announced = announcedToolCalls(incremental?.writer ?? buffer?.writer ?? writer);
         const previews = previewToolInputs(
-          incremental?.writer ?? buffer?.writer ?? writer,
+          announced.writer,
           registryInputPreviews(deps.registry, tools, {
             actor: input.actor,
             threadId: input.threadId,
@@ -3511,6 +3527,9 @@ export async function runAgentLoop<TOutput = unknown>(
           ),
           deps,
         );
+        // A provider that streams no tool frames still gets its calls announced — a call's outcome
+        // for a call the stream never announced cannot be attributed to its tool.
+        await announced.announceRest(result.toolCalls, tools);
         // Journaled with the turn, so whichever process settles the calls withdraws the same
         // previews the stream showed.
         const shownPreviews = previews.shown();

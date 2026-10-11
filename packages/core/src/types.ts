@@ -26,7 +26,21 @@ export type ToolKind = 'read' | 'action' | 'agent' | 'ask' | 'skill' | 'memory';
  * delegation that has always existed; the object form is how an author says this one runs in the
  * background.
  */
-export type AgentDelegation = string | { agent: string; detached?: boolean };
+export type AgentDelegation =
+  | string
+  | {
+      agent: string;
+      detached?: boolean;
+      /**
+       * Who may delegate along this edge: the synthesized `ask_<target>` / `start_<target>` tool's
+       * `roles` (and `ability`), gated like any other tool. Omitted → the tool declares none, which
+       * the default policy reads as open to every actor — but never to a personal agent
+       * (`personalAgentGate` runs only tools declaring one of its roles), so an orchestrator that
+       * should delegate for one names `personal_agent` (or a `scope:<id>`) here.
+       */
+      roles?: string[];
+      ability?: string;
+    };
 
 /**
  * Where a detached sub-agent run posts its answer: the thread that delegated it, and the
@@ -122,6 +136,12 @@ export interface ToolSpec {
   genui?: GenuiToolMarker;
   /** Roles allowed to invoke. Undefined → defaults applied by RolesPolicy (e.g. ADMIN-only). */
   roles?: string[];
+  /**
+   * For `kind: 'action'` — how long its approval (or independent proposal) stays open, in ms, over
+   * the approval policy's `ttlMs`: an action whose card carries something with a lifetime of its own
+   * (a sign-in link) lives as long as that, not as long as a Confirm button does.
+   */
+  approvalTtlMs?: number;
   /**
    * Whether the tool exists in this deployment. `false` (or a predicate returning `false`) drops it
    * before the role filter, so it is never offered to the model and cannot be invoked. Undefined →
@@ -779,6 +799,12 @@ export interface LlmStepEnvelope {
    * intersects with the agent's own. Absent → no persona narrowing, as before personas existed.
    */
   personaAllowedTools?: string[];
+  /**
+   * Whether the loop offers the built-in `skill` / `remember` tools on this turn — `false` when the
+   * actor resolved nothing to load or nowhere to write (a personal agent, `personalAgentScopes`).
+   * The serving worker ANDs it with its own module config. Absent → module config alone, as before.
+   */
+  builtins?: { skills?: boolean; memory?: boolean };
 }
 
 /**

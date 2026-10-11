@@ -5,6 +5,7 @@ import {
   AGENT_STORE,
   type ActionProposal,
   ActionProposalExecutor,
+  type ActionProposalOutcome,
   ActionProposalWorker,
   type AgentStore,
   assertIndependentActionCapabilities,
@@ -20,12 +21,42 @@ import { AgentDepsFactory } from '../agent-deps.factory.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 /** Called with a proposal the worker just settled (executed, or failed executing). */
 export type ActionProposalSettledListener = (proposal: ActionProposal) => void | Promise<void>;
+/** Called with a proposal outcome the worker just wrote to its thread. */
+export type ActionProposalAdmittedListener = (
+  outcome: ActionProposalOutcome,
+) => void | Promise<void>;
 
 @Injectable()
 export class ActionProposalWorkerService implements OnModuleInit, OnModuleDestroy {
   private worker: ActionProposalWorker | undefined;
   private readonly logger = new Logger(ActionProposalWorkerService.name);
   private readonly settledListeners = new Set<ActionProposalSettledListener>();
+  private readonly admittedListeners = new Set<ActionProposalAdmittedListener>();
+
+  /**
+   * Run `listener` once a settled proposal's outcome is written to its thread by this process's
+   * worker (the thread was free) — what a module uses to CONTINUE a conversation once an action it
+   * proposed ran (a Poppy connect: the next turn goes on with what was asked). Next to
+   * `actionProposalWorker.onAdmitted`; a listener that throws is logged and does not stop the
+   * others. Returns the unsubscribe.
+   */
+  onAdmitted(listener: ActionProposalAdmittedListener): () => void {
+    this.admittedListeners.add(listener);
+    return () => {
+      this.admittedListeners.delete(listener);
+    };
+  }
+
+  private async admitted(outcome: ActionProposalOutcome): Promise<void> {
+    const configured = this.options.actionProposalWorker?.onAdmitted;
+    for (const listener of [...(configured ? [configured] : []), ...this.admittedListeners]) {
+      try {
+        await listener(outcome);
+      } catch (error) {
+        this.logger.error(error);
+      }
+    }
+  }
 
   /**
    * Run `listener` after every proposal this process's worker settles — how a module relays an
@@ -66,6 +97,7 @@ export class ActionProposalWorkerService implements OnModuleInit, OnModuleDestro
       workerId: randomUUID(),
       ...this.options.actionProposalWorker,
       onSettled: (proposal) => this.settled(proposal),
+      onAdmitted: (outcome) => this.admitted(outcome),
       executor: new ActionProposalExecutor({
         resolver,
         resolveExecution: async (proposal, actor) => {

@@ -127,6 +127,11 @@ const RESET_ORDER = [
   'agent_confirm_token',
   'agent_channel_state',
   'agent_stream_frame',
+  'agent_poppy_conversation',
+  'agent_poppy_event',
+  'agent_poppy_message',
+  'agent_poppy_connection',
+  'agent_poppy_connect',
 ];
 
 export interface AgentDbHandle {

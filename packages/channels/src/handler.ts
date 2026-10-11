@@ -50,6 +50,7 @@ import {
   type ChannelProposal,
   type ChannelTexts,
   type ChannelTextsOverrides,
+  DEFAULT_CHANNEL_TEXTS,
   channelTextsFor,
   mergeChannelTexts,
 } from './texts.js';
@@ -191,6 +192,52 @@ export interface ChannelTurnStarted {
   queued: boolean;
 }
 
+/**
+ * How a message's (or a resumed run's) handling ended in this process —
+ * {@link ChannelTurnEnded.outcome}:
+ * - `replied`: the turn's stream ended and what it said was delivered (possibly nothing — a turn
+ *   that said nothing, or whose messages `canDeliver` dropped);
+ * - `failed`: the turn failed (`texts.failed` was sent), or the job itself failed after its retries
+ *   (`error` is set; `onError` is told too);
+ * - `timeout`: the turn ran past `timeoutMs` and was cancelled (what it said so far was delivered);
+ * - `blocked`: the turn waits for a decision a text channel cannot make (blocking approvals);
+ * - `parked`: the turn asked a question and waits for the answer — a later message (or the
+ *   question's timeout) resumes it, and that one ends with its own call;
+ * - `stopped`: no turn — the sender is unknown (`unknownSender`) or `beforeTurn` stopped it;
+ * - `handled`: no turn to read — an answer, a button press, a text decision, or nothing to answer;
+ * - `interrupted`: the durable engine took the job away from this process mid-way (it goes on
+ *   elsewhere, or later); this process delivers nothing more for it.
+ */
+export type ChannelTurnOutcome =
+  | 'replied'
+  | 'failed'
+  | 'timeout'
+  | 'blocked'
+  | 'parked'
+  | 'stopped'
+  | 'handled'
+  | 'interrupted';
+
+/** This process is done with a message (or a resumed run) — {@link ChannelOptions.onTurnEnded}. */
+export interface ChannelTurnEnded {
+  /** The adapter's name. */
+  channel: string;
+  conversation: string;
+  /** Who the conversation was answered as — `null` for an unknown sender, or before it was known. */
+  actor: Actor | null;
+  /**
+   * The message handled — `null` for a run read without one: resumed after its question (answered
+   * or timed out), or followed ({@link ChannelHandler.follow}).
+   */
+  message: InboundMessage | null;
+  /** The run read, when a turn was read (or resumed). */
+  runId: string | null;
+  threadId: string | null;
+  outcome: ChannelTurnOutcome;
+  /** What failed, for `outcome: 'failed'` from an error (after its retries). */
+  error?: unknown;
+}
+
 /** What {@link ChannelOptions.prepareMedia} makes of a downloaded file. */
 export type ChannelPreparedMedia =
   | undefined
@@ -249,6 +296,17 @@ export interface ChannelOptions {
   onThreadCreated?(threadId: string, actor: Actor, message: InboundMessage): void | Promise<void>;
   /** A turn started (or was queued) for a message — record where it came from, start a meter. */
   onTurnStarted?(turn: ChannelTurnStarted): void | Promise<void>;
+  /**
+   * This process is done handling a message, or a run read without one (resumed after its question,
+   * or followed) — called ALWAYS, once per job this process ran, whatever it came to
+   * ({@link ChannelTurnOutcome}): a reply, a failure, a timeout, a turn that sent nothing, a sender
+   * stopped before any turn (after `adapter.acknowledge`), a durable job taken away mid-way. For what
+   * the app started for the message and must stop — a "typing…" presence, a meter. Per attempt: when
+   * a durable job runs again (a crash, a lease taken over) each process that ran it is told. Not
+   * called for a question's timeout itself (the resumed run it starts is). Errors it throws are
+   * logged and ignored.
+   */
+  onTurnEnded?(turn: ChannelTurnEnded): void | Promise<void>;
   /**
    * Checked before EVERY message the channel sends — replies, cards, questions, relayed outcomes.
    * `false` → that message is dropped (e.g. the number was unlinked from the account mid-turn).
@@ -1070,6 +1128,28 @@ export class ChannelHandler {
   ) {
     const { capabilities } = this.adapter;
     const summary = texts.proposal(proposal);
+    const link = proposal.confirmation?.link;
+    if (link !== undefined && link !== '') {
+      // The action is opening the link: the card, the link in full, what to do — no buttons, no
+      // reply commands, and not remembered as a card (finishing there decides it; a "yes" here
+      // decides nothing).
+      const linkValidity = texts.linkValidity ?? DEFAULT_CHANNEL_TEXTS.linkValidity;
+      const card = toChannelMarkdown(
+        [
+          summary.includes(link) ? summary : `${summary}\n${link}`,
+          texts.linkInstruction ?? DEFAULT_CHANNEL_TEXTS.linkInstruction,
+          proposal.expiresAt !== undefined
+            ? linkValidity?.(Math.max(1, Math.round((proposal.expiresAt - Date.now()) / 60_000)))
+            : undefined,
+        ]
+          .filter((part) => part !== undefined && part !== '')
+          .join('\n\n'),
+        capabilities.markdown,
+      );
+      for (const piece of splitMessage(card, capabilities.maxLength))
+        await out.send({ text: piece }, 'card');
+      return;
+    }
     const footer = typeof texts.footer === 'function' ? texts.footer(proposal) : texts.footer;
     const instruction = texts.instruction(this.commandsFor(withId ? proposal.id : null));
     const asText = toChannelMarkdown(
@@ -1402,7 +1482,7 @@ export class ChannelHandler {
     threadId: string | null,
     conversation: string,
     message: InboundMessage | null,
-  ) {
+  ): Promise<ChannelTurnOutcome> {
     const { service, options } = this;
     const name = this.adapter.name;
     const texts = await this.textsFor({ actor, message });
@@ -1420,6 +1500,7 @@ export class ChannelHandler {
     let failed = false;
     let blocked = false;
     let parked = false;
+    let timedOut = false;
     const deadlineAt = Date.now() + this.timeoutMs;
     const flush = async (end: boolean) => {
       const batch = [...rendered.values()];
@@ -1456,6 +1537,7 @@ export class ChannelHandler {
           clearTimeout(timer),
         );
         if (next === 'timeout') {
+          timedOut = true;
           failed = parts.length === 0 && rendered.size === 0 && !wroteText;
           await service.cancel(actor, runId).catch(() => {});
           break;
@@ -1537,6 +1619,9 @@ export class ChannelHandler {
                 id: frame.target.proposalId,
                 toolName: toolNames.get(frame.id) ?? 'action',
                 ...(frame.confirmation ? { confirmation: frame.confirmation } : {}),
+                ...(frame.expiresAt !== undefined && Number.isFinite(Date.parse(frame.expiresAt))
+                  ? { expiresAt: Date.parse(frame.expiresAt) }
+                  : {}),
               });
               break;
             }
@@ -1609,13 +1694,14 @@ export class ChannelHandler {
     } finally {
       void stream.return?.(undefined);
     }
-    if (parked) return;
+    if (parked) return 'parked';
     await flush(true);
     if (failed) await out.text(texts.failed, 'notice');
     if (blocked) await out.text(texts.blockingApproval, 'notice');
     const left = [...proposals.values()];
     for (const proposal of left)
       await this.sendProposal(texts, out, conversation, proposal, left.length > 1);
+    return timedOut ? 'timeout' : failed ? 'failed' : blocked ? 'blocked' : 'replied';
   }
 
   private hookContext(message: InboundMessage): ChannelHookContext {
@@ -1625,7 +1711,9 @@ export class ChannelHandler {
   /** Before the turn: who is talking, and whether the app lets them through. */
   private async prepare(
     message: InboundMessage,
-  ): Promise<{ stop: true } | { stop: false; actor: Actor; threadId: string | null }> {
+  ): Promise<
+    { stop: true; actor: Actor | null } | { stop: false; actor: Actor; threadId: string | null }
+  > {
     const { adapter, options } = this;
     await adapter.acknowledge?.(message).catch(() => {});
     const actor = await options.actor(message);
@@ -1639,10 +1727,10 @@ export class ChannelHandler {
         ? replyList(await options.unknownSender(message, this.hookContext(message)))
         : replyList((await this.textsFor({ actor: null, message })).unknownSender);
       for (const reply of replies) await out.reply(reply, 'gate');
-      return { stop: true };
+      return { stop: true, actor: null };
     }
     const gate = await options.beforeTurn?.(message, actor, this.hookContext(message));
-    if (gate === 'stop') return { stop: true };
+    if (gate === 'stop') return { stop: true, actor };
     if (gate !== undefined && gate !== 'continue') {
       const out = this.outbox(`${adapter.name}:out:msg:${message.id}:gate`, message.conversation, {
         actor,
@@ -1650,7 +1738,7 @@ export class ChannelHandler {
       });
       for (const reply of 'replies' in gate ? gate.replies : [gate.reply])
         await out.reply(reply, 'gate');
-      return { stop: true };
+      return { stop: true, actor };
     }
     const threadId = (await options.thread(actor, message)) ?? null;
     return { stop: false, actor, threadId };
@@ -1822,10 +1910,67 @@ export class ChannelHandler {
     else this.logError(error, message);
   }
 
+  /**
+   * Deliver a run this channel did not start — a turn continued on the server, e.g. after a sign-in
+   * completed elsewhere — to `conversation`: its stream is read and delivered like a turn's (durably
+   * under a durable engine), once per run however often it is asked.
+   */
+  async follow(
+    conversation: string,
+    run: { runId: string; threadId: string; actor: Actor },
+  ): Promise<void> {
+    const name = this.adapter.name;
+    // The durable engine dedupes by job id; the claim keeps an inline executor (and replicas
+    // sharing the store) from reading the same run twice.
+    const key = `${name}:follow:${run.runId}`;
+    if (!(await this.store.claim(key, this.dedupeTtlMs))) return;
+    try {
+      await this.executor().enqueue(
+        {
+          kind: 'resume',
+          channel: name,
+          conversation,
+          runId: run.runId,
+          threadId: run.threadId,
+          actor: run.actor,
+        },
+        jobId(name, 'follow', run.runId),
+      );
+    } catch (error) {
+      await Promise.resolve(this.store.delete(key)).catch(() => {});
+      throw error;
+    }
+  }
+
+  /** Tell `onTurnEnded` — never failing the job. */
+  private async turnEnded(turn: ChannelTurnEnded): Promise<void> {
+    if (!this.options.onTurnEnded) return;
+    try {
+      await this.options.onTurnEnded(turn);
+    } catch (error) {
+      this.logger.error(
+        `onTurnEnded on "${this.adapter.name}" failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   /** One job, phase by phase — each phase a checkpoint under a durable engine. @internal */
   async run(job: ChannelJob, step: ChannelStepRunner): Promise<void> {
     const message = job.kind === 'message' ? job.message : null;
     const name = this.adapter.name;
+    /** What `onTurnEnded` is told — a question's timeout is not a turn (the resume it starts is). */
+    const ended: ChannelTurnEnded = {
+      channel: name,
+      conversation: job.conversation,
+      actor: job.kind === 'resume' ? job.actor : null,
+      message,
+      runId: job.kind === 'resume' ? job.runId : null,
+      threadId: job.kind === 'resume' ? job.threadId : null,
+      outcome: 'replied',
+    };
+    /** The read phase's outcome — a checkpoint from before outcomes were recorded reads `null`. */
+    const read = async (fn: () => Promise<ChannelTurnOutcome>) =>
+      ((await step('read', () => this.retry(fn))) as ChannelTurnOutcome | null) ?? 'replied';
     try {
       if (job.kind === 'timeout') {
         await step('timeout', () =>
@@ -1855,36 +2000,41 @@ export class ChannelHandler {
         return;
       }
       if (job.kind === 'resume') {
-        await step('read', () =>
-          this.retry(async () => {
-            await this.readTurn(job.actor, job.runId, job.threadId, job.conversation, null);
-            return null;
-          }),
+        ended.outcome = await read(() =>
+          this.readTurn(job.actor, job.runId, job.threadId, job.conversation, null),
         );
         return;
       }
       const received = job.message;
       const prepared = await step('prepare', () => this.retry(() => this.prepare(received)));
-      if (prepared.stop) return;
+      ended.actor = prepared.actor;
+      if (prepared.stop) {
+        ended.outcome = 'stopped';
+        return;
+      }
+      ended.threadId = prepared.threadId;
       const turn = await step('act', () =>
         this.retry(() => this.act(received, prepared.actor, prepared.threadId)),
       );
-      if (turn === null) return;
-      await step('read', () =>
-        this.retry(async () => {
-          await this.readTurn(
-            prepared.actor,
-            turn.runId,
-            turn.threadId,
-            received.conversation,
-            received,
-          );
-          return null;
-        }),
+      if (turn === null) {
+        ended.outcome = 'handled';
+        return;
+      }
+      ended.runId = turn.runId;
+      ended.threadId = turn.threadId;
+      ended.outcome = await read(() =>
+        this.readTurn(prepared.actor, turn.runId, turn.threadId, received.conversation, received),
       );
     } catch (error) {
-      if ((error as { name?: unknown } | null)?.name === 'WorkflowSuspended') throw error;
+      if ((error as { name?: unknown } | null)?.name === 'WorkflowSuspended') {
+        ended.outcome = 'interrupted';
+        throw error;
+      }
+      ended.outcome = 'failed';
+      ended.error = error;
       this.report(error, message);
+    } finally {
+      if (job.kind !== 'timeout') await this.turnEnded(ended);
     }
   }
 }

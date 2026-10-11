@@ -1,0 +1,90 @@
+{
+  "name": "@dudousxd/nestjs-agent-poppy",
+  "version": "0.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
+    "directory": "packages/poppy"
+  },
+  "homepage": "https://davidecarvalho.github.io/aviary/docs/agent",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/nestjs-agent/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "agent",
+    "poppy",
+    "personal-agent-protocol",
+    "personal-agents"
+  ],
+  "description": "Personal Agent Protocol (\"Poppy\", Draft 0.1 \u2014 experimental) for nestjs-agent: be the Company Agent of personal agents' conversations, and let your agent act at other Poppy companies for its users",
+  "license": "MIT",
+  "author": "Davide Carvalho",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./client": {
+      "import": {
+        "types": "./dist/client/index.d.ts",
+        "default": "./dist/client/index.js"
+      },
+      "require": {
+        "types": "./dist/client/index.d.cts",
+        "default": "./dist/client/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:specs": "tsc -p tsconfig.spec.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "jose": "6.2.12"
+  },
+  "peerDependencies": {
+    "@dudousxd/nestjs-agent": ">=1.34.0 <2.0.0",
+    "@dudousxd/nestjs-agent-core": ">=0.57.0 <1.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
+    "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0"
+  },
+  "devDependencies": {
+    "@dudousxd/nestjs-agent": "workspace:*",
+    "@dudousxd/nestjs-agent-channels": "workspace:*",
+    "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@dudousxd/nestjs-durable-core": "0.72.1",
+    "@nestjs/common": "12.0.4",
+    "@nestjs/core": "12.0.4",
+    "@nestjs/platform-express": "12.0.4",
+    "@nestjs/testing": "12.0.4",
+    "@types/express": "5.0.6",
+    "@types/supertest": "6.0.3",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "supertest": "7.0.0",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9",
+    "zod": "3.25.76"
+  },
+  "bin": {
+    "poppy-agent": "./dist/client/bin/poppy-agent.js"
+  }
+}

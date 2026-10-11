@@ -6,6 +6,8 @@ export * from './mikro-orm-pricing-store';
 export * from './mikro-orm-token-stream-sink';
 export * from './mikro-orm-confirm-token-store';
 export * from './mikro-orm-channel-store';
+export * from './mikro-orm-poppy-store';
+export * from './mikro-orm-poppy-connection-store';
 export * from './mikro-orm-rag-ingestion-log';
 export * from './ensure-schema';
 export { AgentSchemaCollationError } from './mysql-collations';

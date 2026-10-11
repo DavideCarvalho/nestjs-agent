@@ -443,6 +443,19 @@ export class ClosedRolesPolicy extends DefaultRolesPolicy {
 }
 
 /**
+ * Where a wrapper (`personalAgentGate`) carries the default roles of the {@link DefaultRolesPolicy}
+ * it wraps, so wrapping does not make {@link closeEmptyRoles} read every undeclared list as empty.
+ */
+export const DEFAULT_ROLES_OF = Symbol.for('@dudousxd/nestjs-agent:default-roles');
+
+/** The default roles a policy falls back on, when it is (or wraps) a {@link DefaultRolesPolicy}. */
+export function defaultRolesOf(policy: RolesPolicy): string[] | undefined {
+  if (policy instanceof DefaultRolesPolicy) return policy.defaultRoles;
+  const carried = (policy as { [DEFAULT_ROLES_OF]?: unknown })[DEFAULT_ROLES_OF];
+  return Array.isArray(carried) ? (carried as string[]) : undefined;
+}
+
+/**
  * Close a policy you did not build: a tool whose roles come out empty — declared `[]`, or undeclared
  * with no default roles to fall back on — reaches nobody; anything else is the inner policy's call.
  *
@@ -452,13 +465,23 @@ export class ClosedRolesPolicy extends DefaultRolesPolicy {
  * `emptyRoles: 'deny'` wraps the agent's shared policy in.
  */
 export function closeEmptyRoles(inner: RolesPolicy): RolesPolicy {
-  const defaults = inner instanceof DefaultRolesPolicy ? inner.defaultRoles : [];
+  const defaults = defaultRolesOf(inner) ?? [];
+  const closed = (tool: ToolSpec) =>
+    tool.ability === undefined && (tool.roles ?? defaults).length === 0;
   return {
     can(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
-      if (tool.ability === undefined && (tool.roles ?? defaults).length === 0) {
+      if (closed(tool)) {
         return false;
       }
       return inner.can(actor, tool);
     },
+    ...(inner.canOffer !== undefined
+      ? {
+          canOffer(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
+            if (closed(tool)) return false;
+            return (inner.canOffer as NonNullable<RolesPolicy['canOffer']>)(actor, tool);
+          },
+        }
+      : {}),
   };
 }

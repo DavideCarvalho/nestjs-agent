@@ -7,6 +7,8 @@
     "human-in-the-loop-and-durability",
     "action-proposals",
     "channels",
+    "poppy",
+    "poppy-connections",
     "asking-the-user",
     "skills",
     "memory",

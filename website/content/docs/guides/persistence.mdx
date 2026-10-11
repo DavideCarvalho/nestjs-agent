@@ -557,6 +557,25 @@ The logic is `SqlTokenStreamSink` in core, over a six-method `StreamFrameTable` 
 rest comes with it; `SQL_TOKEN_STREAM_SINK_CONTRACT` in `-testing` checks it. The adapters' tables
 are exported as `DrizzleStreamFrameTable` and `MikroOrmStreamFrameTable`.
 
+## Personal Agent Protocol tables (experimental)
+
+Both store modules also bind `AGENT_POPPY_STORE` (`DrizzlePoppyStore` / `MikroOrmPoppyStore`) and
+`AGENT_POPPY_CONNECTION_STORE` (`DrizzlePoppyConnectionStore` / `MikroOrmPoppyConnectionStore`), so
+Poppy conversations and connections are shared by every replica with no extra wiring. Their tables
+are created and healed at boot like the others — never write a migration for them:
+
+| Table | Holds | Keys |
+|---|---|---|
+| `agent_poppy_conversation` | a conversation, its JSON context and grant, the reader lease | `id` |
+| `agent_poppy_event` | the append-only event log | `(conversation_id, seq)`; unique `(conversation_id, event_key)` |
+| `agent_poppy_message` | accepted message receipts (idempotency) | `(owner, message_id)` |
+| `agent_poppy_connection` | this app's sealed connections at other companies | `(owner, issuer)` — issuer ≤ 512 chars |
+| `agent_poppy_connect` | sign-ins in flight | `id` |
+
+Over Redis, `RedisPoppyStore` and `RedisPoppyConnectionStore` from
+`@dudousxd/nestjs-agent-transport-redis` take an ioredis client as is. A store of your own can run
+`POPPY_STORE_CONTRACT` and `POPPY_CONNECTION_STORE_CONTRACT` from `@dudousxd/nestjs-agent-testing`.
+
 ## In-memory store for tests
 
 For offline tests and demos, `@dudousxd/nestjs-agent-testing` ships an `InMemoryAgentStore` (plus

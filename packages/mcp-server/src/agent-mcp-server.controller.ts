@@ -7,6 +7,8 @@ import {
   type RolesPolicy,
   type ToolRegistry,
   closeEmptyRoles,
+  missingScopes,
+  personalAgentGate,
 } from '@dudousxd/nestjs-agent-core';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -19,18 +21,31 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  HttpException,
   Inject,
   NotFoundException,
   Post,
   Req,
   Res,
+  UseFilters,
 } from '@nestjs/common';
 import { createAgentMcpServer } from './agent-mcp-server.js';
 import type { AgentMcpServerModuleOptions } from './agent-mcp-server.options.js';
 import { authenticateMcpRequest } from './authenticate.js';
+import { mcpExposureRefusal } from './exposed-tools.js';
 import type { McpAuthInfo } from './mcp-actor.js';
+import { McpChallengeException, McpChallengeFilter } from './mcp-challenge.js';
 import { type McpSession, McpSessionStore } from './mcp-sessions.js';
-import { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
+import {
+  mcpResourceUrls,
+  requestOrigin,
+  servesProtectedResourceMetadata,
+} from './protected-resource.js';
+import {
+  AGENT_MCP_ROUTE_TOOLS,
+  AGENT_MCP_SERVER_OPTIONS,
+  AGENT_MCP_SERVER_PATH,
+} from './tokens.js';
 
 /** The node request the MCP transport reads, with the slot it takes the verified identity from. */
 type McpHttpRequest = IncomingMessage & { auth?: AuthInfo };
@@ -56,18 +71,31 @@ function authInfoFor(actor: Actor): McpAuthInfo {
  * stream) and `DELETE` (terminate the session), all at the configured route.
  *
  * Every one of them authenticates FIRST, before the transport is handed the request — so an
- * unidentified caller is answered 401 by the framework's own error path and the MCP machinery never
- * runs for them.
+ * unidentified caller is answered 401, with its `WWW-Authenticate` challenge, and the MCP machinery
+ * never runs for them.
  */
 @Controller()
+@UseFilters(McpChallengeFilter)
 export class AgentMcpServerController {
+  /**
+   * The agent's own policy — closed on this surface alone when `emptyRoles: 'deny'` says so — behind
+   * `personalAgentGate` (idempotent): a personal agent is offered the tools written for personal
+   * agents and runs only those of its granted scopes. A no-op for every other actor.
+   */
+  private readonly policy: RolesPolicy;
+
   constructor(
     @Inject(AGENT_MCP_SERVER_OPTIONS) private readonly options: AgentMcpServerModuleOptions,
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
-    @Inject(AGENT_ROLES_POLICY) private readonly policy: RolesPolicy,
+    @Inject(AGENT_ROLES_POLICY) policy: RolesPolicy,
     @Inject(AGENT_MCP_ROUTE_TOOLS) private readonly routeTools: ToolRegistry,
     private readonly sessions: McpSessionStore,
-  ) {}
+    @Inject(AGENT_MCP_SERVER_PATH) private readonly path: string,
+  ) {
+    this.policy = personalAgentGate(
+      options.emptyRoles === 'deny' ? closeEmptyRoles(policy) : policy,
+    );
+  }
 
   @Post()
   async post(
@@ -77,6 +105,7 @@ export class AgentMcpServerController {
   ): Promise<void> {
     const actor = await this.authenticate(req);
     req.auth = authInfoFor(actor);
+    await this.refuseMissingScope({ req, actor, body });
     const sessionId = readSessionId(req);
     if (sessionId !== undefined) {
       const session = this.requireSession({ sessionId, actor });
@@ -118,8 +147,77 @@ export class AgentMcpServerController {
     await session.transport.handleRequest(req, res);
   }
 
-  private authenticate(req: McpHttpRequest): Promise<Actor> {
-    return authenticateMcpRequest({ auth: this.options.auth, request: req });
+  /**
+   * Resolve the caller, turning a refusal into one that carries its challenge: every 401 says
+   * `Bearer` (`invalid_token` when a token was sent), and names the metadata document when one is
+   * served, so an OAuth-aware client knows where to log in. A resolver's own
+   * {@link McpChallengeException} (`sign_in_required`, a verifier's DPoP challenge) keeps its own.
+   */
+  private async authenticate(req: McpHttpRequest): Promise<Actor> {
+    try {
+      return await authenticateMcpRequest({ auth: this.options.auth, request: req });
+    } catch (error) {
+      if (error instanceof McpChallengeException) {
+        throw error.withResourceMetadata(this.resourceMetadataUrl(req));
+      }
+      if (error instanceof HttpException && error.getStatus() === 401) {
+        const metadata = this.resourceMetadataUrl(req);
+        throw new McpChallengeException(401, {
+          ...(req.headers.authorization !== undefined ? { error: 'invalid_token' } : {}),
+          description: error.message,
+          ...(metadata !== undefined ? { resourceMetadataUrl: metadata } : {}),
+        });
+      }
+      throw error;
+    }
+  }
+
+  /** This endpoint's metadata URL, when a document is served (an `oauth` option or a Poppy issuer). */
+  private resourceMetadataUrl(req: McpHttpRequest): string | undefined {
+    if (!servesProtectedResourceMetadata(this.options.oauth)) return undefined;
+    return mcpResourceUrls({ origin: requestOrigin(req, this.options.baseUrl), path: this.path })
+      .metadata;
+  }
+
+  /**
+   * A personal agent calling a tool it is OFFERED but whose scope its user did not grant: `403` with
+   * `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"` (RFC 6750 §3.1, the MCP scope
+   * step-up, Poppy §4.3) before anything runs — the client asks its user for that scope, where a tool
+   * error would read to a model as "try different arguments". Every message of a batched body is
+   * checked. Only tools this surface exposes: any other name stays the server's own "unknown tool".
+   */
+  private async refuseMissingScope(input: {
+    req: McpHttpRequest;
+    actor: Actor;
+    body: unknown;
+  }): Promise<void> {
+    const { req, actor, body } = input;
+    for (const message of Array.isArray(body) ? body : [body]) {
+      const call = message as { method?: unknown; params?: { name?: unknown } } | null;
+      const name = call?.params?.name;
+      if (call?.method !== 'tools/call' || typeof name !== 'string') continue;
+      const spec = [this.registry, this.routeTools].find((source) => source.has(name))?.spec(name);
+      if (spec === undefined) continue;
+      const refusal = mcpExposureRefusal({
+        name,
+        kind: spec.kind,
+        actions: this.options.actions ?? 'deny',
+        ...(this.options.allowedTools !== undefined
+          ? { allowedTools: this.options.allowedTools }
+          : {}),
+        ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
+      });
+      if (refusal !== undefined) continue;
+      const missing = await missingScopes(actor, spec, this.policy);
+      if (missing === null) continue;
+      const metadata = this.resourceMetadataUrl(req);
+      throw new McpChallengeException(403, {
+        error: 'insufficient_scope',
+        scope: missing.join(' '),
+        description: `insufficient_scope: "${name}" needs the scope "${missing.join(' ')}"`,
+        ...(metadata !== undefined ? { resourceMetadataUrl: metadata } : {}),
+      });
+    }
   }
 
   /**
@@ -160,8 +258,7 @@ export class AgentMcpServerController {
       version: this.options.version,
       registry: this.registry,
       routeTools: this.routeTools,
-      // The agent's own policy — closed on this surface alone when `emptyRoles: 'deny'` says so.
-      policy: this.options.emptyRoles === 'deny' ? closeEmptyRoles(this.policy) : this.policy,
+      policy: this.policy,
       ...(this.options.actions !== undefined ? { actions: this.options.actions } : {}),
       ...(this.options.allowedTools !== undefined
         ? { allowedTools: this.options.allowedTools }

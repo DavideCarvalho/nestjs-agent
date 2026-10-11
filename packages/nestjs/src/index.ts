@@ -119,6 +119,7 @@ export { RunNotActiveException } from './run-not-active.exception.js';
 export { ActionProposalService } from './proposals/action-proposal.service.js';
 export { ActionProposalController } from './proposals/action-proposal.controller.js';
 export {
+  type ActionProposalAdmittedListener,
   type ActionProposalSettledListener,
   ActionProposalWorkerService,
 } from './proposals/action-proposal-worker.service.js';

@@ -2,6 +2,8 @@ import {
   AGENT_CHANNEL_STORE,
   AGENT_CONFIRM_TOKEN_STORE,
   AGENT_GOVERNANCE_QUERIES,
+  AGENT_POPPY_CONNECTION_STORE,
+  AGENT_POPPY_STORE,
   AGENT_PRICING_STORE,
   AGENT_STORE,
   type AgentPricingStore,
@@ -20,6 +22,8 @@ import { MikroOrmChannelStore } from './mikro-orm-channel-store';
 import { MikroOrmConfirmTokenStore } from './mikro-orm-confirm-token-store';
 import { MikroOrmGovernanceQueries } from './mikro-orm-governance-queries';
 import { MikroOrmMemoryProvider } from './mikro-orm-memory-provider';
+import { MikroOrmPoppyConnectionStore } from './mikro-orm-poppy-connection-store';
+import { MikroOrmPoppyStore } from './mikro-orm-poppy-store';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
 import { MikroOrmRagIngestionLog } from './mikro-orm-rag-ingestion-log';
 
@@ -157,6 +161,19 @@ export class MikroOrmAgentStoreModule {
           inject: [EntityManager],
         },
         { provide: AGENT_CHANNEL_STORE, useExisting: MikroOrmChannelStore },
+        // Personal Agent Protocol (Poppy) conversations and connections, shared by every replica.
+        {
+          provide: MikroOrmPoppyStore,
+          useFactory: (em: EntityManager) => new MikroOrmPoppyStore(em),
+          inject: [EntityManager],
+        },
+        { provide: AGENT_POPPY_STORE, useExisting: MikroOrmPoppyStore },
+        {
+          provide: MikroOrmPoppyConnectionStore,
+          useFactory: (em: EntityManager) => new MikroOrmPoppyConnectionStore(em),
+          inject: [EntityManager],
+        },
+        { provide: AGENT_POPPY_CONNECTION_STORE, useExisting: MikroOrmPoppyConnectionStore },
       ],
       exports: [
         ...(options.ragIngestionLog === false ? [] : [MikroOrmRagIngestionLog]),
@@ -171,6 +188,10 @@ export class MikroOrmAgentStoreModule {
         AGENT_CONFIRM_TOKEN_STORE,
         MikroOrmChannelStore,
         AGENT_CHANNEL_STORE,
+        MikroOrmPoppyStore,
+        AGENT_POPPY_STORE,
+        MikroOrmPoppyConnectionStore,
+        AGENT_POPPY_CONNECTION_STORE,
       ],
     };
   }

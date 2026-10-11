@@ -1,6 +1,7 @@
 import { snapshotActionProposal } from './action-proposal-transitions.js';
 import { turnChannel } from './genui/channels.js';
 import { type ResolveToolUiCatalog, createNegotiatedUiCollector } from './negotiated-tool-ui.js';
+import { PERSONAL_AGENT_ROLE } from './personal-agent.js';
 import type { ActionProposal } from './spi/action-proposal-store.js';
 import type { BackgroundActorResolver } from './spi/background-actor-resolver.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
@@ -31,16 +32,23 @@ export class ActionProposalExecutor {
       threadId: proposal.threadId,
     });
     try {
-      const actor = await this.options.resolver.resolve({
+      const resolved = await this.options.resolver.resolve({
         actorRef: proposal.actorRef,
         tenantRef: proposal.tenantRef,
       });
       if (
-        !actor ||
-        actor.id !== proposal.actorRef ||
-        (actor.tenantRef ?? null) !== proposal.tenantRef
+        !resolved ||
+        resolved.id !== proposal.actorRef ||
+        (resolved.tenantRef ?? null) !== proposal.tenantRef
       )
         throw new Error('Action proposal requester no longer exists or scope changed');
+      // A personal agent's proposal runs under the roles it was proposed with, never the whole
+      // account's: the resolver answers the account, and `personalAgentGate` must see the agent.
+      const delegated = proposal.executionContext?.personalAgentRoles;
+      const actor: Actor =
+        delegated === undefined
+          ? resolved
+          : { ...resolved, roles: [...new Set([PERSONAL_AGENT_ROLE, ...delegated])] };
       const deps = await this.options.resolveExecution(proposal, actor);
       if (deps.registry.spec(proposal.toolName)?.kind !== 'action')
         throw new Error('Action proposal tool no longer exists as an action');

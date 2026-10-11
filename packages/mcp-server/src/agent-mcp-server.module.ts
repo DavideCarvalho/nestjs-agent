@@ -7,9 +7,14 @@ import type {
   AgentMcpServerModuleOptions,
 } from './agent-mcp-server.options.js';
 import { McpSessionStore } from './mcp-sessions.js';
+import { mcpProtectedResourceController } from './protected-resource.js';
 import { McpRouteDiscoveryService } from './routes/mcp-route-discovery.service.js';
 import { McpRouteDispatcher } from './routes/mcp-route-dispatcher.js';
-import { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
+import {
+  AGENT_MCP_ROUTE_TOOLS,
+  AGENT_MCP_SERVER_OPTIONS,
+  AGENT_MCP_SERVER_PATH,
+} from './tokens.js';
 
 /** Route the MCP endpoint mounts at when `path` is omitted. */
 const DEFAULT_PATH = 'mcp';
@@ -36,35 +41,71 @@ const DEFAULT_PATH = 'mcp';
 @Module({})
 export class AgentMcpServerModule {
   static forRoot(options: AgentMcpServerModuleOptions): DynamicModule {
-    return {
-      module: AgentMcpServerModule,
-      imports: [DiscoveryModule, routerFor(options.path ?? DEFAULT_PATH)],
-      controllers: [AgentMcpServerController],
-      providers: [{ provide: AGENT_MCP_SERVER_OPTIONS, useValue: options }, ...ROUTE_PROVIDERS],
-      exports: [McpSessionStore],
-    };
+    return moduleFor({
+      path: options.path ?? DEFAULT_PATH,
+      options: optionsModule({ provide: AGENT_MCP_SERVER_OPTIONS, useValue: options }, []),
+    });
   }
 
   static forRootAsync(options: AgentMcpServerModuleAsyncOptions): DynamicModule {
-    return {
-      module: AgentMcpServerModule,
-      imports: [
-        DiscoveryModule,
-        routerFor(options.path ?? DEFAULT_PATH),
-        ...(options.imports ?? []),
-      ],
-      controllers: [AgentMcpServerController],
-      providers: [
+    return moduleFor({
+      path: options.path ?? DEFAULT_PATH,
+      options: optionsModule(
         {
           provide: AGENT_MCP_SERVER_OPTIONS,
           useFactory: options.useFactory,
           inject: options.inject ?? [],
         },
-        ...ROUTE_PROVIDERS,
-      ],
-      exports: [McpSessionStore],
-    };
+        options.imports ?? [],
+      ),
+    });
   }
+}
+
+/** Holds the resolved options, shared by the MCP endpoint and its metadata document. */
+@Module({})
+export class AgentMcpServerOptionsModule {}
+
+/**
+ * Serves the protected-resource metadata. A module of its own because the document lives at the app
+ * root, and the route prefix `RouterModule` gives {@link AgentMcpServerModule} would apply to it.
+ */
+@Module({})
+export class AgentMcpProtectedResourceModule {}
+
+function optionsModule(
+  provider: Provider,
+  imports: NonNullable<DynamicModule['imports']>,
+): DynamicModule {
+  return {
+    module: AgentMcpServerOptionsModule,
+    imports,
+    providers: [provider],
+    exports: [AGENT_MCP_SERVER_OPTIONS],
+  };
+}
+
+/**
+ * Both variants: the endpoint under `path`, and the metadata module beside it. They import the SAME
+ * options module object, so Nest instantiates it once — an async factory runs a single time.
+ */
+function moduleFor(input: { path: string; options: DynamicModule }): DynamicModule {
+  return {
+    module: AgentMcpServerModule,
+    imports: [
+      DiscoveryModule,
+      routerFor(input.path),
+      input.options,
+      {
+        module: AgentMcpProtectedResourceModule,
+        imports: [input.options],
+        controllers: [mcpProtectedResourceController(input.path)],
+      },
+    ],
+    controllers: [AgentMcpServerController],
+    providers: [{ provide: AGENT_MCP_SERVER_PATH, useValue: input.path }, ...ROUTE_PROVIDERS],
+    exports: [McpSessionStore],
+  };
 }
 
 /**

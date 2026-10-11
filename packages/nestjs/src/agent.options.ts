@@ -1,6 +1,7 @@
 import type {
   ActionApprovalMode,
   ActionProposal,
+  ActionProposalOutcome,
   BackgroundActorResolver,
   PriceCatalogOptions,
   TextActionProposalConfig,
@@ -157,13 +158,16 @@ export interface AgentModuleOptions {
    * integers, and `pollIntervalMs` must stay below a third of `leaseMs`. `onSettled` runs after each
    * proposal the worker settles (executed or failed), with the stored proposal — its `outcome` and
    * `executionContext.pageContext` included; a module can subscribe the same way through
-   * `ActionProposalWorkerService.onSettled`.
+   * `ActionProposalWorkerService.onSettled`. `onAdmitted` runs once a settled proposal's outcome
+   * was written to its thread — the moment to continue the conversation from it
+   * (`ActionProposalWorkerService.onAdmitted` for a module).
    */
   actionProposalWorker?: {
     pollIntervalMs?: number;
     leaseMs?: number;
     maxConcurrency?: number;
     onSettled?(proposal: ActionProposal): void | Promise<void>;
+    onAdmitted?(outcome: ActionProposalOutcome): void | Promise<void>;
   };
   /**
    * The words a chat message must consist of to approve or reject a proposal by text, and what the

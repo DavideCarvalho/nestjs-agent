@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignore": ["dist", "node_modules", "coverage", ".turbo", "website", "**/*-generated.ts", "**/fixtures/sandbox-kit-variants/**/*.css"]
+    "ignore": [
+      "dist",
+      "node_modules",
+      "coverage",
+      ".turbo",
+      "website",
+      "**/*-generated.ts",
+      "**/fixtures/sandbox-kit-variants/**/*.css"
+    ]
   },
   "organizeImports": {
     "enabled": true
@@ -46,5 +54,23 @@
         "useImportType": "off"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": [
+        "packages/poppy/src/client/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off",
+            "noCommaOperator": "off"
+          },
+          "suspicious": {
+            "noAssignInExpressions": "off"
+          }
+        }
+      }
+    }
+  ]
 }

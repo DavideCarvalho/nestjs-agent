@@ -6,6 +6,11 @@ import { agentGenuiCallSchema } from './agent-genui-call.entity';
 import { agentMemorySchema } from './agent-memory.entity';
 import { agentMessageSchema } from './agent-message.entity';
 import { agentModelPricingSchema } from './agent-model-pricing.entity';
+import { agentPoppyConnectSchema } from './agent-poppy-connect.entity';
+import { agentPoppyConnectionSchema } from './agent-poppy-connection.entity';
+import { agentPoppyConversationSchema } from './agent-poppy-conversation.entity';
+import { agentPoppyEventSchema } from './agent-poppy-event.entity';
+import { agentPoppyMessageSchema } from './agent-poppy-message.entity';
 import { agentQueuedMessageSchema } from './agent-queued-message.entity';
 import { agentRunSchema } from './agent-run.entity';
 import { agentStreamFrameSchema } from './agent-stream-frame.entity';
@@ -28,6 +33,11 @@ export * from './agent-stream-frame.entity';
 export * from './agent-confirm-token.entity';
 export * from './agent-channel-state.entity';
 export * from './agent-action-proposal.entity';
+export * from './agent-poppy-conversation.entity';
+export * from './agent-poppy-event.entity';
+export * from './agent-poppy-message.entity';
+export * from './agent-poppy-connection.entity';
+export * from './agent-poppy-connect.entity';
 
 /** Default string collation baked into {@link AGENT_ENTITIES} for MySQL parity (§5). */
 export const AGENT_COLLATION = 'utf8mb4_unicode_ci';
@@ -52,6 +62,11 @@ export function agentEntities(options: { collation?: string } = {}): EntitySchem
     agentStreamFrameSchema(options.collation),
     agentConfirmTokenSchema(options.collation),
     agentChannelStateSchema(options.collation),
+    agentPoppyConversationSchema(options.collation),
+    agentPoppyEventSchema(options.collation),
+    agentPoppyMessageSchema(options.collation),
+    agentPoppyConnectionSchema(options.collation),
+    agentPoppyConnectSchema(options.collation),
   ];
 }
 

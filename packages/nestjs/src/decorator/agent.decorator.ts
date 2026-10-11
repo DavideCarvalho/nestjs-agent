@@ -52,8 +52,11 @@ export interface AgentOptions {
    * per edge, by the author, and never by the model: the same worker is worth waiting for in one
    * orchestrator and worth backgrounding in another, and only the person wiring the edge knows
    * which side of that the user is sitting on.
+   *
+   * `roles` / `ability` gate who may delegate along the edge (the delegate tool's own), e.g.
+   * `{ agent: Helper, roles: ['personal_agent'] }` to let a personal agent's turn delegate.
    */
-  handoff?: (Type | { agent: Type; detached?: boolean })[];
+  handoff?: (Type | { agent: Type; detached?: boolean; roles?: string[]; ability?: string })[];
   /**
    * How much of the thread this agent's turns carry, overriding `AgentModule.forRoot({ history })`.
    * `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit; `{ summarize: true }` folds

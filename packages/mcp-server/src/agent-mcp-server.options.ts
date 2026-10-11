@@ -2,6 +2,7 @@ import type { ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
 import type { McpToolContextResolver } from './agent-mcp-server.js';
 import type { McpActionPolicy } from './exposed-tools.js';
+import type { McpOAuthOptions } from './protected-resource.js';
 import type { McpRoutePrincipalFactory } from './routes/mcp-route-dispatcher.js';
 
 export interface AgentMcpServerModuleOptions {
@@ -51,6 +52,20 @@ export interface AgentMcpServerModuleOptions {
    * `ctx.emitUi` reaches that turn's stream. See {@link McpToolContextResolver}.
    */
   context?: McpToolContextResolver;
+  /**
+   * OAuth protected-resource metadata (RFC 9728) for this endpoint: served at
+   * `GET /.well-known/oauth-protected-resource/<path>` and named (`resource_metadata`) in every 401 /
+   * 403 challenge, so an OAuth-aware MCP client finds where to log in. Its `authorization_servers`
+   * also names the Poppy issuer when one is announced (Poppy §6) — which alone serves the document
+   * when this is omitted.
+   */
+  oauth?: McpOAuthOptions;
+  /**
+   * The public origin (`https://app.example.com`) of this deployment — the resource URL in the
+   * metadata and challenges. Default: the request's own (Express' `req.protocol`, which honours
+   * `trust proxy`, and its `Host`).
+   */
+  baseUrl?: string;
 }
 
 /** Settings for the tools derived from `@Mcp()` controller routes. */

@@ -28,6 +28,8 @@ import {
   type QuotaProvider,
   type RolesPolicy,
   ToolRegistry,
+  personalAgentGate,
+  personalAgentScopes,
 } from '@dudousxd/nestjs-agent-core';
 import {
   type CanActivate,
@@ -170,6 +172,15 @@ function forwardingPolicy(wrapper: { instance: unknown }): RolesPolicy {
       }
       return policy.can(actor, tool);
     },
+    canOffer(actor, tool) {
+      const policy = wrapper.instance as RolesPolicy | undefined | null;
+      if (policy === undefined || policy === null) {
+        throw new Error(
+          'AgentModule: the AGENT_ROLES_POLICY bound by another module is not ready yet',
+        );
+      }
+      return policy.canOffer ? policy.canOffer(actor, tool) : policy.can(actor, tool);
+    },
   };
 }
 
@@ -205,15 +216,25 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       // drift, and a user would be offered a skill the agent cannot reach. `undefined` when the
       // host configured none — which is what keeps the turn's checkpoint sequence unchanged.
       provide: AGENT_SKILLS,
-      useFactory: (options: AgentModuleOptions, declared: DeclaredSkill[]) =>
-        resolveSkillsConfig(options.skills, declared),
+      // Personal agents resolve no skill scope (`personalAgentScopes`): nothing of the app's to load.
+      useFactory: (options: AgentModuleOptions, declared: DeclaredSkill[]) => {
+        const skills = resolveSkillsConfig(options.skills, declared);
+        return skills === undefined
+          ? undefined
+          : { ...skills, scopes: personalAgentScopes(skills.scopes) };
+      },
       inject: [AGENT_OPTIONS, AGENT_SKILL_SOURCES],
     },
     {
       // One resolution, shared by the loop's deps and the read-back endpoint: a person has to be
       // shown what the model was shown, and two resolutions would eventually disagree about that.
       provide: AGENT_MEMORY,
-      useFactory: (options: AgentModuleOptions) => options.memory,
+      // Personal agents resolve no memory scope (`personalAgentScopes`): under a signed-in Poppy
+      // conversation the actor is the account, and it must neither read nor write its memories.
+      useFactory: (options: AgentModuleOptions) =>
+        options.memory === undefined
+          ? undefined
+          : { ...options.memory, scopes: personalAgentScopes(options.memory.scopes) },
       inject: [AGENT_OPTIONS],
     },
     {
@@ -223,8 +244,11 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
     },
     {
       provide: AGENT_ROLES_POLICY,
+      // Personal agents (a Poppy conversation, a Poppy session's MCP token) reach only the tools
+      // written for them, and run only those of the scopes their user granted. A no-op for every
+      // other actor.
       useFactory: (options: AgentModuleOptions, modules: ModulesContainer) =>
-        resolveRolesPolicy(options, modules),
+        personalAgentGate(resolveRolesPolicy(options, modules)),
       inject: [AGENT_OPTIONS, ModulesContainer],
     },
     {

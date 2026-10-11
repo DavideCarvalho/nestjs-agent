@@ -48,7 +48,7 @@
     "@standard-schema/spec": "1.1.0"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0",
+    "@dudousxd/nestjs-agent-core": ">=0.57.0 <1.0.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0"
   },

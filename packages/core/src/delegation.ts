@@ -5,13 +5,21 @@ import type { AgentDelegation, DetachedDelivery } from './types.js';
 export interface ResolvedDelegation {
   agent: string;
   detached: boolean;
+  /** The edge's gate, carried onto its delegate tool's spec. */
+  roles?: string[];
+  ability?: string;
 }
 
 /** Read one {@link AgentDelegation} entry in either of its forms. */
 export function normalizeDelegation(entry: AgentDelegation): ResolvedDelegation {
   return typeof entry === 'string'
     ? { agent: entry, detached: false }
-    : { agent: entry.agent, detached: entry.detached === true };
+    : {
+        agent: entry.agent,
+        detached: entry.detached === true,
+        ...(entry.roles !== undefined ? { roles: entry.roles } : {}),
+        ...(entry.ability !== undefined ? { ability: entry.ability } : {}),
+      };
 }
 
 /**

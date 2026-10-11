@@ -3,6 +3,8 @@ import {
   AGENT_CHANNEL_STORE,
   AGENT_DURABLE_RUNNER,
   type ActionProposal,
+  type Actor,
+  type ChannelFollower,
   type ChannelStore,
   InMemoryChannelStore,
 } from '@dudousxd/nestjs-agent-core';
@@ -43,7 +45,7 @@ import type { ChannelAdapter, ChannelRequest } from './types.js';
  * durably, the channels move onto the app's `WorkflowEngine` (see the `durable` option).
  */
 @Injectable()
-export class AgentChannelsService implements OnModuleInit, OnModuleDestroy {
+export class AgentChannelsService implements ChannelFollower, OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('AgentChannels');
   private readonly handlers = new Map<string, ChannelHandler>();
   private unsubscribe: (() => void) | undefined;
@@ -165,6 +167,28 @@ export class AgentChannelsService implements OnModuleInit, OnModuleDestroy {
     const handler = address === null ? undefined : this.handlers.get(address.name);
     if (address === null || handler === undefined) return false;
     return handler.relayOutcome(proposal, address.conversation);
+  }
+
+  /**
+   * Deliver a run the channel did not start — a turn continued on the server, e.g. after a sign-in
+   * completed elsewhere — to the conversation `address` names (`pageContext.channel` as a channel
+   * stamped it: `{ name, conversation }`). Read and delivered like a turn (durably under a durable
+   * engine), once per run. `false` when no channel of that name is mounted here. Bound to
+   * `AGENT_CHANNEL_FOLLOWER`, so a module that continues turns can deliver them without importing
+   * this package.
+   */
+  async follow(
+    address: unknown,
+    run: { runId: string; threadId: string; actor: Actor },
+  ): Promise<boolean> {
+    const at =
+      address !== null && typeof address === 'object'
+        ? (address as Record<string, unknown>)
+        : undefined;
+    const handler = typeof at?.name === 'string' ? this.handlers.get(at.name) : undefined;
+    if (handler === undefined || typeof at?.conversation !== 'string') return false;
+    await handler.follow(at.conversation, run);
+    return true;
   }
 
   /**

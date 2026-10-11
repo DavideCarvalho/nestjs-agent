@@ -391,6 +391,125 @@ export const agentActionProposal = pgTable(
   ],
 );
 
+/**
+ * Personal Agent Protocol (Poppy) conversations (`DrizzlePoppyStore`): who it is with, its status,
+ * the User's context and the identity its turns run as (JSON text), and the reader lease
+ * (`reader_holder` until `reader_until`, epoch-ms) that lets one replica at a time write a reply.
+ * `pruned_seq`: events at or below it were pruned.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConversation = pgTable('agent_poppy_conversation', {
+  id: text('id').primaryKey(),
+  clientId: text('client_id').notNull(),
+  userId: text('user_id').notNull(),
+  accountRef: text('account_ref'),
+  agentName: text('agent_name').notNull(),
+  threadId: text('thread_id'),
+  parentId: text('parent_id'),
+  openDirectId: text('open_direct_id'),
+  status: text('status').notNull(),
+  responder: text('responder').notNull(),
+  context: text('context'),
+  activeRunId: text('active_run_id'),
+  turnSeq: bigint('turn_seq', { mode: 'number' }).notNull(),
+  grantInfo: text('grant_info'),
+  readerHolder: text('reader_holder'),
+  readerUntil: bigint('reader_until', { mode: 'number' }),
+  prunedSeq: bigint('pruned_seq', { mode: 'number' }).notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+});
+
+/**
+ * A Poppy conversation's events, append-only, numbered per conversation. The primary key is the
+ * position, so two appends racing for one cannot both win; `event_key` (unique per conversation)
+ * is what keeps a re-read turn from writing its reply twice. `event` is the event as JSON text.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyEvent = pgTable(
+  'agent_poppy_event',
+  {
+    conversationId: text('conversation_id').notNull(),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    id: text('id').notNull(),
+    type: text('type').notNull(),
+    event: text('event').notNull(),
+    eventKey: text('event_key'),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.conversationId, table.seq] }),
+    uniqueIndex('agent_poppy_event_key_idx').on(table.conversationId, table.eventKey),
+    index('agent_poppy_event_id_idx').on(table.conversationId, table.id),
+  ],
+);
+
+/**
+ * Accepted Poppy messages, one row per (owner, message id) — the primary key is the idempotency lock
+ * that makes two deliveries of one message one (§7.3); `response` is what the first got, as JSON.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyMessage = pgTable(
+  'agent_poppy_message',
+  {
+    owner: text('owner').notNull(),
+    messageId: text('message_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    conversationId: text('conversation_id').notNull(),
+    response: text('response').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.owner, table.messageId] })],
+);
+
+/**
+ * This app's Poppy connections (`DrizzlePoppyConnectionStore`): one per (owner, Company issuer),
+ * holding the client state SEALED by the caller — never a token in the clear.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConnection = pgTable(
+  'agent_poppy_connection',
+  {
+    owner: text('owner').notNull(),
+    issuer: text('issuer').notNull(),
+    domain: text('domain').notNull(),
+    organization: text('organization').notNull(),
+    scope: text('scope').notNull(),
+    status: text('status').notNull(),
+    state: text('state').notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.owner, table.issuer] })],
+);
+
+/**
+ * Poppy sign-ins in flight, started by the `connect` tool and completed on the connect page. `actor`
+ * is JSON text; `flow` the sealed per-method state.
+ *
+ * @experimental Personal Agent Protocol Draft 0.1.
+ */
+export const agentPoppyConnect = pgTable('agent_poppy_connect', {
+  id: text('id').primaryKey(),
+  owner: text('owner').notNull(),
+  domain: text('domain').notNull(),
+  issuer: text('issuer').notNull(),
+  organization: text('organization').notNull(),
+  scope: text('scope').notNull(),
+  actor: text('actor'),
+  threadId: text('thread_id'),
+  runId: text('run_id'),
+  toolCallId: text('tool_call_id'),
+  flow: text('flow'),
+  status: text('status').notNull(),
+  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+});
+
 /** Every agent table, for `drizzle(pool, { schema: pgAgentSchema })` on Postgres. */
 export const pgAgentSchema = {
   agentActionProposal,
@@ -407,4 +526,9 @@ export const pgAgentSchema = {
   agentConfirmToken,
   agentChannelState,
   agentStreamFrame,
+  agentPoppyConversation,
+  agentPoppyEvent,
+  agentPoppyMessage,
+  agentPoppyConnection,
+  agentPoppyConnect,
 };

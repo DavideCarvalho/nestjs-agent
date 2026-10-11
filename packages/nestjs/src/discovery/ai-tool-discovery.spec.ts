@@ -1,7 +1,10 @@
 import {
+  AGENT_ROLES_POLICY,
   AGENT_TOOL_REGISTRY,
   type Actor,
   DefaultRolesPolicy,
+  PERSONAL_AGENT_ROLE,
+  type RolesPolicy,
   type ToolRegistry,
 } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
@@ -228,5 +231,47 @@ describe('AiToolDiscoveryService — the delegate tool a handoff synthesizes', (
     const description = registry.spec('start_worker')?.description ?? '';
     expect(description).toContain('BACKGROUND');
     expect(description).toContain('NOT an answer');
+  });
+});
+
+@Agent({ name: 'helper', systemPrompt: 'a helper' })
+@Injectable()
+class HelperAgent {}
+
+@Agent({
+  name: 'concierge',
+  systemPrompt: 'a concierge',
+  handoff: [WorkerAgent, { agent: HelperAgent, roles: [PERSONAL_AGENT_ROLE] }],
+})
+@Injectable()
+class ConciergeAgent {}
+
+describe('AiToolDiscoveryService — an edge’s roles gate its delegate tool', () => {
+  it('carries roles onto the delegate tool, so a personal agent is offered only the opened edge', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'noop' })),
+          store: new InMemoryAgentStore(),
+          actorResolver: new HeaderActorResolver(),
+          defaultAgent: 'concierge',
+        }),
+      ],
+      providers: [WorkerAgent, HelperAgent, ConciergeAgent],
+    }).compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+    try {
+      const registry = app.get<ToolRegistry>(AGENT_TOOL_REGISTRY);
+      const policy = app.get<RolesPolicy>(AGENT_ROLES_POLICY);
+      expect(registry.spec('ask_helper')?.roles).toEqual([PERSONAL_AGENT_ROLE]);
+      expect(registry.spec('ask_worker')?.roles).toBeUndefined();
+      const personalAgent = { id: 'acct-1', roles: [PERSONAL_AGENT_ROLE] };
+      const offered = (await registry.definitionsFor(personalAgent, policy)).map((d) => d.name);
+      expect(offered).toContain('ask_helper');
+      expect(offered).not.toContain('ask_worker');
+    } finally {
+      await app.close();
+    }
   });
 });
