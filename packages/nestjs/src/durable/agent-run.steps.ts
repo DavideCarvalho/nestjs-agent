@@ -8,6 +8,7 @@ import {
   type SinkWriter,
   type ToolStepEnvelope,
   type ToolTransientRetrySetting,
+  announcedToolCalls,
   createFrameBuffer,
   createNoopEmitUi,
   createUiCollector,
@@ -169,8 +170,9 @@ export class AgentRunSteps {
     // ride this step's result into the journal — the same derivation core's inline branch makes.
     // Streaming previews of a tool's input (genui's partial tree) are drawn here, where the model
     // streams, and ride the result as `previews` so the loop withdraws any the call does not replace.
+    const announced = announcedToolCalls(writer);
     const previews = previewToolInputs(
-      writer,
+      announced.writer,
       registryInputPreviews(deps.registry, tools, {
         actor: input.actor,
         ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
@@ -200,6 +202,9 @@ export class AgentRunSteps {
     // (it serves HTTP and replays run bodies), and its own registry would answer `undefined` and
     // downgrade an action to a read — dispatching it, unapproved, to a worker that does know it.
     const stamped = stampToolKinds(turn, deps);
+    // A provider that streams no tool frames still gets its calls announced (as the loop's inline
+    // branch does) — an outcome for a call never announced cannot be attributed to its tool.
+    await announced.announceRest(stamped.toolCalls, tools);
     // Prepare on the worker that owns the registry; a coordinator can have no tool providers.
     // This result rides the existing LLM step, then the coordinator's persist:toolcall checkpoint.
     const allowedTools = intersectAllowLists(deps.toolAllowList, input.personaAllowedTools);

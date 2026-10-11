@@ -7,6 +7,7 @@ export * from './spi/token-stream-sink.js';
 export * from './stream-events.js';
 export * from './turn-frames.js';
 export * from './tool-input-preview.js';
+export * from './announced-tool-calls.js';
 export { type PartialJson, parsePartialJson } from './partial-json.js';
 export * from './tool-ui.js';
 export * from './tool-presentation.js';

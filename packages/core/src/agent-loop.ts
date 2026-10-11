@@ -5,6 +5,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { resolveActionProposalApproval } from './action-proposal-approval.js';
 import { prepareActionProposal } from './action-proposal-preparation.js';
 import { type ActionApprovalMode, actionProposalReceipt } from './action-proposal-receipt.js';
+import { announcedToolCalls } from './announced-tool-calls.js';
 import { isControlFlowSignal } from './control-flow.js';
 import {
   type ToolCallOutcome,
@@ -3486,8 +3487,9 @@ export async function runAgentLoop<TOutput = unknown>(
         // A tool that previews its input (genui's streaming tree) gets partial `ui` frames while
         // the model writes its arguments. Added BELOW the observer: a preview is shown, never part
         // of what the turn persists.
+        const announced = announcedToolCalls(incremental?.writer ?? buffer?.writer ?? writer);
         const previews = previewToolInputs(
-          incremental?.writer ?? buffer?.writer ?? writer,
+          announced.writer,
           registryInputPreviews(deps.registry, tools, {
             actor: input.actor,
             threadId: input.threadId,
@@ -3519,6 +3521,9 @@ export async function runAgentLoop<TOutput = unknown>(
           ),
           deps,
         );
+        // A provider that streams no tool frames still gets its calls announced — a call's outcome
+        // for a call the stream never announced cannot be attributed to its tool.
+        await announced.announceRest(result.toolCalls, tools);
         // Journaled with the turn, so whichever process settles the calls withdraws the same
         // previews the stream showed.
         const shownPreviews = previews.shown();
