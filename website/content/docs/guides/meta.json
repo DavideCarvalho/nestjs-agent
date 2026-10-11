@@ -29,6 +29,7 @@
     "generative-ui",
     "generative-ui-sandbox",
     "generative-ui-sandbox-kit",
+    "generative-ui-sandbox-react-native",
     "generative-ui-channels",
     "genui-builtins",
     "loading-states",

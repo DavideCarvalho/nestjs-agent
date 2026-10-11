@@ -7,7 +7,7 @@
 //
 //   pnpm --filter @dudousxd/nestjs-agent-react build && node packages/react/scripts/verify-dist.mjs
 import { existsSync, readFileSync } from 'node:fs';
-import { createRequire, register } from 'node:module';
+import Module, { createRequire, register } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -19,14 +19,36 @@ if ('React' in globalThis) {
   throw new Error('verify-dist must run without a global React — something defined one');
 }
 
+// The React Native entry imports `react-native` / `react-native-webview` (Flow and native code that
+// Node cannot load): stand-ins with the names it uses, for both formats.
+const NATIVE_MODULES = ['react-native', 'react-native-webview'];
+const NATIVE_STUB =
+  'export const View = () => null; export const Text = () => null; export const WebView = () => null; export default WebView;';
+
 // The markdown entry imports stylesheets, which a bundler handles and Node does not.
 register(
   `data:text/javascript,${encodeURIComponent(
-    "export async function load(url, context, next) { return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context); }",
+    `const NATIVE = ${JSON.stringify(NATIVE_MODULES)}; const STUB = ${JSON.stringify(`data:text/javascript,${encodeURIComponent(NATIVE_STUB)}`)};
+export async function resolve(specifier, context, next) { return NATIVE.includes(specifier) ? { url: STUB, shortCircuit: true } : next(specifier, context); }
+export async function load(url, context, next) { return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : next(url, context); }`,
   )}`,
   import.meta.url,
 );
 require.extensions['.css'] = () => undefined;
+{
+  const stubPath = resolve(packageDir, '__react-native-stub__.cjs');
+  const stub = new Module(stubPath);
+  stub.exports = { View: () => null, Text: () => null, WebView: () => null };
+  stub.exports.default = stub.exports.WebView;
+  stub.loaded = true;
+  require.cache[stubPath] = stub;
+  const resolveFilename = Module._resolveFilename;
+  Module._resolveFilename = function (request, ...rest) {
+    return NATIVE_MODULES.includes(request)
+      ? stubPath
+      : resolveFilename.call(this, request, ...rest);
+  };
+}
 
 // `@streamdown/*` ship ESM only, so the CommonJS markdown entry cannot be `require`d by Node itself
 // (a bundler resolves it). It is still scanned statically by scripts/check-dist-react.mjs.
@@ -137,6 +159,24 @@ function mount(format, entries, React, renderToStaticMarkup) {
     if (!html.includes('data-title="Json"')) throw new Error(`the tree was not rendered: ${html}`);
   });
   if (markdown === undefined) return;
+  const native = entries['./react-native/genui'];
+  if (native !== undefined) {
+    check(`${format} ./react-native/genui <GenuiProvider> + sandbox renderer`, () => {
+      const Sandbox = native.createNativeSandboxRenderer();
+      if (typeof Sandbox !== 'function')
+        throw new Error('createNativeSandboxRenderer did not return a component');
+      renderToStaticMarkup(
+        h(
+          native.GenuiProvider,
+          { registry: { Sandbox } },
+          h(native.GenerativeUI, {
+            part: { id: 'ui-s', component: 'Sandbox', props: { html: '<b>x</b>' }, version: null },
+          }),
+        ),
+      );
+    });
+  }
+
   check(`${format} ./markdown <AgentMarkdown>`, () => {
     const html = renderToStaticMarkup(h(markdown.AgentMarkdown, null, '**bold**'));
     if (!html.includes('bold')) throw new Error(`markdown was not rendered: ${html}`);
