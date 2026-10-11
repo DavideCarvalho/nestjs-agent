@@ -68,13 +68,25 @@ export function validateActionProposalCreation(input: CreateActionProposal): voi
     const context = input.executionContext;
     if (context === null || typeof context !== 'object' || Array.isArray(context))
       throw new TypeError('executionContext must be a JSON object');
-    const allowedContext = ['agentName', 'persona', 'requestId', 'pageContext', 'uiCapabilities'];
+    const allowedContext = [
+      'agentName',
+      'persona',
+      'requestId',
+      'pageContext',
+      'uiCapabilities',
+      'personalAgentRoles',
+    ];
     if (Object.keys(context).some((key) => !allowedContext.includes(key)))
       throw new TypeError('Unknown execution context field');
     checkString(context.requestId);
     if (Object.hasOwn(context, 'uiCapabilities')) validateUiCapabilities(context.uiCapabilities);
     if (Object.hasOwn(context, 'agentName')) checkString(context.agentName);
     if (Object.hasOwn(context, 'persona')) checkString(context.persona);
+    if (Object.hasOwn(context, 'personalAgentRoles')) {
+      const roles = context.personalAgentRoles;
+      if (!Array.isArray(roles) || roles.some((role) => typeof role !== 'string'))
+        throw new TypeError('personalAgentRoles must be an array of strings');
+    }
     if (Object.hasOwn(context, 'pageContext')) {
       const page = context.pageContext;
       if (page === null || typeof page !== 'object' || Array.isArray(page))

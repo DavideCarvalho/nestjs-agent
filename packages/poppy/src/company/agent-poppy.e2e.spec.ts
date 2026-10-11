@@ -373,13 +373,10 @@ describe('AgentPoppyModule over a booted Nest (Express) app', () => {
     const h = await boot(callThen('cancel_order', { id: 'A-1' }), {
       agent: {
         actionApprovalMode: 'independent',
-        // The worker runs the action as the actor the app resolves for its ref — here with the
-        // personal agent's roles, which the tool requires.
+        // The app resolves the WHOLE account for the worker (no personal-agent roles): the
+        // proposal carries the roles it was made under, and the worker runs it under those.
         backgroundActorResolver: {
-          resolve: async ({ actorRef }) => ({
-            id: actorRef,
-            roles: [PERSONAL_AGENT_ROLE, 'scope:poppy:write'],
-          }),
+          resolve: async ({ actorRef }) => ({ id: actorRef, roles: ['member'] }),
         },
         actionProposalWorker: { pollIntervalMs: 10, leaseMs: 3000 },
       },

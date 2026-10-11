@@ -131,9 +131,11 @@ action" (§7.11), the token's scopes do. So:
   'approve-delegated'`, the default; `'reject'` refuses them all). The same goes for independent
   proposals (`actionApprovalMode: 'independent'`): the turn decides it, **waits for it to execute**, and
   the reply carries it in `data.actions` — `{ tool, status, summary, result }`, the summary being the
-  confirmation your app would have shown the person. A question set (`ask`) is skipped. The proposal
-  worker runs the action as `backgroundActorResolver` resolves the recorded actor — it must give back
-  the roles the tool requires.
+  confirmation your app would have shown the person. A question set (`ask`) is skipped. A personal
+  agent's proposal records the roles it was made under (`executionContext.personalAgentRoles`): the
+  proposal worker resolves the account through `backgroundActorResolver` and then runs the action
+  under those roles, so it is gated at execution exactly as when it was proposed — never as the
+  whole account.
 - Every action is also told in the reply's **text** (§7: a message must make sense without `data`):
   `status` is `succeeded`, `failed` (with `error`) or `rejected`. When the model wrote nothing, or an
   action did not go through (the model wrote before the result, so its claim is replaced), the text is

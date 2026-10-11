@@ -21,6 +21,14 @@ export interface ActionProposalExecutionContext {
   requestId: string;
   uiCapabilities?: UiCapabilities;
   pageContext?: PageContext;
+  /**
+   * Set when a PERSONAL AGENT (`personal_agent`, e.g. a Poppy conversation) proposed it: the roles
+   * it carried then — `personal_agent` and its granted `scope:<id>` roles. The worker re-resolves
+   * the requester from scope (`BackgroundActorResolver`), which answers the whole account; these
+   * roles replace the resolved actor's, so the call is gated at execution exactly as it was when
+   * proposed (`personalAgentGate`). The one requester fact a proposal keeps: it only ever narrows.
+   */
+  personalAgentRoles?: string[];
 }
 
 export interface CreateActionProposal extends ActionProposalScope {

@@ -64,6 +64,7 @@ import {
   createNegotiatedUiCollector,
   withDelivered,
 } from './negotiated-tool-ui.js';
+import { isPersonalAgent } from './personal-agent.js';
 import { findPersona, intersectAllowLists } from './personas.js';
 import { resolveUsageCost } from './pricing/resolve.js';
 import {
@@ -2164,6 +2165,11 @@ async function claimToolCall(
           ...(input.persona !== undefined ? { persona: input.persona } : {}),
           ...(input.pageContext !== undefined ? { pageContext: input.pageContext } : {}),
           ...(input.uiCapabilities !== undefined ? { uiCapabilities: input.uiCapabilities } : {}),
+          // A personal agent's proposal keeps the roles that gated it, so the worker — which
+          // re-resolves the requester as the whole account — runs it under the same gate.
+          ...(isPersonalAgent(input.actor)
+            ? { personalAgentRoles: [...(input.actor.roles ?? [])] }
+            : {}),
         },
         // The preflight's own words, else the tool's `confirm` filled by the shared filler, else
         // its label / name in words — the card a channel or the proposal inbox shows.

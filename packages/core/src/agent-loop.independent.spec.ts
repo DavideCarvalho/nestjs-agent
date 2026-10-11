@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { PENDING_ACTION_PROPOSAL_NOTE } from './action-proposal-receipt.js';
 import { type AgentLoopDeps, runAgentLoop } from './agent-loop.js';
 import { InMemoryAgentStore } from './in-memory-store.js';
+import { PERSONAL_AGENT_ROLE, personalAgentGate, scopeRole } from './personal-agent.js';
 import { ToolRegistry } from './tool-registry.js';
 import { DefaultRolesPolicy } from './tool-registry.js';
 
@@ -284,3 +285,43 @@ function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error('Expected a persisted proposal, lease or message');
   return value;
 }
+
+it('keeps the roles of a personal agent that proposed, for the worker to run it under', async () => {
+  const store = new InMemoryAgentStore();
+  const actor = { id: 'acct-1', roles: [PERSONAL_AGENT_ROLE, scopeRole('poppy:write')] };
+  const thread = await store.createThread({ actor });
+  const registry = new ToolRegistry();
+  registry.register(
+    {
+      name: 'cancel_order',
+      kind: 'action',
+      description: 'cancel',
+      inputSchema: z.object({}),
+      roles: [scopeRole('poppy:write')],
+    },
+    { execute: async () => 'cancelled' },
+  );
+  const sink = new InMemoryTokenStreamSink();
+  await runAgentLoop(
+    {
+      store,
+      registry,
+      model: new FakeModelProvider(() => ({
+        text: '',
+        toolCall: { name: 'cancel_order', input: {} },
+      })),
+      rolesPolicy: personalAgentGate(new DefaultRolesPolicy()),
+      systemPrompt: 'test',
+      day: '2026-10-01',
+      actionApprovalMode: 'independent',
+    },
+    { threadId: thread.id, actor, userText: 'cancel' },
+    { runId: 'r', openSink: () => sink.open('r'), step: (_name, fn) => fn() },
+  );
+  const [proposal] = await store.listActionProposals({
+    threadId: thread.id,
+    tenantRef: null,
+    actorRef: actor.id,
+  });
+  expect(proposal?.executionContext?.personalAgentRoles).toEqual(actor.roles);
+});
