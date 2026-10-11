@@ -163,6 +163,10 @@ export interface AgentGenuiSandboxKitOptions {
   manifest?: { file: string; outDir: string } | false;
   /** An explicit kit url (an SPA served from elsewhere), over what is found. */
   kitUrl?: string;
+  /** An explicit url of the compiled styles, over what is found (the same SPA case). */
+  cssUrl?: string;
+  /** An explicit url of the Tailwind browser runtime, over what is found (the same SPA case). */
+  tailwindUrl?: string;
   /** Read the manifest first (else the freshest of the two). Default: `NODE_ENV === 'production'`. */
   production?: boolean;
 }

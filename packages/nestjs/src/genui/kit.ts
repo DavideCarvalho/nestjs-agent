@@ -34,6 +34,8 @@ export function nestSandboxKitDiscovery(
     descriptor: sandboxKitDescriptorPath(options.descriptor ?? NEST_SANDBOX_KIT_DESCRIPTOR, name),
     ...(manifest !== false ? { manifest: { file: manifest.file, outDir: manifest.outDir } } : {}),
     ...(options.kitUrl !== undefined ? { kitUrl: options.kitUrl } : {}),
+    ...(options.cssUrl !== undefined ? { cssUrl: options.cssUrl } : {}),
+    ...(options.tailwindUrl !== undefined ? { tailwindUrl: options.tailwindUrl } : {}),
     ...(options.production !== undefined ? { production: options.production } : {}),
   });
 }
