@@ -1454,6 +1454,9 @@ export class ChannelHandler {
               name: frame.component,
               data: frame.props,
               version: frame.version ?? 1,
+              ...(frame.componentVersions !== undefined
+                ? { componentVersions: frame.componentVersions }
+                : {}),
               ...(frame.fallbackText !== undefined ? { fallbackText: frame.fallbackText } : {}),
             };
             const replies = options.renderComponent
@@ -1479,6 +1482,10 @@ export class ChannelHandler {
                   id: component.id,
                   name: component.name,
                   props: (component.data ?? {}) as Record<string, unknown>,
+                  version: component.version,
+                  ...(component.componentVersions !== undefined
+                    ? { componentVersions: component.componentVersions }
+                    : {}),
                 },
                 native.channel,
               );

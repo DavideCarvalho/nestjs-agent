@@ -64,6 +64,7 @@ browser.
 | `treeInstructions` | | Prepended to the tree tool's description. |
 | `treeLimits` | `{ maxDepth: 12, maxNodes: 200 }` | |
 | `roles` | | `ToolSpec.roles` for every generated tool. |
+| `ability` | | `ToolSpec.ability` for the generated tools, for an ability-aware policy (`AuthzRolesPolicy`, or any authorizer that denies a tool with no ability). A string for every tool; a map by tool name (`{ ui__render: 'genui.render', ui__sandbox: 'genui.sandbox' }`, where a tool left out declares none); or `({ name, component }) => ability \| undefined`. The policy still decides. |
 | `presentation(name)` | label/running/done from `title`, `result: { kind: 'elsewhere' }` | |
 | `resolveCatalog(scope)` (core) / `resolver` (Nest) | | The catalog for one request, `{ actor, threadId?, tenant?, agentName? }`. Consulted on every call and every turn's description. |
 

@@ -3,6 +3,9 @@ packages:
   - "examples/*"
   - "registry"
 allowBuilds:
+  # sass (a dev dependency, for the sandbox kit's Sass test) pulls @parcel/watcher's optional native
+  # build for `sass --watch`; compiling runs without it.
+  '@parcel/watcher': false
   '@biomejs/biome': true
   '@nestjs/core': false
   '@swc/core': true

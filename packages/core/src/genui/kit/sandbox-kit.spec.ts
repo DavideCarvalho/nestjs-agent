@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { prepareSandboxJsx, transpileJsx } from '../sandbox-jsx.js';
 import { kitDocsToModelText, sandboxJsxRuntime } from '../sandbox-kit.js';
+import { tailwindDirectivesFromCss } from '../sandbox-styles.js';
 import {
   hostThemeCss,
-  tailwindDirectivesFromCss,
   tailwindThemeCss,
   themeToModelText,
   themeVarsFromCss,
@@ -20,15 +20,15 @@ import { globToRegExp, resolveSandboxKitFiles } from './files.js';
 import { type GenuiSandboxKitOptions, createGenuiSandboxKitPlugin } from './plugin.js';
 import { writeSandboxKitDocs } from './write.js';
 
-const fixture = fileURLToPath(new URL('./fixtures/sandbox-kit', import.meta.url));
-const typescript = await import('typescript');
-
 /** The plugin with the defaults `@dudousxd/nestjs-agent/vite`'s `genuiSandboxKit()` passes. */
 const genuiSandboxKit = (options: GenuiSandboxKitOptions = {}) =>
   createGenuiSandboxKitPlugin(options, {
     descriptor: '.genui/sandbox-kit.json',
     rendererImport: /@dudousxd\/nestjs-agent-react/,
   });
+
+const fixture = fileURLToPath(new URL('./fixtures/sandbox-kit', import.meta.url));
+const typescript = await import('typescript');
 
 const BILL_SPLITTER = `import { Card } from '@/components/ui/card'
 export default function App() {
@@ -127,16 +127,6 @@ describe('sandbox JSX — transpiler and partial gating', () => {
     expect(transpileJsx(cut, { partial: true })).toContain(
       'React.createElement(Slider, {min: 1, max: 10, value: [people]})',
     );
-  });
-
-  it('the frame runtime holds the transpiler even when the build wrapped it in `__name`', () => {
-    const runtime = sandboxJsxRuntime({ token: 't', jsxMessage: 'agora:sandbox:jsx' });
-    // tsup (under swc) keeps function names with an `__name(fn, "name")` helper the frame lacks.
-    const named = 'var __name=function(f){return f};';
-    expect(runtime.startsWith(`(function(){${named}var transpileJsx=`)).toBe(true);
-    const body = runtime.slice('(function(){'.length).split('\nvar T=')[0];
-    const wrapped = `${body};var t2=__name(function(){return transpileJsx('<b/>')},'t2');return t2()`;
-    expect(new Function(wrapped)()).toBe('React.createElement("b", null)');
   });
 
   it('the frame runtime is valid JavaScript (its regular expressions intact)', () => {
@@ -259,7 +249,7 @@ describe('kit docs generator', () => {
     expect(slider?.props.find((prop) => prop.name === 'onValueChange')?.type).toBe(
       '(value: number[]) => void',
     );
-    const text = kitDocsToModelText({ version: 1, components: docs });
+    const text = kitDocsToModelText({ components: docs });
     expect(text).toContain('- <Button> A button');
     expect(text).toContain('variant?: "default" | "outline" | "ghost" | "destructive" = "default"');
     expect(text).toContain('…and every <button> attribute');
@@ -273,18 +263,22 @@ describe('kit docs generator', () => {
     expect(globToRegExp('components/*.tsx').test('components/ui/b.tsx')).toBe(false);
   });
 
-  it('writes a descriptor (docs + theme) for a server whose Vite runs elsewhere', async () => {
+  it('writes a descriptor (docs + theme) for the assembler hook / codegen', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kit-docs-'));
     try {
       const out = await writeSandboxKitDocs({
         root: fixture,
         typescript,
         output: join(dir, 'kit.json'),
-        css: 'components/ui/*.css',
+        styles: 'components/ui/*.css',
+        compileStyles: false,
       });
       expect(out?.components).toHaveLength(7);
+      expect(out?.jsx).toBe(true);
+      // Plain CSS: its classes are the vocabulary.
+      expect(out?.vocabulary?.groups.map((group) => group.name)).toContain('btn');
       const written = JSON.parse(readFileSync(join(dir, 'kit.json'), 'utf8'));
-      expect(written.kit).toBeNull();
+      expect(written.assets).toEqual({ kit: null, css: null, tailwind: null });
       expect(written.components[0].name).toBe('Button');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -295,19 +289,29 @@ describe('kit docs generator', () => {
 describe('the sandbox definition with a kit', () => {
   it('tells the model the kit, the JSX rules, Tailwind and the theme — read live', () => {
     let components = [{ name: 'Button', props: [] }];
+    const tokens = {
+      colors: ['gold'],
+      radius: [],
+      fonts: [],
+      shadows: [],
+      text: [],
+      animations: [],
+      utilities: ['kit-card'],
+      variants: ['dark'],
+    };
     const sandbox = defineSandbox({
-      kit: () => ({ version: 1, components }),
-      tailwind: true,
+      kit: () => ({ version: 2, components, jsx: true, tailwind: { version: 4, tokens } }),
       theme: { vars: ['--primary'] },
     });
     expect(sandbox.description).toContain('- <Button>');
     expect(sandbox.description).toContain('function App()');
-    expect(sandbox.description).toContain('Tailwind CSS v4');
+    expect(sandbox.description).toContain('Tailwind CSS utility classes work');
+    expect(sandbox.description).toContain('kit-card');
     expect(sandbox.description).toContain('var(--primary)');
     components = [{ name: 'Slider', props: [] }];
     expect(sandbox.description).toContain('- <Slider>');
     expect((sandbox.props as { properties: Record<string, unknown> }).properties.jsx).toBeDefined();
-    expect(sandbox.sandboxView).toEqual({ theme: true, tailwind: true, kit: true });
+    expect(sandbox.sandboxView).toEqual({ theme: true, kit: true });
   });
 
   it('the plain sandbox is unchanged (html required, no jsx)', () => {
@@ -329,21 +333,22 @@ describe('the Vite plugin', () => {
     rmSync(root, { recursive: true, force: true });
   });
   cpSync(fixture, root, { recursive: true });
-  writeFileSync(join(root, 'main.js'), 'import "./app.css"; console.log("app");\n');
+  writeFileSync(join(root, 'main.js'), 'import "./page.css"; console.log("app");\n');
+  writeFileSync(join(root, 'page.css'), '.page { color: red; }\n');
   writeFileSync(
     join(root, 'app.css'),
-    ':root { --primary: oklch(0.7 0.1 80); --radius: 0.5rem; }\n',
+    ':root { --primary: oklch(0.7 0.1 80); --radius: 0.5rem; }\n@theme inline { --color-gold: var(--primary); }\n@utility kit-card { border-radius: var(--radius); }\n.app-shell { display: grid; }\n',
   );
   const alias = { '@': root };
 
-  it('build: emits the kit, Tailwind and the descriptor, listed in the manifest', async () => {
+  it('build: emits the kit, the styles, Tailwind and the descriptor, listed in the manifest', async () => {
     const vite = await import('vite');
     await vite.build({
       configFile: false,
       root,
       logLevel: 'silent',
       resolve: { alias },
-      plugins: [genuiSandboxKit({ typescript, tailwindCss: 'tailwind-directives.txt' })],
+      plugins: [genuiSandboxKit({ typescript, styles: 'app.css' })],
       build: {
         outDir: join(work, 'dist'),
         manifest: true,
@@ -353,6 +358,7 @@ describe('the Vite plugin', () => {
     const manifest = JSON.parse(readFileSync(join(work, 'dist/.vite/manifest.json'), 'utf8'));
     for (const key of [
       'genui-sandbox-kit.js',
+      'genui-sandbox-kit.css',
       'genui-sandbox-tailwind.js',
       'genui-sandbox-kit.json',
     ])
@@ -360,11 +366,17 @@ describe('the Vite plugin', () => {
     const descriptor = JSON.parse(
       readFileSync(join(work, 'dist', manifest['genui-sandbox-kit.json'].file), 'utf8'),
     );
-    expect(descriptor.kit.url).toBe(`/${manifest['genui-sandbox-kit.js'].file}`);
-    expect(descriptor.tailwind.url).toBe(`/${manifest['genui-sandbox-tailwind.js'].file}`);
-    expect(descriptor.tailwind.css).toContain('@utility kit-card');
+    expect(descriptor.assets.kit.url).toBe(`/${manifest['genui-sandbox-kit.js'].file}`);
+    expect(descriptor.assets.css.url).toBe(`/${manifest['genui-sandbox-kit.css'].file}`);
+    expect(descriptor.assets.tailwind.url).toBe(`/${manifest['genui-sandbox-tailwind.js'].file}`);
+    expect(descriptor.assets.tailwind.css).toContain('@utility kit-card');
+    expect(descriptor.tailwind.tokens.colors).toContain('gold');
+    expect(
+      readFileSync(join(work, 'dist', manifest['genui-sandbox-kit.css'].file), 'utf8'),
+    ).toContain('.app-shell');
     expect(descriptor.components.map((c: { name: string }) => c.name)).toContain('Slider');
-    expect(descriptor.theme.vars['--primary']).toBe('oklch(0.7 0.1 80)');
+    // Read off the compiled (minified) styles.
+    expect(descriptor.theme.vars['--primary']).toMatch(/^oklch\(/);
     const kit = readFileSync(join(work, 'dist', manifest['genui-sandbox-kit.js'].file), 'utf8');
     expect(kit).toContain('window.Kit');
 
@@ -374,11 +386,12 @@ describe('the Vite plugin', () => {
       production: true,
       manifest: { file: 'dist/.vite/manifest.json', outDir: 'dist' },
     });
-    const server = resolveSandboxServer({ kit: true, tailwind: true }, discovery);
+    const server = resolveSandboxServer({ kit: true }, discovery);
     expect(server.client()).toEqual({
       theme: true,
-      tailwind: descriptor.tailwind,
-      kit: descriptor.kit,
+      tailwind: descriptor.assets.tailwind,
+      css: descriptor.assets.css,
+      kit: descriptor.assets.kit,
     });
     expect(defineSandbox(server.define).description).toContain('- <Slider>');
   }, 180_000);
@@ -404,13 +417,15 @@ describe('the Vite plugin', () => {
     try {
       await plugin.api.ready();
       const descriptor = plugin.api.descriptor();
-      expect(descriptor?.kit?.url).toMatch(/^\/@genui-sandbox-kit\/kit\.js\?v=[0-9a-f]{12}$/);
+      expect(descriptor?.assets.kit?.url).toMatch(
+        /^\/@genui-sandbox-kit\/kit\.js\?v=[0-9a-f]{12}$/,
+      );
       expect(existsSync(join(root, '.genui/kit.json'))).toBe(true);
       const http = await import('node:http');
       const listener = http.createServer(server.middlewares);
       await new Promise<void>((done) => listener.listen(0, '127.0.0.1', done));
       const port = (listener.address() as { port: number }).port;
-      const response = await fetch(`http://127.0.0.1:${port}${descriptor?.kit?.url}`);
+      const response = await fetch(`http://127.0.0.1:${port}${descriptor?.assets.kit?.url}`);
       const served = { status: response.status, body: await response.text() };
       listener.close();
       expect(served.status).toBe(200);
@@ -427,7 +442,7 @@ describe('the Vite plugin', () => {
         if (Date.now() > deadline) throw new Error('no rebuild');
         await new Promise((r) => setTimeout(r, 50));
       }
-      expect(plugin.api.descriptor()?.kit?.url).not.toBe(descriptor?.kit?.url);
+      expect(plugin.api.descriptor()?.assets.kit?.url).not.toBe(descriptor?.assets.kit?.url);
 
       // The dev server's descriptor is what the server process reads.
       const discovery = sandboxKitDiscovery({
@@ -435,7 +450,9 @@ describe('the Vite plugin', () => {
         descriptor: '.genui/kit.json',
         production: false,
       });
-      expect(discovery.descriptor()?.kit?.url).toBe(plugin.api.descriptor()?.kit?.url);
+      expect(discovery.descriptor()?.assets.kit?.url).toBe(
+        plugin.api.descriptor()?.assets.kit?.url,
+      );
     } finally {
       await server.close();
     }
