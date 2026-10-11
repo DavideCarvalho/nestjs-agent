@@ -1,5 +1,16 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.31.0
+
+### Minor Changes
+
+- [#377](https://github.com/DavideCarvalho/nestjs-agent/pull/377) [`25ccb40`](https://github.com/DavideCarvalho/nestjs-agent/commit/25ccb408fd03cd284036503b8443b7ea6b6694aa) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Poppy (Personal Agent Protocol, experimental) persistence: `DrizzlePoppyStore` / `DrizzlePoppyConnectionStore` and `MikroOrmPoppyStore` / `MikroOrmPoppyConnectionStore`, bound to `AGENT_POPPY_STORE` / `AGENT_POPPY_CONNECTION_STORE` by the store modules on five library-owned, boot-healed tables (`agent_poppy_conversation`, `agent_poppy_event`, `agent_poppy_message`, `agent_poppy_connection`, `agent_poppy_connect`; nothing app-side to migrate); `RedisPoppyStore` / `RedisPoppyConnectionStore` in transport-redis; `POPPY_STORE_CONTRACT` / `POPPY_CONNECTION_STORE_CONTRACT` in testing. On MySQL a connection's issuer is capped at 512 characters (index key length).
+
+### Patch Changes
+
+- Updated dependencies [[`25ccb40`](https://github.com/DavideCarvalho/nestjs-agent/commit/25ccb408fd03cd284036503b8443b7ea6b6694aa)]:
+  - @dudousxd/nestjs-agent-core@0.57.0
+
 ## 0.30.0
 
 ### Minor Changes
