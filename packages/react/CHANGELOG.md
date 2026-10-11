@@ -1,5 +1,18 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.41.2
+
+### Patch Changes
+
+- [#366](https://github.com/DavideCarvalho/nestjs-agent/pull/366) [`382c564`](https://github.com/DavideCarvalho/nestjs-agent/commit/382c5645268f49045fecd14a0c5d1cc8e0504c7d) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Sandbox views a real model writes under strict tool calling (it fills every field):
+
+  - The schema offers `jsx` only when the kit has a bundle to draw it with. A stylesheet-only kit is written as `html`.
+  - When a model writes both `html` and `jsx`, the longer one wins (`sandboxDrawsJsx`, in the web and React Native renderers). A stub `App` next to the real `html` no longer blanks the frame.
+  - The JSX rules now say "jsx OR html, never both".
+
+- Updated dependencies [[`382c564`](https://github.com/DavideCarvalho/nestjs-agent/commit/382c5645268f49045fecd14a0c5d1cc8e0504c7d)]:
+  - @dudousxd/nestjs-agent-core@0.54.2
+
 ## 0.41.1
 
 ### Patch Changes
