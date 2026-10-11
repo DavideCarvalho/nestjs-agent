@@ -173,6 +173,7 @@ export {
   type SandboxThemeSource,
   type SandboxView,
   sandboxCsp,
+  sandboxDrawsJsx,
   sandboxPartialProps,
   sandboxPolicyOf,
 } from './sandbox.js';
