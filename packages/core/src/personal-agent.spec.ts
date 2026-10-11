@@ -7,6 +7,7 @@ import {
   personalAgentScopes,
   scopeRole,
 } from './personal-agent.js';
+import type { AiToolCtx } from './spi/tool.js';
 import { filterToolsByRole } from './tool-filters.js';
 import { DefaultRolesPolicy, ToolRegistry } from './tool-registry.js';
 import type { ToolSpec } from './types.js';
@@ -69,7 +70,12 @@ describe('personalAgentGate', () => {
     const offered = await registry.definitionsFor(signedIn, gate);
     expect(offered.map((d) => d.name)).toEqual(['cancel_order']);
     await expect(
-      registry.invoke('cancel_order', {}, { actor: signedIn, threadId: 't', requestId: 'r' }, gate),
+      registry.invoke(
+        'cancel_order',
+        {},
+        { actor: signedIn, threadId: 't', requestId: 'r' } as AiToolCtx,
+        gate,
+      ),
     ).rejects.toThrow();
   });
 });
