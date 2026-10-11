@@ -71,6 +71,8 @@ export interface SandboxKitDescriptor extends SandboxKitDocs {
  */
 export interface SandboxClientConfig {
   theme: boolean;
+  /** The kit's name, when it is a named one (`genuiSandboxKit({ name })`): whose dev rebuilds to follow. */
+  name?: string;
   kit?: { url: string; hash?: string };
   css?: { url: string; hash?: string };
   tailwind?: { url: string; css?: string };
