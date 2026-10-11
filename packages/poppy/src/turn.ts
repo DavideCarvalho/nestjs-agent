@@ -104,7 +104,7 @@ export interface PersonalAgentTurnResult {
  */
 export interface PersonalAgentTurnService
   extends Pick<AgentService, 'chat' | 'subscribe' | 'approve' | 'reject' | 'skip' | 'cancel'>,
-    Partial<Pick<AgentService, 'decideActionProposal' | 'listActionProposals'>> {
+    Partial<Pick<AgentService, 'decideActionProposal' | 'listActionProposals' | 'threadOwner'>> {
   /**
    * The roles a tool declares — what an approval and a receipt match the granted scopes against.
    * Omitted → the shared `ToolRegistry`. An app whose registry is built per turn answers it here.

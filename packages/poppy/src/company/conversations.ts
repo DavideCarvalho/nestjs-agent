@@ -181,6 +181,10 @@ export type PoppyStreamItem =
   | { kind: 'state'; status: PoppyStatus };
 
 const PAGE_SIZE = 100;
+
+/** How many earlier messages a turn that changes actor (a sign-in) is told. */
+const TRANSCRIPT_MAX_MESSAGES = 20;
+const EARLIER_PREFIX = 'Earlier in this conversation, before the User signed in:';
 const LEASE_MS = 30_000;
 const RUN_ACTIVE_RETRY_MS = 250;
 const PRUNE_EVERY_MS = 60_000;
@@ -1060,6 +1064,37 @@ export class PoppyConversations {
     }
   }
 
+  /**
+   * The conversation's messages before `untilMessageId` (the first one the turn answers), as a
+   * plain transcript — the last {@link TRANSCRIPT_MAX_MESSAGES} of them.
+   */
+  async #transcript(
+    conversation: PoppyConversationRecord,
+    untilMessageId?: string,
+  ): Promise<string> {
+    const lines: string[] = [];
+    let after = 0;
+    for (;;) {
+      const page = await this.options.store.listEvents(conversation.id, after, PAGE_SIZE);
+      for (const entry of page) {
+        after = entry.seq;
+        const message = entry.event.message as PoppyEventMessage | undefined;
+        if (entry.event.type !== 'message' || message === undefined) continue;
+        if (message.id === untilMessageId) return lines.slice(-TRANSCRIPT_MAX_MESSAGES).join('\n');
+        const body = turnText([message]);
+        if (body === '') continue;
+        const who =
+          message.role === 'company'
+            ? `You${message.sender === 'human' ? ' (a person of the company)' : ''}`
+            : message.sender === 'human'
+              ? 'User'
+              : 'Personal agent';
+        lines.push(`${who}: ${body}`);
+      }
+      if (page.length < PAGE_SIZE) return lines.slice(-TRANSCRIPT_MAX_MESSAGES).join('\n');
+    }
+  }
+
   async #turn(
     conversation: PoppyConversationRecord,
     messages: PoppyEventMessage[],
@@ -1082,12 +1117,24 @@ export class PoppyConversations {
       threadId =
         (await this.options.store.getConversation(conversation.parentId))?.threadId ?? null;
     }
+    let text = turnText(messages);
+    // A thread is one actor's. The User signing in mid-conversation (§7.11: the personal agent
+    // continues it with its new token) turns the signed-out actor (`poppy:<hash>`) into the
+    // account: its turn runs in a thread of its own, told what was said so far.
+    if (threadId !== null && service.threadOwner !== undefined) {
+      const owner = await service.threadOwner(threadId).catch(() => null);
+      if (owner !== grant.actor.id) {
+        threadId = null;
+        const earlier = await this.#transcript(conversation, messages[0]?.id);
+        if (earlier !== '') text = `${EARLIER_PREFIX}\n${earlier}\n\n${text}`;
+      }
+    }
 
     for (;;) {
       try {
         const result = await runPersonalAgentTurn(service, this.options.toolRoles, {
           actor: grant.actor,
-          text: turnText(messages),
+          text,
           ...(conversation.agentName !== '' ? { agentName: conversation.agentName } : {}),
           ...(threadId !== null ? { threadId } : {}),
           delegatedScopes: grant.signedIn ? grant.scopes : null,
