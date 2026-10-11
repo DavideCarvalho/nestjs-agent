@@ -12,8 +12,10 @@ import {
   type MessageUsage,
   type SinkWriter,
   type ToolCallRequest,
+  type ToolPresentation,
   type ToolResult,
   encodeStreamEvent,
+  resolveToolConfirmation,
   settleElicitation,
 } from '@dudousxd/nestjs-agent-core';
 import { ConflictException, type Logger } from '@nestjs/common';
@@ -138,6 +140,14 @@ export interface OpenCodeTurnArgs {
   store: AgentStore;
   /** What an action needs before it runs (the module's `ApprovalPolicy`). */
   approvalFor: (action: string) => Promise<ApprovalRequirement>;
+  /**
+   * The app tool a permission `action` names, with its presentation: its `confirm` templates (filled
+   * from the call's arguments) word the approval card. `undefined` (or omitted) → an OpenCode
+   * built-in, worded from its name.
+   */
+  approvalPresentation?: (
+    action: string,
+  ) => { name: string; presentation?: ToolPresentation } | undefined;
   /** The model label usage is recorded under until OpenCode names the step's model. */
   modelLabel: string;
   /**
@@ -838,6 +848,12 @@ export class OpenCodeTurn {
         ? Math.floor(requirement.ttlMs)
         : undefined;
     const expiresAt = ttlMs !== undefined ? new Date(Date.now() + ttlMs).toISOString() : undefined;
+    // An app tool's own prompt, as the loop would carry it ("Refund order #7?") — else its label or
+    // name in words: the call reaches clients under OpenCode's prefixed name (`aviary_refund_order`),
+    // which no tool catalog knows. A built-in (`bash`) carries none; adapters word it from its name.
+    const tool = this.a.approvalPresentation?.(action);
+    const confirmation =
+      tool !== undefined ? resolveToolConfirmation(tool.name, args, tool.presentation) : undefined;
     this.segment.calls.push({ id: req.id, name: action, input: args, kind: 'action' });
     const messageId = (await this.flush(false)) as string;
     await store.recordToolCall({
@@ -847,6 +863,7 @@ export class OpenCodeTurn {
       toolType: 'action',
       input: args,
       status: 'pending_approval',
+      ...(confirmation !== undefined ? { confirmation } : {}),
       runId: this.a.runId,
       approver: requirement.approver,
       ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -862,6 +879,7 @@ export class OpenCodeTurn {
       kind: 'approval-requested',
       id: req.id,
       approver: requirement.approver,
+      ...(confirmation !== undefined ? { confirmation } : {}),
       ...(expiresAt !== undefined ? { expiresAt } : {}),
     });
     this.reach({

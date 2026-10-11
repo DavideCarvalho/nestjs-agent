@@ -4,7 +4,7 @@ The agent on text channels — WhatsApp ([Evolution API](https://doc.evolution-a
 Cloud API) and Telegram — for [`@dudousxd/nestjs-agent`](../nestjs). One webhook route per channel
 that verifies the request, deduplicates by the provider's message id, answers `200` at once and runs
 the turn in the background; the reply is converted to the channel's markdown and split at its length
-limit. Pending proposals arrive as Confirm/Cancel buttons (or a text instruction), questions as
+limit. Pending proposals arrive as buttons — the tool's `confirm.verb` (Confirm when it declares none) and Cancel — (or a text instruction), questions as
 numbered text, media as staged attachments, and late outcomes are relayed when the proposal worker
 settles them.
 

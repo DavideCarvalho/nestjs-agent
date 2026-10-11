@@ -7,9 +7,11 @@ import {
   type AgentStreamEvent,
   type AttachmentRef,
   type ChannelStore,
+  DEFAULT_CONFIRM_VERB,
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type ElicitationQuestion,
   type PageContext,
+  type ToolConfirmation,
   parseTextActionProposalCommand,
 } from '@dudousxd/nestjs-agent-core';
 import { agUiFramesFromNdjson } from '@dudousxd/nestjs-agent-core/ag-ui';
@@ -412,6 +414,19 @@ const buttonRef = (proposalId: string) => proposalId.slice(-BUTTON_REF_LENGTH);
 const CARDS_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CARDS = 20;
 const foldLabel = (label: string) => label.trim().toLowerCase();
+
+/**
+ * The approve button's label on a proposal card: the tool's own `confirm.verb` ("Refund"), else the
+ * channel's localized `texts.approve` — the library's generic English verb never reaches a person
+ * on a channel that words its own.
+ */
+const approveLabel = (
+  proposal: { confirmation?: ToolConfirmation | undefined },
+  texts: ChannelTexts,
+): string => {
+  const verb = proposal.confirmation?.verb?.trim();
+  return verb === undefined || verb === '' || verb === DEFAULT_CONFIRM_VERB ? texts.approve : verb;
+};
 
 /** The button ids for a proposal: what the handler maps back to its decision. */
 export function proposalButtonIds(proposalId: string): { approve: string; reject: string } {
@@ -1013,19 +1028,26 @@ export class ChannelHandler {
     if (message.buttonId !== undefined || message.buttonWithoutId !== true) return undefined;
     if (threadId === null || !this.service.listActionProposals) return undefined;
     const label = foldLabel(message.text);
-    const action =
+    const fixed =
       label === foldLabel(texts.approve)
         ? 'approve'
         : label === foldLabel(texts.reject)
           ? 'reject'
           : undefined;
-    if (action === undefined) return undefined;
     const refs = await this.cardsOf(message.conversation);
     if (refs.size === 0) return undefined;
     const live = (await this.service.listActionProposals(actor, threadId)).filter(
       (proposal) => proposal.decision === 'pending' && refs.has(buttonRef(proposal.id)),
     );
-    const only = live.length === 1 ? live[0] : undefined;
+    // The approve button may carry the tool's own verb ("Refund"): a label matching it approves
+    // the one card that showed it.
+    const candidates =
+      fixed !== undefined
+        ? live
+        : live.filter((proposal) => foldLabel(approveLabel(proposal, texts)) === label);
+    const action = fixed ?? (candidates.length > 0 ? 'approve' : undefined);
+    if (action === undefined) return undefined;
+    const only = candidates.length === 1 ? candidates[0] : undefined;
     return only === undefined ? undefined : `agora:${action}:${buttonRef(only.id)}`;
   }
 
@@ -1068,7 +1090,7 @@ export class ChannelHandler {
       {
         text: toChannelMarkdown(summary, capabilities.markdown).slice(0, capabilities.maxLength),
         buttons: [
-          { id: ids.approve, label: texts.approve },
+          { id: ids.approve, label: approveLabel(proposal, texts) },
           { id: ids.reject, label: texts.reject },
         ],
         fallbackText: asText.slice(0, capabilities.maxLength),

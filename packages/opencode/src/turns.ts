@@ -35,6 +35,7 @@ import {
   type SkillsConfig,
   type StoredMessage,
   type TokenStreamSink,
+  type ToolPresentation,
   type ToolRegistry,
   actorScope,
   buildMemoryBlock,
@@ -266,6 +267,22 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   /** The tools server's name in OpenCode. */
   get toolsServer(): string {
     return this.settings.tools?.server ?? 'aviary';
+  }
+
+  /** The app tool an OpenCode permission `action` names, and its presentation — `undefined` for a built-in. */
+  presentationOf(action: string): { name: string; presentation?: ToolPresentation } | undefined {
+    if (this.settings.tools === undefined) return undefined;
+    const server = this.toolsServer;
+    for (const prefix of [`${server}.`, `${server}_`]) {
+      if (!action.startsWith(prefix)) continue;
+      const spec = this.registry.spec(action.slice(prefix.length));
+      if (spec !== undefined)
+        return {
+          name: spec.name,
+          ...(spec.presentation !== undefined ? { presentation: spec.presentation } : {}),
+        };
+    }
+    return undefined;
   }
 
   /** The roles policy a turn's tools are gated by (the agent's own). */
@@ -972,6 +989,9 @@ export class OpenCodeTurns implements OnApplicationShutdown {
           runId,
           ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
         }),
+      // An app tool reaches OpenCode as `<server>.<name>` / `<server>_<name>`: its own presentation
+      // words the approval card. OpenCode's built-ins (`bash`, `edit`) have none.
+      approvalPresentation: (action) => this.presentationOf(action),
       modelLabel: input.model ?? 'opencode',
       priceStep: (step) => this.priceStep(step),
       ...(spent !== undefined ? { carried: spent } : {}),

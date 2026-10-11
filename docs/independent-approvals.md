@@ -38,6 +38,8 @@ The tool's `preflight(input, ctx, { phase })` handles domain checks. `prepare` r
 
 Declare card templates through `presentation.confirm` (`title`, `verb`, optional `detail`). Placeholders such as `{amount}` resolve from the validated input. A preparation preflight can override those strings for that particular call.
 
+Every adapter words the card the same way, through `resolveToolConfirmation(toolName, input, presentation?)`: the filled `confirm` templates when the tool declares them; otherwise `"<presentation.label>?"`, else the tool's name in words (`refund_order` → `Refund order?`, `humanizeToolName`) with the verb `Approve` (`DEFAULT_CONFIRM_VERB`). A raw identifier never reaches a person. The approve button reads as the `verb` wherever a surface has one: the AG-UI interrupt's `message` is the title (it outranks a free-form `reason`), the A2UI approval surface labels its button with the verb, and a text channel's button shows the tool's `confirm.verb` (its localized `texts.approve` when the tool declares none; a label-only press of the verb still decides the card). OpenCode approvals of the module's own tools carry the filled confirmation too.
+
 The card persists the approved normalized input and original preparation input. The worker parses the original input through the current schema and compares the result with the approved snapshot. Schema drift fails execution instead of silently changing what was approved.
 
 ## Decision channels and expiration

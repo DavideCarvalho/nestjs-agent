@@ -280,7 +280,7 @@ describe('ChannelHandler — the route', () => {
       {
         text: '*Refund order A-1?*\nAmount: 10.00',
         buttons: [
-          { id: ids.approve, label: 'Confirm' },
+          { id: ids.approve, label: 'Refund' },
           { id: ids.reject, label: 'Cancel' },
         ],
         fallbackText:
@@ -329,6 +329,71 @@ describe('ChannelHandler — the route', () => {
     expect(other.service.decided).toEqual([]);
     expect(other.service.sends.map((send) => send.message)).toEqual(['refund A-1', 'Maybe']);
     expect(texts(other.outbox)[0]).toBe('There is nothing waiting for your confirmation here.');
+  });
+
+  it("maps a label-only press of the tool's own verb to the one card that showed it", async () => {
+    const { adapter } = fakeAdapter({ buttons: 3 });
+    const service = fakeService(proposalFrames, {
+      listActionProposals: async () => [
+        {
+          id: proposalId,
+          decision: 'pending',
+          execution: null,
+          confirmation: { title: 'Refund order A-1?', verb: 'Refund' },
+        },
+      ],
+      decideActionProposal: async (...args: unknown[]) => {
+        service.decided.push(args);
+        return { proposalDecision: { status: 'applied' }, text: 'approved!' };
+      },
+    });
+    const handler = channel(adapter, service, { outcomeTimeoutMs: 0 });
+    await handler.handle(request(inbound('refund A-1')));
+    await handler.drain();
+    await handler.handle(request(inbound(' refund ', { buttonWithoutId: true })));
+    await handler.drain();
+    expect(service.decided).toEqual([
+      [actor, 't', proposalId, { decision: 'approved', via: 'test' }],
+    ]);
+  });
+
+  it('keeps the localized approve label when the tool declared no verb, and never names the identifier', async () => {
+    const { adapter, outbox } = fakeAdapter({ buttons: 3 });
+    const handler = channel(
+      adapter,
+      fakeService([
+        { kind: 'tool-input-start', id: 'call-1', name: 'refund_order', toolKind: 'action' },
+        {
+          kind: 'approval-requested',
+          id: 'call-1',
+          approver: 'requester',
+          target: { kind: 'proposal', proposalId: 'proposal-generic' },
+          confirmation: { title: 'Refund order?', verb: 'Approve' },
+        },
+        { kind: 'tool-input-start', id: 'call-2', name: 'refund_order', toolKind: 'action' },
+        {
+          kind: 'approval-requested',
+          id: 'call-2',
+          approver: 'requester',
+          target: { kind: 'proposal', proposalId: 'proposal-bare' },
+        },
+      ]),
+    );
+    await handler.handle(request(inbound('refund')));
+    await handler.drain();
+    const cards = outbox.map((item) => item.message as { text: string; buttons?: unknown[] });
+    expect(cards[0]).toMatchObject({
+      text: '*Refund order?*',
+      buttons: [{ label: 'Confirm' }, { label: 'Cancel' }],
+    });
+    expect(cards[1]).toMatchObject({
+      text: '*Refund order?*',
+      buttons: [{ label: 'Confirm' }, { label: 'Cancel' }],
+    });
+    expect(JSON.stringify(cards)).not.toContain('refund_order');
+    expect(ptBrChannelTexts.proposal({ id: 'p', toolName: 'refund_order' })).toBe(
+      '*Executar: Refund order?*',
+    );
   });
 
   it('reads its own button labels as decisions in the matching vocabulary', () => {
@@ -425,7 +490,7 @@ describe('ChannelHandler — the route', () => {
     expect(outbox[1]?.message).toEqual({
       text: '*Refund order A-1?*\nAmount: 10.00',
       buttons: [
-        { id: ids.approve, label: 'Confirmar' },
+        { id: ids.approve, label: 'Refund' },
         { id: ids.reject, label: 'Cancelar' },
       ],
       fallbackText:
@@ -473,7 +538,8 @@ describe('ChannelHandler — the route', () => {
     await handler.handle(request(inbound('two refunds')));
     await handler.drain();
     expect(texts(outbox)[2]).toBe(
-      '*Run cancel_order?*\n\nReply *yes #p2* to confirm or *no #p2* to cancel.',
+      // No confirmation: the tool's name in words, never the identifier.
+      '*Cancel order?*\n\nReply *yes #p2* to confirm or *no #p2* to cancel.',
     );
   });
 

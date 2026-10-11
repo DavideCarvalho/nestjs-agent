@@ -133,7 +133,8 @@ describe('AgentChannelsModule over a booted Nest app (independent approvals)', (
     expect(refunds).toBe(0);
     expect(outbox.map((item) => item.body.text)).toEqual([
       'I prepared the *refund*\\.',
-      expect.stringContaining('refund'),
+      // No `confirm` declared: the tool's name in words, never the identifier.
+      expect.stringContaining('Refund?'),
     ]);
     const keyboard = outbox[1]?.body.reply_markup.inline_keyboard[0];
     expect(keyboard.map((button: { text: string }) => button.text)).toEqual(['Confirm', 'Cancel']);
