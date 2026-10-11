@@ -80,7 +80,13 @@ const principal: PoppyPrincipal = {
 @Injectable()
 class HelperAgent {}
 
-@Agent({ name: 'orchestrator', systemPrompt: 'You coordinate.', handoff: [HelperAgent] })
+@Agent({
+  name: 'orchestrator',
+  systemPrompt: 'You coordinate.',
+  // The edge is opened to personal agents: a bare edge's delegate tool declares no roles, and the
+  // personal-agent gate keeps a tool that names none of its roles from a personal agent.
+  handoff: [{ agent: HelperAgent, roles: [PERSONAL_AGENT_ROLE] }],
+})
 @Injectable()
 class OrchestratorAgent {}
 
@@ -178,15 +184,7 @@ describe('Poppy over the durable runner (a single engine)', () => {
       }
       return { text: 'All done.' };
     });
-    // Open the edge to personal agents: a delegate tool names no roles, so the personal-agent gate
-    // keeps it from them unless the app says otherwise.
-    const spec = app.registry.spec(delegate);
-    expect(spec).toBeDefined();
-    app.registry.unregister(delegate);
-    app.registry.register(
-      { ...(spec as NonNullable<typeof spec>), roles: [PERSONAL_AGENT_ROLE] },
-      { execute: async () => ({}) },
-    );
+    expect(app.registry.spec(delegate)?.roles).toEqual([PERSONAL_AGENT_ROLE]);
     const conversations = new PoppyConversations({
       store: new InMemoryPoppyStore(),
       service: app.service,

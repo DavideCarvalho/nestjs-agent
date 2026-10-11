@@ -26,7 +26,21 @@ export type ToolKind = 'read' | 'action' | 'agent' | 'ask' | 'skill' | 'memory';
  * delegation that has always existed; the object form is how an author says this one runs in the
  * background.
  */
-export type AgentDelegation = string | { agent: string; detached?: boolean };
+export type AgentDelegation =
+  | string
+  | {
+      agent: string;
+      detached?: boolean;
+      /**
+       * Who may delegate along this edge: the synthesized `ask_<target>` / `start_<target>` tool's
+       * `roles` (and `ability`), gated like any other tool. Omitted → the tool declares none, which
+       * the default policy reads as open to every actor — but never to a personal agent
+       * (`personalAgentGate` runs only tools declaring one of its roles), so an orchestrator that
+       * should delegate for one names `personal_agent` (or a `scope:<id>`) here.
+       */
+      roles?: string[];
+      ability?: string;
+    };
 
 /**
  * Where a detached sub-agent run posts its answer: the thread that delegated it, and the

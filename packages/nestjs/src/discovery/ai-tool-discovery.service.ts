@@ -125,7 +125,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     let delegates = 0;
     for (const definition of this.agents.list()) {
       for (const edge of definition.delegatesTo ?? []) {
-        const { agent: target, detached } = normalizeDelegation(edge);
+        const { agent: target, detached, roles, ability } = normalizeDelegation(edge);
         const targetDefinition = this.agents.get(target);
         // A dangling handoff target (a `@Agent({ handoff })` class that isn't itself an `@Agent`)
         // would otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
@@ -157,6 +157,8 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
             kind: 'agent',
             targetAgent: target,
             ...(detached ? { detached: true } : {}),
+            ...(roles !== undefined ? { roles } : {}),
+            ...(ability !== undefined ? { ability } : {}),
             description,
             inputSchema: z.object({ task: z.string() }),
           },
