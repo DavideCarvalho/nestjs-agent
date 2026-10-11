@@ -92,7 +92,7 @@ export interface SandboxRendererOptions {
   /** An uncaught error in the generated code. */
   onError?: (message: string) => void;
   /**
-   * Where the theme, Tailwind and kit settings come from: default the agent's `GET /config`
+   * Where the theme and the kit's assets (components, styles, Tailwind) come from: default the agent's `GET /config`
    * (`genui.sandbox`, through the enclosing `AgentProvider`, else same-origin `/agent`); a url, an
    * object, or `false` (theme only).
    */
@@ -184,12 +184,14 @@ export function createSandboxRenderer(
     const hostTheme = useHostTheme(themeOn);
     const jsxMode = typeof props.jsx === 'string';
     const tailwindText = useSandboxAsset(client.config?.tailwind?.url);
+    const cssText = useSandboxAsset(client.config?.css?.url, { css: true });
     const kitText = useSandboxAsset(jsxMode ? client.config?.kit?.url : undefined, { kit: true });
     // Assets still on their way: the frame waits for them rather than drawing twice.
-    // A plain view does not wait for the config (it is redrawn if Tailwind turns out to be on); a
-    // view that needs Tailwind or the kit waits for them.
+    // A plain view does not wait for the config (it is redrawn if the app's styles turn out to be
+    // on); a view that needs the styles, Tailwind or the kit waits for them.
     const assetsPending =
       (client.config?.tailwind !== undefined && tailwindText === undefined) ||
+      (client.config?.css !== undefined && cssText === undefined) ||
       (jsxMode && (client.loading || kitText === undefined));
     const themeRef = useRef(hostTheme);
     themeRef.current = hostTheme;
@@ -250,9 +252,16 @@ export function createSandboxRenderer(
       if (phase === 'placeholder' || hostOrigin === '') return '';
       const look = {
         ...(themeRef.current !== null
-          ? { theme: { css: themeRef.current.css, dark: themeRef.current.dark } }
+          ? {
+              theme: {
+                css: themeRef.current.css,
+                dark: themeRef.current.dark,
+                attributes: themeRef.current.attributes,
+              },
+            }
           : {}),
         ...(tailwind !== undefined ? { tailwind } : {}),
+        ...(typeof cssText === 'string' ? { styles: cssText } : {}),
       };
       if (jsxMode) {
         return buildSandboxDocument(
@@ -287,6 +296,7 @@ export function createSandboxRenderer(
       inlineJs,
       policy,
       tailwindText,
+      cssText,
       kit,
     ]);
 
@@ -331,7 +341,12 @@ export function createSandboxRenderer(
     // The host's theme changed (light/dark, a stylesheet): the frame follows, without reloading.
     useEffect(() => {
       if (hostTheme === null || !ready.current) return;
-      post({ type: SANDBOX_MESSAGE.theme, css: hostTheme.css, dark: hostTheme.dark });
+      post({
+        type: SANDBOX_MESSAGE.theme,
+        css: hostTheme.css,
+        dark: hostTheme.dark,
+        attributes: hostTheme.attributes,
+      });
     }, [hostTheme, post]);
 
     // biome-ignore lint/correctness/useExhaustiveDependencies: a new document starts from nothing
@@ -419,6 +434,7 @@ export function createSandboxRenderer(
                 type: SANDBOX_MESSAGE.theme,
                 css: themeRef.current.css,
                 dark: themeRef.current.dark,
+                attributes: themeRef.current.attributes,
               });
             preview();
             runPending();

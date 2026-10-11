@@ -1,16 +1,18 @@
 /**
  * `@dudousxd/nestjs-agent/vite` — `genuiSandboxKit()`, the Vite plugin that puts the app's design
- * system (its components, its theme, Tailwind) inside the sandbox:
+ * system (its styles, its components, its providers) inside the sandbox, whatever the stack:
  *
  * ```ts
  * // vite.config.ts (the SPA that talks to the agent)
  * import { genuiSandboxKit } from '@dudousxd/nestjs-agent/vite'
- * export default defineConfig({ plugins: [react(), genuiSandboxKit({ include: 'src/components/ui/*.tsx' })] })
+ * export default defineConfig({
+ *   plugins: [react(), genuiSandboxKit({ styles: 'src/index.css', components: 'src/components/ui' })],
+ * })
  * ```
  *
- * Then `AgentGenuiModule.forRoot({ sandbox: { kit: true, tailwind: true } })` finds the bundle and
- * the docs: the descriptor the dev server writes (`.genui/sandbox-kit.json`) in dev, the Vite
- * manifest in production (see `AgentGenuiOptions.sandboxKit`).
+ * Then `AgentGenuiModule.forRoot({ sandbox: { kit: true } })` finds what it built: the descriptor
+ * the dev server writes (`.genui/sandbox-kit.json`) in dev, the Vite manifest in production (see
+ * `AgentGenuiOptions.sandboxKit`).
  */
 import {
   type GenuiSandboxKitApi,
@@ -30,9 +32,10 @@ import {
 export const NEST_SANDBOX_KIT_DESCRIPTOR = '.genui/sandbox-kit.json';
 
 /**
- * The sandbox kit plugin. `entry` (a module exporting the kit) or `include` (a glob of component
- * files); neither → the first `components/ui` folder (`src/components/ui`…). See
- * {@link GenuiSandboxKitOptions}.
+ * The sandbox kit plugin: `styles` (the app's style entries — default, the stylesheets among its
+ * Vite entrypoints or `index.html`), `components` (modules or globs exporting React components —
+ * default, the first `components/ui` folder), `wrapper` (a module whose default export wraps the
+ * model's App). See {@link GenuiSandboxKitOptions}.
  */
 export function genuiSandboxKit(options: GenuiSandboxKitOptions = {}): GenuiSandboxKitPlugin {
   return createGenuiSandboxKitPlugin(options, {

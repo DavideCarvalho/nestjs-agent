@@ -17,7 +17,7 @@ AgentGenuiModule.forRoot({
   streaming: 'partial', // top-level options: the default (and what an unlisted channel gets)
   sandbox: true,
   channels: {
-    web: { mode: 'tree', streaming: 'partial', sandbox: { kit: true, tailwind: true } },
+    web: { mode: 'tree', streaming: 'partial', sandbox: { kit: true } },
     mobile: { mode: 'tree', sandbox: false },
     whatsapp: { mode: 'per-component', render: 'native', chartImages: chartImages() },
     telegram: { mode: 'per-component' },
@@ -38,7 +38,7 @@ Each entry may set:
 | `chartImages` | a chart renderer (see below) | none |
 | `instructions` | extra words for the model on that channel | none |
 
-A channel without an entry uses `default`, and without `default` the top-level options. **Without `channels`, nothing changes**: text channels keep answering with each component's text summary, as before. A per-channel `sandbox` with `kit` / `tailwind` is found the same way as the top-level one ([Your design system in the sandbox](/docs/agent/guides/generative-ui-sandbox-kit)).
+A channel without an entry uses `default`, and without `default` the top-level options. **Without `channels`, nothing changes**: text channels keep answering with each component's text summary, as before. A per-channel `sandbox` with `kit` is found the same way as the top-level one ([Your design system in the sandbox](/docs/agent/guides/generative-ui-sandbox-kit)).
 
 ## Which channel a turn is on
 

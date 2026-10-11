@@ -50,11 +50,28 @@ mkdirSync(join(work, '.genui'));
 writeFileSync(
   join(work, '.genui/sandbox-kit.json'),
   JSON.stringify({
-    version: 1,
+    version: 2,
     components: [{ name: 'Slider', props: [{ name: 'value', type: 'number[]', required: true }] }],
+    jsx: true,
     theme: { vars: { '--primary': 'oklch(0.2 0 0)' } },
-    kit: { url: '/@genui-sandbox-kit/kit.js?v=abc', hash: 'abc' },
-    tailwind: { url: '/@genui-sandbox-kit/tailwind.js' },
+    tailwind: {
+      version: 4,
+      tokens: {
+        colors: ['gold'],
+        radius: [],
+        fonts: [],
+        shadows: [],
+        text: [],
+        animations: [],
+        utilities: [],
+        variants: [],
+      },
+    },
+    assets: {
+      kit: { url: '/@genui-sandbox-kit/kit.js?v=abc', hash: 'abc' },
+      css: { url: '/@genui-sandbox-kit/styles.css?v=def', hash: 'def' },
+      tailwind: { url: '/@genui-sandbox-kit/tailwind.js' },
+    },
   }),
 );
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -135,7 +152,7 @@ describe('AgentGenuiModule — channels and the sandbox kit', () => {
       new RecordingModel(),
       AgentGenuiModule.forRoot({
         catalog,
-        sandbox: { kit: true, tailwind: true },
+        sandbox: { kit: true },
         channels: { whatsapp: {} },
         sandboxKit: { root: work, production: false },
       }),
@@ -148,21 +165,25 @@ describe('AgentGenuiModule — channels and the sandbox kit', () => {
       sandbox: {
         theme: true,
         tailwind: { url: '/@genui-sandbox-kit/tailwind.js' },
+        css: { url: '/@genui-sandbox-kit/styles.css?v=def', hash: 'def' },
         kit: { url: '/@genui-sandbox-kit/kit.js?v=abc', hash: 'abc' },
       },
     });
     const genui = booted.get<AgentGenui>(AGENT_GENUI);
     expect(genui.channels).toEqual({ whatsapp: {} });
-    expect(genui.base.sandbox).toMatchObject({ tailwind: true });
+    expect(genui.base.sandbox).toMatchObject({ kit: expect.any(Function) });
+    expect(genui.catalog.get('Sandbox')?.description).toContain(
+      'Tailwind CSS utility classes work',
+    );
     expect(genui.catalog.get('Sandbox')?.description).toContain('- <Slider>');
     expect(genui.catalog.get('Sandbox')?.description).toContain('var(--primary)');
   });
 
-  it('a kit sandbox in the catalog is resolved like `sandbox: { kit, tailwind }`, its name kept', async () => {
+  it('a kit sandbox in the catalog is resolved like `sandbox: { kit }`, its name kept', async () => {
     const { app: booted } = await boot(
       new RecordingModel(),
       AgentGenuiModule.forRoot({
-        catalog: defineCatalog([defineSandbox({ name: 'MiniApp', kit: true, tailwind: true })]),
+        catalog: defineCatalog([defineSandbox({ name: 'MiniApp', kit: true })]),
         sandboxKit: { root: work, production: false },
       }),
     );
@@ -170,6 +191,7 @@ describe('AgentGenuiModule — channels and the sandbox kit', () => {
     expect(genui.sandboxClient?.()).toEqual({
       theme: true,
       tailwind: { url: '/@genui-sandbox-kit/tailwind.js' },
+      css: { url: '/@genui-sandbox-kit/styles.css?v=def', hash: 'def' },
       kit: { url: '/@genui-sandbox-kit/kit.js?v=abc', hash: 'abc' },
     });
     expect(genui.catalog.components).toHaveLength(1);

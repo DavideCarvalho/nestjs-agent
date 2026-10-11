@@ -116,8 +116,9 @@ export interface AgentGenuiOptions {
    * The browser's catalog should carry the same definition (`defineSandbox(...)` in the shared
    * catalog file) so the renderer enforces the same policy.
    *
-   * `theme` (default on), `tailwind` and `kit` put the app's design system in the frame. `kit: true`
-   * (and the theme's variable names) are found through `sandboxKit`: the descriptor
+   * `theme` (default on) and `kit` put the app's design system in the frame: `kit: true` turns on
+   * whatever `genuiSandboxKit()` built (styles, Tailwind, components, wrapper, docs), found through
+   * `sandboxKit`: the descriptor
    * `genuiSandboxKit()` (`@dudousxd/nestjs-agent/vite`) writes in dev, the Vite manifest in
    * production — and `GET <base>/config` tells the renderer where the assets are.
    */
@@ -131,9 +132,9 @@ export interface AgentGenuiOptions {
    */
   channels?: GenuiChannels;
   /**
-   * Where the sandbox kit is found (with `sandbox: { kit: true }`, `tailwind: true` or the theme's
-   * names). No Vite runs in the Nest process, so: the descriptor the dev plugin writes, else the
-   * production Vite manifest (read first when `NODE_ENV=production`).
+   * Where the sandbox kit is found (with `sandbox: { kit: true }` or the theme's names). No Vite
+   * runs in the Nest process, so: the descriptor the dev plugin writes, or the production Vite
+   * manifest — in production the manifest first, otherwise whichever was written last.
    */
   sandboxKit?: AgentGenuiSandboxKitOptions;
 }
@@ -151,7 +152,7 @@ export interface AgentGenuiSandboxKitOptions {
   manifest?: { file: string; outDir: string } | false;
   /** An explicit kit url (an SPA served from elsewhere), over what is found. */
   kitUrl?: string;
-  /** Read the manifest first. Default: `NODE_ENV === 'production'`. */
+  /** Read the manifest first (else the freshest of the two). Default: `NODE_ENV === 'production'`. */
   production?: boolean;
 }
 
@@ -178,10 +179,10 @@ function resolverProviders(resolver: ResolverOption | undefined): Provider[] {
   ];
 }
 
-/** The sandbox and channels with the kit, Tailwind and theme names found ({@link GENUI_RESOLVED}). */
+/** The sandbox and channels with the kit and theme names found ({@link GENUI_RESOLVED}). */
 interface ResolvedGenui {
   sandbox?: boolean | DefineSandboxOptions;
-  /** A kit or Tailwind sandbox the catalog itself defines, resolved (under its own name). */
+  /** A kit sandbox the catalog itself defines, resolved (under its own name). */
   catalogSandbox?: DefineSandboxOptions;
   channels?: GenuiChannels;
   sandboxClient?: () => SandboxClientConfig;
@@ -193,8 +194,9 @@ function mergeSandboxClients(clients: Array<() => SandboxClientConfig>): Sandbox
   for (const client of clients) {
     const one = client();
     merged.theme ||= one.theme;
-    if (one.tailwind !== undefined) merged.tailwind ??= one.tailwind;
     if (one.kit !== undefined) merged.kit ??= one.kit;
+    if (one.css !== undefined) merged.css ??= one.css;
+    if (one.tailwind !== undefined) merged.tailwind ??= one.tailwind;
   }
   return merged;
 }
@@ -203,7 +205,7 @@ function mergeSandboxClients(clients: Array<() => SandboxClientConfig>): Sandbox
 async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> {
   const { sandbox: asked, channels: askedChannels } = options;
   assertGenuiChannels(askedChannels);
-  // A sandbox's kit, Tailwind and theme names are found through the app's Vite output.
+  // A sandbox's kit (styles, components, wrapper) and theme names are found through the app's Vite output.
   const clients: Array<() => SandboxClientConfig> = [];
   let discovery: import('@dudousxd/nestjs-agent-core/genui/kit').SandboxKitDiscovery | undefined;
   const resolveSandbox = async (
@@ -221,15 +223,13 @@ async function resolveGenui(options: AgentGenuiOptions): Promise<ResolvedGenui> 
     return resolved.define;
   };
   const sandbox = await resolveSandbox(asked);
-  // A kit or Tailwind sandbox defined in the (shared) catalog itself: found the same way, and put
+  // A kit sandbox defined in the (shared) catalog itself: found the same way, and put
   // back under its own name, so the browser's copy of the catalog validates what the model writes.
   const own = options.catalog?.components.find((each) => sandboxPolicyOf(each) !== undefined) as
     | SandboxDefinition
     | undefined;
   const ownOptions =
-    asked === undefined &&
-    own?.sandboxOptions !== undefined &&
-    (own.sandboxView?.kit === true || own.sandboxView?.tailwind === true)
+    asked === undefined && own?.sandboxOptions !== undefined && own.sandboxView?.kit === true
       ? await resolveSandbox({ ...own.sandboxOptions, name: own.name })
       : undefined;
   let channels: GenuiChannels | undefined;

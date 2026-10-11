@@ -5,8 +5,8 @@
  *
  * `typescript` is an optional peer dependency (every TypeScript project has it).
  */
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { SandboxKitComponentDoc, SandboxKitPropDoc } from '../sandbox-kit.js';
 import {
   type SandboxKitFiles,
@@ -19,8 +19,10 @@ export interface GenerateSandboxKitDocsOptions extends SandboxKitSourceOptions {
   root?: string;
   /** The tsconfig the kit compiles under. Default: the nearest to the kit's first file. */
   tsconfig?: string;
-  /** Already resolved files (skips `entry` / `include`). */
+  /** Already resolved files (skips `components`). */
   files?: SandboxKitFiles;
+  /** Most components documented (a whole package can export hundreds). Default 120. */
+  maxComponents?: number;
   /**
    * The TypeScript module to read the types with. Default: the project's own `typescript` — one with
    * the JavaScript compiler API (5.x/6.x; TypeScript 7's native compiler has none).
@@ -84,7 +86,7 @@ const ELEMENT_OF_CLASS: Record<string, string> = {
   LI: 'li',
 };
 
-// Types only: the module itself is the app's, loaded at runtime.
+// Types only (a dev alias of typescript@5): the module itself is the app's, loaded at runtime.
 type Ts = typeof import('typescript');
 
 function hasCompilerApi(mod: unknown): mod is Ts {
@@ -112,7 +114,7 @@ async function loadTypescript(root: string, given: unknown): Promise<Ts> {
   throw new Error(
     found === undefined
       ? 'genui: generating the sandbox kit docs needs `typescript` (npm i -D typescript)'
-      : "genui: the project's `typescript` has no JavaScript compiler API (TypeScript 7's native compiler) — add typescript@5 for the kit docs (npm i -D typescript5@npm:typescript@5 and pass `typescript: await import('typescript5')`)",
+      : "genui: the project's `typescript` has no JavaScript compiler API (TypeScript 7's native compiler) — add typescript@5 for the kit docs (npm i -D typescript@npm:typescript@5 and pass `typescript: await import('typescript')`)",
   );
 }
 
@@ -166,12 +168,20 @@ export async function generateSandboxKitDocs(
 ): Promise<SandboxKitComponentDoc[]> {
   const root = options.root ?? process.cwd();
   const files = options.files ?? resolveSandboxKitFiles(root, options);
-  if (files === null || files.files.length === 0) return [];
+  if (files === null || (files.files.length === 0 && files.packages.length === 0)) return [];
   const ts = await loadTypescript(root, options.typescript);
-  const program = ts.createProgram(
-    files.files,
-    compilerOptionsFor(ts, files, options.tsconfig, root),
-  );
+  // Packages (`@mui/material`) are read through a module re-exporting them, inside the app's
+  // node_modules so they resolve as the app's imports do.
+  const roots = [...files.files];
+  if (files.packages.length > 0) {
+    const dir = join(root, 'node_modules', '.cache', 'genui-sandbox-kit');
+    const path = join(dir, 'kit-packages.ts');
+    const text = `${files.packages.map((spec) => `export * from ${JSON.stringify(spec)};`).join('\n')}\n`;
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(path) || readFileSync(path, 'utf8') !== text) writeFileSync(path, text);
+    roots.push(path);
+  }
+  const program = ts.createProgram(roots, compilerOptionsFor(ts, files, options.tsconfig, root));
   const checker = program.getTypeChecker();
   const format =
     ts.TypeFormatFlags.NoTruncation |
@@ -180,12 +190,15 @@ export async function generateSandboxKitDocs(
   const docs: SandboxKitComponentDoc[] = [];
   const seen = new Set<string>();
 
-  for (const file of files.files) {
+  const maxComponents = options.maxComponents ?? 120;
+  for (const file of roots) {
+    if (docs.length >= maxComponents) break;
     const source = program.getSourceFile(file);
     if (source === undefined) continue;
     const moduleSymbol = checker.getSymbolAtLocation(source);
     if (moduleSymbol === undefined) continue;
     for (const exported of checker.getExportsOfModule(moduleSymbol)) {
+      if (docs.length >= maxComponents) break;
       const name = exported.getName();
       if (!/^[A-Z][A-Za-z0-9]*$/.test(name) || seen.has(name)) continue;
       const symbol =

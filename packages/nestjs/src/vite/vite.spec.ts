@@ -12,10 +12,17 @@ describe('genuiSandboxKit() — the Nest defaults', () => {
     expect(NEST_SANDBOX_KIT_DESCRIPTOR).toBe('.genui/sandbox-kit.json');
     expect(SANDBOX_KIT_MANIFEST_KEYS).toEqual({
       kit: 'genui-sandbox-kit.js',
+      css: 'genui-sandbox-kit.css',
       tailwind: 'genui-sandbox-tailwind.js',
       descriptor: 'genui-sandbox-kit.json',
     });
     expect(genuiSandboxKit().name).toBe('genui-sandbox-kit');
+  });
+
+  it('options from before core 0.53 throw a migration message', () => {
+    expect(() => genuiSandboxKit({ include: 'src/components/ui/*.tsx' } as never)).toThrow(
+      /`include: G` is now `components: G`/,
+    );
   });
 
   it('dev: an app module importing the React renderer gets the HMR bridge', () => {
