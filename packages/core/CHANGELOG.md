@@ -1,5 +1,15 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.54.3
+
+### Patch Changes
+
+- [#368](https://github.com/DavideCarvalho/nestjs-agent/pull/368) [`889454d`](https://github.com/DavideCarvalho/nestjs-agent/commit/889454d26b3eb5f6afc76f316f4f231d0079271f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Sandbox kit fixes from the app rollouts:
+
+  - The prompt names theme variables as they exist in the frame (`var(--color-surface-secondary)`, not `var(--surface-secondary)`). The Tailwind utility (`bg-surface-secondary`) is listed separately.
+  - A stylesheet's imports are followed from its real path. A pnpm-injected workspace package's own imports (`shadcn/tailwind.css` and its variants) now reach the frame's Tailwind.
+  - The prompt asks for views at the frame's full width.
+
 ## 0.54.2
 
 ### Patch Changes
