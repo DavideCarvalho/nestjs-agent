@@ -1,5 +1,27 @@
 # @dudousxd/nestjs-agent-core
 
+## 0.55.0
+
+### Minor Changes
+
+- [#370](https://github.com/DavideCarvalho/nestjs-agent/pull/370) [`4d99636`](https://github.com/DavideCarvalho/nestjs-agent/commit/4d9963656f51da4a0f709f996d0346da66c4fc4a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Approval prompts read as the tool's own words on every adapter. A new shared helper in core, `resolveToolConfirmation(toolName, input, presentation?)` (with `humanizeToolName` and `DEFAULT_CONFIRM_VERB`), words a prompt: the tool's `presentation.confirm` filled from the call input, else `"<presentation.label>?"`, else the humanized name (`refund_order` → "Refund order?") — never the raw identifier.
+
+  - AG-UI: an interrupt's `message` is the confirmation title (it now outranks a free-form `reason`); without one it is the humanized name instead of `Approve <tool>?`.
+  - A2UI: the approve button is labelled with the confirmation's `verb` ("Refund"), and an approval without a confirmation reads as the tool's name in words instead of `Approve?`.
+  - Independent proposals: the stored confirmation is filled by the shared filler (placeholders collapse like everywhere else) and falls back to the label / humanized name instead of `Allow <tool>?`.
+  - Channels: the approve button uses the tool's `confirm.verb` (the localized `texts.approve` when none was declared), a label-only press of that verb still decides the card, and the no-confirmation fallback no longer prints the identifier. Requires core >= 0.55.0.
+  - OpenCode: a module tool's approval carries its filled `confirmation` (stream event and persisted row), resolved from the tool's presentation behind OpenCode's prefixed name. Requires core >= 0.55.0.
+
+- [#372](https://github.com/DavideCarvalho/nestjs-agent/pull/372) [`62f2bec`](https://github.com/DavideCarvalho/nestjs-agent/commit/62f2becf8d76e9b1125ddfd77af1af7f75818aa4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - genui sandbox: lighter frames, purged kit styles, overlays that fit, and several kits per app.
+
+  - **Shared assets (new default).** A page fetches the kit, its styles and the Tailwind runtime once; each sandbox `srcdoc` now carries only placeholders for them, asks its host (`agora:sandbox:load`) and gets their text (`agora:sandbox:assets`), put in inline elements under the same CSP as before (no `blob:`, no network, no `allow-same-origin`). Five Lastro-kit sandboxes went from 5.36 MB of HTML to 0.25 MB, with less browser memory. `createSandboxRenderer({ assets: 'inline' })` keeps the old behaviour; React Native keeps inlining. New: `SandboxDocumentOptions.sharedAssets`, `SANDBOX_MESSAGE.load` / `.assets`, `sandboxSharedAssetsWanted()`.
+  - **Purged kit styles.** `genuiSandboxKit({ purge })`, on by default: with Tailwind v4, the utilities layer keeps only what the kit's code names (the frame's runtime generates the rest); Tailwind v3 drops rules naming classes the kit does not use; other CSS drops unused CSS-modules classes. `purge: false` ships everything, `{ safelist }` keeps more. New: `purgeCss()`, `classTokensOf()`, `purgeSandboxKitStyles()`.
+  - **Complete class vocabulary.** Non-Tailwind stylesheets are described as patterns (`m{,b,e,s,t,x,y}-{0..5,auto}`) instead of a list capped at 600 names: all of Bootstrap's 2,025 classes, spacing included, in about 10 KB. `extractCssVocabulary` gains `maxChars` (default 12,000); `maxClasses` / `maxPerFamily` now default to no cap.
+  - **Overlays grow the frame.** An open dialog, menu or popover (portals, `position: fixed`, `<dialog open>`, `:popover-open`, ARIA roles) counts in the frame's height while it is open, and the frame shrinks back once it closes, so a tall MUI `Dialog` or Radix `Popover` is no longer clipped.
+  - **See-through frame page.** The frame's `html`/`body` stay transparent whatever a kit's baseline paints (MUI `CssBaseline`, Bootstrap reboot): no more box of the theme's background beside a narrower card.
+  - **Named kits.** `genuiSandboxKit({ name })` builds several kits in one app, each under `/@genui-sandbox-kit/<name>/`, its own descriptor and manifest keys; the server picks one with `kitName` (`AgentGenuiModule.forRoot({ sandbox: { kit: true, kitName } })`, `defineSandbox({ kitName })`), and named discovery is available for per-request choices.
+  - **Kit urls for an SPA.** `AgentGenuiModule.forRoot({ sandboxKit: { kitUrl, cssUrl, tailwindUrl } })`: `cssUrl` and `tailwindUrl` join `kitUrl`, for a descriptor (codegen) without asset urls; `sandboxKitDiscovery` takes all three. Same options as `@adonis-agora/agent`'s new `genui({ sandboxKit })`.
+
 ## 0.54.3
 
 ### Patch Changes
