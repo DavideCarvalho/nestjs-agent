@@ -1,5 +1,15 @@
 # agent-demo
 
+## 0.0.82
+
+### Patch Changes
+
+- Updated dependencies [[`07066f5`](https://github.com/DavideCarvalho/nestjs-agent/commit/07066f5b7833c5a12d439f56aa3f912255acef2a)]:
+  - @dudousxd/nestjs-agent-core@0.52.1
+  - @dudousxd/nestjs-agent@1.31.1
+  - @dudousxd/nestjs-agent-dashboard@0.15.5
+  - @dudousxd/nestjs-agent-testing@0.28.3
+
 ## 0.0.81
 
 ### Patch Changes
