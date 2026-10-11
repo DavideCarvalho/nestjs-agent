@@ -12,3 +12,6 @@ export const AGENT_MCP_SERVER_OPTIONS = Symbol.for('@dudousxd/nestjs-agent-mcp-s
  * request for. The MCP surface serves from both.
  */
 export const AGENT_MCP_ROUTE_TOOLS = Symbol.for('@dudousxd/nestjs-agent-mcp-server:route-tools');
+
+/** The route the MCP endpoint is mounted at — static, so it is known to `forRootAsync` too. */
+export const AGENT_MCP_SERVER_PATH = Symbol.for('@dudousxd/nestjs-agent-mcp-server:path');

@@ -1,4 +1,8 @@
-export { AgentMcpServerModule } from './agent-mcp-server.module.js';
+export {
+  AgentMcpProtectedResourceModule,
+  AgentMcpServerModule,
+  AgentMcpServerOptionsModule,
+} from './agent-mcp-server.module.js';
 export { AgentMcpServerController } from './agent-mcp-server.controller.js';
 export type {
   AgentMcpServerModuleAsyncOptions,
@@ -26,7 +30,33 @@ export {
   McpUnauthenticatedError,
   type McpAuthInfo,
 } from './mcp-actor.js';
+export {
+  McpChallengeException,
+  McpChallengeFilter,
+  type McpChallenge,
+  type McpChallengeError,
+} from './mcp-challenge.js';
 export { McpSessionStore, type McpSession } from './mcp-sessions.js';
+export {
+  asPersonalAgent,
+  globalPoppyAuthenticate,
+  POPPY_AUTHENTICATE_SLOT,
+  poppyActorResolver,
+  type PoppyActorResolverOptions,
+  type PoppyAuthenticate,
+  type PoppyAuthFailure,
+  type PoppyAuthOptions,
+  type PoppyAuthRequest,
+  type PoppyAuthResult,
+  type PoppyPrincipal,
+} from './poppy-actor-resolver.js';
+export {
+  announcedPoppyIssuer,
+  POPPY_ISSUER_SLOT,
+  protectedResourceMetadata,
+  type McpOAuthOptions,
+  type ProtectedResourceMetadata,
+} from './protected-resource.js';
 export { McpRouteDiscoveryService } from './routes/mcp-route-discovery.service.js';
 export {
   defaultMcpRoutePrincipal,
@@ -54,4 +84,8 @@ export {
 } from './routes/nest-route-metadata.js';
 export { routeInputSchema, type McpRouteInput } from './routes/route-input-schema.js';
 export { toMcpInputSchema, type McpInputSchema } from './tool-json-schema.js';
-export { AGENT_MCP_ROUTE_TOOLS, AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
+export {
+  AGENT_MCP_ROUTE_TOOLS,
+  AGENT_MCP_SERVER_OPTIONS,
+  AGENT_MCP_SERVER_PATH,
+} from './tokens.js';

@@ -1,5 +1,6 @@
 import { type ScopeResolver, defaultScopeResolver } from './skills.js';
 import type { RolesPolicy } from './spi/roles-policy.js';
+import { DEFAULT_ROLES_OF, defaultRolesOf } from './tool-registry.js';
 import type { Actor, ToolSpec } from './types.js';
 
 /**
@@ -36,8 +37,11 @@ export function isPersonalAgent(actor: Actor): boolean {
  */
 export function personalAgentGate(inner: RolesPolicy): RolesPolicy {
   if ((inner as { [GATED]?: true })[GATED] === true) return inner;
+  const defaults = defaultRolesOf(inner);
   return {
     [GATED]: true,
+    // Kept readable through the gate: `closeEmptyRoles` falls back on them for undeclared roles.
+    ...(defaults !== undefined ? { [DEFAULT_ROLES_OF]: defaults } : {}),
     async can(actor: Actor, tool: ToolSpec) {
       if (isPersonalAgent(actor)) {
         const roles = actor.roles ?? [];
