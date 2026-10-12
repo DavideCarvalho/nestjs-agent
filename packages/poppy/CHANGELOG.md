@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-poppy
 
+## 0.1.1
+
+### Patch Changes
+
+- [#379](https://github.com/DavideCarvalho/nestjs-agent/pull/379) [`ac24f24`](https://github.com/DavideCarvalho/nestjs-agent/commit/ac24f24bb12e580318cdc442de3ace34bfe4608b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A Poppy conversation started signed out now continues after the User signs in. The step-up turn used to fail with `thread belongs to another actor` (the thread belonged to the signed-out `poppy:<hash>` actor, the turn ran as the account) and the personal agent got "Sorry, something went wrong". When the thread's owner is not the turn's actor, the turn runs in a new thread, told the conversation's earlier messages as a transcript. `PersonalAgentTurnService` may implement `threadOwner` (`AgentService` does).
+
 ## 0.1.0
 
 ### Minor Changes
