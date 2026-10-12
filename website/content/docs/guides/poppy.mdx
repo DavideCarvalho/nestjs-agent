@@ -15,7 +15,7 @@ spec is a draft. Everything in `@dudousxd/nestjs-agent-poppy` is experimental.
 
 [Personal Agent Protocol](https://personalagentprotocol.org) ("Poppy", Draft 0.1) is how a user's
 personal agent works with a company: discovery (`poppy.json`), Sessions and sign-in, APIs — and
-**conversations** (§7), where the personal agent talks with the Company Agent.
+**conversations** ([Poppy §7](https://personalagentprotocol.org/docs/spec#conversations)), where the personal agent talks with the Company Agent.
 `AgentPoppyModule` makes one of your registered agents that Company Agent.
 
 The rest of the protocol — `poppy.json`, the OAuth server, Session Tokens and DPoP — is the
@@ -108,7 +108,7 @@ only tools that declare one of its roles, and memory and skills resolve no scope
 ```ts
 // Anyone's agent, signed in or not — general questions.
 @AiTool({ name: 'store_hours', kind: 'read', roles: ['personal_agent'], /* … */ })
-// Reading the account (§4.4).
+// Reading the account (Poppy spec §4.4).
 @AiTool({ name: 'list_orders', kind: 'read', roles: ['scope:poppy:read'], /* … */ })
 // Changing it — and your own scopes work the same (`scope:addresses`).
 @AiTool({ name: 'cancel_order', kind: 'action', roles: ['scope:poppy:write'], /* … */ })
@@ -120,12 +120,12 @@ re-register it with `roles: ['personal_agent']` (or a scope role).
 ## Scopes, sign-in and actions
 
 The protocol has no confirmation step: "sending a message does not authorize the requested account
-action" (§7.11), the token's scopes do. So:
+action" ([Poppy §7.11](https://personalagentprotocol.org/docs/spec#conversation-sign-in)), the token's scopes do. So:
 
 - A tool behind a scope the token lacks is **offered but not run**. Its refused call ends the turn
   with an **`authorization`** event: `sign_in_required` for a signed-out token, `insufficient_scope`
   otherwise, and `scope` naming what was missing (`"poppy:write"`). In a Direct Conversation the
-  Company Agent also asks in a message (§7.11 SHOULD). The conversation stays open; the personal agent
+  Company Agent also asks in a message ([Poppy §7.11](https://personalagentprotocol.org/docs/spec#conversation-sign-in) SHOULD). The conversation stays open; the personal agent
   continues it with its new token. A thread is one actor's, so once the User signs in the account's
   first turn runs in a thread of its own, told what was said before (a transcript of the messages).
 - With the scope, an `action` that parks for approval is **approved by the scope** (`actions:
@@ -137,7 +137,7 @@ action" (§7.11), the token's scopes do. So:
   proposal worker resolves the account through `backgroundActorResolver` and then runs the action
   under those roles, so it is gated at execution exactly as when it was proposed — never as the
   whole account.
-- Every action is also told in the reply's **text** (§7: a message must make sense without `data`):
+- Every action is also told in the reply's **text** ([Poppy §7](https://personalagentprotocol.org/docs/spec#conversations): a message must make sense without `data`):
   `status` is `succeeded`, `failed` (with `error`) or `rejected`. When the model wrote nothing, or an
   action did not go through (the model wrote before the result, so its claim is replaced), the text is
   each action worded by `formatAction(action, texts)` — by default `texts.actionSucceeded` /
@@ -166,7 +166,7 @@ the conversation closes.
 
 Message ids are the personal agent's and unique per User: a retry with the same content answers what
 the first delivery answered (a retried first message returns the conversation it started); different
-content is `message_id_conflict` (409). Unknown fields are ignored everywhere (§3.3).
+content is `message_id_conflict` (409). Unknown fields are ignored everywhere ([Poppy §3.3](https://personalagentprotocol.org/docs/spec#extensions)).
 
 ## Handoff to a person
 

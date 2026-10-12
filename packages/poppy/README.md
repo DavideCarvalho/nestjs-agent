@@ -7,7 +7,7 @@
 
 Poppy for [`@dudousxd/nestjs-agent`](../nestjs):
 
-- **`AgentPoppyModule`** — be the Company Agent of personal agents' conversations (§7): create,
+- **`AgentPoppyModule`** — be the Company Agent of personal agents' conversations ([Poppy §7](https://personalagentprotocol.org/docs/spec#conversations)): create,
   messages, events (cursor, `wait`, SSE with `Last-Event-ID` and `text-delta`), handoff, close,
   Direct Conversations, idempotent message ids, `authorization` events, actions approved by the
   token's scopes and always told in words. Session Tokens are verified by the resolver an
