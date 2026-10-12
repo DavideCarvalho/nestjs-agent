@@ -513,16 +513,16 @@ accountId }`, made a personal agent of the token's scopes.
 |---|---|
 | none | `401` `Bearer` |
 | refused by the verifier | its status, its challenge verbatim (`invalid_token`, `invalid_dpop_proof`, `use_dpop_nonce`) and its headers (`DPoP-Nonce`) |
-| a **signed-out** Session's | `403` `Bearer error="sign_in_required"` (Poppy §4.3) — not `invalid_token`, which would only make the agent mint another token of the same kind |
+| a **signed-out** Session's | `403` `Bearer error="sign_in_required"` ([Poppy §4.3](https://personalagentprotocol.org/docs/spec#sending-tokens)) — not `invalid_token`, which would only make the agent mint another token of the same kind |
 | no verifier configured at all | `501` |
 
 Verifying tokens yourself? `asPersonalAgent(actor, scopes)` turns any actor into a personal agent of
 those scopes; any resolver can throw `McpChallengeException(status, { error, scope, description,
 headers })` to pick the challenge a refusal reaches the client with.
 
-### The Poppy issuer (Poppy §6)
+### The Poppy issuer
 
-A listed MCP server's protected-resource metadata must name the Poppy issuer. When the authorization
+A listed MCP server's protected-resource metadata must name the Poppy issuer ([Poppy §6](https://personalagentprotocol.org/docs/spec#apis)). When the authorization
 server announces one in `globalThis[Symbol.for('@adonis-agora/poppy:issuer')]` (read per request), it is
 added to `authorization_servers` next to the `oauth` issuer, once — and the document is served with
 just that issuer when no `oauth` option is configured.
