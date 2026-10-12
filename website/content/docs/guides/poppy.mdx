@@ -126,7 +126,8 @@ action" (§7.11), the token's scopes do. So:
   with an **`authorization`** event: `sign_in_required` for a signed-out token, `insufficient_scope`
   otherwise, and `scope` naming what was missing (`"poppy:write"`). In a Direct Conversation the
   Company Agent also asks in a message (§7.11 SHOULD). The conversation stays open; the personal agent
-  continues it with its new token.
+  continues it with its new token. A thread is one actor's, so once the User signs in the account's
+  first turn runs in a thread of its own, told what was said before (a transcript of the messages).
 - With the scope, an `action` that parks for approval is **approved by the scope** (`actions:
   'approve-delegated'`, the default; `'reject'` refuses them all). The same goes for independent
   proposals (`actionApprovalMode: 'independent'`): the turn decides it, **waits for it to execute**, and

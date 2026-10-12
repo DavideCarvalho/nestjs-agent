@@ -359,6 +359,40 @@ describe('AgentPoppyModule over a booted Nest (Express) app', () => {
     });
   });
 
+  it('signing in continues the conversation: the step-up turn runs as the account, with what was said before', async () => {
+    // The model asks for the orders, and answers with what the tool returned.
+    const h = await boot((args) => {
+      const results = args.messages.at(-1)?.toolResults ?? [];
+      if (results.length === 0) return { text: '', toolCall: { name: 'list_orders', input: {} } };
+      return { text: results.some((r) => r.error === undefined) ? 'Here are your orders.' : '' };
+    });
+    const id = (await post(h, '', msg('Which orders are still open?'))).body.conversation_id;
+    await readUntil(h, id, (e) => e.some((x) => x.type === 'authorization'));
+    expect(ran).toEqual([]);
+
+    // The personal agent signs the User in and continues the SAME conversation with its new token
+    // (§7.11). The thread so far belongs to the signed-out actor (`poppy:<hash>`); the account must
+    // still get its turn — not a 403 from the thread's owner check.
+    const signedIn = auth('u1|poppy:read|in|acct-1');
+    expect((await post(h, `/${id}/messages`, msg('Signed in, go ahead.'), signedIn)).status).toBe(
+      202,
+    );
+    const { events } = await readUntil(
+      h,
+      id,
+      (e) => companyMessages(e).some((m) => m.message.text === 'Here are your orders.'),
+      signedIn,
+    );
+    expect(ran).toEqual(['list_orders']);
+    expect(companyMessages(events).map((m) => m.message.text)).not.toContain(
+      'Sorry, something went wrong on our side. Please try again.',
+    );
+    // The account's turn knows what was asked before signing in.
+    const prompt = JSON.stringify(h.model.calls.at(-1)?.messages);
+    expect(prompt).toContain('Which orders are still open?');
+    expect(prompt).toContain('Signed in, go ahead.');
+  });
+
   it('a scope-granted action is approved by the scope and narrated (blocking approvals)', async () => {
     const h = await boot(callThen('cancel_order', { id: 'A-1' }));
     const writer = auth('u1|poppy:write|in|acct-1');
