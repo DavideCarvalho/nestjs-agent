@@ -7,7 +7,7 @@ import {
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { addUsage, emptyUsage, errorText } from '../turn.js';
+import { type TurnProgress, addUsage, emptyUsage, errorText } from '../turn.js';
 import { OpenCodeTurns, type SessionHandle } from '../turns.js';
 
 export const OPENCODE_RUN_WORKFLOW = 'agent.opencode.run';
@@ -27,7 +27,8 @@ export function decisionToken(runId: string, toolCallId: string): string {
  * the steps from their checkpoints and replying to OpenCode from there (`OpenCodeTurns` rebuilds the
  * live turn, and re-prompts a fresh session when OpenCode itself restarted meanwhile). A process
  * that dies while OpenCode works re-runs that `observe` step, which catches up on what OpenCode
- * asked while nobody listened.
+ * asked while nobody listened, and — when the execution ends — on what it said: the text, tool
+ * calls and usage it streamed meanwhile, read back from the session's messages.
  */
 @Injectable()
 @Workflow({ name: OPENCODE_RUN_WORKFLOW, version: '1' })
@@ -41,6 +42,9 @@ export class OpenCodeRunWorkflow {
     // What the run spent: every milestone carries its share, journaled with it, so a run resumed in
     // another process adds up the same figure (a milestone journaled before usage travelled adds 0).
     let spent = emptyUsage();
+    // What the turn took from the session up to its last ask, journaled with it: an `observe` re-run
+    // after a restart reads back from the session only what came after.
+    let progress: TurnProgress | undefined;
     try {
       const begun = await ctx.localStep('begin', async () => ({
         handle: await this.turns.begin(ctx.runId, input),
@@ -53,8 +57,9 @@ export class OpenCodeRunWorkflow {
       });
       for (let n = 0; ; n += 1) {
         const before = spent;
+        const taken = progress;
         const milestone = await ctx.localStep(`observe:${n}`, () =>
-          this.turns.observe(ctx.runId, input, handle, before),
+          this.turns.observe(ctx.runId, input, handle, before, taken),
         );
         spent = addUsage(spent, milestone.usage);
         const total = spent;
@@ -85,8 +90,10 @@ export class OpenCodeRunWorkflow {
           reply = { approved: false, expired: true } satisfies Decision;
         }
         const ask = milestone.ask;
+        progress = milestone.progress ?? progress;
+        const tookSoFar = progress;
         handle = await ctx.localStep(`reply:${n}`, () =>
-          this.turns.reply(ctx.runId, input, handle, ask, reply, total),
+          this.turns.reply(ctx.runId, input, handle, ask, reply, total, tookSoFar),
         );
       }
     } catch (error) {
