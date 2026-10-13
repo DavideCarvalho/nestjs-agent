@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-opencode
 
+## 0.4.1
+
+### Patch Changes
+
+- [#382](https://github.com/DavideCarvalho/nestjs-agent/pull/382) [`7a1b3bf`](https://github.com/DavideCarvalho/nestjs-agent/commit/7a1b3bf01632f6d0eaf98e20a62b39cd81b324e3) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A durable turn whose API restarted while OpenCode worked no longer settles as an empty success. The re-run `observe` step re-attached and caught up on open permissions and forms only, so the text, tool calls and usage OpenCode streamed meanwhile were lost and the turn ended `succeeded` with no text and zero usage. Now the rebuilt turn, when the execution ends, reads back the session's messages after the turn's prompt (the prompt carries the run id in its `metadata`) and takes what it missed as the events would have — less what was taken before the restart, journaled with each `ask` milestone (`TurnProgress`), so nothing is persisted or counted twice. A session that left no answer for the turn fails it with `LOST_ANSWER_ERROR` instead. `OpenCodeClient.message.list` now types the messages (`OpenCodeMessage`) and takes a `cursor`; `session.prompt` takes `metadata`.
+
 ## 0.4.0
 
 ### Minor Changes
