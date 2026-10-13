@@ -76,6 +76,7 @@ import {
   type StepCost,
   type StepModel,
   type TurnOutcome,
+  type TurnProgress,
   emptyUsage,
   errorText,
 } from './turn.js';
@@ -837,6 +838,8 @@ export class OpenCodeTurns implements OnApplicationShutdown {
         sessionID: handle.sessionId,
         text: prompt.text,
         ...(prompt.files?.length ? { files: prompt.files } : {}),
+        // Marks the prompt as this run's: a turn resumed after a restart reads what came after it.
+        metadata: { runId },
       });
     } catch (error) {
       live.turn.fail(`OpenCode refused the message: ${(error as Error).message}`);
@@ -850,14 +853,17 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    *
    * `spent` is what the run spent before (the sum of the `usage` of its earlier milestones): a turn
    * rebuilt here starts from it, so the answer it persists carries the whole run's usage.
+   * `progress` is what the turn took before (its last `ask` milestone's): a turn rebuilt here reads
+   * back from the session's messages, when the execution ends, what nobody heard after that.
    */
   async observe(
     runId: string,
     input: AgentRunInput,
     handle: SessionHandle,
     spent?: OpenCodeUsage,
+    progress?: TurnProgress,
   ): Promise<Milestone> {
-    const live = await this.ensureLive(runId, input, handle, true, spent);
+    const live = await this.ensureLive(runId, input, handle, true, spent, progress);
     const { turn, client } = live;
     if (turn.hasMilestone()) return this.reached(runId, input, handle, await turn.next());
     // Set once this observation has its milestone: the safety nets below only act while it waits.
@@ -908,12 +914,13 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     ask: PendingAsk,
     reply: HumanReply,
     spent?: OpenCodeUsage,
+    progress?: TurnProgress,
   ): Promise<SessionHandle> {
     const server = await this.host.server(input.actor);
     if (server.key !== handle.serverKey || server.bootId !== handle.bootId) {
       return this.continueAfterRestart(runId, input, server, ask, reply, spent);
     }
-    const live = await this.ensureLive(runId, input, handle, false, spent);
+    const live = await this.ensureLive(runId, input, handle, false, spent, progress);
     await live.turn.decide(ask, reply);
     return handle;
   }
@@ -941,7 +948,11 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     // The old request's card settles as decided; OpenCode is told in the note.
     await live.turn.decide(ask, reply, { tellOpenCode: false });
     live.turn.setBaseline(await this.sessionUsage(live.client, handle.sessionId));
-    await live.client.session.prompt({ sessionID: handle.sessionId, text: note });
+    await live.client.session.prompt({
+      sessionID: handle.sessionId,
+      text: note,
+      metadata: { runId },
+    });
     return handle;
   }
 
@@ -969,9 +980,12 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     handle: SessionHandle,
     catchUp: boolean,
     spent?: OpenCodeUsage,
+    progress?: TurnProgress,
   ): Promise<LiveTurn> {
     const current = this.live.get(runId);
     if (current !== undefined && current.handle.sessionId === handle.sessionId) return current;
+    // Nobody here followed the session while it ran: what it said meanwhile is read back at the end.
+    const resumed = catchUp && current === undefined;
     current?.stop();
     const server = await this.host.server(input.actor);
     const deps = this.deps.forAgent(input.agentName);
@@ -996,6 +1010,8 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       modelLabel: input.model ?? 'opencode',
       priceStep: (step) => this.priceStep(step),
       ...(spent !== undefined ? { carried: spent } : {}),
+      ...(progress !== undefined ? { progress } : {}),
+      resumed,
       logger: this.logger,
       onGranted: (action, id) => {
         const grants = this.grants.get(runId) ?? [];
@@ -1008,7 +1024,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     );
     const live: LiveTurn = { turn, input, handle, client: server.client, stop };
     this.live.set(runId, live);
-    if (catchUp && current === undefined) await turn.catchUp().catch(() => undefined);
+    if (resumed) await turn.catchUp().catch(() => undefined);
     return live;
   }
 

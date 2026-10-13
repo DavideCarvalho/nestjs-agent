@@ -94,8 +94,9 @@ the dashboard and `GET /quota` see an OpenCode turn like any other.
   the turn's last message) is added up from the turn's own calls, not read back from the store: each
   milestone carries what was spent since the last one, and a durable run journals it with the
   milestone, so a run resumed in another process (an approval answered after a restart) still reports
-  the whole run, cache tokens included. A process that dies while OpenCode works loses the calls it
-  saw from that total (their ledger rows are already written).
+  the whole run, cache tokens included. A process that dies while OpenCode works does not lose the
+  calls it saw: the `observe` re-run reads each step's usage back from the session's messages (see
+  below).
 
 ## Durable turns
 
@@ -109,7 +110,13 @@ AgentModule.forRoot({ engine: openCodeDurable({ host: MyOpenCodeHost, sessions: 
 Every step of a turn is checkpointed (`begin → prompt → observe → [wait for a person → reply →
 observe]* → finish`) and a person's decision is a durable signal: a turn waiting on an approval
 survives restarts and is resumed by whichever process gets the decision. If OpenCode restarted
-meanwhile, a new session is opened with the conversation and the decision. `openCode()` runs the
+meanwhile, a new session is opened with the conversation and the decision. If the API restarted
+while OpenCode worked (its `observe` step re-runs), the rebuilt turn catches up on what OpenCode
+asked meanwhile and, when the execution ends, on what it said: the text, tool calls and results and
+each step's usage are read back from the session's messages after the turn's prompt (the prompt
+carries the run id in its `metadata`), less what was already taken before the restart (journaled
+with each ask). A session that left no answer at all fails the turn (`LOST_ANSWER_ERROR`) instead
+of settling it as an empty success. It needs the client's `message.list`. `openCode()` runs the
 same steps in memory (single replica). Several processes need a cross-process sink and a persistent
 `OpenCodeSessionStore`.
 

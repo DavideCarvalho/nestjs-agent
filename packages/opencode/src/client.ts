@@ -10,6 +10,8 @@ export interface OpenCodeClient {
       sessionID: string;
       text: string;
       files?: OpenCodePromptFile[];
+      /** Kept on the user message OpenCode records (the engine puts the run id there). */
+      metadata?: { readonly [key: string]: OpenCodeJson };
     }): Promise<unknown>;
     /** Stops the running execution; OpenCode answers with `session.execution.interrupted`. */
     interrupt(args: { sessionID: string }): Promise<unknown>;
@@ -54,13 +56,18 @@ export interface OpenCodeClient {
       message?: string;
     }): Promise<unknown>;
   };
-  /** The session's messages, newest first with `order: 'desc'`. Optional (regenerate). */
+  /**
+   * The session's messages, newest first with `order: 'desc'`, a page at a time (`cursor.next`).
+   * Optional: rewinds a session (regenerate), and lets a turn resumed after a restart recover what
+   * the session said while nobody listened.
+   */
   message?: {
     list(args: {
       sessionID: string;
       order?: 'asc' | 'desc';
       limit?: number;
-    }): Promise<{ data: Array<{ id: string; type: string }> }>;
+      cursor?: string;
+    }): Promise<{ data: OpenCodeMessage[]; cursor?: { next?: string | null } }>;
   };
   /** Register an MCP server at a location. Optional (exposing the module's tools). */
   mcp?: {
@@ -176,4 +183,32 @@ export interface OpenCodeTokens {
   output: number;
   reasoning?: number;
   cache?: { read: number; write: number };
+}
+
+/**
+ * One of a session's messages, as `message.list` returns them — the fields the engine reads. A
+ * `user` message carries the prompt (`text`, `metadata`); an `assistant` message is one model step
+ * (`content`, `model`, `tokens`, `cost`, `error`); `idle` marks where an execution ended (`outcome`).
+ */
+export interface OpenCodeMessage {
+  id: string;
+  type: string;
+  metadata?: { readonly [key: string]: OpenCodeJson };
+  text?: string;
+  content?: OpenCodeMessagePart[];
+  model?: { providerID: string; id: string };
+  cost?: number;
+  tokens?: OpenCodeTokens;
+  error?: { message?: string };
+  outcome?: string;
+}
+
+/** A part of an assistant message: its text, its reasoning, or a tool call and how it went. */
+export interface OpenCodeMessagePart {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  /** A tool call's `{ status, input, error }` (a text part's is the provider's own: ignored). */
+  state?: unknown;
 }

@@ -2,6 +2,9 @@ import type {
   OpenCodeClient,
   OpenCodeEvent,
   OpenCodeForm,
+  OpenCodeJson,
+  OpenCodeMessage,
+  OpenCodeMessagePart,
   OpenCodePermissionRequest,
   OpenCodePromptFile,
   OpenCodeSessionCreate,
@@ -20,6 +23,8 @@ export interface FakeTurn {
   sessionId: string;
   text: string;
   emit(type: string, data?: Record<string, unknown>): void;
+  /** Emit an event nobody hears (the API was down); the session's messages still record it. */
+  unheard(type: string, data?: Record<string, unknown>): void;
   /** Resolves with the next call of `method` on this session (e.g. `permission.reply`). */
   next(method: string): Promise<FakeCall>;
   /** Ends the execution: `session.execution.succeeded`. */
@@ -44,8 +49,15 @@ export class FakeOpenCode implements OpenCodeClient {
   /** Permission requests and forms asked and not answered yet (what `list` reports). */
   readonly openPermissions = new Map<string, OpenCodePermissionRequest>();
   readonly openForms = new Map<string, OpenCodeForm>();
-  /** User messages per session, for `message.list` (regenerate). */
-  private readonly userMessages = new Map<string, string[]>();
+  /**
+   * Each session's messages, oldest first, as OpenCode records them from the events it emits: the
+   * prompts, one assistant message per step (its text, reasoning and tool parts, its usage) and an
+   * `idle` where an execution ended — what `message.list` reports.
+   */
+  readonly messages = new Map<string, OpenCodeMessage[]>();
+  /** The assistant message each session's step is writing, until `session.step.ended`. */
+  private readonly writing = new Map<string, OpenCodeMessage>();
+  private messageCount = 0;
   private readonly idleWaiters: Array<() => void> = [];
   private idle = false;
   /**
@@ -86,6 +98,7 @@ export class FakeOpenCode implements OpenCodeClient {
   }
 
   emit(event: OpenCodeEvent): void {
+    this.recordMessage(event);
     if (event.type === 'permission.asked') {
       this.openPermissions.set(String(event.data.id), event.data as OpenCodePermissionRequest);
     }
@@ -94,6 +107,138 @@ export class FakeOpenCode implements OpenCodeClient {
       this.openForms.set(form.id, form);
     }
     for (const listener of this.listeners) listener(event);
+  }
+
+  private messagesOf(sessionId: string): OpenCodeMessage[] {
+    let list = this.messages.get(sessionId);
+    if (list === undefined) {
+      list = [];
+      this.messages.set(sessionId, list);
+    }
+    return list;
+  }
+
+  /** The assistant message an event of a step belongs to: the one being written, else a new one. */
+  private assistantOf(sessionId: string, toolId?: string): OpenCodeMessage {
+    const list = this.messagesOf(sessionId);
+    // A tool settles on the message that called it, even after that step ended.
+    if (toolId !== undefined) {
+      const caller = list.find((m) => m.content?.some((p) => p.type === 'tool' && p.id === toolId));
+      if (caller !== undefined) return caller;
+    }
+    let message = this.writing.get(sessionId);
+    if (message === undefined) {
+      this.messageCount += 1;
+      message = { id: `asst_${this.messageCount}`, type: 'assistant', content: [] };
+      list.push(message);
+      this.writing.set(sessionId, message);
+    }
+    return message;
+  }
+
+  /** Record what an event says on the session's messages, and name its assistant message. */
+  private recordMessage(event: OpenCodeEvent): void {
+    if (event.data === undefined || !event.type.startsWith('session.')) return;
+    const data = event.data as Record<string, any>;
+    const sessionId = data.sessionID;
+    if (typeof sessionId !== 'string') return;
+    const part = (message: OpenCodeMessage, type: string, open: boolean) => {
+      const parts = message.content ?? [];
+      message.content = parts;
+      const last = parts.at(-1) as (OpenCodeMessagePart & { open?: boolean }) | undefined;
+      if (last?.type === type && last.open === true) return last;
+      const created: OpenCodeMessagePart & { open?: boolean } = { type, text: '', open };
+      parts.push(created);
+      return created;
+    };
+    const tool = (message: OpenCodeMessage, id: string, name?: string) => {
+      const parts = message.content ?? [];
+      message.content = parts;
+      let found = parts.find((p) => p.type === 'tool' && p.id === id);
+      if (found === undefined) {
+        found = {
+          type: 'tool',
+          id,
+          name: name ?? 'tool',
+          state: { status: 'streaming', input: '' },
+        };
+        parts.push(found);
+      }
+      return found;
+    };
+    const stamp = (message: OpenCodeMessage) => {
+      data.assistantMessageID ??= message.id;
+    };
+    switch (event.type) {
+      case 'session.step.started': {
+        this.writing.delete(sessionId);
+        const message = this.assistantOf(sessionId);
+        if (data.model !== undefined) message.model = data.model;
+        stamp(message);
+        return;
+      }
+      case 'session.text.delta':
+      case 'session.reasoning.delta': {
+        const message = this.assistantOf(sessionId);
+        stamp(message);
+        const kind = event.type === 'session.text.delta' ? 'text' : 'reasoning';
+        const p = part(message, kind, true);
+        p.text = `${p.text ?? ''}${String(data.delta ?? '')}`;
+        return;
+      }
+      case 'session.text.ended': {
+        const message = this.assistantOf(sessionId);
+        stamp(message);
+        const last = message.content?.at(-1) as { type: string; open?: boolean } | undefined;
+        if (last?.type === 'text') last.open = false;
+        return;
+      }
+      case 'session.tool.input.started':
+      case 'session.tool.called':
+      case 'session.tool.success':
+      case 'session.tool.failed': {
+        const id = String(data.id);
+        const message = this.assistantOf(sessionId, id);
+        stamp(message);
+        const p = tool(message, id, typeof data.name === 'string' ? data.name : undefined);
+        const input = (p.state as { input?: unknown }).input;
+        if (event.type === 'session.tool.called')
+          p.state = { status: 'running', input: data.input ?? {}, metadata: {} };
+        if (event.type === 'session.tool.success')
+          p.state = { status: 'completed', input, content: [{ type: 'text', text: 'ok' }] };
+        if (event.type === 'session.tool.failed')
+          p.state = {
+            status: 'error',
+            input,
+            error: {
+              type: 'error',
+              message: String(data.error?.message ?? data.error ?? 'failed'),
+            },
+          };
+        return;
+      }
+      case 'session.step.ended': {
+        const message = this.assistantOf(sessionId);
+        stamp(message);
+        if (data.tokens !== undefined) message.tokens = data.tokens;
+        if (typeof data.cost === 'number') message.cost = data.cost;
+        this.writing.delete(sessionId);
+        return;
+      }
+      case 'session.execution.succeeded':
+      case 'session.execution.failed':
+      case 'session.execution.interrupted':
+        this.writing.delete(sessionId);
+        this.messageCount += 1;
+        this.messagesOf(sessionId).push({
+          id: `idle_${this.messageCount}`,
+          type: 'idle',
+          outcome: event.type.slice('session.execution.'.length),
+        });
+        return;
+      default:
+        return;
+    }
   }
 
   /** Raise an event without anyone hearing it — what OpenCode did while the API was down. */
@@ -124,17 +269,30 @@ export class FakeOpenCode implements OpenCodeClient {
         }),
       };
     },
-    prompt: async (args: { sessionID: string; text: string; files?: OpenCodePromptFile[] }) => {
+    prompt: async (args: {
+      sessionID: string;
+      text: string;
+      files?: OpenCodePromptFile[];
+      metadata?: { readonly [key: string]: OpenCodeJson };
+    }) => {
       this.record('session.prompt', args);
       this.idle = false;
       const sessionId = args.sessionID;
-      const ids = this.userMessages.get(sessionId) ?? [];
-      ids.push(`msg_${sessionId}_${ids.length + 1}`);
-      this.userMessages.set(sessionId, ids);
+      const messages = this.messagesOf(sessionId);
+      const users = messages.filter((m) => m.type === 'user').length;
+      this.writing.delete(sessionId);
+      messages.push({
+        id: `msg_${sessionId}_${users + 1}`,
+        type: 'user',
+        text: args.text,
+        ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+      });
       const turn: FakeTurn = {
         sessionId,
         text: args.text,
         emit: (type, data = {}) => this.emit({ type, data: { sessionID: sessionId, ...data } }),
+        unheard: (type, data = {}) =>
+          this.emitUnheard({ type, data: { sessionID: sessionId, ...data } }),
         next: (method) =>
           new Promise((resolve) => this.waiters.push({ method, sessionId, resolve })),
         succeed: () =>
@@ -208,11 +366,26 @@ export class FakeOpenCode implements OpenCodeClient {
   };
 
   message = {
-    list: async (args: { sessionID: string; order?: 'asc' | 'desc'; limit?: number }) => {
+    list: async (args: {
+      sessionID: string;
+      order?: 'asc' | 'desc';
+      limit?: number;
+      cursor?: string;
+    }) => {
       this.record('message.list', args);
-      const ids = [...(this.userMessages.get(args.sessionID) ?? [])];
-      if (args.order === 'desc') ids.reverse();
-      return { data: ids.map((id) => ({ id, type: 'user' })) };
+      // Copies with the bookkeeping (`open`) left out, as the API serializes them.
+      const all: OpenCodeMessage[] = JSON.parse(
+        JSON.stringify(this.messages.get(args.sessionID) ?? [], (key, value) =>
+          key === 'open' ? undefined : value,
+        ),
+      );
+      if (args.order === 'desc') all.reverse();
+      const from = args.cursor !== undefined ? Number(args.cursor) : 0;
+      const to = args.limit !== undefined ? from + args.limit : all.length;
+      return {
+        data: all.slice(from, to),
+        cursor: { next: to < all.length ? String(to) : null },
+      };
     },
   };
 

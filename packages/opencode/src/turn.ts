@@ -23,6 +23,8 @@ import type {
   OpenCodeClient,
   OpenCodeEvent,
   OpenCodeForm,
+  OpenCodeMessage,
+  OpenCodeMessagePart,
   OpenCodePermissionRequest,
   OpenCodeTokens,
 } from './client.js';
@@ -110,6 +112,30 @@ function subUsage(a: OpenCodeUsage, b: OpenCodeUsage): OpenCodeUsage {
   };
 }
 
+/**
+ * What a turn took from the session's assistant messages (by OpenCode message id), so a turn rebuilt
+ * after a restart takes only the rest. Journaled with every `ask` milestone: what was taken up to
+ * there is persisted (the message the ask hangs on) and its usage reported.
+ */
+export interface TurnProgress {
+  /** Characters of text taken, per assistant message. */
+  text: Record<string, number>;
+  /** Characters of reasoning taken, per assistant message. */
+  reasoning: Record<string, number>;
+  /** Tool calls taken (OpenCode's call ids), and those whose result was taken too. */
+  called: string[];
+  settled: string[];
+  /** Assistant messages whose step's usage was counted. */
+  steps: string[];
+}
+
+/** What a turn says when it was rebuilt after a restart and the session left no answer for it. */
+export const LOST_ANSWER_ERROR = 'The answer was lost while the agent restarted; ask again.';
+
+/** How many pages of the session's messages a resumed turn reads looking for its prompt. */
+const RECOVER_PAGES = 10;
+const RECOVER_PAGE_SIZE = 100;
+
 /** The model a step ran on, as OpenCode names it (`session.step.started`). */
 export interface StepModel {
   providerID: string;
@@ -128,7 +154,13 @@ export interface StepCost {
  * up what every process saw.
  */
 export type Milestone =
-  | { kind: 'ask'; ask: PendingAsk; timeoutMs?: number; usage?: OpenCodeUsage }
+  | {
+      kind: 'ask';
+      ask: PendingAsk;
+      timeoutMs?: number;
+      usage?: OpenCodeUsage;
+      progress?: TurnProgress;
+    }
   | { kind: 'finished'; outcome: TurnOutcome; usage?: OpenCodeUsage };
 
 export interface OpenCodeTurnArgs {
@@ -161,6 +193,14 @@ export interface OpenCodeTurnArgs {
   }) => Promise<StepCost>;
   /** What the run spent before this turn object existed (an earlier process, an earlier session). */
   carried?: OpenCodeUsage;
+  /** What the turn took before this turn object existed (the last `ask` milestone's progress). */
+  progress?: TurnProgress;
+  /**
+   * Rebuilt in a process that was not listening while the session ran (a durable `observe` re-run
+   * after a restart): when the execution ends, what the session said in between is read back from
+   * its messages.
+   */
+  resumed?: boolean;
   logger: Logger;
   /**
    * An action OpenCode was allowed to run (a person approved it, or the policy did): the approval
@@ -282,6 +322,14 @@ export class OpenCodeTurn {
   private wroteMessage = false;
   private ended = false;
   private stepError: string | undefined;
+  /** What this turn object took from the session's assistant messages (see {@link TurnProgress}). */
+  private readonly took = {
+    text: new Map<string, number>(),
+    reasoning: new Map<string, number>(),
+    called: new Set<string>(),
+    settled: new Set<string>(),
+    steps: new Set<string>(),
+  };
 
   constructor(private readonly a: OpenCodeTurnArgs) {
     this.model = modelOfLabel(a.input.model);
@@ -296,6 +344,26 @@ export class OpenCodeTurn {
   setBaseline(info: { cost?: number; tokens?: OpenCodeTokens } | undefined): void {
     if (info?.tokens === undefined) return;
     this.baseline = { cost: Number(info.cost) || 0, tokens: info.tokens };
+  }
+
+  /** What the turn took so far: carried from before this turn object, plus what it took. */
+  progress(): TurnProgress {
+    const before = this.a.progress;
+    const merged = (carried: Record<string, number> | undefined, own: Map<string, number>) => {
+      const out = { ...(carried ?? {}) };
+      for (const [id, n] of own) out[id] = (out[id] ?? 0) + n;
+      return out;
+    };
+    const union = (carried: string[] | undefined, own: Set<string>) => [
+      ...new Set([...(carried ?? []), ...own]),
+    ];
+    return {
+      text: merged(before?.text, this.took.text),
+      reasoning: merged(before?.reasoning, this.took.reasoning),
+      called: union(before?.called, this.took.called),
+      settled: union(before?.settled, this.took.settled),
+      steps: union(before?.steps, this.took.steps),
+    };
   }
 
   /** What the run spent so far: carried from before this turn object, plus what it saw. */
@@ -394,7 +462,10 @@ export class OpenCodeTurn {
   private reach(reached: Milestone): void {
     const usage = subUsage(this.spent, this.reported);
     this.reported = { ...this.spent };
-    const milestone: Milestone = { ...reached, usage };
+    const milestone: Milestone =
+      reached.kind === 'ask'
+        ? { ...reached, usage, progress: this.progress() }
+        : { ...reached, usage };
     const waiting = this.waiting;
     if (waiting !== undefined) {
       this.waiting = undefined;
@@ -447,6 +518,7 @@ export class OpenCodeTurn {
         innerSettled: new Set(),
       };
       this.tools.set(id, state);
+      this.took.called.add(id);
       this.segment.calls.push({ id, name, input: state.input, kind: 'read' });
     }
     return state;
@@ -547,6 +619,7 @@ export class OpenCodeTurn {
       case 'session.text.delta': {
         const delta = typeof d.delta === 'string' ? d.delta : '';
         if (!delta) return;
+        this.count(this.took.text, d.assistantMessageID, delta.length);
         this.endReasoning();
         // Whitespace before anything was said is noise.
         if (!this.sawText && !delta.trim()) return;
@@ -565,6 +638,7 @@ export class OpenCodeTurn {
       case 'session.reasoning.delta': {
         const delta = typeof d.delta === 'string' ? d.delta : '';
         if (!delta) return;
+        this.count(this.took.reasoning, d.assistantMessageID, delta.length);
         this.reasoningSince ??= Date.now();
         await this.step();
         this.segment.reasoning += delta;
@@ -618,6 +692,7 @@ export class OpenCodeTurn {
       }
       case 'session.step.ended':
         this.endReasoning();
+        if (typeof d.assistantMessageID === 'string') this.took.steps.add(d.assistantMessageID);
         await this.stepEnded(d);
         return;
       case 'session.step.failed':
@@ -652,10 +727,17 @@ export class OpenCodeTurn {
     }
   }
 
+  /** Characters taken from an assistant message's text or reasoning. */
+  private count(into: Map<string, number>, messageId: unknown, n: number): void {
+    if (typeof messageId !== 'string') return;
+    into.set(messageId, (into.get(messageId) ?? 0) + n);
+  }
+
   private async settleTool(id: string, ok: boolean, error = 'failed'): Promise<void> {
     const state = this.tool(id);
     if (state.settled) return;
     state.settled = true;
+    this.took.settled.add(id);
     if (ok) {
       this.segment.results.push({ id, name: state.name, output: { ok: true } });
       await this.write({ kind: 'tool-output', id, output: { ok: true } });
@@ -1083,9 +1165,161 @@ export class OpenCodeTurn {
     );
   }
 
-  private async end(outcome: TurnOutcome): Promise<void> {
+  /**
+   * The session's messages since this turn's prompt, oldest first: everything after its newest user
+   * message. `undefined` when they cannot be read (no `message.list`, no prompt within reach); empty
+   * when the newest prompt is another run's (this turn's never reached the session).
+   */
+  private async messagesSincePrompt(): Promise<OpenCodeMessage[] | undefined> {
+    const messages = this.a.client.message;
+    if (messages === undefined) return undefined;
+    const since: OpenCodeMessage[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < RECOVER_PAGES; page += 1) {
+      const listed = await messages.list({
+        sessionID: this.a.sessionId,
+        order: 'desc',
+        limit: RECOVER_PAGE_SIZE,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      for (const message of listed.data) {
+        if (message.type === 'user') {
+          const runId = message.metadata?.runId;
+          if (typeof runId === 'string' && runId !== this.a.runId) return [];
+          return since.reverse();
+        }
+        since.push(message);
+      }
+      const next = listed.cursor?.next;
+      if (typeof next !== 'string' || next.length === 0 || listed.data.length === 0) break;
+      cursor = next;
+    }
+    return undefined;
+  }
+
+  /**
+   * A turn rebuilt after a restart heard only what the session said once it re-attached: what it
+   * said in between — read back from the session's messages since the prompt, less what an earlier
+   * process already took ({@link TurnProgress}) and what this one heard — is taken now, as its
+   * events would have been: text, reasoning, tool calls and results, each step's usage. A session
+   * that left nothing for the turn fails it ({@link LOST_ANSWER_ERROR}) rather than reading as an
+   * empty answer.
+   */
+  private async recover(outcome: TurnOutcome): Promise<TurnOutcome> {
+    const messages = await this.messagesSincePrompt().catch((error: unknown) => {
+      this.a.logger.warn(
+        `run ${this.a.runId}: ${errorText(error, 'could not read the session messages')}`,
+      );
+      return undefined;
+    });
+    const before = this.a.progress;
+    const text: Array<{ text: string; continues: boolean }> = [];
+    let reasoning = '';
+    let lastError: string | undefined;
+    for (const message of messages ?? []) {
+      if (message.type !== 'assistant') continue;
+      const id = message.id;
+      const parts = message.content ?? [];
+      text.push(...missed(parts, 'text', before?.text[id] ?? 0, this.took.text.get(id) ?? 0));
+      reasoning += missed(
+        parts,
+        'reasoning',
+        before?.reasoning[id] ?? 0,
+        this.took.reasoning.get(id) ?? 0,
+      )
+        .map((piece) => piece.text)
+        .join('');
+      for (const part of parts) if (part.type === 'tool') await this.missedTool(part);
+      if (message.tokens !== undefined && !before?.steps.includes(id) && !this.took.steps.has(id)) {
+        this.took.steps.add(id);
+        const model = message.model;
+        if (typeof model?.id === 'string' && typeof model.providerID === 'string')
+          this.model = { providerID: model.providerID, id: model.id };
+        await this.spend({ tokens: message.tokens, cost: message.cost }, 'chat');
+      }
+      if (message.error?.message) lastError = message.error.message;
+    }
+    // A part's pieces start a paragraph, as the next part's text does live (`session.text.ended`).
+    const recovered = text
+      .map((piece) => piece.text)
+      .join('\n\n')
+      .trimStart();
+    if (recovered.trim()) {
+      await this.step();
+      const joint = this.segment.text && !text.at(-1)?.continues ? '\n\n' : '';
+      this.segment.text = `${recovered}${joint}${this.segment.text}`;
+      this.sawText = true;
+      await this.write({ kind: 'text', text: recovered });
+    }
+    if (reasoning) {
+      await this.step();
+      this.segment.reasoning = `${reasoning}${this.segment.reasoning}`;
+      await this.write({ kind: 'reasoning', text: reasoning });
+    }
+    if (outcome.status !== 'succeeded') return outcome;
+    // The session's own record of how the execution ended, when the ending was inferred (idle).
+    const idle = (messages ?? []).filter((m) => m.type === 'idle').at(-1);
+    if (idle?.outcome === 'failed')
+      return { status: 'failed', error: lastError ?? this.stepError ?? 'the execution failed' };
+    if (idle?.outcome === 'interrupted') return { status: 'interrupted' };
+    const s = this.segment;
+    const said = s.text || s.reasoning || s.calls.length > 0 || s.ui.length > 0;
+    const progress = this.progress();
+    const tookAny =
+      Object.keys(progress.text).length > 0 ||
+      progress.called.length > 0 ||
+      progress.steps.length > 0;
+    if (!said && !this.wroteMessage && !tookAny)
+      return { status: 'failed', error: LOST_ANSWER_ERROR };
+    return outcome;
+  }
+
+  /** A tool part of a message the turn did not hear: its call, its result, whichever it lacks. */
+  private async missedTool(part: OpenCodeMessagePart): Promise<void> {
+    const id = part.id;
+    const name = part.name ?? 'tool';
+    if (id === undefined || HIDDEN_TOOLS.has(name)) return;
+    const state = (part.state ?? {}) as { status?: unknown; input?: unknown; error?: unknown };
+    const before = this.a.progress;
+    if (!before?.called.includes(id) && !this.tools.has(id)) {
+      await this.step();
+      this.setInput(id, state.input, name);
+      await this.makeAvailable(id);
+    }
+    const ok = state.status === 'completed';
+    if ((!ok && state.status !== 'error') || before?.settled.includes(id)) return;
+    const error = errorText(state.error, 'tool failed');
+    if (this.tools.has(id)) {
+      await this.settleTool(id, ok, error);
+      return;
+    }
+    // Called before the restart: its result goes on the message persisted with the call.
+    this.took.settled.add(id);
+    const result: ToolResult = ok
+      ? { id, name, output: { ok: true } }
+      : { id, name, output: { ok: false }, error };
+    const messageId = await this.messageOf(id);
+    if (messageId !== undefined) await this.addResult(messageId, result);
+    else this.segment.results.push(result);
+    await this.write(
+      ok
+        ? { kind: 'tool-output', id, output: { ok: true } }
+        : { kind: 'tool-output-error', id, error },
+    );
+  }
+
+  private async end(ended: TurnOutcome): Promise<void> {
     if (this.ended) return;
     this.ended = true;
+    const outcome =
+      this.a.resumed === true
+        ? await this.recover(ended).catch((error: unknown) => {
+            this.a.logger.warn(
+              `run ${this.a.runId}: ${errorText(error, 'could not recover the turn')}`,
+            );
+            return ended;
+          })
+        : ended;
     await this.unreported().catch((error: unknown) =>
       this.a.logger.warn(
         `run ${this.a.runId}: ${errorText(error, 'could not read the session usage')}`,
@@ -1105,6 +1339,33 @@ export class OpenCodeTurn {
     }
     this.reach({ kind: 'finished', outcome });
   }
+}
+
+/**
+ * The `type` parts' characters a turn lacks: those after the `head` an earlier process took and
+ * before the `tail` this one heard, one piece per part. `continues`: the piece stops inside its part
+ * (the heard tail goes on with it).
+ */
+function missed(
+  parts: OpenCodeMessagePart[],
+  type: 'text' | 'reasoning',
+  head: number,
+  tail: number,
+): Array<{ text: string; continues: boolean }> {
+  const texts = parts.flatMap((p) =>
+    p.type === type && typeof p.text === 'string' ? [p.text] : [],
+  );
+  const total = texts.reduce((n, t) => n + t.length, 0);
+  const end = total - tail;
+  const out: Array<{ text: string; continues: boolean }> = [];
+  let at = 0;
+  for (const t of texts) {
+    const from = Math.max(head, at);
+    const to = Math.min(end, at + t.length);
+    if (to > from) out.push({ text: t.slice(from - at, to - at), continues: to < at + t.length });
+    at += t.length;
+  }
+  return out;
 }
 
 /** `provider/model` (the send's `model`) as a step model; `undefined` for a bare label. */

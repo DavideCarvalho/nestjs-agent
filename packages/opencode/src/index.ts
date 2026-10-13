@@ -4,6 +4,8 @@ export type {
   OpenCodeForm,
   OpenCodeFormField,
   OpenCodeFormValue,
+  OpenCodeMessage,
+  OpenCodeMessagePart,
   OpenCodeModelRef,
   OpenCodePermissionRequest,
   OpenCodePermissionRule,
@@ -48,6 +50,7 @@ export {
 export {
   addUsage,
   emptyUsage,
+  LOST_ANSWER_ERROR,
   type Milestone,
   OpenCodeReplyMismatchError,
   OpenCodeTurn,
@@ -56,6 +59,7 @@ export {
   type StepCost,
   type StepModel,
   type TurnOutcome,
+  type TurnProgress,
   usageOf,
 } from './turn.js';
 export {
