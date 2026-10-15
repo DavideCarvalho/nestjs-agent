@@ -649,8 +649,8 @@ importers:
         specifier: 5.11.1
         version: 5.11.1
       nestjs-agent-before:
-        specifier: npm:@dudousxd/nestjs-agent@1.19.3
-        version: '@dudousxd/nestjs-agent@1.19.3(bad4e9c6d1a2f787956a35d055cce7d1)'
+        specifier: npm:@dudousxd/nestjs-agent@1.35.0
+        version: '@dudousxd/nestjs-agent@1.35.0(c2f87901834c4174222fb52f563a8ef0)'
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2
@@ -1523,11 +1523,22 @@ packages:
       ioredis:
         optional: true
 
-  '@dudousxd/nestjs-agent-core@0.38.1':
-    resolution: {integrity: sha512-6s18AqzDS5oQmd5pSVzg4q7LjaFJq1a+cmNBuzmpTp5jLrgmqUSeENhM3Qw+aJca/34baqMcGBkAwx9iKm1tdw==}
+  '@dudousxd/nestjs-agent-core@0.57.0':
+    resolution: {integrity: sha512-RiQFSpyzscPseUiRJD/zwuTIk3LcG1egC8JaWmVQMAvS0KC7240QgWYLzewSXMIBypxE8VYiz/SApYfN3D/3VA==}
+    peerDependencies:
+      '@resvg/resvg-js': ^2.6.0
+      typescript: '>=5'
+      vite: '>=5'
+    peerDependenciesMeta:
+      '@resvg/resvg-js':
+        optional: true
+      typescript:
+        optional: true
+      vite:
+        optional: true
 
-  '@dudousxd/nestjs-agent@1.19.3':
-    resolution: {integrity: sha512-cAJFWArdwsEgULveCEckU0+B/5OnBfIvKJ9rA7VeY29XI9Fo/JXgM4NNLSfli1f4CBT3L3nl0QVYqoOqrLj/4A==}
+  '@dudousxd/nestjs-agent@1.35.0':
+    resolution: {integrity: sha512-O2DDvcS5fkS07C9oQcwqlbBWQtV8yGXBXDE1zr5ioQjpjLybt8yx26kLsJ+ZrvKq0fRct+dF2zfcD6zxLeVZEw==}
     peerDependencies:
       '@dudousxd/nestjs-durable': '>=0.34.0'
       '@dudousxd/nestjs-durable-core': '>=0.52.0'
@@ -1537,6 +1548,7 @@ packages:
       '@nestjs/platform-express': ^10.0.0 || ^11.0.0 || ^12.0.0
       ioredis: ^5.0.0
       reflect-metadata: ^0.2.0
+      vite: '>=5'
     peerDependenciesMeta:
       '@dudousxd/nestjs-durable':
         optional: true
@@ -1545,6 +1557,8 @@ packages:
       '@dudousxd/nestjs-media':
         optional: true
       ioredis:
+        optional: true
+      vite:
         optional: true
 
   '@dudousxd/nestjs-authz@0.6.7':
@@ -7938,18 +7952,25 @@ snapshots:
     optionalDependencies:
       ioredis: 5.11.1
 
-  '@dudousxd/nestjs-agent-core@0.38.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
+  '@dudousxd/nestjs-agent-core@0.57.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@resvg/resvg-js@2.6.2)(reflect-metadata@0.2.2)(typescript@5.9.3)(vite@5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2))':
     dependencies:
       '@dudousxd/nestjs-diagnostics': 0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@standard-schema/spec': 1.1.0
+      '@tailwindcss/browser': 4.3.3
+      acorn: 8.17.0
+      acorn-jsx: 5.3.2(acorn@8.17.0)
+    optionalDependencies:
+      '@resvg/resvg-js': 2.6.2
+      typescript: 5.9.3
+      vite: 5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2)
     transitivePeerDependencies:
       - '@nestjs/common'
       - '@nestjs/core'
       - reflect-metadata
 
-  '@dudousxd/nestjs-agent@1.19.3(bad4e9c6d1a2f787956a35d055cce7d1)':
+  '@dudousxd/nestjs-agent@1.35.0(c2f87901834c4174222fb52f563a8ef0)':
     dependencies:
-      '@dudousxd/nestjs-agent-core': 0.38.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
+      '@dudousxd/nestjs-agent-core': 0.57.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(@resvg/resvg-js@2.6.2)(reflect-metadata@0.2.2)(typescript@5.9.3)(vite@5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2))
       '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
@@ -7961,6 +7982,10 @@ snapshots:
       '@dudousxd/nestjs-durable-core': 0.72.1(reflect-metadata@0.2.2)(zod@3.25.76)
       '@dudousxd/nestjs-media': 0.9.3(@dudousxd/nestjs-media-core@0.9.1(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       ioredis: 5.11.1
+      vite: 5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2)
+    transitivePeerDependencies:
+      - '@resvg/resvg-js'
+      - typescript
 
   '@dudousxd/nestjs-authz@0.6.7(@dudousxd/nestjs-context@0.2.1(@dudousxd/nestjs-diagnostics@0.7.2(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2))(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)':
     dependencies:
