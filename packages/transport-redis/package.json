@@ -50,7 +50,7 @@
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
     "@testcontainers/redis": "12.2.0",
-    "ioredis": "5.11.1",
+    "ioredis": "6.0.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
