@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent
 
+## 1.35.1
+
+### Patch Changes
+
+- [#384](https://github.com/DavideCarvalho/nestjs-agent/pull/384) [`68b2fff`](https://github.com/DavideCarvalho/nestjs-agent/commit/68b2fffdb250b54b01aa0a273d6bc923b441deef) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Support ioredis 6: the optional `ioredis` peer is now `^5.0.0 || ^6.0.0`. `RedisTokenStreamSink` also reads the RESP3 map-shaped `XREAD` reply that ioredis 6 returns under `replyMapping: "resp3"` (the default `"legacy"` mapping, `protocol: 2` and ioredis 5 keep the array shape and work as before).
+
 ## 1.35.0
 
 ### Minor Changes
