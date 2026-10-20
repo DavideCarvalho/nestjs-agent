@@ -10,7 +10,11 @@ type Entry = [id: Buffer, fields: Buffer[]];
  * `xreadBuffer`, `duplicate`, `disconnect`, `del`, `expire`). Faithful enough to exercise replay +
  * cursor + terminal semantics; live-follow against a real Redis is covered by the integration run.
  */
-function fakeRedis(ttls = new Map<string, number>()): Redis {
+function fakeRedis(
+  ttls = new Map<string, number>(),
+  /** `'resp3'` replies the way ioredis 6 does under `replyMapping: "resp3"`: a `{ key: entries }` map. */
+  replyMapping: 'legacy' | 'resp3' = 'legacy',
+): Redis {
   const streams = new Map<string, Entry[]>();
   let seq = 0;
   const client = {
@@ -34,7 +38,7 @@ function fakeRedis(ttls = new Map<string, number>()): Redis {
       if (entries.length === 0) {
         return null;
       }
-      return [[Buffer.from(key), entries]];
+      return replyMapping === 'resp3' ? { [key]: entries } : [[Buffer.from(key), entries]];
     },
     duplicate() {
       return client;
@@ -62,6 +66,17 @@ async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string[]> {
 }
 
 describe('RedisTokenStreamSink', () => {
+  it('reads the RESP3 map-shaped XREAD reply (ioredis 6 with replyMapping "resp3")', async () => {
+    const sink = new RedisTokenStreamSink(fakeRedis(new Map(), 'resp3'));
+    const encoder = new TextEncoder();
+    const writer = await sink.open('run-resp3');
+    await writer.write(encoder.encode('Hello'));
+    await writer.write(encoder.encode(' world'));
+    await writer.end();
+
+    expect(await collect(sink.subscribe('run-resp3'))).toEqual(['Hello', ' world']);
+  });
+
   it('replays every buffered chunk to a late subscriber, then ends cleanly', async () => {
     const sink = new RedisTokenStreamSink(fakeRedis());
     const encoder = new TextEncoder();

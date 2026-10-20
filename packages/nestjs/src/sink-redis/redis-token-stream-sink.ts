@@ -113,20 +113,34 @@ interface StreamEntry {
 }
 
 /**
- * Flatten ioredis's `XREAD` buffer response — `[[key, [[id, [field, value, …]], …]], …] | null` —
- * into the entries we care about. Validated defensively at runtime (it crosses the Redis boundary)
- * rather than trusting the driver's loose typing.
+ * The per-stream entry lists of an `XREAD` reply. ioredis 5 (and ioredis 6 under its default
+ * `replyMapping: "legacy"`) returns `[[key, entries], …]`; ioredis 6 with `replyMapping: "resp3"`
+ * surfaces the RESP3 map as a plain object `{ [key]: entries }`. Accept both, so the sink works with
+ * whatever client the app hands it.
+ */
+function streamEntryLists(response: unknown): unknown[] {
+  if (Array.isArray(response)) {
+    return response.map((stream) => (Array.isArray(stream) ? stream[1] : undefined));
+  }
+  if (typeof response === 'object' && response !== null && !Buffer.isBuffer(response)) {
+    return Object.values(response);
+  }
+  return [];
+}
+
+/**
+ * Flatten ioredis's `XREAD` buffer response — `[[key, [[id, [field, value, …]], …]], …] | null`,
+ * or the RESP3 map form (see {@link streamEntryLists}) — into the entries we care about. Validated
+ * defensively at runtime (it crosses the Redis boundary) rather than trusting the driver's loose
+ * typing.
  */
 function readEntries(response: unknown): StreamEntry[] {
-  if (!Array.isArray(response)) {
-    return [];
-  }
   const entries: StreamEntry[] = [];
-  for (const stream of response) {
-    if (!Array.isArray(stream) || !Array.isArray(stream[1])) {
+  for (const list of streamEntryLists(response)) {
+    if (!Array.isArray(list)) {
       continue;
     }
-    for (const item of stream[1]) {
+    for (const item of list) {
       if (!Array.isArray(item) || item.length < 2) {
         continue;
       }
