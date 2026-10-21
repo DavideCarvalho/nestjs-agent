@@ -375,6 +375,8 @@ describe('a turn\u2019s long steps are dispatched, because that is what ctx.step
             toolCallId: 'call-x',
           },
         ],
+        // The tool's own time, measured on the worker that ran it.
+        executionMs: expect.any(Number),
       });
     } finally {
       await moduleRef.close();

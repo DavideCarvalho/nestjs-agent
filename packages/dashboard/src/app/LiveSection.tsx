@@ -1,16 +1,31 @@
+import { formatDurationMs } from '../client/format-usd';
 import type { FeedEvent } from '../client/merge-live-events';
 import { isAlertEvent } from '../client/merge-live-events';
 import { Badge } from './ui/badge';
 import { Empty, Panel, StatusDot, relTime } from './ui/kit';
 
 /** A short human summary for a live event, pulled from the well-known payload fields. */
-function summarize(event: FeedEvent): string {
+export function summarize(event: FeedEvent): string {
   const payload = event.payload;
   switch (event.event) {
     case 'run.started':
       return `run ${str(payload.runId)} started${payload.agentName ? ` · ${str(payload.agentName)}` : ''}`;
     case 'run.finished':
-      return `run ${str(payload.runId)} finished · ${num(payload.steps)} steps · ${num(payload.inputTokens) + num(payload.outputTokens)} tok`;
+      return `run ${str(payload.runId)} finished · ${num(payload.steps)} steps · ${num(payload.inputTokens) + num(payload.outputTokens)} tok${
+        typeof payload.ttftMs === 'number' ? ` · ttft ${formatDurationMs(payload.ttftMs)}` : ''
+      }`;
+    case 'run.failed':
+      return `run ${str(payload.runId)} failed · ${str(payload.code)}${
+        typeof payload.durationMs === 'number'
+          ? ` after ${formatDurationMs(payload.durationMs)}`
+          : ''
+      }`;
+    case 'run.cancelled':
+      return `run ${str(payload.runId)} cancelled${
+        typeof payload.durationMs === 'number'
+          ? ` after ${formatDurationMs(payload.durationMs)}`
+          : ''
+      }`;
     case 'message':
       return `${str(payload.role)} message · ${num(payload.textLength)} chars`;
     case 'tool-call':

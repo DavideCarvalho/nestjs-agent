@@ -89,6 +89,13 @@ export interface RunMetrics {
   retries: number;
   durationP50Ms: number | null;
   durationP95Ms: number | null;
+  /**
+   * Time to first token — turn start to the first `text` frame — over the range's COMPLETED TOP-LEVEL
+   * runs (a delegated child streams into its parent's turn, so its first token is not one a person
+   * waited for). `null` when no such run recorded one.
+   */
+  ttftP50Ms: number | null;
+  ttftP95Ms: number | null;
 }
 
 /** Run/failure/retry rollup for one agent over a range. */
@@ -126,6 +133,12 @@ export interface RecentRunRow {
    */
   status: string;
   durationMs: number | null;
+  /** Time to first token, ms — see `RecordRunEndInput.ttftMs`. `null` when not recorded. */
+  ttftMs: number | null;
+  /** The run's spend in USD — see `RecordRunEndInput.costUsd`. `null` when not known. */
+  costUsd: number | null;
+  /** The model the run's last model call resolved to. `null` when not recorded. */
+  modelId: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   retries: number;

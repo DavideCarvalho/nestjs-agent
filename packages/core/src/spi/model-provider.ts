@@ -93,6 +93,13 @@ export interface BufferedModelTurnResult extends ModelTurnResult {
    * stream showed when a call's own push does not replace them.
    */
   previews?: ShownToolInputPreview[];
+  /**
+   * Epoch ms at which the run's first non-empty `text` frame reached the reader's stream, when it
+   * had by the end of this call — stamped by whatever ran the call (the loop, or the dispatched-step
+   * handler) from its own clock. Journaled with the turn so a replay keeps the run's time to first
+   * token. Absent for a call whose frames were held for a gate: the gate's release stamps it then.
+   */
+  firstTextAt?: number;
 }
 
 /** A preview a model turn showed: what the loop withdraws if the call's own push never replaces it. */

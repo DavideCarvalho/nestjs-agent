@@ -58,8 +58,9 @@ const SCHEMA_LOCK_NAME = 'agent_schema';
  * 2: MySQL columns are reconciled to their declared collation (earlier heals left them in the table
  * default), so a database healed before it gets the correction once.
  * 3: `agent_genui_call` (generative-UI telemetry).
+ * 4: `agent_run.ttft_ms` / `cost_usd` / `model_id` (run metrics).
  */
-const SCHEMA_REVISION = 3;
+const SCHEMA_REVISION = 4;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the

@@ -24,6 +24,12 @@ export class AgentRun {
   agentName?: string | null;
   status!: AgentRunStatus;
   durationMs?: number | null;
+  /** Turn start to the first `text` frame; null for a run that streamed none or did not complete. */
+  ttftMs?: number | null;
+  /** The run's known spend (the sum of its model calls with a known cost); null when none had one. */
+  costUsd?: number | null;
+  /** The model the run's last model call resolved to. */
+  modelId?: string | null;
   errorCode?: string | null;
   errorMessage?: string | null;
   retries!: number;
@@ -66,6 +72,9 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
       agentName: { type: 'string', nullable: true, fieldName: 'agent_name', ...str },
       status: { type: 'string', ...str },
       durationMs: { type: 'integer', nullable: true, fieldName: 'duration_ms' },
+      ttftMs: { type: 'integer', nullable: true, fieldName: 'ttft_ms' },
+      costUsd: { type: 'double', nullable: true, fieldName: 'cost_usd' },
+      modelId: { type: 'string', nullable: true, fieldName: 'model_id', ...str },
       errorCode: { type: 'string', nullable: true, fieldName: 'error_code', ...str },
       errorMessage: { type: LongTextType, nullable: true, fieldName: 'error_message', ...str },
       retries: { type: 'integer', default: 0 },

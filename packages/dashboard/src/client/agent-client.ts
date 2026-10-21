@@ -92,6 +92,9 @@ export interface RunMetrics {
   retries: number;
   durationP50Ms: number | null;
   durationP95Ms: number | null;
+  /** Time to first token over completed top-level runs; `null` when none recorded one. */
+  ttftP50Ms: number | null;
+  ttftP95Ms: number | null;
 }
 
 /** Run/failure counts for one agent over a range. */
@@ -123,6 +126,12 @@ export interface RecentRunRow {
   agentName: string | null;
   status: string;
   durationMs: number | null;
+  /** Turn start to the first streamed text; `null` when not recorded. */
+  ttftMs: number | null;
+  /** The run's known spend in USD; `null` when not known. */
+  costUsd: number | null;
+  /** The model the run's last model call resolved to; `null` when not recorded. */
+  modelId: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   retries: number;

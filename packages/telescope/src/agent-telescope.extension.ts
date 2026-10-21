@@ -2,7 +2,10 @@ import type { DashboardSection, DataProvider } from '@dudousxd/nestjs-telescope'
 import { defineTelescopeExtension } from '@dudousxd/nestjs-telescope';
 import { agentDashboard } from './agent-dashboard.spec-data.js';
 import {
+  agentRunFailureCodesProvider,
+  agentRunsCancelledProvider,
   agentRunsProvider,
+  agentRunsTtftDistributionProvider,
   agentTokensProvider,
   agentToolStatusProvider,
 } from './agent-data-providers.js';
@@ -23,6 +26,7 @@ import {
   agentRunsSuccessRateProvider,
   agentRunsTotalProvider,
   agentRunsTrendProvider,
+  agentRunsTtftProvider,
   agentSpendByActorProvider,
   agentSpendByModelProvider,
   agentSpendTotalProvider,
@@ -153,6 +157,10 @@ export function agentTelescopeExtension(opts: AgentTelescopeExtensionOptions = {
       agentRunsFailedProvider(),
       agentRunsRetriesProvider(),
       agentRunsDurationProvider(),
+      agentRunsTtftProvider(),
+      agentRunsTtftDistributionProvider(),
+      agentRunFailureCodesProvider(),
+      agentRunsCancelledProvider(),
       agentRunsByAgentTableProvider(),
       agentRunErrorsProvider(),
       agentRunsTrendProvider(),

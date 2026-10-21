@@ -2,6 +2,7 @@ import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import type {
   ActorSpendRow,
   AgentApprovalPort,
+  AgentDiagnosticEvent,
   AgentGovernanceQueries,
   AgentPricingStore,
   ApprovalWhere,
@@ -113,15 +114,23 @@ export interface LiveAgentEvent {
   payload: Record<string, unknown>;
 }
 
-/** The `aviary:agent:*` events the Live feed tails. Mirrors the telescope watcher's subscription. */
-const AGENT_EVENTS = [
+/**
+ * The `aviary:agent:*` events the Live feed tails — a curated subset of core's
+ * `AGENT_DIAGNOSTIC_EVENTS`, typed against it so a renamed event is a compile error here. Every run
+ * TERMINAL is in it (finished, failed, cancelled): a feed that showed runs starting but never failing
+ * would read as "all fine" exactly when it is not. The per-turn bookkeeping events (skills, memory,
+ * retrieval, tool retries) are left to the telescope.
+ */
+const AGENT_EVENTS: readonly AgentDiagnosticEvent[] = [
   'run.started',
   'message',
   'tool-call',
   'quota.exceeded',
   'run.finished',
+  'run.failed',
+  'run.cancelled',
   'delegated',
-] as const;
+];
 
 /** The `node:diagnostics_channel` envelope `emit()` publishes (see `@dudousxd/nestjs-diagnostics`). */
 interface AgentDiagnosticEnvelope {

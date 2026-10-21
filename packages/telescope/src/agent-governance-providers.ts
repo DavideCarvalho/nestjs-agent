@@ -290,6 +290,9 @@ interface RecentRunTableRow {
   agentName: string;
   status: string;
   durationMs: number | string;
+  ttftMs: number | string;
+  costUsd: number | string;
+  modelId: string;
   retries: number;
   errorCode: string;
   errorMessage: string;
@@ -306,6 +309,9 @@ export function toRecentRunTableRows(rows: RecentRunRow[]): RecentRunTableRow[] 
     agentName: row.agentName ?? NO_VALUE,
     status: row.status,
     durationMs: row.durationMs ?? NO_VALUE,
+    ttftMs: row.ttftMs ?? NO_VALUE,
+    costUsd: row.costUsd ?? NO_VALUE,
+    modelId: row.modelId ?? NO_VALUE,
     retries: row.retries,
     errorCode: row.errorCode ?? NO_VALUE,
     errorMessage: capErrorMessage(row.errorMessage) ?? NO_VALUE,
@@ -387,6 +393,8 @@ const EMPTY_RUN_METRICS: RunMetrics = {
   retries: 0,
   durationP50Ms: null,
   durationP95Ms: null,
+  ttftP50Ms: null,
+  ttftP95Ms: null,
 };
 
 /**
@@ -545,6 +553,24 @@ export function agentRunsDurationProvider(): DataProvider {
       const queries = resolveGovernanceQueries(ctx);
       const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
       const value = query?.metric === 'p95' ? metrics.durationP95Ms : metrics.durationP50Ms;
+      return { value: value ?? 0 };
+    },
+  };
+}
+
+/**
+ * stat → time-to-first-token percentile over the range's completed top-level runs, selected by
+ * `query.metric` exactly like {@link agentRunsDurationProvider}. A `null` percentile (no run in range
+ * recorded one) resolves to 0. The histogram beside it reads the raw samples off Telescope's own
+ * `run.finished` entries — `agent.runs.ttftDistribution`.
+ */
+export function agentRunsTtftProvider(): DataProvider {
+  return {
+    name: 'agent.runs.ttft',
+    async resolve(query, ctx) {
+      const queries = resolveGovernanceQueries(ctx);
+      const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
+      const value = query?.metric === 'p95' ? metrics.ttftP95Ms : metrics.ttftP50Ms;
       return { value: value ?? 0 };
     },
   };

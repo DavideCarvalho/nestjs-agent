@@ -124,6 +124,10 @@ function toRecentRunRow(run: AgentRun): RecentRunRow {
     agentName: run.agentName ?? null,
     status: run.status,
     durationMs: run.durationMs ?? null,
+    ttftMs: run.ttftMs ?? null,
+    // A driver that hands a DOUBLE back as a string is normalized so the SPI row is always a number.
+    costUsd: run.costUsd == null ? null : Number(run.costUsd),
+    modelId: run.modelId ?? null,
     errorCode: run.errorCode ?? null,
     errorMessage: run.errorMessage ?? null,
     retries: run.retries,
@@ -386,6 +390,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     let failed = 0;
     let retries = 0;
     const settledDurationsMs: number[] = [];
+    const ttftsMs: number[] = [];
     for (const run of runs) {
       if (run.status === 'completed') {
         completed += 1;
@@ -396,8 +401,14 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       if ((run.status === 'completed' || run.status === 'failed') && run.durationMs != null) {
         settledDurationsMs.push(run.durationMs);
       }
+      // A person waited for the first token of a completed TOP-LEVEL turn only: a delegated child
+      // streams into its parent's turn.
+      if (run.status === 'completed' && run.parentRunId == null && run.ttftMs != null) {
+        ttftsMs.push(run.ttftMs);
+      }
     }
     settledDurationsMs.sort((left, right) => left - right);
+    ttftsMs.sort((left, right) => left - right);
     return {
       runs: runs.length,
       completed,
@@ -406,6 +417,8 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       retries,
       durationP50Ms: percentileMs(settledDurationsMs, 0.5),
       durationP95Ms: percentileMs(settledDurationsMs, 0.95),
+      ttftP50Ms: percentileMs(ttftsMs, 0.5),
+      ttftP95Ms: percentileMs(ttftsMs, 0.95),
     };
   }
 

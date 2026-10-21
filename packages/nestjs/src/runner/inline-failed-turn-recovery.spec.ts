@@ -1,3 +1,4 @@
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import {
   type ModelMessage,
   RUN_ENDED_BEFORE_TOOL_CALL,
@@ -102,6 +103,10 @@ describe('a turn that died mid-step (inline runner)', () => {
     }).compile();
     await moduleRef.init();
     const service = moduleRef.get(AgentService);
+    const published: unknown[] = [];
+    const onFailed = (message: unknown) =>
+      void published.push((message as { payload: unknown }).payload);
+    subscribe('aviary:agent:run.failed', onFailed);
     try {
       const { runId, threadId } = await service.chat({ actor: ACTOR, message: 'keep this exam' });
       await until(
@@ -123,6 +128,16 @@ describe('a turn that died mid-step (inline runner)', () => {
         code: 'run_failed',
         message: RUN_FAILED_MESSAGE,
       });
+      // The diagnostic carries the stable code, how long the run went on and who it was for.
+      expect(published).toEqual([
+        expect.objectContaining({
+          runId,
+          threadId,
+          code: 'run_failed',
+          durationMs: expect.any(Number),
+          context: expect.objectContaining({ actorId: 'u1' }),
+        }),
+      ]);
 
       await until(async () => (await store.activeRunForThread(threadId)) === null);
       // Neither call's row was settled by the run: the first died being written, the second was
@@ -145,6 +160,7 @@ describe('a turn that died mid-step (inline runner)', () => {
         [MEASURE, RUN_ENDED_BEFORE_TOOL_CALL],
       ]);
     } finally {
+      unsubscribe('aviary:agent:run.failed', onFailed);
       await moduleRef.close();
     }
   });

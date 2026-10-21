@@ -42,6 +42,7 @@ import {
   agentRunsSuccessRateProvider,
   agentRunsTotalProvider,
   agentRunsTrendProvider,
+  agentRunsTtftProvider,
   agentSpendByModelProvider,
   agentSpendTotalProvider,
   agentThreadsPagedTableProvider,
@@ -106,6 +107,8 @@ const RUN_METRICS: RunMetrics = {
   retries: 4,
   durationP50Ms: 820,
   durationP95Ms: 4_100,
+  ttftP50Ms: 310,
+  ttftP95Ms: 1_250,
 };
 
 const RUN_AGENT_ROWS: RunAgentBreakdownRow[] = [
@@ -133,6 +136,9 @@ const RECENT_RUN_ROWS: RecentRunRow[] = [
     agentName: 'triage',
     status: 'failed',
     durationMs: 1_500,
+    ttftMs: 420,
+    costUsd: 0.0123,
+    modelId: 'gpt-4o',
     errorCode: 'quota_exceeded',
     errorMessage: LONG_ERROR_MESSAGE,
     retries: 1,
@@ -147,6 +153,9 @@ const RECENT_RUN_ROWS: RecentRunRow[] = [
     agentName: null,
     status: 'completed',
     durationMs: null,
+    ttftMs: null,
+    costUsd: null,
+    modelId: null,
     errorCode: null,
     errorMessage: null,
     retries: 0,
@@ -485,6 +494,9 @@ describe('reliability data-shaping', () => {
       agentName: 'triage',
       status: 'failed',
       durationMs: 1_500,
+      ttftMs: 420,
+      costUsd: 0.0123,
+      modelId: 'gpt-4o',
       retries: 1,
       errorCode: 'quota_exceeded',
       errorMessage: capErrorMessage(LONG_ERROR_MESSAGE),
@@ -498,6 +510,9 @@ describe('reliability data-shaping', () => {
       agentName: '—',
       status: 'completed',
       durationMs: '—',
+      ttftMs: '—',
+      costUsd: '—',
+      modelId: '—',
       retries: 0,
       errorCode: '—',
       errorMessage: '—',
@@ -543,6 +558,11 @@ describe('reliability + tools + approvals providers', () => {
     });
     await expect(agentRunsDurationProvider().resolve({ metric: 'p95' }, ctx)).resolves.toEqual({
       value: 4_100,
+    });
+    // TTFT follows the same metric selector as duration.
+    await expect(agentRunsTtftProvider().resolve({}, ctx)).resolves.toEqual({ value: 310 });
+    await expect(agentRunsTtftProvider().resolve({ metric: 'p95' }, ctx)).resolves.toEqual({
+      value: 1_250,
     });
     await expect(agentRunsByAgentTableProvider().resolve({}, ctx)).resolves.toEqual({
       rows: RUN_AGENT_ROWS,

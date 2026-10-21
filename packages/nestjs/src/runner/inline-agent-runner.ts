@@ -15,10 +15,13 @@ import {
   RunCancelledError,
   type SinkWriter,
   agentFailureCode,
+  agentRunContext,
   encodeStreamEvent,
+  publishAgentRunCancelled,
   publishAgentRunFailed,
   releaseThreadRun,
   runAgentLoop,
+  runDurationMs,
   settleAll,
   settleUnsettledDelegation,
   streamFailure,
@@ -104,19 +107,30 @@ export class InlineAgentRunner implements AgentRunner {
     void runAgentLoop({ ...deps, day }, input, hooks)
       .then(() => releaseThreadRun(this.store, input.threadId, runId))
       .catch(async (error) => {
+        // From the run's journaled start, when the loop got as far as recording one.
+        const durationMs = runDurationMs(error);
+        const timed = durationMs !== undefined ? { durationMs } : {};
         if (error instanceof RunCancelledError) {
-          await this.settleCancelled(runId, input, deps);
+          await this.settleCancelled(runId, input, deps, durationMs);
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
         const code = agentFailureCode(error);
         this.logger.error(`agent run ${runId} failed (${code}): ${message}`);
-        publishAgentRunFailed({ runId, code, message });
+        publishAgentRunFailed({
+          runId,
+          threadId: input.threadId,
+          code,
+          message,
+          ...timed,
+          context: agentRunContext(input),
+        });
         // Settle the run's persisted outcome (the loop only records completions — it can't catch
         // its own crash). Optional-call: a store without run recording skips reliability metrics.
         await this.store.recordRunEnd?.({
           runId,
           status: 'failed',
+          ...timed,
           errorCode: code,
           errorMessage: message,
         });
@@ -207,8 +221,16 @@ export class InlineAgentRunner implements AgentRunner {
     runId: string,
     input: AgentRunInput,
     deps: AgentDeps,
+    durationMs: number | undefined,
   ): Promise<void> {
     this.logger.log(`agent run ${runId} cancelled`);
+    const timed = durationMs !== undefined ? { durationMs } : {};
+    publishAgentRunCancelled({
+      runId,
+      threadId: input.threadId,
+      ...timed,
+      context: agentRunContext(input),
+    });
     const writer = await deps.sink.open(runId);
     // An interrupt's message starts now; otherwise the queue pauses behind the Stop.
     await this.settleQueue(writer, input, runId, 'cancelled');
@@ -217,7 +239,7 @@ export class InlineAgentRunner implements AgentRunner {
     await writer.end();
     // Last, so the reader is released before the bookkeeping: everything above is what someone is
     // waiting on, and the run row is what someone reads afterwards.
-    await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
+    await this.store.recordRunEnd?.({ runId, status: 'cancelled', ...timed });
   }
 
   /**
@@ -425,31 +447,39 @@ export class InlineAgentRunner implements AgentRunner {
           deliverTo: { threadId: subThread.id, toolCallId },
         }),
     };
-    void runAgentLoop(
-      { ...deps, day },
-      {
-        threadId: subThread.id,
-        actor,
-        userText: task,
-        agentName,
-        day,
-        delegationDepth: depth,
-        delegationPath: path,
-        parentRunId,
-        deliverTo,
-      },
-      hooks,
-    )
+    const childInput: AgentRunInput = {
+      threadId: subThread.id,
+      actor,
+      userText: task,
+      agentName,
+      day,
+      delegationDepth: depth,
+      delegationPath: path,
+      parentRunId,
+      deliverTo,
+    };
+    void runAgentLoop({ ...deps, day }, childInput, hooks)
       .catch(async (error: unknown) => {
         const cancelled = error instanceof RunCancelledError;
         const message = error instanceof Error ? error.message : String(error);
-        if (!cancelled) {
+        const durationMs = runDurationMs(error);
+        const timed = durationMs !== undefined ? { durationMs } : {};
+        const settled = {
+          runId,
+          threadId: subThread.id,
+          ...timed,
+          context: agentRunContext(childInput),
+        };
+        if (cancelled) {
+          publishAgentRunCancelled(settled);
+        } else {
           this.logger.error(`detached agent run ${runId} failed: ${message}`);
-          publishAgentRunFailed({ runId, code: agentFailureCode(error), message });
+          publishAgentRunFailed({ ...settled, code: agentFailureCode(error), message });
         }
         await this.store.recordRunEnd?.({
           runId,
           status: cancelled ? 'cancelled' : 'failed',
+          ...timed,
           ...(cancelled ? {} : { errorCode: agentFailureCode(error), errorMessage: message }),
         });
         await Promise.resolve(

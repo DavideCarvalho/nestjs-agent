@@ -210,7 +210,24 @@ export interface RecordRunEndInput {
    * model failures. It carries no `errorCode`/`errorMessage`, since there is nothing to diagnose.
    */
   status: 'completed' | 'failed' | 'cancelled';
+  /**
+   * Turn start to settle. The start is the run's journaled `run:started-at`, so a run that suspended
+   * and resumed reports its whole wall time, not the last replay's. Set for a cancelled or failed run
+   * too where the runner knows the start.
+   */
   durationMs?: number;
+  /**
+   * Turn start to the first non-empty `text` frame the reader was sent — time to first token. Absent
+   * for a run that streamed no text (a tool-only or refused turn), and for a run that did not complete.
+   */
+  ttftMs?: number;
+  /**
+   * The run's spend: the sum of its model calls whose cost is known (provider-reported or estimated
+   * from the price list). Absent when none of them had a known cost — never a made-up `0`.
+   */
+  costUsd?: number;
+  /** The model the run's LAST model call resolved to (the provider-reported id, else the configured one). */
+  modelId?: string;
   errorCode?: string;
   errorMessage?: string;
 }

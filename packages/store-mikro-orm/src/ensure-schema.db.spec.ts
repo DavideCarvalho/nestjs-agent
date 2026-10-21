@@ -390,7 +390,7 @@ const ADDED_LATER: Record<string, string[]> = {
     'queue_pause',
     'deleted_at',
   ],
-  agent_run: ['parent_run_id'],
+  agent_run: ['parent_run_id', 'ttft_ms', 'cost_usd', 'model_id'],
   agent_message: ['reasoning', 'reasoning_ms', 'ui', 'feedback', 'attachments', 'seq', 'persona'],
   agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
   agent_token_usage: ['cost_source'],

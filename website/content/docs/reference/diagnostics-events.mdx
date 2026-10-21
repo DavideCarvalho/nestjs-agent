@@ -12,12 +12,13 @@ import { Callout } from 'fumadocs-ui/components/callout';
 
 | Event | Payload fields | Publisher |
 |---|---|---|
-| `run.started` | `runId: string`; `threadId: string`; `actorId: string`; `agentName?: string`; `persona?: string` | `publishAgentRunStarted` |
+| `run.started` | `runId: string`; `threadId: string`; `actorId: string`; `agentName?: string`; `persona?: string` | `publishAgentRunStarted` — published outside any checkpoint, so a durable run publishes it again each time it replays (a resume after an approval, a dispatch hop); count runs from `run.finished` / `run.failed` / `run.cancelled` instead. |
 | `message` | `runId: string`; `threadId: string`; `role: 'user' \| 'assistant'`; `textLength: number` | `publishAgentMessage` |
-| `tool-call` | `runId: string`; `toolName: string`; `toolType: 'read' \| 'action'`; `status: string`; `durationMs?: number` | `publishAgentToolCall` |
+| `tool-call` | `runId: string`; `toolCallId: string`; `toolName: string`; `toolType: 'read' \| 'action'`; `status: string`; `durationMs?: number`; `replayed?: true` | `publishAgentToolCall` — `durationMs` is the tool's own time, measured inside its checkpoint (`tool:<callId>`, or on the worker running a dispatched call); `replayed: true` when a durable replay re-publishes an outcome an earlier execution already settled — skip those when counting. |
 | `quota.exceeded` | `actorId: string`; `period?: 'day' \| 'month'`; `reason?: string`; `usedTokens?: number`; `limitTokens?: number`; `usedUsd?: number`; `limitUsd?: number` | `publishAgentQuotaExceeded` — when the send gate refuses a turn with `429`, and when the [message queue](/docs/agent/guides/message-queue) pauses on quota. Token figures are absent on a USD-only cap. |
-| `run.failed` | `runId: string`; `code: string`; `message: string` | `publishAgentRunFailed` |
-| `run.finished` | `runId: string`; `threadId: string`; `steps: number`; `inputTokens: number`; `outputTokens: number` | `publishAgentRunFinished` |
+| `run.failed` | `runId: string`; `threadId?: string`; `code: string` (the stream error code); `message: string`; `durationMs?: number`; `context?: AgentRunContext` | `publishAgentRunFailed` — by the runner that settles the failure. A durable suspend publishes nothing. |
+| `run.cancelled` | `runId: string`; `threadId?: string`; `durationMs?: number`; `context?: AgentRunContext` | `publishAgentRunCancelled` — instead of `run.failed`, by the runner that settles the Stop. |
+| `run.finished` | `runId: string`; `threadId: string`; `steps: number`; `inputTokens: number`; `outputTokens: number`; `durationMs?: number`; `ttftMs?: number`; `costUsd?: number`; `modelId?: string`; plus the `AgentRunContext` fields | `publishAgentRunFinished` — `ttftMs` is turn start to the first non-empty `text` frame; `costUsd` sums the model calls with a known cost (absent when none had one); `modelId` is the last call's model. |
 | `delegated` | `runId: string`; `fromAgent?: string`; `toAgent: string`; `detached?: boolean` | `publishAgentDelegated` — `detached: true` when the delegate was started, not awaited |
 | `retrieved` | `runId: string`; `query: string`; `count: number` | `publishAgentRetrieved` — **inject mode only** (`retrieval: { mode: 'inject' }`). Agentic retrieval through a tool is not reported here; wrap the retriever with `instrumentRetriever` to see it on `aviary:rag:retrieval`. |
 | `skills.resolved` | `runId: string`; `scopes: number`; `offered: number`; `omitted: number`; `promptChars: number` | once per run, at the `skills:catalog` checkpoint (counts only, never skill names) |
@@ -45,6 +46,11 @@ The RAG packages publish on their own namespace:
 <Callout type="info" title="tool-call's toolType is narrower than ToolKind">
   `AgentToolCallEvent.toolType` is `'read' | 'action'` — it does not include the `'agent'` kind that `ToolSpec.kind` supports for delegation. Delegation gets its own `delegated` event instead.
 </Callout>
+
+`AgentRunContext` is `{ actorId: string; agentName?: string; tenantRef?: string; parentRunId?: string }`.
+Durations are measured from the run's journaled `run:started-at`, so a run that suspended and
+resumed reports its whole wall time; the time to first token is read where the text is written and
+journaled with the step that wrote it.
 
 ## Trace spans (`traceId = runId`)
 

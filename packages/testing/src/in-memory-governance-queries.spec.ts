@@ -419,7 +419,56 @@ describe('InMemoryGovernanceQueries run reliability', () => {
       retries: 0,
       durationP50Ms: null,
       durationP95Ms: null,
+      ttftP50Ms: null,
+      ttftP95Ms: null,
     });
+  });
+
+  it('runMetrics takes TTFT percentiles over completed top-level runs only, and rows carry ttft/cost/model', async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'tina' } });
+    const today = new Date().toISOString().slice(0, 10);
+    const queries = new InMemoryGovernanceQueries(store);
+
+    for (const [runId, ttftMs] of [
+      ['top-1', 100],
+      ['top-2', 300],
+      ['top-3', 200],
+    ] as const) {
+      await store.recordRunStart({ runId, threadId: thread.id, actorRef: 'tina' });
+      await store.recordRunEnd({
+        runId,
+        status: 'completed',
+        durationMs: 1000,
+        ttftMs,
+        costUsd: 0.25,
+        modelId: 'gpt-x',
+      });
+    }
+    // A delegated child: its first token was streamed into the parent's turn — not counted.
+    await store.recordRunStart({
+      runId: 'child',
+      threadId: thread.id,
+      actorRef: 'tina',
+      parentRunId: 'top-1',
+    });
+    await store.recordRunEnd({ runId: 'child', status: 'completed', ttftMs: 9_000 });
+    // A failed run — not counted either.
+    await store.recordRunStart({ runId: 'failed', threadId: thread.id, actorRef: 'tina' });
+    await store.recordRunEnd({ runId: 'failed', status: 'failed', ttftMs: 8_000 });
+    // A completed run that streamed no text — no sample.
+    await store.recordRunStart({ runId: 'silent', threadId: thread.id, actorRef: 'tina' });
+    await store.recordRunEnd({ runId: 'silent', status: 'completed' });
+
+    const metrics = await queries.runMetrics({ fromDay: today, toDay: today });
+    // ascending [100, 200, 300] → p50 offset 1, p95 offset 2
+    expect(metrics.ttftP50Ms).toBe(200);
+    expect(metrics.ttftP95Ms).toBe(300);
+
+    const detail = await queries.runDetail('top-2');
+    expect(detail?.run).toMatchObject({ ttftMs: 300, costUsd: 0.25, modelId: 'gpt-x' });
+    const silent = (await queries.recentRuns(10)).find((row) => row.runId === 'silent');
+    expect(silent).toMatchObject({ ttftMs: null, costUsd: null, modelId: null });
   });
 
   it('runTrend buckets by UTC day and recentRuns orders newest-first, capped, with nulls for an unsettled run', async () => {
@@ -453,6 +502,9 @@ describe('InMemoryGovernanceQueries run reliability', () => {
         status: 'running',
         agentName: null,
         durationMs: null,
+        ttftMs: null,
+        costUsd: null,
+        modelId: null,
         errorCode: null,
         errorMessage: null,
       });

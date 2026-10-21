@@ -342,12 +342,18 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
         runId: 'run-1',
         status: 'completed',
         durationMs: 1_234,
+        ttftMs: 321,
+        costUsd: 0.0125,
+        modelId: 'gpt-x',
       });
       const settled = await orm.em.fork().findOne(AgentRun, { id: 'run-1' });
       expect(settled?.status).toBe('completed');
       expect(settled?.durationMs).toBe(1_234);
       expect(settled?.settledAt).toBeInstanceOf(Date);
       expect(settled?.errorCode).toBeNull();
+      expect(settled?.ttftMs).toBe(321);
+      expect(Number(settled?.costUsd)).toBeCloseTo(0.0125, 6);
+      expect(settled?.modelId).toBe('gpt-x');
 
       // a run with no agentName defaults to null, and a failed run carries the error fields
       await store.recordRunStart({ runId: 'run-2', threadId: thread.id, actorRef: 'actor-run' });
@@ -364,6 +370,10 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
       expect(failed?.errorMessage).toBe('upstream timed out');
       // a run started with no promptHash defaults to null
       expect(failed?.promptHash).toBeNull();
+      // and one that recorded no metrics leaves them null
+      expect(failed?.ttftMs ?? null).toBeNull();
+      expect(failed?.costUsd ?? null).toBeNull();
+      expect(failed?.modelId ?? null).toBeNull();
 
       // recordRunEnd/bumpRunRetries on an unknown run are silent no-ops
       await expect(

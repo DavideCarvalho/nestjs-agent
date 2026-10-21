@@ -29,7 +29,12 @@ import type {
   ToolStatRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
-import { publishAgentToolCall } from '@dudousxd/nestjs-agent-core';
+import {
+  publishAgentRunCancelled,
+  publishAgentRunFailed,
+  publishAgentRunFinished,
+  publishAgentToolCall,
+} from '@dudousxd/nestjs-agent-core';
 import { NotFoundException, NotImplementedException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 import type { ActorDirectory } from './actor-directory.js';
@@ -45,6 +50,8 @@ const EMPTY_RUN_METRICS: RunMetrics = {
   retries: 0,
   durationP50Ms: null,
   durationP95Ms: null,
+  ttftP50Ms: null,
+  ttftP95Ms: null,
 };
 
 interface QueriesOverrides {
@@ -206,6 +213,8 @@ describe('DashboardService', () => {
       retries: 3,
       durationP50Ms: 420,
       durationP95Ms: 1800,
+      ttftP50Ms: 180,
+      ttftP95Ms: 650,
     };
     const service = new DashboardService(
       fakeQueries({
@@ -237,6 +246,9 @@ describe('DashboardService', () => {
             agentName: 'analyst',
             status: 'failed',
             durationMs: 1200,
+            ttftMs: null,
+            costUsd: null,
+            modelId: null,
             errorCode: 'TIMEOUT',
             errorMessage: 'upstream timed out',
             retries: 1,
@@ -393,6 +405,9 @@ describe('DashboardService', () => {
           agentName: 'analyst',
           status: 'failed',
           durationMs: 1200,
+          ttftMs: null,
+          costUsd: null,
+          modelId: null,
           errorCode: 'TIMEOUT',
           errorMessage: 'upstream timed out',
           retries: 1,
@@ -479,11 +494,46 @@ describe('DashboardService', () => {
       .streamEvents()
       .subscribe((message: { data: LiveAgentEvent }) => seen.push(message.data));
 
-    publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'ok' });
+    publishAgentToolCall({
+      runId: 'r1',
+      toolCallId: 'call-1',
+      toolName: 'search',
+      toolType: 'read',
+      status: 'ok',
+    });
 
     expect(seen).toHaveLength(1);
     expect(seen[0]?.event).toBe('tool-call');
     expect(seen[0]?.payload.toolName).toBe('search');
+
+    subscription.unsubscribe();
+  });
+
+  it('streamEvents() forwards the run terminals — failed and cancelled as well as finished', () => {
+    const service = new DashboardService(fakeQueries());
+    const seen: LiveAgentEvent[] = [];
+    const subscription = service
+      .streamEvents()
+      .subscribe((message: { data: LiveAgentEvent }) => seen.push(message.data));
+
+    publishAgentRunFinished({
+      runId: 'r1',
+      threadId: 't1',
+      actorId: 'a1',
+      steps: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      ttftMs: 120,
+    });
+    publishAgentRunFailed({ runId: 'r2', threadId: 't1', code: 'run_failed', message: 'boom' });
+    publishAgentRunCancelled({ runId: 'r3', threadId: 't1', durationMs: 40 });
+
+    expect(seen.map((event) => event.event)).toEqual([
+      'run.finished',
+      'run.failed',
+      'run.cancelled',
+    ]);
+    expect(seen[1]?.payload.code).toBe('run_failed');
 
     subscription.unsubscribe();
   });
@@ -496,7 +546,13 @@ describe('DashboardService', () => {
       .subscribe((message: { data: LiveAgentEvent }) => seen.push(message.data));
     subscription.unsubscribe();
 
-    publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'ok' });
+    publishAgentToolCall({
+      runId: 'r1',
+      toolCallId: 'call-1',
+      toolName: 'search',
+      toolType: 'read',
+      status: 'ok',
+    });
 
     expect(seen).toHaveLength(0);
   });
@@ -804,6 +860,9 @@ describe('DashboardService approvals inbox + drill-downs', () => {
     agentName: 'ops-agent',
     status: 'failed',
     durationMs: 1200,
+    ttftMs: null,
+    costUsd: null,
+    modelId: null,
     errorCode: 'TIMEOUT',
     errorMessage: 'upstream timed out',
     retries: 1,
