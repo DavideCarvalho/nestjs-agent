@@ -584,6 +584,9 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
           agentName: 'researcher',
           status: 'completed',
           durationMs: 100,
+          ttftMs: 40,
+          costUsd: 0.5,
+          modelId: 'gpt-x',
           retries: 1,
           startedAt: new Date('2026-07-10T09:00:00.000Z'),
           settledAt: new Date('2026-07-10T09:00:00.100Z'),
@@ -596,6 +599,8 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
           agentName: 'researcher',
           status: 'failed',
           durationMs: 200,
+          // A failed run's first token is not a TTFT sample.
+          ttftMs: 7_000,
           errorCode: 'timeout',
           errorMessage: 'upstream timed out',
           retries: 0,
@@ -610,6 +615,9 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
           actorRef: 'ivan',
           status: 'completed',
           durationMs: 300,
+          // A delegated child streams into its parent's turn — not a TTFT sample either.
+          ttftMs: 9_000,
+          parentRunId: 'run-1',
           retries: 2,
           startedAt: new Date('2026-07-11T09:00:00.000Z'),
           settledAt: new Date('2026-07-11T09:00:00.300Z'),
@@ -648,6 +656,9 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
       // settled durations ascending: [100, 200, 300] (run-4 is unsettled, excluded)
       expect(metrics.durationP50Ms).toBe(200);
       expect(metrics.durationP95Ms).toBe(300);
+      // TTFT over completed top-level runs only: run-1 (run-2 failed, run-3 is a delegated child)
+      expect(metrics.ttftP50Ms).toBe(40);
+      expect(metrics.ttftP95Ms).toBe(40);
     });
 
     it('runMetrics reports successRate 0 and null percentiles when there are no runs in range', async () => {
@@ -660,6 +671,8 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
         retries: 0,
         durationP50Ms: null,
         durationP95Ms: null,
+        ttftP50Ms: null,
+        ttftP95Ms: null,
       });
     });
 
@@ -718,6 +731,8 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
 
       const completed = rows.find((row) => row.runId === 'run-1');
       expect(completed?.promptHash).toBe('hash-run-1');
+      expect(completed).toMatchObject({ ttftMs: 40, costUsd: 0.5, modelId: 'gpt-x' });
+      expect(running).toMatchObject({ ttftMs: null, costUsd: null, modelId: null });
     });
 
     it('recentRuns caps at limit', async () => {
@@ -1848,6 +1863,9 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
         agentName: 'shipper',
         status: 'failed',
         durationMs: 4200,
+        ttftMs: null,
+        costUsd: null,
+        modelId: null,
         errorCode: 'tool_failed',
         errorMessage: 'deploy blew up',
         retries: 2,

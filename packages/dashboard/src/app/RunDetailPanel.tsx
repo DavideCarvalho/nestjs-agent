@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { RunDetail } from '../client/agent-client';
-import { formatDurationMs } from '../client/format-usd';
+import { formatDurationMs, formatUsd } from '../client/format-usd';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Empty, Panel, StatusPill, relTime } from './ui/kit';
@@ -9,9 +9,10 @@ import { Empty, Panel, StatusPill, relTime } from './ui/kit';
  * A run drill-down: the run's outcome, the FULL error text a table row could only truncate, and the
  * tool calls it made in the order it requested them.
  *
- * There is no cost figure and that is not an omission to fix here — the token ledger has no run
- * column, so per-run spend is not attributable, and a plausible-looking number would be worse than
- * a missing one on a governance screen.
+ * Cost, time to first token and model come off the run row itself (`recordRunEnd`), written by the
+ * run that spent them. They are shown only when the row has them — a run recorded before they
+ * existed, or one that never completed, shows no figure rather than a plausible-looking `0`, which
+ * would be worse than a missing one on a governance screen.
  */
 export function RunDetailPanel({
   detail,
@@ -31,6 +32,11 @@ export function RunDetailPanel({
           </Field>
           <Field label="Agent">{run.agentName ?? '(default)'}</Field>
           <Field label="Duration">{formatDurationMs(run.durationMs)}</Field>
+          {run.ttftMs !== null && (
+            <Field label="Time to first token">{formatDurationMs(run.ttftMs)}</Field>
+          )}
+          {run.costUsd !== null && <Field label="Cost">{formatUsd(run.costUsd)}</Field>}
+          {run.modelId !== null && <Field label="Model">{run.modelId}</Field>}
           <Field label="Retries">{`${run.retries}`}</Field>
           <Field label="Started">{relTime(run.startedAt)}</Field>
           <Field label="Actor">{run.actorRef}</Field>

@@ -9,8 +9,9 @@ import { type AgentStreamEvent, type AgentUiComponent } from './stream-events.js
  * without running anything. The loop then persists them once, from the step that already persists
  * the step's tool results.
  *
- * The wrapper is used ONLY when a tool pushed something, so every other tool journals exactly the
- * bytes it always did, and a run recorded before this existed replays unchanged.
+ * The wrapper is used ONLY when a tool pushed something (or, for a dispatched call, to carry the
+ * worker's measurement of it), so every other inline tool journals exactly the bytes it always did,
+ * and a run recorded before this existed replays unchanged.
  */
 const TOOL_STEP_UI = '@@nestjs-agent/tool-step-ui';
 
@@ -20,6 +21,8 @@ interface ToolStepOutputWithUi {
   ui: AgentUiComponent[];
   preflightDenied?: string;
   text?: string;
+  /** The tool's own time, measured where it ran — set by the dispatched-step handler. */
+  executionMs?: number;
 }
 
 /** The tool step's journaled result: the bare output, or the output plus the components it pushed. */
@@ -27,10 +30,11 @@ export function wrapToolStepOutput(
   output: unknown,
   ui: readonly AgentUiComponent[],
   text?: string,
+  executionMs?: number,
 ): unknown {
   // Escape ordinary output that happens to match our envelope: unwrap exactly one layer.
   const reserved = typeof output === 'object' && output !== null && TOOL_STEP_UI in output;
-  if (ui.length === 0 && !reserved && !text) {
+  if (ui.length === 0 && !reserved && !text && executionMs === undefined) {
     return output;
   }
   const wrapped: ToolStepOutputWithUi = {
@@ -38,6 +42,7 @@ export function wrapToolStepOutput(
     output,
     ui: [...ui],
     ...(text ? { text } : {}),
+    ...(executionMs !== undefined ? { executionMs } : {}),
   };
   return wrapped;
 }
@@ -59,6 +64,7 @@ export function unwrapToolStepOutput(raw: unknown): {
   ui: AgentUiComponent[];
   preflightDenied?: string;
   text?: string;
+  executionMs?: number;
 } {
   if (
     typeof raw === 'object' &&
@@ -70,6 +76,7 @@ export function unwrapToolStepOutput(raw: unknown): {
       output: wrapped.output,
       ui: Array.isArray(wrapped.ui) ? wrapped.ui : [],
       ...(typeof wrapped.text === 'string' ? { text: wrapped.text } : {}),
+      ...(typeof wrapped.executionMs === 'number' ? { executionMs: wrapped.executionMs } : {}),
       ...(typeof wrapped.preflightDenied === 'string'
         ? { preflightDenied: wrapped.preflightDenied }
         : {}),

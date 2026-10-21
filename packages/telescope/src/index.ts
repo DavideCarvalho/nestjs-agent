@@ -31,10 +31,15 @@ export {
   type RagRetrieval,
 } from './rag-data-providers.js';
 export {
+  agentRunFailureCodesProvider,
+  agentRunsCancelledProvider,
   agentRunsProvider,
+  agentRunsTtftDistributionProvider,
   agentTokensProvider,
   agentToolsProvider,
   agentToolStatusProvider,
+  toFailureCodeSegments,
+  toTtftDistribution,
 } from './agent-data-providers.js';
 export {
   agentActorSpendTableProvider,
@@ -52,6 +57,7 @@ export {
   agentRunsSuccessRateProvider,
   agentRunsTotalProvider,
   agentRunsTrendProvider,
+  agentRunsTtftProvider,
   agentSpendByActorProvider,
   agentSpendByModelProvider,
   agentSpendTotalProvider,

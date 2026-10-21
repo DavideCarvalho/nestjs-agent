@@ -21,6 +21,7 @@ import {
   type QueuePause,
   type QueuedMessage,
   type QueuedMessagePatch,
+  type RecordRunEndInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -846,13 +847,7 @@ export class MikroOrmAgentStore
   }
 
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
-  async recordRunEnd(end: {
-    runId: string;
-    status: 'completed' | 'failed' | 'cancelled';
-    durationMs?: number;
-    errorCode?: string;
-    errorMessage?: string;
-  }): Promise<void> {
+  async recordRunEnd(end: RecordRunEndInput): Promise<void> {
     const em = this.em.fork();
     const runRow = await em.findOne(AgentRun, { id: end.runId });
     if (runRow === null) {
@@ -862,6 +857,15 @@ export class MikroOrmAgentStore
     runRow.settledAt = new Date();
     if (end.durationMs !== undefined) {
       runRow.durationMs = end.durationMs;
+    }
+    if (end.ttftMs !== undefined) {
+      runRow.ttftMs = end.ttftMs;
+    }
+    if (end.costUsd !== undefined) {
+      runRow.costUsd = end.costUsd;
+    }
+    if (end.modelId !== undefined) {
+      runRow.modelId = end.modelId;
     }
     if (end.errorCode !== undefined) {
       runRow.errorCode = end.errorCode;

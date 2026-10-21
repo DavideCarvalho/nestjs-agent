@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { agentDashboard } from './agent-dashboard.spec-data.js';
 
 describe('agentDashboard', () => {
-  it('is sectioned into the eight named groups, merging the old Reliability/Run-trends split', () => {
+  it('is sectioned into the nine named groups, merging the old Reliability/Run-trends split', () => {
     const dashboard = agentDashboard();
     const titles = dashboard.sections?.map((s) => s.title) ?? [];
     expect(titles).toEqual([
       'Overview',
       'Spend',
       'Reliability',
+      'Run outcomes',
       'Activity',
       'Approvals',
       'Tools',
@@ -19,13 +20,36 @@ describe('agentDashboard', () => {
     expect(kinds).toContain('breakdown');
   });
 
-  it('has no distribution panel outside RAG — RunMetrics carries no raw samples to bucket', () => {
+  it('has one distribution outside RAG — TTFT, bound to the raw-sample provider, not RunMetrics', () => {
     const dashboard = agentDashboard();
     const distributions =
       dashboard.sections
         ?.filter((s) => s.title !== 'Retrieval')
-        .flatMap((s) => s.panels.map((p) => p.kind)) ?? [];
-    expect(distributions).not.toContain('distribution');
+        .flatMap((s) => s.panels)
+        .filter((p) => p.kind === 'distribution') ?? [];
+    // RunMetrics carries only percentiles, so a histogram over it would be a permanently-empty box;
+    // the TTFT histogram reads each run's own `ttftMs` off the recorded `run.finished` entries.
+    expect(distributions.map((p) => p.data)).toEqual([{ provider: 'agent.runs.ttftDistribution' }]);
+  });
+
+  it('renders TTFT as p50/p95 stats from the read-model', () => {
+    const panels = agentDashboard().sections?.flatMap((s) => s.panels) ?? [];
+    expect(panels.find((p) => p.title === 'TTFT p50')?.data).toEqual({
+      provider: 'agent.runs.ttft',
+      query: { metric: 'p50' },
+    });
+    expect(panels.find((p) => p.title === 'TTFT p95')?.data).toEqual({
+      provider: 'agent.runs.ttft',
+      query: { metric: 'p95' },
+    });
+  });
+
+  it('keeps cancelled runs out of failures — the run-outcomes section shows both apart', () => {
+    const outcomes = agentDashboard().sections?.find((s) => s.title === 'Run outcomes');
+    expect(outcomes?.panels.map((p) => p.data)).toEqual([
+      { provider: 'agent.runs.failureCodes' },
+      { provider: 'agent.runs.cancelled' },
+    ]);
   });
 
   it('every section renders a whole number of rows for its own `cols` — no orphan half-width panel', () => {
@@ -155,7 +179,7 @@ describe('agentDashboard', () => {
     };
     const dashboard = agentDashboard({ sections: [hostSection] });
     expect(dashboard.sections?.at(-1)).toEqual(hostSection);
-    expect(dashboard.sections?.map((s) => s.title).slice(0, 8)).toEqual(
+    expect(dashboard.sections?.map((s) => s.title).slice(0, 9)).toEqual(
       agentDashboard().sections?.map((s) => s.title),
     );
   });

@@ -22,8 +22,8 @@ function col(key: string, label: string, href?: string): Column {
  * correctly is the whole bug — hence no default here. A host that has a run viewer passes its own
  * template; one that does not gets plain text, which is honest.
  *
- * Layout: eight sections (Overview lean; Spend; Reliability; Activity; Approvals; Tools;
- * Retrieval; Retrieval sources), each sized so its panel count is an exact multiple of its `cols` —
+ * Layout: nine sections (Overview lean; Spend; Reliability; Run outcomes; Activity; Approvals;
+ * Tools; Retrieval; Retrieval sources), each sized so its panel count is an exact multiple of its `cols` —
  * no half-empty row. `nestjs-telescope`'s `ExtensionDashboardPage` renders a section as a
  * `grid-cols-N` grid with one panel per cell and no `colSpan`, so a lone table in an otherwise-empty
  * row would leave a visible gap next to it.
@@ -158,6 +158,28 @@ export function agentDashboard(
           // Two duration stats above, not a `distribution` panel: RunMetrics carries only p50/p95
           // (no raw samples to bucket), so a histogram here would be a permanently-empty box.
           {
+            kind: 'stat',
+            title: 'TTFT p50',
+            data: { provider: 'agent.runs.ttft', query: { metric: 'p50' } },
+            format: 'duration',
+          },
+          {
+            kind: 'stat',
+            title: 'TTFT p95',
+            data: { provider: 'agent.runs.ttft', query: { metric: 'p95' } },
+            format: 'duration',
+          },
+          {
+            // The one histogram in this section: `run.finished` diagnostics carry each run's own
+            // `ttftMs`, so the watcher-recorded entries DO have samples to bucket (over what
+            // Telescope's storage still holds, not the governance range).
+            kind: 'distribution',
+            title: 'Time to first token',
+            data: { provider: 'agent.runs.ttftDistribution' },
+            markers: ['p50', 'p95'],
+            format: 'duration',
+          },
+          {
             kind: 'timeseries',
             title: 'Runs & failures',
             data: { provider: 'agent.runs.trend' },
@@ -181,6 +203,22 @@ export function agentDashboard(
               { key: 'retries', label: 'Retries' },
             ],
           },
+        ],
+      },
+      {
+        // Live, from the watcher-recorded diagnostics rather than the run rows: what failed and
+        // what was stopped, readable on a host that binds no governance read-model. A cancel is
+        // its own number — a user pressing Stop is the control working, not a failure.
+        title: 'Run outcomes',
+        cols: 2,
+        panels: [
+          {
+            kind: 'breakdown',
+            title: 'Failures by code',
+            data: { provider: 'agent.runs.failureCodes' },
+            style: 'donut',
+          },
+          { kind: 'stat', title: 'Cancelled', data: { provider: 'agent.runs.cancelled' } },
         ],
       },
       {

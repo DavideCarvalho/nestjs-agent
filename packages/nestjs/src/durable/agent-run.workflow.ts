@@ -14,11 +14,13 @@ import {
   type ToolCallRequest,
   type ToolStepEnvelope,
   agentFailureCode,
+  agentRunContext,
   encodeStreamEvent,
   isReplayIntegrityError,
   publishAgentRunFailed,
   releaseThreadRun,
   runAgentLoop,
+  runDurationMs,
   settleAll,
   settleDeadRun,
   settleUnsettledDelegation,
@@ -482,18 +484,28 @@ export class AgentRunWorkflow {
       // position the history cannot supply and raise their own refusal — burying the one that names
       // the checkpoints that actually disagreed. The stream still has to be settled, though, or the
       // subscriber hangs on a run the engine is about to fail.
+      // From the run's journaled `run:started-at`, when the loop got as far as recording it.
+      const durationMs = runDurationMs(error);
+      const timed = durationMs !== undefined ? { durationMs } : {};
       if (isReplayIntegrityError(error)) {
         const detail = (error as Error).message;
         const code = agentFailureCode(error);
         this.logger.error(`agent run ${ctx.runId} failed (${code}): ${detail}`);
-        publishAgentRunFailed({ runId: ctx.runId, code, message: detail });
+        publishAgentRunFailed({
+          runId: ctx.runId,
+          threadId: input.threadId,
+          code,
+          message: detail,
+          ...timed,
+          context: agentRunContext(input),
+        });
         // What the checkpoints below would have settled, written straight to the store instead:
         // the run's row, the calls it left awaiting a decision, and — for a thread's own turn — the
         // thread, so the next message starts a turn instead of queueing behind a run that is gone.
         await settleDeadRun(this.store, {
           runId: ctx.runId,
           threadId: input.threadId,
-          failure: { code, message: detail },
+          failure: { code, message: detail, ...timed },
         });
         await (await hooks.openSink()).fail(streamFailure(error));
         throw error;
@@ -505,13 +517,21 @@ export class AgentRunWorkflow {
       const message = error instanceof Error ? error.message : String(error);
       const code = agentFailureCode(error);
       this.logger.error(`agent run ${ctx.runId} failed (${code}): ${message}`);
-      publishAgentRunFailed({ runId: ctx.runId, code, message });
+      publishAgentRunFailed({
+        runId: ctx.runId,
+        threadId: input.threadId,
+        code,
+        message,
+        ...timed,
+        context: agentRunContext(input),
+      });
       // Settle the run's persisted outcome (the loop only records completions — it can't catch its
       // own crash). Optional-call: a store without run recording degrades to no reliability metrics.
       await stepOf(ctx)('persist:run:fail', async () => {
         await this.store.recordRunEnd?.({
           runId: ctx.runId,
           status: 'failed',
+          ...timed,
           errorCode: code,
           errorMessage: message,
         });

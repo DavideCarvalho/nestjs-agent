@@ -241,6 +241,12 @@ export const agentRun = pgTable(
     agentName: text('agent_name'),
     status: text('status').$type<AgentRunStatus>().notNull(),
     durationMs: integer('duration_ms'),
+    /** Turn start to the first `text` frame; null for a run that streamed none or did not complete. */
+    ttftMs: integer('ttft_ms'),
+    /** The run's known spend (the sum of its model calls with a known cost); null when none had one. */
+    costUsd: doublePrecision('cost_usd'),
+    /** The model the run's last model call resolved to. */
+    modelId: text('model_id'),
     errorCode: text('error_code'),
     errorMessage: text('error_message'),
     retries: integer('retries').notNull().default(0),

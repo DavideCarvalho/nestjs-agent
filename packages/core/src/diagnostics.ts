@@ -20,10 +20,24 @@ export interface AgentMessageEvent {
 }
 export interface AgentToolCallEvent {
   runId: string;
+  /** The call this outcome settles — pairs the event with its `tool.execution` span and its row. */
+  toolCallId: string;
   toolName: string;
   toolType: 'read' | 'action';
   status: string;
+  /**
+   * The tool's own execution time, measured INSIDE its checkpoint (`tool:<callId>`, or the worker
+   * running a dispatched call) — so it is the tool's time, not the time to read a journal back.
+   * Absent for an outcome that ran nothing (a refusal, an expiry, an answered `ask`) and for a
+   * replayed outcome whose checkpoint carries no measurement.
+   */
   durationMs?: number;
+  /**
+   * The outcome was settled by an EARLIER execution of this run and is being published again because
+   * the run is replaying its journal (a durable resume). A consumer counting calls or summing latency
+   * skips these: the first publication already counted.
+   */
+  replayed?: true;
 }
 /**
  * A turn refused for budget. Published by the send gate (`429`) and the message queue when a
@@ -42,18 +56,58 @@ export interface AgentQuotaExceeded {
   usedUsd?: number;
   limitUsd?: number;
 }
-export interface AgentRunFinished {
+/**
+ * Who and what a settled run was for — the dimensions a metrics consumer slices `run.finished`,
+ * `run.failed` and `run.cancelled` by, carried on each so none of them has to be joined to its
+ * `run.started`.
+ */
+export interface AgentRunContext {
+  actorId: string;
+  agentName?: string;
+  /** The actor's tenant, when the deployment is multi-tenant. */
+  tenantRef?: string;
+  /** The run that delegated this one — present on a sub-agent's run only. */
+  parentRunId?: string;
+}
+export interface AgentRunFinished extends AgentRunContext {
   runId: string;
   threadId: string;
   steps: number;
   inputTokens: number;
   outputTokens: number;
+  /** Turn start (the journaled `run:started-at`) to settle. */
+  durationMs?: number;
+  /** Turn start to the first non-empty `text` frame. Absent when the run streamed no text. */
+  ttftMs?: number;
+  /** The sum of the run's model calls with a known cost; absent when none had one. */
+  costUsd?: number;
+  /** The model the run's last model call resolved to. */
+  modelId?: string;
 }
 export interface AgentRunFailed {
   runId: string;
-  /** Stable failure slug, e.g. `quota_exceeded` or `run_failed`. */
+  /** Absent only where the runner cannot say which thread the run was on. */
+  threadId?: string;
+  /** Stable failure slug — the stream error code, e.g. `quota_exceeded` or `run_failed`. */
   code: string;
   message: string;
+  /** Turn start to the failure; absent when the run failed before its start was recorded. */
+  durationMs?: number;
+  /** Absent only where the runner no longer has the run's input. */
+  context?: AgentRunContext;
+}
+/**
+ * Someone stopped the run and it stopped. Not a failure — published INSTEAD of `run.failed`, so a
+ * failure rate never counts a user pressing Stop.
+ */
+export interface AgentRunCancelled {
+  runId: string;
+  /** Absent only where the runner cannot say which thread the run was on. */
+  threadId?: string;
+  /** Turn start to the cancel, where the runner knows the start. */
+  durationMs?: number;
+  /** Absent only where the runner no longer has the run's input. */
+  context?: AgentRunContext;
 }
 export interface AgentDelegated {
   runId: string;
@@ -194,6 +248,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'quota.exceeded': AgentQuotaExceeded;
       'run.finished': AgentRunFinished;
       'run.failed': AgentRunFailed;
+      'run.cancelled': AgentRunCancelled;
       delegated: AgentDelegated;
       retrieved: AgentRetrieved;
       'skills.resolved': AgentSkillsResolved;
@@ -228,6 +283,9 @@ export function publishAgentRunFinished(payload: AgentRunFinished): void {
 }
 export function publishAgentRunFailed(payload: AgentRunFailed): void {
   emit('agent', 'run.failed', payload);
+}
+export function publishAgentRunCancelled(payload: AgentRunCancelled): void {
+  emit('agent', 'run.cancelled', payload);
 }
 export function publishAgentDelegated(payload: AgentDelegated): void {
   emit('agent', 'delegated', payload);
@@ -289,7 +347,7 @@ void agentSpanEventsAreRegistered;
 export type AgentDiagnosticEvent = Exclude<keyof ChannelRegistry['agent'], AgentSpanEvent>;
 
 /**
- * All 12 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
+ * All 13 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
  * subscribers (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). Span-only events (see
  * {@link AgentSpanEvent}) are excluded. A drift between this list and the registry is a compile
  * error in both directions: an extra/misspelled entry fails this array's own
@@ -303,6 +361,7 @@ export const AGENT_DIAGNOSTIC_EVENTS: readonly AgentDiagnosticEvent[] = [
   'quota.exceeded',
   'run.finished',
   'run.failed',
+  'run.cancelled',
   'delegated',
   'retrieved',
   'skills.resolved',

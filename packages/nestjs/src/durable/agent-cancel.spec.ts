@@ -1,3 +1,4 @@
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import {
   type AgentStreamEvent,
   type RecordRunEndInput,
@@ -142,6 +143,12 @@ beforeEach(() => {
 describe('the durable runner’s cancel', () => {
   it('stops a running turn, and records it cancelled rather than failed', async () => {
     const app = await buildApp(callsThen('slow'));
+    const cancelled: unknown[] = [];
+    const failed: unknown[] = [];
+    const onCancelled = (message: unknown) => void cancelled.push(message);
+    const onFailed = (message: unknown) => void failed.push(message);
+    subscribe('aviary:agent:run.cancelled', onCancelled);
+    subscribe('aviary:agent:run.failed', onFailed);
     try {
       const { runId } = await app.service.chat({ actor: ACTOR, message: 'hi' });
       const streamed = drain(app.service, runId);
@@ -155,14 +162,26 @@ describe('the durable runner’s cancel', () => {
       expect(result.status).toBe('cancelled');
       // The tool already executing finished; the turn stopped before its next model call.
       expect(app.modelCalls()).toBe(1);
-      expect(app.ends).toEqual([{ runId, status: 'cancelled' }]);
+      expect(app.ends).toEqual([{ runId, status: 'cancelled', durationMs: expect.any(Number) }]);
       expect(app.store.governanceRuns()[0]).toMatchObject({ runId, status: 'cancelled' });
 
       const { frames, failure } = await streamed;
       // Ended, not failed: a client that retries a failed stream must not retry a user's Stop.
       expect(failure).toBeUndefined();
       expect(frames.at(-1)).toEqual({ kind: 'cancelled' });
+      // Published once, from the runner that settled it — and never as a failure.
+      expect(failed).toEqual([]);
+      expect(cancelled.map((message) => (message as { payload: unknown }).payload)).toEqual([
+        {
+          runId,
+          threadId: expect.any(String),
+          durationMs: expect.any(Number),
+          context: { actorId: 'u1', agentName: 'default' },
+        },
+      ]);
     } finally {
+      unsubscribe('aviary:agent:run.cancelled', onCancelled);
+      unsubscribe('aviary:agent:run.failed', onFailed);
       releaseTool.resolve();
       await app.moduleRef.close();
     }
@@ -199,7 +218,7 @@ describe('the durable runner’s cancel', () => {
       });
       expect(result.status).toBe('cancelled');
       // The approval never came and never will: the runtime's own cancel is what settles this one.
-      expect(app.ends).toEqual([{ runId, status: 'cancelled' }]);
+      expect(app.ends).toEqual([{ runId, status: 'cancelled', durationMs: expect.any(Number) }]);
       // Including the thread, which a body suspended inside a position its journal already holds
       // can never release itself.
       expect(await app.store.activeRunForThread(threadId)).toBeNull();

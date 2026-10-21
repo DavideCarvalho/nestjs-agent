@@ -34,6 +34,7 @@ function finish(runId: string): void {
   publishAgentRunFinished({
     runId,
     threadId: 'thread-1',
+    actorId: 'actor-1',
     steps: 1,
     inputTokens: 1,
     outputTokens: 1,

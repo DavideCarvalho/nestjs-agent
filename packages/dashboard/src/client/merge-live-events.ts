@@ -26,7 +26,9 @@ export function pushLiveEvent(
 
 /** True when a live event denotes a governance breach the Live feed should surface loudly. */
 export function isAlertEvent(event: LiveAgentEvent): boolean {
-  if (event.event === 'quota.exceeded') return true;
+  // A failed run carries its outcome in the event NAME (no `status` field). A cancelled one is a
+  // user's Stop — the control working, not something to page anyone about.
+  if (event.event === 'quota.exceeded' || event.event === 'run.failed') return true;
   const status = event.payload.status;
   return typeof status === 'string' && /forbidden|denied|error|failed/i.test(status);
 }

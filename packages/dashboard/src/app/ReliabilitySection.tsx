@@ -76,7 +76,7 @@ export function ReliabilitySection({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <Stat
           label="Success rate"
           value={formatPercent(metrics.successRate)}
@@ -101,6 +101,12 @@ export function ReliabilitySection({
           label="p95 duration"
           value={formatDurationMs(metrics.durationP95Ms)}
           sub={`p50 ${formatDurationMs(metrics.durationP50Ms)}`}
+          icon={<ClockIcon />}
+        />
+        <Stat
+          label="p95 TTFT"
+          value={formatDurationMs(metrics.ttftP95Ms)}
+          sub={`p50 ${formatDurationMs(metrics.ttftP50Ms)} · completed turns`}
           icon={<ClockIcon />}
         />
       </div>

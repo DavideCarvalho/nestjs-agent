@@ -94,6 +94,8 @@ export {
   QuotaExceededError,
   RunCancelledError,
   agentFailureCode,
+  agentRunContext,
+  runDurationMs,
   streamFailure,
   exposeStreamErrorDetails,
   toolCallContext,
@@ -187,6 +189,7 @@ export {
   type FunctionalTool,
 } from './functional-tool.js';
 export { emitToolPresentations } from './tool-presentations.js';
+export { observeFirstText, type FirstTextObserver } from './first-text.js';
 export {
   GenuiRunRecorder,
   GenuiTurnTelemetry,

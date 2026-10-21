@@ -16,6 +16,7 @@ import {
   type QueuedMessage,
   type QueuedMessagePatch,
   type RecordGenuiCallInput,
+  type RecordRunEndInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -855,6 +856,9 @@ export class DrizzleAgentStore
       agentName: run.agentName ?? null,
       status: 'running',
       durationMs: null,
+      ttftMs: null,
+      costUsd: null,
+      modelId: null,
       errorCode: null,
       errorMessage: null,
       retries: 0,
@@ -867,19 +871,22 @@ export class DrizzleAgentStore
   }
 
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
-  async recordRunEnd(end: {
-    runId: string;
-    status: 'completed' | 'failed' | 'cancelled';
-    durationMs?: number;
-    errorCode?: string;
-    errorMessage?: string;
-  }): Promise<void> {
+  async recordRunEnd(end: RecordRunEndInput): Promise<void> {
     const updates: Partial<typeof agentRun.$inferInsert> = {
       status: end.status,
       settledAt: new Date(),
     };
     if (end.durationMs !== undefined) {
       updates.durationMs = end.durationMs;
+    }
+    if (end.ttftMs !== undefined) {
+      updates.ttftMs = end.ttftMs;
+    }
+    if (end.costUsd !== undefined) {
+      updates.costUsd = end.costUsd;
+    }
+    if (end.modelId !== undefined) {
+      updates.modelId = end.modelId;
     }
     if (end.errorCode !== undefined) {
       updates.errorCode = end.errorCode;

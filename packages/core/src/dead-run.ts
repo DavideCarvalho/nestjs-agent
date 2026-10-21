@@ -21,7 +21,7 @@ export interface SettleDeadRunInput {
    * (the run's own body, unwinding). `recordRunEnd` is last-write-wins, so a caller that only knows
    * the run is no longer running — it may have completed — must leave the row alone.
    */
-  failure?: { code: string; message: string };
+  failure?: { code: string; message: string; durationMs?: number };
 }
 
 /**
@@ -45,6 +45,7 @@ export async function settleDeadRun(store: AgentStore, input: SettleDeadRunInput
       store.recordRunEnd?.({
         runId: input.runId,
         status: 'failed',
+        ...(failure.durationMs !== undefined ? { durationMs: failure.durationMs } : {}),
         errorCode: failure.code,
         errorMessage: failure.message,
       }),

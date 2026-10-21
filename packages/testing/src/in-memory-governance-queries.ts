@@ -121,6 +121,9 @@ function toRecentRunRow(run: GovernanceRunRow): RecentRunRow {
     agentName: run.agentName ?? null,
     status: run.status,
     durationMs: run.durationMs ?? null,
+    ttftMs: run.ttftMs ?? null,
+    costUsd: run.costUsd ?? null,
+    modelId: run.modelId ?? null,
     errorCode: run.errorCode ?? null,
     errorMessage: run.errorMessage ?? null,
     retries: run.retries,
@@ -237,6 +240,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     let failed = 0;
     let retries = 0;
     const settledDurationsMs: number[] = [];
+    const ttftsMs: number[] = [];
     for (const run of runs) {
       if (run.status === 'completed') {
         completed += 1;
@@ -247,8 +251,14 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       if ((run.status === 'completed' || run.status === 'failed') && run.durationMs !== undefined) {
         settledDurationsMs.push(run.durationMs);
       }
+      // A person waited for the first token of a completed TOP-LEVEL turn only: a delegated child
+      // streams into its parent's turn.
+      if (run.status === 'completed' && run.parentRunId === undefined && run.ttftMs !== undefined) {
+        ttftsMs.push(run.ttftMs);
+      }
     }
     settledDurationsMs.sort((left, right) => left - right);
+    ttftsMs.sort((left, right) => left - right);
     return {
       runs: runs.length,
       completed,
@@ -257,6 +267,8 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       retries,
       durationP50Ms: percentileMs(settledDurationsMs, 0.5),
       durationP95Ms: percentileMs(settledDurationsMs, 0.95),
+      ttftP50Ms: percentileMs(ttftsMs, 0.5),
+      ttftP95Ms: percentileMs(ttftsMs, 0.95),
     };
   }
 

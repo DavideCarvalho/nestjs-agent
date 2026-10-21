@@ -4,6 +4,7 @@ import {
   AGENT_DEPS_FACTORY,
   type AiToolCtx,
   type BufferedModelTurnResult,
+  type FirstTextObserver,
   type LlmStepEnvelope,
   type SinkWriter,
   type ToolStepEnvelope,
@@ -17,6 +18,7 @@ import {
   invokeWithTransientRetry,
   isControlFlowSignal,
   isReplayIntegrityError,
+  observeFirstText,
   observeTurnFrames,
   previewToolInputs,
   publishAgentToolRetry,
@@ -155,11 +157,16 @@ export class AgentRunSteps {
     // simply re-buffers, so no half-gated turn can reach the sink.
     const buffer = input.bufferOutput === true ? createFrameBuffer() : undefined;
     let writer: SinkWriter;
+    // When the reader first saw text, read where the text is written — this worker — and carried on
+    // the result, so the run's time to first token survives the journal. A buffered turn reaches
+    // the reader only when the loop's gate releases it, and the loop stamps it there.
+    let firstText: FirstTextObserver | undefined;
     if (buffer !== undefined) {
       writer = buffer.writer;
     } else {
       const opened = await deps.sink.open(input.sinkRunId);
-      writer = input.childSink ? childSinkWriter(opened) : opened;
+      firstText = observeFirstText(input.childSink ? childSinkWriter(opened) : opened);
+      writer = firstText.writer;
     }
     // Span-wrapped HERE (the genuine execution site), emitting the identical `aviary:agent:llm.turn`
     // span core's non-dispatched branch emits — from whichever worker actually serves the step.
@@ -261,7 +268,11 @@ export class AgentRunSteps {
     }
     const shown = previews.shown();
     const previewed = shown.length > 0 ? { ...stamped, previews: shown } : stamped;
-    return buffer === undefined ? previewed : { ...previewed, bufferedFrames: buffer.frames() };
+    const firstTextAt = firstText?.firstTextAt();
+    if (buffer !== undefined) {
+      return { ...previewed, bufferedFrames: buffer.frames() };
+    }
+    return firstTextAt === undefined ? previewed : { ...previewed, firstTextAt };
   }
 
   /**
@@ -338,6 +349,9 @@ export class AgentRunSteps {
       input.allowedTools === undefined ? undefined : [...input.allowedTools],
     );
     let output: unknown;
+    // The tool's own time, measured here where it runs and carried on the result: the loop reads
+    // this step back from the journal, so its own clock would time the read, not the tool.
+    const toolStartedAt = Date.now();
     try {
       output = await traceToolExecution(
         input.ctx.runId,
@@ -377,12 +391,14 @@ export class AgentRunSteps {
       }
       throw error;
     }
-    // Wrapped only when the dispatching loop asked for it (`collectUi`) AND something was pushed, so
-    // a loop that predates this always reads the bare output it expects.
+    // Wrapped only when the dispatching loop asked for it (`collectUi`) — a loop that predates that
+    // always reads the bare output it expects, and every loop that asks reads the envelope back,
+    // which now always carries the tool's measured time.
     // On a channel the server draws for, the model reads what the user actually got there.
+    const executionMs = Date.now() - toolStartedAt;
     output = await withChannelDelivery(deps, input.ctx, output, ui.components());
     return input.collectUi === true
-      ? wrapToolStepOutput(output, ui.components(), ui.text())
+      ? wrapToolStepOutput(output, ui.components(), ui.text(), executionMs)
       : output;
   }
 }

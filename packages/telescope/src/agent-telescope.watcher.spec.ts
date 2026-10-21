@@ -6,6 +6,7 @@ import {
   publishAgentMessage,
   publishAgentQuotaExceeded,
   publishAgentRetrieved,
+  publishAgentRunCancelled,
   publishAgentRunFailed,
   publishAgentRunFinished,
   publishAgentRunStarted,
@@ -31,8 +32,8 @@ describe('AgentTelescopeWatcher', () => {
     expect(new AgentTelescopeWatcher().type).toBe('agent');
   });
 
-  it('subscribes all 12 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(12);
+  it('subscribes all 13 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(13);
 
     const ctx = mockCtx();
     watcher = new AgentTelescopeWatcher();
@@ -40,17 +41,25 @@ describe('AgentTelescopeWatcher', () => {
 
     publishAgentRunStarted({ runId: 'r1', threadId: 't1', actorId: 'u1' });
     publishAgentMessage({ runId: 'r1', threadId: 't1', role: 'user', textLength: 3 });
-    publishAgentToolCall({ runId: 'r1', toolName: 'search', toolType: 'read', status: 'executed' });
+    publishAgentToolCall({
+      runId: 'r1',
+      toolCallId: 'call-1',
+      toolName: 'search',
+      toolType: 'read',
+      status: 'executed',
+    });
     publishAgentQuotaExceeded({ actorId: 'u1', usedTokens: 100, limitTokens: 50 });
     publishAgentRunFinished({
       runId: 'r1',
       threadId: 't1',
+      actorId: 'u1',
       steps: 2,
       inputTokens: 10,
       outputTokens: 20,
     });
     // Previously not recorded by the hand-written literal — now covered via AGENT_DIAGNOSTIC_EVENTS.
     publishAgentRunFailed({ runId: 'r1', code: 'run_failed', message: 'boom' });
+    publishAgentRunCancelled({ runId: 'r2', threadId: 't2', durationMs: 40 });
     publishAgentDelegated({ runId: 'r1', toAgent: 'triage' });
     publishAgentRetrieved({ runId: 'r1', query: 'q', count: 3 });
     publishAgentSkillsResolved({
@@ -77,7 +86,7 @@ describe('AgentTelescopeWatcher', () => {
       message: 'deadlock',
     });
 
-    expect(ctx.record).toHaveBeenCalledTimes(12);
+    expect(ctx.record).toHaveBeenCalledTimes(13);
     const events = ctx.record.mock.calls.map(
       ([input]) => (input.content as { event: string }).event,
     );

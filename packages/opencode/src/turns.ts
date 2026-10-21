@@ -38,11 +38,13 @@ import {
   type ToolPresentation,
   type ToolRegistry,
   actorScope,
+  agentRunContext,
   buildMemoryBlock,
   defaultScopeResolver,
   encodeStreamEvent,
   memoryWriteVerdict,
   parseBedrockModelId,
+  publishAgentRunCancelled,
   publishAgentRunFailed,
   releaseThreadRun,
   resolveMemoryDigest,
@@ -1164,6 +1166,12 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       await releaseThreadRun(this.store, input.threadId, runId);
       await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
       await writer.end();
+      publishAgentRunCancelled({
+        runId,
+        threadId: input.threadId,
+        durationMs,
+        context: agentRunContext(input),
+      });
       await this.store.recordRunEnd?.({ runId, status: 'cancelled', durationMs });
     } else {
       await this.handoff(writer, input, runId, 'completed');
@@ -1197,10 +1205,18 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     // outside production (or with `exposeStreamErrorDetails(true)`).
     const message = worded ?? streamFailure(new Error(error)).message;
     this.logger.error(`agent run ${runId} failed: ${error}`);
-    publishAgentRunFailed({ runId, code: 'opencode_failed', message: error });
+    publishAgentRunFailed({
+      runId,
+      threadId: input.threadId,
+      code: 'opencode_failed',
+      message: error,
+      durationMs,
+      context: agentRunContext(input),
+    });
     await this.store.recordRunEnd?.({
       runId,
       status: 'failed',
+      durationMs,
       errorCode: 'opencode_failed',
       errorMessage: error,
     });

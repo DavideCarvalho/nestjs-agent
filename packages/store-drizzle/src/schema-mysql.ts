@@ -246,6 +246,12 @@ export const agentRun = mysqlTable(
     agentName: key('agent_name'),
     status: key('status').$type<AgentRunStatus>().notNull(),
     durationMs: int('duration_ms'),
+    /** Turn start to the first `text` frame; null for a run that streamed none or did not complete. */
+    ttftMs: int('ttft_ms'),
+    /** The run's known spend (the sum of its model calls with a known cost); null when none had one. */
+    costUsd: double('cost_usd'),
+    /** The model the run's last model call resolved to. */
+    modelId: key('model_id'),
     errorCode: key('error_code'),
     errorMessage: longtext('error_message'),
     retries: int('retries').notNull().default(0),

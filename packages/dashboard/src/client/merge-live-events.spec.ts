@@ -38,4 +38,11 @@ describe('isAlertEvent', () => {
     expect(isAlertEvent(event({ event: 'tool-call', payload: { status: 'ok' } }))).toBe(false);
     expect(isAlertEvent(event({ event: 'message' }))).toBe(false);
   });
+
+  it('flags a failed run but not a cancelled one — a Stop is the control working', () => {
+    expect(isAlertEvent(event({ event: 'run.failed', payload: { code: 'run_failed' } }))).toBe(
+      true,
+    );
+    expect(isAlertEvent(event({ event: 'run.cancelled' }))).toBe(false);
+  });
 });

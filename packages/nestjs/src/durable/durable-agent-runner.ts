@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AGENT_SINK,
   AGENT_STORE,
+  type AgentRunContext,
   type AgentRunInput,
   type AgentRunStartOptions,
   type AgentRunner,
@@ -10,6 +11,7 @@ import {
   type HumanReply,
   type TokenStreamSink,
   encodeStreamEvent,
+  publishAgentRunCancelled,
   releaseThreadRun,
   settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
@@ -66,6 +68,61 @@ function deliveryOf(input: unknown): { delivery: DetachedDelivery; agent: string
     delivery: deliverTo as DetachedDelivery,
     agent: typeof agentName === 'string' ? agentName : 'default',
   };
+}
+
+/**
+ * The run diagnostics' context, read structurally off a recorded input — see {@link threadOfRun}.
+ * `undefined` when the input names no actor.
+ */
+function runContextOf(input: unknown): AgentRunContext | undefined {
+  if (typeof input !== 'object' || input === null) {
+    return undefined;
+  }
+  const { actor, agentName, parentRunId } = input as {
+    actor?: { id?: unknown; tenantRef?: unknown };
+    agentName?: unknown;
+    parentRunId?: unknown;
+  };
+  if (typeof actor?.id !== 'string') {
+    return undefined;
+  }
+  return {
+    actorId: actor.id,
+    ...(typeof agentName === 'string' ? { agentName } : {}),
+    ...(typeof actor.tenantRef === 'string' ? { tenantRef: actor.tenantRef } : {}),
+    ...(typeof parentRunId === 'string' ? { parentRunId } : {}),
+  };
+}
+
+/**
+ * How long a run the runtime is cancelling from outside had been going: from when the runtime
+ * created it — the run's body, which journaled its own start, is not running here to ask.
+ */
+function cancelledAfterMs(detail: RunDetail | undefined): { durationMs?: number } {
+  const createdAt = detail?.run.createdAt;
+  if (createdAt === undefined) {
+    return {};
+  }
+  const started = new Date(createdAt).getTime();
+  return Number.isFinite(started) ? { durationMs: Math.max(0, Date.now() - started) } : {};
+}
+
+/**
+ * Publish `run.cancelled` for a run settled from here — the single place a durable cancel is settled
+ * (the body that observes the Stop publishes nothing, so this never doubles up).
+ */
+function publishCancelled(runId: string, detail: RunDetail | undefined): { durationMs?: number } {
+  const input = detail?.run.input;
+  const threadId = threadOfRun(input);
+  const context = runContextOf(input);
+  const timed = cancelledAfterMs(detail);
+  publishAgentRunCancelled({
+    runId,
+    ...(threadId !== undefined ? { threadId } : {}),
+    ...timed,
+    ...(context !== undefined ? { context } : {}),
+  });
+  return timed;
 }
 
 /**
@@ -218,7 +275,8 @@ export class DurableAgentRunner implements AgentRunner {
     }
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();
-    await this.store.recordRunEnd?.({ runId, status: 'cancelled' });
+    const timed = publishCancelled(runId, detail);
+    await this.store.recordRunEnd?.({ runId, status: 'cancelled', ...timed });
   }
 
   /**
@@ -273,7 +331,8 @@ export class DurableAgentRunner implements AgentRunner {
     const writer = await this.sink.open(childId);
     await writer.write(encodeStreamEvent({ kind: 'cancelled' }));
     await writer.end();
-    await this.store.recordRunEnd?.({ runId: childId, status: 'cancelled' });
+    const timed = publishCancelled(childId, child);
+    await this.store.recordRunEnd?.({ runId: childId, status: 'cancelled', ...timed });
   }
 
   /**

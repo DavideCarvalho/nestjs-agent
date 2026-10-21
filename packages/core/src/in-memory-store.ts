@@ -17,6 +17,7 @@ import {
   type AppendMessageInput,
   type CostSource,
   type CreateThreadInput,
+  type RecordRunEndInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
@@ -167,6 +168,12 @@ interface RunRow {
   agentName?: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
+  /** Turn start to the first `text` frame; undefined when the run streamed none or did not complete. */
+  ttftMs?: number;
+  /** The run's known spend; undefined when none of its model calls had a known cost. */
+  costUsd?: number;
+  /** The model the run's last model call resolved to. */
+  modelId?: string;
   errorCode?: string;
   errorMessage?: string;
   retries: number;
@@ -186,6 +193,12 @@ export interface GovernanceRunRow {
   agentName?: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
+  /** Turn start to the first `text` frame; undefined when the run streamed none or did not complete. */
+  ttftMs?: number;
+  /** The run's known spend; undefined when none of its model calls had a known cost. */
+  costUsd?: number;
+  /** The model the run's last model call resolved to. */
+  modelId?: string;
   errorCode?: string;
   errorMessage?: string;
   retries: number;
@@ -455,13 +468,7 @@ export class InMemoryAgentStore
   }
 
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
-  async recordRunEnd(end: {
-    runId: string;
-    status: 'completed' | 'failed' | 'cancelled';
-    durationMs?: number;
-    errorCode?: string;
-    errorMessage?: string;
-  }): Promise<void> {
+  async recordRunEnd(end: RecordRunEndInput): Promise<void> {
     const row = this.runs.get(end.runId);
     if (row === undefined) {
       return;
@@ -470,6 +477,15 @@ export class InMemoryAgentStore
     row.settledAt = this.now();
     if (end.durationMs !== undefined) {
       row.durationMs = end.durationMs;
+    }
+    if (end.ttftMs !== undefined) {
+      row.ttftMs = end.ttftMs;
+    }
+    if (end.costUsd !== undefined) {
+      row.costUsd = end.costUsd;
+    }
+    if (end.modelId !== undefined) {
+      row.modelId = end.modelId;
     }
     if (end.errorCode !== undefined) {
       row.errorCode = end.errorCode;
@@ -1065,6 +1081,9 @@ export class InMemoryAgentStore
       ...(row.agentName !== undefined ? { agentName: row.agentName } : {}),
       ...(row.parentRunId !== undefined ? { parentRunId: row.parentRunId } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
+      ...(row.ttftMs !== undefined ? { ttftMs: row.ttftMs } : {}),
+      ...(row.costUsd !== undefined ? { costUsd: row.costUsd } : {}),
+      ...(row.modelId !== undefined ? { modelId: row.modelId } : {}),
       ...(row.errorCode !== undefined ? { errorCode: row.errorCode } : {}),
       ...(row.errorMessage !== undefined ? { errorMessage: row.errorMessage } : {}),
       ...(row.settledAt !== undefined ? { settledAt: row.settledAt } : {}),
