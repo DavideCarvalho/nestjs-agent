@@ -856,10 +856,13 @@ const chat = useAgentChat({ getHeaders: () => ({ 'x-actor-id': me.id, 'x-actor-r
 ## Observability (diagnostics)
 
 The agent emits `aviary:agent:*` events (`run.started`, `message`, `tool-call`, `delegated`,
-`quota.exceeded`, `run.finished`, `run.failed`, `retrieved`, `tool.retry`) on Node's
-`diagnostics_channel`. `@dudousxd/nestjs-agent-telescope` consumes them for a dashboard tab; any app
-can subscribe for its own metrics, alerts, or an orchestration graph — the library instruments
-nothing in your code.
+`quota.exceeded`, `run.finished`, `run.failed`, `run.cancelled`, `retrieved`, `tool.retry`) on Node's
+`diagnostics_channel`. `run.finished` carries the turn's duration, time to first token, cost and
+model; `run.failed` its stable error code (never the message); `tool-call` the call id, the tool's
+own duration and `replayed` on a durable replay. Payloads carry ids, counts and timings, never
+content — see the [diagnostics events reference](./website/content/docs/reference/diagnostics-events.mdx).
+`@dudousxd/nestjs-agent-telescope` consumes them for a dashboard tab; any app can subscribe for its
+own metrics, alerts, or an orchestration graph — the library instruments nothing in your code.
 
 ## Cost & governance
 
