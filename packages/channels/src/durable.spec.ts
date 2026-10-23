@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { InMemoryChannelStore } from '@dudousxd/nestjs-agent-core';
 import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
 import { describe, expect, it } from 'vitest';
@@ -11,7 +12,7 @@ import {
   texts,
   until,
 } from './channels.spec-helper.js';
-import type { ChannelWorkflowEngine } from './executor.js';
+import { CHANNELS_ORIGIN, type ChannelWorkflowEngine } from './executor.js';
 
 const never = <T = never>() => new Promise<T>(() => {});
 
@@ -39,6 +40,7 @@ describe('durable channels (a @dudousxd/nestjs-durable engine)', () => {
     expect(answer).toEqual({ status: 200, body: { ok: true } });
     const run = await engine.getRun('agora.channel:test:message:m-1');
     expect(run?.workflow).toBe('agora.channel.job');
+    expect(run?.origin).toBe('@dudousxd/nestjs-agent-channels');
     expect(run?.input).toMatchObject({ kind: 'message', conversation: 'chat-1' });
     await handler.drain();
     expect(texts(outbox)).toEqual(['Hello *there*']);
@@ -232,11 +234,17 @@ describe('durable channels (a @dudousxd/nestjs-durable engine)', () => {
     expect(texts(outbox)).toEqual(['*Anything else?*']);
     const timer = await engine.getRun('agora.channel:test:timeout:run-1:ask-1');
     expect(timer?.workflow).toBe('agora.channel.timer');
+    expect(timer?.origin).toBe('@dudousxd/nestjs-agent-channels');
     await new Promise((resolve) => setTimeout(resolve, 40));
     await engine.resumeDueTimers();
     await engine.waitForRun('agora.channel:test:timeout:run-1:ask-1', { until: 'terminal' });
     await handler.drain();
     expect(service.skipped).toHaveLength(1);
     expect(texts(outbox).at(-1)).toBe('Went with defaults.');
+  });
+
+  it("CHANNELS_ORIGIN is this package's npm name", () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(CHANNELS_ORIGIN).toBe(pkg.name);
   });
 });

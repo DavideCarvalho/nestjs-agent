@@ -452,6 +452,9 @@ describe('AgentDurableModule (llm/tool as the routed remote steps every turn dis
 
       expect(result.status).toBe('completed');
       expect(streamed).toContain('hello dispatched');
+      // Derived by `@dudousxd/nestjs-durable` from `AgentRunWorkflow`'s declaring file, so the
+      // console's ORIGIN facet files agent turns under this lib rather than the app.
+      expect((await engine.getRun(runId))?.origin).toBe('@dudousxd/nestjs-agent');
       const detail = await store.getThread((await store.listThreads('u1'))[0]?.id ?? '');
       expect(detail?.messages.map((m) => m.role)).toContain('assistant');
     } finally {

@@ -107,7 +107,11 @@ export interface ChannelWorkflowEngine {
     name: string,
     version: string,
     fn: (ctx: ChannelWorkflowCtx, input: unknown) => Promise<unknown>,
-    opts?: { singleton?: { key: (input: unknown) => string; limit?: number } },
+    opts?: {
+      singleton?: { key: (input: unknown) => string; limit?: number };
+      /** The package that declared the workflow, stamped onto its runs (`WorkflowRun.origin`). */
+      origin?: string;
+    },
   ): void;
   start(workflow: string, input: unknown, runId: string): Promise<unknown>;
   waitForRun?(
@@ -131,6 +135,12 @@ export interface ChannelWorkflowCtx {
 export const CHANNEL_JOB_WORKFLOW = 'agora.channel.job';
 /** A question's timeout: runs on its own, so it never waits behind the conversation. */
 export const CHANNEL_TIMER_WORKFLOW = 'agora.channel.timer';
+/**
+ * The origin stamped onto every channel run (`WorkflowRun.origin`): this package's npm name, so the
+ * durable console's ORIGIN facet files channel jobs under the lib, not the app. These workflows are
+ * registered with a bare `engine.register` (no `@Workflow` class), so nothing derives it for us.
+ */
+export const CHANNELS_ORIGIN = '@dudousxd/nestjs-agent-channels';
 
 /** A control-flow signal a driving dispatcher may surface out of `start` — not a failure. */
 const isControlFlowSignal = (error: unknown) => {
@@ -175,8 +185,9 @@ export function registerChannelWorkflows(
   };
   engine.register(CHANNEL_JOB_WORKFLOW, '1', body, {
     singleton: { key: (input) => lockKey(input as ChannelJob), limit: 1 },
+    origin: CHANNELS_ORIGIN,
   });
-  engine.register(CHANNEL_TIMER_WORKFLOW, '1', body);
+  engine.register(CHANNEL_TIMER_WORKFLOW, '1', body, { origin: CHANNELS_ORIGIN });
 }
 
 /** As durable runs on `engine` — see {@link registerChannelWorkflows}. */

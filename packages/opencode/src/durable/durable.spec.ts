@@ -60,6 +60,10 @@ describe('openCodeDurable', () => {
     const fs = await frames(h.service, runId);
     expect(textOf(fs)).toBe('echo: hello');
     expect((await terminal(h, runId)).status).toBe('completed');
+    // Derived from the `@Workflow` class's declaring file: runs are filed under this lib.
+    expect((await h.app.get(WorkflowEngine).getRun(runId))?.origin).toBe(
+      '@dudousxd/nestjs-agent-opencode',
+    );
     expect((await h.store.getThread(threadId))?.messages.map((m) => m.content)).toEqual([
       'hello',
       'echo: hello',

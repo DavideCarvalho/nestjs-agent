@@ -50,6 +50,7 @@ export {
   ptBrChannelTexts,
 } from './texts.js';
 export {
+  CHANNELS_ORIGIN,
   type ChannelExecutor,
   type ChannelJob,
   type ChannelRetryOptions,

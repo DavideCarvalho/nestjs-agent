@@ -118,8 +118,8 @@
     "zod": "3.25.76"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-durable": ">=0.34.0",
-    "@dudousxd/nestjs-durable-core": ">=0.52.0",
+    "@dudousxd/nestjs-durable": ">=0.40.0",
+    "@dudousxd/nestjs-durable-core": ">=0.63.0",
     "@dudousxd/nestjs-media": ">=0.9.0",
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
     "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
