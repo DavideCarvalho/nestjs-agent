@@ -36,8 +36,12 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
     class: AgentTokenUsage,
     tableName: 'agent_token_usage',
     repository: () => AgentTokenUsageRepository,
+    // `thread` unnamed for the reason `agent_tool_call` declares `message`: MySQL and SQLite already
+    // carry the ORM's own index on the many-to-one, Postgres does not.
     indexes: [
       { name: 'agent_token_usage_actor_created_idx', properties: ['actorRef', 'createdAt'] },
+      { name: 'agent_token_usage_created_idx', properties: ['createdAt'] },
+      { properties: ['thread'] },
     ],
     properties: {
       id: { type: 'string', primary: true, ...str },

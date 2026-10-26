@@ -184,7 +184,22 @@ function toGenuiCallRow(row: AgentGenuiCall): GenuiCallRow {
   };
 }
 
-function toUsageInput(row: AgentTokenUsage): GovernanceUsageInput {
+/** The usage columns the bucketers read — the rest of a ledger row is never loaded for them. */
+const USAGE_INPUT_FIELDS = [
+  'thread',
+  'modelId',
+  'actorRef',
+  'createdAt',
+  'inputTokens',
+  'outputTokens',
+  'cacheWriteTokens',
+  'cacheReadTokens',
+  'costUsd',
+] as const;
+
+function toUsageInput(
+  row: Pick<AgentTokenUsage, (typeof USAGE_INPUT_FIELDS)[number]>,
+): GovernanceUsageInput {
   return {
     modelId: row.modelId,
     actorRef: row.actorRef,
@@ -232,7 +247,11 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     range: GovernanceRange,
   ): Promise<GovernanceUsageInput[]> {
     const { start, end } = dayBoundsUtc(range);
-    const rows = await em.find(AgentTokenUsage, { createdAt: { $gte: start, $lte: end } });
+    const rows = await em.find(
+      AgentTokenUsage,
+      { createdAt: { $gte: start, $lte: end } },
+      { fields: USAGE_INPUT_FIELDS },
+    );
     return rows.map(toUsageInput);
   }
 
@@ -271,7 +290,11 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     if (threadIds.length === 0) {
       return [];
     }
-    const threads = await em.find(AgentThread, { id: { $in: threadIds }, deletedAt: null });
+    const threads = await em.find(
+      AgentThread,
+      { id: { $in: threadIds }, deletedAt: null },
+      { fields: ['title', 'actorRef'] },
+    );
     const threadsById = new Map<string, ThreadMeta>(
       threads.map((thread) => [thread.id, { title: thread.title, actorRef: thread.actorRef }]),
     );
@@ -378,14 +401,29 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     return this.toThreadActivityRows(em, threads);
   }
 
-  private async runsInRange(em: EntityManager, range: GovernanceRange): Promise<AgentRun[]> {
+  /** The range's runs, loaded with only the columns the caller rolls up. */
+  private async runsInRange<const F extends readonly (keyof AgentRun & string)[]>(
+    em: EntityManager,
+    range: GovernanceRange,
+    fields: F,
+  ): Promise<Pick<AgentRun, F[number]>[]> {
     const { start, end } = dayBoundsUtc(range);
-    return em.find(AgentRun, { startedAt: { $gte: start, $lte: end } });
+    return em.find(
+      AgentRun,
+      { startedAt: { $gte: start, $lte: end } },
+      { fields: fields as unknown as never[] },
+    );
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
     const em = this.em.fork();
-    const runs = await this.runsInRange(em, range);
+    const runs = await this.runsInRange(em, range, [
+      'status',
+      'retries',
+      'durationMs',
+      'ttftMs',
+      'parentRunId',
+    ]);
     let completed = 0;
     let failed = 0;
     let retries = 0;
@@ -424,7 +462,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async runsByAgent(range: GovernanceRange): Promise<RunAgentBreakdownRow[]> {
     const em = this.em.fork();
-    const runs = await this.runsInRange(em, range);
+    const runs = await this.runsInRange(em, range, ['agentName', 'status', 'retries']);
     const byAgent = new Map<string, { runs: number; failed: number; retries: number }>();
     for (const run of runs) {
       const agentName = run.agentName ?? DEFAULT_AGENT_BUCKET;
@@ -447,10 +485,11 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   async runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]> {
     const em = this.em.fork();
     const { start, end } = dayBoundsUtc(range);
-    const runs = await em.find(AgentRun, {
-      startedAt: { $gte: start, $lte: end },
-      status: 'failed',
-    });
+    const runs = await em.find(
+      AgentRun,
+      { startedAt: { $gte: start, $lte: end }, status: 'failed' },
+      { fields: ['errorCode'] },
+    );
     const byError = new Map<string, number>();
     for (const run of runs) {
       const errorCode = run.errorCode ?? UNCLASSIFIED_ERROR_CODE;
@@ -468,7 +507,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async runTrend(range: GovernanceRange): Promise<RunTrendPoint[]> {
     const em = this.em.fork();
-    const runs = await this.runsInRange(em, range);
+    const runs = await this.runsInRange(em, range, ['startedAt', 'status']);
     const byDay = new Map<string, { runs: number; failed: number }>();
     for (const run of runs) {
       const day = run.startedAt.toISOString().slice(0, 10);
@@ -530,7 +569,11 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const em = this.em.fork();
     const { start, end } = dayBoundsUtc(range);
-    const calls = await em.find(AgentToolCall, { createdAt: { $gte: start, $lte: end } });
+    const calls = await em.find(
+      AgentToolCall,
+      { createdAt: { $gte: start, $lte: end } },
+      { fields: ['toolName', 'toolType', 'status', 'executionMs'] },
+    );
     const byTool = new Map<
       string,
       {

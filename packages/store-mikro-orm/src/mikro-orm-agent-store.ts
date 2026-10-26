@@ -27,6 +27,8 @@ import {
   type RecordUsageInput,
   type StoredMessage,
   type ThreadDetail,
+  type ThreadSettings,
+  type ThreadSettingsReader,
   type ThreadSummary,
   type ThreadTurnPage,
   type ThreadTurnQuery,
@@ -96,6 +98,7 @@ export class MikroOrmAgentStore
   implements
     AgentStore,
     ThreadTurnReader,
+    ThreadSettingsReader,
     ChatQueueStore,
     ActionProposalStore,
     ActionProposalWorkerStore,
@@ -398,16 +401,59 @@ export class MikroOrmAgentStore
       { actorRef, transient: false, deletedAt: null },
       { orderBy: { updatedAt: 'desc' }, limit },
     );
-    const summaries: ThreadSummary[] = [];
-    for (const thread of threads) {
-      const last = await em.findOne(
-        AgentMessage,
-        { thread },
-        { orderBy: MESSAGE_ORDER_NEWEST_FIRST },
-      );
-      summaries.push(this.toSummary(thread, last?.content));
+    const previews = await this.lastMessageContents(
+      em,
+      threads.map((thread) => thread.id),
+    );
+    return threads.map((thread) => this.toSummary(thread, previews.get(thread.id)));
+  }
+
+  /**
+   * The content of each thread's newest message ({@link MESSAGE_ORDER_NEWEST_FIRST}), in a fixed two
+   * reads for any number of threads: each thread's highest `seq`, then the rows holding it. Only a
+   * thread whose every message predates `seq` is read on its own, by `created_at`.
+   */
+  private async lastMessageContents(
+    em: EntityManager,
+    threadIds: readonly string[],
+  ): Promise<Map<string, string>> {
+    const contents = new Map<string, string>();
+    if (threadIds.length === 0) {
+      return contents;
     }
-    return summaries;
+    const highest = (await em
+      .getConnection()
+      .execute(
+        `select thread_id, max(seq) as seq from agent_message where thread_id in (${threadIds.map(() => '?').join(', ')}) group by thread_id`,
+        [...threadIds],
+        'all',
+      )) as { thread_id: string; seq: number | string | null }[];
+    const numbered = highest.filter((row) => row.seq !== null);
+    if (numbered.length > 0) {
+      const rows = await em.find(
+        AgentMessage,
+        { $or: numbered.map((row) => ({ thread: row.thread_id, seq: Number(row.seq) })) },
+        { fields: ['thread', 'content', 'createdAt'], orderBy: MESSAGE_ORDER_NEWEST_FIRST },
+      );
+      for (const row of rows) {
+        if (!contents.has(row.thread.id)) {
+          contents.set(row.thread.id, row.content);
+        }
+      }
+    }
+    for (const row of highest) {
+      if (row.seq === null) {
+        const last = await em.findOne(
+          AgentMessage,
+          { thread: row.thread_id },
+          { fields: ['content'], orderBy: MESSAGE_ORDER_NEWEST_FIRST },
+        );
+        if (last !== null) {
+          contents.set(row.thread_id, last.content);
+        }
+      }
+    }
+    return contents;
   }
 
   async softDeleteThread(threadId: string): Promise<void> {
@@ -797,6 +843,24 @@ export class MikroOrmAgentStore
     return thread?.persona ?? null;
   }
 
+  async threadSettings(threadId: string): Promise<ThreadSettings | null> {
+    const em = this.em.fork();
+    const thread = await em.findOne(
+      AgentThread,
+      { id: threadId, deletedAt: null },
+      { fields: ['actorRef', 'defaultAgent', 'persona', 'model'] },
+    );
+    if (thread === null) {
+      return null;
+    }
+    return {
+      actorRef: thread.actorRef,
+      defaultAgent: thread.defaultAgent ?? null,
+      persona: thread.persona ?? null,
+      model: thread.model ?? null,
+    };
+  }
+
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     const em = this.em.fork();
     const thread = await em.findOne(
@@ -931,13 +995,9 @@ export class MikroOrmAgentStore
   }
 
   async setMessageUi(messageId: string, ui: AgentUiComponent[]): Promise<void> {
-    const em = this.em.fork();
-    const message = await em.findOne(AgentMessage, { id: messageId });
-    if (message === null) {
-      return;
-    }
-    message.ui = ui.length > 0 ? ui : null;
-    await em.flush();
+    await this.em
+      .fork()
+      .nativeUpdate(AgentMessage, { id: messageId }, { ui: ui.length > 0 ? ui : null });
   }
 
   async threadOfMessage(messageId: string): Promise<string | null> {
@@ -947,23 +1007,11 @@ export class MikroOrmAgentStore
   }
 
   async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
-    const em = this.em.fork();
-    const message = await em.findOne(AgentMessage, { id: messageId });
-    if (message === null) {
-      return;
-    }
-    message.feedback = feedback;
-    await em.flush();
+    await this.em.fork().nativeUpdate(AgentMessage, { id: messageId }, { feedback });
   }
 
   async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
-    const em = this.em.fork();
-    const message = await em.findOne(AgentMessage, { id: messageId });
-    if (message === null) {
-      return;
-    }
-    message.toolResults = results;
-    await em.flush();
+    await this.em.fork().nativeUpdate(AgentMessage, { id: messageId }, { toolResults: results });
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
@@ -1003,34 +1051,22 @@ export class MikroOrmAgentStore
   }
 
   async updateToolCall(input: UpdateToolCallInput): Promise<void> {
-    const em = this.em.fork();
-    const toolCall = await em.findOne(AgentToolCall, { id: input.toolCallId });
-    if (toolCall === null) {
-      return;
-    }
-    toolCall.status = input.status;
-    if (input.output !== undefined) {
-      toolCall.output = input.output;
-    }
-    if (input.error !== undefined) {
-      toolCall.error = input.error;
-    }
-    if (input.executionMs !== undefined) {
-      toolCall.executionMs = input.executionMs;
-    }
-    if (input.executedByRef !== undefined) {
-      toolCall.executedByRef = input.executedByRef;
-    }
-    if (input.remember !== undefined) {
-      toolCall.remember = input.remember;
-    }
-    if (input.decidedVia !== undefined) {
-      toolCall.decidedVia = input.decidedVia;
-    }
-    if (input.status === 'executed' || input.status === 'auto_executed') {
-      toolCall.executedAt = new Date();
-    }
-    await em.flush();
+    await this.em.fork().nativeUpdate(
+      AgentToolCall,
+      { id: input.toolCallId },
+      {
+        status: input.status,
+        ...(input.output !== undefined ? { output: input.output } : {}),
+        ...(input.error !== undefined ? { error: input.error } : {}),
+        ...(input.executionMs !== undefined ? { executionMs: input.executionMs } : {}),
+        ...(input.executedByRef !== undefined ? { executedByRef: input.executedByRef } : {}),
+        ...(input.remember !== undefined ? { remember: input.remember } : {}),
+        ...(input.decidedVia !== undefined ? { decidedVia: input.decidedVia } : {}),
+        ...(input.status === 'executed' || input.status === 'auto_executed'
+          ? { executedAt: new Date() }
+          : {}),
+      },
+    );
   }
 
   async toolCallOutcomes(toolCallIds: readonly string[]): Promise<ToolCallOutcome[]> {
@@ -1173,14 +1209,56 @@ export class MikroOrmAgentStore
   }
 
   async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
+    const [totals] = await this.usageWindows(actorRef, [{ fromDay, toDay }]);
+    return totals ?? sumUsage([]);
+  }
+
+  /**
+   * Every range summed by the database in one statement, each as a conditional aggregate over the
+   * rows of the smallest span covering them all — the actor's `(actor_ref, created_at)` index serves
+   * it, and no usage row crosses the wire.
+   */
+  async usageWindows(
+    actorRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]> {
+    if (ranges.length === 0) {
+      return [];
+    }
     const em = this.em.fork();
-    const start = new Date(`${fromDay}T00:00:00.000Z`);
-    const end = new Date(`${toDay}T23:59:59.999Z`);
-    const rows = await em.find(AgentTokenUsage, {
-      actorRef,
-      createdAt: { $gte: start, $lte: end },
+    const platform = em.getPlatform();
+    const bounds = ranges.map(({ fromDay, toDay }) => ({
+      start: new Date(`${fromDay}T00:00:00.000Z`),
+      end: new Date(`${toDay}T23:59:59.999Z`),
+    }));
+    const param = (date: Date) => platform.processDateProperty(date);
+    const cost = costAsRead(em);
+    const columns: string[] = [];
+    const params: unknown[] = [];
+    bounds.forEach(({ start, end }, index) => {
+      const within = 'created_at >= ? and created_at <= ?';
+      columns.push(
+        `sum(case when ${within} then input_tokens + output_tokens else 0 end) as tokens_${index}`,
+        `sum(case when ${within} then ${cost} else 0 end) as cost_${index}`,
+        `sum(case when ${within} and cost_source = 'estimate' then ${cost} else 0 end) as estimated_${index}`,
+      );
+      params.push(param(start), param(end), param(start), param(end), param(start), param(end));
     });
-    return sumUsage(rows);
+    const from = Math.min(...bounds.map(({ start }) => start.getTime()));
+    const to = Math.max(...bounds.map(({ end }) => end.getTime()));
+    params.push(actorRef, param(new Date(from)), param(new Date(to)));
+    const [row] = (await em
+      .getConnection()
+      .execute(
+        `select ${columns.join(', ')} from agent_token_usage where actor_ref = ? and created_at >= ? and created_at <= ?`,
+        params,
+        'all',
+      )) as Record<string, unknown>[];
+    return bounds.map((_, index) => ({
+      usedTokens: Number(row?.[`tokens_${index}`] ?? 0),
+      costUsd: Number(row?.[`cost_${index}`] ?? 0),
+      estimatedCostUsd: Number(row?.[`estimated_${index}`] ?? 0),
+    }));
   }
 
   private toSummary(thread: AgentThread, lastContent?: string): ThreadSummary {
@@ -1228,4 +1306,20 @@ export class MikroOrmAgentStore
       ...(message.feedback != null ? { feedback: message.feedback } : {}),
     };
   }
+}
+
+/**
+ * `cost_usd` as the number the driver hands back for a row. Postgres and MySQL keep the column
+ * single-precision and send it as its shortest decimal, which is what `sumUsage` added up; summing
+ * the raw floats instead would drift in the eighth digit. SQLite stores a double.
+ */
+function costAsRead(em: EntityManager): string {
+  const platform = em.getPlatform().constructor.name.toLowerCase();
+  if (platform.includes('mysql') || platform.includes('maria')) {
+    return 'cast(cast(cost_usd as char) as double)';
+  }
+  if (platform.includes('postgre')) {
+    return 'cast(cast(cost_usd as text) as double precision)';
+  }
+  return 'cost_usd';
 }

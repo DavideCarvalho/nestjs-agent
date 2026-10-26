@@ -60,7 +60,11 @@ export function agentMessageSchema(collation?: string): EntitySchema<AgentMessag
     class: AgentMessage,
     tableName: 'agent_message',
     repository: () => AgentMessageRepository,
-    indexes: [{ name: 'agent_message_thread_created_idx', properties: ['thread', 'createdAt'] }],
+    indexes: [
+      { name: 'agent_message_thread_created_idx', properties: ['thread', 'createdAt'] },
+      // Transcript reads order a thread's messages by `seq`, and every append reads its highest.
+      { name: 'agent_message_thread_seq_idx', properties: ['thread', 'seq'] },
+    ],
     properties: {
       id: { type: 'string', primary: true, ...str },
       thread: {

@@ -398,6 +398,58 @@ const EMPTY_RUN_METRICS: RunMetrics = {
 };
 
 /**
+ * How long a range read stays shared. The panels of one dashboard load land together and several
+ * ask the read-model the same question — four of them `spendByModel`, three `runMetrics` — so each
+ * distinct read runs once for all of them rather than once per panel.
+ */
+const SHARED_READ_MS = 1_000;
+
+const sharedReads = new WeakMap<AgentGovernanceQueries, Map<string, Promise<unknown>>>();
+
+/** `read()`, or the same read another panel started under `key` less than {@link SHARED_READ_MS} ago. */
+function sharedRead<T>(
+  queries: AgentGovernanceQueries,
+  key: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  let reads = sharedReads.get(queries);
+  if (reads === undefined) {
+    reads = new Map();
+    sharedReads.set(queries, reads);
+  }
+  const pending = reads.get(key);
+  if (pending !== undefined) {
+    return pending as Promise<T>;
+  }
+  const started = read();
+  reads.set(key, started);
+  const forget = () => {
+    if (reads.get(key) === started) reads.delete(key);
+  };
+  started.then(() => setTimeout(forget, SHARED_READ_MS).unref(), forget);
+  return started;
+}
+
+function rangeKey(method: string, range: GovernanceRange): string {
+  return `${method}|${range.fromDay}|${range.toDay}`;
+}
+
+/** `spendByModel`, shared across the panels that read it. */
+function spendByModel(queries: AgentGovernanceQueries, range: GovernanceRange) {
+  return sharedRead(queries, rangeKey('spendByModel', range), () => queries.spendByModel(range));
+}
+
+/** `spendByActor`, shared across the panels that read it. */
+function spendByActor(queries: AgentGovernanceQueries, range: GovernanceRange) {
+  return sharedRead(queries, rangeKey('spendByActor', range), () => queries.spendByActor(range));
+}
+
+/** `runMetrics`, shared across the panels that read it. */
+function runMetrics(queries: AgentGovernanceQueries, range: GovernanceRange) {
+  return sharedRead(queries, rangeKey('runMetrics', range), () => queries.runMetrics(range));
+}
+
+/**
  * Build a governance `DataProvider` from a fetch + a format step. Every provider follows the same
  * shape: resolve the read-model, run ONE query over the panel's range, then format the rows into the
  * panel's result shape. When the host hasn't bound the read-model, `fetch` is skipped and `format`
@@ -423,7 +475,7 @@ function governanceStatProvider<TRow>(
 export function agentSpendTotalProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.totalCost',
-    (queries, range) => queries.spendByModel(range),
+    (queries, range) => spendByModel(queries, range),
     (rows) => ({ value: totalCostUsd(rows) }),
   );
 }
@@ -432,7 +484,7 @@ export function agentSpendTotalProvider(): DataProvider {
 export function agentTokensTotalProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.totalTokens',
-    (queries, range) => queries.spendByModel(range),
+    (queries, range) => spendByModel(queries, range),
     (rows) => ({ value: totalTokens(rows) }),
   );
 }
@@ -441,7 +493,7 @@ export function agentTokensTotalProvider(): DataProvider {
 export function agentSpendByModelProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.byModel',
-    (queries, range) => queries.spendByModel(range),
+    (queries, range) => spendByModel(queries, range),
     (rows) => ({ segments: toModelSpendSegments(rows) }),
   );
 }
@@ -450,7 +502,7 @@ export function agentSpendByModelProvider(): DataProvider {
 export function agentModelSpendTableProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.byModelTable',
-    (queries, range) => queries.spendByModel(range),
+    (queries, range) => spendByModel(queries, range),
     (rows) => ({ rows: toModelSpendRows(rows) }),
   );
 }
@@ -468,7 +520,7 @@ export function agentUsageTrendProvider(): DataProvider {
 export function agentActorSpendTableProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.byActor',
-    (queries, range) => queries.spendByActor(range),
+    (queries, range) => spendByActor(queries, range),
     (rows) => ({ rows: toActorSpendRows(rows) }),
   );
 }
@@ -477,7 +529,7 @@ export function agentActorSpendTableProvider(): DataProvider {
 export function agentSpendByActorProvider(): DataProvider {
   return governanceStatProvider(
     'agent.spend.byActorShare',
-    (queries, range) => queries.spendByActor(range),
+    (queries, range) => spendByActor(queries, range),
     (rows) => ({ segments: toActorSpendSegments(rows) }),
   );
 }
@@ -507,7 +559,7 @@ function governanceRunMetricsProvider(
     name,
     async resolve(query, ctx) {
       const queries = resolveGovernanceQueries(ctx);
-      const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
+      const metrics = queries ? await runMetrics(queries, resolveRange(query)) : EMPTY_RUN_METRICS;
       return format(metrics);
     },
   };
@@ -551,7 +603,7 @@ export function agentRunsDurationProvider(): DataProvider {
     name: 'agent.runs.duration',
     async resolve(query, ctx) {
       const queries = resolveGovernanceQueries(ctx);
-      const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
+      const metrics = queries ? await runMetrics(queries, resolveRange(query)) : EMPTY_RUN_METRICS;
       const value = query?.metric === 'p95' ? metrics.durationP95Ms : metrics.durationP50Ms;
       return { value: value ?? 0 };
     },
@@ -569,7 +621,7 @@ export function agentRunsTtftProvider(): DataProvider {
     name: 'agent.runs.ttft',
     async resolve(query, ctx) {
       const queries = resolveGovernanceQueries(ctx);
-      const metrics = queries ? await queries.runMetrics(resolveRange(query)) : EMPTY_RUN_METRICS;
+      const metrics = queries ? await runMetrics(queries, resolveRange(query)) : EMPTY_RUN_METRICS;
       const value = query?.metric === 'p95' ? metrics.ttftP95Ms : metrics.ttftP50Ms;
       return { value: value ?? 0 };
     },
