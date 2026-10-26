@@ -1,5 +1,5 @@
 import { InMemoryAgentStore, InMemoryTokenStreamSink } from '@dudousxd/nestjs-agent-testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type AgentLoopDeps,
   type AgentStreamEvent,
@@ -141,5 +141,32 @@ describe('runAgentLoop — reasoning and pushed UI reach the stored message', ()
       .map((line) => JSON.parse(line) as AgentStreamEvent)
       .find((event) => event.kind === 'step-finish');
     expect(stepFinish).toMatchObject({ reasoningMs: assistant?.reasoningMs });
+  });
+});
+
+describe('observeTurnFrames — tokens', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not decode text frames outside a reasoning burst', async () => {
+    const observed = observeTurnFrames(nullWriter());
+    const frames = Array.from({ length: 100 }, (_, i) =>
+      encodeStreamEvent({ kind: 'text', text: `t${i} ` }),
+    );
+    const parse = vi.spyOn(JSON, 'parse');
+    for (const frame of frames) await observed.writer.write(frame);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it('still closes a reasoning burst on the first token after it', async () => {
+    let clock = 0;
+    const observed = observeTurnFrames(nullWriter(), () => clock);
+    await observed.writer.write(encodeStreamEvent({ kind: 'reasoning', text: 'hm' }));
+    clock = 40;
+    await observed.writer.write(encodeStreamEvent({ kind: 'text', text: 'answer' }));
+    clock = 1_000;
+    await observed.writer.write(encodeStreamEvent({ kind: 'text', text: ' more' }));
+    expect(observed.summary()).toMatchObject({ reasoning: 'hm', reasoningMs: 40 });
   });
 });

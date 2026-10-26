@@ -316,6 +316,12 @@ export class Guardrails {
   private readonly vaults: VaultStore;
   /** Per thread: hits already reported this turn, so re-scans of the same content stay quiet. */
   private readonly reported = new Map<string, Set<string>>();
+  /**
+   * The vault an answer is restored from, loaded once per processor context: an incremental gate
+   * rules on every prefix of one model call under the same context, and nothing saves the thread's
+   * vault while the model is answering.
+   */
+  private readonly answerVaults = new WeakMap<ProcessorContext, Vault | undefined>();
 
   constructor(private readonly options: GuardrailsOptions = {}) {
     this.shorthand = shorthandRules(options);
@@ -573,10 +579,17 @@ export class Guardrails {
     if (isRefusal(response.action)) {
       return { action: 'reject', reason: response.decisive?.message ?? 'blocked' };
     }
-    const vault = await this.vaults.load(pctx.threadId);
+    const vault = await this.answerVault(pctx);
     const redacted = response.segments[0] ?? answer.text;
     const text = vault !== undefined ? vault.restore(redacted) : redacted;
     return text === answer.text ? { action: 'pass' } : { action: 'replace', text };
+  }
+
+  private async answerVault(pctx: ProcessorContext): Promise<Vault | undefined> {
+    if (this.answerVaults.has(pctx)) return this.answerVaults.get(pctx);
+    const vault = await this.vaults.load(pctx.threadId);
+    this.answerVaults.set(pctx, vault);
+    return vault;
   }
 
   private async report(ctx: AgentGuardContext, result: ScanResult): Promise<void> {

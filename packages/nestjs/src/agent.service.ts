@@ -33,6 +33,7 @@ import {
   REQUESTER_APPROVER,
   type StagedAttachment,
   type StoredMessage,
+  type SubscribeOptions,
   type TextActionProposalVocabulary,
   type ThreadDetail,
   type ThreadSummary,
@@ -864,8 +865,8 @@ export class AgentService {
    * {@link subscribeAs} instead: a runId is the only thing standing between a caller and another
    * actor's answer, tool arguments and tool results.
    */
-  subscribe(runId: string): AsyncIterable<Uint8Array> {
-    return this.deps.forAgent().sink.subscribe(runId);
+  subscribe(runId: string, options?: SubscribeOptions): AsyncIterable<Uint8Array> {
+    return this.deps.forAgent().sink.subscribe(runId, options);
   }
 
   /**
@@ -874,9 +875,13 @@ export class AgentService {
    * replayed — the runner clears the thread's active stream as the run ends, and that field is what
    * ownership is derived from.
    */
-  async subscribeAs(actor: Actor, runId: string): Promise<AsyncIterable<Uint8Array>> {
+  async subscribeAs(
+    actor: Actor,
+    runId: string,
+    options?: SubscribeOptions,
+  ): Promise<AsyncIterable<Uint8Array>> {
     await this.assertOwnsActiveStream(actor, runId);
-    return this.subscribe(runId);
+    return this.subscribe(runId, options);
   }
 
   /**

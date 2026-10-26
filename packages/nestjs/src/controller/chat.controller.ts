@@ -22,6 +22,7 @@ import {
 import type { Request, Response } from 'express';
 import { AgentService, type ChatSendMode } from '../agent.service.js';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachment-limits.js';
+import { readerGone } from './reader-gone.js';
 
 interface ChatBody {
   uiCapabilities?: unknown;
@@ -157,7 +158,8 @@ export class ChatController {
     // The run was just started for this actor, so no ownership read is needed — and one would race
     // the run itself, which clears the thread's active stream (what ownership is derived from) the
     // moment it finishes.
-    await this.pipe(res, runId, this.agent.subscribe(runId), threadId);
+    const gone = readerGone(res);
+    await this.pipe(res, runId, this.agent.subscribe(runId, gone), threadId, 0, gone.signal);
   }
 
   /**
@@ -174,7 +176,15 @@ export class ChatController {
   ): Promise<void> {
     const actor = await this.actorResolver.resolve(req);
     const cursor = parseCursor(after) ?? parseCursor(req.headers['last-event-id']) ?? 0;
-    await this.pipe(res, runId, await this.agent.subscribeAs(actor, runId), undefined, cursor);
+    const gone = readerGone(res);
+    await this.pipe(
+      res,
+      runId,
+      await this.agent.subscribeAs(actor, runId, gone),
+      undefined,
+      cursor,
+      gone.signal,
+    );
   }
 
   @Post('chat/:runId/cancel')
@@ -191,6 +201,9 @@ export class ChatController {
    * and on any later `GET …/stream`, whichever replica serves it. A reconnecting client passes the
    * last one it saw as `?after=`; frames at or below it are read off the sink but not re-sent.
    * `meta`, `done` and `error` carry no id: `meta` is re-sent on every attach, the terminals once.
+   *
+   * A reader that disconnects aborts `gone`, which the sink honours by ending the subscription even
+   * while the run is silent (parked on a person, or never writing again).
    */
   private async pipe(
     res: Response,
@@ -198,6 +211,7 @@ export class ChatController {
     events: AsyncIterable<Uint8Array>,
     threadId?: string,
     after = 0,
+    gone?: AbortSignal,
   ): Promise<void> {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -221,6 +235,9 @@ export class ChatController {
     };
     try {
       for await (const chunk of events) {
+        if (gone?.aborted) {
+          return;
+        }
         buffer += decoder.decode(chunk, { stream: true });
         let newline = buffer.indexOf('\n');
         while (newline !== -1) {
@@ -232,11 +249,17 @@ export class ChatController {
           newline = buffer.indexOf('\n');
         }
       }
+      if (gone?.aborted) {
+        return;
+      }
       if (buffer.length > 0) {
         forward(buffer);
       }
       res.write('event: done\ndata: {}\n\n');
     } catch (error) {
+      if (gone?.aborted) {
+        return;
+      }
       // A run that failed terminates the sink with an AgentStreamError; surface it as a typed
       // error frame so the client can render a failure state instead of parsing it as a token.
       const payload =

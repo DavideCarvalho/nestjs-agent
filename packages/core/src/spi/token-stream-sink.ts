@@ -44,6 +44,16 @@ export class AgentStreamError extends Error {
   }
 }
 
+/** How a caller of {@link TokenStreamSink.subscribe} can stop following a run. */
+export interface SubscribeOptions {
+  /**
+   * Ends the subscription where it stands once aborted — the reader went away. The iterable then
+   * finishes without a terminal, and the sink lets go of whatever it held for this subscriber
+   * (a parked wait, a blocking connection), even when the run itself never writes again.
+   */
+  signal?: AbortSignal;
+}
+
 export interface TokenStreamSink {
   /** Open (or reopen) the writer for a run. */
   open(runId: string): SinkWriter | Promise<SinkWriter>;
@@ -51,7 +61,7 @@ export interface TokenStreamSink {
    * Replay buffered chunks for the run, then yield live ones until `end()`. Throws
    * {@link AgentStreamError} if the run was terminated with {@link SinkWriter.fail}.
    */
-  subscribe(runId: string): AsyncIterable<Uint8Array>;
+  subscribe(runId: string, options?: SubscribeOptions): AsyncIterable<Uint8Array>;
   /** Drop any buffer/resources for the run. */
   close(runId: string): void | Promise<void>;
 }

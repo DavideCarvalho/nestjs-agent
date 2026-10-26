@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { detectKeywords, detectRegex, fold } from './custom.js';
 
 describe('custom detectors', () => {
@@ -20,5 +20,27 @@ describe('custom detectors', () => {
     expect(f.map((x) => x.value)).toEqual(['Fusão', 'confidencial', 'fusao']);
     for (const x of f) expect(text.slice(x.start, x.end)).toBe(x.value);
     expect(fold('Ação')).toBe('acao');
+  });
+
+  describe('compiling', () => {
+    const NativeRegExp = globalThis.RegExp;
+    afterEach(() => {
+      globalThis.RegExp = NativeRegExp;
+    });
+
+    it('compiles a keyword list once, however many texts it scans', () => {
+      let compiled = 0;
+      globalThis.RegExp = new Proxy(NativeRegExp, {
+        construct(target, args) {
+          compiled += 1;
+          return Reflect.construct(target, args);
+        },
+      });
+      const words = ['orçamento', 'demissão'];
+      for (let i = 0; i < 50; i++) {
+        expect(detectKeywords(`o orcamento ${i} e a demissão`, [...words])).toHaveLength(2);
+      }
+      expect(compiled).toBeLessThanOrEqual(1);
+    });
   });
 });

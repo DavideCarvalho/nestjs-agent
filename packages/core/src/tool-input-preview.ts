@@ -160,7 +160,8 @@ export function previewToolInputs(
         while (newline !== -1) {
           const line = pending.slice(0, newline);
           pending = pending.slice(newline + 1);
-          const event = line.trim().length > 0 ? decodeStreamEvent(line) : null;
+          // Only the `tool-input-*` events drive a preview, and the rest (every token) is not decoded.
+          const event = line.includes('"tool-input-') ? decodeStreamEvent(line) : null;
           if (event !== null) await observe(event);
           newline = pending.indexOf('\n');
         }

@@ -1,10 +1,13 @@
 // The chat stream numbers its frames so a client that dropped can resume where it left off instead
 // of replaying the whole run into a message it already rendered.
+import { request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type {
   ModelProvider,
   ModelTurnArgs,
   ModelTurnResult,
   SinkWriter,
+  SubscribeOptions,
   TokenStreamSink,
 } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
@@ -13,7 +16,10 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
+import { a2uiAdapter } from '../a2ui/a2ui.adapter.js';
+import { agUiAdapter } from '../ag-ui/ag-ui.adapter.js';
 import { AgentModule } from '../agent.module.js';
+import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { InProcessTokenStreamSink } from '../in-process-sink.js';
@@ -59,10 +65,22 @@ class CountingSink implements TokenStreamSink {
     return this.inner.open(runId);
   }
 
-  subscribe(runId: string): AsyncIterable<Uint8Array> {
+  /** The options each subscriber was attached with, and whether its iteration has finished. */
+  readonly subscriptions: Array<{ options: SubscribeOptions | undefined; finished: boolean }> = [];
+
+  subscribe(runId: string, options?: SubscribeOptions): AsyncIterable<Uint8Array> {
     this.attached += 1;
     for (const waiter of this.waiters.filter((w) => w.count <= this.attached)) waiter.resolve();
-    return this.inner.subscribe(runId);
+    const subscription = { options, finished: false };
+    this.subscriptions.push(subscription);
+    const inner = this.inner.subscribe(runId, options);
+    return (async function* () {
+      try {
+        yield* inner;
+      } finally {
+        subscription.finished = true;
+      }
+    })();
   }
 
   close(runId: string): void {
@@ -72,7 +90,11 @@ class CountingSink implements TokenStreamSink {
 
 let app: NestExpressApplication | undefined;
 
-async function boot(model: ModelProvider, sink?: TokenStreamSink) {
+async function boot(
+  model: ModelProvider,
+  sink?: TokenStreamSink,
+  adapters?: AgentModuleOptions['adapters'],
+) {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AgentModule.forRoot({
@@ -81,6 +103,7 @@ async function boot(model: ModelProvider, sink?: TokenStreamSink) {
         actorResolver: new HeaderActorResolver(),
         defaultAgent: 'default',
         ...(sink !== undefined ? { sink } : {}),
+        ...(adapters !== undefined ? { adapters } : {}),
       }),
     ],
     providers: [DefaultAgent],
@@ -168,4 +191,85 @@ describe('chat stream sequence numbers', () => {
     );
     expect(framesOf(afterTwoRes.text).at(-1)).toMatchObject({ event: 'done' });
   });
+});
+
+/** Opens `path` over real HTTP, waits until the response has started, then drops the connection. */
+async function attachAndDrop(
+  port: number,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+): Promise<void> {
+  const req = httpRequest({
+    host: '127.0.0.1',
+    port,
+    method,
+    path,
+    headers: { 'content-type': 'application/json', 'x-actor-id': 'u1' },
+  });
+  req.on('error', () => {});
+  const started = new Promise<void>((resolve) => {
+    req.on('response', () => resolve());
+  });
+  req.end(body === undefined ? undefined : JSON.stringify(body));
+  await started;
+  req.destroy();
+}
+
+async function finished(subscription: { finished: boolean } | undefined): Promise<void> {
+  for (let i = 0; i < 50 && subscription?.finished !== true; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+describe('stream disconnects', () => {
+  const routes: Array<{
+    name: string;
+    attach: (port: number, service: AgentService) => Promise<void>;
+  }> = [
+    {
+      name: 'POST chat',
+      attach: (port) => attachAndDrop(port, 'POST', '/agent/chat', { message: 'hi' }),
+    },
+    {
+      name: 'GET chat/:runId/stream',
+      attach: async (port, service) => {
+        const { runId } = await service.chat({ actor: { id: 'u1' }, message: 'hi' });
+        await attachAndDrop(port, 'GET', `/agent/chat/${runId}/stream`);
+      },
+    },
+    {
+      name: 'POST ag-ui',
+      attach: (port) =>
+        attachAndDrop(port, 'POST', '/agent/ag-ui', {
+          threadId: 'ag-ui-thread',
+          runId: 'ag-ui-run',
+          protocolVersion: '1.0',
+          messages: [{ id: 'm1', role: 'user', content: 'hi' }],
+        }),
+    },
+    {
+      name: 'POST a2ui',
+      attach: (port) => attachAndDrop(port, 'POST', '/agent/a2ui', { message: 'hi' }),
+    },
+  ];
+
+  for (const route of routes) {
+    it(`${route.name} ends the subscription when the reader goes away, even while the run is silent`, async () => {
+      const model = new GatedModelProvider();
+      const sink = new CountingSink();
+      const built = await boot(model, sink, [agUiAdapter(), a2uiAdapter()]);
+      await built.app.listen(0, '127.0.0.1');
+      const { port } = built.app.getHttpServer().address() as AddressInfo;
+
+      // The turn is held, so nothing is written: the subscriber is parked waiting for a frame.
+      await route.attach(port, built.service);
+      await sink.attachedAtLeast(1);
+      const subscription = sink.subscriptions.at(-1);
+      await finished(subscription);
+      expect(subscription?.options?.signal?.aborted).toBe(true);
+      expect(subscription?.finished).toBe(true);
+      model.release();
+    });
+  }
 });
