@@ -131,7 +131,20 @@ ALTER TABLE agent_tool_call ADD COLUMN confirmation TEXT;
 ALTER TABLE agent_tool_call ADD COLUMN proposal_id TEXT;
 ALTER TABLE agent_message ADD COLUMN action_proposal_outcome TEXT;
 ALTER TABLE agent_queued_message ADD COLUMN ui_capabilities TEXT;
+-- read indexes (attach ownership, approvals inbox, date ranges, highest seq)
+CREATE INDEX agent_thread_active_stream_idx ON agent_thread (active_stream_id);
+CREATE INDEX agent_message_thread_seq_idx ON agent_message (thread_id, seq);
+CREATE INDEX agent_tool_call_status_created_idx ON agent_tool_call (status, created_at);
+CREATE INDEX agent_tool_call_run_idx ON agent_tool_call (run_id);
+CREATE INDEX agent_tool_call_created_idx ON agent_tool_call (created_at);
+CREATE INDEX agent_token_usage_created_idx ON agent_token_usage (created_at);
+CREATE INDEX agent_token_usage_thread_idx ON agent_token_usage (thread_id);
 ```
+
+The index names are the same on every dialect. On a large Postgres table, build them with
+`CREATE INDEX CONCURRENTLY` before upgrading; `ensureAgentSchema` skips an index that already exists
+by name. What each one serves is in
+[Persistence → What the reads cost](/docs/agent/guides/persistence#what-the-reads-cost).
 
 Whole tables added since (`agent_queued_message`, `agent_stream_frame`, `agent_confirm_token`, `agent_channel_state`,
 `agent_action_proposal`) come from `agentSchemaDdl(dialect)` or the schema object. On Postgres the

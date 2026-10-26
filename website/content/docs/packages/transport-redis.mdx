@@ -114,11 +114,34 @@ Per run (`keyPrefix` defaults to `agent:stream`):
 | Structure | Key | Purpose |
 |---|---|---|
 | LIST | `<prefix>:<runId>:chunks` | Every chunk (base64) appended in order — what a late subscriber replays before following live. |
-| pub/sub channel | `<prefix>:<runId>` | A wake-up published per chunk and on end, for subscribers already caught up. |
+| pub/sub channel | `<prefix>:<runId>` | A wake-up published after each append and on end, for subscribers already caught up. |
 | terminal marker | `<prefix>:<runId>:state` | `{ t: 'end' }` or `{ t: 'fail', error }`, set when the run ends — a reconnect after completion sees the ending instead of hanging on an empty subscribe. |
 
-Keys are written without a TTL; `close(runId)` deletes the list and the marker. Configure expiry or
-an eviction policy on the Redis side if runs aren't closed.
+Both keys expire `ttlSeconds` after the run's last write (see above); `close(runId)` deletes them
+at once.
+
+## What a token costs
+
+Consecutive `text` frames are gathered while the previous send is still on the wire and go out as
+one `text` chunk: one `RPUSH`, then the `PUBLISH` wake with the TTL re-arm alongside it. No timer is
+involved, so a model streaming faster than a Redis round trip costs one send per burst, and a slow
+stream still goes out a token at a time with no added latency. The `PUBLISH` waits for the `RPUSH`,
+so a woken subscriber always finds the chunk it was woken for. Non-text frames keep their place
+between the gathered text around them. Writers opened for the same run in one process share what
+they gather, so a delegated run's text and its parent's next frame keep the order they were written
+in, and `flush()` writes whatever is gathered without ending the stream.
+
+A gathered send that fails is raised by the writer's next `write`, `flush`, `end` or `fail`, not by
+the `write` that gathered it.
+
+A subscriber reads the list with `LRANGE` from its cursor on every wake, and reads the terminal
+marker only when it attaches and once an `end` wake arrives; after seeing the ending it reads the
+list once more, so chunks appended just before the marker are not lost. Every subscriber reads the
+same stored list, so SSE frame ids and `?after=` cursors are the same on every replica.
+
+A subscription passed `{ signal }` (the chat routes pass one that aborts when the client
+disconnects) unsubscribes from the channel as soon as it aborts, even on a run that never writes
+again.
 
 A run that ended in failure re-raises as `AgentStreamError` (from `@dudousxd/nestjs-agent-core`) on
 the subscriber side rather than silently closing, so a reconnecting client can tell "the run is done"
@@ -128,8 +151,8 @@ from "the run failed" the same way it would against the in-process sink.
 
 | Export | Kind | Purpose |
 |---|---|---|
-| `RedisTokenStreamSink` | class (`TokenStreamSink`) | `new RedisTokenStreamSink(client, options?)`; `open` / `subscribe` / `close`, backed by the LIST + pub/sub + marker scheme above |
-| `RedisTokenStreamSinkOptions` | type | `{ keyPrefix?: string }` — default `agent:stream` |
+| `RedisTokenStreamSink` | class (`TokenStreamSink`) | `new RedisTokenStreamSink(client, options?)`; `open` / `subscribe(runId, { signal }?)` / `close`, backed by the LIST + pub/sub + marker scheme above |
+| `RedisTokenStreamSinkOptions` | type | `{ keyPrefix?: string; ttlSeconds?: number }` — defaults `agent:stream` and `3600` |
 | `RedisStreamClient` | type | The eight-method seam your app implements over its own Redis driver |
 | `RedisChannelStore` | class (`ChannelStore`) | `new RedisChannelStore(client, { prefix? })` — the state of [text channels](/docs/agent/guides/channels) (message ids, questions, relayed outcomes) shared by every replica: `SET … PX … NX` claims, `GET`, `DEL`. Pass it as `AgentChannelsModule.forRoot({ store })` |
 | `RedisChannelClient` | type | The three commands it uses (`set` with `PX`/`NX`, `get`, `del`) — an `ioredis` client has them as is |

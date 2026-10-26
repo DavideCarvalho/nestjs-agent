@@ -189,6 +189,24 @@ keeps each run in a Redis Stream. `ttlSeconds` (default `3600`) is re-armed on e
 the run ends or fails, so a run whose process crashed still expires; `0` keeps the stream until
 `close()`.
 
+Consecutive `text` frames are gathered while the previous send is on the wire and go out as one
+`text` entry, with `XADD` and the `EXPIRE` re-arm in one pipeline: a model streaming faster than a
+Redis round trip costs one round trip per burst, and a slow stream still goes out a token at a time
+with no added latency. Writers for the same run in one process share what they gather, so frame
+order holds across a delegated run's child writer, and `flush()` sends the gathered text without
+ending the stream. A gathered send that fails is raised by the writer's next call. Every subscriber
+reads the same stored entries, so SSE frame ids and `?after=` cursors are exact across replicas.
+
+Each `subscribe` follows on its own `duplicate()` connection (`XREAD BLOCK blockMs`), disconnected
+when the subscriber stops: when the run ends or fails, when its `signal` aborts (the chat routes
+abort it when the client disconnects), or when a stream that had entries disappears without an end
+(expired past `ttlSeconds`, or closed), in which case the subscriber ends as if the run had ended.
+
+The default `InProcessTokenStreamSink` drops a run's buffer 60 seconds after `end()` / `fail()`, or
+one hour after its last write if the run never ends (its subscribers then end too). A writer that
+writes again after that hour starts a fresh buffer its next subscriber follows. Its timers are
+`unref`'d, so they never keep a process alive.
+
 ### Run reliability recording
 
 `AgentRunWorkflow` calls `AgentStore.recordRunStart`/`recordRunEnd` (both optional on the SPI — see

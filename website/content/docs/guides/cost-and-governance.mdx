@@ -254,7 +254,9 @@ which doesn't need pagination.
 limitTokens?, usedUsd, limitUsd?, resetsAt?, warnAt? }` — `blocked` when one is used up, and
 `warning` (`{ period, ratio, reason? }`) when one is past its soft limit. It comes from a
 `QuotaProvider`; the default `LedgerQuotaProvider` reads this ledger (a `day` window, plus `month`
-when the store has `usageBetween`) and, unconfigured, only reports. Tokens count
+when the store has `usageBetween` or `usageWindows`) and, unconfigured, only reports. Both SQL stores
+sum the ledger in the database and answer both windows in one statement (`usageWindows`), so a quota
+check costs the same whatever the number of usage rows. Tokens count
 `inputTokens + outputTokens`, unaffected by the cache split.
 
 One option configures it:
