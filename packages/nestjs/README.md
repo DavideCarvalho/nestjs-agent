@@ -403,8 +403,8 @@ turn rather than answering on another. `staticModelCatalog(view)` wraps a fixed 
 `GET /agent/quota` reports `{ windows: [{ period: 'day' | 'month', usedTokens?, limitTokens?,
 usedUsd, limitUsd?, resetsAt?, warnAt? }], blocked?, warning? }` from a `QuotaProvider` (a USD-only
 budget leaves `usedTokens` out; `quota: { limits, warnAt: 0.8 }` adds a soft-limit `warning`). The default,
-`LedgerQuotaProvider`, reads the usage ledger (day, plus month when the store has `usageBetween`)
-and only reports. Configure it and it also gates sends — a `blocked` report refuses `POST
+`LedgerQuotaProvider`, reads the usage ledger (day, plus month when the store has `usageBetween`;
+one summed read for both when it has `usageWindows`, as both SQL stores do) and only reports. Configure it and it also gates sends — a `blocked` report refuses `POST
 /agent/chat` with `429 { code: 'quota_exceeded', period }` before the turn starts:
 
 ```ts

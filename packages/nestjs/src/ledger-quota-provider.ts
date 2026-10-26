@@ -43,7 +43,7 @@ export interface LedgerQuotaOptions {
  * The default {@link QuotaProvider}: windows read off the usage ledger the loop already writes.
  *
  * - `day` — always.
- * - `month` — when the store implements `usageBetween`.
+ * - `month` — when the store implements `usageBetween` or `usageWindows`.
  *
  * `limits` add ceilings per window (tokens and/or USD). A window that reaches one makes the report
  * `blocked`.
@@ -58,11 +58,21 @@ export class LedgerQuotaProvider implements QuotaProvider {
   async report(query: QuotaQuery): Promise<QuotaReport> {
     const now = query.now ?? new Date();
     const actorRef = query.actor.id;
-    const windows: QuotaWindow[] = [await this.dayWindow(actorRef, now)];
-    if (this.store.usageBetween !== undefined) {
-      const range = quotaPeriodRange('month', now);
-      const used = await this.store.usageBetween(actorRef, range.fromDay, range.toDay);
-      windows.push(this.window('month', used.usedTokens, this.usd(used), range.resetsAt));
+    const day = quotaPeriodRange('day', now);
+    const month = quotaPeriodRange('month', now);
+    const windows: QuotaWindow[] = [];
+    if (this.store.usageWindows !== undefined) {
+      const [dayUsed, monthUsed] = await this.store.usageWindows(actorRef, [day, month]);
+      windows.push(this.usedWindow('day', dayUsed, day.resetsAt));
+      windows.push(this.usedWindow('month', monthUsed, month.resetsAt));
+    } else {
+      windows.push(
+        this.usedWindow('day', await this.store.quotaToday(actorRef, day.fromDay), day.resetsAt),
+      );
+      if (this.store.usageBetween !== undefined) {
+        const used = await this.store.usageBetween(actorRef, month.fromDay, month.toDay);
+        windows.push(this.usedWindow('month', used, month.resetsAt));
+      }
     }
     const blocked = exhaustedWindow(windows);
     const warning = quotaWarning(windows);
@@ -73,10 +83,17 @@ export class LedgerQuotaProvider implements QuotaProvider {
     };
   }
 
-  private async dayWindow(actorRef: string, now: Date): Promise<QuotaWindow> {
-    const range = quotaPeriodRange('day', now);
-    const used = await this.store.quotaToday(actorRef, range.fromDay);
-    return this.window('day', used.usedTokens, this.usd(used), range.resetsAt);
+  private usedWindow(
+    period: QuotaPeriod,
+    used: UsageTotals | undefined,
+    resetsAt: string,
+  ): QuotaWindow {
+    return this.window(
+      period,
+      used?.usedTokens ?? 0,
+      used === undefined ? 0 : this.usd(used),
+      resetsAt,
+    );
   }
 
   /** The window's USD: every priced row, or (with `countEstimatedCost: false`) reported cost only. */

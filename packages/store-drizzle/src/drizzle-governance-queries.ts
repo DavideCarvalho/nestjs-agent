@@ -180,7 +180,20 @@ function toRunToolCallRow(toolCall: typeof agentToolCall.$inferSelect): RunToolC
 }
 
 /** Map a Drizzle usage row onto the shared bucketer input (day derived from `createdAt`). */
-function toUsageInput(row: typeof agentTokenUsage.$inferSelect): GovernanceUsageInput {
+function toUsageInput(
+  row: Pick<
+    typeof agentTokenUsage.$inferSelect,
+    | 'modelId'
+    | 'actorRef'
+    | 'threadId'
+    | 'createdAt'
+    | 'inputTokens'
+    | 'outputTokens'
+    | 'cacheWriteTokens'
+    | 'cacheReadTokens'
+    | 'costUsd'
+  >,
+): GovernanceUsageInput {
   return {
     modelId: row.modelId,
     actorRef: row.actorRef,
@@ -245,9 +258,21 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
 
   private async usageInRange(range: GovernanceRange): Promise<GovernanceUsageInput[]> {
     const { start, end } = dayBoundsUtc(range);
+    const usage = this.t.agentTokenUsage;
+    // Only what the bucketers read.
     const rows = await this.db
-      .select()
-      .from(this.t.agentTokenUsage)
+      .select({
+        modelId: usage.modelId,
+        actorRef: usage.actorRef,
+        threadId: usage.threadId,
+        createdAt: usage.createdAt,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        costUsd: usage.costUsd,
+      })
+      .from(usage)
       .where(
         and(
           gte(this.t.agentTokenUsage.createdAt, start),
@@ -280,7 +305,11 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       return [];
     }
     const threads = await this.db
-      .select()
+      .select({
+        id: this.t.agentThread.id,
+        title: this.t.agentThread.title,
+        actorRef: this.t.agentThread.actorRef,
+      })
       .from(this.t.agentThread)
       .where(and(inArray(this.t.agentThread.id, threadIds), isNull(this.t.agentThread.deletedAt)));
     const threadsById = new Map<string, ThreadMeta>(
@@ -392,12 +421,22 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     return this.toThreadActivityRows(threads);
   }
 
-  private async runsInRange(range: GovernanceRange): Promise<(typeof agentRun.$inferSelect)[]> {
+  /** The range's runs, with only the columns the rollups read. */
+  private async runsInRange(range: GovernanceRange) {
     const { start, end } = dayBoundsUtc(range);
+    const run = this.t.agentRun;
     return this.db
-      .select()
-      .from(this.t.agentRun)
-      .where(and(gte(this.t.agentRun.startedAt, start), lte(this.t.agentRun.startedAt, end)));
+      .select({
+        agentName: run.agentName,
+        status: run.status,
+        retries: run.retries,
+        durationMs: run.durationMs,
+        ttftMs: run.ttftMs,
+        parentRunId: run.parentRunId,
+        startedAt: run.startedAt,
+      })
+      .from(run)
+      .where(and(gte(run.startedAt, start), lte(run.startedAt, end)));
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
@@ -462,7 +501,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]> {
     const { start, end } = dayBoundsUtc(range);
     const runs = await this.db
-      .select()
+      .select({ errorCode: this.t.agentRun.errorCode })
       .from(this.t.agentRun)
       .where(
         and(
@@ -560,7 +599,12 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
     const { start, end } = dayBoundsUtc(range);
     const calls = await this.db
-      .select()
+      .select({
+        toolName: this.t.agentToolCall.toolName,
+        toolType: this.t.agentToolCall.toolType,
+        status: this.t.agentToolCall.status,
+        executionMs: this.t.agentToolCall.executionMs,
+      })
       .from(this.t.agentToolCall)
       .where(
         and(gte(this.t.agentToolCall.createdAt, start), lte(this.t.agentToolCall.createdAt, end)),

@@ -776,10 +776,13 @@ describe('thread rename + defaultAgent (Feature 4)', () => {
     class SpecialistAgent {}
     const built = await buildApp(() => ({ text: 'answered' }), { agents: [SpecialistAgent] });
     app = built.app;
-    const { threadId } = await built.service.chat({
+    const first = await built.service.chat({
       actor: { id: 'u1', roles: ['ADMIN'] },
       message: 'hi',
     });
+    const { threadId } = first;
+    // The next send starts a turn of its own, so this one has to have finished.
+    await collect(built.service.subscribe(first.runId));
     await built.service.updateThread({ id: 'u1', roles: ['ADMIN'] }, threadId, {
       defaultAgent: 'specialist',
     });

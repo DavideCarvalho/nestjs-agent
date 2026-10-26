@@ -75,7 +75,11 @@ export const agentThread = mysqlTable(
     updatedAt: ts('updated_at').notNull(),
     deletedAt: ts('deleted_at'),
   },
-  (table) => [index('agent_thread_actor_updated_idx').on(table.actorRef, table.updatedAt)],
+  (table) => [
+    index('agent_thread_actor_updated_idx').on(table.actorRef, table.updatedAt),
+    // `ownerOfActiveStream` reads by run id on every stream attach and reconnect.
+    index('agent_thread_active_stream_idx').on(table.activeStreamId),
+  ],
 );
 
 export const agentMessage = mysqlTable(
@@ -104,7 +108,11 @@ export const agentMessage = mysqlTable(
     seq: int('seq'),
     createdAt: ts('created_at').notNull(),
   },
-  (table) => [index('agent_message_thread_created_idx').on(table.threadId, table.createdAt)],
+  (table) => [
+    index('agent_message_thread_created_idx').on(table.threadId, table.createdAt),
+    // Transcript reads order a thread's messages by `seq`.
+    index('agent_message_thread_seq_idx').on(table.threadId, table.seq),
+  ],
 );
 
 export const agentToolCall = mysqlTable(
@@ -132,7 +140,13 @@ export const agentToolCall = mysqlTable(
     remember: boolean('remember'),
     decidedVia: key('decided_via'),
   },
-  (table) => [index('agent_tool_call_message_idx').on(table.messageId)],
+  (table) => [
+    index('agent_tool_call_message_idx').on(table.messageId),
+    // The approvals inbox: `pending_approval`, oldest first.
+    index('agent_tool_call_status_created_idx').on(table.status, table.createdAt),
+    index('agent_tool_call_run_idx').on(table.runId),
+    index('agent_tool_call_created_idx').on(table.createdAt),
+  ],
 );
 
 export const agentQueuedMessage = mysqlTable(
@@ -180,7 +194,11 @@ export const agentTokenUsage = mysqlTable(
     costSource: key('cost_source').$type<CostSource>(),
     createdAt: ts('created_at').notNull(),
   },
-  (table) => [index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt)],
+  (table) => [
+    index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt),
+    index('agent_token_usage_created_idx').on(table.createdAt),
+    index('agent_token_usage_thread_idx').on(table.threadId),
+  ],
 );
 
 /**

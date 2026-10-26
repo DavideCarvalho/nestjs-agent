@@ -38,7 +38,11 @@ export function agentThreadSchema(collation?: string): EntitySchema<AgentThread>
     class: AgentThread,
     tableName: 'agent_thread',
     repository: () => AgentThreadRepository,
-    indexes: [{ name: 'agent_thread_actor_updated_idx', properties: ['actorRef', 'updatedAt'] }],
+    indexes: [
+      { name: 'agent_thread_actor_updated_idx', properties: ['actorRef', 'updatedAt'] },
+      // `ownerOfActiveStream` reads by run id on every stream attach and reconnect.
+      { name: 'agent_thread_active_stream_idx', properties: ['activeStreamId'] },
+    ],
     properties: {
       id: { type: 'string', primary: true, ...str },
       actorRef: { type: 'string', fieldName: 'actor_ref', ...identity },

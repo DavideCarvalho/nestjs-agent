@@ -58,8 +58,12 @@ describe('AgentService — picking the agent for a turn', () => {
     const thread = await backing.createThread({ actor: { id: 'u1' } });
     await backing.updateThread(thread.id, { defaultAgent: 'researcher' });
     // a store predating the projection: everything else delegates, the projection is simply absent
-    const store = Object.create(backing) as AgentStore & { defaultAgentForThread?: unknown };
+    const store = Object.create(backing) as AgentStore & {
+      defaultAgentForThread?: unknown;
+      threadSettings?: unknown;
+    };
     store.defaultAgentForThread = undefined;
+    store.threadSettings = undefined;
     const start = vi.spyOn(runner, 'start');
 
     await buildService(store).chat({ actor: { id: 'u1' }, message: 'hi', threadId: thread.id });
@@ -86,5 +90,62 @@ describe('AgentService — picking the agent for a turn', () => {
     expect(projected).not.toHaveBeenCalled();
     projected.mockRestore();
     start.mockRestore();
+  });
+});
+
+describe('AgentService — what a send reads off its thread', () => {
+  const THREAD_READS = [
+    'getThread',
+    'ownerOfThread',
+    'defaultAgentForThread',
+    'personaForThread',
+    'modelForThread',
+    'threadSettings',
+  ] as const;
+
+  it('reads the thread once for its owner, default agent, persona and model', async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'u1' } });
+    await store.updateThread(thread.id, { defaultAgent: 'researcher', persona: 'pirate' });
+    const reads = THREAD_READS.map((name) => vi.spyOn(store, name));
+    const updateThread = vi.spyOn(store, 'updateThread');
+    const start = vi.spyOn(runner, 'start');
+    const service = new AgentService(runner, store, {
+      ...deps,
+      personaCatalog: () => [{ id: 'pirate' }, { id: 'clerk' }],
+      resolvePersona: ({
+        requested,
+        threadPersona,
+      }: { requested?: string; threadPersona?: string }) => requested ?? threadPersona,
+    } as unknown as AgentDepsFactory);
+
+    await service.chat({ actor: { id: 'u1' }, message: 'hi', threadId: thread.id });
+    await service.chat({
+      actor: { id: 'u1' },
+      message: 'again',
+      threadId: thread.id,
+      personaId: 'clerk',
+    });
+
+    expect(start.mock.calls.map(([input]) => [input.agentName, input.persona])).toEqual([
+      ['researcher', 'pirate'],
+      ['researcher', 'clerk'],
+    ]);
+    // The persona a send names is pinned, compared against the one read.
+    expect(updateThread).toHaveBeenCalledWith(thread.id, { persona: 'clerk' });
+    const calls = reads.reduce((sum, spy) => sum + spy.mock.calls.length, 0);
+    expect(calls).toBe(2);
+    for (const spy of [...reads, updateThread, start]) spy.mockRestore();
+  });
+
+  it("refuses another actor's thread off the same read", async () => {
+    const store = new InMemoryAgentStore();
+    const thread = await store.createThread({ actor: { id: 'owner' } });
+    await expect(
+      buildService(store).chat({ actor: { id: 'intruder' }, message: 'hi', threadId: thread.id }),
+    ).rejects.toThrow('thread belongs to another actor');
+    await expect(
+      buildService(store).chat({ actor: { id: 'owner' }, message: 'hi', threadId: 'missing' }),
+    ).rejects.toThrow('thread missing not found');
   });
 });
