@@ -184,7 +184,7 @@ describe('previewToolInputs — tokens', () => {
     const forwarded: Uint8Array[] = [];
     const previews = previewToolInputs(
       { write: (chunk) => void forwarded.push(chunk), end() {}, fail() {} },
-      () => echo,
+      async () => echo,
     );
     const frames = Array.from({ length: 100 }, (_, i) =>
       encodeStreamEvent({ kind: 'text', text: `t${i} ` }),
