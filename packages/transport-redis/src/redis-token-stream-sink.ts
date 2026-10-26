@@ -18,12 +18,16 @@ export interface RedisTokenStreamSinkOptions {
    * How long (seconds) a run's keys outlive its last write, so streams self-expire instead of
    * accumulating in Redis — ended runs past their replay window and runs that crashed without
    * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the
-   * window still replays. Default 3600 (1h). `0` keeps the keys until `close()`.
+   * window still replays; a subscriber of a run that writes nothing for the whole window stops
+   * following it. Default 3600 (1h). `0` keeps the keys until `close()`.
    */
   ttlSeconds?: number;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
+
+/** The longest delay `setTimeout` honours; longer ones fire at once. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 const decoder = new TextDecoder();
 
@@ -247,6 +251,11 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     for (const key of keys) await this.client.expire(key, this.ttlSeconds);
   }
 
+  /**
+   * Follows the run until its terminal, an abort, or the run is gone. Gone means its keys no longer
+   * exist: `close()` deleted them, or a full TTL passed with nothing written — the window after which
+   * the run's keys expire — so a run silent for less than its TTL is still followed.
+   */
   async *subscribe(runId: string, options: SubscribeOptions = {}): AsyncIterable<Uint8Array> {
     const { signal } = options;
     if (signal?.aborted) return;
@@ -254,10 +263,12 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     // re-reads. A promise is armed BEFORE each drain, so a publish arriving mid-drain is never lost.
     let resolveWake: (() => void) | null = null;
     // The terminal marker is only read when it can have changed: on attach (the run may already be
-    // over), and once an `end` arrives.
+    // over), once an `end` arrives, and before deciding the run is gone.
     let checkTerminal = true;
+    let closed = false;
     const onMessage = (message: string) => {
       if (message === 'end') checkTerminal = true;
+      if (message === 'close') closed = true;
       const resolve = resolveWake;
       resolveWake = null;
       resolve?.();
@@ -265,18 +276,21 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     const onAbort = () => onMessage('abort');
     signal?.addEventListener('abort', onAbort, { once: true });
     const unsubscribe = await this.client.subscribe(this.channel(runId), onMessage);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       let index = 0;
+      let silent = false;
       while (signal?.aborted !== true) {
         const wake = new Promise<void>((resolve) => {
           resolveWake = resolve;
         });
+        const gone = closed || silent;
         const chunks = await this.client.lrange(this.chunksKey(runId), index, -1);
         for (const encoded of chunks) {
           index += 1;
           yield fromBase64(encoded);
         }
-        if (checkTerminal) {
+        if (checkTerminal || gone) {
           checkTerminal = false;
           const terminal = await this.readTerminal(runId);
           if (terminal !== null) {
@@ -291,9 +305,27 @@ export class RedisTokenStreamSink implements TokenStreamSink {
             return;
           }
         }
+        // A wake lost in transit shows up as chunks here, and the run is followed on.
+        if (gone && chunks.length === 0) return;
+        silent = false;
+        if (this.ttlSeconds > 0) {
+          const deadline = Date.now() + this.ttlSeconds * 1000;
+          const arm = () => {
+            const remaining = deadline - Date.now();
+            if (remaining > 0) {
+              timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+              return;
+            }
+            silent = true;
+            onMessage('silent');
+          };
+          arm();
+        }
         await wake;
+        clearTimeout(timer);
       }
     } finally {
+      clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       await unsubscribe();
     }
@@ -301,6 +333,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
 
   async close(runId: string): Promise<void> {
     await this.client.del(this.chunksKey(runId), this.stateKey(runId));
+    await this.client.publish(this.channel(runId), 'close');
   }
 
   private async readTerminal(runId: string): Promise<Terminal | null> {

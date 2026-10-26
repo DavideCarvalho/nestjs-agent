@@ -141,4 +141,17 @@ describe('RedisTokenStreamSink (real Redis)', () => {
     expect(await command.exists('agent:stream:run-close:chunks')).toBe(0);
     expect(await command.exists('agent:stream:run-close:state')).toBe(0);
   });
+
+  it('stops following a run whose keys expired without a terminal', async () => {
+    const shortLived = new RedisTokenStreamSink(ioredisClient(command, subscriber), {
+      ttlSeconds: 1,
+    });
+    await shortLived.open('run-expired').write(encode('partial'));
+    const outcome = await Promise.race([
+      collect(shortLived.subscribe('run-expired')),
+      delay(5_000).then(() => 'still following'),
+    ]);
+    expect(outcome).toBe('partial');
+    expect(await command.exists('agent:stream:run-expired:chunks')).toBe(0);
+  });
 });

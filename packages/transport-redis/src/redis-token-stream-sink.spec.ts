@@ -4,7 +4,7 @@ import {
   decodeStreamEvent,
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RedisStreamClient } from './redis-stream-client.js';
 import { RedisTokenStreamSink } from './redis-token-stream-sink.js';
 
@@ -257,6 +257,91 @@ describe('RedisTokenStreamSink', () => {
       new Promise((resolve) => setTimeout(() => resolve('still waiting'), 200)),
     ]);
     expect(outcome).toBe('finished');
+    expect(redis.subscribers()).toBe(0);
+  });
+});
+
+/** Follows `runId` in the background, recording what arrives and whether the iterable finished. */
+function follow(sink: RedisTokenStreamSink, runId: string) {
+  const state = { seen: '', finished: false };
+  const done = (async () => {
+    for await (const chunk of sink.subscribe(runId)) state.seen += new TextDecoder().decode(chunk);
+    state.finished = true;
+  })();
+  return { state, done };
+}
+
+describe('RedisTokenStreamSink — a run that is gone', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stops following a run that never writes once its TTL has passed', async () => {
+    vi.useFakeTimers();
+    const redis = new CountingRedis();
+    const sink = new RedisTokenStreamSink(redis, { ttlSeconds: 2 });
+    const { state, done } = follow(sink, 'run-silent');
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(state.finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    await done;
+    expect(state.finished).toBe(true);
+    expect(redis.subscribers()).toBe(0);
+  });
+
+  it('stops following a run whose keys expired without a terminal', async () => {
+    vi.useFakeTimers();
+    const redis = new FakeRedis();
+    const sink = new RedisTokenStreamSink(redis, { ttlSeconds: 2 });
+    await sink.open('run-crashed').write(encode('partial'));
+    const { state, done } = follow(sink, 'run-crashed');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await redis.del('agent:stream:run-crashed:chunks');
+    await vi.advanceTimersByTimeAsync(100);
+    await done;
+    expect(state).toEqual({ seen: 'partial', finished: true });
+  });
+
+  it('keeps following a run that writes again before a whole TTL passes', async () => {
+    vi.useFakeTimers();
+    const sink = new RedisTokenStreamSink(new FakeRedis(), { ttlSeconds: 2 });
+    const writer = sink.open('run-slow');
+    const { state, done } = follow(sink, 'run-slow');
+    for (const part of ['a', 'b', 'c']) {
+      await vi.advanceTimersByTimeAsync(1_500);
+      await writer.write(encode(part));
+    }
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(state).toEqual({ seen: 'abc', finished: false });
+    await writer.end();
+    await done;
+    expect(state).toEqual({ seen: 'abc', finished: true });
+  });
+
+  it('picks up chunks whose wake was lost instead of ending the run', async () => {
+    vi.useFakeTimers();
+    const redis = new FakeRedis();
+    const sink = new RedisTokenStreamSink(redis, { ttlSeconds: 2 });
+    const { state, done } = follow(sink, 'run-lossy');
+    await vi.advanceTimersByTimeAsync(10);
+    // Appended straight to the list, with no publish to wake the subscriber.
+    await redis.rpush('agent:stream:run-lossy:chunks', Buffer.from('late').toString('base64'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(state).toEqual({ seen: 'late', finished: false });
+    await sink.open('run-lossy').end();
+    await done;
+    expect(state.finished).toBe(true);
+  });
+
+  it('stops following a run once close() drops its keys, even under ttlSeconds: 0', async () => {
+    const redis = new CountingRedis();
+    const sink = new RedisTokenStreamSink(redis, { ttlSeconds: 0 });
+    await sink.open('run-closed').write(encode('partial'));
+    const { state, done } = follow(sink, 'run-closed');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await sink.close('run-closed');
+    await Promise.race([done, new Promise((resolve) => setTimeout(resolve, 200))]);
+    expect(state).toEqual({ seen: 'partial', finished: true });
     expect(redis.subscribers()).toBe(0);
   });
 });

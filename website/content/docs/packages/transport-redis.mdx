@@ -114,7 +114,7 @@ Per run (`keyPrefix` defaults to `agent:stream`):
 | Structure | Key | Purpose |
 |---|---|---|
 | LIST | `<prefix>:<runId>:chunks` | Every chunk (base64) appended in order — what a late subscriber replays before following live. |
-| pub/sub channel | `<prefix>:<runId>` | A wake-up published after each append and on end, for subscribers already caught up. |
+| pub/sub channel | `<prefix>:<runId>` | A wake-up published after each append, on end and on `close()`, for subscribers already caught up. |
 | terminal marker | `<prefix>:<runId>:state` | `{ t: 'end' }` or `{ t: 'fail', error }`, set when the run ends — a reconnect after completion sees the ending instead of hanging on an empty subscribe. |
 
 Both keys expire `ttlSeconds` after the run's last write (see above); `close(runId)` deletes them
@@ -142,6 +142,12 @@ same stored list, so SSE frame ids and `?after=` cursors are the same on every r
 A subscription passed `{ signal }` (the chat routes pass one that aborts when the client
 disconnects) unsubscribes from the channel as soon as it aborts, even on a run that never writes
 again.
+
+A subscriber also stops, as if the run had ended, once the run is gone: `close()` deleted its keys,
+or `ttlSeconds` passed with nothing written — by then the keys have expired, whether the run crashed,
+is parked past its TTL, or never started. A run that writes again before a full TTL passes is still
+followed, and a subscriber whose wake-up was lost picks the chunks up from the list instead of
+ending. Under `ttlSeconds: 0` only `close()` ends a silent run's subscribers.
 
 A run that ended in failure re-raises as `AgentStreamError` (from `@dudousxd/nestjs-agent-core`) on
 the subscriber side rather than silently closing, so a reconnecting client can tell "the run is done"

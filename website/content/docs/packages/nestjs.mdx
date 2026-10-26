@@ -199,8 +199,11 @@ reads the same stored entries, so SSE frame ids and `?after=` cursors are exact 
 
 Each `subscribe` follows on its own `duplicate()` connection (`XREAD BLOCK blockMs`), disconnected
 when the subscriber stops: when the run ends or fails, when its `signal` aborts (the chat routes
-abort it when the client disconnects), or when a stream that had entries disappears without an end
-(expired past `ttlSeconds`, or closed), in which case the subscriber ends as if the run had ended.
+abort it when the client disconnects), when a stream that had entries disappears without an end
+(expired past `ttlSeconds`, or closed), or when no stream appears within `ttlSeconds` of
+subscribing — a run that wrote nothing for that long has no stream left to follow. In the last two
+cases the subscriber ends as if the run had ended; under `ttlSeconds: 0` a stream that never
+appears is followed until the signal aborts.
 
 The default `InProcessTokenStreamSink` drops a run's buffer 60 seconds after `end()` / `fail()`, or
 one hour after its last write if the run never ends (its subscribers then end too). A writer that

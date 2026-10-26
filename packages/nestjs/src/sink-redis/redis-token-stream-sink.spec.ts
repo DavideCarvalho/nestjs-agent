@@ -5,7 +5,7 @@ import {
   encodeStreamEvent,
 } from '@dudousxd/nestjs-agent-core';
 import type { Redis } from 'ioredis';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RedisTokenStreamSink } from './redis-token-stream-sink.js';
 
 type Entry = [id: Buffer, fields: Buffer[]];
@@ -320,6 +320,56 @@ describe('RedisTokenStreamSink', () => {
     ]);
     expect(outcome).toBe('finished');
     expect(fake.openReaders()).toBe(0);
+  });
+
+  it('gives up on a stream that never appears within the TTL', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeRedisWith();
+      const sink = new RedisTokenStreamSink(fake.redis, { ttlSeconds: 2, blockMs: 100 });
+      let finished = false;
+      const following = (async () => {
+        for await (const _ of sink.subscribe('run-never')) {
+          // nothing is ever written
+        }
+        finished = true;
+      })();
+      await vi.advanceTimersByTimeAsync(1_900);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      await following;
+      expect(finished).toBe(true);
+      expect(fake.openReaders()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows a stream that first appears just inside the TTL', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeRedisWith();
+      const sink = new RedisTokenStreamSink(fake.redis, { ttlSeconds: 2, blockMs: 100 });
+      const seen: string[] = [];
+      const following = (async () => {
+        for await (const chunk of sink.subscribe('run-late')) {
+          seen.push(new TextDecoder().decode(chunk));
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(1_900);
+      const writer = sink.open('run-late');
+      const written = writer.write(new TextEncoder().encode('first'));
+      await vi.advanceTimersByTimeAsync(3_000);
+      await written;
+      expect(seen).toEqual(['first']);
+      const ended = writer.end();
+      await vi.advanceTimersByTimeAsync(10);
+      await ended;
+      await following;
+      expect(seen).toEqual(['first']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('AgentStreamError carries the structured code', () => {

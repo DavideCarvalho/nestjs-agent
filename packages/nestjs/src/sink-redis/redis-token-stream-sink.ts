@@ -15,7 +15,8 @@ export interface RedisTokenStreamSinkOptions {
    * How long (seconds) a run's stream outlives its last write, so streams self-expire instead of
    * accumulating in Redis — ended runs past their replay window and runs that crashed without
    * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the window
-   * still replays. Default 3600 (1h). `0` keeps the stream until `close()`.
+   * still replays; a subscriber of a run that never writes within the window stops following it.
+   * Default 3600 (1h). `0` keeps the stream until `close()`.
    */
   ttlSeconds?: number;
   /** `XREAD BLOCK` timeout (ms) between follow polls. Default 5000. Purely an internal cadence. */
@@ -68,7 +69,7 @@ interface RunWrites {
  * pod. The turn `XADD`s its frames to `agent:sink:<runId>`; a subscriber `XREAD`s from `0` so it
  * REPLAYS everything buffered so far (a reconnect or a subscriber that attaches after the run
  * started misses nothing), then blocks for live entries until an `end`/`fail` sentinel — or until
- * the stream is gone (expired or closed) after it had entries.
+ * the stream is gone: expired or closed after it had entries, or never created within the TTL.
  *
  * Consecutive `text` frames are gathered while the previous send is still on the wire and go out as
  * ONE `text` entry, so a model streaming faster than a Redis round trip costs one round trip per
@@ -239,6 +240,9 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     const reader = this.redis.duplicate();
     const onAbort = () => reader.disconnect();
     signal?.addEventListener('abort', onAbort, { once: true });
+    // A run writes within its TTL or its stream would have expired, so one silent that long is gone.
+    const giveUpAt =
+      this.ttlSeconds > 0 ? Date.now() + this.ttlSeconds * 1000 : Number.POSITIVE_INFINITY;
     try {
       let lastId = '0';
       while (true) {
@@ -254,6 +258,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
           // A stream that had entries and is now gone expired or was closed without a terminal
           // (its run crashed, or is parked past the TTL): nothing will ever be appended to it.
           if (lastId !== '0' && (await this.redis.exists(key)) === 0) return;
+          if (lastId === '0' && Date.now() >= giveUpAt) return;
           continue;
         }
         for (const entry of entries) {
