@@ -57,6 +57,12 @@ import { stepOf } from './outside-workflow-ctx.js';
  * (`sinkRunId`) so the human watching the parent sees it and can approve its action tools; the
  * approval routes to the child's own run via `runForToolCall`.
  */
+
+/** A gateway that reads a run's own row. Older runtimes' gateways may not offer it. */
+interface RunRowReader {
+  getRun(runId: string): Promise<{ status: string } | null>;
+}
+
 @Injectable()
 @Workflow({ name: 'agent.run', version: '1' })
 export class AgentRunWorkflow {
@@ -218,10 +224,11 @@ export class AgentRunWorkflow {
    * `DurableAgentRunner.cancel` puts it — `cancelling` while a compensating cancel is in flight,
    * `cancelled` once it has settled.
    *
-   * Costs a run read at each of the loop's observation points (two per step). That is a row the
-   * control plane already has, against a turn that is otherwise making model calls, and it buys the
-   * property that matters: the answer comes from a place BOTH the canceller and every pod that might
-   * replay this run can see.
+   * Costs a run read at each of the loop's observation points (two per step): the run's own row
+   * where the gateway can read it alone, else its detail, which carries every checkpoint of the run.
+   * That row is one the control plane already has, against a turn that is otherwise making model
+   * calls, and it buys the property that matters: the answer comes from a place BOTH the canceller
+   * and every pod that might replay this run can see.
    *
    * Failing to ask is not a cancel. A tenant with no gateway wired, or an operator briefly
    * unreachable, answers "no" and the run carries on — the alternative is failing healthy runs
@@ -229,8 +236,13 @@ export class AgentRunWorkflow {
    * can never disagree about what was seen here.
    */
   private async isCancelled(runId: string): Promise<boolean> {
+    const runs = this.runs as (RunGateway & Partial<RunRowReader>) | undefined;
     try {
-      const status = (await this.runs?.getRunDetail(runId))?.run.status;
+      const run =
+        typeof runs?.getRun === 'function'
+          ? await runs.getRun(runId)
+          : (await runs?.getRunDetail(runId))?.run;
+      const status = run?.status;
       return status === 'cancelled' || status === 'cancelling';
     } catch {
       return false;
