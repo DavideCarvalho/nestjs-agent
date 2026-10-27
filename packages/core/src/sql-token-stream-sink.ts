@@ -2,6 +2,7 @@ import {
   AgentStreamError,
   type SinkWriter,
   type StreamError,
+  type SubscribeOptions,
   type TokenStreamSink,
 } from './spi/token-stream-sink.js';
 import { encodeStreamEvent } from './stream-events.js';
@@ -105,6 +106,20 @@ interface RunWrites {
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** {@link sleep}, cut short when `signal` aborts. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return sleep(ms);
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
 
 /** The text of a chunk that is exactly one `{"kind":"text","text":…}` line, else `null`. */
 function textOf(line: string): string | null {
@@ -301,10 +316,11 @@ export class SqlTokenStreamSink implements TokenStreamSink {
     };
   }
 
-  async *subscribe(runId: string): AsyncIterable<Uint8Array> {
+  async *subscribe(runId: string, options: SubscribeOptions = {}): AsyncIterable<Uint8Array> {
+    const { signal } = options;
     let cursor = 0;
     let quietSince = Date.now();
-    while (true) {
+    while (signal?.aborted !== true) {
       const rows = await this.table.read(runId, cursor, READ_PAGE);
       for (const row of rows) {
         cursor = row.seq;
@@ -321,8 +337,9 @@ export class SqlTokenStreamSink implements TokenStreamSink {
         // A full page means there may be more already written: read on without waiting.
         if (rows.length >= READ_PAGE) continue;
       }
-      await sleep(
+      await pause(
         Date.now() - quietSince >= IDLE_AFTER_MS ? this.idlePollIntervalMs : this.pollIntervalMs,
+        signal,
       );
     }
   }

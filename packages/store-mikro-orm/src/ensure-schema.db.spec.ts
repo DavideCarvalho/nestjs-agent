@@ -359,7 +359,7 @@ describe('ensureAgentSchema — healing a table that is missing columns', () => 
       // and the shape a filtered-out statement, a silent driver and a lying proxy all share.
       const execute = connection.execute.bind(connection);
       connection.execute = (async (query: string, ...rest: unknown[]) =>
-        typeof query === 'string' && /__temp_alter|^drop\s+table/i.test(query)
+        typeof query === 'string' && /__temp_alter|^drop\s+table|^create\s+index/i.test(query)
           ? []
           : execute(query, ...(rest as []))) as typeof connection.execute;
 
@@ -395,6 +395,12 @@ const ADDED_LATER: Record<string, string[]> = {
   agent_tool_call: ['approver', 'expires_at', 'remember', 'decided_via'],
   agent_token_usage: ['cost_source'],
 };
+
+/** Indexes on a column of {@link ADDED_LATER}, as `[table, index]`. */
+const INDEXED_LATER: [string, string][] = [
+  ['agent_thread', 'agent_thread_active_stream_idx'],
+  ['agent_message', 'agent_message_thread_seq_idx'],
+];
 
 /** The update DDL the differ still wants for agent tables — empty once the heal has landed. */
 async function pendingAgentDdl(instance: MikroORM): Promise<string[]> {
@@ -483,6 +489,10 @@ describeEachDialect('ensureAgentSchema on a real database', (dialect) => {
     const instance = await fresh();
     for (const statement of await agentSchemaSql(instance, { ifNotExists: false })) {
       await rawSql(instance, statement);
+    }
+    // Indexes younger than the columns they name — SQLite will not drop a column an index still holds.
+    for (const [table, index] of INDEXED_LATER) {
+      await rawSql(instance, `drop index ${index}${dialect === 'mysql' ? ` on ${table}` : ''}`);
     }
     for (const [table, columns] of Object.entries(ADDED_LATER)) {
       for (const column of columns) {

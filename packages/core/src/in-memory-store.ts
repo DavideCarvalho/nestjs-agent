@@ -21,6 +21,8 @@ import {
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
+  type ThreadSettings,
+  type ThreadSettingsReader,
   type ToolCallApprovalState,
   type UpdateThreadInput,
   type UpdateToolCallInput,
@@ -216,7 +218,7 @@ export interface GovernanceRunRow {
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
 export class InMemoryAgentStore
   extends InMemoryActionProposalStore
-  implements AgentStore, ChatQueueStore, ActionProposalOutcomeStore
+  implements AgentStore, ChatQueueStore, ActionProposalOutcomeStore, ThreadSettingsReader
 {
   private readonly threads = new Map<string, ThreadRow>();
   /** Each thread's waiting messages, in run order. */
@@ -445,6 +447,19 @@ export class InMemoryAgentStore
   /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
   async modelForThread(threadId: string): Promise<string | null> {
     return this.threads.get(threadId)?.model ?? null;
+  }
+
+  async threadSettings(threadId: string): Promise<ThreadSettings | null> {
+    const thread = this.threads.get(threadId);
+    if (thread === undefined) {
+      return null;
+    }
+    return {
+      actorRef: thread.actorRef,
+      defaultAgent: thread.defaultAgent ?? null,
+      persona: thread.persona ?? null,
+      model: thread.model ?? null,
+    };
   }
 
   /**

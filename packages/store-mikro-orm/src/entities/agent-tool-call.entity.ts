@@ -48,7 +48,13 @@ export function agentToolCallSchema(collation?: string): EntitySchema<AgentToolC
     // read, `truncateFrom`'s delete, the cascade from agent_message) then scanned the whole table.
     // Unnamed, so it takes the name the ORM already gave its own index elsewhere — a MySQL or SQLite
     // schema sees the index it has, and only Postgres gains one.
-    indexes: [{ properties: ['message'] }],
+    indexes: [
+      { properties: ['message'] },
+      // The approvals inbox: `pending_approval`, oldest first.
+      { name: 'agent_tool_call_status_created_idx', properties: ['status', 'createdAt'] },
+      { name: 'agent_tool_call_run_idx', properties: ['runId'] },
+      { name: 'agent_tool_call_created_idx', properties: ['createdAt'] },
+    ],
     properties: {
       id: { type: 'string', primary: true, ...str },
       message: {

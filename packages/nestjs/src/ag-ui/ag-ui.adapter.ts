@@ -49,6 +49,7 @@ import type { Request, Response } from 'express';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService, NO_USER_MESSAGE_CODE } from '../agent.service.js';
 import { attachmentLimits } from '../attachment-limits.js';
+import { readerGone } from '../controller/reader-gone.js';
 import { answers as boundedAnswers, rejectReason } from '../controller/tool-call.controller.js';
 import { GENUI_CATALOG } from '../genui/agent-genui.module.js';
 import type { AgentProtocolAdapter } from '../protocol-adapter.js';
@@ -436,7 +437,7 @@ export class AgUiRunHandler {
     // follow the rest of the run on `chat/:runId/stream?after=<id>` once this AG-UI run ends.
     const cursor = { seq: 0 };
     try {
-      const frames = agUiFramesFromNdjson(this.agent.subscribe(runId));
+      const frames = agUiFramesFromNdjson(this.agent.subscribe(runId, readerGone(res)));
       for await (const event of agUiEvents(frames, { ...options, cursor })) {
         if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') terminal = true;
         res.write(agUiSse(event, cursor.seq));

@@ -742,3 +742,62 @@ describe('paged-table providers (A1)', () => {
     });
   });
 });
+
+describe('governance panels sharing a read', () => {
+  it('runs each range read once for every panel of a dashboard load that asks it', async () => {
+    const calls: Record<string, number> = {};
+    const stub = stubQueries();
+    const counted = Object.fromEntries(
+      Object.entries(stub).map(([name, method]) => [
+        name,
+        (...args: unknown[]) => {
+          calls[name] = (calls[name] ?? 0) + 1;
+          return (method as (...a: unknown[]) => unknown)(...args);
+        },
+      ]),
+    ) as unknown as AgentGovernanceQueries;
+    const ctx = contextWith(counted);
+    const query = { fromDay: '2026-07-01', toDay: '2026-07-30' };
+    const panels = [
+      agentSpendTotalProvider(),
+      agentTokensTotalProvider(),
+      agentSpendByModelProvider(),
+      agentModelSpendTableProvider(),
+      agentActorSpendTableProvider(),
+      agentRunsTotalProvider(),
+      agentRunsSuccessRateProvider(),
+      agentRunsFailedProvider(),
+      agentRunsRetriesProvider(),
+      agentRunsDurationProvider(),
+      agentRunsTtftProvider(),
+    ];
+
+    const results = await Promise.all(panels.map((panel) => panel.resolve(query, ctx)));
+
+    expect(calls.spendByModel).toBe(1);
+    expect(calls.spendByActor).toBe(1);
+    expect(calls.runMetrics).toBe(1);
+    expect(results[0]).toEqual({ value: totalCostUsd(MODEL_ROWS) });
+    // Another range is another read.
+    await agentSpendTotalProvider().resolve({ fromDay: '2026-06-01', toDay: '2026-06-30' }, ctx);
+    expect(calls.spendByModel).toBe(2);
+  });
+
+  it('does not keep a failed read for the next panel', async () => {
+    let attempts = 0;
+    const queries: AgentGovernanceQueries = {
+      ...stubQueries(),
+      async spendByModel() {
+        attempts += 1;
+        if (attempts === 1) throw new Error('database away');
+        return MODEL_ROWS;
+      },
+    };
+    const ctx = contextWith(queries);
+    const query = { fromDay: '2026-07-01', toDay: '2026-07-30' };
+    await expect(agentSpendTotalProvider().resolve(query, ctx)).rejects.toThrow('database away');
+    await expect(agentSpendTotalProvider().resolve(query, ctx)).resolves.toEqual({
+      value: totalCostUsd(MODEL_ROWS),
+    });
+  });
+});

@@ -1344,6 +1344,10 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
         const agedStore = new DrizzleAgentStore(aged.db);
         const thread = await agedStore.createThread({ actor: { id: 'old' }, title: 'Old chat' });
         await agedStore.appendMessage({ threadId: thread.id, role: 'user', content: 'old row' });
+        // Younger than the column it names — SQLite will not drop a column an index still holds.
+        await aged.run(
+          `DROP INDEX agent_message_thread_seq_idx${dialect === 'mysql' ? ' ON agent_message' : ''}`,
+        );
         for (const [table, columns] of Object.entries(later)) {
           for (const column of columns)
             await aged.run(`ALTER TABLE ${table} DROP COLUMN ${column}`);
@@ -1354,6 +1358,9 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
         for (const [table, columns] of Object.entries(later)) {
           expect(await columnsOf(aged, table)).toEqual(expect.arrayContaining(columns));
         }
+        expect((await indexesOf(aged, 'agent_message')).map((index) => index.name)).toContain(
+          'agent_message_thread_seq_idx',
+        );
         await agedStore.appendMessage({
           threadId: thread.id,
           role: 'assistant',
@@ -1378,6 +1385,160 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
       } finally {
         await empty.close();
       }
+    });
+  });
+
+  /** The reads that run on every attach, poll, list and send — what each costs in statements. */
+  describe('DrizzleAgentStore — statements per read', () => {
+    const queries: string[] = [];
+    let countedHandle: AgentDbHandle;
+    let counted: DrizzleAgentStore;
+
+    beforeAll(async () => {
+      countedHandle = await openAgentDb(dialect, {
+        logger: { logQuery: (query) => queries.push(query) },
+      });
+      counted = new DrizzleAgentStore(countedHandle.db);
+    });
+
+    afterAll(async () => {
+      await countedHandle?.close();
+    });
+
+    beforeEach(async () => {
+      await countedHandle.reset();
+    });
+
+    /** The statements `work` ran, identifiers re-quoted MySQL-style so one pattern fits every dialect. */
+    async function statementsOf(work: () => Promise<unknown>): Promise<string[]> {
+      queries.length = 0;
+      await work();
+      return queries.map((query) => query.replaceAll('"', '`'));
+    }
+
+    it('indexes the columns those reads filter and order on', async () => {
+      const columnsOfIndexes = async (table: string) =>
+        (await indexesOf(countedHandle, table)).map((index) => index.columns.join(','));
+      expect(await columnsOfIndexes('agent_thread')).toContain('active_stream_id');
+      expect(await columnsOfIndexes('agent_message')).toContain('thread_id,seq');
+      expect(await columnsOfIndexes('agent_tool_call')).toEqual(
+        expect.arrayContaining(['status,created_at', 'run_id', 'created_at']),
+      );
+      expect(await columnsOfIndexes('agent_token_usage')).toEqual(
+        expect.arrayContaining(['created_at', 'thread_id']),
+      );
+    });
+
+    it('lists threads with their previews in a fixed number of statements', async () => {
+      const actor = { id: 'listing-actor' };
+      const expected = new Map<string, string>();
+      for (let index = 0; index < 30; index += 1) {
+        const thread = await counted.createThread({ actor, title: `chat ${index}` });
+        await counted.appendMessage({ threadId: thread.id, role: 'user', content: `q ${index}` });
+        await counted.appendMessage({
+          threadId: thread.id,
+          role: 'assistant',
+          content: `answer ${index} ${'x'.repeat(200)}`,
+        });
+        expected.set(thread.id, `answer ${index} ${'x'.repeat(200)}`.slice(0, 120));
+      }
+      // A thread whose messages all predate `seq`, and one with none at all.
+      const legacy = await counted.createThread({ actor, title: 'legacy' });
+      const older = await counted.appendMessage({
+        threadId: legacy.id,
+        role: 'user',
+        content: 'a',
+      });
+      const newer = await counted.appendMessage({
+        threadId: legacy.id,
+        role: 'user',
+        content: 'b',
+      });
+      const message = countedHandle.t.agentMessage;
+      await countedHandle.q
+        .update(message)
+        .set({ seq: null, createdAt: new Date('2026-01-01T00:00:00.000Z') })
+        .where(eq(message.id, older.id));
+      await countedHandle.q
+        .update(message)
+        .set({ seq: null, createdAt: new Date('2026-01-01T00:00:01.000Z') })
+        .where(eq(message.id, newer.id));
+      expected.set(legacy.id, 'b');
+      const empty = await counted.createThread({ actor, title: 'empty' });
+
+      let threads: ThreadSummary[] = [];
+      const statements = await statementsOf(async () => {
+        threads = await counted.listThreads(actor.id);
+      });
+
+      expect(threads).toHaveLength(32);
+      for (const thread of threads) {
+        expect(thread.lastMessagePreview).toBe(expected.get(thread.id));
+      }
+      expect(threads.find((thread) => thread.id === empty.id)?.lastMessagePreview).toBeUndefined();
+      // Each thread's highest seq, the rows holding it — and the legacy thread alone.
+      expect(statements.filter((sql) => /from `agent_message`/i.test(sql))).toHaveLength(3);
+    });
+
+    it('sums usage windows in the database, in one statement', async () => {
+      const thread = await counted.createThread({ actor: { id: 'usage-actor' } });
+      const costs = [0.000123456, 0.038268, 0.1, 0.2, 0.0731];
+      for (const [index, costUsd] of costs.entries()) {
+        await counted.recordUsage({
+          threadId: thread.id,
+          actorRef: 'usage-actor',
+          modelId: 'm',
+          purpose: 'chat',
+          usage: { inputTokens: 100 + index, outputTokens: 10 },
+          costUsd,
+          ...(index % 2 === 0 ? { costSource: 'estimate' as const } : {}),
+        });
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const month = `${today.slice(0, 8)}01`;
+      let totals: Awaited<ReturnType<DrizzleAgentStore['usageWindows']>> = [];
+      const statements = await statementsOf(async () => {
+        totals = await counted.usageWindows('usage-actor', [
+          { fromDay: today, toDay: today },
+          { fromDay: month, toDay: today },
+          { fromDay: '2000-01-01', toDay: '2000-01-31' },
+        ]);
+      });
+
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toMatch(/\bsum\(/i);
+      const tokens = costs.reduce((sum, _, index) => sum + 110 + index, 0);
+      const cost = costs.reduce((sum, value) => sum + value, 0);
+      const estimated = costs.reduce((sum, value, index) => sum + (index % 2 === 0 ? value : 0), 0);
+      for (const window of totals.slice(0, 2)) {
+        expect(window.usedTokens).toBe(tokens);
+        expect(window.costUsd).toBeCloseTo(cost, 12);
+        expect(window.estimatedCostUsd).toBeCloseTo(estimated, 12);
+      }
+      expect(totals[2]).toEqual({ usedTokens: 0, costUsd: 0, estimatedCostUsd: 0 });
+      expect(await counted.quotaToday('usage-actor', today)).toEqual(totals[0]);
+      expect(await counted.usageBetween('usage-actor', month, today)).toEqual(totals[1]);
+    });
+
+    it('answers what a send reads off a thread in one statement', async () => {
+      const thread = await counted.createThread({ actor: { id: 'settings-actor' } });
+      await counted.updateThread(thread.id, {
+        defaultAgent: 'researcher',
+        model: 'big',
+        persona: 'pirate',
+      });
+      const statements = await statementsOf(async () => {
+        expect(await counted.threadSettings(thread.id)).toEqual({
+          actorRef: 'settings-actor',
+          defaultAgent: 'researcher',
+          persona: 'pirate',
+          model: 'big',
+        });
+      });
+      expect(statements).toHaveLength(1);
+      await counted.softDeleteThread(thread.id);
+      expect(await counted.threadSettings(thread.id)).toBeNull();
+      expect(await counted.threadSettings('no-such-thread')).toBeNull();
     });
   });
 

@@ -2292,4 +2292,63 @@ describeEachDialect('MikroOrmGovernanceQueries', (dialect) => {
       ]);
     });
   });
+  /** A range aggregate reads the columns it rolls up, not every column of every row in the range. */
+  describe('MikroOrmGovernanceQueries — the columns a range aggregate loads', () => {
+    let loggedOrm: MikroORM;
+    let logged: MikroOrmGovernanceQueries;
+    const statements: string[] = [];
+
+    beforeAll(async () => {
+      loggedOrm = await openFreshOrm(dialect, {
+        debug: ['query'],
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: the logger colours its output
+        logger: (message) => statements.push(message.replace(/\u001b\[[0-9;]*m/g, '')),
+      });
+      await ensureAgentSchema(loggedOrm);
+      logged = new MikroOrmGovernanceQueries(loggedOrm.em, new MikroOrmPricingStore(loggedOrm.em));
+    });
+
+    afterAll(async () => {
+      await loggedOrm?.close(true);
+    });
+
+    async function selectsFrom(table: string, read: () => Promise<unknown>): Promise<string[]> {
+      statements.length = 0;
+      await read();
+      return statements
+        .map((statement) => statement.replaceAll('"', '`'))
+        .filter((statement) => new RegExp(`select .* from \`${table}\``, 'i').test(statement));
+    }
+
+    it('reads usage rows without the columns no bucket uses', async () => {
+      for (const read of [
+        () => logged.spendByModel(range),
+        () => logged.spendByActor(range),
+        () => logged.usageTrend(range),
+      ]) {
+        const [select] = await selectsFrom('agent_token_usage', read);
+        expect(select).toMatch(/`input_tokens`/);
+        expect(select).not.toMatch(/`purpose`|`message_id`|`cost_source`/);
+      }
+    });
+
+    it('reads runs without their error text or prompt hash', async () => {
+      for (const read of [
+        () => logged.runMetrics(range),
+        () => logged.runsByAgent(range),
+        () => logged.runTrend(range),
+        () => logged.runErrors(range),
+      ]) {
+        const [select] = await selectsFrom('agent_run', read);
+        expect(select).toBeDefined();
+        expect(select).not.toMatch(/`error_message`|`prompt_hash`|\.\*/);
+      }
+    });
+
+    it('reads tool calls without their input and output', async () => {
+      const [select] = await selectsFrom('agent_tool_call', () => logged.toolStats(range));
+      expect(select).toMatch(/`tool_name`/);
+      expect(select).not.toMatch(/`input`|`output`|`confirmation`/);
+    });
+  });
 });

@@ -33,6 +33,7 @@ import {
   REQUESTER_APPROVER,
   type StagedAttachment,
   type StoredMessage,
+  type SubscribeOptions,
   type TextActionProposalVocabulary,
   type ThreadDetail,
   type ThreadSummary,
@@ -69,6 +70,7 @@ import { ChatQueueService } from './queue/chat-queue.service.js';
 import { publishQuotaBlocked } from './quota-exceeded.js';
 import { RunNotActiveException } from './run-not-active.exception.js';
 import { threadPersona } from './thread-persona.js';
+import { type ThreadReads, threadReads } from './thread-reads.js';
 
 /**
  * What a send does when its thread already has a turn running:
@@ -437,6 +439,7 @@ export class AgentService {
     agent: string,
     requested: string | undefined,
     threadId: string | undefined,
+    reads?: ThreadReads,
   ): Promise<string | undefined> {
     const locked =
       this.models !== undefined ? (await this.models.list({ actor, agent })).locked : undefined;
@@ -448,7 +451,9 @@ export class AgentService {
       }
       return locked.model;
     }
-    const model = requested ?? (threadId !== undefined ? await this.threadModel(threadId) : null);
+    const model =
+      requested ??
+      (threadId !== undefined ? await (reads?.model() ?? this.threadModel(threadId)) : null);
     if (model === null || model === undefined) {
       return undefined;
     }
@@ -520,17 +525,25 @@ export class AgentService {
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
     await this.assertWithinQuota(params.actor);
+    const reads = params.threadId !== undefined ? this.threadReads(params.threadId) : undefined;
     // A name a persona took over (`Persona.aliases`) runs as the agent that owns it, under it.
     const target = this.deps.resolveAgent(
-      await this.resolveAgentName(params.agentName, params.threadId),
+      await this.resolveAgentName(params.agentName, params.threadId, reads),
     );
     const agentName = target.agentName;
     const persona = await this.resolvePersona(
       agentName,
       params.personaId ?? target.persona,
       params.threadId,
+      reads,
     );
-    const model = await this.resolveModel(params.actor, agentName, params.model, params.threadId);
+    const model = await this.resolveModel(
+      params.actor,
+      agentName,
+      params.model,
+      params.threadId,
+      reads,
+    );
     // Before the thread exists, so a turn that names an attachment it may not have leaves nothing
     // behind.
     const attachments = await this.resolveAttachments(params.actor, params.attachments ?? []);
@@ -550,11 +563,11 @@ export class AgentService {
     } else {
       // Every send onto an existing thread is gated by ownership: a regenerate rewinds the thread,
       // and a queued message would otherwise land in someone else's conversation.
-      if (params.authorized !== true) await this.assertOwnsThread(params.actor, threadId);
+      if (params.authorized !== true) await this.assertOwnsThread(params.actor, threadId, reads);
       // A persona a send NAMES is the person's pick for this conversation: pinned, so the next send
       // (and a reopened thread's picker) keeps it. One the send fell back to is not pinned.
       if (params.personaId !== undefined) {
-        await this.pinThreadPersona(threadId, params.personaId);
+        await this.pinThreadPersona(threadId, params.personaId, reads);
       }
     }
 
@@ -864,8 +877,8 @@ export class AgentService {
    * {@link subscribeAs} instead: a runId is the only thing standing between a caller and another
    * actor's answer, tool arguments and tool results.
    */
-  subscribe(runId: string): AsyncIterable<Uint8Array> {
-    return this.deps.forAgent().sink.subscribe(runId);
+  subscribe(runId: string, options?: SubscribeOptions): AsyncIterable<Uint8Array> {
+    return this.deps.forAgent().sink.subscribe(runId, options);
   }
 
   /**
@@ -874,9 +887,13 @@ export class AgentService {
    * replayed — the runner clears the thread's active stream as the run ends, and that field is what
    * ownership is derived from.
    */
-  async subscribeAs(actor: Actor, runId: string): Promise<AsyncIterable<Uint8Array>> {
+  async subscribeAs(
+    actor: Actor,
+    runId: string,
+    options?: SubscribeOptions,
+  ): Promise<AsyncIterable<Uint8Array>> {
     await this.assertOwnsActiveStream(actor, runId);
-    return this.subscribe(runId);
+    return this.subscribe(runId, options);
   }
 
   /**
@@ -1121,6 +1138,7 @@ export class AgentService {
     agentName: string,
     requested: string | undefined,
     threadId: string | undefined,
+    reads?: ThreadReads,
   ): Promise<string | undefined> {
     const needsThread =
       requested === undefined &&
@@ -1129,16 +1147,22 @@ export class AgentService {
     return this.deps.resolvePersona({
       agentName,
       ...(requested !== undefined ? { requested } : {}),
-      ...(needsThread ? { threadPersona: await threadPersona(this.store, threadId) } : {}),
+      ...(needsThread
+        ? { threadPersona: await (reads?.persona() ?? threadPersona(this.store, threadId)) }
+        : {}),
     });
   }
 
   /** Pin `persona` on the thread when it is not already — a no-op on a store that cannot. */
-  private async pinThreadPersona(threadId: string, persona: string): Promise<void> {
+  private async pinThreadPersona(
+    threadId: string,
+    persona: string,
+    reads?: ThreadReads,
+  ): Promise<void> {
     if (this.store.updateThread === undefined) {
       return;
     }
-    if ((await threadPersona(this.store, threadId)) !== persona) {
+    if ((await (reads?.persona() ?? threadPersona(this.store, threadId))) !== persona) {
       await this.store.updateThread(threadId, { persona });
     }
   }
@@ -1168,17 +1192,28 @@ export class AgentService {
   private async resolveAgentName(
     agentName: string | undefined,
     threadId: string | undefined,
+    reads?: ThreadReads,
   ): Promise<string> {
     if (agentName !== undefined) {
       return agentName;
     }
     if (threadId !== undefined) {
-      const threadDefault = await this.threadDefaultAgent(threadId);
+      const threadDefault = await (reads?.defaultAgent() ?? this.threadDefaultAgent(threadId));
       if (threadDefault !== null) {
         return threadDefault;
       }
     }
     return this.deps.defaultAgentName();
+  }
+
+  /** Everything a send reads off `threadId`, in one read where the store allows it. */
+  private threadReads(threadId: string): ThreadReads {
+    return threadReads(this.store, threadId, {
+      owner: () => this.store.ownerOfThread(threadId),
+      defaultAgent: () => this.threadDefaultAgent(threadId),
+      persona: () => threadPersona(this.store, threadId),
+      model: () => this.threadModel(threadId),
+    });
   }
 
   private async threadDefaultAgent(threadId: string): Promise<string | null> {
@@ -1380,8 +1415,12 @@ export class AgentService {
    * Authorization seam for thread-scoped endpoints: the caller must own the thread. A missing
    * thread is a 404; someone else's thread is a 403 — one actor never touches another's thread.
    */
-  private async assertOwnsThread(actor: Actor, threadId: string): Promise<void> {
-    const owner = await this.store.ownerOfThread(threadId);
+  private async assertOwnsThread(
+    actor: Actor,
+    threadId: string,
+    reads?: ThreadReads,
+  ): Promise<void> {
+    const owner = await (reads?.owner() ?? this.store.ownerOfThread(threadId));
     if (owner === null) {
       throw new NotFoundException(`thread ${threadId} not found`);
     }

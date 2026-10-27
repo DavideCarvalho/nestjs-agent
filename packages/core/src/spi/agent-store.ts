@@ -271,6 +271,24 @@ export interface ThreadTurnReader {
   loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null>;
 }
 
+/** The scalars a send reads off an existing thread before it starts a turn on it. */
+export interface ThreadSettings {
+  actorRef: string;
+  defaultAgent: string | null;
+  persona: string | null;
+  model: string | null;
+}
+
+/**
+ * {@link ThreadSettings} in ONE read: who owns the thread and what it pins, for a send that would
+ * otherwise ask `ownerOfThread`, `defaultAgentForThread`, `personaForThread` and `modelForThread`
+ * one after another. `null` for a thread that is unknown or soft-deleted, matching `ownerOfThread`.
+ * Probed structurally, like {@link ThreadTurnReader}.
+ */
+export interface ThreadSettingsReader {
+  threadSettings(threadId: string): Promise<ThreadSettings | null>;
+}
+
 /** ORM-agnostic persistence. Refs are string ids; adapters may add real relations. */
 export interface AgentStore {
   createThread(input: CreateThreadInput): Promise<ThreadSummary>;
@@ -465,4 +483,13 @@ export interface AgentStore {
    * window is left out.
    */
   usageBetween?(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals>;
+  /**
+   * OPTIONAL: {@link usageBetween} over several day ranges in ONE read, answered in the order asked —
+   * what a quota check uses to read its day and month windows together. A store with
+   * {@link usageBetween} but not this is asked once per window instead.
+   */
+  usageWindows?(
+    actorRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]>;
 }

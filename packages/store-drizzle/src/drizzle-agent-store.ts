@@ -22,6 +22,8 @@ import {
   type RecordUsageInput,
   type StoredMessage,
   type ThreadDetail,
+  type ThreadSettings,
+  type ThreadSettingsReader,
   type ThreadSummary,
   type ThreadTurnPage,
   type ThreadTurnQuery,
@@ -111,6 +113,7 @@ export class DrizzleAgentStore
   implements
     AgentStore,
     ThreadTurnReader,
+    ThreadSettingsReader,
     ChatQueueStore,
     ActionProposalStore,
     ActionProposalWorkerStore,
@@ -336,17 +339,59 @@ export class DrizzleAgentStore
       )
       .orderBy(desc(this.t.agentThread.updatedAt))
       .limit(limit);
-    const summaries: ThreadSummary[] = [];
-    for (const thread of threads) {
-      const [last] = await this.db
-        .select()
-        .from(this.t.agentMessage)
-        .where(eq(this.t.agentMessage.threadId, thread.id))
-        .orderBy(...this.messageOrderNewestFirst())
-        .limit(1);
-      summaries.push(this.toSummary(thread, last?.content));
+    const previews = await this.lastMessageContents(threads.map((thread) => thread.id));
+    return threads.map((thread) => this.toSummary(thread, previews.get(thread.id)));
+  }
+
+  /**
+   * The content of each thread's newest message ({@link messageOrderNewestFirst}), in a fixed two
+   * reads for any number of threads: each thread's highest `seq`, then the rows holding it. Only a
+   * thread whose every message predates `seq` is read on its own, by `created_at`.
+   */
+  private async lastMessageContents(threadIds: readonly string[]): Promise<Map<string, string>> {
+    const contents = new Map<string, string>();
+    if (threadIds.length === 0) {
+      return contents;
     }
-    return summaries;
+    const message = this.t.agentMessage;
+    const highest = await this.db
+      .select({ threadId: message.threadId, seq: max(message.seq) })
+      .from(message)
+      .where(inArray(message.threadId, [...threadIds]))
+      .groupBy(message.threadId);
+    const numbered = highest.filter((row) => row.seq !== null);
+    if (numbered.length > 0) {
+      const rows = await this.db
+        .select({ threadId: message.threadId, content: message.content })
+        .from(message)
+        .where(
+          or(
+            ...numbered.map((row) =>
+              and(eq(message.threadId, row.threadId), eq(message.seq, Number(row.seq))),
+            ),
+          ),
+        )
+        .orderBy(...this.messageOrderNewestFirst());
+      for (const row of rows) {
+        if (!contents.has(row.threadId)) {
+          contents.set(row.threadId, row.content);
+        }
+      }
+    }
+    for (const row of highest) {
+      if (row.seq === null) {
+        const [last] = await this.db
+          .select({ content: message.content })
+          .from(message)
+          .where(eq(message.threadId, row.threadId))
+          .orderBy(...this.messageOrderNewestFirst())
+          .limit(1);
+        if (last !== undefined) {
+          contents.set(row.threadId, last.content);
+        }
+      }
+    }
+    return contents;
   }
 
   async softDeleteThread(threadId: string): Promise<void> {
@@ -834,6 +879,28 @@ export class DrizzleAgentStore
     return thread?.persona ?? null;
   }
 
+  async threadSettings(threadId: string): Promise<ThreadSettings | null> {
+    const thread = this.t.agentThread;
+    const [row] = await this.db
+      .select({
+        actorRef: thread.actorRef,
+        defaultAgent: thread.defaultAgent,
+        persona: thread.persona,
+        model: thread.model,
+      })
+      .from(thread)
+      .where(and(eq(thread.id, threadId), isNull(thread.deletedAt)));
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      actorRef: row.actorRef,
+      defaultAgent: row.defaultAgent ?? null,
+      persona: row.persona ?? null,
+      model: row.model ?? null,
+    };
+  }
+
   async defaultAgentForThread(threadId: string): Promise<string | null> {
     const [thread] = await this.db
       .select({ defaultAgent: this.t.agentThread.defaultAgent })
@@ -1195,19 +1262,49 @@ export class DrizzleAgentStore
   }
 
   async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
-    const start = new Date(`${fromDay}T00:00:00.000Z`);
-    const end = new Date(`${toDay}T23:59:59.999Z`);
-    const rows = await this.db
-      .select()
-      .from(this.t.agentTokenUsage)
-      .where(
-        and(
-          eq(this.t.agentTokenUsage.actorRef, actorRef),
-          gte(this.t.agentTokenUsage.createdAt, start),
-          lte(this.t.agentTokenUsage.createdAt, end),
-        ),
-      );
-    return sumUsage(rows);
+    const [totals] = await this.usageWindows(actorRef, [{ fromDay, toDay }]);
+    return totals ?? sumUsage([]);
+  }
+
+  /**
+   * Every range summed by the database in one statement, each as a conditional aggregate over the
+   * rows of the smallest span covering them all — the actor's `(actor_ref, created_at)` index serves
+   * it, and no usage row crosses the wire.
+   */
+  async usageWindows(
+    actorRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]> {
+    if (ranges.length === 0) {
+      return [];
+    }
+    const usage = this.t.agentTokenUsage;
+    const bounds = ranges.map(({ fromDay, toDay }) => ({
+      start: new Date(`${fromDay}T00:00:00.000Z`),
+      end: new Date(`${toDay}T23:59:59.999Z`),
+    }));
+    const within = (start: Date, end: Date) =>
+      and(gte(usage.createdAt, start), lte(usage.createdAt, end));
+    const columns: Record<string, SQL> = {};
+    bounds.forEach(({ start, end }, index) => {
+      columns[`tokens${index}`] =
+        sql`sum(case when ${within(start, end)} then ${usage.inputTokens} + ${usage.outputTokens} else 0 end)`;
+      columns[`cost${index}`] =
+        sql`sum(case when ${within(start, end)} then ${usage.costUsd} else 0 end)`;
+      columns[`estimated${index}`] =
+        sql`sum(case when ${within(start, end)} and ${usage.costSource} = 'estimate' then ${usage.costUsd} else 0 end)`;
+    });
+    const from = new Date(Math.min(...bounds.map(({ start }) => start.getTime())));
+    const to = new Date(Math.max(...bounds.map(({ end }) => end.getTime())));
+    const [row] = (await this.db
+      .select(columns)
+      .from(usage)
+      .where(and(eq(usage.actorRef, actorRef), within(from, to)))) as Record<string, unknown>[];
+    return bounds.map((_, index) => ({
+      usedTokens: Number(row?.[`tokens${index}`] ?? 0),
+      costUsd: Number(row?.[`cost${index}`] ?? 0),
+      estimatedCostUsd: Number(row?.[`estimated${index}`] ?? 0),
+    }));
   }
 
   private toSummary(thread: AgentThreadRow, lastContent?: string): ThreadSummary {

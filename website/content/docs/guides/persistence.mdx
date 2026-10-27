@@ -109,6 +109,22 @@ holds only the user's last questions has still been answered. Like `defaultAgent
 method is not part of the `AgentStore` SPI: it is probed structurally, and a store that doesn't offer
 it still answers through the full `getThread` read.
 
+### What a send reads off a thread
+
+Before a send starts a turn on an existing thread, `AgentService` needs four scalars off it: the
+owner (for the ownership check), the default agent, the pinned persona and the pinned model. Both SQL
+adapters and `InMemoryAgentStore` implement `threadSettings(threadId)`, which answers all four in one
+primary-key read:
+
+```ts
+const settings = await store.threadSettings(threadId);
+// { actorRef, defaultAgent, persona, model } — null for an unknown or soft-deleted thread
+```
+
+It is probed structurally against the `ThreadSettingsReader` shape exported from
+`@dudousxd/nestjs-agent-core`, like `loadThreadForTurn`. A store that doesn't offer it is asked field
+by field (`ownerOfThread`, `defaultAgentForThread`, and so on), which costs one read per field.
+
 ### Which turn asked for a run
 
 A delegation's child run records its parent in `agent_run.parent_run_id` — set from
@@ -493,6 +509,34 @@ first boot). A host on its own migrations owns those additive statements itself.
 
 ---
 
+## What the reads cost
+
+Both SQL adapters are built so the reads a chat makes on every send, attach and dashboard load stay
+flat as the tables grow:
+
+| Read | How it is answered |
+|---|---|
+| `ownerOfActiveStream` (every stream attach and reconnect) | index on `agent_thread(active_stream_id)` |
+| the approvals badge and inbox (`pendingApprovals`, polled every 20 s) | index on `agent_tool_call(status, created_at)` |
+| tool calls by run, tool calls and usage by date range | indexes on `agent_tool_call(run_id)`, `agent_tool_call(created_at)`, `agent_token_usage(created_at)` |
+| usage by thread | index on `agent_token_usage(thread_id)` |
+| the highest `seq` of a thread (every append, and `listThreads`) | index on `agent_message(thread_id, seq)` |
+| `listThreads(actorRef, limit)` | three statements whatever the limit: the threads, each thread's highest `seq`, then the messages holding it. A thread whose messages all lack a `seq` costs one more query of its own |
+| `quotaToday`, `usageBetween`, `usageWindows` | summed in SQL, never by loading usage rows. `usageWindows` answers several day ranges in one statement |
+| governance range reads (`spendByModel`, `spendByActor`, `toolStats`, `runMetrics`, …) | select only the columns they aggregate, so large JSON inputs/outputs and error texts never leave the database |
+
+Transcript ordering (`order by seq nulls first` / `coalesce(seq, 0)`) can't use the
+`(thread_id, seq)` index, so reading a whole thread still sorts that thread's messages.
+
+The indexes ship in both adapters' schemas for SQLite, Postgres and MySQL. `ensureAgentSchema` adds
+them to an existing database (the MikroORM heal at boot, the Drizzle helper when you call it); on
+your own migrations, see [`-store-drizzle`](/docs/agent/packages/store-drizzle) and
+[`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm). A plain `CREATE INDEX` blocks
+writes to the table while it builds, so on a large `agent_message` / `agent_tool_call` /
+`agent_token_usage` create them ahead of the upgrade (`CREATE INDEX CONCURRENTLY` on Postgres, an
+online `ALTER TABLE … ADD INDEX` on MySQL) under the same names; the heal skips an index that already
+exists.
+
 ## Choosing an adapter
 
 Both implement the identical SPI, so the agent behaves the same either way — the choice is about the
@@ -519,7 +563,9 @@ governance surfaces are untouched.
 The store holds threads; the **sink** holds a run's live stream while it is being written, so a
 browser that reconnects (`GET /agent/chat/:runId/stream?after=`) is replayed what it missed. The
 default sink keeps that in the process running the turn — with several replicas a reconnect landing
-elsewhere finds nothing. Share it: Redis (`@dudousxd/nestjs-agent-transport-redis`), or, with no
+elsewhere finds nothing. It drops a run's buffer 60 seconds after the run ends or fails, or one hour
+after its last write for a run that never ends (a crashed or cancelled path), so its memory is
+bounded by the runs of the last hour rather than every run the process has served. Share it: Redis (`@dudousxd/nestjs-agent-transport-redis`), or, with no
 Redis, the database these adapters already use:
 
 ```ts
@@ -547,6 +593,8 @@ AgentModule.forRootAsync({
   ends (at most once a minute; `autoPurge: false` to schedule it yourself).
 - A run that fails ends with a terminal row carrying its error: a subscriber replays, then gets the
   stream's `event: error`.
+- A subscriber whose `signal` aborts (the chat routes abort it when the client disconnects) stops
+  polling at once, even on a run that never writes again.
 
 Both constructors take an optional second argument, `SqlTokenStreamSinkOptions` (`pollIntervalMs`,
 `idlePollIntervalMs`, `flushMs`, `ttlSeconds`, `autoPurge`). The sink is not bound by the store

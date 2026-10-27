@@ -196,9 +196,17 @@ const redactEmails: OutputProcessor = {
 ```
 
 The chain sees the **growing prefix**, not each new chunk, so it always gets well-formed text and
-never has to reassemble a pattern split across frames. After every prefix, the loop releases what the
+never has to reassemble a pattern split across frames. After each pass, the loop releases what the
 chain produced *minus* the trailing `lookbackChars` characters, which stay held so the processor can
 still change them. The rest arrives when the whole-answer pass runs.
+
+A pass costs the length of the prefix, so the chain does not run on every streamed token. It runs
+once the text it has not yet ruled on has grown by half the window (`lookbackChars / 2`), or on the
+first frame that arrives 250 ms or more after the previous pass, so a slow stream still releases
+between half windows. When the model call ends, one last pass rules on whatever is left. What has
+been released by then is the same however the model chunked its answer; only the size and timing of
+the released frames depend on it. Processors should still be cheap per call: a chain runs about
+`2 × answer length / lookbackChars` times per answer on a fast stream, more on a slow one.
 
 <Callout type="warn" title="Undeclared means whole-answer, and a chain is incremental only if every processor declares it">
   A processor without `incremental` was written against the complete text, and running it on a prefix
@@ -235,15 +243,18 @@ It is per-processor, defaults to `DEFAULT_INCREMENTAL_LOOKBACK_CHARS` (64), and 
 one matching longer patterns. Set it to the length of the longest text your processor can act on.
 
 It is also the answer's minimum latency tail: those characters are only released once the turn's last
-model chunk has arrived, so "as large as possible" is not the safe choice either. Measured, with the
-first text frame reaching the reader only after that many characters have been gated:
+model chunk has arrived, so "as large as possible" is not the safe choice either. Measured on a fast
+stream (4-character tokens, all arriving within 250 ms of each other, so every pass is a half-window
+pass), with the first text frame reaching the reader only after that many characters have been gated:
 
 | `lookbackChars` | Answer | Reader sees the first frame after | Streamed live |
 |---:|---:|---|---:|
-| 64 | 120 chars | 68 chars (~17 tokens) | 56 / 120 |
-| 64 | 2,000 chars | 68 chars (~17 tokens) | 1,936 / 2,000 |
+| 64 | 120 chars | 96 chars (~24 tokens) | 32 / 120 |
+| 64 | 2,000 chars | 96 chars (~24 tokens) | 1,920 / 2,000 |
 | 320 | **120 chars** | **never — the whole answer is held to the gate step** | **0 / 120** |
-| 320 | 2,000 chars | 324 chars (~81 tokens) | 1,680 / 2,000 |
+| 320 | 2,000 chars | 480 chars (~120 tokens) | 1,600 / 2,000 |
+
+A slower stream reaches its first pass sooner, on the first frame 250 ms after the stream started.
 
 <Callout type="warn" title="A window wider than the answer streams nothing">
   An answer shorter than `lookbackChars` never has a releasable prefix, so it degrades silently to
@@ -261,8 +272,8 @@ first text frame reaching the reader only after that many characters have been g
 
 Non-text frames (tool cards, reasoning) are forwarded live in arrival order, and frames the gate
 cannot decode are dropped — the same rule the buffered path applies, for the same reason. The chain
-runs once per streamed `text` frame, over the prefix so far, which is why an `incremental` processor
-should be cheap and local.
+runs over the whole prefix so far on every pass, which is why an `incremental` processor should be
+cheap and local.
 
 ## Under the durable runner
 
@@ -355,7 +366,9 @@ flow for guardrails, so `approve` is enforced as `block`.
 - **Placeholders live per thread** in a `VaultStore` (option `vaults`, default `InMemoryVaultStore`,
   bounded to 1,000 threads). A run resumed in another process finds no vault, so its placeholders
   reach the reader unrestored; the values still never reach the model. `Vault.toJSON()` /
-  `Vault.fromJSON()` back a shared store, which then holds the raw values.
+  `Vault.fromJSON()` back a shared store, which then holds the raw values. `guardrails.output` loads
+  the vault once per processor context (one model call's answer), not once per incremental pass, so
+  a shared store is read once per answer however many prefixes the gate rules on.
 - **`wrapTool`** is the only place a tool's arguments can be rewritten: it restores the thread's
   placeholders (the tool needs the address, not `[EMAIL_1]`) and runs the `tool_args` rules on what
   the tool receives. That is why the `pii` shorthand does not cover `tool_args`; `secrets` does.

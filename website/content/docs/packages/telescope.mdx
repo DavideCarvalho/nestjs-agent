@@ -60,6 +60,10 @@ or [`testing`](/docs/agent/packages/testing)'s `InMemoryGovernanceQueries`) — 
 registers `TelescopeModule.forRoot({ extensions: [agentTelescopeExtension()] })`. If the binding is
 absent, those panels render an empty state; the live watcher-fed panels (runs, tool calls) keep
 working regardless, since they depend only on the diagnostics channel.
+
+Panels that ask the same range question share one read: `spendByModel`, `spendByActor` and
+`runMetrics` run once per range for every panel of a dashboard load, and the result is kept for one
+second after it settles (a failed read is not kept).
 </Callout>
 
 ## Options

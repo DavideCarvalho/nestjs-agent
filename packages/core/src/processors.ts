@@ -228,14 +228,20 @@ export interface IncrementalGate {
   rejection(): OutputGateResult['rejection'];
 }
 
+/** The longest a slow stream waits for its next prefix pass once the window has not filled. */
+const GATE_PASS_INTERVAL_MS = 250;
+
 /**
  * Releases a model call's answer to `writer` as it arrives, holding back the last `lookbackChars`
  * characters of what the chain produces so a processor can still change them.
  *
  * The chain runs over the whole PREFIX accumulated so far rather than over each new chunk, so a
  * processor always sees well-formed text and never has to reassemble a pattern split across
- * frames — which is what makes {@link IncrementalGating}'s promise a claim about prefixes. It runs
- * once per streamed `text` frame.
+ * frames — which is what makes {@link IncrementalGating}'s promise a claim about prefixes. Each pass
+ * costs the prefix's length, so it runs once the unruled text has grown by half the window, or
+ * {@link GATE_PASS_INTERVAL_MS} after the last pass, rather than per streamed `text` frame — a pass
+ * per token is quadratic in the answer. {@link IncrementalGate.settled} rules on whatever is left,
+ * so what the gate has released by then does not depend on how the model chunked its answer.
  *
  * Only an EXTENSION of what the reader already has is ever written: a chain whose output stops
  * agreeing with its earlier output has broken its promise, and the loop's whole-answer pass reports
@@ -253,6 +259,10 @@ export function createIncrementalGate(options: {
 }): IncrementalGate {
   const { processors, ctx, lookbackChars, writer } = options;
   let raw = '';
+  /** How much of `raw` the last pass ruled on, and when. */
+  let ruled = 0;
+  let ruledAt = Date.now();
+  const passEvery = Math.max(1, Math.floor(lookbackChars / 2));
   let released = '';
   let rejection: OutputGateResult['rejection'];
   /** A prefix the chain could not rule on. Text stops flowing; the whole-answer pass decides. */
@@ -263,9 +273,11 @@ export function createIncrementalGate(options: {
   let queue: Promise<void> = Promise.resolve();
 
   async function advance(): Promise<void> {
-    if (raw.length === 0) {
+    if (raw.length === ruled || stalled || rejection !== undefined) {
       return;
     }
+    ruled = raw.length;
+    ruledAt = Date.now();
     let settled: OutputGateResult;
     try {
       settled = await runOutputProcessors(processors, { text: raw, toolCalls }, ctx);
@@ -302,7 +314,7 @@ export function createIncrementalGate(options: {
       }
       if (event.kind === 'text') {
         raw += event.text;
-        if (!stalled) {
+        if (raw.length - ruled >= passEvery || Date.now() - ruledAt >= GATE_PASS_INTERVAL_MS) {
           await advance();
         }
         continue;
@@ -323,7 +335,10 @@ export function createIncrementalGate(options: {
       end: () => {},
       fail: () => {},
     },
-    settled: () => queue,
+    settled: () => {
+      queue = queue.then(advance);
+      return queue;
+    },
     released: () => released,
     rejection: () => rejection,
   };

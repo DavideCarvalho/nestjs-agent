@@ -23,7 +23,7 @@ import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MikroOrmAgentStore } from './mikro-orm-agent-store';
 import { MikroOrmPricingStore } from './mikro-orm-pricing-store';
-import { describeEachDialect, openFreshOrm } from './testing/real-db';
+import { describeEachDialect, indexesOf, openFreshOrm } from './testing/real-db';
 
 describeEachDialect('MikroOrmAgentStore', (dialect) => {
   let orm: MikroORM;
@@ -1261,6 +1261,228 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
       expect(totals.estimatedCostUsd).toBeCloseTo(0.038268, 9);
       const rows = await orm.em.fork().find(AgentTokenUsage, { actorRef: 'cost-actor' });
       expect(rows.map((row) => row.costSource).sort()).toEqual(['estimate', 'provider']);
+    });
+  });
+
+  /**
+   * The reads that run on every attach, poll, list and send — what each statement costs, counted off
+   * the ORM's query log.
+   */
+  describe('MikroOrmAgentStore — statements per read', () => {
+    let countedOrm: MikroORM;
+    let counted: MikroOrmAgentStore;
+    const queries: string[] = [];
+
+    beforeAll(async () => {
+      countedOrm = await openFreshOrm(dialect, {
+        debug: ['query'],
+        logger: (message) => queries.push(message),
+      });
+      await ensureAgentSchema(countedOrm);
+      counted = new MikroOrmAgentStore(countedOrm.em);
+    });
+
+    afterAll(async () => {
+      await countedOrm?.close(true);
+    });
+
+    /** The statements `work` ran, identifiers re-quoted MySQL-style so one pattern fits every dialect. */
+    async function statementsOf(work: () => Promise<unknown>): Promise<string[]> {
+      queries.length = 0;
+      await work();
+      return (
+        queries
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: the logger colours its output
+          .map((query) => query.replace(/\u001b\[[0-9;]*m/g, '').replaceAll('"', '`'))
+          .filter((query) => /^\[query\] (select|insert|update|delete)\b/i.test(query))
+      );
+    }
+
+    it('indexes the columns those reads filter and order on', async () => {
+      const columnsOfIndexes = async (table: string) =>
+        (await indexesOf(countedOrm, table)).map((index) => index.columns.join(','));
+      expect(await columnsOfIndexes('agent_thread')).toContain('active_stream_id');
+      expect(await columnsOfIndexes('agent_message')).toContain('thread_id,seq');
+      expect(await columnsOfIndexes('agent_tool_call')).toEqual(
+        expect.arrayContaining(['status,created_at', 'run_id', 'created_at']),
+      );
+      expect(await columnsOfIndexes('agent_token_usage')).toEqual(
+        expect.arrayContaining(['created_at', 'thread_id']),
+      );
+    });
+
+    it('lists threads with their previews in a fixed number of statements', async () => {
+      const actor = { id: 'listing-actor' };
+      const expected = new Map<string, string>();
+      for (let index = 0; index < 30; index += 1) {
+        const thread = await counted.createThread({ actor, title: `chat ${index}` });
+        await counted.appendMessage({ threadId: thread.id, role: 'user', content: `q ${index}` });
+        await counted.appendMessage({
+          threadId: thread.id,
+          role: 'assistant',
+          content: `answer ${index} ${'x'.repeat(200)}`,
+        });
+        expected.set(thread.id, `answer ${index} ${'x'.repeat(200)}`.slice(0, 120));
+      }
+      // A thread whose messages all predate `seq`, and one with none at all.
+      const legacy = await counted.createThread({ actor, title: 'legacy' });
+      const older = await counted.appendMessage({
+        threadId: legacy.id,
+        role: 'user',
+        content: 'a',
+      });
+      const newer = await counted.appendMessage({
+        threadId: legacy.id,
+        role: 'user',
+        content: 'b',
+      });
+      const em = countedOrm.em.fork();
+      await em.nativeUpdate(
+        AgentMessage,
+        { id: older.id },
+        { seq: null, createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      );
+      await em.nativeUpdate(
+        AgentMessage,
+        { id: newer.id },
+        { seq: null, createdAt: new Date('2026-01-01T00:00:01.000Z') },
+      );
+      expected.set(legacy.id, 'b');
+      const empty = await counted.createThread({ actor, title: 'empty' });
+
+      let threads: ThreadSummary[] = [];
+      const statements = await statementsOf(async () => {
+        threads = await counted.listThreads(actor.id);
+      });
+
+      expect(threads).toHaveLength(32);
+      for (const thread of threads) {
+        expect(thread.lastMessagePreview).toBe(expected.get(thread.id));
+      }
+      expect(threads.find((thread) => thread.id === empty.id)?.lastMessagePreview).toBeUndefined();
+      // The threads, each thread's highest seq, the rows holding it — and the legacy thread alone.
+      expect(statements.filter((sql) => /from `?agent_message\b/i.test(sql))).toHaveLength(3);
+    });
+
+    it('sums usage windows in the database, in one statement', async () => {
+      const thread = await counted.createThread({ actor: { id: 'usage-actor' } });
+      const costs = [0.000123456, 0.038268, 0.1, 0.2, 0.0731];
+      for (const [index, costUsd] of costs.entries()) {
+        await counted.recordUsage({
+          threadId: thread.id,
+          actorRef: 'usage-actor',
+          modelId: 'm',
+          purpose: 'chat',
+          usage: { inputTokens: 100 + index, outputTokens: 10 },
+          costUsd,
+          ...(index % 2 === 0 ? { costSource: 'estimate' as const } : {}),
+        });
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const month = `${today.slice(0, 8)}01`;
+      let totals: Awaited<ReturnType<MikroOrmAgentStore['usageWindows']>> = [];
+      const statements = await statementsOf(async () => {
+        totals = await counted.usageWindows('usage-actor', [
+          { fromDay: today, toDay: today },
+          { fromDay: month, toDay: today },
+          { fromDay: '2000-01-01', toDay: '2000-01-31' },
+        ]);
+      });
+
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toMatch(/\bsum\(/i);
+      const tokens = costs.reduce((sum, _, index) => sum + 110 + index, 0);
+      const cost = costs.reduce((sum, value) => sum + value, 0);
+      const estimated = costs.reduce((sum, value, index) => sum + (index % 2 === 0 ? value : 0), 0);
+      for (const window of totals.slice(0, 2)) {
+        expect(window.usedTokens).toBe(tokens);
+        // To the cent of a millionth: the database sums the cost each row reads back as.
+        expect(window.costUsd).toBeCloseTo(cost, 12);
+        expect(window.estimatedCostUsd).toBeCloseTo(estimated, 12);
+      }
+      expect(totals[2]).toEqual({ usedTokens: 0, costUsd: 0, estimatedCostUsd: 0 });
+      expect(await counted.quotaToday('usage-actor', today)).toEqual(totals[0]);
+      expect(await counted.usageBetween('usage-actor', month, today)).toEqual(totals[1]);
+    });
+
+    it('writes a tool call or message update without reading the row first', async () => {
+      const thread = await counted.createThread({ actor: { id: 'write-actor' } });
+      const message = await counted.appendMessage({
+        threadId: thread.id,
+        role: 'assistant',
+        content: 'calling',
+        toolCalls: [{ id: 'write-call', name: 'lookup', input: {} }],
+      });
+      await counted.recordToolCall({
+        toolCallId: 'write-call',
+        messageId: message.id,
+        toolName: 'lookup',
+        toolType: 'read',
+        input: {},
+        status: 'pending_approval',
+      });
+      const FEEDBACK = { value: 'up' as const, updatedAt: '2026-10-26T00:00:00.000Z' };
+      const writes = [
+        () =>
+          counted.updateToolCall({
+            toolCallId: 'write-call',
+            status: 'executed',
+            output: { rows: [1, 2] },
+            executionMs: 12,
+            executedByRef: 'write-actor',
+            decidedVia: 'web',
+          }),
+        () =>
+          counted.setMessageToolResults(message.id, [
+            { id: 'write-call', name: 'lookup', output: { rows: [1, 2] } },
+          ]),
+        () => counted.setMessageUi(message.id, [{ id: 'ui-1', component: 'card', props: {} }]),
+        () => counted.setMessageFeedback(message.id, FEEDBACK),
+      ];
+      for (const write of writes) {
+        const statements = await statementsOf(write);
+        expect(
+          statements.map((sql) => sql.match(/\b(select|update)\b/i)?.[1]?.toLowerCase()),
+        ).toEqual(['update']);
+      }
+      const [call] = await countedOrm.em.fork().find(AgentToolCall, { id: 'write-call' });
+      expect(call).toMatchObject({
+        status: 'executed',
+        output: { rows: [1, 2] },
+        executionMs: 12,
+        executedByRef: 'write-actor',
+        decidedVia: 'web',
+      });
+      expect(call?.executedAt).toBeInstanceOf(Date);
+      const [stored] = (await counted.getThread(thread.id))?.messages ?? [];
+      expect(stored).toMatchObject({
+        toolResults: [{ id: 'write-call', name: 'lookup', output: { rows: [1, 2] } }],
+        ui: [{ id: 'ui-1', component: 'card', props: {} }],
+        feedback: FEEDBACK,
+      });
+      // A row that is not there is not an error.
+      await counted.updateToolCall({ toolCallId: 'no-such-call', status: 'failed' });
+    });
+
+    it('answers what a send reads off a thread in one statement', async () => {
+      const thread = await counted.createThread({ actor: { id: 'settings-actor' } });
+      await counted.updateThread(thread.id, {
+        defaultAgent: 'researcher',
+        model: 'big',
+        persona: 'pirate',
+      });
+      const statements = await statementsOf(async () => {
+        expect(await counted.threadSettings(thread.id)).toEqual({
+          actorRef: 'settings-actor',
+          defaultAgent: 'researcher',
+          persona: 'pirate',
+          model: 'big',
+        });
+      });
+      expect(statements).toHaveLength(1);
+      await counted.softDeleteThread(thread.id);
+      expect(await counted.threadSettings(thread.id)).toBeNull();
+      expect(await counted.threadSettings('no-such-thread')).toBeNull();
     });
   });
 

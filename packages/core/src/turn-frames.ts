@@ -50,6 +50,10 @@ export function observeTurnFrames(
     if (line.trim().length === 0) {
       return;
     }
+    // Any other event only matters for closing a burst, so outside one a token is not decoded.
+    if (burstStartedAt === undefined && !line.includes('"reasoning"') && !line.includes('"ui"')) {
+      return;
+    }
     const event = decodeStreamEvent(line);
     if (event === null) {
       return;

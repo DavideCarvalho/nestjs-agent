@@ -40,6 +40,7 @@ import {
 import type { Request, Response } from 'express';
 import { AGENT_SERVICE } from '../agent-service.token.js';
 import type { AgentService } from '../agent.service.js';
+import { readerGone } from '../controller/reader-gone.js';
 import { GENUI_CATALOG } from '../genui/agent-genui.module.js';
 import type { AgentProtocolAdapter } from '../protocol-adapter.js';
 
@@ -274,7 +275,7 @@ export class A2uiRunHandler {
       for (const message of messages) res.write(`${JSON.stringify(message)}\n`);
     };
     try {
-      const frames = agUiFramesFromNdjson(this.agent.subscribe(runId));
+      const frames = agUiFramesFromNdjson(this.agent.subscribe(runId, readerGone(res)));
       for await (const event of agUiEvents(frames, {
         threadId: options.threadId ?? runId,
         runId,

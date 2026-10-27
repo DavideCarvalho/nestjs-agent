@@ -128,6 +128,19 @@ alter table agent_message add column persona varchar(255) null;
 alter table agent_queued_message add column persona varchar(255) null;
 ```
 
+Upgrading from a release before the read indexes: `agent_thread(active_stream_id)`,
+`agent_message(thread_id, seq)`, `agent_tool_call(status, created_at)`, `agent_tool_call(run_id)`,
+`agent_tool_call(created_at)`, `agent_token_usage(created_at)` and, on Postgres,
+`agent_token_usage(thread_id)` (MySQL and SQLite already index that foreign key). The boot heal and
+`migration:create` both pick them up from the entities. A plain `create index` blocks writes while it
+builds, so on a large table run the heal (or your migration, with `create index concurrently` on
+Postgres) in a quiet window. What each one serves is in
+[Persistence → What the reads cost](/docs/agent/guides/persistence#what-the-reads-cost).
+
+Updates of a tool call or of a message's tool results, `ui` and feedback are written with
+`nativeUpdate`, without loading the row into the identity map first. A MikroORM `EventSubscriber` or
+lifecycle hook of your own on these entities does not see those updates.
+
 Upgrading from a release before per-call confirmations and independent approvals: nullable
 `agent_tool_call.confirmation` (json) and `agent_tool_call.proposal_id`,
 `agent_message.action_proposal_outcome` (escaped JSON text), `agent_queued_message.ui_capabilities`

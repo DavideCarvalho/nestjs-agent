@@ -43,6 +43,10 @@ of its buffer: ownership is derived from the thread's active stream, which the r
 run ends, so reconnect while the turn is live (which is what `activeRunId` on a thread tells a
 client).
 
+A client that disconnects from any streaming route (`POST /agent/chat`, `GET /agent/chat/:runId/stream`,
+the AG-UI and A2UI routes) only stops its own subscription: the sink lets go of what it held for that
+reader, and the run keeps going for the next attach.
+
 Every event frame carries an SSE `id:` — strictly increasing (this library uses the frame's 1-based position in the run), the same on every attach —
 so a client that dropped can resume with `?after=<last id>`. See
 [Sequence numbers and reconnecting](/docs/agent/reference/stream-events#sequence-numbers-and-reconnecting).
@@ -222,7 +226,8 @@ cursor is a `400`. The decision is recorded with `via: 'web'`.
 | `GET` | `/agent/quota` | — | `QuotaReport` — `{ windows: { period: 'day' \| 'month'; usedTokens?; limitTokens?; usedUsd; limitUsd?; resetsAt?; warnAt? }[]; blocked?: { period; reason? }; warning?: { period; ratio; reason? } }` |
 
 `GET /agent/quota` is the bound `QuotaProvider`'s report. The default, `LedgerQuotaProvider`, reads
-the usage ledger: a `day` window and a `month` window when the store implements `usageBetween`, with
+the usage ledger: a `day` window and a `month` window when the store implements `usageBetween` or
+`usageWindows` (both SQL stores read the two in one summed statement), with
 the ceilings `quota: { limits }` sets. `blocked` names the first exhausted window. `quota: { warnAt: 0.8 }`
 adds a soft limit: every window with a ceiling carries `warnAt`, and `warning` names the fullest window
 past it (never while `blocked`). A window leaves `usedTokens` out when its budget does not count

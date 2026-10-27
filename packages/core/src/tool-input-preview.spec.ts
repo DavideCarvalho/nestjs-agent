@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SinkWriter } from './spi/token-stream-sink.js';
 import type { ToolInputPreview } from './spi/tool.js';
 import { type AgentStreamEvent, decodeStreamEvent, encodeStreamEvent } from './stream-events.js';
@@ -172,5 +172,26 @@ describe('registryInputPreviews', () => {
     expect(await resolve('echo', 'c1')).toBe(echo);
     expect(await resolve('hidden', 'c2')).toBeUndefined();
     expect(asked).toEqual([['echo', { actor: { id: 'u1' }, threadId: 't1', toolCallId: 'c1' }]]);
+  });
+});
+
+describe('previewToolInputs — tokens', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not decode the text frames it forwards', async () => {
+    const forwarded: Uint8Array[] = [];
+    const previews = previewToolInputs(
+      { write: (chunk) => void forwarded.push(chunk), end() {}, fail() {} },
+      async () => echo,
+    );
+    const frames = Array.from({ length: 100 }, (_, i) =>
+      encodeStreamEvent({ kind: 'text', text: `t${i} ` }),
+    );
+    const parse = vi.spyOn(JSON, 'parse');
+    for (const frame of frames) await previews.writer.write(frame);
+    expect(parse).not.toHaveBeenCalled();
+    expect(forwarded).toEqual(frames);
   });
 });
