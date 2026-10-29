@@ -156,9 +156,48 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   // schema moved: a filtered, rewritten or silently-swallowed statement leaves no error to catch.
   await reconcileMySqlCollations(em, collations);
   const pending = (await agentUpdateStatements(em)).filter(isRequiredStructure);
+  // A nullability change is not "required structure" to the filter above (it is an alter), yet usage
+  // recorded outside a conversation fails on every write without it — so it is checked by itself,
+  // and an unrelaxed column keeps the fingerprint from being written.
+  for (const { table, column } of RELAXED_COLUMNS) {
+    if (!(await columnIsNullable(em, dialect, table, column))) {
+      pending.push(`${table}.${column} must accept NULL`);
+    }
+  }
   if (pending.length > 0) {
     throw new AgentSchemaHealError(pending);
   }
+}
+
+/** Columns created NOT NULL by an earlier release and nullable now, which the heal must relax. */
+const RELAXED_COLUMNS: readonly { table: string; column: string }[] = [
+  { table: 'agent_token_usage', column: 'thread_id' },
+];
+
+/** Whether `table.column` accepts NULL, from the catalog; `true` when the dialect cannot say. */
+async function columnIsNullable(
+  em: EntityManager,
+  dialect: SqlDialect,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  const connection = em.getConnection();
+  if (dialect === 'sqlite') {
+    const rows = (await connection.execute(`pragma table_info(${table})`)) as {
+      name: string;
+      notnull: number;
+    }[];
+    const row = rows.find((each) => each.name === column);
+    return row === undefined || Number(row.notnull) === 0;
+  }
+  if (dialect !== 'mysql' && dialect !== 'postgres') return true;
+  const schema = dialect === 'mysql' ? 'database()' : 'current_schema()';
+  const rows = (await connection.execute(
+    `select is_nullable as nullable from information_schema.columns where table_schema = ${schema} and table_name = ? and column_name = ?`,
+    [table, column],
+  )) as { nullable?: string; NULLABLE?: string }[];
+  const value = rows[0]?.nullable ?? rows[0]?.NULLABLE;
+  return value === undefined || String(value).toUpperCase() === 'YES';
 }
 
 /** The metadata of the tables this store owns, as the host registered them. */

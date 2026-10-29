@@ -1596,9 +1596,11 @@ export class AgentService {
    * answered with `{ recorded: false, error }`. Pass `{ throwOnError: true }` where losing the row
    * must fail the caller.
    *
-   * Counted against `actorRef` like an agent turn: tokens in the token windows (a row with no tokens
-   * adds 0 there), `costUsd` in the USD windows, tokens bumped on the configured `QuotaStore`.
-   * `actorRef: null` is platform cost, recorded under `PLATFORM_ACTOR_REF` and counted against nobody.
+   * Counted against `actorRef` like an agent turn: the ledger is the budget (`LedgerQuotaProvider`),
+   * so its tokens count in the token windows (a row with no tokens adds 0 there) and its `costUsd` in
+   * the USD windows. A `QuotaStore` counter is bumped only where loop deps carry one (`AgentModule`
+   * wires none). `actorRef: null` is platform cost, recorded under `PLATFORM_ACTOR_REF` and counted
+   * against nobody.
    */
   recordUsage(input: AiUsageInput, options: AiUsageOptions = {}): Promise<AiUsageResult> {
     return recordAiUsage({
