@@ -133,6 +133,10 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   await reconcileMySqlCollations(em, collations);
   const statements = await agentUpdateStatements(em);
   if (statements.length === 0) {
+    // Nothing to apply — but a nullability change the safe diff does not emit still has to have
+    // landed before this revision is recorded.
+    const unrelaxed = await unrelaxedColumns(em, dialect);
+    if (unrelaxed.length > 0) throw new AgentSchemaHealError(unrelaxed);
     return;
   }
   await withoutForeignKeyEnforcement(connection, dialect, async () => {
@@ -159,11 +163,7 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   // A nullability change is not "required structure" to the filter above (it is an alter), yet usage
   // recorded outside a conversation fails on every write without it — so it is checked by itself,
   // and an unrelaxed column keeps the fingerprint from being written.
-  for (const { table, column } of RELAXED_COLUMNS) {
-    if (!(await columnIsNullable(em, dialect, table, column))) {
-      pending.push(`${table}.${column} must accept NULL`);
-    }
-  }
+  pending.push(...(await unrelaxedColumns(em, dialect)));
   if (pending.length > 0) {
     throw new AgentSchemaHealError(pending);
   }
@@ -173,6 +173,17 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
 const RELAXED_COLUMNS: readonly { table: string; column: string }[] = [
   { table: 'agent_token_usage', column: 'thread_id' },
 ];
+
+/** Each {@link RELAXED_COLUMNS} entry the database still holds NOT NULL, as a pending statement. */
+async function unrelaxedColumns(em: EntityManager, dialect: SqlDialect): Promise<string[]> {
+  const pending: string[] = [];
+  for (const { table, column } of RELAXED_COLUMNS) {
+    if (!(await columnIsNullable(em, dialect, table, column))) {
+      pending.push(`${table}.${column} must accept NULL`);
+    }
+  }
+  return pending;
+}
 
 /** Whether `table.column` accepts NULL, from the catalog; `true` when the dialect cannot say. */
 async function columnIsNullable(
