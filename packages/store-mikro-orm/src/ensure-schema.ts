@@ -59,8 +59,10 @@ const SCHEMA_LOCK_NAME = 'agent_schema';
  * default), so a database healed before it gets the correction once.
  * 3: `agent_genui_call` (generative-UI telemetry).
  * 4: `agent_run.ttft_ms` / `cost_usd` / `model_id` (run metrics).
+ * 5: the usage ledger beyond agent turns (`agent_token_usage.thread_id` nullable, `feature`, the
+ * units, `metadata`) and the run timings (`agent_run.queue_ms`, `model_ms`, `tools_ms`, …).
  */
-const SCHEMA_REVISION = 4;
+const SCHEMA_REVISION = 5;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the

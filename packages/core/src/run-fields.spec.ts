@@ -21,6 +21,7 @@ function everyRunStartField(threadId: string): Required<RecordRunStartInput> {
     agentName: 'researcher',
     parentRunId: 'run-parent',
     promptHash: 'a'.repeat(64),
+    queueMs: 42,
   };
 }
 

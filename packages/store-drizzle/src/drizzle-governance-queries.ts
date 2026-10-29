@@ -3,6 +3,7 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   ApprovalWhere,
+  FeatureSpendRow,
   GenuiCallRow,
   GenuiStats,
   GovernancePage,
@@ -19,6 +20,7 @@ import type {
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
   RunMetrics,
+  RunTimings,
   RunToolCallRow,
   RunTrendPoint,
   RunWhere,
@@ -32,12 +34,16 @@ import type {
   ToolCallWhere,
   ToolKind,
   ToolStatRow,
+  UsageBreakdownFilter,
+  UsageBreakdownRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import {
   bucketByActor,
+  bucketByFeature,
   bucketByModel,
   bucketByThread,
+  bucketUsageBreakdown,
   bucketUsageTrend,
   dayBoundsUtc,
   rollupThreadUsage,
@@ -162,6 +168,23 @@ function toRecentRunRow(run: typeof agentRun.$inferSelect): RecentRunRow {
     startedAt: run.startedAt.toISOString(),
     promptHash: run.promptHash ?? null,
     parentRunId: run.parentRunId ?? null,
+    queueMs: run.queueMs ?? null,
+    modelMs: run.modelMs ?? null,
+    toolsMs: run.toolsMs ?? null,
+    modelCalls: run.modelCalls ?? null,
+    toolCalls: run.toolCalls ?? null,
+  };
+}
+
+/** A run row's persisted {@link RunTimings}, or `null` when it has none. */
+function toRunTimings(run: typeof agentRun.$inferSelect): RunTimings | null {
+  if (!Array.isArray(run.timings)) return null;
+  return {
+    modelMs: run.modelMs ?? 0,
+    toolsMs: run.toolsMs ?? 0,
+    modelCalls: run.modelCalls ?? 0,
+    toolCalls: run.toolCalls ?? 0,
+    steps: run.timings,
   };
 }
 
@@ -192,9 +215,21 @@ function toUsageInput(
     | 'cacheWriteTokens'
     | 'cacheReadTokens'
     | 'costUsd'
-  >,
+  > &
+    Partial<
+      Pick<
+        typeof agentTokenUsage.$inferSelect,
+        'feature' | 'purpose' | 'costSource' | 'audioSeconds' | 'characters' | 'requests'
+      >
+    >,
 ): GovernanceUsageInput {
   return {
+    feature: row.feature ?? null,
+    purpose: row.purpose ?? null,
+    costSource: row.costSource ?? null,
+    audioSeconds: row.audioSeconds == null ? null : Number(row.audioSeconds),
+    characters: row.characters == null ? null : Number(row.characters),
+    requests: row.requests ?? null,
     modelId: row.modelId,
     actorRef: row.actorRef,
     threadId: row.threadId,
@@ -256,7 +291,15 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     return pricing;
   }
 
-  private async usageInRange(range: GovernanceRange): Promise<GovernanceUsageInput[]> {
+  /**
+   * The usage rows in range, with only what the bucketers read: `requests` always (a recorded row
+   * counts as its own requests in every rollup), and the feature/unit columns only for the
+   * per-feature reads that group by them.
+   */
+  private async usageInRange(
+    range: GovernanceRange,
+    withFeature = false,
+  ): Promise<GovernanceUsageInput[]> {
     const { start, end } = dayBoundsUtc(range);
     const usage = this.t.agentTokenUsage;
     // Only what the bucketers read.
@@ -271,6 +314,16 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         cacheWriteTokens: usage.cacheWriteTokens,
         cacheReadTokens: usage.cacheReadTokens,
         costUsd: usage.costUsd,
+        requests: usage.requests,
+        ...(withFeature
+          ? {
+              feature: usage.feature,
+              purpose: usage.purpose,
+              costSource: usage.costSource,
+              audioSeconds: usage.audioSeconds,
+              characters: usage.characters,
+            }
+          : {}),
       })
       .from(usage)
       .where(
@@ -287,6 +340,19 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     return bucketByModel(await this.usageInRange(range), pricing);
   }
 
+  async spendByFeature(range: GovernanceRange): Promise<FeatureSpendRow[]> {
+    const pricing = await this.loadPricing();
+    return bucketByFeature(await this.usageInRange(range, true), pricing);
+  }
+
+  async usageBreakdown(
+    range: GovernanceRange,
+    filter?: UsageBreakdownFilter,
+  ): Promise<UsageBreakdownRow[]> {
+    const pricing = await this.loadPricing();
+    return bucketUsageBreakdown(await this.usageInRange(range, true), pricing, filter);
+  }
+
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
     const pricing = await this.loadPricing();
     return bucketByActor(await this.usageInRange(range), pricing);
@@ -300,7 +366,9 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   async spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]> {
     const pricing = await this.loadPricing();
     const rows = await this.usageInRange(range);
-    const threadIds = [...new Set(rows.map((row) => row.threadId))];
+    const threadIds = [
+      ...new Set(rows.flatMap((row) => (row.threadId === null ? [] : [row.threadId]))),
+    ];
     if (threadIds.length === 0) {
       return [];
     }
@@ -384,6 +452,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .where(inArray(this.t.agentTokenUsage.threadId, threadIds))
       .groupBy(this.t.agentTokenUsage.threadId);
     for (const row of usageTotals) {
+      if (row.threadId === null) continue;
       const bucket = rollups.get(row.threadId);
       if (bucket !== undefined) {
         // Drizzle types SUM() as string|null (a dialect can widen it past a JS number).
@@ -921,6 +990,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         deleted: row.thread.deletedAt != null,
       },
       toolCalls: toolCalls.map(toRunToolCallRow),
+      timings: toRunTimings(row.run),
     };
   }
 

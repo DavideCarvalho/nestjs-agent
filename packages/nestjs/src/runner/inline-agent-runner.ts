@@ -3,6 +3,7 @@ import {
   AGENT_STORE,
   type Actor,
   type AgentLoopHooks,
+  type AgentRunEndTimings,
   type AgentRunInput,
   type AgentRunStartOptions,
   type AgentRunner,
@@ -22,6 +23,7 @@ import {
   releaseThreadRun,
   runAgentLoop,
   runDurationMs,
+  runEndTimings,
   settleAll,
   settleUnsettledDelegation,
   streamFailure,
@@ -88,10 +90,13 @@ export class InlineAgentRunner implements AgentRunner {
     options: AgentRunStartOptions = {},
   ): Promise<{ runId: string }> {
     const runId = options.runId ?? crypto.randomUUID();
+    // Queue time inline is the gap between this call and the loop body starting — no queue, so ~0.
+    const acceptedAt = Date.now();
     const day = input.day ?? utcDay();
     const deps = this.factory.forAgent(input.agentName);
     this.live.add(runId);
     const hooks = this.topLevelHooks({
+      acceptedAt,
       runId,
       deps,
       actor: input.actor,
@@ -110,8 +115,9 @@ export class InlineAgentRunner implements AgentRunner {
         // From the run's journaled start, when the loop got as far as recording one.
         const durationMs = runDurationMs(error);
         const timed = durationMs !== undefined ? { durationMs } : {};
+        const measured = runEndTimings(error);
         if (error instanceof RunCancelledError) {
-          await this.settleCancelled(runId, input, deps, durationMs);
+          await this.settleCancelled(runId, input, deps, durationMs, measured);
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -123,6 +129,7 @@ export class InlineAgentRunner implements AgentRunner {
           code,
           message,
           ...timed,
+          ...measured,
           context: agentRunContext(input),
         });
         // Settle the run's persisted outcome (the loop only records completions — it can't catch
@@ -222,6 +229,7 @@ export class InlineAgentRunner implements AgentRunner {
     input: AgentRunInput,
     deps: AgentDeps,
     durationMs: number | undefined,
+    measured: AgentRunEndTimings = {},
   ): Promise<void> {
     this.logger.log(`agent run ${runId} cancelled`);
     const timed = durationMs !== undefined ? { durationMs } : {};
@@ -229,6 +237,7 @@ export class InlineAgentRunner implements AgentRunner {
       runId,
       threadId: input.threadId,
       ...timed,
+      ...measured,
       context: agentRunContext(input),
     });
     const writer = await deps.sink.open(runId);
@@ -336,10 +345,13 @@ export class InlineAgentRunner implements AgentRunner {
     /** This run's delegation chain with its own agent appended — see `AgentRunInput.delegationPath`. */
     chainBelow: readonly string[];
     input: AgentRunInput;
+    /** When {@link start} was called: the start of the run's (inline, ~0) queue time. */
+    acceptedAt: number;
   }): AgentLoopHooks {
-    const { runId, deps, actor, day, threadId, chainBelow, input } = args;
+    const { runId, deps, actor, day, threadId, chainBelow, input, acceptedAt } = args;
     return {
       runId,
+      queueMs: () => Date.now() - acceptedAt,
       // The loop ends the stream when the turn completes. Just before, the thread passes to the next
       // queued message (or is released), and the reader is told which — so by the time a client
       // sees the run end, the thread is already free or already running what it queued.
@@ -464,10 +476,12 @@ export class InlineAgentRunner implements AgentRunner {
         const message = error instanceof Error ? error.message : String(error);
         const durationMs = runDurationMs(error);
         const timed = durationMs !== undefined ? { durationMs } : {};
+        const measured = runEndTimings(error);
         const settled = {
           runId,
           threadId: subThread.id,
           ...timed,
+          ...measured,
           context: agentRunContext(childInput),
         };
         if (cancelled) {

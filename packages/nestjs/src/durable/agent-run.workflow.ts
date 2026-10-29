@@ -21,6 +21,7 @@ import {
   releaseThreadRun,
   runAgentLoop,
   runDurationMs,
+  runEndTimings,
   settleAll,
   settleDeadRun,
   settleUnsettledDelegation,
@@ -311,6 +312,21 @@ export class AgentRunWorkflow {
     ];
     const hooks: AgentLoopHooks = {
       runId: ctx.runId,
+      // The runtime's own enqueue stamp: the run row's `createdAt` is written when the run is
+      // started (a send, a parent's `ctx.child`, the queue's `ctx.startChild`), so now − createdAt,
+      // read on the body's first execution (inside `persist:run:start`), is how long it waited for a
+      // worker. The clocks are the enqueuing process's and the worker's.
+      queueMs: async () => {
+        const runs = this.runs as (RunGateway & Partial<RunRowReader>) | undefined;
+        const run =
+          typeof runs?.getRun === 'function'
+            ? await runs.getRun(ctx.runId)
+            : (await runs?.getRunDetail(ctx.runId))?.run;
+        const createdAt = (run as { createdAt?: string | Date } | undefined)?.createdAt;
+        if (createdAt === undefined) return undefined;
+        const at = new Date(createdAt).getTime();
+        return Number.isFinite(at) ? Date.now() - at : undefined;
+      },
       // A child forwards into the top-level sink but must not end/fail it (the top-level run owns it).
       // A thread's own turn hands the thread to its queue just before the loop ends the stream, so
       // the reader learns what runs next from the `queue` frame, before the end.
@@ -499,6 +515,8 @@ export class AgentRunWorkflow {
       // From the run's journaled `run:started-at`, when the loop got as far as recording it.
       const durationMs = runDurationMs(error);
       const timed = durationMs !== undefined ? { durationMs } : {};
+      // What the run measured before failing (queue, model and tool time), for the diagnostic only.
+      const measured = runEndTimings(error);
       if (isReplayIntegrityError(error)) {
         const detail = (error as Error).message;
         const code = agentFailureCode(error);
@@ -509,6 +527,7 @@ export class AgentRunWorkflow {
           code,
           message: detail,
           ...timed,
+          ...measured,
           context: agentRunContext(input),
         });
         // What the checkpoints below would have settled, written straight to the store instead:
@@ -535,6 +554,7 @@ export class AgentRunWorkflow {
         code,
         message,
         ...timed,
+        ...measured,
         context: agentRunContext(input),
       });
       // Settle the run's persisted outcome (the loop only records completions — it can't catch its

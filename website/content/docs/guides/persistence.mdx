@@ -338,8 +338,8 @@ run outcomes, in `agent_run` — absent on an adapter, they're a graceful no-op,
 `AgentStore` keeps compiling untouched:
 
 ```ts
-recordRunStart?(run: RecordRunStartInput): Promise<void>; // carries promptHash
-recordRunEnd?(end: RecordRunEndInput): Promise<void>;     // durationMs, errorCode/errorMessage on failure
+recordRunStart?(run: RecordRunStartInput): Promise<void>; // carries promptHash, queueMs
+recordRunEnd?(end: RecordRunEndInput): Promise<void>;     // durationMs and timings on completion, errorCode/errorMessage on failure
 bumpRunRetries?(runId: string): Promise<void>;
 ```
 
@@ -348,6 +348,15 @@ the resolved system prompt as `promptHash` — computed **pre-RAG**, so it ident
 *version* rather than the per-request, retrieval-augmented text, letting you correlate error-rate
 shifts with prompt changes. `recordRunEnd` is called on completion (with duration) and on failure
 (with an error code/message) by both runners — the durable workflow and the inline runner alike.
+
+`RecordUsageInput.threadId` is optional: usage recorded outside a conversation
+(`AgentService.recordUsage`) has none, and `agent_token_usage.thread_id` is nullable. Both bundled
+adapters relax an existing column at boot — Drizzle's heal drops the `NOT NULL` (`ALTER COLUMN` on
+Postgres, `MODIFY` on MySQL, a rebuild of that one table inside a savepoint on SQLite); MikroORM's
+fingerprinted heal applies the same diff. The foreign key and its cascade stay. The ledger also
+gains `run_id`, `feature`, `provider`, `tenant_ref`, `audio_seconds`, `characters`, `requests` and
+`metadata`, and `agent_run` gains `queue_ms`, `model_ms`, `tools_ms`, `model_calls`, `tool_calls`
+and `timings`.
 
 Both bundled adapters (`-store-mikro-orm`, `-store-drizzle`) implement all three against a new
 `agent_run` table (autoSchema-managed, alongside the five tables above), and the same rows back

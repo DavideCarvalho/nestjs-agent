@@ -1873,6 +1873,12 @@ describeEachDialect('DrizzleGovernanceQueries', (dialect) => {
         promptHash: 'abc123',
         // Nobody delegated this turn.
         parentRunId: null,
+        // A failed run recorded no timings, and this one no queue time either.
+        queueMs: null,
+        modelMs: null,
+        toolsMs: null,
+        modelCalls: null,
+        toolCalls: null,
       });
       expect(detail?.thread).toEqual({
         threadId: 'thread-detail',

@@ -7,6 +7,7 @@ import type {
   AgentPricingStore,
   ApprovalWhere,
   CurrentModelPrice,
+  FeatureSpendRow,
   GenuiStats,
   GovernancePage,
   GovernancePageQuery,
@@ -77,6 +78,11 @@ export interface SpendOverview {
   byModel: ModelSpendRow[];
   byActor: ActorSpendRowWithLabel[];
   trend: UsageTrendPoint[];
+  /**
+   * Spend per feature — agent turns and usage recorded outside them side by side. Absent when the
+   * bound governance adapter has no `spendByFeature`.
+   */
+  byFeature?: FeatureSpendRow[];
 }
 
 /** The run-reliability overview the SPA renders on its Reliability section (`GET <api>/reliability`). */
@@ -179,13 +185,14 @@ export class DashboardService {
 
   /** Spend/usage overview for a day range: by-model + by-actor spend and the daily trend, in parallel. */
   async spend(range: GovernanceRange): Promise<SpendOverview> {
-    const [byModel, byActorRaw, trend] = await Promise.all([
+    const [byModel, byActorRaw, trend, byFeature] = await Promise.all([
       this.queries.spendByModel(range),
       this.queries.spendByActor(range),
       this.queries.usageTrend(range),
+      this.queries.spendByFeature?.(range),
     ]);
     const byActor = await this.withActorLabels(byActorRaw);
-    return { byModel, byActor, trend };
+    return { byModel, byActor, trend, ...(byFeature !== undefined ? { byFeature } : {}) };
   }
 
   /** Top threads by cost for a day range (default 10, highest cost first). */

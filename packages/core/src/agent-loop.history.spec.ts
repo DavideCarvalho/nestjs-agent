@@ -198,6 +198,8 @@ describe('agent loop — history ceiling', () => {
     expect(usage).toContainEqual({
       threadId: expect.any(String),
       actorRef: 'u1',
+      runId: expect.any(String),
+      feature: 'agent',
       modelId: 'summarizer-1',
       purpose: 'history_summary',
       usage: { inputTokens: 900, outputTokens: 40 },

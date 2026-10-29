@@ -17,10 +17,52 @@ estimate accounts for prompt caching.
 
 ## The ledger
 
-Each model turn appends an `agent_token_usage` row: the actor, thread, model id, purpose, the token
-counts, and — when a gateway reported it — the real dollar cost. This is the raw material; you never
-write to it directly, the loop does. Aggregation happens in the read-model, in-process, so the
-day-bucketing stays engine-portable across MikroORM and Drizzle.
+Each model turn appends an `agent_token_usage` row: the actor, thread, run, model id, purpose, the
+token counts, the feature it was for (`agent:<agent name>`), and — when a gateway reported it — the
+real dollar cost. AI spend outside agent turns goes on the same ledger through
+[`AgentService.recordUsage`](#recording-usage-outside-agent-turns), so one cost, one quota and one
+dashboard cover all of it. Aggregation happens in the read-model, in-process, so the day-bucketing
+stays engine-portable across MikroORM and Drizzle.
+
+Every row is also published as `aviary:agent:usage.recorded` (amounts and attribution, never
+content) — see [Diagnostics events](/docs/agent/reference/diagnostics-events).
+
+### Recording usage outside agent turns
+
+An app pays for AI that never goes through an agent turn: transcription (billed by audio seconds),
+text-to-speech (by characters), embeddings in a batch job, a spellcheck that calls an SDK directly.
+`AgentService.recordUsage` writes those rows:
+
+```ts
+constructor(private readonly agent: AgentService) {}
+
+await this.agent.recordUsage({
+  actorRef: user.id,          // who pays — null for platform cost
+  feature: 'transcription',   // free-form: what it was for
+  modelId: 'whisper-1',
+  provider: 'openai',
+  audioSeconds: 312.4,
+  costUsd: 0.0312,
+  costSource: 'estimate',     // 'provider' (the default) when the provider reported it
+  metadata: { meetingId },
+});
+```
+
+`actorRef: null` is platform cost, recorded under `PLATFORM_ACTOR_REF` (`'@platform'`) — `actor_ref`
+stays non-null, so every per-actor read keeps working and the platform is one more row in spend by
+actor. Every unit is optional: tokens (`inputTokens`, `outputTokens`, the cache split),
+`audioSeconds`, `characters`, `requests` (absent → one; at least 1 — every rollup's `requests` counts a row as that many). `threadId`, `runId`, `tenantRef` and
+`metadata` (your JSON, never read by the library) attribute the row; nothing requires a thread —
+`thread_id` is nullable, and the foreign key still cascades a deleted thread's rows.
+
+It **never throws into your flow**: a failed write or an invalid input (an empty `feature`, a
+negative amount) is logged and answered with `{ recorded: false, error }`, a good one with
+`{ recorded: true }`. Pass `{ throwOnError: true }` where losing the row must fail the caller.
+
+What counts toward the [quota](#quota): the token windows sum `inputTokens + outputTokens`, so a row
+billed in audio seconds or characters adds nothing there — seconds are not tokens; the USD windows
+sum `costUsd`, so every priced row counts whatever its unit. Platform cost counts against nobody. A
+token-only budget does not limit audio; a USD budget limits everything that was priced.
 
 ---
 
@@ -173,6 +215,8 @@ just inject it:
 | `spendByModel(range)` | requests / input+output tokens / cost, per model |
 | `spendByActor(range)` | requests / total tokens / cost, per actor |
 | `usageTrend(range)` | total tokens + cost bucketed by day |
+| `spendByFeature?(range)` | requests / tokens / audio seconds / characters / cost per feature, agent turns (`source: 'agent'`) and recorded usage (`'external'`) side by side |
+| `usageBreakdown?(range, { actor?, feature? })` | the same per actor × feature — cost by actor and by feature, with the estimated share |
 | `recentToolCalls(limit)` | latest tool calls with status + thread |
 | `recentThreads(limit)` | latest threads with message count + tokens |
 | `runMetrics(range)` | success/error rate, retries, p95 run duration |
@@ -204,6 +248,28 @@ guess: success/error rate, retry counts, run duration as a distribution (p50/p95
 over time, a failure breakdown by error code, and a recent-runs table that carries each run's
 `promptHash` — a stable fingerprint of the resolved system prompt (pre-RAG) that lets you correlate an
 error-rate spike with a specific prompt change rather than guessing from timing alone.
+
+### Where a run's time goes
+
+A completed run also persists where its time went: `queue_ms` (enqueue → the body starting),
+`model_ms` and `tools_ms` (totals), `model_calls`, `tool_calls`, and the per-step breakdown in
+`timings` (each step's model time and its tool calls' name and ms). `recentRuns` / `runsPage` carry
+the totals, `runDetail` the steps, and `run.finished` all of it. None of it is a new clock:
+
+- **Queue** — the durable runtime's own run row: `createdAt`, written when the run was started,
+  read once on the body's first execution. The enqueuing process's clock against the worker's.
+  Inline, about `0`. Written at start, so a failed run has it too.
+- **Model** — each `llm.turn` span's duration, journaled with the model result (inline `llm:<i>` or
+  the dispatched llm step's result).
+- **Tools** — each executed call's `tool.execution` time (the same figure as
+  `agent_tool_call.execution_ms`), journaled by the call's persist checkpoint. A step's tool time is
+  the union of its calls' windows, so parallel calls count once. Approval waits and a delegation's
+  time are not tool time.
+
+Because each figure rides the journal entry of the step that measured it, a durable replay reads it
+back instead of measuring again: a **resumed run** counts every step once, whichever slice ran it,
+and the time it spent parked is in none of the totals — it is what separates `durationMs` from queue
++ model + tools.
 
 ---
 
@@ -319,8 +385,11 @@ signals off the `aviary:agent:*` diagnostics channel — pick either or both.
     export class AppModule {}
     ```
 
-    The in-process analog of a hosted AI-gateway dashboard — spend per model/actor, usage trend, and
-    live activity — at `/ai-gateway`.
+    The in-process analog of a hosted AI-gateway dashboard — spend per model/actor, spend by
+    feature (agent turns and [recorded usage](#recording-usage-outside-agent-turns) side by side, in
+    the units each billed), usage trend, and live activity — at `/ai-gateway`. A run's drill-down
+    shows [where its time went](#where-a-runs-time-goes): queue / model / tools / other, then each
+    step's model time and tool calls.
   </Tab>
   <Tab value="Telescope tab">
     Already running `@dudousxd/nestjs-telescope`? Register the extension on Telescope's `extensions`

@@ -14,6 +14,9 @@ import {
   type AgentRunInput,
   type AgentRunner,
   type AgentStore,
+  type AiUsageInput,
+  type AiUsageOptions,
+  type AiUsageResult,
   type AttachmentRef,
   type AttachmentStagingStore,
   type ChatQueueState,
@@ -42,6 +45,7 @@ import {
   findCatalogModel,
   mayDecideApproval,
   readElicitationQuestions,
+  recordAiUsage,
   settleDeadRun,
   textActionProposalReply,
   validateElicitationAnswer,
@@ -56,6 +60,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   NotImplementedException,
   Optional,
@@ -63,6 +68,8 @@ import {
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import type { AgentDepsFactory } from './agent-deps.factory.js';
+
+const usageLogger = new Logger('AgentService');
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { type AttachmentLimits, attachmentLimits } from './attachment-limits.js';
@@ -1578,5 +1585,29 @@ export class AgentService {
     if (owner !== actor.id) {
       throw new ForbiddenException('run belongs to another actor');
     }
+  }
+
+  /**
+   * Record AI spend that did not come from an agent turn — a transcription, a TTS render, a batch of
+   * embeddings, a direct OpenAI/OpenRouter SDK call — on the same ledger the agent's turns write, so
+   * cost, quota and the dashboard see one figure.
+   *
+   * Never throws into the caller's flow by default: a failed write or an invalid input is logged and
+   * answered with `{ recorded: false, error }`. Pass `{ throwOnError: true }` where losing the row
+   * must fail the caller.
+   *
+   * Counted against `actorRef` like an agent turn: tokens in the token windows (a row with no tokens
+   * adds 0 there), `costUsd` in the USD windows, tokens bumped on the configured `QuotaStore`.
+   * `actorRef: null` is platform cost, recorded under `PLATFORM_ACTOR_REF` and counted against nobody.
+   */
+  recordUsage(input: AiUsageInput, options: AiUsageOptions = {}): Promise<AiUsageResult> {
+    return recordAiUsage({
+      store: this.store,
+      quota: this.deps.forAgent().quota,
+      day: utcDay(),
+      input,
+      options,
+      warn: (message: string) => usageLogger.warn(message),
+    });
   }
 }

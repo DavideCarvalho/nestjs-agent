@@ -1056,6 +1056,7 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
       agentName: 'researcher',
       parentRunId: 'run-parent',
       promptHash: 'a'.repeat(64),
+      queueMs: 42,
     };
   }
 
@@ -1071,6 +1072,7 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
         agentName: started.agentName,
         parentRunId: started.parentRunId,
         promptHash: started.promptHash,
+        queueMs: started.queueMs,
       });
     });
 

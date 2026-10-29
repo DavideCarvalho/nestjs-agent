@@ -144,6 +144,38 @@ export interface RecentRunRow {
    * transcript pairs them nowhere.
    */
   parentRunId: string | null;
+  /** Enqueue → body start; absent from an older server. */
+  queueMs?: number | null;
+  /** The completed run's model time, summed; absent from an older server. */
+  modelMs?: number | null;
+  /** The completed run's tool time, wall-clock (parallel calls once); absent from an older server. */
+  toolsMs?: number | null;
+  modelCalls?: number | null;
+  toolCalls?: number | null;
+}
+
+/** One tool call's share of a step's time. */
+export interface RunToolTiming {
+  toolCallId: string;
+  toolName: string;
+  ms: number;
+}
+
+/** Where one step (a model call and the tools it asked for) spent its time. */
+export interface RunStepTiming {
+  step: number;
+  modelMs?: number;
+  tools: RunToolTiming[];
+  toolsMs: number;
+}
+
+/** Where a completed run's time went. */
+export interface RunTimings {
+  modelMs: number;
+  toolsMs: number;
+  modelCalls: number;
+  toolCalls: number;
+  steps: RunStepTiming[];
 }
 
 /** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */
@@ -285,6 +317,8 @@ export interface RunDetail {
   thread: DetailThreadRef;
   /** The run's tool calls, oldest first — the order they were requested in. */
   toolCalls: RunToolCallRow[];
+  /** Step-by-step timings of a completed run; `null`/absent when there are none. */
+  timings?: RunTimings | null;
 }
 
 /** One message inside a `ThreadDetail`. `content` is capped server-side. */
@@ -354,10 +388,27 @@ export interface UpsertModelPriceInput {
 }
 
 /** The `GET <api>/spend` response. */
+/**
+ * Spend for one feature: agent turns (`source: 'agent'`) and usage the app recorded outside them
+ * (`'external'`, `AgentService.recordUsage`).
+ */
+export interface FeatureSpendRow {
+  feature: string;
+  source: 'agent' | 'external';
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  audioSeconds: number;
+  characters: number;
+  costUsd: number;
+}
+
 export interface SpendOverview {
   byModel: ModelSpendRow[];
   byActor: ActorSpendRow[];
   trend: UsageTrendPoint[];
+  /** Absent when the server's governance adapter does not report spend by feature. */
+  byFeature?: FeatureSpendRow[];
 }
 
 // ─── Generative UI telemetry ────────────────────────────────────────────────

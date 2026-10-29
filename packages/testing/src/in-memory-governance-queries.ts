@@ -2,6 +2,7 @@ import type {
   ActorSpendRow,
   AgentGovernanceQueries,
   ApprovalWhere,
+  FeatureSpendRow,
   GenuiStats,
   GovernancePage,
   GovernancePageQuery,
@@ -28,12 +29,16 @@ import type {
   ToolCallActivityRow,
   ToolCallWhere,
   ToolStatRow,
+  UsageBreakdownFilter,
+  UsageBreakdownRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import {
   bucketByActor,
+  bucketByFeature,
   bucketByModel,
   bucketByThread,
+  bucketUsageBreakdown,
   bucketUsageTrend,
   genuiRowsInRange,
   rollupThreadUsage,
@@ -130,6 +135,11 @@ function toRecentRunRow(run: GovernanceRunRow): RecentRunRow {
     startedAt: run.startedAt,
     promptHash: run.promptHash ?? null,
     parentRunId: run.parentRunId ?? null,
+    queueMs: run.queueMs ?? null,
+    modelMs: run.timings?.modelMs ?? null,
+    toolsMs: run.timings?.toolsMs ?? null,
+    modelCalls: run.timings?.modelCalls ?? null,
+    toolCalls: run.timings?.toolCalls ?? null,
   };
 }
 
@@ -193,6 +203,17 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
       limit,
       includeUnknownThreads: true,
     });
+  }
+
+  async spendByFeature(range: GovernanceRange): Promise<FeatureSpendRow[]> {
+    return bucketByFeature(this.usageInRange(range), this.pricing);
+  }
+
+  async usageBreakdown(
+    range: GovernanceRange,
+    filter?: UsageBreakdownFilter,
+  ): Promise<UsageBreakdownRow[]> {
+    return bucketUsageBreakdown(this.usageInRange(range), this.pricing, filter);
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
@@ -595,6 +616,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
         deleted: false,
       },
       toolCalls,
+      timings: run.timings ?? null,
     };
   }
 

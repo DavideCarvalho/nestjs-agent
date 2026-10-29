@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SpendOverview, ThreadSpendRow } from '../client/agent-client';
+import type { FeatureSpendRow, SpendOverview, ThreadSpendRow } from '../client/agent-client';
 import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatUsd } from '../client/format-usd';
 import { donutSegments, summarizeSpend, withShares } from '../client/spend-summary';
@@ -121,7 +121,59 @@ export function SpendSection({
         </Panel>
       </div>
 
+      {overview.byFeature !== undefined && (
+        <Panel
+          title="Spend by feature"
+          subtitle="Agent turns and recorded usage (transcription, TTS, direct calls) side by side"
+        >
+          {overview.byFeature.length === 0 ? (
+            <Empty label="No spend by feature in this range" />
+          ) : (
+            <FeatureTable rows={overview.byFeature} />
+          )}
+        </Panel>
+      )}
+
       <TopThreadsSection rows={topThreads} onOpenThread={onOpenThread} />
     </div>
+  );
+}
+
+/** What a feature row billed, in the units it billed by: tokens, audio, characters. */
+export function featureUnits(row: FeatureSpendRow): string {
+  const parts: string[] = [];
+  const tokens = row.inputTokens + row.outputTokens;
+  if (tokens > 0) parts.push(`${formatCount(tokens)} tok`);
+  if (row.audioSeconds > 0) parts.push(`${formatCount(Math.round(row.audioSeconds))} s audio`);
+  if (row.characters > 0) parts.push(`${formatCount(row.characters)} chars`);
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
+function FeatureTable({ rows }: { rows: FeatureSpendRow[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+          <th className="py-1.5 font-medium">Feature</th>
+          <th className="py-1.5 font-medium">Source</th>
+          <th className="py-1.5 text-right font-medium">Requests</th>
+          <th className="py-1.5 text-right font-medium">Units</th>
+          <th className="py-1.5 text-right font-medium">Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={`${row.source}:${row.feature}`} className="border-t border-line-soft">
+            <td className="mono py-1.5 text-foreground">{row.feature}</td>
+            <td className="py-1.5 text-muted-foreground">
+              {row.source === 'agent' ? 'agent turn' : 'recorded'}
+            </td>
+            <td className="mono tnum py-1.5 text-right">{formatCount(row.requests)}</td>
+            <td className="mono tnum py-1.5 text-right">{featureUnits(row)}</td>
+            <td className="mono tnum py-1.5 text-right">{formatUsd(row.costUsd)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

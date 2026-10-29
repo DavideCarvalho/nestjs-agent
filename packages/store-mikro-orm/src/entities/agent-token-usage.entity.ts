@@ -6,7 +6,8 @@ import { DATETIME, identityCollation } from './column-types';
 /** A token-usage ledger row, summed per actor per day by {@link MikroOrmAgentStore.quotaToday}. */
 export class AgentTokenUsage {
   id!: string;
-  thread!: AgentThread;
+  /** NULL for usage recorded outside any conversation (`AgentService.recordUsage`). */
+  thread?: AgentThread | null;
   actorRef!: string;
   messageId?: string | null;
   modelId!: string;
@@ -21,6 +22,15 @@ export class AgentTokenUsage {
   costUsd?: number | null;
   /** Where `costUsd` came from: `'provider'` or `'estimate'`; null on rows from before it existed (reported). */
   costSource?: CostSource | null;
+  runId?: string | null;
+  /** What the spend was for: `agent:<name>` for an agent turn, the app's own otherwise; null → `agent`. */
+  feature?: string | null;
+  provider?: string | null;
+  tenantRef?: string | null;
+  audioSeconds?: number | null;
+  characters?: number | null;
+  requests?: number | null;
+  metadata?: Record<string, unknown> | null;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentTokenUsageRepository;
 }
@@ -42,6 +52,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       { name: 'agent_token_usage_actor_created_idx', properties: ['actorRef', 'createdAt'] },
       { name: 'agent_token_usage_created_idx', properties: ['createdAt'] },
       { properties: ['thread'] },
+      { name: 'agent_token_usage_feature_created_idx', properties: ['feature', 'createdAt'] },
     ],
     properties: {
       id: { type: 'string', primary: true, ...str },
@@ -49,6 +60,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
         kind: 'm:1',
         entity: () => AgentThread,
         deleteRule: 'cascade',
+        nullable: true,
         fieldName: 'thread_id',
         ...str,
       },
@@ -62,6 +74,14 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       cacheReadTokens: { type: 'integer', nullable: true, fieldName: 'cache_read_tokens' },
       costUsd: { type: 'float', nullable: true, fieldName: 'cost_usd' },
       costSource: { type: 'string', length: 16, nullable: true, fieldName: 'cost_source', ...str },
+      runId: { type: 'string', nullable: true, fieldName: 'run_id', ...str },
+      feature: { type: 'string', nullable: true, ...str },
+      provider: { type: 'string', nullable: true, ...str },
+      tenantRef: { type: 'string', nullable: true, fieldName: 'tenant_ref', ...str },
+      audioSeconds: { type: 'float', nullable: true, fieldName: 'audio_seconds' },
+      characters: { type: 'integer', nullable: true },
+      requests: { type: 'integer', nullable: true },
+      metadata: { type: 'json', nullable: true },
       createdAt: { ...DATETIME, fieldName: 'created_at' },
     },
   });

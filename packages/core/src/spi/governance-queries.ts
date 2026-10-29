@@ -1,4 +1,5 @@
 import type { GenuiStats } from '../genui-telemetry.js';
+import type { RunTimings } from './agent-store.js';
 
 /**
  * A read-model over the persisted agent data (usage ⋈ pricing, tool calls, threads) for the
@@ -120,6 +121,39 @@ export interface RunTrendPoint {
   failed: number;
 }
 
+/**
+ * Spend for one feature over a range — agent turns and usage recorded outside them
+ * (`AgentService.recordUsage`) side by side. An agent-turn row from before features is `agent`.
+ */
+export interface FeatureSpendRow {
+  feature: string;
+  /** `'agent'` for rows an agent turn wrote, `'external'` for rows `recordUsage` wrote. */
+  source: 'agent' | 'external';
+  /** Rows, or each row's `requests` when it set one. */
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  audioSeconds: number;
+  characters: number;
+  /** Provider-reported plus estimated cost (an unpriced row's tokens priced from the price list). */
+  costUsd: number;
+}
+
+/** One actor's spend on one feature over a range — "cost by actor and by feature". */
+export interface UsageBreakdownRow extends FeatureSpendRow {
+  /** Platform cost is the actor `@platform`. */
+  actorRef: string;
+  /** The part of `costUsd` that is an estimate (recorded as one, or priced here from tokens). */
+  estimatedCostUsd: number;
+}
+
+/** Filters for {@link AgentGovernanceQueries.usageBreakdown}, on top of the day range. */
+export interface UsageBreakdownFilter {
+  actor?: string;
+  /** Exact feature (`agent` matches the rows from before features too). */
+  feature?: string;
+}
+
 /** A recent run for the reliability feed. */
 export interface RecentRunRow {
   runId: string;
@@ -154,6 +188,14 @@ export interface RecentRunRow {
    * holds no other link.
    */
   parentRunId: string | null;
+  /** Enqueue → body start (`RecordRunStartInput.queueMs`); optional for an older adapter. */
+  queueMs?: number | null;
+  /** The completed run's model time, summed over its model calls. */
+  modelMs?: number | null;
+  /** The completed run's tool time, wall-clock (parallel calls once). */
+  toolsMs?: number | null;
+  modelCalls?: number | null;
+  toolCalls?: number | null;
 }
 
 /** One tool call awaiting a HITL decision, for the cross-thread approvals inbox. */
@@ -293,14 +335,18 @@ export interface DetailThreadRef {
  *
  * `toolCalls` is empty for a run recorded before tool calls carried a `runId` (the column is
  * nullable and pre-rollout rows have none) — indistinguishable, from here, from a run that called
- * no tools. There is deliberately no cost figure: the token ledger has no run column, so per-run
- * spend is not attributable without a store migration.
+ * no tools. The run's spend is on the run row (`costUsd`).
  */
 export interface GovernanceRunDetail {
   run: RecentRunRow;
   thread: DetailThreadRef;
   /** The run's tool calls, oldest first — the order they were requested in. */
   toolCalls: RunToolCallRow[];
+  /**
+   * Where the run's time went, step by step (see {@link RunTimings}). `null` for a run that did not
+   * complete or predates timings; optional for an adapter that predates it.
+   */
+  timings?: RunTimings | null;
 }
 
 /** One message inside a {@link GovernanceThreadDetail}. `content` is capped server-side. */
@@ -385,6 +431,13 @@ export interface AgentGovernanceQueries {
   /** Top threads by spend within the range, highest cost first, capped at `limit`. */
   spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]>;
   usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]>;
+  /** OPTIONAL: spend per feature, agent turns and recorded usage side by side, costliest first. */
+  spendByFeature?(range: GovernanceRange): Promise<FeatureSpendRow[]>;
+  /** OPTIONAL: spend per actor × feature, costliest first — cost by actor and by feature. */
+  usageBreakdown?(
+    range: GovernanceRange,
+    filter?: UsageBreakdownFilter,
+  ): Promise<UsageBreakdownRow[]>;
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;
   recentThreads(limit: number): Promise<ThreadActivityRow[]>;
   // Run reliability. An adapter backed by a store without run recording (no `recordRunStart`)

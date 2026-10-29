@@ -82,10 +82,11 @@ describe('AGENT_DIAGNOSTIC_EVENTS', () => {
     'memory.resolved',
     'memory.written',
     'tool.retry',
+    'usage.recorded',
   ];
 
-  it("lists all 13 ChannelRegistry['agent'] point events, in a stable order", () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(13);
+  it("lists all 14 ChannelRegistry['agent'] point events, in a stable order", () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(14);
     expect(AGENT_DIAGNOSTIC_EVENTS).toEqual(expectedEvents);
   });
 

@@ -1,5 +1,6 @@
 import { emit } from '@dudousxd/nestjs-diagnostics';
 import type { ChannelRegistry } from '@dudousxd/nestjs-diagnostics';
+import type { RunStepTiming } from './spi/agent-store.js';
 import type { QuotaPeriod } from './spi/quota-provider.js';
 
 /** Payloads carried on each `aviary:agent:*` channel. */
@@ -83,8 +84,54 @@ export interface AgentRunFinished extends AgentRunContext {
   costUsd?: number;
   /** The model the run's last model call resolved to. */
   modelId?: string;
+  /** Enqueue → the run's body starting (the runtime's run `createdAt`); about 0 inline. */
+  queueMs?: number;
+  /** Every model call's `llm.turn` time, summed. */
+  modelMs?: number;
+  /** Tool time, wall-clock: tools a step ran in parallel count once. */
+  toolsMs?: number;
+  modelCalls?: number;
+  toolCalls?: number;
+  /** Each step's model time and its tool calls (name and ms). */
+  stepTimings?: RunStepTiming[];
 }
-export interface AgentRunFailed {
+/** The timing fields `run.failed` / `run.cancelled` carry — what the run measured before it ended. */
+export interface AgentRunEndTimings {
+  queueMs?: number;
+  modelMs?: number;
+  toolsMs?: number;
+  modelCalls?: number;
+  toolCalls?: number;
+  stepTimings?: RunStepTiming[];
+}
+/**
+ * One row written to the usage ledger — an agent turn's model call or spend an app recorded through
+ * `AgentService.recordUsage`. Every AI cost goes through this one event. Amounts and attribution
+ * only: never content, never `metadata`.
+ */
+export interface AgentUsageRecorded {
+  /** Who pays; `@platform` for platform cost. */
+  actorRef: string;
+  /** `agent:<name>` (or `agent`) for an agent turn, the app's own feature otherwise. */
+  feature: string;
+  /** The ledger `purpose`: `chat`, `structured_output`, `history_summary`… or `external`. */
+  purpose: string;
+  modelId: string;
+  provider?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  audioSeconds?: number;
+  characters?: number;
+  requests?: number;
+  costUsd?: number;
+  costSource?: 'provider' | 'estimate';
+  threadId?: string;
+  runId?: string;
+  tenantRef?: string;
+}
+export interface AgentRunFailed extends AgentRunEndTimings {
   runId: string;
   /** Absent only where the runner cannot say which thread the run was on. */
   threadId?: string;
@@ -100,7 +147,7 @@ export interface AgentRunFailed {
  * Someone stopped the run and it stopped. Not a failure — published INSTEAD of `run.failed`, so a
  * failure rate never counts a user pressing Stop.
  */
-export interface AgentRunCancelled {
+export interface AgentRunCancelled extends AgentRunEndTimings {
   runId: string;
   /** Absent only where the runner cannot say which thread the run was on. */
   threadId?: string;
@@ -255,6 +302,7 @@ declare module '@dudousxd/nestjs-diagnostics' {
       'memory.resolved': AgentMemoryResolved;
       'memory.written': AgentMemoryWritten;
       'tool.retry': AgentToolRetry;
+      'usage.recorded': AgentUsageRecorded;
       // Span-only events (published via trace() on :start/:end/:asyncStart/:asyncEnd/:error
       // sub-channels, never as point events) — see AgentSpanEvent below.
       'llm.turn': AgentLlmTurnSpan;
@@ -277,6 +325,9 @@ export function publishAgentToolCall(payload: AgentToolCallEvent): void {
 }
 export function publishAgentQuotaExceeded(payload: AgentQuotaExceeded): void {
   emit('agent', 'quota.exceeded', payload);
+}
+export function publishAgentUsageRecorded(payload: AgentUsageRecorded): void {
+  emit('agent', 'usage.recorded', payload);
 }
 export function publishAgentRunFinished(payload: AgentRunFinished): void {
   emit('agent', 'run.finished', payload);
@@ -347,7 +398,7 @@ void agentSpanEventsAreRegistered;
 export type AgentDiagnosticEvent = Exclude<keyof ChannelRegistry['agent'], AgentSpanEvent>;
 
 /**
- * All 13 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
+ * All 14 point events on `ChannelRegistry['agent']`, in a stable order — handy for wiring
  * subscribers (mirrors nestjs-media's `MEDIA_DIAGNOSTIC_EVENTS`). Span-only events (see
  * {@link AgentSpanEvent}) are excluded. A drift between this list and the registry is a compile
  * error in both directions: an extra/misspelled entry fails this array's own
@@ -368,6 +419,7 @@ export const AGENT_DIAGNOSTIC_EVENTS: readonly AgentDiagnosticEvent[] = [
   'memory.resolved',
   'memory.written',
   'tool.retry',
+  'usage.recorded',
 ];
 
 /** Compile-time-only check: every point event of `ChannelRegistry['agent']` must appear above. */

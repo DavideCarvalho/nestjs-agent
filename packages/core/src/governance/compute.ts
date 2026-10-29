@@ -1,9 +1,12 @@
 import type {
   ActorSpendRow,
+  FeatureSpendRow,
   GovernanceRange,
   ModelSpendRow,
   ThreadSpendRow,
   ThreadUsageRollup,
+  UsageBreakdownFilter,
+  UsageBreakdownRow,
   UsageTrendPoint,
 } from '../spi/governance-queries.js';
 
@@ -37,7 +40,18 @@ export interface CostUsage {
 export interface GovernanceUsageInput extends CostUsage {
   modelId: string;
   actorRef: string;
-  threadId: string;
+  /** `null` for usage recorded outside any conversation (`AgentService.recordUsage`). */
+  threadId: string | null;
+  /** What the row was for; absent/null on an agent-turn row from before features (read as `agent`). */
+  feature?: string | null | undefined;
+  /** The ledger `purpose`; `external` marks a row `AgentService.recordUsage` wrote. */
+  purpose?: string | null | undefined;
+  /** Where `costUsd` came from. */
+  costSource?: string | null | undefined;
+  audioSeconds?: number | null | undefined;
+  characters?: number | null | undefined;
+  /** Billable requests the row stands for; absent → one. */
+  requests?: number | null | undefined;
   /** The `YYYY-MM-DD` UTC day the row belongs to (its trend bucket). */
   day: string;
   /** Provider-reported spend for the row; wins over the token estimate when present. */
@@ -93,7 +107,7 @@ export function bucketByModel(
       outputTokens: 0,
       costUsd: 0,
     };
-    bucket.requests += 1;
+    bucket.requests += row.requests ?? 1;
     bucket.inputTokens += row.inputTokens;
     bucket.outputTokens += row.outputTokens;
     bucket.costUsd += rowCost(row, prices);
@@ -131,10 +145,10 @@ export function bucketByActor(
       costUsd: 0,
       threadIds: new Set<string>(),
     };
-    bucket.requests += 1;
+    bucket.requests += row.requests ?? 1;
     bucket.totalTokens += row.inputTokens + row.outputTokens;
     bucket.costUsd += rowCost(row, prices);
-    bucket.threadIds.add(row.threadId);
+    if (row.threadId !== null) bucket.threadIds.add(row.threadId);
     byActor.set(row.actorRef, bucket);
   }
   const result: ActorSpendRow[] = [];
@@ -167,8 +181,10 @@ export function bucketByThread(
 ): ThreadSpendRow[] {
   const byThread = new Map<string, { requests: number; totalTokens: number; costUsd: number }>();
   for (const row of rows) {
+    // Usage recorded outside any conversation belongs to no thread's spend.
+    if (row.threadId === null) continue;
     const bucket = byThread.get(row.threadId) ?? { requests: 0, totalTokens: 0, costUsd: 0 };
-    bucket.requests += 1;
+    bucket.requests += row.requests ?? 1;
     bucket.totalTokens += row.inputTokens + row.outputTokens;
     bucket.costUsd += rowCost(row, prices);
     byThread.set(row.threadId, bucket);
@@ -211,7 +227,7 @@ export function rollupThreadUsage(
     costUsd: 0,
   };
   for (const row of rows) {
-    rollup.requests += 1;
+    rollup.requests += row.requests ?? 1;
     rollup.inputTokens += row.inputTokens;
     rollup.outputTokens += row.outputTokens;
     rollup.totalTokens += row.inputTokens + row.outputTokens;
@@ -246,4 +262,101 @@ export function dayBoundsUtc(range: GovernanceRange): { start: Date; end: Date }
     start: new Date(`${range.fromDay}T00:00:00.000Z`),
     end: new Date(`${range.toDay}T23:59:59.999Z`),
   };
+}
+
+/** The feature a ledger row reports under: its own, else `agent` (an agent row from before features). */
+export function usageFeature(row: { feature?: string | null | undefined }): string {
+  return typeof row.feature === 'string' && row.feature !== '' ? row.feature : 'agent';
+}
+
+/** Whether a ledger row came from `AgentService.recordUsage` rather than an agent turn. */
+export function usageSource(row: { purpose?: string | null | undefined }): 'agent' | 'external' {
+  return row.purpose === 'external' ? 'external' : 'agent';
+}
+
+/**
+ * Aggregate usage rows into per-feature spend — agent turns and recorded usage side by side —
+ * costliest first. Same `rowCost` as every bucketer above.
+ */
+export function bucketByFeature(
+  rows: GovernanceUsageInput[],
+  prices: ReadonlyMap<string, ModelPrice>,
+): FeatureSpendRow[] {
+  const byFeature = new Map<string, FeatureSpendRow>();
+  for (const row of rows) {
+    const feature = usageFeature(row);
+    const source = usageSource(row);
+    const key = `${source}\u0000${feature}`;
+    const bucket = byFeature.get(key) ?? {
+      feature,
+      source,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      audioSeconds: 0,
+      characters: 0,
+      costUsd: 0,
+    };
+    bucket.requests += row.requests ?? 1;
+    bucket.inputTokens += row.inputTokens;
+    bucket.outputTokens += row.outputTokens;
+    bucket.audioSeconds += row.audioSeconds ?? 0;
+    bucket.characters += row.characters ?? 0;
+    bucket.costUsd += rowCost(row, prices);
+    byFeature.set(key, bucket);
+  }
+  return [...byFeature.values()].sort(
+    (left, right) =>
+      right.costUsd - left.costUsd ||
+      left.feature.localeCompare(right.feature) ||
+      left.source.localeCompare(right.source),
+  );
+}
+
+/**
+ * Aggregate usage rows into per actor × feature spend, costliest first — "cost by actor and by
+ * feature". `estimatedCostUsd` is the part recorded as an estimate or priced here from tokens.
+ */
+export function bucketUsageBreakdown(
+  rows: GovernanceUsageInput[],
+  prices: ReadonlyMap<string, ModelPrice>,
+  filter: UsageBreakdownFilter = {},
+): UsageBreakdownRow[] {
+  const result = new Map<string, UsageBreakdownRow>();
+  for (const row of rows) {
+    const feature = usageFeature(row);
+    if (filter.actor !== undefined && row.actorRef !== filter.actor) continue;
+    if (filter.feature !== undefined && feature !== filter.feature) continue;
+    const source = usageSource(row);
+    const key = `${row.actorRef}\u0000${source}\u0000${feature}`;
+    const bucket = result.get(key) ?? {
+      actorRef: row.actorRef,
+      feature,
+      source,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      audioSeconds: 0,
+      characters: 0,
+      costUsd: 0,
+      estimatedCostUsd: 0,
+    };
+    const cost = rowCost(row, prices);
+    bucket.requests += row.requests ?? 1;
+    bucket.inputTokens += row.inputTokens;
+    bucket.outputTokens += row.outputTokens;
+    bucket.audioSeconds += row.audioSeconds ?? 0;
+    bucket.characters += row.characters ?? 0;
+    bucket.costUsd += cost;
+    if (row.costUsd === undefined || row.costUsd === null || row.costSource === 'estimate') {
+      bucket.estimatedCostUsd += cost;
+    }
+    result.set(key, bucket);
+  }
+  return [...result.values()].sort(
+    (left, right) =>
+      right.costUsd - left.costUsd ||
+      left.actorRef.localeCompare(right.actorRef) ||
+      left.feature.localeCompare(right.feature),
+  );
 }
