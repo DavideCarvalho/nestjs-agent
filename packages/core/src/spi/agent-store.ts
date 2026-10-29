@@ -17,6 +17,20 @@ import type {
 } from '../types.js';
 import type { ActionProposalOutcome } from './action-proposal-outcome-store.js';
 
+/**
+ * Who owns a fork. Absent → the source thread's owner (forking your own conversation). Given, the
+ * copy belongs to that actor — "continue this conversation" from a link someone shared: the reader
+ * gets their own copy to go on from, and the original stays its owner's.
+ */
+export interface ForkThreadOptions {
+  actorRef?: string;
+  /**
+   * The copy's tenant. Absent → the source's (even with a new `actorRef`: forking across tenants,
+   * pass both); `null` → none; a value → that tenant.
+   */
+  tenantRef?: string | null;
+}
+
 export interface CreateThreadInput {
   actor: Actor;
   transient?: boolean;
@@ -295,7 +309,15 @@ export interface AgentStore {
   getThread(threadId: string): Promise<ThreadDetail | null>;
   listThreads(actorRef: string, limit?: number): Promise<ThreadSummary[]>;
   softDeleteThread(threadId: string): Promise<void>;
-  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary>;
+  /**
+   * Copy the thread up to `fromMessageId` (inclusive) into a new, persistent thread. Without
+   * `options` the copy is the source owner's, in the source's tenant — see {@link ForkThreadOptions}.
+   */
+  forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options?: ForkThreadOptions,
+  ): Promise<ThreadSummary>;
   setTitle(threadId: string, title: string): Promise<void>;
   /**
    * Promote a transient thread to a persistent one so it shows up in {@link listThreads}. A

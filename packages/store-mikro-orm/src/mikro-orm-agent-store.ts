@@ -17,6 +17,7 @@ import {
   type ChatQueueStore,
   type CreateThreadInput,
   type EnqueueMessageInput,
+  type ForkThreadOptions,
   type MessageFeedback,
   type QueuePause,
   type QueuedMessage,
@@ -465,7 +466,11 @@ export class MikroOrmAgentStore
     }
   }
 
-  async forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+  async forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options: ForkThreadOptions = {},
+  ): Promise<ThreadSummary> {
     const em = this.em.fork();
     const source = await em.findOne(AgentThread, { id: threadId });
     if (source === null) {
@@ -475,14 +480,15 @@ export class MikroOrmAgentStore
     const cutoff = messages.findIndex((message) => message.id === fromMessageId);
     const kept = cutoff >= 0 ? messages.slice(0, cutoff + 1) : messages;
     const now = new Date();
+    const tenantRef = options.tenantRef !== undefined ? options.tenantRef : source.tenantRef;
     const fork = em.create(AgentThread, {
       id: crypto.randomUUID(),
-      actorRef: source.actorRef,
+      actorRef: options.actorRef ?? source.actorRef,
       title: source.title,
       transient: false,
       createdAt: now,
       updatedAt: now,
-      ...(source.tenantRef != null ? { tenantRef: source.tenantRef } : {}),
+      ...(tenantRef != null ? { tenantRef } : {}),
       ...(source.defaultAgent != null ? { defaultAgent: source.defaultAgent } : {}),
       ...(source.model != null ? { model: source.model } : {}),
       ...(source.persona != null ? { persona: source.persona } : {}),

@@ -330,7 +330,9 @@ the root; otherwise the `Gate` provider is missing and DI fails at boot.
 `POST .../fork-from/:messageId`), and `POST /agent/chat/:runId/cancel` resolve the acting actor via
 the same `ActorResolver` and assert they own the target thread, tool call, or run before acting on
 it: someone else's returns `403`, a missing one returns `404`. There's no path to approve, reject,
-read, fork, delete, or cancel another actor's state by guessing an id.
+read, fork, delete, or cancel another actor's state by guessing an id. (A host that grants reads some
+other way — a share link — forks server-side with `forkThread(actor, id, messageId, { authorized: true })`;
+see [Persistence](/docs/agent/guides/persistence#forking-a-thread-to-another-actor).)
 
 ---
 

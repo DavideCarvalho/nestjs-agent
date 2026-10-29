@@ -10,6 +10,7 @@ import type {
 import {
   BLANK_ASSISTANT_HISTORY_CONTRACT,
   EVERY_MESSAGE_FIELD,
+  FORK_THREAD_CONTRACT,
 } from '@dudousxd/nestjs-agent-testing';
 import type { MikroORM } from '@mikro-orm/sqlite';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -1490,6 +1491,14 @@ describeEachDialect('MikroOrmAgentStore', (dialect) => {
   // that already holds one (written before the loop stopped persisting them) still answers.
   describe('blank assistant messages', () => {
     for (const contractCase of BLANK_ASSISTANT_HISTORY_CONTRACT) {
+      it(contractCase.name, async () => contractCase.run({ store }));
+    }
+  });
+
+  // `forkThread` into another actor — "continue this conversation" from a shared link — and the
+  // copy's tenant.
+  describe('forkThread options', () => {
+    for (const contractCase of FORK_THREAD_CONTRACT) {
       it(contractCase.name, async () => contractCase.run({ store }));
     }
   });

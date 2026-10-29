@@ -11,6 +11,7 @@ import {
   type ChatQueueStore,
   type CreateThreadInput,
   type EnqueueMessageInput,
+  type ForkThreadOptions,
   type MessageFeedback,
   type QueuePause,
   type QueuedMessage,
@@ -401,7 +402,11 @@ export class DrizzleAgentStore
       .where(eq(this.t.agentThread.id, threadId));
   }
 
-  async forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+  async forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options: ForkThreadOptions = {},
+  ): Promise<ThreadSummary> {
     const [source] = await this.db
       .select()
       .from(this.t.agentThread)
@@ -419,8 +424,8 @@ export class DrizzleAgentStore
     const now = new Date();
     const fork: AgentThreadRow = {
       id: crypto.randomUUID(),
-      actorRef: source.actorRef,
-      tenantRef: source.tenantRef,
+      actorRef: options.actorRef ?? source.actorRef,
+      tenantRef: options.tenantRef !== undefined ? options.tenantRef : source.tenantRef,
       title: source.title,
       transient: false,
       activeStreamId: null,
