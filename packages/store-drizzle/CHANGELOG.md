@@ -1,5 +1,28 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.34.0
+
+### Minor Changes
+
+- [#395](https://github.com/DavideCarvalho/nestjs-agent/pull/395) [`5b54d94`](https://github.com/DavideCarvalho/nestjs-agent/commit/5b54d94ea9096f3224a48213a60d688e197fd84c) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fork a thread into another actor's copy — "continue this conversation" from a shared link: the reader
+  gets their own copy up to that message, and the original stays its owner's.
+
+  `AgentStore.forkThread(threadId, fromMessageId, options?: ForkThreadOptions)` takes
+  `{ actorRef?, tenantRef? }`. `actorRef` makes the copy that actor's; `tenantRef` is separate — absent
+  keeps the source's tenant even with a new `actorRef`, `null` clears it, a value sets it. Without
+  options nothing changes. `InMemoryAgentStore`, `DrizzleAgentStore` and `MikroOrmAgentStore` implement
+  it, and `FORK_THREAD_CONTRACT` in the testing package checks a store does.
+
+  `AgentService.forkThread(actor, threadId, fromMessageId, params?: ForkThreadParams)` takes
+  `{ authorized?, tenantRef? }`. With `authorized: true` the host vouches that `actor` may read the
+  thread: the ownership check is skipped and the copy is `actor`'s. It stays owner-only by default, and
+  `POST /threads/:id/fork-from/:messageId` never passes it.
+
+### Patch Changes
+
+- Updated dependencies [[`5b54d94`](https://github.com/DavideCarvalho/nestjs-agent/commit/5b54d94ea9096f3224a48213a60d688e197fd84c)]:
+  - @dudousxd/nestjs-agent-core@0.59.0
+
 ## 0.33.0
 
 ### Minor Changes
