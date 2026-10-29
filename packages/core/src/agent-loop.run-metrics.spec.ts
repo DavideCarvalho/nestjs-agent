@@ -9,6 +9,7 @@ import {
   type AgentRunFinished,
   type AgentStore,
   type AgentToolCallEvent,
+  type AgentUsageRecorded,
   DefaultRolesPolicy,
   type ModelProvider,
   type ModelTurnArgs,
@@ -18,6 +19,7 @@ import {
   encodeStreamEvent,
   runAgentLoop,
   runDurationMs,
+  runEndTimings,
 } from './index.js';
 
 const ACTOR = { id: 'u1', roles: ['ADMIN'], tenantRef: 'tenant-1' };
@@ -132,6 +134,130 @@ async function setup(turns: ScriptedTurn[]): Promise<Setup> {
     },
   };
 }
+
+describe('run timings — queue / model / tools, journaled with the steps that measured them', () => {
+  let finished: ReturnType<typeof listen<AgentRunFinished>>;
+  let usage: ReturnType<typeof listen<AgentUsageRecorded>>;
+  beforeEach(() => {
+    finished = listen<AgentRunFinished>('run.finished');
+    usage = listen<AgentUsageRecorded>('usage.recorded');
+  });
+  afterEach(() => {
+    finished.stop();
+    usage.stop();
+  });
+
+  it('persists queue, model and tool time and the per-step list, and rides run.finished', async () => {
+    const { deps, ends, threadId, store } = await setup([
+      { text: 'Let me check.', toolCall: { id: 'call-1', name: 'slowRead', input: {} } },
+      { text: 'All good.' },
+    ]);
+    const sink = new InMemoryTokenStreamSink();
+    const hooks: AgentLoopHooks = {
+      runId: 'run-t',
+      openSink: () => sink.open('run-t'),
+      awaitApproval: async () => ({ approved: true }),
+      step: (_name, fn) => fn(),
+      queueMs: () => 12,
+    };
+    await runAgentLoop(deps, { threadId, actor: ACTOR, userText: 'hi' }, hooks);
+
+    const timings = ends[0]?.timings;
+    expect(timings).toMatchObject({ modelCalls: 2, toolCalls: 1 });
+    expect(timings?.toolsMs).toBeGreaterThanOrEqual(20);
+    expect(timings?.steps.map((step) => step.tools.map((tool) => tool.toolName))).toEqual([
+      ['slowRead'],
+      [],
+    ]);
+    expect(store.governanceRuns()[0]?.queueMs).toBe(12);
+    expect(finished.payloads[0]).toMatchObject({
+      queueMs: 12,
+      modelCalls: 2,
+      toolCalls: 1,
+      toolsMs: timings?.toolsMs,
+      modelMs: timings?.modelMs,
+    });
+    expect(finished.payloads[0]?.stepTimings).toEqual(timings?.steps);
+    // Every model call is one ledger row and one usage.recorded event, labelled by the agent.
+    expect(usage.payloads).toHaveLength(2);
+    expect(usage.payloads[0]).toMatchObject({ purpose: 'chat', feature: 'agent', runId: 'run-t' });
+  });
+
+  it('counts a replayed step once, from its journal, and never re-measures it', async () => {
+    const { deps, ends, threadId } = await setup([
+      { text: 'Let me check.', toolCall: { id: 'call-1', name: 'slowRead', input: {} } },
+      { text: 'All good.' },
+    ]);
+    // A journal: the first body records every step; a second body (the resume) reads them back.
+    const journal = new Map<string, unknown>();
+    const step = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      if (journal.has(name)) return journal.get(name) as T;
+      const value = await fn();
+      journal.set(name, value);
+      return value;
+    };
+    const sink = new InMemoryTokenStreamSink();
+    const hooks = (runId: string): AgentLoopHooks => ({
+      runId,
+      openSink: () => sink.open(runId),
+      awaitApproval: async () => ({ approved: true }),
+      step,
+      queueMs: () => 7,
+    });
+    await runAgentLoop(deps, { threadId, actor: ACTOR, userText: 'hi' }, hooks('run-r'));
+    const first = ends[0]?.timings;
+    // The replay runs no step body: `persist:run:end` too comes back from the journal.
+    finished.payloads.length = 0;
+    await runAgentLoop(
+      deps,
+      { threadId, actor: ACTOR, userText: 'hi' },
+      {
+        ...hooks('run-r'),
+        queueMs: () => 99_999,
+      },
+    );
+    expect(ends).toHaveLength(1);
+    expect(finished.payloads[0]).toMatchObject({
+      queueMs: 7,
+      modelCalls: 2,
+      toolCalls: 1,
+      toolsMs: first?.toolsMs,
+      modelMs: first?.modelMs,
+    });
+  });
+
+  it('hands a failed run’s measurements to the runner through runEndTimings', async () => {
+    const { deps, threadId } = await setup([
+      { text: 'Let me check.', toolCall: { id: 'call-1', name: 'slowRead', input: {} } },
+    ]);
+    const failing: AgentLoopDeps = {
+      ...deps,
+      model: {
+        calls: 0,
+        async runTurn(args: ModelTurnArgs) {
+          this.calls += 1;
+          if (this.calls > 1) throw new Error('provider down');
+          return new ScriptedModel([
+            { text: 'Let me check.', toolCall: { id: 'call-1', name: 'slowRead', input: {} } },
+          ]).runTurn(args);
+        },
+      } as ModelProvider & { calls: number },
+    };
+    const sink = new InMemoryTokenStreamSink();
+    const error = await runAgentLoop(
+      failing,
+      { threadId, actor: ACTOR, userText: 'hi' },
+      {
+        runId: 'run-f',
+        openSink: () => sink.open('run-f'),
+        awaitApproval: async () => ({ approved: true }),
+        step: (_name, fn) => fn(),
+        queueMs: () => 3,
+      },
+    ).catch((caught: unknown) => caught);
+    expect(runEndTimings(error)).toMatchObject({ queueMs: 3, modelCalls: 1, toolCalls: 1 });
+  });
+});
 
 describe('run metrics on run.finished and the run row', () => {
   let finished: ReturnType<typeof listen<AgentRunFinished>>;

@@ -96,6 +96,7 @@ export {
   agentFailureCode,
   agentRunContext,
   runDurationMs,
+  runEndTimings,
   streamFailure,
   exposeStreamErrorDetails,
   toolCallContext,
@@ -213,3 +214,13 @@ export type {
   GenuiValidity,
   RecordGenuiCallInput,
 } from './genui-telemetry.js';
+export { rollupRunTimings, type ToolWindow, toolsWallClockMs } from './run-timings.js';
+export {
+  type AiUsageInput,
+  type AiUsageOptions,
+  type AiUsageResult,
+  aiUsageRow,
+  recordAiUsage,
+  recordUsageRow,
+  usageAttribution,
+} from './usage-ledger.js';

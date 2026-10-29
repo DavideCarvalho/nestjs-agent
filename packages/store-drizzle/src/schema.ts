@@ -23,6 +23,7 @@ import type {
   GenuiToolMarker,
   GenuiValidity,
   RecordGenuiCallInput,
+  RunStepTiming,
 } from '@dudousxd/nestjs-agent-core';
 import type { UiCapabilities } from '@dudousxd/nestjs-agent-core/genui';
 import {
@@ -208,7 +209,7 @@ export const agentTokenUsage = sqliteTable(
   {
     id: text('id').primaryKey(),
     threadId: text('thread_id')
-      .notNull()
+      // NULL for usage recorded outside any conversation (`AgentService.recordUsage`).
       .references(() => agentThread.id, { onDelete: 'cascade' }),
     actorRef: text('actor_ref').notNull(),
     messageId: text('message_id'),
@@ -224,12 +225,25 @@ export const agentTokenUsage = sqliteTable(
     costUsd: real('cost_usd'),
     /** Where `cost_usd` came from: `'provider'` (reported) or `'estimate'` (tokens × the price row); null on rows from before it existed (reported). */
     costSource: text('cost_source').$type<CostSource>(),
+    /** The run the row belongs to. */
+    runId: text('run_id'),
+    /** What the spend was for: `agent:<name>` for an agent turn, the app's own otherwise; null → `agent`. */
+    feature: text('feature'),
+    provider: text('provider'),
+    tenantRef: text('tenant_ref'),
+    /** Units a row bills by when they are not tokens. */
+    audioSeconds: real('audio_seconds'),
+    characters: integer('characters'),
+    requests: integer('requests'),
+    /** The caller's own JSON, never read by the library. */
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [
     index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt),
     index('agent_token_usage_created_idx').on(table.createdAt),
     index('agent_token_usage_thread_idx').on(table.threadId),
+    index('agent_token_usage_feature_created_idx').on(table.feature, table.createdAt),
   ],
 );
 
@@ -337,6 +351,14 @@ export const agentRun = sqliteTable(
      * transcript.
      */
     parentRunId: text('parent_run_id'),
+    /** Enqueue → body start (ms); null when not read. */
+    queueMs: integer('queue_ms'),
+    /** Where the completed run's time went: model and tool totals, counts, and the per-step list. */
+    modelMs: integer('model_ms'),
+    toolsMs: integer('tools_ms'),
+    modelCalls: integer('model_calls'),
+    toolCalls: integer('tool_calls'),
+    timings: text('timings', { mode: 'json' }).$type<RunStepTiming[]>(),
   },
   (table) => [index('agent_run_started_idx').on(table.startedAt)],
 );

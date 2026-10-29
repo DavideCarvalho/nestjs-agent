@@ -86,6 +86,11 @@ export {
   type ForkThreadContractSubject,
 } from './fork-thread-contract.js';
 export {
+  USAGE_LEDGER_STORE_CONTRACT,
+  type UsageLedgerStoreContractCase,
+  type UsageLedgerStoreContractSubject,
+} from './usage-ledger-store-contract.js';
+export {
   GENUI_TELEMETRY_STORE_CONTRACT,
   type GenuiTelemetryStoreContractCase,
   type GenuiTelemetryStoreContractSubject,

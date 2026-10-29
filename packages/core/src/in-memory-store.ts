@@ -22,6 +22,7 @@ import {
   type RecordRunStartInput,
   type RecordToolCallInput,
   type RecordUsageInput,
+  type RunTimings,
   type ThreadSettings,
   type ThreadSettingsReader,
   type ToolCallApprovalState,
@@ -82,7 +83,19 @@ interface ToolCallRow {
 
 interface UsageRow {
   actorRef: string;
-  threadId: string;
+  /** `null` for usage recorded outside any conversation. */
+  threadId: string | null;
+  /** The ledger `purpose` (`chat`, `external`…). */
+  purpose?: string;
+  runId?: string;
+  feature?: string;
+  provider?: string;
+  tenantRef?: string;
+  audioSeconds?: number;
+  characters?: number;
+  requests?: number;
+  metadata?: Record<string, unknown>;
+
   modelId: string;
   inputTokens: number;
   outputTokens: number;
@@ -97,7 +110,19 @@ interface UsageRow {
 /** A recorded usage row exposed to the governance read-model (input/output split + thread/day). */
 export interface GovernanceUsageRow {
   actorRef: string;
-  threadId: string;
+  /** `null` for usage recorded outside any conversation (`AgentService.recordUsage`). */
+  threadId: string | null;
+  /** The ledger `purpose` (`chat`, `external`…). */
+  purpose?: string;
+  runId?: string;
+  feature?: string;
+  provider?: string;
+  tenantRef?: string;
+  audioSeconds?: number;
+  characters?: number;
+  requests?: number;
+  metadata?: Record<string, unknown>;
+
   modelId: string;
   inputTokens: number;
   outputTokens: number;
@@ -186,6 +211,8 @@ interface RunRow {
   promptHash?: string;
   /** The run that delegated this one; undefined for a turn nobody delegated. */
   parentRunId?: string;
+  queueMs?: number;
+  timings?: RunTimings;
 }
 
 /** A recorded run outcome exposed to the governance read-model (reliability surfaces). */
@@ -214,6 +241,8 @@ export interface GovernanceRunRow {
    * parent's turn, so nothing in the transcript pairs them either.
    */
   parentRunId?: string;
+  queueMs?: number;
+  timings?: RunTimings;
 }
 
 /** A fully in-memory `AgentStore` for tests and the offline demo. */
@@ -484,6 +513,7 @@ export class InMemoryAgentStore
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
       ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
       ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
+      ...(run.queueMs !== undefined ? { queueMs: Math.max(0, Math.round(run.queueMs)) } : {}),
     });
   }
 
@@ -512,6 +542,9 @@ export class InMemoryAgentStore
     }
     if (end.errorMessage !== undefined) {
       row.errorMessage = end.errorMessage;
+    }
+    if (end.timings !== undefined) {
+      row.timings = structuredClone(end.timings);
     }
   }
 
@@ -943,7 +976,9 @@ export class InMemoryAgentStore
     const createdAt = this.now();
     this.usage.push({
       actorRef: input.actorRef,
-      threadId: input.threadId,
+      threadId: input.threadId ?? null,
+      purpose: input.purpose,
+      ...ledgerExtras(input),
       modelId: input.modelId,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
@@ -1002,6 +1037,8 @@ export class InMemoryAgentStore
     return this.usage.map((row) => ({
       actorRef: row.actorRef,
       threadId: row.threadId,
+      ...(row.purpose !== undefined ? { purpose: row.purpose } : {}),
+      ...ledgerExtras(row),
       modelId: row.modelId,
       inputTokens: row.inputTokens,
       outputTokens: row.outputTokens,
@@ -1108,6 +1145,8 @@ export class InMemoryAgentStore
       ...(row.errorMessage !== undefined ? { errorMessage: row.errorMessage } : {}),
       ...(row.settledAt !== undefined ? { settledAt: row.settledAt } : {}),
       ...(row.promptHash !== undefined ? { promptHash: row.promptHash } : {}),
+      ...(row.queueMs !== undefined ? { queueMs: row.queueMs } : {}),
+      ...(row.timings !== undefined ? { timings: structuredClone(row.timings) } : {}),
     }));
   }
 
@@ -1167,4 +1206,27 @@ export class InMemoryAgentStore
       persona: row.persona ?? null,
     };
   }
+}
+
+/** The ledger fields beyond tokens, copied when present (`runId`, `feature`, units, `metadata`…). */
+function ledgerExtras(row: {
+  runId?: string;
+  feature?: string;
+  provider?: string;
+  tenantRef?: string;
+  audioSeconds?: number;
+  characters?: number;
+  requests?: number;
+  metadata?: Record<string, unknown>;
+}): Partial<GovernanceUsageRow> {
+  return {
+    ...(row.runId !== undefined ? { runId: row.runId } : {}),
+    ...(row.feature !== undefined ? { feature: row.feature } : {}),
+    ...(row.provider !== undefined ? { provider: row.provider } : {}),
+    ...(row.tenantRef !== undefined ? { tenantRef: row.tenantRef } : {}),
+    ...(row.audioSeconds !== undefined ? { audioSeconds: row.audioSeconds } : {}),
+    ...(row.characters !== undefined ? { characters: row.characters } : {}),
+    ...(row.requests !== undefined ? { requests: row.requests } : {}),
+    ...(row.metadata !== undefined ? { metadata: structuredClone(row.metadata) } : {}),
+  };
 }

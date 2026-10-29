@@ -70,6 +70,8 @@ export function RunDetailPanel({
         )}
       </Panel>
 
+      <TimingPanel detail={detail} />
+
       <Panel
         title="Thread"
         subtitle="The conversation this run belongs to"
@@ -131,6 +133,81 @@ export function RunDetailPanel({
         )}
       </Panel>
     </div>
+  );
+}
+
+/**
+ * Where a run's time went: queue / model / tools, the rest of the wall-clock (persistence, approval
+ * and delegation waits) as "other", and each step's model time and tool calls. Absent when the server
+ * recorded no timings for the run (an older server, a run that did not complete).
+ */
+export function TimingPanel({ detail }: { detail: RunDetail }) {
+  const { run, timings } = detail;
+  if ((timings === null || timings === undefined) && (run.queueMs ?? null) === null) return null;
+  const model = timings?.modelMs ?? 0;
+  const tools = timings?.toolsMs ?? 0;
+  const parts = [
+    { label: 'Queue', ms: run.queueMs ?? 0, tone: 'bg-muted-foreground/50' },
+    { label: 'Model', ms: model, tone: 'bg-accent' },
+    { label: 'Tools', ms: tools, tone: 'bg-good' },
+    {
+      label: 'Other',
+      ms: run.durationMs === null ? 0 : Math.max(0, run.durationMs - model - tools),
+      tone: 'bg-line',
+    },
+  ];
+  const total = parts.reduce((sum, part) => sum + part.ms, 0);
+  return (
+    <Panel
+      title="Where the time went"
+      subtitle={
+        timings
+          ? `${timings.modelCalls} model calls · ${timings.toolCalls} tool calls`
+          : 'queue time only'
+      }
+    >
+      <div
+        className="flex h-2.5 gap-px overflow-hidden rounded"
+        role="img"
+        aria-label={parts.map((part) => `${part.label} ${formatDurationMs(part.ms)}`).join(', ')}
+      >
+        {parts.map((part) =>
+          part.ms > 0 && total > 0 ? (
+            <span
+              key={part.label}
+              className={part.tone}
+              title={`${part.label}: ${formatDurationMs(part.ms)}`}
+              style={{ flex: part.ms / total }}
+            />
+          ) : null,
+        )}
+      </div>
+      <dl className="mt-3 grid grid-cols-4 gap-x-4 text-xs">
+        {parts.map((part) => (
+          <Field key={part.label} label={part.label}>
+            {formatDurationMs(part.ms)}
+          </Field>
+        ))}
+      </dl>
+      {timings && timings.steps.length > 0 && (
+        <ul className="mt-3 space-y-1">
+          {timings.steps.map((step) => (
+            <li key={step.step} className="mono flex flex-wrap gap-2 text-[11px]">
+              <span className="text-muted-foreground">step {step.step + 1}</span>
+              <span>model {formatDurationMs(step.modelMs ?? null)}</span>
+              {step.tools.length > 0 && (
+                <span className="text-muted-foreground">
+                  tools {formatDurationMs(step.toolsMs)} —{' '}
+                  {step.tools
+                    .map((tool) => `${tool.toolName} ${formatDurationMs(tool.ms)}`)
+                    .join(' · ')}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 

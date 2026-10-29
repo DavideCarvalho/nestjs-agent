@@ -70,6 +70,11 @@ export interface ModelTurnResult {
  * the real sink by the loop once the gate has passed.
  */
 export interface BufferedModelTurnResult extends ModelTurnResult {
+  /**
+   * How long the model call took — the `llm.turn` span's own reading — journaled with the turn, so a
+   * replay counts the call once. Absent on a turn journaled before it was.
+   */
+  modelMs?: number;
   /** The NDJSON stream lines the call produced, in write order. */
   bufferedFrames?: string[];
   /**

@@ -911,6 +911,7 @@ export class MikroOrmAgentStore
       ...(run.agentName !== undefined ? { agentName: run.agentName } : {}),
       ...(run.parentRunId !== undefined ? { parentRunId: run.parentRunId } : {}),
       ...(run.promptHash !== undefined ? { promptHash: run.promptHash } : {}),
+      ...(run.queueMs !== undefined ? { queueMs: Math.max(0, Math.round(run.queueMs)) } : {}),
     });
     em.persist(runRow);
     await em.flush();
@@ -942,6 +943,13 @@ export class MikroOrmAgentStore
     }
     if (end.errorMessage !== undefined) {
       runRow.errorMessage = end.errorMessage;
+    }
+    if (end.timings !== undefined) {
+      runRow.modelMs = Math.round(end.timings.modelMs);
+      runRow.toolsMs = Math.round(end.timings.toolsMs);
+      runRow.modelCalls = end.timings.modelCalls;
+      runRow.toolCalls = end.timings.toolCalls;
+      runRow.timings = end.timings.steps;
     }
     await em.flush();
   }
@@ -1188,10 +1196,18 @@ export class MikroOrmAgentStore
     const em = this.em.fork();
     const usage = em.create(AgentTokenUsage, {
       id: crypto.randomUUID(),
-      thread: em.getReference(AgentThread, input.threadId),
+      thread: input.threadId !== undefined ? em.getReference(AgentThread, input.threadId) : null,
       actorRef: input.actorRef,
       modelId: input.modelId,
       purpose: input.purpose,
+      runId: input.runId ?? null,
+      feature: input.feature ?? null,
+      provider: input.provider ?? null,
+      tenantRef: input.tenantRef ?? null,
+      audioSeconds: input.audioSeconds ?? null,
+      characters: input.characters ?? null,
+      requests: input.requests ?? null,
+      metadata: input.metadata ?? null,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       createdAt: new Date(),

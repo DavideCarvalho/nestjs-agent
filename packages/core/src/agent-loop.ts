@@ -19,6 +19,7 @@ import {
 } from './delegation.js';
 import {
   type AgentRunContext,
+  type AgentRunEndTimings,
   type AgentSpanEvent,
   type AgentToolCallEvent,
   publishAgentDelegated,
@@ -82,6 +83,7 @@ import {
   runOutputProcessors,
 } from './processors.js';
 import { isReplayIntegrityError } from './replay-integrity.js';
+import { rollupRunTimings, toolsWallClockMs } from './run-timings.js';
 import {
   SKILL_TOOL_NAME,
   type SkillContext,
@@ -97,7 +99,7 @@ import type {
   ActionProposalStore,
   ActionProposalSupersessionStore,
 } from './spi/action-proposal-store.js';
-import type { AgentStore, ThreadTurnReader } from './spi/agent-store.js';
+import type { AgentStore, RunStepTiming, ThreadTurnReader } from './spi/agent-store.js';
 import {
   type ApprovalPolicy,
   type ApprovalRequirement,
@@ -178,6 +180,7 @@ import type {
   ToolStepEnvelope,
   TurnPersona,
 } from './types.js';
+import { recordUsageRow, usageAttribution } from './usage-ledger.js';
 
 export interface AgentLoopDeps<TOutput = unknown> {
   actionApprovalMode?: ActionApprovalMode;
@@ -537,6 +540,13 @@ export interface AgentLoopHooks {
    * cached results (stable ids, no double-write, no re-streaming).
    */
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * How long this run waited between being enqueued and its body running, in ms — read ONCE, inside
+   * the `persist:run:start` checkpoint, and journaled with it, so a replay or a resume reports the
+   * first reading. The durable runner answers from the runtime's run `createdAt`; the inline runner
+   * from its own `start`. Absent (or `undefined`) → no queue time is recorded.
+   */
+  queueMs?(): number | undefined | Promise<number | undefined>;
   /**
    * Dispatch the model turn as a routed remote step. When present the loop uses it INSTEAD of
    * running the model inline under hooks.step. Must resolve to exactly what deps.model.runTurn
@@ -1041,18 +1051,23 @@ async function spanned<TEvent extends AgentSpanEvent, T>(
  * handler (which executes the genuine remote llm step) can emit the same span — core cannot wrap
  * `hooks.dispatchLlm` itself, because that call also runs (from cache) on replay.
  */
-export function traceLlmTurn(
+export async function traceLlmTurn(
   runId: string,
   step: number,
   run: () => Promise<ModelTurnResult>,
-): Promise<ModelTurnResult> {
-  return spanned('llm.turn', runId, { runId, step }, run, (turn) => ({
-    ...(turn.modelId !== undefined ? { modelId: turn.modelId } : {}),
-    inputTokens: turn.usage.inputTokens,
-    outputTokens: turn.usage.outputTokens,
-    textLength: turn.text.length,
-    toolCalls: turn.toolCalls.length,
+): Promise<ModelTurnResult & { modelMs: number }> {
+  // The span's duration, read here whether or not anyone subscribes, rides the result: the run's
+  // model time comes back out of the journaled turn (inline `llm:<i>` or the dispatched step's
+  // result), so a replay counts the call once and never measures the time to read a journal.
+  const startedAt = performance.now();
+  const turn = await spanned('llm.turn', runId, { runId, step }, run, (result) => ({
+    ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    textLength: result.text.length,
+    toolCalls: result.toolCalls.length,
   }));
+  return { ...turn, modelMs: Math.round(performance.now() - startedAt) };
 }
 
 /**
@@ -1332,8 +1347,10 @@ async function foldDroppedHistory(
   if (summary.usage !== undefined) {
     const usage = summary.usage;
     await hooks.step('persist:usage:history', () =>
-      deps.store.recordUsage({
+      recordUsageRow(deps.store, {
         threadId: input.threadId,
+        runId: hooks.runId,
+        ...usageAttribution(input),
         actorRef: input.actor.id,
         modelId: summary.modelId ?? deps.modelId ?? 'unknown',
         purpose: 'history_summary',
@@ -1457,8 +1474,10 @@ async function structureAnswer<TOutput>(
       ),
     );
     await hooks.step(`persist:usage:structured:${step}:${attempt}`, () =>
-      deps.store.recordUsage({
+      recordUsageRow(deps.store, {
         threadId: input.threadId,
+        runId: hooks.runId,
+        ...usageAttribution(input),
         actorRef: input.actor.id,
         modelId: reply.modelId ?? deps.modelId ?? 'unknown',
         purpose: 'structured_output',
@@ -1929,6 +1948,11 @@ async function haltIfCancelled(
 
 /** What every per-call helper below needs from the turn that requested the call. */
 interface ToolTurnContext {
+  /**
+   * The step's tool calls that ran, with their windows, read off their persist checkpoints — the
+   * run's tool time. Absent → nothing is collected.
+   */
+  toolTimings?: ToolTimingEntry[];
   deps: AgentLoopDeps;
   input: AgentRunInput;
   hooks: AgentLoopHooks;
@@ -2018,24 +2042,65 @@ type ToolOutcome = (
   | { status: 'executed'; output: unknown; executionMs: number }
   | { status: 'failed'; error: string; executionMs: number }
   | { status: 'denied'; reason: string; executionMs: number }
-) & { measuredMs?: number };
+) & { measuredMs?: number; startedAt?: number };
 
 /**
  * Run `fn` as the checkpoint `name` and report whether its body ran HERE — `false` when the runner
  * read the checkpoint back from its journal (a durable replay). That is what tells a diagnostic
  * re-published on a replay from the first one.
  */
-async function stepRanHere(
+async function stepRanHere<T>(
   hooks: AgentLoopHooks,
   name: string,
-  fn: () => Promise<unknown>,
+  fn: () => Promise<T>,
+  journaled?: (value: T | undefined) => void,
 ): Promise<boolean> {
   let ran = false;
-  await hooks.step(name, async () => {
+  const value = await hooks.step(name, async () => {
     ran = true;
-    await fn();
+    return fn();
   });
+  journaled?.(value);
   return ran;
+}
+
+/** One executed tool call's window, as its persist checkpoint journaled it. */
+interface ToolTimingEntry {
+  toolCallId: string;
+  toolName: string;
+  /** Epoch ms the call started, when known. */
+  at?: number;
+  ms: number;
+}
+
+/** What a tool's persist checkpoint journals about its execution (`{}` when it was not measured). */
+type JournaledToolTiming = { ms?: number; at?: number } | undefined;
+
+/**
+ * The execution window a persist checkpoint journals: the tool's own measured time only — the time
+ * around a call a replay read back is the time to read a journal, so it journals nothing.
+ */
+function journalTiming(outcome: ToolOutcome): { ms?: number; at?: number } {
+  return {
+    ...(outcome.measuredMs !== undefined ? { ms: outcome.measuredMs } : {}),
+    ...(outcome.startedAt !== undefined ? { at: outcome.startedAt } : {}),
+  };
+}
+
+/** Note a settled call's journaled execution window on its step. */
+function noteToolTiming(
+  turn: ToolTurnContext,
+  call: { id: string; name: string },
+  journaled: JournaledToolTiming,
+): void {
+  if (turn.toolTimings === undefined || journaled === undefined || journaled === null) return;
+  if (typeof journaled.ms !== 'number') return;
+  turn.toolTimings.push({
+    toolCallId: call.id,
+    toolName: call.name,
+    ms: journaled.ms,
+    ...(typeof journaled.at === 'number' ? { at: journaled.at } : {}),
+  });
 }
 
 /**
@@ -2519,10 +2584,16 @@ async function invokeClaimedTool(
   // The tool's own time — see ToolOutcome. Set by the checkpoint's body (or read off the dispatched
   // step's result), so a call whose checkpoint was replayed leaves it unset.
   let measuredMs: number | undefined;
-  const timing = (): { executionMs: number; measuredMs?: number } =>
+  // When the checkpoint's body started here — the window the step's wall-clock tool time unions.
+  let measuredAt: number | undefined;
+  const timing = (): { executionMs: number; measuredMs?: number; startedAt?: number } =>
     measuredMs === undefined
       ? { executionMs: Date.now() - startedAt }
-      : { executionMs: measuredMs, measuredMs };
+      : {
+          executionMs: measuredMs,
+          measuredMs,
+          ...(measuredAt !== undefined ? { startedAt: measuredAt } : {}),
+        };
   try {
     // Inside the same `try` as a registered tool's invocation, so a provider that throws is recorded
     // as this call's failure — and a suspend or a replay refusal still leaves untouched below.
@@ -2624,6 +2695,7 @@ async function invokeClaimedTool(
       // leaves `measuredMs` unset, rather than reporting the time to read a journal as the tool's.
       const invocation = hooks.step(`tool:${call.id}`, async () => {
         const bodyStartedAt = Date.now();
+        measuredAt = bodyStartedAt;
         try {
           return await runToolBody();
         } finally {
@@ -2723,16 +2795,23 @@ async function recordToolOutcome(
     };
   }
   if (outcome.status === 'failed') {
-    const settledHere = await stepRanHere(hooks, `persist:toolfail:${call.id}`, async () => {
-      await deps.store.updateToolCall({
-        toolCallId: call.id,
-        status: 'failed',
-        error: outcome.error,
-        executionMs: outcome.executionMs,
-        ...decided,
-      });
-      await settle();
-    });
+    const settledHere = await stepRanHere(
+      hooks,
+      `persist:toolfail:${call.id}`,
+      async () => {
+        await deps.store.updateToolCall({
+          toolCallId: call.id,
+          status: 'failed',
+          error: outcome.error,
+          executionMs: outcome.executionMs,
+          ...decided,
+        });
+        await settle();
+        // Journaled with the checkpoint that records it, so a replay counts the call's time once.
+        return journalTiming(outcome);
+      },
+      (journaled) => noteToolTiming(turn, call, journaled),
+    );
     publishAgentToolCall({
       runId: hooks.runId,
       toolCallId: call.id,
@@ -2743,17 +2822,23 @@ async function recordToolOutcome(
     });
     return { id: call.id, name: call.name, output: null, error: outcome.error };
   }
-  const settledHere = await stepRanHere(hooks, `persist:toolexec:${call.id}`, async () => {
-    await deps.store.updateToolCall({
-      toolCallId: call.id,
-      status: 'executed',
-      output: outcome.output,
-      executionMs: outcome.executionMs,
-      ...(toolType === 'action' ? { executedByRef: deciderRef } : {}),
-      ...decided,
-    });
-    await settle();
-  });
+  const settledHere = await stepRanHere(
+    hooks,
+    `persist:toolexec:${call.id}`,
+    async () => {
+      await deps.store.updateToolCall({
+        toolCallId: call.id,
+        status: 'executed',
+        output: outcome.output,
+        executionMs: outcome.executionMs,
+        ...(toolType === 'action' ? { executedByRef: deciderRef } : {}),
+        ...decided,
+      });
+      await settle();
+      return journalTiming(outcome);
+    },
+    (journaled) => noteToolTiming(turn, call, journaled),
+  );
   publishAgentToolCall({
     runId: hooks.runId,
     toolCallId: call.id,
@@ -3165,6 +3250,26 @@ export interface AgentLoopResult<TOutput = unknown> {
 
 /** When the run an error unwound from started — see {@link runDurationMs}. */
 const runStartedAt = new WeakMap<object, number>();
+/** What the run an error unwound from measured — see {@link runEndTimings}. */
+const runMeasured = new WeakMap<object, AgentRunEndTimings>();
+
+/**
+ * What the run `error` unwound from measured before it ended — queue time, and the model and tool
+ * time of the steps it ran — for the runner to spread into `run.failed` / `run.cancelled`. `{}` when
+ * the run measured nothing (it failed before `persist:run:start`) or `error` did not come out of the
+ * loop.
+ */
+export function runEndTimings(error: unknown): AgentRunEndTimings {
+  if (typeof error !== 'object' || error === null) return {};
+  return runMeasured.get(error) ?? {};
+}
+
+/** The loop's own record of what it measured, read by {@link runAgentLoop}'s catch. */
+interface RunClock {
+  at?: number;
+  queueMs?: number;
+  steps?: RunStepTiming[];
+}
 
 /**
  * How long the run had been going when `error` unwound out of {@link runAgentLoop}: from the run's
@@ -3175,6 +3280,19 @@ const runStartedAt = new WeakMap<object, number>();
  * For the RUNNER, which is where a failed or cancelled run is settled and published: the loop does
  * not catch its own failure, so this is how the runner learns the start the loop journaled.
  */
+/** The queue time the runner reports, rounded; `undefined` when it has none (or it fails). */
+async function readQueueMs(hooks: AgentLoopHooks): Promise<number | undefined> {
+  if (hooks.queueMs === undefined) return undefined;
+  try {
+    const value = await hooks.queueMs();
+    return typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.round(value))
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function runDurationMs(error: unknown, now: number = Date.now()): number | undefined {
   if (typeof error !== 'object' || error === null) {
     return undefined;
@@ -3211,7 +3329,7 @@ export async function runAgentLoop<TOutput = unknown>(
   requested: AgentRunInput,
   hooks: AgentLoopHooks,
 ): Promise<AgentLoopResult<TOutput>> {
-  const started: { at?: number } = {};
+  const started: RunClock = {};
   try {
     return await runAgentLoopBody(boundDeps, requested, hooks, started);
   } catch (error) {
@@ -3219,6 +3337,21 @@ export async function runAgentLoop<TOutput = unknown>(
     // with the start of the outermost run — the one whose runner catches it.
     if (started.at !== undefined && typeof error === 'object' && error !== null) {
       runStartedAt.set(error, started.at);
+    }
+    if (typeof error === 'object' && error !== null && started.at !== undefined) {
+      const timings = started.steps !== undefined ? rollupRunTimings(started.steps) : undefined;
+      runMeasured.set(error, {
+        ...(started.queueMs !== undefined ? { queueMs: started.queueMs } : {}),
+        ...(timings !== undefined
+          ? {
+              modelMs: timings.modelMs,
+              toolsMs: timings.toolsMs,
+              modelCalls: timings.modelCalls,
+              toolCalls: timings.toolCalls,
+              stepTimings: timings.steps,
+            }
+          : {}),
+      });
     }
     throw error;
   }
@@ -3228,7 +3361,7 @@ async function runAgentLoopBody<TOutput>(
   boundDeps: AgentLoopDeps<TOutput>,
   requested: AgentRunInput,
   hooks: AgentLoopHooks,
-  started: { at?: number },
+  started: RunClock,
 ): Promise<AgentLoopResult<TOutput>> {
   // The persona, FIRST and only when the run names one: its definition is read from config once and
   // frozen in this checkpoint, so a run resumed after the persona was edited or removed keeps the
@@ -3371,19 +3504,33 @@ async function runAgentLoopBody<TOutput>(
   const startedAt = await hooks.step('run:started-at', () => Promise.resolve(Date.now()));
   started.at = startedAt;
   // Optional-chained: a store without run recording makes this (and persist:run:end) a no-op.
-  await hooks.step('persist:run:start', async () => {
-    // Hashed BEFORE the retrieved-context block is folded in below, so the hash identifies the
-    // prompt VERSION (agent base + contributors), not a given turn's retrieval.
-    const promptHash = createHash('sha256').update(system).digest('hex');
-    await deps.store.recordRunStart?.({
-      runId: hooks.runId,
-      threadId: input.threadId,
-      actorRef: input.actor.id,
-      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
-      ...(input.parentRunId !== undefined ? { parentRunId: input.parentRunId } : {}),
-      promptHash,
-    });
-  });
+  // The queue time is read INSIDE this checkpoint and journaled with it: only the first execution
+  // of this step is the moment the run left the queue.
+  const opened: { queueMs?: number } | undefined = await hooks.step(
+    'persist:run:start',
+    async () => {
+      // Hashed BEFORE the retrieved-context block is folded in below, so the hash identifies the
+      // prompt VERSION (agent base + contributors), not a given turn's retrieval.
+      const promptHash = createHash('sha256').update(system).digest('hex');
+      const queueMs = await readQueueMs(hooks);
+      await deps.store.recordRunStart?.({
+        runId: hooks.runId,
+        threadId: input.threadId,
+        actorRef: input.actor.id,
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.parentRunId !== undefined ? { parentRunId: input.parentRunId } : {}),
+        promptHash,
+        ...(queueMs !== undefined ? { queueMs } : {}),
+      });
+      return queueMs !== undefined ? { queueMs } : {};
+    },
+  );
+  if (typeof opened === 'object' && opened !== null && typeof opened.queueMs === 'number') {
+    started.queueMs = opened.queueMs;
+  }
+  // Where each step's time went, filled as the steps run (or replay from their checkpoints).
+  const stepTimings: RunStepTiming[] = [];
+  started.steps = stepTimings;
 
   // What the assistant already believes about this person, folded in ABOVE the retrieved passages
   // and the skills catalog — see `AgentLoopDeps.memory` for why the order runs most-durable-first.
@@ -3697,6 +3844,13 @@ async function runAgentLoopBody<TOutput>(
     }
     // The first text of the run is the first one a checkpoint recorded — a replay reads it back.
     firstTextAt ??= turn.firstTextAt;
+    const stepTiming: RunStepTiming = {
+      step: i,
+      ...(typeof turn.modelMs === 'number' ? { modelMs: turn.modelMs } : {}),
+      tools: [],
+      toolsMs: 0,
+    };
+    stepTimings.push(stepTiming);
     // The gate runs before ANYTHING downstream: before the held frames reach the subscriber, before
     // the assistant message is persisted, before this text becomes the next step's context.
     let rejection: { processor: string; reason: string } | undefined;
@@ -3758,8 +3912,10 @@ async function runAgentLoopBody<TOutput>(
     }));
 
     await hooks.step(`persist:usage:${i}`, () =>
-      deps.store.recordUsage({
+      recordUsageRow(deps.store, {
         threadId: input.threadId,
+        runId: hooks.runId,
+        ...usageAttribution(input),
         actorRef: input.actor.id,
         modelId: resolvedModelId,
         purpose: 'chat',
@@ -3856,8 +4012,10 @@ async function runAgentLoopBody<TOutput>(
         followUps = suggestions;
       }
       await hooks.step(`persist:usage:followups:${i}`, () =>
-        deps.store.recordUsage({
+        recordUsageRow(deps.store, {
           threadId: input.threadId,
+          runId: hooks.runId,
+          ...usageAttribution(input),
           actorRef: input.actor.id,
           modelId: generated.modelId ?? deps.modelId ?? 'unknown',
           purpose: 'follow_ups',
@@ -4030,6 +4188,7 @@ async function runAgentLoopBody<TOutput>(
       ...(skillOffer !== undefined ? { skills: skillOffer } : {}),
       ...(memoryDigest !== undefined ? { memory: memoryDigest } : {}),
       ...(persona !== undefined ? { persona } : {}),
+      toolTimings: [],
     };
     // A model routinely asks for several tools at once, and running them back to back makes the turn
     // cost their sum. Overlapping them is safe here because a checkpoint position is handed out on
@@ -4080,6 +4239,18 @@ async function runAgentLoopBody<TOutput>(
         results.push(await runClaimedToolCall(turnCalls, await claimToolCall(turnCalls, call)));
       }
     }
+    // Settled, in call order: the step's tool time, parallel calls counted once.
+    const ranTools = turnCalls.toolTimings ?? [];
+    const order = new Map(toolCallsWithKind.map((call, index) => [call.id, index]));
+    ranTools.sort(
+      (left, right) => (order.get(left.toolCallId) ?? 0) - (order.get(right.toolCallId) ?? 0),
+    );
+    stepTiming.tools = ranTools.map((entry) => ({
+      toolCallId: entry.toolCallId,
+      toolName: entry.toolName,
+      ms: entry.ms,
+    }));
+    stepTiming.toolsMs = toolsWallClockMs(ranTools);
     const settledResults = [...results, ...syntheticResults];
     const toolText = escapeUnsafeToolUiText(
       toolCallsWithKind
@@ -4231,6 +4402,7 @@ async function runAgentLoopBody<TOutput>(
   // Normal completion only. The loop never records 'failed' — it doesn't catch its own crash;
   // failure recording is the RUNNER's job. A checkpointed step, so a resumed replay settles once.
   const ttftMs = firstTextAt === undefined ? undefined : Math.max(0, firstTextAt - startedAt);
+  const timings = rollupRunTimings(stepTimings);
   const runMetrics = {
     ...(ttftMs !== undefined ? { ttftMs } : {}),
     ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
@@ -4245,6 +4417,7 @@ async function runAgentLoopBody<TOutput>(
       status: 'completed',
       durationMs,
       ...runMetrics,
+      timings,
     });
     return durationMs;
   });
@@ -4259,6 +4432,12 @@ async function runAgentLoopBody<TOutput>(
     outputTokens: totalOutput,
     durationMs: recordedDurationMs ?? Date.now() - startedAt,
     ...runMetrics,
+    ...(started.queueMs !== undefined ? { queueMs: started.queueMs } : {}),
+    modelMs: timings.modelMs,
+    toolsMs: timings.toolsMs,
+    modelCalls: timings.modelCalls,
+    toolCalls: timings.toolCalls,
+    stepTimings: timings.steps,
   });
   return { text: lastText, ...(structured !== undefined ? { object: structured } : {}) };
 }

@@ -938,6 +938,12 @@ export class DrizzleAgentStore
       settledAt: null,
       promptHash: run.promptHash ?? null,
       parentRunId: run.parentRunId ?? null,
+      queueMs: run.queueMs !== undefined ? Math.max(0, Math.round(run.queueMs)) : null,
+      modelMs: null,
+      toolsMs: null,
+      modelCalls: null,
+      toolCalls: null,
+      timings: null,
     };
     await this.db.insert(this.t.agentRun).values(runRow);
   }
@@ -965,6 +971,13 @@ export class DrizzleAgentStore
     }
     if (end.errorMessage !== undefined) {
       updates.errorMessage = end.errorMessage;
+    }
+    if (end.timings !== undefined) {
+      updates.modelMs = Math.round(end.timings.modelMs);
+      updates.toolsMs = Math.round(end.timings.toolsMs);
+      updates.modelCalls = end.timings.modelCalls;
+      updates.toolCalls = end.timings.toolCalls;
+      updates.timings = end.timings.steps;
     }
     await this.db.update(this.t.agentRun).set(updates).where(eq(this.t.agentRun.id, end.runId));
   }
@@ -1207,9 +1220,17 @@ export class DrizzleAgentStore
   async recordUsage(input: RecordUsageInput): Promise<void> {
     await this.db.insert(this.t.agentTokenUsage).values({
       id: crypto.randomUUID(),
-      threadId: input.threadId,
+      threadId: input.threadId ?? null,
       actorRef: input.actorRef,
       messageId: input.messageId ?? null,
+      runId: input.runId ?? null,
+      feature: input.feature ?? null,
+      provider: input.provider ?? null,
+      tenantRef: input.tenantRef ?? null,
+      audioSeconds: input.audioSeconds ?? null,
+      characters: input.characters ?? null,
+      requests: input.requests ?? null,
+      metadata: input.metadata ?? null,
       modelId: input.modelId,
       purpose: input.purpose,
       inputTokens: input.usage.inputTokens,

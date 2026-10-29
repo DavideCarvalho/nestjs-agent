@@ -15,7 +15,11 @@ import {
 
 /**
  * Creates the agent tables a database lacks, adds the columns and indexes an existing one lacks, and
- * never drops or alters anything — safe to run on every boot against a shared database. SQLite,
+ * relaxes a column the schema made nullable since (`agent_token_usage.thread_id`: usage recorded
+ * outside a conversation) — never drops anything — safe to run on every boot against a shared
+ * database. Postgres drops the `NOT NULL` in place, MySQL `MODIFY`s the column, and SQLite, which can
+ * do neither, rebuilds that one table (created under a scratch name, rows copied, renamed) inside a
+ * savepoint; only a table no other table references is rebuilt, and its indexes come back below. SQLite,
  * Postgres and MySQL alike, with no drizzle-kit and no migration files.
  *
  * The DDL is rendered from the dialect's Drizzle schema ({@link import('./schema.js').agentSchema},
@@ -185,15 +189,97 @@ async function existingColumns(
   dialect: AgentDialect,
   table: string,
 ): Promise<Set<string>> {
-  const rows =
-    dialect === 'sqlite'
-      ? await querySql<{ name: string }>(db, dialect, sql.raw(`PRAGMA table_info("${table}")`))
-      : await querySql<{ name: string }>(
-          db,
-          dialect,
-          sql`select column_name as name from information_schema.columns where table_schema = ${sql.raw(dialect === 'mysql' ? 'database()' : 'current_schema()')} and table_name = ${table}`,
-        );
-  return new Set(rows.map((row) => String(row.name)));
+  return new Set((await columnNullability(db, dialect, table)).keys());
+}
+
+/** Each column the table has, and whether the database lets it hold NULL. */
+async function columnNullability(
+  db: AgentDrizzleDb,
+  dialect: AgentDialect,
+  table: string,
+): Promise<Map<string, boolean>> {
+  if (dialect === 'sqlite') {
+    const rows = await querySql<{ name: string; notnull: number }>(
+      db,
+      dialect,
+      sql.raw(`PRAGMA table_info("${table}")`),
+    );
+    return new Map(rows.map((row) => [String(row.name), Number(row.notnull) === 0]));
+  }
+  const rows = await querySql<{ name: string; nullable: string }>(
+    db,
+    dialect,
+    sql`select column_name as name, is_nullable as nullable from information_schema.columns where table_schema = ${sql.raw(dialect === 'mysql' ? 'database()' : 'current_schema()')} and table_name = ${table}`,
+  );
+  return new Map(
+    rows.map((row) => [
+      String(row.name ?? (row as { NAME?: string }).NAME),
+      String(row.nullable ?? (row as { NULLABLE?: string }).NULLABLE).toUpperCase() === 'YES',
+    ]),
+  );
+}
+
+/**
+ * Let `column` hold NULL. In place on Postgres and MySQL; on SQLite the table is rebuilt in its
+ * current shape under a scratch name, its rows copied, and renamed over the old one, inside a
+ * savepoint — refused for a table another agent table references, whose foreign keys a rebuild
+ * would break.
+ */
+async function relaxNotNull(
+  db: AgentDrizzleDb,
+  dialect: AgentDialect,
+  spec: TableSpec,
+  column: Column,
+  all: readonly TableSpec[],
+): Promise<void> {
+  const q = (identifier: string) => quote(dialect, identifier);
+  if (dialect === 'postgres') {
+    await runSql(
+      db,
+      dialect,
+      sql.raw(`ALTER TABLE ${q(spec.name)} ALTER COLUMN ${q(column.name)} DROP NOT NULL`),
+    );
+    return;
+  }
+  if (dialect === 'mysql') {
+    await runSql(
+      db,
+      dialect,
+      sql.raw(`ALTER TABLE ${q(spec.name)} MODIFY ${columnDefinition(dialect, column)}`),
+    );
+    return;
+  }
+  if (
+    all.some((other) => other.foreignKeys.some((key) => key.table === spec.name && other !== spec))
+  ) {
+    throw new Error(
+      `agent schema: cannot make ${spec.name}.${column.name} nullable on SQLite — other tables reference ${spec.name}`,
+    );
+  }
+  const scratch = `${spec.name}__rebuild`;
+  const present = [...(await columnNullability(db, dialect, spec.name)).keys()];
+  const list = present.map(q).join(', ');
+  await runSql(db, dialect, sql.raw('SAVEPOINT agent_schema_rebuild'));
+  try {
+    await runSql(db, dialect, sql.raw(`DROP TABLE IF EXISTS ${q(scratch)}`));
+    await runSql(db, dialect, sql.raw(createTableSql(dialect, { ...spec, name: scratch })));
+    await runSql(
+      db,
+      dialect,
+      sql.raw(`INSERT INTO ${q(scratch)} (${list}) SELECT ${list} FROM ${q(spec.name)}`),
+    );
+    await runSql(db, dialect, sql.raw(`DROP TABLE ${q(spec.name)}`));
+    await runSql(db, dialect, sql.raw(`ALTER TABLE ${q(scratch)} RENAME TO ${q(spec.name)}`));
+    await runSql(db, dialect, sql.raw('RELEASE SAVEPOINT agent_schema_rebuild'));
+  } catch (error) {
+    await runSql(db, dialect, sql.raw('ROLLBACK TO SAVEPOINT agent_schema_rebuild')).catch(
+      () => undefined,
+    );
+    await runSql(db, dialect, sql.raw('RELEASE SAVEPOINT agent_schema_rebuild')).catch(
+      () => undefined,
+    );
+    throw error;
+  }
 }
 
 async function indexExists(
@@ -214,7 +300,8 @@ async function indexExists(
 }
 
 async function heal(db: AgentDrizzleDb, dialect: AgentDialect): Promise<void> {
-  for (const spec of specs(dialect)) {
+  const all = specs(dialect);
+  for (const spec of all) {
     await runSql(db, dialect, sql.raw(createTableSql(dialect, spec)));
     // `CREATE TABLE IF NOT EXISTS` is inert against a table that is already there, so a column the
     // schema gained since is added here. Asked, not attempted-and-swallowed: a swallowed error cannot
@@ -229,6 +316,15 @@ async function heal(db: AgentDrizzleDb, dialect: AgentDialect): Promise<void> {
             `ALTER TABLE ${quote(dialect, spec.name)} ADD COLUMN ${columnDefinition(dialect, column)}`,
           ),
         );
+      }
+    }
+    // A column the schema made nullable since it was created. Primary-key columns are left alone:
+    // drizzle reports them nullable on some dialects, and none of them ever relaxes.
+    const nullable = await columnNullability(db, dialect, spec.name);
+    for (const column of spec.columns) {
+      if (column.notNull || spec.primaryKey.includes(column.name)) continue;
+      if (nullable.get(column.name) === false) {
+        await relaxNotNull(db, dialect, spec, column, all);
       }
     }
     for (const index of spec.indexes) {

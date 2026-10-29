@@ -3,6 +3,7 @@ import type {
   AgentGovernanceQueries,
   AgentPricingStore,
   ApprovalWhere,
+  FeatureSpendRow,
   GenuiCallRow,
   GenuiStats,
   GovernancePage,
@@ -19,6 +20,7 @@ import type {
   RunAgentBreakdownRow,
   RunErrorBreakdownRow,
   RunMetrics,
+  RunTimings,
   RunToolCallRow,
   RunTrendPoint,
   RunWhere,
@@ -30,12 +32,16 @@ import type {
   ToolCallActivityRow,
   ToolCallWhere,
   ToolStatRow,
+  UsageBreakdownFilter,
+  UsageBreakdownRow,
   UsageTrendPoint,
 } from '@dudousxd/nestjs-agent-core';
 import {
   bucketByActor,
+  bucketByFeature,
   bucketByModel,
   bucketByThread,
+  bucketUsageBreakdown,
   bucketUsageTrend,
   dayBoundsUtc,
   rollupThreadUsage,
@@ -134,6 +140,23 @@ function toRecentRunRow(run: AgentRun): RecentRunRow {
     startedAt: run.startedAt.toISOString(),
     promptHash: run.promptHash ?? null,
     parentRunId: run.parentRunId ?? null,
+    queueMs: run.queueMs ?? null,
+    modelMs: run.modelMs ?? null,
+    toolsMs: run.toolsMs ?? null,
+    modelCalls: run.modelCalls ?? null,
+    toolCalls: run.toolCalls ?? null,
+  };
+}
+
+/** A run entity's persisted {@link RunTimings}, or `null` when it has none. */
+function toRunTimings(run: AgentRun): RunTimings | null {
+  if (!Array.isArray(run.timings)) return null;
+  return {
+    modelMs: run.modelMs ?? 0,
+    toolsMs: run.toolsMs ?? 0,
+    modelCalls: run.modelCalls ?? 0,
+    toolCalls: run.toolCalls ?? 0,
+    steps: run.timings,
   };
 }
 
@@ -195,21 +218,40 @@ const USAGE_INPUT_FIELDS = [
   'cacheWriteTokens',
   'cacheReadTokens',
   'costUsd',
+  'requests',
+] as const;
+
+/** {@link USAGE_INPUT_FIELDS} plus what the per-feature reads group and sum by. */
+const FEATURE_INPUT_FIELDS = [
+  ...USAGE_INPUT_FIELDS,
+  'feature',
+  'purpose',
+  'costSource',
+  'audioSeconds',
+  'characters',
 ] as const;
 
 function toUsageInput(
-  row: Pick<AgentTokenUsage, (typeof USAGE_INPUT_FIELDS)[number]>,
+  row: {
+    [K in (typeof FEATURE_INPUT_FIELDS)[number]]?: AgentTokenUsage[K] | undefined;
+  },
 ): GovernanceUsageInput {
   return {
-    modelId: row.modelId,
-    actorRef: row.actorRef,
-    threadId: row.thread.id,
-    day: row.createdAt.toISOString().slice(0, 10),
-    inputTokens: row.inputTokens,
-    outputTokens: row.outputTokens,
-    cacheWriteTokens: row.cacheWriteTokens,
-    cacheReadTokens: row.cacheReadTokens,
-    costUsd: row.costUsd,
+    modelId: row.modelId as string,
+    actorRef: row.actorRef as string,
+    threadId: row.thread?.id ?? null,
+    feature: row.feature ?? null,
+    purpose: row.purpose ?? null,
+    costSource: row.costSource ?? null,
+    audioSeconds: row.audioSeconds == null ? null : Number(row.audioSeconds),
+    characters: row.characters == null ? null : Number(row.characters),
+    requests: row.requests == null ? null : Number(row.requests),
+    day: (row.createdAt as Date).toISOString().slice(0, 10),
+    inputTokens: row.inputTokens as number,
+    outputTokens: row.outputTokens as number,
+    cacheWriteTokens: row.cacheWriteTokens ?? null,
+    cacheReadTokens: row.cacheReadTokens ?? null,
+    costUsd: row.costUsd ?? null,
   };
 }
 
@@ -245,12 +287,13 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   private async usageInRange(
     em: EntityManager,
     range: GovernanceRange,
+    withFeature = false,
   ): Promise<GovernanceUsageInput[]> {
     const { start, end } = dayBoundsUtc(range);
     const rows = await em.find(
       AgentTokenUsage,
       { createdAt: { $gte: start, $lte: end } },
-      { fields: USAGE_INPUT_FIELDS },
+      { fields: withFeature ? FEATURE_INPUT_FIELDS : USAGE_INPUT_FIELDS },
     );
     return rows.map(toUsageInput);
   }
@@ -269,6 +312,21 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const em = this.em.fork();
     const pricing = await this.loadPricing();
     return bucketByModel(await this.usageInRange(em, range), pricing);
+  }
+
+  async spendByFeature(range: GovernanceRange): Promise<FeatureSpendRow[]> {
+    const em = this.em.fork();
+    const pricing = await this.loadPricing();
+    return bucketByFeature(await this.usageInRange(em, range, true), pricing);
+  }
+
+  async usageBreakdown(
+    range: GovernanceRange,
+    filter?: UsageBreakdownFilter,
+  ): Promise<UsageBreakdownRow[]> {
+    const em = this.em.fork();
+    const pricing = await this.loadPricing();
+    return bucketUsageBreakdown(await this.usageInRange(em, range, true), pricing, filter);
   }
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
@@ -361,6 +419,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       { fields: ['thread', 'inputTokens', 'outputTokens'] },
     );
     for (const row of usageRows) {
+      if (row.thread === null || row.thread === undefined) continue;
       const bucket = rollups.get(row.thread.id);
       if (bucket !== undefined) {
         bucket.totalTokens += row.inputTokens + row.outputTokens;
@@ -833,6 +892,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
         deleted: run.thread.deletedAt != null,
       },
       toolCalls: toolCalls.map(toRunToolCallRow),
+      timings: toRunTimings(run),
     };
   }
 

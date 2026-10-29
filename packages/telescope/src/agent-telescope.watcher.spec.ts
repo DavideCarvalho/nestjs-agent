@@ -13,6 +13,7 @@ import {
   publishAgentSkillsResolved,
   publishAgentToolCall,
   publishAgentToolRetry,
+  publishAgentUsageRecorded,
 } from '@dudousxd/nestjs-agent-core';
 import { isDiagnosticClaimed } from '@dudousxd/nestjs-diagnostics';
 import type { WatcherContext } from '@dudousxd/nestjs-telescope';
@@ -32,8 +33,8 @@ describe('AgentTelescopeWatcher', () => {
     expect(new AgentTelescopeWatcher().type).toBe('agent');
   });
 
-  it('subscribes all 13 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
-    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(13);
+  it('subscribes all 14 AGENT_DIAGNOSTIC_EVENTS and records a tagged entry for each', () => {
+    expect(AGENT_DIAGNOSTIC_EVENTS).toHaveLength(14);
 
     const ctx = mockCtx();
     watcher = new AgentTelescopeWatcher();
@@ -85,8 +86,17 @@ describe('AgentTelescopeWatcher', () => {
       attempt: 1,
       message: 'deadlock',
     });
+    publishAgentUsageRecorded({
+      actorRef: 'u1',
+      feature: 'transcription',
+      purpose: 'external',
+      modelId: 'whisper-1',
+      inputTokens: 0,
+      outputTokens: 0,
+      audioSeconds: 30,
+    });
 
-    expect(ctx.record).toHaveBeenCalledTimes(13);
+    expect(ctx.record).toHaveBeenCalledTimes(14);
     const events = ctx.record.mock.calls.map(
       ([input]) => (input.content as { event: string }).event,
     );

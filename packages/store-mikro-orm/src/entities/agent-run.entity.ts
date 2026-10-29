@@ -1,3 +1,4 @@
+import type { RunStepTiming } from '@dudousxd/nestjs-agent-core';
 import { EntityRepository, EntityRepositoryType, EntitySchema } from '@mikro-orm/core';
 import { AgentThread } from './agent-thread.entity';
 import { DATETIME, LongTextType, identityCollation } from './column-types';
@@ -44,6 +45,14 @@ export class AgentRun {
    * detached child, which outlives its parent's turn and so is paired by nothing in the transcript.
    */
   parentRunId?: string | null;
+  /** Enqueue → body start (ms); null when not read. */
+  queueMs?: number | null;
+  /** Where the completed run's time went: model and tool totals, counts, and the per-step list. */
+  modelMs?: number | null;
+  toolsMs?: number | null;
+  modelCalls?: number | null;
+  toolCalls?: number | null;
+  timings?: RunStepTiming[] | null;
   declare [EntityRepositoryType]?: AgentRunRepository;
 }
 
@@ -82,6 +91,12 @@ export function agentRunSchema(collation?: string): EntitySchema<AgentRun> {
       settledAt: { ...DATETIME, nullable: true, fieldName: 'settled_at' },
       promptHash: { type: 'string', nullable: true, fieldName: 'prompt_hash', ...str },
       parentRunId: { type: 'string', nullable: true, fieldName: 'parent_run_id', ...str },
+      queueMs: { type: 'integer', nullable: true, fieldName: 'queue_ms' },
+      modelMs: { type: 'integer', nullable: true, fieldName: 'model_ms' },
+      toolsMs: { type: 'integer', nullable: true, fieldName: 'tools_ms' },
+      modelCalls: { type: 'integer', nullable: true, fieldName: 'model_calls' },
+      toolCalls: { type: 'integer', nullable: true, fieldName: 'tool_calls' },
+      timings: { type: 'json', nullable: true },
     },
   });
 }

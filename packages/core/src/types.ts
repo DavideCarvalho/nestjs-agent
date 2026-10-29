@@ -270,7 +270,12 @@ export type UsagePurpose =
   | 'follow_ups'
   | 'history_summary'
   | 'structured_output'
-  | 'title';
+  | 'title'
+  /**
+   * Usage recorded from outside an agent turn through `AgentService.recordUsage` — transcription,
+   * TTS, a batch embedding job, a direct SDK call. Its `feature` says what it was for.
+   */
+  | 'external';
 
 export interface QuotaState {
   usedTokens: number;

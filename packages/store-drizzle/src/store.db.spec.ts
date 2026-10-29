@@ -1043,6 +1043,7 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
       agentName: 'researcher',
       parentRunId: 'run-parent',
       promptHash: 'a'.repeat(64),
+      queueMs: 42,
     };
   }
 
@@ -1061,6 +1062,7 @@ describeEachDialect('DrizzleAgentStore', (dialect) => {
         agentName: started.agentName,
         parentRunId: started.parentRunId,
         promptHash: started.promptHash,
+        queueMs: started.queueMs,
       });
     });
 

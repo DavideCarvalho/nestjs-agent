@@ -247,6 +247,10 @@ describe('AgentDurableModule (a turn whose journal predates dispatch)', () => {
       // Core's loop records the run outcome (persist:run:start/end) — assert it lands through the
       // durable path too, so the reliability read-model sees durable runs.
       expect(store.governanceRuns()[0]).toMatchObject({ runId, status: 'completed' });
+      // Queue time comes from the runtime's own run row (`createdAt`), and the run's model time
+      // from the journaled `llm.turn` measurement.
+      expect(store.governanceRuns()[0]?.queueMs).toBeTypeOf('number');
+      expect(store.governanceRuns()[0]?.timings).toMatchObject({ modelCalls: 1, toolCalls: 0 });
     } finally {
       await moduleRef.close();
     }

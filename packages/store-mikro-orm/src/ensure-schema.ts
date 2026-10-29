@@ -59,8 +59,10 @@ const SCHEMA_LOCK_NAME = 'agent_schema';
  * default), so a database healed before it gets the correction once.
  * 3: `agent_genui_call` (generative-UI telemetry).
  * 4: `agent_run.ttft_ms` / `cost_usd` / `model_id` (run metrics).
+ * 5: the usage ledger beyond agent turns (`agent_token_usage.thread_id` nullable, `feature`, the
+ * units, `metadata`) and the run timings (`agent_run.queue_ms`, `model_ms`, `tools_ms`, …).
  */
-const SCHEMA_REVISION = 4;
+const SCHEMA_REVISION = 5;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the
@@ -131,6 +133,10 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   await reconcileMySqlCollations(em, collations);
   const statements = await agentUpdateStatements(em);
   if (statements.length === 0) {
+    // Nothing to apply — but a nullability change the safe diff does not emit still has to have
+    // landed before this revision is recorded.
+    const unrelaxed = await unrelaxedColumns(em, dialect);
+    if (unrelaxed.length > 0) throw new AgentSchemaHealError(unrelaxed);
     return;
   }
   await withoutForeignKeyEnforcement(connection, dialect, async () => {
@@ -154,9 +160,55 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   // schema moved: a filtered, rewritten or silently-swallowed statement leaves no error to catch.
   await reconcileMySqlCollations(em, collations);
   const pending = (await agentUpdateStatements(em)).filter(isRequiredStructure);
+  // A nullability change is not "required structure" to the filter above (it is an alter), yet usage
+  // recorded outside a conversation fails on every write without it — so it is checked by itself,
+  // and an unrelaxed column keeps the fingerprint from being written.
+  pending.push(...(await unrelaxedColumns(em, dialect)));
   if (pending.length > 0) {
     throw new AgentSchemaHealError(pending);
   }
+}
+
+/** Columns created NOT NULL by an earlier release and nullable now, which the heal must relax. */
+const RELAXED_COLUMNS: readonly { table: string; column: string }[] = [
+  { table: 'agent_token_usage', column: 'thread_id' },
+];
+
+/** Each {@link RELAXED_COLUMNS} entry the database still holds NOT NULL, as a pending statement. */
+async function unrelaxedColumns(em: EntityManager, dialect: SqlDialect): Promise<string[]> {
+  const pending: string[] = [];
+  for (const { table, column } of RELAXED_COLUMNS) {
+    if (!(await columnIsNullable(em, dialect, table, column))) {
+      pending.push(`${table}.${column} must accept NULL`);
+    }
+  }
+  return pending;
+}
+
+/** Whether `table.column` accepts NULL, from the catalog; `true` when the dialect cannot say. */
+async function columnIsNullable(
+  em: EntityManager,
+  dialect: SqlDialect,
+  table: string,
+  column: string,
+): Promise<boolean> {
+  const connection = em.getConnection();
+  if (dialect === 'sqlite') {
+    const rows = (await connection.execute(`pragma table_info(${table})`)) as {
+      name: string;
+      notnull: number;
+    }[];
+    const row = rows.find((each) => each.name === column);
+    return row === undefined || Number(row.notnull) === 0;
+  }
+  if (dialect !== 'mysql' && dialect !== 'postgres') return true;
+  const schema = dialect === 'mysql' ? 'database()' : 'current_schema()';
+  const rows = (await connection.execute(
+    `select is_nullable as nullable from information_schema.columns where table_schema = ${schema} and table_name = ? and column_name = ?`,
+    [table, column],
+  )) as { nullable?: string; NULLABLE?: string }[];
+  const value = rows[0]?.nullable ?? rows[0]?.NULLABLE;
+  return value === undefined || String(value).toUpperCase() === 'YES';
 }
 
 /** The metadata of the tables this store owns, as the host registered them. */
