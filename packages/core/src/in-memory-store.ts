@@ -17,6 +17,7 @@ import {
   type AppendMessageInput,
   type CostSource,
   type CreateThreadInput,
+  type ForkThreadOptions,
   type RecordRunEndInput,
   type RecordRunStartInput,
   type RecordToolCallInput,
@@ -342,7 +343,11 @@ export class InMemoryAgentStore
     this.threads.delete(threadId);
   }
 
-  async forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
+  async forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options: ForkThreadOptions = {},
+  ): Promise<ThreadSummary> {
     const source = this.threads.get(threadId);
     if (source === undefined) {
       throw new Error(`thread ${threadId} not found`);
@@ -353,8 +358,8 @@ export class InMemoryAgentStore
     const ts = this.now();
     const row: ThreadRow = {
       id,
-      actorRef: source.actorRef,
-      tenantRef: source.tenantRef,
+      actorRef: options.actorRef ?? source.actorRef,
+      tenantRef: options.tenantRef !== undefined ? options.tenantRef : source.tenantRef,
       title: source.title,
       transient: false,
       createdAt: ts,

@@ -81,6 +81,11 @@ export {
   type BlankAssistantHistoryContractSubject,
 } from './blank-assistant-history-contract.js';
 export {
+  FORK_THREAD_CONTRACT,
+  type ForkThreadContractCase,
+  type ForkThreadContractSubject,
+} from './fork-thread-contract.js';
+export {
   GENUI_TELEMETRY_STORE_CONTRACT,
   type GenuiTelemetryStoreContractCase,
   type GenuiTelemetryStoreContractSubject,

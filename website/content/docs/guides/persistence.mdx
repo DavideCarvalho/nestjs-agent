@@ -37,7 +37,11 @@ export interface AgentStore {
   getThread(threadId: string): Promise<ThreadDetail | null>;
   listThreads(actorRef: string, limit?: number): Promise<ThreadSummary[]>;
   softDeleteThread(threadId: string): Promise<void>;
-  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary>;
+  forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options?: ForkThreadOptions, // { actorRef?: string; tenantRef?: string | null }
+  ): Promise<ThreadSummary>;
   appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
   setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void>;
   recordToolCall(input: RecordToolCallInput): Promise<void>;
@@ -76,6 +80,37 @@ A `chat()` call that names no agent uses it, ahead of the module's configured `d
 `chat()` call that names one still wins. It comes back on every thread summary and detail as
 `defaultAgent: string | null`, and a `forkThread` carries it onto the fork, since a fork continues
 the same conversation.
+
+### Forking a thread to another actor
+
+`forkThread` copies a thread up to `fromMessageId` (inclusive) into a new, persistent thread. By
+default the copy belongs to the source's owner, in the source's tenant. `ForkThreadOptions` changes
+whose it is — the "continue this conversation" button on a shared link: the reader gets their own
+copy to go on from, and the original stays its owner's.
+
+| Option | Absent | Given |
+|---|---|---|
+| `actorRef` | the source's owner | the copy is that actor's: it shows up in their `listThreads`, not the owner's |
+| `tenantRef` | the source's tenant, **even with a new `actorRef`** | `null` clears it; a string sets it |
+
+A new owner does not imply a new tenant. Forking across tenants, pass both.
+
+`AgentService.forkThread` stays owner-only, and so does `POST /agent/threads/:id/fork-from/:messageId`
+— the route never forks to anyone but the caller of their own thread. A host that authorized the
+read some other way (it checked the share link) says so with `authorized: true`, the same flag
+`chat()` takes for a thread the host shares. The ownership check is skipped and the copy is the
+calling actor's:
+
+```ts
+// your own controller, after checking the share link grants a read of `threadId`
+const fork = await agent.forkThread(actor, threadId, messageId, {
+  authorized: true,
+  tenantRef: actor.tenantRef ?? null, // omit to keep the source's tenant
+});
+```
+
+A missing thread is still a `404`. Never set `authorized` from a request's own claim — it is the host
+vouching for the read, not the client.
 
 Both SQL adapters also implement `defaultAgentForThread(threadId)`, a one-column read on the primary
 key. `AgentService` prefers it for exactly this lookup: `getThread` would return the whole transcript

@@ -18,6 +18,7 @@ export {
   type ChatParams,
   type ChatSendMode,
   type ChatSendResult,
+  type ForkThreadParams,
   type QueuedSend,
   type ThreadDefaultAgentReader,
   type ThreadModelReader,

@@ -4,6 +4,7 @@ import type {
   AgentStore,
   AppendMessageInput,
   CreateThreadInput,
+  ForkThreadOptions,
   RecordToolCallInput,
   RecordUsageInput,
   Retriever,
@@ -77,8 +78,12 @@ class MinimalAgentStore implements AgentStore {
   softDeleteThread(threadId: string): Promise<void> {
     return this.inner.softDeleteThread(threadId);
   }
-  forkThread(threadId: string, fromMessageId: string): Promise<ThreadSummary> {
-    return this.inner.forkThread(threadId, fromMessageId);
+  forkThread(
+    threadId: string,
+    fromMessageId: string,
+    options?: ForkThreadOptions,
+  ): Promise<ThreadSummary> {
+    return this.inner.forkThread(threadId, fromMessageId, options);
   }
   setTitle(threadId: string, title: string): Promise<void> {
     return this.inner.setTitle(threadId, title);

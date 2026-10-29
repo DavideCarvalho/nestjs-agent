@@ -20,6 +20,7 @@ import {
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type Decision,
   type ElicitationReply,
+  type ForkThreadOptions,
   type HumanReply,
   type ListStagedAttachmentsInput,
   type MessageAttachment,
@@ -202,6 +203,23 @@ export interface ChatParams {
  */
 export interface ThreadDefaultAgentReader {
   defaultAgentForThread(threadId: string): Promise<string | null>;
+}
+
+/** What {@link AgentService.forkThread} takes past the thread and the message to copy up to. */
+export interface ForkThreadParams {
+  /**
+   * The HOST already decided this actor may read the thread — "continue this conversation" from a
+   * link its owner shared. Skips the ownership check, and the copy belongs to the CALLER, not the
+   * source's owner; the original is left as it was. Never set it from a request's own claim: the
+   * `POST /threads/:id/fork-from/:messageId` route never does, so it stays owner-only.
+   */
+  authorized?: boolean;
+  /**
+   * The copy's tenant — see `ForkThreadOptions.tenantRef`. Absent keeps the SOURCE's, even when the
+   * copy now belongs to someone else; forking across tenants, pass the caller's
+   * (`actor.tenantRef ?? null`). `null` clears it.
+   */
+  tenantRef?: string | null;
 }
 
 /** Like {@link ThreadDefaultAgentReader}, for the thread's pinned model. */
@@ -1068,9 +1086,29 @@ export class AgentService {
     return this.store.softDeleteThread(threadId);
   }
 
-  async forkThread(actor: Actor, threadId: string, fromMessageId: string): Promise<ThreadSummary> {
-    await this.assertOwnsThread(actor, threadId);
-    return this.store.forkThread(threadId, fromMessageId);
+  /**
+   * Copy a thread up to `fromMessageId` (inclusive) into a new one. By default only the thread's
+   * owner may, and the copy is theirs. With `params.authorized`, the host has vouched for `actor`
+   * (a share link it checked) and the copy is `actor`'s — see {@link ForkThreadParams}.
+   */
+  async forkThread(
+    actor: Actor,
+    threadId: string,
+    fromMessageId: string,
+    params: ForkThreadParams = {},
+  ): Promise<ThreadSummary> {
+    if (params.authorized === true) {
+      if ((await this.store.ownerOfThread(threadId)) === null) {
+        throw new NotFoundException(`thread ${threadId} not found`);
+      }
+    } else {
+      await this.assertOwnsThread(actor, threadId);
+    }
+    const options: ForkThreadOptions = {
+      ...(params.authorized === true ? { actorRef: actor.id } : {}),
+      ...(params.tenantRef !== undefined ? { tenantRef: params.tenantRef } : {}),
+    };
+    return this.store.forkThread(threadId, fromMessageId, options);
   }
 
   /** Kept for source compatibility — a thin wrapper over the more general `updateThread`. */
