@@ -257,7 +257,6 @@ export function bucketUsageTrend(
   return result;
 }
 
-/** Turn an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used to filter usage rows. */
 /**
  * The `[start, end)` a usage report covers — whole UTC days, or a {@link TimestampRange} as given
  * (`to` exclusive). A `TypeError` for an instant that does not parse.
@@ -280,6 +279,7 @@ export function usageRangeBounds(range: GovernanceRange | TimestampRange): {
   return { start, end };
 }
 
+/** Turn an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used to filter usage rows. */
 export function dayBoundsUtc(range: GovernanceRange): { start: Date; end: Date } {
   return {
     start: new Date(`${range.fromDay}T00:00:00.000Z`),

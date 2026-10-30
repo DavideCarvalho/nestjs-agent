@@ -164,11 +164,22 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     private readonly pricing: ReadonlyMap<string, InMemoryModelPrice> = new Map(),
   ) {}
 
-  /** The recorded usage rows within the inclusive day range, already in the shared bucketer shape. */
-  private usageInRange(range: GovernanceRange): GovernanceUsageInput[] {
-    return this.store
-      .governanceUsage()
-      .filter((row) => row.day >= range.fromDay && row.day <= range.toDay);
+  /**
+   * The recorded usage rows within the range, already in the shared bucketer shape: whole UTC days
+   * by the row's `day`, a {@link TimestampRange} by its `createdAt` — the `[start, end)` the SQL
+   * adapters read through `usageRangeBounds`.
+   */
+  private usageInRange(range: GovernanceRange | TimestampRange): GovernanceUsageInput[] {
+    if ('fromDay' in range) {
+      return this.store
+        .governanceUsage()
+        .filter((row) => row.day >= range.fromDay && row.day <= range.toDay);
+    }
+    const { start, end } = usageRangeBounds(range);
+    return this.store.governanceUsage().filter((row) => {
+      const at = Date.parse(row.createdAt);
+      return at >= start.getTime() && at < end.getTime();
+    });
   }
 
   /** The recorded run rows within the inclusive day range (bucketed by `startedAt`'s UTC day). */
@@ -215,12 +226,7 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
     range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]> {
-    const { start, end } = usageRangeBounds(range);
-    const rows = this.store.governanceUsage().filter((row) => {
-      const at = Date.parse(row.createdAt);
-      return at >= start.getTime() && at < end.getTime();
-    });
-    return bucketUsageBreakdown(rows, this.pricing, filter);
+    return bucketUsageBreakdown(this.usageInRange(range), this.pricing, filter);
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
