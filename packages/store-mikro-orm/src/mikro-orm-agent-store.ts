@@ -1208,6 +1208,7 @@ export class MikroOrmAgentStore
       characters: input.characters ?? null,
       requests: input.requests ?? null,
       metadata: input.metadata ?? null,
+      countsTowardsQuota: input.countsTowardsQuota !== false,
       inputTokens: input.usage.inputTokens,
       outputTokens: input.usage.outputTokens,
       createdAt: new Date(),
@@ -1269,13 +1270,13 @@ export class MikroOrmAgentStore
     const from = Math.min(...bounds.map(({ start }) => start.getTime()));
     const to = Math.max(...bounds.map(({ end }) => end.getTime()));
     params.push(actorRef, param(new Date(from)), param(new Date(to)));
-    const [row] = (await em
-      .getConnection()
-      .execute(
-        `select ${columns.join(', ')} from agent_token_usage where actor_ref = ? and created_at >= ? and created_at <= ?`,
-        params,
-        'all',
-      )) as Record<string, unknown>[];
+    const [row] = (await em.getConnection().execute(
+      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) index
+      // already narrows to one actor's window.
+      `select ${columns.join(', ')} from agent_token_usage where actor_ref = ? and created_at >= ? and created_at <= ? and counts_towards_quota = true`,
+      params,
+      'all',
+    )) as Record<string, unknown>[];
     return bounds.map((_, index) => ({
       usedTokens: Number(row?.[`tokens_${index}`] ?? 0),
       costUsd: Number(row?.[`cost_${index}`] ?? 0),

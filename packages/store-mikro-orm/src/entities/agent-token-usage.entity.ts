@@ -31,6 +31,8 @@ export class AgentTokenUsage {
   characters?: number | null;
   requests?: number | null;
   metadata?: Record<string, unknown> | null;
+  /** `false` keeps the row out of the agent's quota windows. */
+  countsTowardsQuota?: boolean;
   createdAt!: Date;
   declare [EntityRepositoryType]?: AgentTokenUsageRepository;
 }
@@ -82,6 +84,7 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       characters: { type: 'integer', nullable: true },
       requests: { type: 'integer', nullable: true },
       metadata: { type: 'json', nullable: true },
+      countsTowardsQuota: { type: 'boolean', default: true, fieldName: 'counts_towards_quota' },
       createdAt: { ...DATETIME, fieldName: 'created_at' },
     },
   });

@@ -29,6 +29,7 @@ import type {
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
+  TimestampRange,
   ToolCallActivityRow,
   ToolCallStatus,
   ToolCallWhere,
@@ -49,8 +50,23 @@ import {
   rollupThreadUsage,
   summarizeGenuiCalls,
   truncateDetailContent,
+  usageRangeBounds,
 } from '@dudousxd/nestjs-agent-core';
-import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, sql, sum } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  like,
+  lt,
+  lte,
+  sql,
+  sum,
+} from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
@@ -297,10 +313,10 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
    * per-feature reads that group by them.
    */
   private async usageInRange(
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     withFeature = false,
   ): Promise<GovernanceUsageInput[]> {
-    const { start, end } = dayBoundsUtc(range);
+    const { start, end } = usageRangeBounds(range);
     const usage = this.t.agentTokenUsage;
     // Only what the bucketers read.
     const rows = await this.db
@@ -329,7 +345,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .where(
         and(
           gte(this.t.agentTokenUsage.createdAt, start),
-          lte(this.t.agentTokenUsage.createdAt, end),
+          lt(this.t.agentTokenUsage.createdAt, end),
         ),
       );
     return rows.map(toUsageInput);
@@ -346,7 +362,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async usageBreakdown(
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]> {
     const pricing = await this.loadPricing();

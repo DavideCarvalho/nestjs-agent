@@ -130,6 +130,8 @@ export interface AgentUsageRecorded {
   threadId?: string;
   runId?: string;
   tenantRef?: string;
+  /** `false` when the row is kept out of the agent's quota; absent when it counts. */
+  countsTowardsQuota?: false;
 }
 export interface AgentRunFailed extends AgentRunEndTimings {
   runId: string;

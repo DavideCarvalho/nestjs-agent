@@ -220,6 +220,7 @@ export {
   type AiUsageOptions,
   type AiUsageResult,
   aiUsageRow,
+  UNKNOWN_MODEL,
   recordAiUsage,
   recordUsageRow,
   usageAttribution,

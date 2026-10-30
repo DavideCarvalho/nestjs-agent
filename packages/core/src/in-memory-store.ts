@@ -82,6 +82,8 @@ interface ToolCallRow {
 }
 
 interface UsageRow {
+  /** `false` → left out of the quota windows. */
+  countsTowardsQuota?: boolean;
   actorRef: string;
   /** `null` for usage recorded outside any conversation. */
   threadId: string | null;
@@ -109,6 +111,8 @@ interface UsageRow {
 
 /** A recorded usage row exposed to the governance read-model (input/output split + thread/day). */
 export interface GovernanceUsageRow {
+  /** `false` → left out of the quota windows. */
+  countsTowardsQuota?: boolean;
   actorRef: string;
   /** `null` for usage recorded outside any conversation (`AgentService.recordUsage`). */
   threadId: string | null;
@@ -978,6 +982,7 @@ export class InMemoryAgentStore
       actorRef: input.actorRef,
       threadId: input.threadId ?? null,
       purpose: input.purpose,
+      ...(input.countsTowardsQuota === false ? { countsTowardsQuota: false } : {}),
       ...ledgerExtras(input),
       modelId: input.modelId,
       inputTokens: input.usage.inputTokens,
@@ -1018,7 +1023,11 @@ export class InMemoryAgentStore
 
   async usageBetween(actorRef: string, fromDay: string, toDay: string): Promise<UsageTotals> {
     const rows = this.usage.filter(
-      (row) => row.actorRef === actorRef && row.day >= fromDay && row.day <= toDay,
+      (row) =>
+        row.actorRef === actorRef &&
+        row.day >= fromDay &&
+        row.day <= toDay &&
+        row.countsTowardsQuota !== false,
     );
     return sumUsage(rows);
   }
@@ -1038,6 +1047,7 @@ export class InMemoryAgentStore
       actorRef: row.actorRef,
       threadId: row.threadId,
       ...(row.purpose !== undefined ? { purpose: row.purpose } : {}),
+      ...(row.countsTowardsQuota === false ? { countsTowardsQuota: false } : {}),
       ...ledgerExtras(row),
       modelId: row.modelId,
       inputTokens: row.inputTokens,

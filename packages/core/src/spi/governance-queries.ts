@@ -145,6 +145,17 @@ export interface UsageBreakdownRow extends FeatureSpendRow {
   actorRef: string;
   /** The part of `costUsd` that is an estimate (recorded as one, or priced here from tokens). */
   estimatedCostUsd: number;
+  /** Rows recorded with no `cost_usd` — the ones `costUsd` priced from tokens, or left at `0`. */
+  unpricedRows: number;
+}
+
+/**
+ * A window of instants for {@link AgentGovernanceQueries.usageBreakdown}, for a report that is not
+ * whole UTC days (a billing period in the app's time zone): `from` inclusive, `to` exclusive.
+ */
+export interface TimestampRange {
+  from: string | Date;
+  to: string | Date;
 }
 
 /** Filters for {@link AgentGovernanceQueries.usageBreakdown}, on top of the day range. */
@@ -152,6 +163,12 @@ export interface UsageBreakdownFilter {
   actor?: string;
   /** Exact feature (`agent` matches the rows from before features too). */
   feature?: string;
+  /**
+   * Price rows recorded without a cost from their tokens and the price list (the default, as every
+   * other rollup does). `false` reports recorded cost only: an unpriced row adds `0`, and
+   * {@link UsageBreakdownRow.unpricedRows} says how many there were.
+   */
+  reprice?: boolean;
 }
 
 /** A recent run for the reliability feed. */
@@ -435,7 +452,7 @@ export interface AgentGovernanceQueries {
   spendByFeature?(range: GovernanceRange): Promise<FeatureSpendRow[]>;
   /** OPTIONAL: spend per actor × feature, costliest first — cost by actor and by feature. */
   usageBreakdown?(
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]>;
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]>;

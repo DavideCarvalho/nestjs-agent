@@ -29,6 +29,7 @@ import type {
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
+  TimestampRange,
   ToolCallActivityRow,
   ToolCallWhere,
   ToolStatRow,
@@ -47,6 +48,7 @@ import {
   rollupThreadUsage,
   summarizeGenuiCalls,
   truncateDetailContent,
+  usageRangeBounds,
 } from '@dudousxd/nestjs-agent-core';
 import type { ToolCallStatus, ToolKind } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
@@ -286,13 +288,13 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   private async usageInRange(
     em: EntityManager,
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     withFeature = false,
   ): Promise<GovernanceUsageInput[]> {
-    const { start, end } = dayBoundsUtc(range);
+    const { start, end } = usageRangeBounds(range);
     const rows = await em.find(
       AgentTokenUsage,
-      { createdAt: { $gte: start, $lte: end } },
+      { createdAt: { $gte: start, $lt: end } },
       { fields: withFeature ? FEATURE_INPUT_FIELDS : USAGE_INPUT_FIELDS },
     );
     return rows.map(toUsageInput);
@@ -321,7 +323,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async usageBreakdown(
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]> {
     const em = this.em.fork();
