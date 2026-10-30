@@ -168,7 +168,7 @@
     "@types/supertest": "6.0.3",
     "ajv": "8.20.0",
     "ioredis": "6.0.0",
-    "nestjs-agent-before": "npm:@dudousxd/nestjs-agent@1.19.3",
+    "nestjs-agent-before": "npm:@dudousxd/nestjs-agent@1.36.2",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "supertest": "7.0.0",
