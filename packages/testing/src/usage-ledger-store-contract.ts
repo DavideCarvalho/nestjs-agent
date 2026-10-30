@@ -197,6 +197,75 @@ export const USAGE_LEDGER_STORE_CONTRACT: readonly UsageLedgerStoreContractCase[
     },
   },
   {
+    name: 'keeps a countsTowardsQuota: false row out of the quota windows, and in the reports',
+    async run({ store, governance, actorRef }) {
+      await store.recordUsage({
+        actorRef,
+        modelId: 'text-embedding-3-small',
+        purpose: 'external',
+        feature: 'embeddings',
+        usage: { inputTokens: 50_000, outputTokens: 0 },
+        costUsd: 0.5,
+        countsTowardsQuota: false,
+      });
+      await store.recordUsage({
+        actorRef,
+        modelId: 'gpt-4o-mini',
+        purpose: 'external',
+        feature: 'spellcheck',
+        usage: { inputTokens: 100, outputTokens: 20 },
+        costUsd: 0.0001,
+      });
+      const day = await store.quotaToday(actorRef, today());
+      check(day.usedTokens === 120, 'the token window skips the row', day);
+      check(close(day.costUsd, 0.0001), 'the USD window skips the row', day);
+      const features = (await governance.spendByFeature?.(range())) ?? [];
+      check(
+        features.find((row) => row.feature === 'embeddings')?.inputTokens === 50_000,
+        'the row is still in the reports',
+        features,
+      );
+    },
+  },
+  {
+    name: 'breaks usage down over a timestamp window, counting unpriced rows, with or without repricing',
+    async run({ store, governance, actorRef }) {
+      const before = new Date(Date.now() - 2000);
+      await store.recordUsage({
+        actorRef,
+        modelId: 'unpriced-model',
+        purpose: 'external',
+        feature: 'chat',
+        usage: { inputTokens: 10, outputTokens: 0 },
+      });
+      await store.recordUsage({
+        actorRef,
+        modelId: 'unpriced-model',
+        purpose: 'external',
+        feature: 'chat',
+        usage: { inputTokens: 10, outputTokens: 0 },
+        costUsd: 0.25,
+      });
+      const after = new Date(Date.now() + 2000);
+      const [row] = (await governance.usageBreakdown?.({ from: before, to: after })) ?? [];
+      check(row?.unpricedRows === 1, 'counts the unpriced row', row);
+      check(row?.requests === 2, 'counts both rows in the window', row);
+      const [recorded] =
+        (await governance.usageBreakdown?.(
+          { from: before.toISOString(), to: after.toISOString() },
+          { reprice: false },
+        )) ?? [];
+      check(
+        recorded !== undefined && close(recorded.costUsd, 0.25),
+        'recorded cost only',
+        recorded,
+      );
+      const later =
+        (await governance.usageBreakdown?.({ from: after, to: new Date(Date.now() + 9000) })) ?? [];
+      check(later.length === 0, 'a window after the rows has none', later);
+    },
+  },
+  {
     name: 'counts tokens in the token windows and cost in the USD windows; audio adds no tokens',
     async run({ store, actorRef }) {
       await store.recordUsage({

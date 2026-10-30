@@ -237,6 +237,10 @@ export const agentTokenUsage = sqliteTable(
     requests: integer('requests'),
     /** The caller's own JSON, never read by the library. */
     metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    /** `false` keeps the row out of the agent's quota windows (`recordUsage({ countsTowardsQuota: false })`). */
+    countsTowardsQuota: integer('counts_towards_quota', { mode: 'boolean' })
+      .notNull()
+      .default(true),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [

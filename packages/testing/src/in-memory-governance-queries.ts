@@ -26,6 +26,7 @@ import type {
   ThreadMeta,
   ThreadSpendRow,
   ThreadWhere,
+  TimestampRange,
   ToolCallActivityRow,
   ToolCallWhere,
   ToolStatRow,
@@ -44,6 +45,7 @@ import {
   rollupThreadUsage,
   summarizeGenuiCalls,
   truncateDetailContent,
+  usageRangeBounds,
 } from '@dudousxd/nestjs-agent-core';
 import type {
   GovernanceRunRow,
@@ -210,10 +212,15 @@ export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async usageBreakdown(
-    range: GovernanceRange,
+    range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]> {
-    return bucketUsageBreakdown(this.usageInRange(range), this.pricing, filter);
+    const { start, end } = usageRangeBounds(range);
+    const rows = this.store.governanceUsage().filter((row) => {
+      const at = Date.parse(row.createdAt);
+      return at >= start.getTime() && at < end.getTime();
+    });
+    return bucketUsageBreakdown(rows, this.pricing, filter);
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {

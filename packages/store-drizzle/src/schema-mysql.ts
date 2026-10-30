@@ -205,6 +205,8 @@ export const agentTokenUsage = mysqlTable(
     requests: int('requests'),
     /** The caller's own JSON, never read by the library. */
     metadata: json('metadata').$type<Record<string, unknown>>(),
+    /** `false` keeps the row out of the agent's quota windows (`recordUsage({ countsTowardsQuota: false })`). */
+    countsTowardsQuota: boolean('counts_towards_quota').notNull().default(true),
     createdAt: ts('created_at').notNull(),
   },
   (table) => [

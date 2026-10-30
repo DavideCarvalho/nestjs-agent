@@ -1231,6 +1231,7 @@ export class DrizzleAgentStore
       characters: input.characters ?? null,
       requests: input.requests ?? null,
       metadata: input.metadata ?? null,
+      countsTowardsQuota: input.countsTowardsQuota !== false,
       modelId: input.modelId,
       purpose: input.purpose,
       inputTokens: input.usage.inputTokens,
@@ -1325,7 +1326,11 @@ export class DrizzleAgentStore
     const [row] = (await this.db
       .select(columns)
       .from(usage)
-      .where(and(eq(usage.actorRef, actorRef), within(from, to)))) as Record<string, unknown>[];
+      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) index
+      // already narrows to one actor's window.
+      .where(
+        and(eq(usage.actorRef, actorRef), within(from, to), eq(usage.countsTowardsQuota, true)),
+      )) as Record<string, unknown>[];
     return bounds.map((_, index) => ({
       usedTokens: Number(row?.[`tokens${index}`] ?? 0),
       costUsd: Number(row?.[`cost${index}`] ?? 0),

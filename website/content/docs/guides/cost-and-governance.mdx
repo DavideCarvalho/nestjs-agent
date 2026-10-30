@@ -64,6 +64,31 @@ billed in audio seconds or characters adds nothing there — seconds are not tok
 sum `costUsd`, so every priced row counts whatever its unit. Platform cost counts against nobody. A
 token-only budget does not limit audio; a USD budget limits everything that was priced.
 
+**Spend you budget yourself.** The agent's quota is the assistant's budget. If the app meters some AI
+on its own (indexing a library into embeddings, a spellcheck with its own allowance), counting it here
+too would lock a person out of the assistant for the day. Pass `countsTowardsQuota: false`:
+
+```ts
+await this.agent.recordUsage({
+  actorRef: user.id,
+  feature: 'embeddings',
+  modelId: 'text-embedding-3-small',
+  inputTokens: 480_000,
+  countsTowardsQuota: false,
+});
+```
+
+The row stays in the ledger, every report and `usage.recorded` (which then carries
+`countsTowardsQuota: false`); `quotaToday` / `usageBetween` / `usageWindows` — the token and USD
+windows — skip it, and no `QuotaStore` counter is bumped. It is stored in
+`agent_token_usage.counts_towards_quota` (boolean, `NOT NULL DEFAULT true`, so every older row counts),
+added by both adapters' heal; the quota reads add `counts_towards_quota = true` to the rows the
+`(actor_ref, created_at)` index already narrows to one actor's window, so they stay one index range
+scan.
+
+A call whose provider named no model leaves `modelId` out (or passes `null`): it is recorded as
+`'unknown'` (`UNKNOWN_MODEL`), the loop's own convention.
+
 ---
 
 ## Cost per row: reported wins, else estimate
@@ -216,7 +241,7 @@ just inject it:
 | `spendByActor(range)` | requests / total tokens / cost, per actor |
 | `usageTrend(range)` | total tokens + cost bucketed by day |
 | `spendByFeature?(range)` | requests / tokens / audio seconds / characters / cost per feature, agent turns (`source: 'agent'`) and recorded usage (`'external'`) side by side |
-| `usageBreakdown?(range, { actor?, feature? })` | the same per actor × feature — cost by actor and by feature, with the estimated share |
+| `usageBreakdown?(range, { actor?, feature?, reprice? })` | the same per actor × feature — cost by actor and by feature, with the estimated share and `unpricedRows`. `range` is UTC days or `{ from, to }` instants (`to` exclusive). `reprice: false` reports recorded cost only, leaving unpriced rows at `0` instead of pricing their tokens |
 | `recentToolCalls(limit)` | latest tool calls with status + thread |
 | `recentThreads(limit)` | latest threads with message count + tokens |
 | `runMetrics(range)` | success/error rate, retries, p95 run duration |

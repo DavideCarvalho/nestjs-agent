@@ -5,6 +5,7 @@ import type {
   ModelSpendRow,
   ThreadSpendRow,
   ThreadUsageRollup,
+  TimestampRange,
   UsageBreakdownFilter,
   UsageBreakdownRow,
   UsageTrendPoint,
@@ -257,6 +258,28 @@ export function bucketUsageTrend(
 }
 
 /** Turn an inclusive `YYYY-MM-DD` day range into the UTC datetime bounds used to filter usage rows. */
+/**
+ * The `[start, end)` a usage report covers — whole UTC days, or a {@link TimestampRange} as given
+ * (`to` exclusive). A `TypeError` for an instant that does not parse.
+ */
+export function usageRangeBounds(range: GovernanceRange | TimestampRange): {
+  start: Date;
+  end: Date;
+} {
+  if ('fromDay' in range) {
+    return {
+      start: new Date(`${range.fromDay}T00:00:00.000Z`),
+      end: new Date(Date.parse(`${range.toDay}T23:59:59.999Z`) + 1),
+    };
+  }
+  const start = new Date(range.from);
+  const end = new Date(range.to);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new TypeError('usageBreakdown: from and to must be instants (ISO strings or Dates)');
+  }
+  return { start, end };
+}
+
 export function dayBoundsUtc(range: GovernanceRange): { start: Date; end: Date } {
   return {
     start: new Date(`${range.fromDay}T00:00:00.000Z`),
@@ -340,8 +363,11 @@ export function bucketUsageBreakdown(
       characters: 0,
       costUsd: 0,
       estimatedCostUsd: 0,
+      unpricedRows: 0,
     };
-    const cost = rowCost(row, prices);
+    const unpriced = row.costUsd === undefined || row.costUsd === null;
+    const cost = unpriced && filter.reprice === false ? 0 : rowCost(row, prices);
+    if (unpriced) bucket.unpricedRows += 1;
     bucket.requests += row.requests ?? 1;
     bucket.inputTokens += row.inputTokens;
     bucket.outputTokens += row.outputTokens;

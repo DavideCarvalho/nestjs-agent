@@ -112,6 +112,31 @@ describe('AgentService.recordUsage — AI spend from outside agent turns', () =>
     ]);
   });
 
+  it('records a call with no model as `unknown`, and an opt-out row outside the quota', async () => {
+    const { service, store } = await boot();
+    const events: AgentUsageRecorded[] = [];
+    const name = 'aviary:agent:usage.recorded';
+    const listener = (message: unknown) =>
+      void events.push((message as { payload: AgentUsageRecorded }).payload);
+    subscribe(name, listener);
+    try {
+      await service.recordUsage({ actorRef: 'alice', feature: 'rag-chat', inputTokens: 10 });
+      await service.recordUsage({
+        actorRef: 'alice',
+        feature: 'embeddings',
+        modelId: null,
+        inputTokens: 90_000,
+        countsTowardsQuota: false,
+      });
+    } finally {
+      unsubscribe(name, listener);
+    }
+    expect(store.governanceUsage().map((row) => row.modelId)).toEqual(['unknown', 'unknown']);
+    expect(events[1]?.countsTowardsQuota).toBe(false);
+    expect(events[0]?.countsTowardsQuota).toBeUndefined();
+    expect((await store.quotaToday('alice', today())).usedTokens).toBe(10);
+  });
+
   it('never throws into the caller unless throwOnError', async () => {
     const { service, store } = await boot();
     vi.spyOn(store, 'recordUsage').mockRejectedValue(new Error('database is down'));
