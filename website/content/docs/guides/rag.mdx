@@ -217,6 +217,32 @@ Swap `MemoryVectorStore` for either in the wiring above; nothing else changes. F
 (Qdrant, Pinecone, Weaviate), implement the `VectorStore` SPI (see
 the [package reference](/docs/agent/packages/rag) for the required methods).
 
+## RAG for a model: `RagRepository`
+
+When the text lives on your own rows, declare it once per model. The entity or Drizzle table doesn't change:
+
+```ts
+import { RagModule, RagRepository } from '@dudousxd/nestjs-agent-rag/nestjs';
+
+RagModule.forRoot({ store, embedder, onUsage: (usage) => meter.add(usage) });
+
+@Injectable()
+export class DocumentsRag extends RagRepository<ProjectDocument> {
+  protected readonly name = 'project_documents';
+  readonly scope = { projectId: (d: ProjectDocument) => d.project.id };
+
+  id(d: ProjectDocument) { return d.id; }
+  protected text(d: ProjectDocument) { return d.textContent; }
+}
+
+RagModule.forFeature([DocumentsRag]);
+
+await documentsRag.index(doc);
+await documentsRag.search('question', { scope: { projectId } });
+```
+
+A search without the scope doesn't compile, and at runtime throws `RagScopeRequiredError` before any embedding is paid for. A `filter` can't override it. Saving a row doesn't index it: call `index` from a job. To keep deletions in step, use `.returning()` plus `remove` on Drizzle, `provideRagDeleteSync` on MikroORM, and `reconcile` for what no hook sees, such as `ON DELETE CASCADE`. See the [package reference](/docs/agent/packages/rag) for the details.
+
 ## Long documents: tree navigation
 
 On long structured documents (regulations, contracts, 10-Ks), chunk search tends to find the right

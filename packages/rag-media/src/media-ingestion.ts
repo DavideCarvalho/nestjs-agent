@@ -4,6 +4,7 @@ import {
   type VectorRecord,
   type VectorStore,
   chunkDocuments,
+  replaceDocumentChunks,
 } from '@dudousxd/nestjs-agent-rag';
 import {
   outcomeContext,
@@ -299,15 +300,12 @@ export async function ingestMediaFile(
   const embeddings = await inPhase('embed', () =>
     chunks.length === 0 ? [] : deps.embedder.embed(chunks.map((chunk) => chunk.text)),
   );
-  // remove-then-upsert so a re-attach that shrinks to fewer chunks doesn't leave a stale tail.
-  await inPhase('store', () => deps.store.remove(event.id));
+  // Replaced whole so a re-attach that shrinks to fewer chunks doesn't leave a stale tail.
   const records: VectorRecord[] = chunks.map((chunk, index) => ({
     ...chunk,
     embedding: embeddings[index] ?? [],
   }));
-  if (records.length > 0) {
-    await inPhase('store', () => deps.store.upsert(records));
-  }
+  await inPhase('store', () => replaceDocumentChunks(deps.store, event.id, records));
   const count = records.length;
   publishRagMediaIngested({
     mediaId: event.id,

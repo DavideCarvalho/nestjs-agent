@@ -62,6 +62,23 @@ function openAiAnswer({ body }: Seen) {
 }
 
 describe('openAiEmbeddings', () => {
+  it('embedWithUsage reports the tokens of every batch and the model', async () => {
+    respond = openAiAnswer;
+    const embedder = openAiEmbeddings({
+      baseUrl: `${base}/v1/`,
+      model: 'text-embedding-3-small',
+      apiKey: 'sk-test',
+      dimensions: 2,
+      batchSize: 2,
+    });
+
+    const { vectors, usage } = await embedder.embedWithUsage(['a', 'bb', 'ccc']);
+
+    expect(vectors).toHaveLength(3);
+    expect(usage?.modelId).toBe('text-embedding-3-small');
+    expect(usage?.inputTokens).toBeGreaterThan(0);
+  });
+
   it('posts batches to <baseUrl>/embeddings and returns vectors in input order', async () => {
     respond = openAiAnswer;
     const usage: number[] = [];

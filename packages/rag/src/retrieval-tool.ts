@@ -1,4 +1,10 @@
-import type { Passage, Retriever, ToolHandler, ToolSpec } from '@dudousxd/nestjs-agent-core';
+import type {
+  AiToolCtx,
+  Passage,
+  Retriever,
+  ToolHandler,
+  ToolSpec,
+} from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { type InstrumentRetrieverOptions, instrumentRetriever } from './retrieval-telemetry.js';
 
@@ -8,6 +14,11 @@ export interface RetrievalToolOptions {
   description?: string;
   /** Passages per search. Default lets the retriever decide (typically 5). */
   topK?: number;
+  /**
+   * The access filter for this call, from the tool context — e.g.
+   * `(ctx) => ({ tenant: ctx.actor.tenantRef })`. Without it, every actor searches the same corpus.
+   */
+  filter?: (ctx: AiToolCtx) => Record<string, unknown> | undefined;
   /**
    * Retrieval telemetry (`aviary:rag:retrieval` — duration, chunk count, score distribution, store
    * and collection). **On by default**, because this tool is the once-per-retrieval seam in agentic
@@ -83,14 +94,15 @@ export function createRetrievalTool(
       inputSchema: querySchema,
     },
     handler: {
-      async execute(input: unknown): Promise<{ passages: Passage[] }> {
+      async execute(input: unknown, ctx: AiToolCtx): Promise<{ passages: Passage[] }> {
         if (!isQueryInput(input)) {
           throw new Error('retrieval tool expects { query: string }');
         }
-        const passages = await instrumented.retrieve(
-          input.query,
-          topK !== undefined ? { topK } : {},
-        );
+        const filter = options.filter?.(ctx);
+        const passages = await instrumented.retrieve(input.query, {
+          ...(topK !== undefined ? { topK } : {}),
+          ...(filter !== undefined ? { filter } : {}),
+        });
         return { passages };
       },
     },

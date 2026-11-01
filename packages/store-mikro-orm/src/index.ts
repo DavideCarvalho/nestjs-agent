@@ -13,3 +13,4 @@ export * from './ensure-schema';
 export { AgentSchemaCollationError } from './mysql-collations';
 export * from './agent-schema-sql';
 export * from './mikro-orm-agent-store.module';
+export * from './rag-delete-sync';

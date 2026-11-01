@@ -557,3 +557,28 @@ describe('buildWhere with an undefined value', () => {
     expect(params).toEqual([]);
   });
 });
+
+describe('PgVectorStore vectorType', () => {
+  const client = { query: async () => [] };
+
+  it('emits halfvec DDL', () => {
+    const ddl = new PgVectorStore(client, { dimensions: 8, vectorType: 'halfvec' })
+      .schemaStatements()
+      .join('\n');
+    expect(ddl).toContain('embedding halfvec(8)');
+    expect(ddl).toContain('halfvec_cosine_ops');
+  });
+
+  it('keeps vector as the default', () => {
+    const ddl = new PgVectorStore(client, { dimensions: 8 }).schemaStatements().join('\n');
+    expect(ddl).toContain('embedding vector(8)');
+    expect(ddl).toContain('vector_cosine_ops');
+    expect(ddl).not.toContain('halfvec');
+  });
+
+  it('refuses a list of widths', () => {
+    expect(() => new PgVectorStore(client, { dimensions: [8, 16], vectorType: 'halfvec' })).toThrow(
+      /single width/,
+    );
+  });
+});

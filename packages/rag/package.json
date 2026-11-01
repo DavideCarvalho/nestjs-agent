@@ -15,7 +15,7 @@
     "agent",
     "rag"
   ],
-  "description": "Retrieval-Augmented Generation for nestjs-agent — chunking, ingestion, an embedding-backed Retriever, and in-memory, pgvector and Redis (RediSearch) vector stores with lexical/hybrid search, plus PageIndex-style tree navigation retrieval for long documents",
+  "description": "Retrieval-Augmented Generation for nestjs-agent \u2014 chunking, ingestion, an embedding-backed Retriever, and in-memory, pgvector and Redis (RediSearch) vector stores with lexical/hybrid search, plus PageIndex-style tree navigation retrieval for long documents",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -32,6 +32,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./nestjs": {
+      "import": {
+        "types": "./dist/nestjs/index.d.ts",
+        "default": "./dist/nestjs/index.js"
+      },
+      "require": {
+        "types": "./dist/nestjs/index.d.cts",
+        "default": "./dist/nestjs/index.cjs"
+      }
     }
   },
   "files": [
@@ -44,7 +54,8 @@
     "typecheck:specs": "tsc -p tsconfig.spec.json"
   },
   "peerDependencies": {
-    "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0"
+    "@dudousxd/nestjs-agent-core": ">=0.10.0 <1.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0"
   },
   "dependencies": {
     "@dudousxd/nestjs-diagnostics": "0.7.2",
@@ -53,14 +64,23 @@
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@nestjs/common": "12.0.4",
+    "@nestjs/core": "12.0.4",
+    "@nestjs/testing": "12.0.4",
     "@testcontainers/postgresql": "12.2.0",
     "@types/pg": "8.23.1",
     "drizzle-orm": "0.45.3",
     "pg": "8.23.1",
     "redis": "6.2.1",
+    "reflect-metadata": "0.2.2",
     "testcontainers": "12.2.0",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9"
+  },
+  "peerDependenciesMeta": {
+    "@nestjs/common": {
+      "optional": true
+    }
   }
 }

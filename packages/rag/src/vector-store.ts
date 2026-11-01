@@ -211,6 +211,30 @@ export interface LexicalVectorStore extends VectorStore {
 }
 
 /**
+ * An **optional** capability: swap all of a document's chunks atomically, so no search or crash ever
+ * sees it half-replaced. Optional because atomicity is exactly what not every backend can promise over
+ * its client; {@link replaceDocumentChunks} falls back to `remove` plus `upsert` for the others.
+ */
+export interface AtomicReplaceVectorStore extends VectorStore {
+  replaceDocument(documentId: string, records: VectorRecord[]): Promise<void>;
+}
+
+/** Replaces a document's chunks, atomically where the store can. */
+export async function replaceDocumentChunks(
+  store: VectorStore,
+  documentId: string,
+  records: VectorRecord[],
+): Promise<void> {
+  const atomic = store as Partial<AtomicReplaceVectorStore>;
+  if (typeof atomic.replaceDocument === 'function') {
+    await atomic.replaceDocument(documentId, records);
+    return;
+  }
+  await store.remove(documentId);
+  await store.upsert(records);
+}
+
+/**
  * Does this store carry the optional {@link LexicalVectorStore} capability? Lets a consumer pick the
  * store-backed lexical leg when available and fall back to `KeywordRetriever` (or to dense-only)
  * when it is not, without knowing which adapter it was handed.

@@ -1,4 +1,4 @@
-import type { EmbeddingProvider } from '@dudousxd/nestjs-agent-core';
+import type { UsageReportingEmbeddingProvider } from './embedding-usage.js';
 
 /** A non-2xx answer (or a malformed one) from an embeddings or rerank endpoint. */
 export class HttpModelError extends Error {
@@ -96,7 +96,9 @@ const learnedBatchLimits = new Map<string, number>();
  * const local = openAiEmbeddings({ baseUrl: 'http://tei:8080/v1', model: 'BAAI/bge-m3' });
  * ```
  */
-export function openAiEmbeddings(options: OpenAiEmbeddingsOptions): EmbeddingProvider {
+export function openAiEmbeddings(
+  options: OpenAiEmbeddingsOptions,
+): UsageReportingEmbeddingProvider {
   const url = `${(options.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')}/embeddings`;
   const limitKey = `${url} ${options.model}`;
   const configured = Math.max(1, Math.floor(options.batchSize ?? 64));
@@ -105,7 +107,7 @@ export function openAiEmbeddings(options: OpenAiEmbeddingsOptions): EmbeddingPro
   const timeoutMs = options.timeoutMs ?? 120_000;
   const doFetch = options.fetch ?? fetch;
 
-  const request = async (input: string[]): Promise<number[][]> => {
+  const request = async (input: string[], count: (tokens: number) => void): Promise<number[][]> => {
     const response = await doFetch(url, {
       method: 'POST',
       headers: {
@@ -141,23 +143,27 @@ export function openAiEmbeddings(options: OpenAiEmbeddingsOptions): EmbeddingPro
     const tokens = json?.usage?.total_tokens ?? json?.usage?.prompt_tokens;
     if (typeof tokens === 'number' && Number.isFinite(tokens)) {
       options.onUsage?.(tokens);
+      count(tokens);
     }
     return items.map((item) => item.embedding as number[]);
   };
 
   // A batch refused for its size is split in halves (recursively) and retried; the smaller size
   // becomes the batch size for every later request to this server and model.
-  const requestSplitting = async (input: string[]): Promise<number[][]> => {
+  const requestSplitting = async (
+    input: string[],
+    count: (tokens: number) => void,
+  ): Promise<number[][]> => {
     if (input.length > batchSize) {
       // The size was learned while this batch was being split: send the rest at the size that works.
       const vectors: number[][] = [];
       for (let start = 0; start < input.length; start += batchSize) {
-        vectors.push(...(await requestSplitting(input.slice(start, start + batchSize))));
+        vectors.push(...(await requestSplitting(input.slice(start, start + batchSize), count)));
       }
       return vectors;
     }
     try {
-      return await request(input);
+      return await request(input, count);
     } catch (error) {
       if (!isBatchTooLarge(error) || input.length <= 1) {
         throw error;
@@ -171,25 +177,38 @@ export function openAiEmbeddings(options: OpenAiEmbeddingsOptions): EmbeddingPro
         );
       }
       return [
-        ...(await requestSplitting(input.slice(0, half))),
-        ...(await requestSplitting(input.slice(half))),
+        ...(await requestSplitting(input.slice(0, half), count)),
+        ...(await requestSplitting(input.slice(half), count)),
       ];
     }
   };
 
+  const embedAll = async (
+    texts: string[],
+    count: (tokens: number) => void,
+  ): Promise<number[][]> => {
+    const vectors: number[][] = [];
+    for (let start = 0; start < texts.length; ) {
+      const input = texts
+        .slice(start, start + batchSize)
+        .map((text) => (text.length > maxInputChars ? text.slice(0, maxInputChars) : text) || ' ');
+      vectors.push(...(await requestSplitting(input, count)));
+      start += input.length;
+    }
+    return vectors;
+  };
+
   return {
-    async embed(texts: string[]): Promise<number[][]> {
-      const vectors: number[][] = [];
-      for (let start = 0; start < texts.length; ) {
-        const input = texts
-          .slice(start, start + batchSize)
-          .map(
-            (text) => (text.length > maxInputChars ? text.slice(0, maxInputChars) : text) || ' ',
-          );
-        vectors.push(...(await requestSplitting(input)));
-        start += input.length;
-      }
-      return vectors;
+    embed: (texts) => embedAll(texts, () => {}),
+    async embedWithUsage(texts) {
+      let inputTokens: number | undefined;
+      const vectors = await embedAll(texts, (tokens) => {
+        inputTokens = (inputTokens ?? 0) + tokens;
+      });
+      return {
+        vectors,
+        ...(inputTokens !== undefined ? { usage: { inputTokens, modelId: options.model } } : {}),
+      };
     },
   };
 }
