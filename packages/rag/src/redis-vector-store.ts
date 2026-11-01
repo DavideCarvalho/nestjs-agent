@@ -293,7 +293,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     ) {
       if (Date.now() >= deadline) {
         throw new Error(
-          `RedisVectorStore: timed out after ${REPLACE_LOCK_WAIT_MS}ms waiting to replace document "${documentId}"`,
+          `RedisVectorStore: timed out after ${REPLACE_LOCK_WAIT_MS}ms waiting to change document "${documentId}"`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -303,7 +303,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     const assertHeld = () => {
       if (lost) {
         throw new Error(
-          `RedisVectorStore: lost the lock while replacing document "${documentId}"; call again to repair it`,
+          `RedisVectorStore: lost the lock while changing document "${documentId}"; call again to repair it`,
         );
       }
     };

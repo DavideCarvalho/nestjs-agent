@@ -64,20 +64,21 @@ describe('RedisVectorStore (real RediSearch)', () => {
   });
 
   it('remove waits for a replaceDocument in progress and removes all of it', async () => {
-    await Promise.all([
-      store.replaceDocument(
+    for (let round = 0; round < 10; round++) {
+      const replacing = store.replaceDocument(
         'gone',
         Array.from({ length: 40 }, (_, chunk) => ({
           id: `gone#${chunk}`,
           text: 'x',
           embedding: [1, 0, 0],
         })),
-      ),
-      store.remove('gone'),
-    ]);
-    const left = (await store.listChunks('gone')).length;
-    expect([0, 40]).toContain(left);
-    await store.remove('gone');
+      );
+      // Let the replace get partway through, where an unlocked remove would cut it.
+      await new Promise((resolve) => setTimeout(resolve, round));
+      await Promise.all([replacing, store.remove('gone')]);
+      expect([0, 40]).toContain((await store.listChunks('gone')).length);
+      await store.remove('gone');
+    }
   });
 
   it('replaceDocument takes over a lock whose holder crashed once its lease ends', async () => {

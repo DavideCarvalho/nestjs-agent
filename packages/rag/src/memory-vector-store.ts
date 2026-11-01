@@ -49,7 +49,7 @@ export class MemoryVectorStore implements AtomicReplaceVectorStore {
     }
   }
 
-  /** Calls overlap only across `await`s, so a queue per document is enough here. */
+  /** Replaces take turns per document. A `remove` during one isn't queued, and may be undone by it. */
   async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
     const previous = this.replacing.get(documentId) ?? Promise.resolve();
     const run = previous
