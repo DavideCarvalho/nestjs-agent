@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.1
+
+### Patch Changes
+
+- [#400](https://github.com/DavideCarvalho/nestjs-agent/pull/400) [`43d5ec7`](https://github.com/DavideCarvalho/nestjs-agent/commit/43d5ec72a751c6830de9b1906893ebd30a43a826) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `replaceDocument` no longer leaves a mix of versions when the same document is replaced concurrently. `PgVectorStore` takes an advisory lock per document, which also stops the deadlocks. `RedisVectorStore` gains `replaceDocument`, with a per-document lease that needs `SET` and `EVAL` on the client.
+
 ## 0.14.0
 
 ### Minor Changes
