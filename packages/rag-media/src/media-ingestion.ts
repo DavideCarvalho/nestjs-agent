@@ -1,9 +1,9 @@
 import type { EmbeddingProvider } from '@dudousxd/nestjs-agent-core';
 import {
   type ChunkOptions,
+  type VectorRecord,
   type VectorStore,
   chunkDocuments,
-  ingestChunks,
 } from '@dudousxd/nestjs-agent-rag';
 import {
   outcomeContext,
@@ -142,8 +142,7 @@ const FAILURE_KIND = Symbol.for('aviary.rag.media.ingestFailureKind');
  * structured clone, so a tagged error logs and serializes exactly as it did before.
  *
  * The first (innermost) tag wins, so a nested wrapper never relabels a phase its callee already
- * named — that is what lets the `embed` delegate and the `store` wrapper around `ingestChunks`
- * coexist.
+ * named.
  */
 function tagFailureKind(error: unknown, kind: MediaIngestFailureKind): void {
   // primitives can't carry a property; they surface as `unknown` on read.
@@ -194,7 +193,7 @@ export function mediaIngestFailureKind(error: unknown): MediaIngestFailureKind {
 
 /**
  * Ingest one attached media file into a vector store: size-gate → read bytes → re-check the REAL
- * size → extract text → `store.remove(id)` (orphan-free re-attach) → chunk → embed → upsert.
+ * size → extract text → chunk → embed → `store.remove(id)` (orphan-free re-attach) → upsert.
  *
  * The size gate never trusts `event.size` alone. That number is declared upstream (typically by the
  * client that opened the upload session), so a file announced as `0` would otherwise sail past the
@@ -271,8 +270,6 @@ export async function ingestMediaFile(
     return { status: 'skipped', reason: 'empty-text' };
   }
 
-  // remove-then-ingest so a re-attach that shrinks to fewer chunks doesn't leave a stale tail.
-  await inPhase('store', () => deps.store.remove(event.id));
   const chunks = await inPhase('extract', () =>
     chunkDocuments(
       [
@@ -298,14 +295,20 @@ export async function ingestMediaFile(
       deps.chunk ?? {},
     ),
   );
-  // `ingestChunks` does embed AND upsert behind one call, so one wrapper can't tell them apart.
-  // The embedder is therefore tagged from the inside, via a one-method delegate, and the outer
-  // wrapper claims `store`. First tag wins, so an embedder throw stays `embed` and whatever escapes
-  // `ingestChunks` that ISN'T the embedder is, by elimination, the upsert.
-  const embedder: EmbeddingProvider = {
-    embed: (texts) => inPhase('embed', () => deps.embedder.embed(texts)),
-  };
-  const count = await inPhase('store', () => ingestChunks(chunks, { embedder, store: deps.store }));
+  // Embed before touching the index: a provider failure leaves the previous version searchable.
+  const embeddings = await inPhase('embed', () =>
+    chunks.length === 0 ? [] : deps.embedder.embed(chunks.map((chunk) => chunk.text)),
+  );
+  // remove-then-upsert so a re-attach that shrinks to fewer chunks doesn't leave a stale tail.
+  await inPhase('store', () => deps.store.remove(event.id));
+  const records: VectorRecord[] = chunks.map((chunk, index) => ({
+    ...chunk,
+    embedding: embeddings[index] ?? [],
+  }));
+  if (records.length > 0) {
+    await inPhase('store', () => deps.store.upsert(records));
+  }
+  const count = records.length;
   publishRagMediaIngested({
     mediaId: event.id,
     ownerType: event.ownerType,

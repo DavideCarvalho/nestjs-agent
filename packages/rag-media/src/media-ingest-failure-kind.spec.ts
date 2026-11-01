@@ -140,7 +140,7 @@ describe('failure kind per phase', () => {
     expect(outcome.kind).toBe('store');
   });
 
-  it('tags the final upsert as store — the other half of the same ingestChunks call', async () => {
+  it('tags the final upsert as store', async () => {
     const store = new MemoryVectorStore();
     store.upsert = async () => {
       throw new Boom('vector dimension mismatch');
@@ -150,11 +150,8 @@ describe('failure kind per phase', () => {
     expect(outcome.kind).toBe('store');
   });
 
-  it('splits embed from store even though one ingestChunks call does both', async () => {
-    // The subtle one: `ingestChunks(chunks, { embedder, store })` embeds AND upserts behind a single
-    // call, so a single wrapper would have to label both the same. Same call site, two deps made to
-    // fail, two different kinds — proving the inner delegate wins and the outer wrapper covers the
-    // rest by elimination.
+  it('splits embed from store', async () => {
+    // Two deps made to fail, two different kinds.
     const embedFails = new MemoryVectorStore();
     const upsertFails = new MemoryVectorStore();
     upsertFails.upsert = async () => {
@@ -334,9 +331,8 @@ describe('tagging is non-destructive', () => {
     expect(outcome.kind).toBe('unknown');
   });
 
-  it('lets the innermost phase win rather than the outermost wrapper', async () => {
-    // The embedder is called from inside the `store`-tagged wrapper around `ingestChunks`. If the
-    // outer tag overwrote the inner one, this would read 'store'.
+  it('tags an embedder failure as embed', async () => {
+    // The embedder failure must read 'embed', never a later phase.
     const outcome = await failWith({
       embedder: {
         embed: async () => {

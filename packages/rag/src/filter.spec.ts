@@ -1,10 +1,11 @@
 import { FakeEmbeddingProvider } from '@dudousxd/nestjs-agent-testing';
 import { describe, expect, it } from 'vitest';
 import { EmbeddingRetriever } from './embedding-retriever.js';
-import { matchesFilter } from './filter.js';
+import { filterMatchesNothing, matchesFilter } from './filter.js';
+import { FilteredRetriever } from './filtered-retriever.js';
 import { ingestDocuments } from './ingest.js';
 import { MemoryVectorStore } from './memory-vector-store.js';
-import { documentIdOf } from './vector-store.js';
+import { UnsafeRemovalError, documentIdOf } from './vector-store.js';
 
 describe('matchesFilter', () => {
   it('scalar values keep exact-match (backward compatible)', () => {
@@ -79,5 +80,40 @@ describe('MemoryVectorStore capability-token filtering (search)', () => {
     const retriever = new EmbeddingRetriever(embedder, store);
     const passages = await retriever.retrieve('public', { topK: 10, filter: { audience: [] } });
     expect(passages).toEqual([]);
+  });
+});
+
+describe('an undefined filter value denies', () => {
+  const records = [
+    { id: 'a#0', text: 'a', embedding: [1, 0], metadata: { tenant: 'A' } },
+    { id: 'n#0', text: 'n', embedding: [1, 0], metadata: {} },
+  ];
+
+  it('matchesFilter and filterMatchesNothing', () => {
+    expect(matchesFilter({}, { tenant: undefined })).toBe(false);
+    expect(matchesFilter({ tenant: 'A' }, { tenant: undefined })).toBe(false);
+    expect(filterMatchesNothing({ tenant: undefined })).toBe(true);
+  });
+
+  it('an array holding one denies too', async () => {
+    expect(matchesFilter({}, { tenant: ['A', undefined] })).toBe(false);
+    expect(matchesFilter({ tenant: 'A' }, { tenant: ['A', undefined] })).toBe(false);
+    expect(filterMatchesNothing({ tenant: ['A', undefined] })).toBe(true);
+  });
+
+  it('FilteredRetriever with a missing scope returns nothing', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert(records);
+    const base = new EmbeddingRetriever({ embed: async (t) => t.map(() => [1, 0]) }, store);
+    expect(await new FilteredRetriever(base, { tenant: undefined }).retrieve('q')).toEqual([]);
+  });
+
+  it('removeWhere refuses it and deletes nothing', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert(records);
+    const call = store.removeWhere({ tenant: undefined });
+    await expect(call).rejects.toBeInstanceOf(UnsafeRemovalError);
+    await expect(call).rejects.toMatchObject({ reason: 'undefined-value' });
+    expect(await store.countChunks()).toBe(2);
   });
 });

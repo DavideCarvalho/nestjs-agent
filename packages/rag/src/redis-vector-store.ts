@@ -1,5 +1,5 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import { filterMatchesNothing } from './filter.js';
+import { filterMatchesNothing, undefinedFilterKeys, undefinedFilterMessage } from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
@@ -575,6 +575,10 @@ export class RedisVectorStore implements LexicalVectorStore {
           'Pass a filter that scopes the removal, or delete deliberately with ' +
           'removeMany(await store.listDocumentIds()).',
       );
+    }
+    const missing = undefinedFilterKeys(filter);
+    if (missing.length > 0) {
+      throw new UnsafeRemovalError('undefined-value', undefinedFilterMessage(missing));
     }
     const unindexed = keys.filter((key) => !this.filterableFields.includes(key));
     if (unindexed.length > 0) {

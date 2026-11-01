@@ -1,5 +1,5 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import { filterMatchesNothing } from './filter.js';
+import { filterMatchesNothing, undefinedFilterKeys, undefinedFilterMessage } from './filter.js';
 import {
   DEFAULT_STOP_WORDS,
   anyTermTsquery,
@@ -436,6 +436,10 @@ export class PgVectorStore implements VectorStore {
           'removeMany(await store.listDocumentIds()).',
       );
     }
+    const missing = undefinedFilterKeys(filter);
+    if (missing.length > 0) {
+      throw new UnsafeRemovalError('undefined-value', undefinedFilterMessage(missing));
+    }
     // Redundant with buildWhere's `false` clause, and stated anyway — the deny primitive should be
     // visible at the destructive call site, not one indirection away.
     if (filterMatchesNothing(filter)) {
@@ -712,7 +716,7 @@ function toPassage(row: PgRow): Passage {
  * continue from `params.length`). Scalar values collapse into a single `@>` jsonb-containment check
  * (exact-match, as before). An **array** value is a **match-any** (OR / set membership) check via
  * jsonb `?|`: the record matches when its value for that key — scalar or array — shares an element
- * with the filter array. An empty array can never match (deny primitive). Keys are passed as
+ * with the filter array. An empty array or an `undefined` value can never match (deny primitive). Keys are passed as
  * parameters (`metadata->$k`) so a caller-supplied metadata key can't inject SQL. Returns `[]` when
  * there is no filter, preserving the previous unfiltered query shape.
  *
@@ -731,6 +735,11 @@ export function buildWhere(
   const clauses: string[] = [];
   const scalar: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(stripped)) {
+    // `JSON.stringify` below would drop this key and turn the filter into `@> '{}'`: every row.
+    if (value === undefined || (Array.isArray(value) && value.includes(undefined))) {
+      clauses.push('false');
+      continue;
+    }
     if (Array.isArray(value)) {
       if (value.length === 0) {
         clauses.push('false');

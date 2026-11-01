@@ -222,6 +222,12 @@ describe('RedisVectorStore.searchText (real RediSearch BM25)', () => {
   });
 
   // ── the ACL properties ────────────────────────────────────────────────────────────────────────
+  it('DENIES: an undefined filter value returns nothing, even for a query that matches plenty', async () => {
+    expect(
+      await store.searchText('reimbursement auditors', { topK: 10, filter: { tenant: undefined } }),
+    ).toEqual([]);
+  });
+
   it('DENIES: an empty-array filter returns nothing, even for a query that matches plenty', async () => {
     const unfiltered = await store.searchText('reimbursement auditors', { topK: 10 });
     expect(unfiltered.length).toBeGreaterThan(0); // the query really does match

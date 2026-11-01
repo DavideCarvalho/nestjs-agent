@@ -5,7 +5,7 @@
 // suite (pg-vector-store.db.spec.ts) proves everything that needs a live engine.
 import { describe, expect, it, vi } from 'vitest';
 import type { PgClient } from './pg-vector-store.js';
-import { PgLexicalVectorStore, PgVectorStore } from './pg-vector-store.js';
+import { PgLexicalVectorStore, PgVectorStore, buildWhere } from './pg-vector-store.js';
 import { isLexicalVectorStore } from './vector-store.js';
 
 const NUL = String.fromCharCode(0);
@@ -546,5 +546,14 @@ describe('PgVectorStore.whereConditions (subclass hook)', () => {
     expect(calls[0]?.params).toEqual(['[1]', 3, 't1']);
     expect(calls[1]?.sql).toContain('WHERE tenant_id = $1');
     expect(calls[1]?.params).toEqual(['t2']);
+  });
+});
+
+describe('buildWhere with an undefined value', () => {
+  it('compiles to false instead of an empty containment', () => {
+    const params: unknown[] = [];
+    expect(buildWhere({ tenant: undefined }, params)).toEqual(['false']);
+    expect(buildWhere({ tenant: ['A', undefined] }, params)).toEqual(['false']);
+    expect(params).toEqual([]);
   });
 });

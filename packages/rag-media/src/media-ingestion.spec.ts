@@ -123,6 +123,27 @@ describe('ingestMediaFile', () => {
     expect(document?.metadata?.size).toBe(bytes.byteLength);
   });
 
+  it('keeps the previous chunks when the embedder fails', async () => {
+    const { deps, store } = buildDeps({
+      's3:docs/policy.txt': Buffer.from('Refunds take thirty days.'),
+    });
+    await ingestMediaFile(attachEvent({}), deps);
+    const before = await store.countChunks();
+    expect(before).toBeGreaterThan(0);
+
+    const broken = {
+      ...deps,
+      embedder: {
+        embed: vi.fn(async () => {
+          throw new Error('quota');
+        }),
+      },
+    };
+    await expect(ingestMediaFile(attachEvent({}), broken)).rejects.toThrow('quota');
+
+    expect(await store.countChunks()).toBe(before);
+  });
+
   it('skips a file whose extracted text is blank', async () => {
     const { deps } = buildDeps({ 's3:docs/policy.txt': Buffer.from('   \n\t ') });
     expect(await ingestMediaFile(attachEvent(), deps)).toEqual({
