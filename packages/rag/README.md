@@ -592,6 +592,7 @@ await store.removeMany(['doc-a', 'doc-b']);              // N documents, one pas
 |---|---|
 | `{ collection: 'handbook' }` | deletes that scope, returns the chunk count |
 | `{ audience: [] }` (or any empty array) | **deletes nothing**, returns `0` — the empty array is this package's deny primitive, and a deny must never be read as "no filter" |
+| `{ tenantId: undefined }` | throws `UnsafeRemovalError` with reason `undefined-value` — a missing value is a bug, and on every read method it matches nothing |
 | `{}` | throws `UnsafeRemovalError` — an empty filter is far more often a filter built wrong than a deliberate request to wipe the store |
 | `{ notFilterable: 'x' }` (Redis) | throws `UnsafeRemovalError` — the key has no `meta_*` TAG to match on |
 

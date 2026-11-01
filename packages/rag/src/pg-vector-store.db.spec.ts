@@ -272,6 +272,17 @@ describe('PgVectorStore enumeration + bulk deletion (real pgvector)', () => {
     expect(await enumStore.countChunks()).toBe(2);
   });
 
+  it('an undefined filter value denies reads and refuses removeWhere', async () => {
+    const before = await enumStore.countChunks();
+    expect(before).toBeGreaterThan(0);
+    expect(await enumStore.countChunks({ collection: undefined })).toBe(0);
+    expect(await enumStore.listDocumentIds({ collection: undefined })).toEqual([]);
+    await expect(enumStore.removeWhere({ collection: undefined })).rejects.toMatchObject({
+      reason: 'undefined-value',
+    });
+    expect(await enumStore.countChunks()).toBe(before);
+  });
+
   it('removeWhere scoped to one collection leaves the other intact', async () => {
     expect(await enumStore.removeWhere({ collection: 'kb' })).toBe(3);
     expect(await enumStore.countChunks({ collection: 'kb' })).toBe(0);

@@ -1,5 +1,10 @@
 import type { Passage } from '@dudousxd/nestjs-agent-core';
-import { filterMatchesNothing, matchesFilter } from './filter.js';
+import {
+  filterMatchesNothing,
+  matchesFilter,
+  undefinedFilterKeys,
+  undefinedFilterMessage,
+} from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
@@ -157,6 +162,10 @@ export class MemoryVectorStore implements VectorStore {
           'Pass a filter that scopes the removal, or delete deliberately with ' +
           'removeMany(await store.listDocumentIds()).',
       );
+    }
+    const missing = undefinedFilterKeys(filter);
+    if (missing.length > 0) {
+      throw new UnsafeRemovalError('undefined-value', undefinedFilterMessage(missing));
     }
     if (filterMatchesNothing(filter)) {
       return 0;

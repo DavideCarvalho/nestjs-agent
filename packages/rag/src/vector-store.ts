@@ -13,7 +13,10 @@ export interface VectorRecord {
 
 export interface VectorSearchOptions {
   topK: number;
-  /** Exact-match metadata filter (all keys must equal). Passed through from `RetrieveOptions.filter`. */
+  /**
+   * Exact-match metadata filter (all keys must equal). Passed through from `RetrieveOptions.filter`.
+   * An empty array or an `undefined` value matches nothing.
+   */
   filter?: Record<string, unknown>;
 }
 
@@ -164,6 +167,8 @@ export interface VectorStore {
    *   got built wrong (a dropped key, an `undefined` scope) than a deliberate request to delete
    *   everything. Deliberate mass deletion stays available and stays explicit:
    *   `removeMany(await store.listDocumentIds())`, or the backend's own drop.
+   * - **A key with an `undefined` value throws** {@link UnsafeRemovalError} too, for the same reason:
+   *   `removeWhere({ tenantId: actor.tenantRef })` with no tenant is a bug, not a request.
    *
    * What it removes is exactly what a {@link VectorStore.search} carrying the same filter could
    * reach — no more (it cannot escape the filter) and no less.
@@ -223,7 +228,7 @@ export function isLexicalVectorStore(store: VectorStore): store is LexicalVector
 export class UnsafeRemovalError extends Error {
   constructor(
     /** Why the removal was refused. */
-    readonly reason: 'empty-filter' | 'unindexed-field',
+    readonly reason: 'empty-filter' | 'unindexed-field' | 'undefined-value',
     message: string,
   ) {
     super(message);
