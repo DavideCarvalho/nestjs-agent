@@ -11,7 +11,9 @@ export const alias: Record<string, string> = {
   '@dudousxd/nestjs-agent-rag/nestjs': fileURLToPath(
     new URL('./packages/rag/src/nestjs/index.ts', import.meta.url),
   ),
-  '@dudousxd/nestjs-agent-rag': fileURLToPath(new URL('./packages/rag/src/index.ts', import.meta.url)),
+  '@dudousxd/nestjs-agent-rag': fileURLToPath(
+    new URL('./packages/rag/src/index.ts', import.meta.url),
+  ),
   '@dudousxd/nestjs-agent-core/guardrails': fileURLToPath(
     new URL('./packages/core/src/guardrails/index.ts', import.meta.url),
   ),
