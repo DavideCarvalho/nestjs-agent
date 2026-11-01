@@ -53,6 +53,24 @@ describe('RagIndex scope', () => {
     expect(emb.embed).not.toHaveBeenCalled();
   });
 
+  it('anyOf refuses a missing element', async () => {
+    const { rag, emb } = await setup();
+    await expect(
+      rag.search('q', { scope: { projectId: anyOf([undefined as never]) } }),
+    ).rejects.toBeInstanceOf(RagScopeRequiredError);
+    expect(emb.embed).not.toHaveBeenCalled();
+  });
+
+  it('a row with no id cannot be indexed', async () => {
+    const { rag, emb, store } = await setup();
+    const before = await store.countChunks();
+    await expect(rag.index({ projectId: 'a', body: 'x' } as unknown as Doc)).rejects.toThrow(
+      /needs an id/,
+    );
+    expect(emb.embed).not.toHaveBeenCalled();
+    expect(await store.countChunks()).toBe(before);
+  });
+
   it('anyOf widens explicitly, and an empty one denies', async () => {
     const { rag } = await setup();
     expect(ids(await rag.search('q', { scope: { projectId: anyOf(['a', 'b']) } }))).toEqual([
@@ -189,11 +207,11 @@ describe('RagIndex.reconcile', () => {
     expect(await store.listChunks('doc:2')).toHaveLength(1);
   });
 
-  it('refuses a scope with a missing value', async () => {
+  it.each([undefined, '', Number.NaN])('refuses a scope of %s', async (projectId) => {
     const { rag, store } = await setup();
-    await expect(
-      rag.reconcile([], { scope: { projectId: undefined } as never }),
-    ).rejects.toBeInstanceOf(RagScopeRequiredError);
+    await expect(rag.reconcile([], { scope: { projectId } as never })).rejects.toBeInstanceOf(
+      RagScopeRequiredError,
+    );
     expect(await store.countChunks()).toBe(2);
   });
 

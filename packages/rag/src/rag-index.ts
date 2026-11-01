@@ -41,6 +41,12 @@ export function anyOf<Value extends RagScopeValue>(values: readonly Value[]): Ra
   return { [ANY_OF]: values };
 }
 
+function isScopeValue(value: unknown): value is RagScopeValue {
+  return typeof value === 'number'
+    ? Number.isFinite(value)
+    : typeof value === 'string' && value !== '';
+}
+
 function isAnyOf(value: unknown): value is RagAnyOf<RagScopeValue> {
   return typeof value === 'object' && value !== null && ANY_OF in value;
 }
@@ -142,6 +148,10 @@ export class RagIndex<Row, Scope extends RagScopeDefinition<Row>> {
 
   /** The id this row's chunks are stored under: `<name>:<id>`. */
   documentId(id: RagScopeValue): string {
+    // An unsaved row would otherwise index under `name:undefined`, shared with every other such row.
+    if (!isScopeValue(id)) {
+      throw new Error(`${this.definition.name}: a row needs an id to be indexed or removed`);
+    }
     return `${this.definition.name}:${String(id)}`;
   }
 
@@ -219,7 +229,7 @@ export class RagIndex<Row, Scope extends RagScopeDefinition<Row>> {
   ): Promise<RagReconcileResult> {
     const filter: Record<string, unknown> = { [RAG_ENTITY_KEY]: this.definition.name };
     for (const [key, value] of Object.entries(options.scope ?? {})) {
-      if (typeof value !== 'string' && typeof value !== 'number') {
+      if (!isScopeValue(value)) {
         throw new RagScopeRequiredError(this.definition.name, key);
       }
       filter[key] = String(value);
@@ -265,11 +275,9 @@ export class RagIndex<Row, Scope extends RagScopeDefinition<Row>> {
     const filter: Record<string, unknown> = { [RAG_ENTITY_KEY]: this.definition.name };
     for (const key of Object.keys(this.definition.scope)) {
       const value = given[key];
-      if (isAnyOf(value)) {
+      if (isAnyOf(value) && value[ANY_OF].every(isScopeValue)) {
         filter[key] = value[ANY_OF].map(String);
-      } else if (
-        typeof value === 'number' ? Number.isFinite(value) : value && typeof value === 'string'
-      ) {
+      } else if (isScopeValue(value)) {
         filter[key] = String(value);
       } else {
         throw new RagScopeRequiredError(this.definition.name, key);
