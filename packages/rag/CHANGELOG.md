@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.2
+
+### Patch Changes
+
+- [#401](https://github.com/DavideCarvalho/nestjs-agent/pull/401) [`e5f91f4`](https://github.com/DavideCarvalho/nestjs-agent/commit/e5f91f4bcc3842466c9defa072b94f2ebb360af4) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `RedisVectorStore.remove` waits for a `replaceDocument` in progress, so it can't leave part of a document behind. `MemoryVectorStore` gains `replaceDocument`, which queues calls per document.
+
 ## 0.14.1
 
 ### Patch Changes
