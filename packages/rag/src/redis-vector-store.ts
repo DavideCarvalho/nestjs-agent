@@ -293,7 +293,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     ) {
       if (Date.now() >= deadline) {
         throw new Error(
-          `RedisVectorStore: timed out after ${REPLACE_LOCK_WAIT_MS}ms waiting to replace document "${documentId}"`,
+          `RedisVectorStore: timed out after ${REPLACE_LOCK_WAIT_MS}ms waiting to change document "${documentId}"`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -303,7 +303,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     const assertHeld = () => {
       if (lost) {
         throw new Error(
-          `RedisVectorStore: lost the lock while replacing document "${documentId}"; call again to repair it`,
+          `RedisVectorStore: lost the lock while changing document "${documentId}"; call again to repair it`,
         );
       }
     };
@@ -362,10 +362,13 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * than N scans). Neither depends on a field that older chunks lack, so neither has a migration.
    */
   async remove(documentId: string): Promise<void> {
-    const keys = await this.chunkKeys(documentId);
-    if (keys.length > 0) {
-      await this.client.sendCommand(['DEL', ...keys]);
-    }
+    // Under the lock, or it could delete part of a version a `replaceDocument` is still writing.
+    await this.withDocumentLock(documentId, async () => {
+      const keys = await this.chunkKeys(documentId);
+      if (keys.length > 0) {
+        await this.client.sendCommand(['DEL', ...keys]);
+      }
+    });
   }
 
   /**
