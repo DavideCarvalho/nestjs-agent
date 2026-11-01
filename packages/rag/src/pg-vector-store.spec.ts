@@ -553,6 +553,7 @@ describe('buildWhere with an undefined value', () => {
   it('compiles to false instead of an empty containment', () => {
     const params: unknown[] = [];
     expect(buildWhere({ tenant: undefined }, params)).toEqual(['false']);
+    expect(buildWhere({ tenant: ['A', undefined] }, params)).toEqual(['false']);
     expect(params).toEqual([]);
   });
 });

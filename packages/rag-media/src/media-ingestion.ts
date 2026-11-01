@@ -142,8 +142,7 @@ const FAILURE_KIND = Symbol.for('aviary.rag.media.ingestFailureKind');
  * structured clone, so a tagged error logs and serializes exactly as it did before.
  *
  * The first (innermost) tag wins, so a nested wrapper never relabels a phase its callee already
- * named — that is what lets the `embed` delegate and the `store` wrapper around `ingestChunks`
- * coexist.
+ * named.
  */
 function tagFailureKind(error: unknown, kind: MediaIngestFailureKind): void {
   // primitives can't carry a property; they surface as `unknown` on read.

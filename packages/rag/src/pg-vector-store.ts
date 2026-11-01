@@ -736,7 +736,7 @@ export function buildWhere(
   const scalar: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(stripped)) {
     // `JSON.stringify` below would drop this key and turn the filter into `@> '{}'`: every row.
-    if (value === undefined) {
+    if (value === undefined || (Array.isArray(value) && value.includes(undefined))) {
       clauses.push('false');
       continue;
     }

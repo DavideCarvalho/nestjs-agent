@@ -5,12 +5,17 @@
  * - an **array** filter value means **match-any** (OR / set membership) — the record matches when its
  *   value for that key is one of them, or (for a multi-valued record) shares at least one element.
  *   An empty array matches nothing (no value is a member of the empty set) — the deny primitive;
- * - an **`undefined`** filter value matches nothing either. It is what a scope reads as when the value
- *   behind it was never set (`{ tenantId: actor.tenantRef }`), so it cannot mean "don't filter on this".
+ * - an **`undefined`** filter value, or an array holding one, matches nothing either. It is what a
+ *   scope reads as when the value behind it was never set (`{ tenantId: actor.tenantRef }`), so it
+ *   cannot mean "don't filter on this".
  *
  * Array-valued filters are how a caller expresses capability-style access control over a shared store
  * (e.g. `{ audience: ['public', 'role:ADMIN', 'base:…'] }`) without the store knowing what a token means.
  */
+function isMissingValue(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.includes(undefined));
+}
+
 export function matchesFilter(
   metadata: Record<string, unknown> | undefined,
   filter: Record<string, unknown>,
@@ -20,13 +25,16 @@ export function matchesFilter(
     return entries.length === 0;
   }
   return entries.every(([key, expected]) => {
+    if (isMissingValue(expected)) {
+      return false;
+    }
     if (Array.isArray(expected)) {
       const actual = metadata[key];
       return Array.isArray(actual)
         ? actual.some((value) => expected.includes(value))
         : expected.includes(actual);
     }
-    return expected !== undefined && metadata[key] === expected;
+    return metadata[key] === expected;
   });
 }
 
@@ -48,17 +56,17 @@ export function filterMatchesNothing(filter?: Record<string, unknown>): boolean 
     return false;
   }
   return Object.values(filter).some(
-    (value) => value === undefined || (Array.isArray(value) && value.length === 0),
+    (value) => isMissingValue(value) || (Array.isArray(value) && value.length === 0),
   );
 }
 
 /**
- * The keys of a filter whose value is `undefined`. `removeWhere` refuses these outright instead of
+ * The keys of a filter whose value is `undefined`, or an array holding one. `removeWhere` refuses these outright instead of
  * deleting nothing: a destructive call built from a missing value is a bug the caller must hear about.
  */
 export function undefinedFilterKeys(filter: Record<string, unknown>): string[] {
   return Object.entries(filter)
-    .filter(([, value]) => value === undefined)
+    .filter(([, value]) => isMissingValue(value))
     .map(([key]) => key);
 }
 

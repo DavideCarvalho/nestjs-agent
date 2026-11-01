@@ -95,6 +95,12 @@ describe('an undefined filter value denies', () => {
     expect(filterMatchesNothing({ tenant: undefined })).toBe(true);
   });
 
+  it('an array holding one denies too', async () => {
+    expect(matchesFilter({}, { tenant: ['A', undefined] })).toBe(false);
+    expect(matchesFilter({ tenant: 'A' }, { tenant: ['A', undefined] })).toBe(false);
+    expect(filterMatchesNothing({ tenant: ['A', undefined] })).toBe(true);
+  });
+
   it('FilteredRetriever with a missing scope returns nothing', async () => {
     const store = new MemoryVectorStore();
     await store.upsert(records);
