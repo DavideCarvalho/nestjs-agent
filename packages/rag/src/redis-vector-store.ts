@@ -257,10 +257,12 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * come out, so a crash leaves the document searchable and the next call repairs it.
    */
   async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
-    await this.withDocumentLock(documentId, async () => {
+    await this.withDocumentLock(documentId, async (assertHeld) => {
       await this.upsert(records);
+      assertHeld();
       const current = new Set(records.map((record) => `${this.prefix}${record.id}`));
       const stale = (await this.chunkKeys(documentId)).filter((key) => !current.has(key));
+      assertHeld();
       if (stale.length > 0) {
         await this.client.sendCommand(['DEL', ...stale]);
       }
@@ -271,7 +273,10 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * A lease, so a crashed writer can't block the document forever. It is renewed while the work runs,
    * which keeps a large document from outliving it.
    */
-  private async withDocumentLock<T>(documentId: string, work: () => Promise<T>): Promise<T> {
+  private async withDocumentLock<T>(
+    documentId: string,
+    work: (assertHeld: () => void) => Promise<T>,
+  ): Promise<T> {
     const key = `${this.index}:replace-lock:${documentId}`;
     const token = randomUUID();
     const deadline = Date.now() + REPLACE_LOCK_WAIT_MS;
@@ -294,6 +299,14 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
       await new Promise((resolve) => setTimeout(resolve, delay));
       delay = Math.min(delay * 2, 250);
     }
+    let lost = false;
+    const assertHeld = () => {
+      if (lost) {
+        throw new Error(
+          `RedisVectorStore: lost the lock while replacing document "${documentId}"; call again to repair it`,
+        );
+      }
+    };
     const renewal = setInterval(() => {
       void Promise.resolve(
         this.client.sendCommand([
@@ -304,14 +317,27 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
           token,
           String(REPLACE_LOCK_TTL_MS),
         ]),
-      ).catch(() => {});
+      ).then(
+        (renewed) => {
+          if (Number(renewed) === 0) {
+            lost = true;
+          }
+        },
+        // A failed renewal isn't a lost lock yet: the lease may still have time left.
+        () => {},
+      );
     }, REPLACE_LOCK_TTL_MS / 3);
     renewal.unref?.();
     try {
-      return await work();
+      const result = await work(assertHeld);
+      assertHeld();
+      return result;
     } finally {
       clearInterval(renewal);
-      await this.client.sendCommand(['EVAL', RELEASE_LOCK_SCRIPT, '1', key, token]);
+      // The lease expires by itself, and a failure here must not hide the error from `work`.
+      await Promise.resolve(
+        this.client.sendCommand(['EVAL', RELEASE_LOCK_SCRIPT, '1', key, token]),
+      ).catch(() => {});
     }
   }
 
