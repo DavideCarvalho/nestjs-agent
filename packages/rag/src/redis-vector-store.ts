@@ -362,10 +362,13 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * than N scans). Neither depends on a field that older chunks lack, so neither has a migration.
    */
   async remove(documentId: string): Promise<void> {
-    const keys = await this.chunkKeys(documentId);
-    if (keys.length > 0) {
-      await this.client.sendCommand(['DEL', ...keys]);
-    }
+    // Under the lock, or it could delete part of a version a `replaceDocument` is still writing.
+    await this.withDocumentLock(documentId, async () => {
+      const keys = await this.chunkKeys(documentId);
+      if (keys.length > 0) {
+        await this.client.sendCommand(['DEL', ...keys]);
+      }
+    });
   }
 
   /**

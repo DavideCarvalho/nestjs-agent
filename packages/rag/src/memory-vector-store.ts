@@ -8,6 +8,7 @@ import {
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
+  type AtomicReplaceVectorStore,
   type IndexedDocument,
   type ListChunksOptions,
   type StoredChunk,
@@ -29,8 +30,9 @@ import {
  * (`removeWhere` refusing an empty filter, an empty-array filter deleting nothing) are behavioural,
  * not incidental to Redis.
  */
-export class MemoryVectorStore implements VectorStore {
+export class MemoryVectorStore implements AtomicReplaceVectorStore {
   private readonly records = new Map<string, VectorRecord>();
+  private readonly replacing = new Map<string, Promise<void>>();
 
   /**
    * Telemetry self-description. No `collection`: there is no namespace to name — the corpus IS this
@@ -44,6 +46,25 @@ export class MemoryVectorStore implements VectorStore {
   async upsert(records: VectorRecord[]): Promise<void> {
     for (const record of records) {
       this.records.set(record.id, record);
+    }
+  }
+
+  /** Calls overlap only across `await`s, so a queue per document is enough here. */
+  async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
+    const previous = this.replacing.get(documentId) ?? Promise.resolve();
+    const run = previous
+      .catch(() => {})
+      .then(async () => {
+        await this.remove(documentId);
+        await this.upsert(records);
+      });
+    this.replacing.set(documentId, run);
+    try {
+      await run;
+    } finally {
+      if (this.replacing.get(documentId) === run) {
+        this.replacing.delete(documentId);
+      }
     }
   }
 

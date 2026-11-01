@@ -63,6 +63,23 @@ describe('RedisVectorStore (real RediSearch)', () => {
     expect(await store.listChunks('race')).toEqual([]);
   });
 
+  it('remove waits for a replaceDocument in progress and removes all of it', async () => {
+    await Promise.all([
+      store.replaceDocument(
+        'gone',
+        Array.from({ length: 40 }, (_, chunk) => ({
+          id: `gone#${chunk}`,
+          text: 'x',
+          embedding: [1, 0, 0],
+        })),
+      ),
+      store.remove('gone'),
+    ]);
+    const left = (await store.listChunks('gone')).length;
+    expect([0, 40]).toContain(left);
+    await store.remove('gone');
+  });
+
   it('replaceDocument takes over a lock whose holder crashed once its lease ends', async () => {
     await client.set('test_idx:replace-lock:crashed', 'dead-writer', { PX: 100 });
     await store.replaceDocument('crashed', [

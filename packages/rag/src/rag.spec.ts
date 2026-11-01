@@ -492,3 +492,23 @@ describe('createRetrievalTool', () => {
     ).rejects.toThrow(/query/);
   });
 });
+
+describe('MemoryVectorStore.replaceDocument', () => {
+  it('leaves one version when calls overlap', async () => {
+    const store = new MemoryVectorStore();
+    await Promise.all(
+      [5, 2].map((size) =>
+        store.replaceDocument(
+          'doc',
+          Array.from({ length: size }, (_, chunk) => ({
+            id: `doc#${chunk}`,
+            text: `size-${size}`,
+            embedding: [1],
+          })),
+        ),
+      ),
+    );
+    const chunks = await store.listChunks('doc');
+    expect(chunks.map((chunk) => chunk.text)).toEqual(['size-2', 'size-2']);
+  });
+});
