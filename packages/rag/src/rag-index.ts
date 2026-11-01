@@ -174,8 +174,9 @@ export class RagIndex<Row, Scope extends RagScopeDefinition<Row>> {
 
   /**
    * Replaces the row's chunks and returns how many were written. Embeddings come first: if the
-   * provider fails, the previous chunks are still there. The swap is one transaction on Postgres; on a
-   * store without `replaceDocument` a crash mid-swap loses the document until the next `index`.
+   * provider fails, the previous chunks are still there. The swap is one transaction on Postgres. Redis
+   * adds the new chunks before dropping the old, so a search can briefly see both. On a store without
+   * `replaceDocument`, a crash mid-swap loses the document until the next `index`.
    */
   async index(row: Row): Promise<number> {
     const { definition, deps } = this;

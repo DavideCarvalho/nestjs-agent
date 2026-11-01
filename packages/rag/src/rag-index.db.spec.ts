@@ -100,6 +100,27 @@ describe('RagIndex + Drizzle (real pgvector)', () => {
     expect((await store.listChunks(rag.documentId(1)))[0]?.text).toBe('first');
   });
 
+  it('concurrent replaceDocument calls leave exactly one version, without deadlocks', async () => {
+    const store = new PgVectorStore(pool, { table: 'race', dimensions: 3 });
+    await store.ensureSchema();
+    for (let round = 0; round < 10; round++) {
+      await Promise.all(
+        Array.from({ length: 8 }, (_, writer) =>
+          store.replaceDocument(
+            'doc',
+            Array.from({ length: 30 - writer * 3 }, (_, chunk) => ({
+              id: `doc#${chunk}`,
+              text: `writer-${writer}`,
+              embedding: [1, 0, 0],
+            })),
+          ),
+        ),
+      );
+      const chunks = await store.listChunks('doc');
+      expect(new Set(chunks.map((chunk) => chunk.text)).size).toBe(1);
+    }
+  });
+
   it('halfvec gets an HNSW index past the 2000 dimensions vector stops at', async () => {
     const wide = new PgVectorStore(pool, {
       table: 'wide',

@@ -41,6 +41,37 @@ afterAll(async () => {
 });
 
 describe('RedisVectorStore (real RediSearch)', () => {
+  it('concurrent replaceDocument calls leave exactly one version and release the lock', async () => {
+    for (let round = 0; round < 5; round++) {
+      await Promise.all(
+        Array.from({ length: 6 }, (_, writer) =>
+          store.replaceDocument(
+            'race',
+            Array.from({ length: 12 - writer }, (_, chunk) => ({
+              id: `race#${chunk}`,
+              text: `writer-${writer}`,
+              embedding: [1, 0, 0],
+            })),
+          ),
+        ),
+      );
+      const chunks = await store.listChunks('race');
+      expect(new Set(chunks.map((chunk) => chunk.text)).size).toBe(1);
+    }
+    expect(await client.exists('test_idx:replace-lock:race')).toBe(0);
+    await store.replaceDocument('race', []);
+    expect(await store.listChunks('race')).toEqual([]);
+  });
+
+  it('replaceDocument takes over a lock whose holder crashed once its lease ends', async () => {
+    await client.set('test_idx:replace-lock:crashed', 'dead-writer', { PX: 100 });
+    await store.replaceDocument('crashed', [
+      { id: 'crashed#0', text: 'recovered', embedding: [1, 0, 0] },
+    ]);
+    expect((await store.listChunks('crashed'))[0]?.text).toBe('recovered');
+    await store.remove('crashed');
+  });
+
   it('upserts and ranks by cosine KNN', async () => {
     await store.upsert([
       { id: 'a', text: 'about cats', embedding: [1, 0, 0], source: 'cats' },

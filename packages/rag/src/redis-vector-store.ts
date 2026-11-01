@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { Passage } from '@dudousxd/nestjs-agent-core';
 import { filterMatchesNothing, undefinedFilterKeys, undefinedFilterMessage } from './filter.js';
 import { type MetadataPatch, applyMetadataPatch, isEmptyMetadataPatch } from './metadata-patch.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import {
+  type AtomicReplaceVectorStore,
   type IndexedDocument,
   type LexicalVectorStore,
   type ListChunksOptions,
@@ -21,6 +23,13 @@ import {
  * this package pulls in NO Redis driver (bring your own, like the other adapters). Requires the
  * RediSearch module (Redis Stack / Redis 8+).
  */
+const REPLACE_LOCK_TTL_MS = 30_000;
+const REPLACE_LOCK_WAIT_MS = 120_000;
+const RENEW_LOCK_SCRIPT =
+  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) end return 0";
+const RELEASE_LOCK_SCRIPT =
+  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0";
+
 export interface RedisSearchClient {
   sendCommand(args: (string | Buffer)[]): Promise<unknown>;
 }
@@ -85,7 +94,7 @@ export interface RedisVectorStoreOptions {
  * {@link LexicalVectorStore}: {@link RedisVectorStore.searchText} is BM25 over that same index —
  * the lexical half of hybrid search with no second index to build, feed, or invalidate.
  */
-export class RedisVectorStore implements LexicalVectorStore {
+export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVectorStore {
   private readonly index: string;
   private readonly prefix: string;
   private readonly dimensions: number;
@@ -238,6 +247,97 @@ export class RedisVectorStore implements LexicalVectorStore {
         }
       }
       await this.client.sendCommand(args);
+    }
+  }
+
+  /**
+   * Replaces a document's chunks, one writer at a time per document. Redis can't swap them in one step
+   * without scanning the keyspace inside a script, so a search may briefly see old and new chunks
+   * together, but concurrent calls can't leave them mixed. The new chunks go in before the old ones
+   * come out, so a crash leaves the document searchable and the next call repairs it.
+   */
+  async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
+    await this.withDocumentLock(documentId, async (assertHeld) => {
+      await this.upsert(records);
+      assertHeld();
+      const current = new Set(records.map((record) => `${this.prefix}${record.id}`));
+      const stale = (await this.chunkKeys(documentId)).filter((key) => !current.has(key));
+      assertHeld();
+      if (stale.length > 0) {
+        await this.client.sendCommand(['DEL', ...stale]);
+      }
+    });
+  }
+
+  /**
+   * A lease, so a crashed writer can't block the document forever. It is renewed while the work runs,
+   * which keeps a large document from outliving it.
+   */
+  private async withDocumentLock<T>(
+    documentId: string,
+    work: (assertHeld: () => void) => Promise<T>,
+  ): Promise<T> {
+    const key = `${this.index}:replace-lock:${documentId}`;
+    const token = randomUUID();
+    const deadline = Date.now() + REPLACE_LOCK_WAIT_MS;
+    let delay = 10;
+    while (
+      (await this.client.sendCommand([
+        'SET',
+        key,
+        token,
+        'NX',
+        'PX',
+        String(REPLACE_LOCK_TTL_MS),
+      ])) === null
+    ) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `RedisVectorStore: timed out after ${REPLACE_LOCK_WAIT_MS}ms waiting to replace document "${documentId}"`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 250);
+    }
+    let lost = false;
+    const assertHeld = () => {
+      if (lost) {
+        throw new Error(
+          `RedisVectorStore: lost the lock while replacing document "${documentId}"; call again to repair it`,
+        );
+      }
+    };
+    const renewal = setInterval(() => {
+      void Promise.resolve(
+        this.client.sendCommand([
+          'EVAL',
+          RENEW_LOCK_SCRIPT,
+          '1',
+          key,
+          token,
+          String(REPLACE_LOCK_TTL_MS),
+        ]),
+      ).then(
+        (renewed) => {
+          if (Number(renewed) === 0) {
+            lost = true;
+          }
+        },
+        // A failed renewal isn't a lost lock yet: the lease may still have time left.
+        () => {},
+      );
+    }, REPLACE_LOCK_TTL_MS / 3);
+    renewal.unref?.();
+    try {
+      const result = await work(assertHeld);
+      assertHeld();
+      return result;
+    } finally {
+      clearInterval(renewal);
+      // The lease expires by itself, and a failure here must not hide the error from `work`.
+      await Promise.resolve(
+        this.client.sendCommand(['EVAL', RELEASE_LOCK_SCRIPT, '1', key, token]),
+      ).catch(() => {});
     }
   }
 

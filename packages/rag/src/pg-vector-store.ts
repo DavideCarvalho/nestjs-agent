@@ -272,6 +272,10 @@ export class PgVectorStore implements AtomicReplaceVectorStore {
   /**
    * Swaps a document's chunks in one transaction, so a crash can't lose it and a search sees the old
    * version or the new one. A client without `transaction` falls back to two statements.
+   *
+   * Concurrent swaps of one document take turns on an advisory lock. Without it the second `DELETE`
+   * can't see the rows the first just committed, so the first's tail survives next to the second's
+   * chunks, and overlapping writes can deadlock.
    */
   async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
     const swap = async (client: PgClient) => {
@@ -281,7 +285,16 @@ export class PgVectorStore implements AtomicReplaceVectorStore {
       await this.upsertWith(client, records);
     };
     const transaction = this.client.transaction?.bind(this.client);
-    await (transaction === undefined ? swap(this.client) : transaction(swap));
+    if (transaction === undefined) {
+      await swap(this.client);
+      return;
+    }
+    await transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${this.table}:${stripNulBytes(documentId)}`,
+      ]);
+      await swap(client);
+    });
   }
 
   private async upsertWith(client: PgClient, records: VectorRecord[]): Promise<void> {

@@ -211,15 +211,16 @@ export interface LexicalVectorStore extends VectorStore {
 }
 
 /**
- * An **optional** capability: swap all of a document's chunks atomically, so no search or crash ever
- * sees it half-replaced. Optional because atomicity is exactly what not every backend can promise over
- * its client; {@link replaceDocumentChunks} falls back to `remove` plus `upsert` for the others.
+ * An **optional** capability: swap all of a document's chunks safely under concurrent calls, so two
+ * writers can't leave a mix of versions behind. Postgres also makes the swap atomic for searches and
+ * crashes; Redis can't, and only guarantees the end state. {@link replaceDocumentChunks} falls back to
+ * `remove` plus `upsert` for the others.
  */
 export interface AtomicReplaceVectorStore extends VectorStore {
   replaceDocument(documentId: string, records: VectorRecord[]): Promise<void>;
 }
 
-/** Replaces a document's chunks, atomically where the store can. */
+/** Replaces a document's chunks through the store's safe swap, where it has one. */
 export async function replaceDocumentChunks(
   store: VectorStore,
   documentId: string,

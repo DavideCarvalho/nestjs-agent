@@ -481,7 +481,8 @@ array is refused so a request can't widen a search. A corpus shared by everyone 
 
 **Saving doesn't index.** Embedding is slow and paid for, so call `index` from a job or wherever the
 text changed. It embeds first, so a provider failure keeps the old chunks. On `PgVectorStore` the swap is
-one transaction; on stores without `replaceDocument`, it is two statements.
+one transaction. On Redis, a search can briefly see both versions, but concurrent calls wait for each
+other, so they can't leave a mix behind. On stores without `replaceDocument`, it is two statements.
 
 **Deleting.** With Drizzle, use `.returning()` and call `remove`. With MikroORM, add
 `provideRagDeleteSync(ProjectDocument, DocumentsRag)` from `@dudousxd/nestjs-agent-store-mikro-orm` to
