@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.0
+
+### Minor Changes
+
+- [#399](https://github.com/DavideCarvalho/nestjs-agent/pull/399) [`9b9107f`](https://github.com/DavideCarvalho/nestjs-agent/commit/9b9107fd664fb68a036a745d7d28161b80b82039) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - RAG declared per model. `RagRepository` and `RagModule` (`@dudousxd/nestjs-agent-rag/nestjs`, with `@nestjs/common` as an optional peer) and the framework-free `RagIndex`: a scope a search can't omit or override, no indexing on save, embeddings before replacing chunks, `reconcile` for what no hook sees, and `onUsage`. `provideRagDeleteSync` in the MikroORM store removes chunks after the commit. Also new: `vectorType: 'halfvec'` on `PgVectorStore`, `filter: (ctx) => ...` on `createRetrievalTool`, and `embedWithUsage` on `openAiEmbeddings`.
+
+- [#398](https://github.com/DavideCarvalho/nestjs-agent/pull/398) [`109aab9`](https://github.com/DavideCarvalho/nestjs-agent/commit/109aab92f148d38256c14aa5ca8293beea8dc074) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - An `undefined` filter value now matches nothing, in every store. On pgvector it used to drop the key and match every row, so `new FilteredRetriever(base, { tenantId: undefined })` returned all tenants and `removeWhere({ tenantId: undefined })` deleted the table. `removeWhere` now throws `UnsafeRemovalError` with reason `undefined-value`. If you pass `{ lang: maybeUndefined }` to mean "no filter", omit the key instead.
+
 ## 0.13.1
 
 ### Patch Changes

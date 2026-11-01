@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag-media
 
+## 0.6.5
+
+### Patch Changes
+
+- [#398](https://github.com/DavideCarvalho/nestjs-agent/pull/398) [`109aab9`](https://github.com/DavideCarvalho/nestjs-agent/commit/109aab92f148d38256c14aa5ca8293beea8dc074) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `ingestMediaFile` embeds before removing the previous chunks, so a provider failure no longer drops the document from the index.
+
 ## 0.6.4
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.42.0
+
+### Minor Changes
+
+- [#399](https://github.com/DavideCarvalho/nestjs-agent/pull/399) [`9b9107f`](https://github.com/DavideCarvalho/nestjs-agent/commit/9b9107fd664fb68a036a745d7d28161b80b82039) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - RAG declared per model. `RagRepository` and `RagModule` (`@dudousxd/nestjs-agent-rag/nestjs`, with `@nestjs/common` as an optional peer) and the framework-free `RagIndex`: a scope a search can't omit or override, no indexing on save, embeddings before replacing chunks, `reconcile` for what no hook sees, and `onUsage`. `provideRagDeleteSync` in the MikroORM store removes chunks after the commit. Also new: `vectorType: 'halfvec'` on `PgVectorStore`, `filter: (ctx) => ...` on `createRetrievalTool`, and `embedWithUsage` on `openAiEmbeddings`.
+
 ## 0.41.0
 
 ### Minor Changes
