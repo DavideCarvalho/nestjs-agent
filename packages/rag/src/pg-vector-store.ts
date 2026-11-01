@@ -10,6 +10,7 @@ import { type MetadataPatch, isEmptyMetadataPatch, splitMetadataPatch } from './
 import { type PgClient, type PgClientSource, toPgClient } from './pg-client.js';
 import type { RetrievalDescriptor } from './retrieval-descriptor.js';
 import type {
+  AtomicReplaceVectorStore,
   IndexedDocument,
   LexicalVectorStore,
   ListChunksOptions,
@@ -72,6 +73,13 @@ export interface PgVectorStoreOptions {
    * the chunk metadata) when two models share a width.
    */
   dimensions?: number | readonly number[];
+  /**
+   * The pgvector column type. `halfvec` stores each dimension in 2 bytes instead of 4, and its HNSW
+   * index accepts up to 4000 dimensions where `vector` stops at 2000 (so `text-embedding-3-large`'s
+   * 3072 needs it). Needs a single width, not a list. Only affects the DDL for a new table and the
+   * casts in statements: converting an existing table is a migration of yours. Default `vector`.
+   */
+  vectorType?: 'vector' | 'halfvec';
   /**
    * Allow chunks with no embedding (`embedding: []` on upsert is stored as `NULL`): index text first
    * and embed later, or keep full-text-only chunks when there is no embedding model at all. The
@@ -166,13 +174,14 @@ export function stripNulBytes<T>(value: T): T {
  * Subclassing: every statement filters through {@link PgVectorStore.whereConditions}, so a subclass
  * can map an opaque filter onto its own columns (a tenant id, an ACL) in one place.
  */
-export class PgVectorStore implements VectorStore {
+export class PgVectorStore implements AtomicReplaceVectorStore {
   protected readonly client: PgClient;
   protected readonly table: string;
   /** The single width (fixed-dimension table), or `undefined` for a mixed-dimension table. */
   private readonly dimensions: number | undefined;
   /** The widths with a partial HNSW index, for a mixed-dimension table. */
   private readonly indexedDimensions: readonly number[];
+  private readonly vectorType: 'vector' | 'halfvec';
   private readonly nullableEmbeddings: boolean;
   private readonly iterativeScan: PgVectorStoreOptions['iterativeScan'];
   private readonly efSearch: number | undefined;
@@ -195,6 +204,10 @@ export class PgVectorStore implements VectorStore {
       this.dimensions = undefined;
       this.indexedDimensions = [...new Set(dimensions)];
     }
+    this.vectorType = options.vectorType ?? 'vector';
+    if (this.vectorType === 'halfvec' && this.dimensions === undefined) {
+      throw new Error('PgVectorStore: vectorType "halfvec" needs a single width, not a list');
+    }
     this.nullableEmbeddings = options.nullableEmbeddings ?? false;
     this.iterativeScan = options.iterativeScan;
     this.efSearch = options.efSearch;
@@ -212,7 +225,7 @@ export class PgVectorStore implements VectorStore {
    */
   schemaStatements(): string[] {
     const mixed = this.dimensions === undefined;
-    const column = mixed ? 'vector' : `vector(${this.dimensions})`;
+    const column = mixed ? 'vector' : `${this.vectorType}(${this.dimensions})`;
     const statements = [
       'CREATE EXTENSION IF NOT EXISTS vector',
       `CREATE TABLE IF NOT EXISTS ${this.table} (
@@ -234,7 +247,7 @@ export class PgVectorStore implements VectorStore {
     } else {
       statements.push(
         `CREATE INDEX IF NOT EXISTS ${this.table}_embedding_idx
-        ON ${this.table} USING hnsw (embedding vector_cosine_ops)`,
+        ON ${this.table} USING hnsw (embedding ${this.vectorType}_cosine_ops)`,
       );
     }
     return statements;
@@ -253,6 +266,25 @@ export class PgVectorStore implements VectorStore {
    * {@link PgVectorStoreOptions.nullableEmbeddings}).
    */
   async upsert(records: VectorRecord[]): Promise<void> {
+    await this.upsertWith(this.client, records);
+  }
+
+  /**
+   * Swaps a document's chunks in one transaction, so a crash can't lose it and a search sees the old
+   * version or the new one. A client without `transaction` falls back to two statements.
+   */
+  async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
+    const swap = async (client: PgClient) => {
+      await client.query(`DELETE FROM ${this.table} WHERE ${DOCUMENT_ID_FROM_CHUNK} = $1`, [
+        stripNulBytes(documentId),
+      ]);
+      await this.upsertWith(client, records);
+    };
+    const transaction = this.client.transaction?.bind(this.client);
+    await (transaction === undefined ? swap(this.client) : transaction(swap));
+  }
+
+  private async upsertWith(client: PgClient, records: VectorRecord[]): Promise<void> {
     // Postgres rejects the NUL byte in text/jsonb — see stripNulBytes. The id is stripped before
     // de-duplication, so two ids that only differ by a NUL byte are the same row, as they'd be stored.
     const byId = new Map<string, VectorRecord>();
@@ -280,9 +312,9 @@ export class PgVectorStore implements VectorStore {
           metadata !== undefined ? JSON.stringify(metadata) : null,
           record.embedding.length > 0 ? toVectorLiteral(record.embedding) : null,
         );
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}::jsonb, $${base + 5}::vector)`;
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}::jsonb, $${base + 5}::${this.vectorType})`;
       });
-      await this.client.query(
+      await client.query(
         `INSERT INTO ${this.table} (id, text, source, metadata, embedding)
          VALUES ${rows.join(', ')}
          ON CONFLICT (id) DO UPDATE SET
@@ -479,7 +511,7 @@ export class PgVectorStore implements VectorStore {
     // $1 = query vector, $2 = topK; metadata-filter params start at $3.
     const params: unknown[] = [toVectorLiteral(embedding), options.topK];
     const conditions = this.whereConditions(options.filter, params);
-    let vectorType = 'vector';
+    let vectorType: string = this.vectorType;
     if (this.dimensions === undefined) {
       const width = embedding.length;
       if (this.indexedDimensions.includes(width)) {
@@ -491,7 +523,7 @@ export class PgVectorStore implements VectorStore {
     }
     // A fixed-width table keeps the exact expression its index was built on (`embedding`); a
     // mixed one casts both sides so the planner can match the per-width partial index.
-    const column = vectorType === 'vector' ? 'embedding' : `(embedding::${vectorType})`;
+    const column = vectorType === this.vectorType ? 'embedding' : `(embedding::${vectorType})`;
     const sql = `SELECT id, text, source, metadata, 1 - (${column} <=> $1::${vectorType}) AS score
        FROM ${this.table}
        ${conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''}

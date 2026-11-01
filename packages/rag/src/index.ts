@@ -1,5 +1,6 @@
 export { chunkText, type ChunkOptions } from './chunk.js';
 export type {
+  AtomicReplaceVectorStore,
   IndexedDocument,
   LexicalVectorStore,
   ListChunksOptions,
@@ -11,6 +12,7 @@ export type {
 export {
   UnsafeRemovalError,
   chunkIndexOf,
+  replaceDocumentChunks,
   documentIdOf,
   isLexicalVectorStore,
 } from './vector-store.js';
@@ -92,4 +94,27 @@ export {
   type OpenAiEmbeddingsOptions,
 } from './openai-embeddings.js';
 export { HttpReranker, type HttpRerankerOptions } from './http-reranker.js';
+export {
+  embedCountingUsage,
+  type EmbeddingResult,
+  type EmbeddingUsage,
+  type UsageReportingEmbeddingProvider,
+} from './embedding-usage.js';
+export {
+  RAG_ENTITY_KEY,
+  RagIndex,
+  RagScopeRequiredError,
+  anyOf,
+  ragFilterableFields,
+  type RagAnyOf,
+  type RagIndexDefinition,
+  type RagIndexDeps,
+  type RagReconcileOptions,
+  type RagReconcileResult,
+  type RagScopeDefinition,
+  type RagScopeOf,
+  type RagScopeValue,
+  type RagSearchOptions,
+  type RagToolOptions,
+} from './rag-index.js';
 export * from './tree/index.js';

@@ -197,6 +197,9 @@ await store.ensureSchema(); // CREATE EXTENSION vector + table + HNSW cosine ind
 `store.schemaStatements()` returns the same DDL as strings, for a migration instead of a boot-time
 side effect. Other options (all off by default, so existing tables behave exactly as before):
 
+- **`vectorType`** (default `vector`) — `halfvec` stores 2 bytes per dimension and its HNSW index goes
+  up to 4000 dimensions, where `vector` stops at 2000. Needs a single width. Converting an existing
+  table is a migration of yours.
 - **`upsertBatchSize`** (default 100) — `upsert` writes multi-row `INSERT … ON CONFLICT` statements;
   duplicate ids in one call collapse to the last occurrence. NUL bytes are stripped from every
   text/jsonb binding (Postgres rejects them).
@@ -438,6 +441,69 @@ choice that must match between index and query or Postgres silently falls back t
 Had `PgVectorStore` simply grown `searchText`, every `isLexicalVectorStore(store)` check would have
 started using it against an unindexed table on upgrade. Constructing `PgLexicalVectorStore` is the
 opt-in; the index is a migration you run and watch (`schemaStatements()` prints it).
+
+## RAG for a model: `RagRepository`
+
+One class per model, as `nestjs-filter` does with filters. The entity or Drizzle table doesn't change.
+
+```ts
+import { RagModule, RagRepository } from '@dudousxd/nestjs-agent-rag/nestjs';
+
+// Once in the app
+RagModule.forRoot({ store, embedder, onUsage: (usage) => meter.add(usage) });
+
+@Injectable()
+export class DocumentsRag extends RagRepository<ProjectDocument> {
+  protected readonly name = 'project_documents';
+  readonly scope = { projectId: (d: ProjectDocument) => d.project.id };
+
+  id(d: ProjectDocument) { return d.id; }
+  protected text(d: ProjectDocument) { return d.textContent; }
+}
+
+// In the feature module
+RagModule.forFeature([DocumentsRag]);
+
+// Injected by type
+await documentsRag.index(doc);
+await documentsRag.search('question', { scope: { projectId } });
+await documentsRag.remove(doc);
+```
+
+With Drizzle, only the row type changes: `type Row = typeof documents.$inferSelect`, then
+`RagRepository<Row>` and `scope = { projectId: (d: Row) => d.projectId }`.
+
+**The scope can't be skipped.** Leaving out `scope`, returning a nullable column, or calling `search`
+without it doesn't compile. At runtime a missing, empty or malformed value throws
+`RagScopeRequiredError` before any embedding is paid for, and `filter` can't override it. Values are
+compared as strings. To search several, use `anyOf(ids)`, where an empty list matches nothing; a plain
+array is refused so a request can't widen a search. A corpus shared by everyone says `scope = {}`.
+
+**Saving doesn't index.** Embedding is slow and paid for, so call `index` from a job or wherever the
+text changed. It embeds first, so a provider failure keeps the old chunks. On `PgVectorStore` the swap is
+one transaction; on stores without `replaceDocument`, it is two statements.
+
+**Deleting.** With Drizzle, use `.returning()` and call `remove`. With MikroORM, add
+`provideRagDeleteSync(ProjectDocument, DocumentsRag)` from `@dudousxd/nestjs-agent-store-mikro-orm` to
+your providers; it removes after the commit and sees only `em.remove` (on MikroORM 6, not inside a
+nested transaction). For everything no hook sees
+(`ON DELETE CASCADE`, `nativeDelete`, raw SQL), run `reconcile`:
+
+```ts
+await documentsRag.reconcile(allLiveIds, { dryRun: true }); // { orphans, missing }
+await documentsRag.reconcile(liveIdsOfProject, { scope: { projectId } });
+```
+
+`liveIds` must be complete for the part compared: whatever it leaves out is removed.
+
+**Agents.** `documentsRag.tool({ name, scope: (ctx) => ({ projectId: ctx.actor.tenantRef as string }) })`
+gives a tool whose scope comes from the context, for `provideAgentTool`. `scoped(scope)` gives a
+`Retriever` for composing. `retrieval: { mode: 'inject' }` passes no actor, so it can't scope per
+request: use the tool for multi-tenant agents.
+
+On Redis, declare the keys up front: `filterableFields: ragFilterableFields('projectId')`.
+
+Without Nest, `RagIndex` from the main entry does the same with a plain definition.
 
 ## Tree navigation retrieval (PageIndex-style)
 
