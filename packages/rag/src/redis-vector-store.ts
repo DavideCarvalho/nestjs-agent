@@ -29,6 +29,29 @@ const RENEW_LOCK_SCRIPT =
   "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) end return 0";
 const RELEASE_LOCK_SCRIPT =
   "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0";
+/**
+ * KEYS: the lock, the stale chunks, the new chunks. ARGV: the lock token, how many keys are stale, then
+ * each new chunk's field count and fields. A new chunk is deleted first so it keeps nothing from the
+ * old one, such as a `source` the new version doesn't have.
+ */
+const SWAP_CHUNKS_SCRIPT = `
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+local stale = tonumber(ARGV[2])
+for i = 2, stale + 1 do redis.call('DEL', KEYS[i]) end
+local arg = 3
+for i = stale + 2, #KEYS do
+  local fields = tonumber(ARGV[arg])
+  redis.call('DEL', KEYS[i])
+  redis.call('HSET', KEYS[i], unpack(ARGV, arg + 1, arg + fields))
+  arg = arg + fields + 1
+end
+return 1`;
+/**
+ * The most chunks (new plus stale) one script swaps. RediSearch indexes inside the script, and nothing
+ * else runs on that Redis meanwhile: about 2ms per chunk at 1536 dimensions, measured on Redis Stack.
+ * Past 5s other clients start getting BUSY, so a larger document takes the path that doesn't block.
+ */
+const SWAP_MAX_CHUNKS = 256;
 
 export interface RedisSearchClient {
   sendCommand(args: (string | Buffer)[]): Promise<unknown>;
@@ -226,42 +249,55 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
 
   async upsert(records: VectorRecord[]): Promise<void> {
     for (const record of records) {
-      const args: (string | Buffer)[] = [
+      await this.client.sendCommand([
         'HSET',
         `${this.prefix}${record.id}`,
-        'text',
-        record.text,
-        'embedding',
-        encodeVector(record.embedding),
-      ];
-      if (record.source !== undefined) {
-        args.push('source', record.source);
-      }
-      if (record.metadata !== undefined) {
-        args.push('metadata_json', JSON.stringify(record.metadata));
-        for (const field of this.filterableFields) {
-          const value = record.metadata[field];
-          if (value !== undefined) {
-            args.push(`meta_${field}`, encodeTag(value));
-          }
-        }
-      }
-      await this.client.sendCommand(args);
+        ...this.chunkFields(record),
+      ]);
     }
   }
 
+  private chunkFields(record: VectorRecord): (string | Buffer)[] {
+    const fields: (string | Buffer)[] = [
+      'text',
+      record.text,
+      'embedding',
+      encodeVector(record.embedding),
+    ];
+    if (record.source !== undefined) {
+      fields.push('source', record.source);
+    }
+    if (record.metadata !== undefined) {
+      fields.push('metadata_json', JSON.stringify(record.metadata));
+      for (const field of this.filterableFields) {
+        const value = record.metadata[field];
+        if (value !== undefined) {
+          fields.push(`meta_${field}`, encodeTag(value));
+        }
+      }
+    }
+    return fields;
+  }
+
   /**
-   * Replaces a document's chunks, one writer at a time per document. Redis can't swap them in one step
-   * without scanning the keyspace inside a script, so a search may briefly see old and new chunks
-   * together, but concurrent calls can't leave them mixed. The new chunks go in before the old ones
-   * come out, so a crash leaves the document searchable and the next call repairs it.
+   * Replaces a document's chunks, one writer at a time per document. The swap is one script, so a search
+   * sees the old version or the new one, and a crash leaves the old one. The keys to drop are found
+   * first, under the lock, because a script can't scan the keyspace.
+   *
+   * A document past {@link SWAP_MAX_CHUNKS} would block Redis for too long that way. Its new chunks go in
+   * first and the old ones come out after, so a search may briefly see both, and a crash leaves the
+   * document searchable for the next call to repair.
    */
   async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
-    await this.withDocumentLock(documentId, async (assertHeld) => {
-      await this.upsert(records);
-      assertHeld();
+    await this.withDocumentLocks([documentId], async (assertHeld, token) => {
       const current = new Set(records.map((record) => `${this.prefix}${record.id}`));
       const stale = (await this.chunkKeys(documentId)).filter((key) => !current.has(key));
+      assertHeld();
+      if (records.length + stale.length <= SWAP_MAX_CHUNKS) {
+        await this.swapChunks(documentId, token, stale, records);
+        return;
+      }
+      await this.upsert(records);
       assertHeld();
       if (stale.length > 0) {
         await this.client.sendCommand(['DEL', ...stale]);
@@ -269,22 +305,108 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     });
   }
 
-  /**
-   * A lease, so a crashed writer can't block the document forever. It is renewed while the work runs,
-   * which keeps a large document from outliving it.
-   */
-  private async withDocumentLock<T>(
+  private async swapChunks(
     documentId: string,
-    work: (assertHeld: () => void) => Promise<T>,
+    token: string,
+    stale: string[],
+    records: VectorRecord[],
+  ): Promise<void> {
+    const keys = [
+      this.lockKey(documentId),
+      ...stale,
+      ...records.map((record) => `${this.prefix}${record.id}`),
+    ];
+    const args: (string | Buffer)[] = [token, String(stale.length)];
+    for (const record of records) {
+      const fields = this.chunkFields(record);
+      args.push(String(fields.length), ...fields);
+    }
+    const swapped = await this.client.sendCommand([
+      'EVAL',
+      SWAP_CHUNKS_SCRIPT,
+      String(keys.length),
+      ...keys,
+      ...args,
+    ]);
+    if (Number(swapped) === 0) {
+      throw lostLockError(documentId);
+    }
+  }
+
+  private lockKey(documentId: string): string {
+    return `${this.index}:replace-lock:${documentId}`;
+  }
+
+  /**
+   * A lease on each document, so a crashed writer can't block one forever. They are renewed while the
+   * work runs, which keeps a large document from outliving them.
+   *
+   * Several documents are locked in sorted order, without duplicates. Every other caller either holds
+   * one lock or takes them in that same order, so no two calls can wait on each other.
+   */
+  private async withDocumentLocks<T>(
+    documentIds: string[],
+    work: (assertHeld: () => void, token: string) => Promise<T>,
   ): Promise<T> {
-    const key = `${this.index}:replace-lock:${documentId}`;
     const token = randomUUID();
+    const held: string[] = [];
+    let lostDocument: string | undefined;
+    const assertHeld = () => {
+      if (lostDocument !== undefined) {
+        throw lostLockError(lostDocument);
+      }
+    };
+    const renewal = setInterval(() => {
+      for (const key of held) {
+        void Promise.resolve(
+          this.client.sendCommand([
+            'EVAL',
+            RENEW_LOCK_SCRIPT,
+            '1',
+            key,
+            token,
+            String(REPLACE_LOCK_TTL_MS),
+          ]),
+        ).then(
+          (renewed) => {
+            if (Number(renewed) === 0) {
+              lostDocument = key.slice(this.lockKey('').length);
+            }
+          },
+          // A failed renewal isn't a lost lock yet: the lease may still have time left.
+          () => {},
+        );
+      }
+    }, REPLACE_LOCK_TTL_MS / 3);
+    renewal.unref?.();
+    try {
+      for (const documentId of [...new Set(documentIds)].sort()) {
+        await this.acquireLock(documentId, token);
+        held.push(this.lockKey(documentId));
+      }
+      const result = await work(assertHeld, token);
+      assertHeld();
+      return result;
+    } finally {
+      clearInterval(renewal);
+      // The leases expire by themselves, and a failure here must not hide the error from `work`.
+      await Promise.all(
+        held.map((key) =>
+          Promise.resolve(
+            this.client.sendCommand(['EVAL', RELEASE_LOCK_SCRIPT, '1', key, token]),
+          ).catch(() => {}),
+        ),
+      );
+    }
+  }
+
+  private async acquireLock(documentId: string, token: string): Promise<void> {
     const deadline = Date.now() + REPLACE_LOCK_WAIT_MS;
     let delay = 10;
     while (
       (await this.client.sendCommand([
         'SET',
-        key,
+        this.lockKey(documentId),
         token,
         'NX',
         'PX',
@@ -298,46 +420,6 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
       delay = Math.min(delay * 2, 250);
-    }
-    let lost = false;
-    const assertHeld = () => {
-      if (lost) {
-        throw new Error(
-          `RedisVectorStore: lost the lock while changing document "${documentId}"; call again to repair it`,
-        );
-      }
-    };
-    const renewal = setInterval(() => {
-      void Promise.resolve(
-        this.client.sendCommand([
-          'EVAL',
-          RENEW_LOCK_SCRIPT,
-          '1',
-          key,
-          token,
-          String(REPLACE_LOCK_TTL_MS),
-        ]),
-      ).then(
-        (renewed) => {
-          if (Number(renewed) === 0) {
-            lost = true;
-          }
-        },
-        // A failed renewal isn't a lost lock yet: the lease may still have time left.
-        () => {},
-      );
-    }, REPLACE_LOCK_TTL_MS / 3);
-    renewal.unref?.();
-    try {
-      const result = await work(assertHeld);
-      assertHeld();
-      return result;
-    } finally {
-      clearInterval(renewal);
-      // The lease expires by itself, and a failure here must not hide the error from `work`.
-      await Promise.resolve(
-        this.client.sendCommand(['EVAL', RELEASE_LOCK_SCRIPT, '1', key, token]),
-      ).catch(() => {});
     }
   }
 
@@ -363,7 +445,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    */
   async remove(documentId: string): Promise<void> {
     // Under the lock, or it could delete part of a version a `replaceDocument` is still writing.
-    await this.withDocumentLock(documentId, async () => {
+    await this.withDocumentLocks([documentId], async () => {
       const keys = await this.chunkKeys(documentId);
       if (keys.length > 0) {
         await this.client.sendCommand(['DEL', ...keys]);
@@ -609,40 +691,47 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    *
    * It deletes by key, exactly as `remove` does, so it is correct on chunks written by any version of
    * this library — there is no field it needs the corpus to already carry.
+   *
+   * It holds every document's lock for the whole scan, so it waits for a `replaceDocument` in progress
+   * and one can't start partway through. That adds two commands per document to the one scan.
    */
   async removeMany(documentIds: string[]): Promise<void> {
     if (documentIds.length === 0) {
       return;
     }
-    const wanted = new Set(documentIds);
-    // A document may have been stored under its bare id (no `#n` suffix); those keys are exact and
-    // need no scan to find, so seed them and let the scan add the chunked ones.
-    let pending = documentIds.map((id) => `${this.prefix}${id}`);
-    let cursor = '0';
-    do {
-      const reply = await this.client.sendCommand([
-        'SCAN',
-        cursor,
-        'MATCH',
-        `${escapeGlob(this.prefix)}*`,
-        'COUNT',
-        String(SCAN_PAGE),
-      ]);
-      const page = parseScanReply(reply);
-      cursor = page.cursor;
-      for (const key of page.keys) {
-        if (wanted.has(documentIdOf(stripPrefix(key, this.prefix)))) {
-          pending.push(key);
+    await this.withDocumentLocks(documentIds, async (assertHeld) => {
+      const wanted = new Set(documentIds);
+      // A document may have been stored under its bare id (no `#n` suffix); those keys are exact and
+      // need no scan to find, so seed them and let the scan add the chunked ones.
+      let pending = documentIds.map((id) => `${this.prefix}${id}`);
+      let cursor = '0';
+      do {
+        const reply = await this.client.sendCommand([
+          'SCAN',
+          cursor,
+          'MATCH',
+          `${escapeGlob(this.prefix)}*`,
+          'COUNT',
+          String(SCAN_PAGE),
+        ]);
+        const page = parseScanReply(reply);
+        cursor = page.cursor;
+        for (const key of page.keys) {
+          if (wanted.has(documentIdOf(stripPrefix(key, this.prefix)))) {
+            pending.push(key);
+          }
         }
-      }
-      if (pending.length >= DELETE_BATCH) {
+        if (pending.length >= DELETE_BATCH) {
+          assertHeld();
+          await this.client.sendCommand(['DEL', ...pending]);
+          pending = [];
+        }
+      } while (cursor !== '0');
+      if (pending.length > 0) {
+        assertHeld();
         await this.client.sendCommand(['DEL', ...pending]);
-        pending = [];
       }
-    } while (cursor !== '0');
-    if (pending.length > 0) {
-      await this.client.sendCommand(['DEL', ...pending]);
-    }
+    });
   }
 
   /**
@@ -668,6 +757,10 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * from the index, so paging forward would skip their replacements. If a page comes back non-empty
    * but `DEL` reports nothing removed (keys expired between query and delete, or the index is stale),
    * the loop stops rather than spinning on results it can never consume.
+   *
+   * The documents aren't known until a page comes back, so each page locks the documents it touches, one
+   * page at a time, and asks again with `INKEYS` once it holds them. A `replaceDocument` that finished in
+   * between may have dropped those chunks, or rewritten them to no longer match.
    */
   async removeWhere(filter: Record<string, unknown>): Promise<number> {
     const keys = Object.keys(filter);
@@ -700,6 +793,7 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
 
     const query = buildFilter(filter);
     let removed = 0;
+    let emptyPageBefore = false;
     for (;;) {
       const reply = await this.client.sendCommand([
         'FT.SEARCH',
@@ -716,11 +810,46 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
       if (page.length === 0) {
         break;
       }
-      const deleted = Number(await this.client.sendCommand(['DEL', ...page]));
-      if (!Number.isFinite(deleted) || deleted === 0) {
+      const documents = page.map((key) => documentIdOf(stripPrefix(key, this.prefix)));
+      const outcome = await this.withDocumentLocks(documents, async (assertHeld) => {
+        const confirmed = parseSearchKeys(
+          await this.client.sendCommand([
+            'FT.SEARCH',
+            this.index,
+            query,
+            'NOCONTENT',
+            'INKEYS',
+            String(page.length),
+            ...page,
+            'LIMIT',
+            '0',
+            String(DELETE_BATCH),
+            'DIALECT',
+            '2',
+          ]),
+        );
+        assertHeld();
+        return confirmed.length === 0
+          ? { confirmed: 0, deleted: 0 }
+          : {
+              confirmed: confirmed.length,
+              deleted: Number(await this.client.sendCommand(['DEL', ...confirmed])),
+            };
+      });
+      if (outcome.confirmed === 0) {
+        // The whole page changed while waiting, so the next search won't return it. Twice in a row means
+        // the index keeps returning keys it won't confirm, and the loop would never end.
+        if (emptyPageBefore) {
+          break;
+        }
+        emptyPageBefore = true;
+        continue;
+      }
+      emptyPageBefore = false;
+      if (!Number.isFinite(outcome.deleted) || outcome.deleted === 0) {
         break;
       }
-      removed += deleted;
+      removed += outcome.deleted;
     }
     return removed;
   }
@@ -820,6 +949,12 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
     ]);
     return parseSearchReply(reply, this.prefix, 'lexical');
   }
+}
+
+function lostLockError(documentId: string): Error {
+  return new Error(
+    `RedisVectorStore: lost the lock while changing document "${documentId}"; call again to repair it`,
+  );
 }
 
 /** Page size for `SCAN COUNT` and for the id-only `FT.SEARCH` pages. */

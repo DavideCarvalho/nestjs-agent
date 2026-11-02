@@ -90,6 +90,182 @@ describe('RedisVectorStore (real RediSearch)', () => {
     await store.remove('crashed');
   });
 
+  /** The same store, on a client that runs `before` ahead of each command. */
+  function storeWith(
+    before: (args: (string | Buffer)[]) => Promise<void> | void,
+  ): RedisVectorStore {
+    return new RedisVectorStore(
+      {
+        sendCommand: async (args) => {
+          await before(args);
+          return client.sendCommand(args);
+        },
+      },
+      { dimensions: 3, index: 'test_idx', prefix: 'test:', filterableFields: ['tenant'] },
+    );
+  }
+
+  /** A replace paused on its 10th write, large enough to be written in steps. */
+  async function pausedReplace(documentId: string) {
+    let writes = 0;
+    let reached = () => {};
+    let resume = () => {};
+    const atPause = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const replacing = storeWith(async (args) => {
+      if (args[0] === 'HSET' && ++writes === 10) {
+        reached();
+        await paused;
+      }
+    }).replaceDocument(
+      documentId,
+      Array.from({ length: 300 }, (_, chunk) => ({
+        id: `${documentId}#${chunk}`,
+        text: 'x',
+        embedding: [1, 0, 0],
+        metadata: { tenant: `${documentId}-tenant` },
+      })),
+    );
+    await atPause;
+    return { replacing, resume };
+  }
+
+  it('removeMany waits for a replaceDocument in progress and removes all of it', async () => {
+    const { replacing, resume } = await pausedReplace('many-gone');
+    const removing = store.removeMany(['many-gone']);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    resume();
+    await Promise.all([replacing, removing]);
+    expect(await store.listChunks('many-gone')).toEqual([]);
+    expect(await client.exists('test_idx:replace-lock:many-gone')).toBe(0);
+  });
+
+  it('removeWhere waits for a replaceDocument in progress and removes all of it', async () => {
+    const { replacing, resume } = await pausedReplace('where-gone');
+    const removing = store.removeWhere({ tenant: 'where-gone-tenant' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    resume();
+    const [, removed] = await Promise.all([replacing, removing]);
+    expect(removed).toBe(300);
+    expect(await store.listChunks('where-gone')).toEqual([]);
+    expect(await client.exists('test_idx:replace-lock:where-gone')).toBe(0);
+  });
+
+  it('removeWhere spares a chunk the writer it waited for rewrote to no longer match', async () => {
+    await store.upsert([
+      { id: 'moved#0', text: 'old', embedding: [1, 0, 0], metadata: { tenant: 'from' } },
+    ]);
+    await client.set('test_idx:replace-lock:moved', 'other-writer', { PX: 10_000 });
+    const removing = store.removeWhere({ tenant: 'from' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await store.upsert([
+      { id: 'moved#0', text: 'new', embedding: [1, 0, 0], metadata: { tenant: 'to' } },
+    ]);
+    await client.del('test_idx:replace-lock:moved');
+    expect(await removing).toBe(0);
+    expect((await store.listChunks('moved'))[0]?.text).toBe('new');
+    await store.remove('moved');
+  });
+
+  it(
+    'overlapping removeMany calls in opposite orders, with duplicates, do not deadlock',
+    { timeout: 20_000 },
+    async () => {
+      const ids = Array.from({ length: 20 }, (_, index) => `overlap-${index}`);
+      for (let round = 0; round < 5; round++) {
+        await store.upsert(ids.map((id) => ({ id, text: 'x', embedding: [1, 0, 0] })));
+        await Promise.all([
+          store.removeMany(ids),
+          store.removeMany([...ids].reverse()),
+          store.removeMany([ids[3] as string, ids[3] as string]),
+        ]);
+      }
+      for (const id of ids) {
+        expect(await store.listChunks(id)).toEqual([]);
+        expect(await client.exists(`test_idx:replace-lock:${id}`)).toBe(0);
+      }
+    },
+  );
+
+  it('a search during replaceDocument never sees old and new chunks together', async () => {
+    const version = (text: string, length: number) =>
+      Array.from({ length }, (_, chunk) => ({
+        id: `swap#${chunk}`,
+        text,
+        embedding: [1, 0, 0],
+        metadata: { tenant: 'swap' },
+      }));
+    await store.upsert(version('old', 6));
+    const seen: string[][] = [];
+    const look = async () => {
+      const hits = await store.search([1, 0, 0], { topK: 20, filter: { tenant: 'swap' } });
+      seen.push(hits.map((hit) => hit.text));
+    };
+    const interesting = new Set(['HSET', 'DEL']);
+    await storeWith(async (args) => {
+      if (interesting.has(String(args[0]))) {
+        await look();
+      }
+    }).replaceDocument('swap', version('new', 3));
+    await look();
+    for (const texts of seen) {
+      expect(new Set(texts).size).toBe(1);
+    }
+    expect(seen.at(-1)).toEqual(['new', 'new', 'new']);
+    await store.remove('swap');
+  });
+
+  it('replaceDocument writes the same hash upsert does, keeping nothing of the old chunk', async () => {
+    const record = {
+      id: 'same#0',
+      text: 'new',
+      embedding: [1, 0, 0],
+      metadata: { tenant: 'same' },
+    };
+    await store.upsert([record]);
+    const written = await client.sendCommand(['HGETALL', 'test:same#0']);
+    await store.upsert([{ ...record, source: 'old source' }]);
+    await store.replaceDocument('same', [record]);
+    expect(await client.sendCommand(['HGETALL', 'test:same#0'])).toEqual(written);
+    await store.remove('same');
+  });
+
+  it('replaceDocument changes nothing if it lost its lock before the swap', async () => {
+    await store.upsert([{ id: 'stolen#0', text: 'old', embedding: [1, 0, 0] }]);
+    const stealing = storeWith(async (args) => {
+      if (args[0] === 'EVAL' || args[0] === 'HSET') {
+        await client.set('test_idx:replace-lock:stolen', 'next-writer');
+      }
+    });
+    await expect(
+      stealing.replaceDocument('stolen', [{ id: 'stolen#0', text: 'new', embedding: [1, 0, 0] }]),
+    ).rejects.toThrow(/lost the lock/);
+    expect((await store.listChunks('stolen'))[0]?.text).toBe('old');
+    await client.del('test_idx:replace-lock:stolen');
+    await store.remove('stolen');
+  });
+
+  it('concurrent replaces too large for one script still leave exactly one version', async () => {
+    await Promise.all(
+      [0, 1].map((writer) =>
+        store.replaceDocument(
+          'large',
+          Array.from({ length: 300 - writer }, (_, chunk) => ({
+            id: `large#${chunk}`,
+            text: `writer-${writer}`,
+            embedding: [1, 0, 0],
+          })),
+        ),
+      ),
+    );
+    expect(new Set((await store.listChunks('large')).map((chunk) => chunk.text)).size).toBe(1);
+    await store.remove('large');
+  });
+
   it('upserts and ranks by cosine KNN', async () => {
     await store.upsert([
       { id: 'a', text: 'about cats', embedding: [1, 0, 0], source: 'cats' },
