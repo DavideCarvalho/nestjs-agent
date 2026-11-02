@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.4
+
+### Patch Changes
+
+- [#403](https://github.com/DavideCarvalho/nestjs-agent/pull/403) [`22c8dd7`](https://github.com/DavideCarvalho/nestjs-agent/commit/22c8dd76a78b36767e97cf6ce7b4e44b870686cb) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `RedisVectorStore.updateMetadata` now takes the same per-document lock as `replaceDocument` and `remove`. Without it, a chunk they deleted mid-update came back as a hash holding only metadata.
+
 ## 0.14.3
 
 ### Patch Changes
