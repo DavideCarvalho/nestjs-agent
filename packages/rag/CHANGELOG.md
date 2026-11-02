@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.3
+
+### Patch Changes
+
+- [#402](https://github.com/DavideCarvalho/nestjs-agent/pull/402) [`bc17ff1`](https://github.com/DavideCarvalho/nestjs-agent/commit/bc17ff1fa21615448d7ef1f15d0affe3ed949164) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `RedisVectorStore.removeMany` and `removeWhere` wait for a `replaceDocument` in progress, so they can't leave part of a document behind. `RedisVectorStore.replaceDocument` swaps a document in one script, so a search no longer sees both versions; a document of more than 256 chunks is still written in steps. In `MemoryVectorStore`, `remove`, `removeMany` and `removeWhere` take their turn with `replaceDocument`.
+
 ## 0.14.2
 
 ### Patch Changes
