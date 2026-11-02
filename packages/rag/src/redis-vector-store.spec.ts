@@ -187,28 +187,57 @@ describe('RedisVectorStore.removeWhere (guards, before anything hits the wire)',
     expect(verbs()).toEqual([]);
   });
 
-  it('a scoped filter issues a NOCONTENT search and DELs exactly its keys', async () => {
-    // one page of two keys, then an empty page to end the loop
+  it('a scoped filter locks the page, confirms it, and DELs exactly its keys', async () => {
+    // one page of two keys, confirmed under the lock, then an empty page to end the loop
     let searches = 0;
     const { client, commands, verbs } = scriptedClient((verb) => {
       if (verb !== 'FT.SEARCH') {
         return 2;
       }
       searches += 1;
-      return searches === 1 ? [2, 'p:doc#0', 'p:doc#1'] : [0];
+      return searches <= 2 ? [2, 'p:doc#0', 'p:doc#1'] : [0];
     });
 
     expect(await store(client).removeWhere({ tenant: 't1' })).toBe(2);
-    expect(verbs()).toEqual(['FT.SEARCH', 'DEL', 'FT.SEARCH']);
+    expect(verbs()).toEqual(['FT.SEARCH', 'SET', 'FT.SEARCH', 'DEL', 'EVAL', 'FT.SEARCH']);
     expect(commands[0]).toContain('NOCONTENT');
     expect(commands[0]).toContain('(@meta_tenant:{t1})');
-    expect(commands[1]).toEqual(['DEL', 'p:doc#0', 'p:doc#1']);
+    expect(commands[1]?.[1]).toBe('idx:replace-lock:doc');
+    expect(commands[2]).toContain('INKEYS');
+    expect(commands[3]).toEqual(['DEL', 'p:doc#0', 'p:doc#1']);
+  });
+
+  it('searches again when the whole page changed while waiting for its locks', async () => {
+    let searches = 0;
+    const { client } = scriptedClient((verb) => {
+      if (verb !== 'FT.SEARCH') {
+        return 1;
+      }
+      searches += 1;
+      // The page, nothing confirmed; then a fresh page, confirmed; then nothing left.
+      return [1, 3, 4].includes(searches) ? [1, 'p:doc#0'] : [0];
+    });
+    expect(await store(client).removeWhere({ tenant: 't1' })).toBe(1);
+  });
+
+  it('stops instead of spinning when the index keeps returning keys it will not confirm', async () => {
+    let searches = 0;
+    const { client, verbs } = scriptedClient((verb) => {
+      if (verb !== 'FT.SEARCH') {
+        return 1;
+      }
+      searches += 1;
+      return searches % 2 === 1 ? [1, 'p:ghost#0'] : [0];
+    });
+    expect(await store(client).removeWhere({ tenant: 't1' })).toBe(0);
+    expect(verbs()).not.toContain('DEL');
+    expect(searches).toBe(4);
   });
 
   it('stops instead of spinning when DEL reports nothing removed', async () => {
     const { client, verbs } = scriptedClient({ 'FT.SEARCH': [1, 'p:ghost#0'], DEL: 0 });
     expect(await store(client).removeWhere({ tenant: 't1' })).toBe(0);
-    expect(verbs()).toEqual(['FT.SEARCH', 'DEL']);
+    expect(verbs()).toEqual(['FT.SEARCH', 'SET', 'FT.SEARCH', 'DEL', 'EVAL']);
   });
 });
 

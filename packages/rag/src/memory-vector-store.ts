@@ -49,15 +49,21 @@ export class MemoryVectorStore implements AtomicReplaceVectorStore {
     }
   }
 
-  /** Replaces take turns per document. A `remove` during one isn't queued, and may be undone by it. */
+  /** A replace and a removal of one document take turns, in the order they were called. */
   async replaceDocument(documentId: string, records: VectorRecord[]): Promise<void> {
+    await this.inTurn(documentId, async () => {
+      this.deleteChunks(documentId);
+      await this.upsert(records);
+    });
+  }
+
+  async remove(documentId: string): Promise<void> {
+    await this.inTurn(documentId, async () => this.deleteChunks(documentId));
+  }
+
+  private async inTurn(documentId: string, work: () => Promise<void>): Promise<void> {
     const previous = this.replacing.get(documentId) ?? Promise.resolve();
-    const run = previous
-      .catch(() => {})
-      .then(async () => {
-        await this.remove(documentId);
-        await this.upsert(records);
-      });
+    const run = previous.catch(() => {}).then(work);
     this.replacing.set(documentId, run);
     try {
       await run;
@@ -68,7 +74,7 @@ export class MemoryVectorStore implements AtomicReplaceVectorStore {
     }
   }
 
-  async remove(documentId: string): Promise<void> {
+  private deleteChunks(documentId: string): void {
     for (const id of this.records.keys()) {
       if (documentIdOf(id) === documentId) {
         this.records.delete(id);
@@ -161,12 +167,7 @@ export class MemoryVectorStore implements AtomicReplaceVectorStore {
     if (documentIds.length === 0) {
       return;
     }
-    const wanted = new Set(documentIds);
-    for (const id of this.records.keys()) {
-      if (wanted.has(documentIdOf(id))) {
-        this.records.delete(id);
-      }
-    }
+    await Promise.all([...new Set(documentIds)].map((documentId) => this.remove(documentId)));
   }
 
   /**
@@ -191,6 +192,8 @@ export class MemoryVectorStore implements AtomicReplaceVectorStore {
     if (filterMatchesNothing(filter)) {
       return 0;
     }
+    // Which documents match isn't known until the replaces already called have finished.
+    await Promise.allSettled(this.replacing.values());
     let removed = 0;
     for (const [id, record] of this.records) {
       if (matchesFilter(record.metadata, filter)) {

@@ -139,13 +139,13 @@ describe('RagIndex.index', () => {
     expect((await store.listChunks('doc:1'))[0]?.text).toBe('one');
   });
 
-  it('embeds, then removes, then upserts', async () => {
+  it('embeds, then replaces', async () => {
     const calls: string[] = [];
     const store = new MemoryVectorStore();
     const spied = new Proxy(store, {
       get(target, key, receiver) {
         const value = Reflect.get(target, key, receiver);
-        if ((key === 'remove' || key === 'upsert') && typeof value === 'function') {
+        if (key === 'replaceDocument' && typeof value === 'function') {
           return (...args: unknown[]) => {
             calls.push(key);
             return value.apply(target, args);
@@ -164,7 +164,7 @@ describe('RagIndex.index', () => {
       },
     });
     await rag.index({ id: 1, projectId: 'a', body: 'x' });
-    expect(calls).toEqual(['embed', 'remove', 'upsert']);
+    expect(calls).toEqual(['embed', 'replaceDocument']);
   });
 
   it('a shorter version leaves no tail, and blank text removes', async () => {

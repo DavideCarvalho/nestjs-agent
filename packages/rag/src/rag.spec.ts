@@ -252,6 +252,53 @@ describe('MemoryVectorStore.remove', () => {
   });
 });
 
+describe('MemoryVectorStore removals during a replace', () => {
+  const version = [
+    { id: 'd#0', text: 'new', embedding: [1, 0], metadata: { tenant: 't' } },
+    { id: 'd#1', text: 'new', embedding: [1, 0], metadata: { tenant: 't' } },
+  ];
+
+  it('remove takes its turn after a replace already called', async () => {
+    const store = new MemoryVectorStore();
+    await Promise.all([store.replaceDocument('d', version), store.remove('d')]);
+    expect(await store.listChunks('d')).toEqual([]);
+  });
+
+  it('a replace called after remove still lands', async () => {
+    const store = new MemoryVectorStore();
+    await Promise.all([store.remove('d'), store.replaceDocument('d', version)]);
+    expect(await store.listChunks('d')).toHaveLength(2);
+  });
+
+  it('removeMany takes its turn too, and takes duplicates', async () => {
+    const store = new MemoryVectorStore();
+    await Promise.all([store.replaceDocument('d', version), store.removeMany(['d', 'd'])]);
+    expect(await store.listChunks('d')).toEqual([]);
+  });
+
+  it('removeWhere waits for a replace already called', async () => {
+    const store = new MemoryVectorStore();
+    const replacing = store.replaceDocument('d', version);
+    expect(await store.removeWhere({ tenant: 't' })).toBe(2);
+    await replacing;
+    expect(await store.listChunks('d')).toEqual([]);
+  });
+
+  it('a failed replace does not stop the removal behind it', async () => {
+    const store = new MemoryVectorStore();
+    await store.upsert(version);
+    const upsert = store.upsert.bind(store);
+    store.upsert = async () => {
+      store.upsert = upsert;
+      throw new Error('write failed');
+    };
+    const replacing = store.replaceDocument('d', version);
+    await store.remove('d');
+    await expect(replacing).rejects.toThrow('write failed');
+    expect(await store.listChunks('d')).toEqual([]);
+  });
+});
+
 describe('MemoryVectorStore.listDocuments', () => {
   it('returns distinct documents (chunks collapsed) with metadata, filtered by metadata', async () => {
     const embedder = new FakeEmbeddingProvider();

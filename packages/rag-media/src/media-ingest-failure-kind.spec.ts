@@ -130,9 +130,9 @@ describe('failure kind per phase', () => {
     expect(outcome.kind).toBe('embed');
   });
 
-  it('tags the pre-ingest store.remove as store', async () => {
+  it('tags the swap of the old chunks as store', async () => {
     const store = new MemoryVectorStore();
-    store.remove = async () => {
+    store.replaceDocument = async () => {
       throw new Boom('index unavailable');
     };
     const outcome = await failWith({ store });
