@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import {
   type AiToolCtx,
   ConfirmTokenError,
@@ -234,7 +235,7 @@ describe('defineConfirmedTool', () => {
 });
 
 describe('withConfirmFields', () => {
-  const schema = withConfirmFields(z.object({ orderId: z.string() }).strict());
+  const schema = withConfirmFields(z3.object({ orderId: z3.string() }).strict());
 
   it('validates the app schema without the two fields, and puts them back', async () => {
     const result = await schema['~standard'].validate({

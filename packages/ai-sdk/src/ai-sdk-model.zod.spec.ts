@@ -8,6 +8,7 @@ import type { JSONSchema7 } from 'ai';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import { aiSdkModel } from './ai-sdk-model.js';
 
 // A genuine end-to-end run: no mocking of the `ai` module. We drive the real `streamText` with a
@@ -148,5 +149,19 @@ describe('aiSdkModel — Standard Schema → model params (real SDK)', () => {
       confirmToken: { type: 'string' },
     });
     expect(schema.required).toEqual(['orderId']);
+  });
+
+  it('shows an app’s Zod 3 tool its real shape too', async () => {
+    const tool: ToolDefinition = {
+      name: 'legacy',
+      kind: 'read',
+      description: 'legacy',
+      inputSchema: z3.object({ city: z3.string() }),
+    };
+
+    const schema = schemaSeenByModel(await runWith([tool]), 'legacy');
+
+    expect(schema.properties).toMatchObject({ city: { type: 'string' } });
+    expect(schema.required).toEqual(['city']);
   });
 });

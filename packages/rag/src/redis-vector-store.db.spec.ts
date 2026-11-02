@@ -708,6 +708,100 @@ describe('RedisVectorStore.updateMetadata (real RediSearch, dual representation)
 });
 
 /**
+ * `updateMetadata` reads each chunk and then writes it, so a chunk deleted in between used to come back
+ * as a hash holding only metadata. The client here pauses that first read long enough for another call
+ * to get in, if nothing stops it.
+ */
+describe('RedisVectorStore.updateMetadata takes turns with other changes (real RediSearch)', () => {
+  const OVERLAP_MS = 250;
+  let racing: RedisVectorStore;
+  let beforeFirstRead: (() => Promise<unknown>) | undefined;
+
+  const chunk = (id: string, text = 'x') => ({
+    id,
+    text,
+    embedding: [1, 0, 0],
+    metadata: { tenant: 'old' },
+  });
+  /** Waits for `other`, but no longer than the overlap: under a lease it can't finish until later. */
+  const overlapWith = (other: Promise<unknown>) =>
+    Promise.race([other, new Promise((resolve) => setTimeout(resolve, OVERLAP_MS))]);
+
+  beforeAll(async () => {
+    const paused: RedisSearchClient = {
+      sendCommand: async (args) => {
+        if (String(args[0]) === 'HGET' && beforeFirstRead !== undefined) {
+          const pause = beforeFirstRead;
+          beforeFirstRead = undefined;
+          await pause();
+        }
+        return client.sendCommand(args);
+      },
+    };
+    racing = new RedisVectorStore(paused, {
+      dimensions: 3,
+      index: 'turns_idx',
+      prefix: 'turns:',
+      filterableFields: ['tenant'],
+    });
+    await racing.ensureSchema();
+  });
+
+  beforeEach(async () => {
+    beforeFirstRead = undefined;
+    await racing.remove('doc');
+  });
+
+  it('does not bring back a chunk a remove deleted', async () => {
+    await racing.upsert([chunk('doc#0'), chunk('doc#1')]);
+    let removing: Promise<void> | undefined;
+    beforeFirstRead = () => {
+      removing = racing.remove('doc');
+      return overlapWith(removing);
+    };
+
+    await racing.updateMetadata('doc', { tenant: 'new' });
+    await removing;
+
+    expect(await client.keys('turns:doc*')).toEqual([]);
+  });
+
+  it('does not bring back a chunk a replaceDocument dropped', async () => {
+    await racing.upsert([chunk('doc#0'), chunk('doc#1'), chunk('doc#2')]);
+    let replacing: Promise<void> | undefined;
+    beforeFirstRead = () => {
+      replacing = racing.replaceDocument('doc', [chunk('doc#0', 'v2')]);
+      return overlapWith(replacing);
+    };
+
+    await racing.updateMetadata('doc', { tenant: 'new' });
+    await replacing;
+
+    expect(await client.keys('turns:doc*')).toEqual(['turns:doc#0']);
+    expect(await client.hGet('turns:doc#0', 'text')).toBe('v2');
+  });
+
+  it('waits for the lease, then patches what the holder left', async () => {
+    await racing.upsert([chunk('doc#0')]);
+    await client.set('turns_idx:replace-lock:doc', 'someone-else', { PX: 30_000 });
+
+    let finished = false;
+    const updating = racing.updateMetadata('doc', { tenant: 'new' }).then((count) => {
+      finished = true;
+      return count;
+    });
+    await new Promise((resolve) => setTimeout(resolve, OVERLAP_MS));
+    expect(finished).toBe(false);
+    expect(await client.hGet('turns:doc#0', 'meta_tenant')).toBe('old');
+
+    await client.del('turns_idx:replace-lock:doc');
+    expect(await updating).toBe(1);
+    expect(await client.hGet('turns:doc#0', 'meta_tenant')).toBe('new');
+    expect(await client.exists('turns_idx:replace-lock:doc')).toBe(0);
+  });
+});
+
+/**
  * Enumeration + bulk deletion against a real engine, on their own index so a destructive test can
  * never reach the corpus the other suites share. The properties under test are the ones a fake client
  * cannot establish: that the emitted queries are *valid* RediSearch, that a scoped delete really

@@ -480,37 +480,43 @@ export class RedisVectorStore implements LexicalVectorStore, AtomicReplaceVector
    * Removals are issued **before** the write, so the only window a concurrent reader can observe is
    * "TAG already gone, `metadata_json` not yet updated" — which fails *closed* on a filter carrying
    * an ACL. The reverse order would briefly leave a document tagged with a capability its metadata no
-   * longer claims. Read-modify-write across chunks is not transactional; concurrent writers to the
-   * same chunk are last-writer-wins, exactly as two concurrent `upsert`s already are.
+   * longer claims.
+   *
+   * Under the same lock as {@link RedisVectorStore.replaceDocument} and {@link RedisVectorStore.remove}:
+   * `HSET` creates a missing hash, so a chunk they deleted after the scan would come back holding only
+   * metadata. A plain `upsert` takes no lock, so one that overlaps is still last-writer-wins.
    */
   async updateMetadata(documentId: string, patch: MetadataPatch): Promise<number> {
     if (isEmptyMetadataPatch(patch)) {
       return 0;
     }
-    const keys = await this.chunkKeys(documentId);
-    let updated = 0;
-    for (const key of keys) {
-      const raw = await this.client.sendCommand(['HGET', key, 'metadata_json']);
-      const current = parseMetadata(raw === null || raw === undefined ? undefined : toStr(raw));
-      const next = applyMetadataPatch(current.metadata, patch);
+    return this.withDocumentLocks([documentId], async (assertHeld) => {
+      const keys = await this.chunkKeys(documentId);
+      let updated = 0;
+      for (const key of keys) {
+        const raw = await this.client.sendCommand(['HGET', key, 'metadata_json']);
+        const current = parseMetadata(raw === null || raw === undefined ? undefined : toStr(raw));
+        const next = applyMetadataPatch(current.metadata, patch);
 
-      const args: (string | Buffer)[] = ['HSET', key, 'metadata_json', JSON.stringify(next)];
-      const stale: string[] = [];
-      for (const field of this.filterableFields) {
-        const value = next[field];
-        if (value !== undefined) {
-          args.push(`meta_${field}`, encodeTag(value));
-        } else if (current.metadata?.[field] !== undefined) {
-          stale.push(`meta_${field}`);
+        const args: (string | Buffer)[] = ['HSET', key, 'metadata_json', JSON.stringify(next)];
+        const stale: string[] = [];
+        for (const field of this.filterableFields) {
+          const value = next[field];
+          if (value !== undefined) {
+            args.push(`meta_${field}`, encodeTag(value));
+          } else if (current.metadata?.[field] !== undefined) {
+            stale.push(`meta_${field}`);
+          }
         }
+        assertHeld();
+        if (stale.length > 0) {
+          await this.client.sendCommand(['HDEL', key, ...stale]);
+        }
+        await this.client.sendCommand(args);
+        updated += 1;
       }
-      if (stale.length > 0) {
-        await this.client.sendCommand(['HDEL', key, ...stale]);
-      }
-      await this.client.sendCommand(args);
-      updated += 1;
-    }
-    return updated;
+      return updated;
+    });
   }
 
   /**

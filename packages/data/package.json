@@ -45,7 +45,7 @@
   "dependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "node-sql-parser": "5.4.0",
-    "zod": "3.25.76"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent-core": "workspace:*",
