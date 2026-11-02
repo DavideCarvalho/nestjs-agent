@@ -82,7 +82,7 @@
     "@dudousxd/nestjs-durable-core": "0.72.1",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
     "@nestjs/event-emitter": "12.0.1",
-    "zod": "3.25.76",
+    "zod": "4.6.7",
     "@opencode/client": "2.0.18"
   },
   "peerDependenciesMeta": {

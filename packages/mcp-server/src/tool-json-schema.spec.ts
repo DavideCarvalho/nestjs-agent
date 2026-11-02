@@ -2,6 +2,7 @@ import { withConfirmFields } from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import { toMcpInputSchema } from './tool-json-schema.js';
 
 /** A Standard Schema from a vendor the SDK cannot introspect, with no JSON Schema extension. */
@@ -43,8 +44,14 @@ describe('toMcpInputSchema', () => {
   });
 
   it('carries the converter’s other keywords through, so nested references still resolve', () => {
-    const schema = toMcpInputSchema(z.object({ city: z.string() }));
+    const schema = toMcpInputSchema(z.strictObject({ city: z.string() }));
     expect(schema.additionalProperties).toBe(false);
+  });
+
+  it('still converts an app’s Zod 3 schema, which has no JSON Schema extension', () => {
+    const schema = toMcpInputSchema(z3.object({ city: z3.string() }));
+    expect(schema.properties).toMatchObject({ city: { type: 'string' } });
+    expect(schema.required).toEqual(['city']);
   });
 
   it('hands a Standard JSON Schema straight through', () => {

@@ -115,7 +115,17 @@ describe('app component registry', () => {
     );
     expect(registry.catalog.has('Greeting')).toBe(true);
     expect(JSON.parse(JSON.stringify(registry.manifest))).toEqual([
-      { name: 'Greeting', title: 'Greeting', description: 'A greeting', version: 2 },
+      {
+        name: 'Greeting',
+        title: 'Greeting',
+        description: 'A greeting',
+        version: 2,
+        props: expect.objectContaining({
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        }),
+      },
     ]);
     expect(() => registry.register(definition, {})).toThrow(/twice|already/);
     expect(createComponentRegistry().catalog.has('Greeting')).toBe(false);
