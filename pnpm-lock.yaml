@@ -437,7 +437,7 @@ importers:
         specifier: 5.4.0
         version: 5.4.0
       zod:
-        specifier: ^4.6.6
+        specifier: 4.6.7
         version: 4.6.7
     devDependencies:
       tsup:
@@ -579,7 +579,7 @@ importers:
         specifier: '>=5'
         version: 5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2)
       zod:
-        specifier: ^4.6.6
+        specifier: 4.6.7
         version: 4.6.7
     devDependencies:
       '@a2ui/web_core':
@@ -942,7 +942,7 @@ importers:
         specifier: 0.16.45
         version: 0.16.45
       playwright-core:
-        specifier: ^1.63.0
+        specifier: 1.63.0
         version: 1.63.0
       prism-react-renderer:
         specifier: 2.4.1
