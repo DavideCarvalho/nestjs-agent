@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.43.6
+
+### Patch Changes
+
+- [#405](https://github.com/DavideCarvalho/nestjs-agent/pull/405) [`115118d`](https://github.com/DavideCarvalho/nestjs-agent/commit/115118d198fd9a9349c4dd9cf3e57d8256cc65d5) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `AgentChatTransport`: a component pushed mid-step (`ui` frame) now closes only the open text run. It used to close the reasoning run too, stamping the browser's elapsed time on it — so when a tool pushed a component while it ran (a search pushing its result card), the tool's whole execution was counted as thinking, and the backend's `step-finish.reasoningMs` arriving after it was dropped. The reasoning run now closes at the step boundary with the backend's own measurement, the same number a reloaded thread shows.
+
 ## 0.43.5
 
 ### Patch Changes
