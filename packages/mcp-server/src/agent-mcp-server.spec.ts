@@ -10,12 +10,22 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { defineCatalog, genuiTools } from '@dudousxd/nestjs-agent-core/genui';
 import { BUILTIN_COMPONENTS, LAYOUT_COMPONENTS } from '@dudousxd/nestjs-agent-core/genui/builtins';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { Client } from '@modelcontextprotocol/client';
+import { InMemoryTransport, McpServer } from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { type CreateAgentMcpServerOptions, createAgentMcpServer } from './agent-mcp-server.js';
+import { type RegisterAgentToolsOptions, registerAgentTools } from './agent-mcp-server.js';
+
+/** What a spec builds a server from: everything but the actor, which each connection brings. */
+type ServerSpec = Omit<RegisterAgentToolsOptions, 'actor'>;
+
+/** A server spec, as the specs describe one (`name` / `version` are the SDK server's, below). */
+function createAgentMcpServer(
+  options: ServerSpec & { name?: string; version?: string },
+): ServerSpec {
+  const { name: _name, version: _version, ...spec } = options;
+  return spec;
+}
 
 const ANALYST: Actor = { id: 'u-analyst', roles: ['ANALYST'] };
 
@@ -103,20 +113,13 @@ function freshHandlers(): Handlers {
   return { search: vi.fn(), purge: vi.fn(), delegate: vi.fn(), retired: vi.fn() };
 }
 
-/** An MCP client talking to `server`, sending `actor` as the transport's verified identity. */
-async function connect(input: { server: Server; actor?: Actor }): Promise<Client> {
+/** An MCP client talking to a server `@nestjs/mcp` would build for `actor`, with the agent's tools on it. */
+async function connect(input: { server: ServerSpec; actor: Actor }): Promise<Client> {
+  const server = new McpServer({ name: 'spec-server', version: '1.0.0' });
+  await registerAgentTools(server, { ...input.server, actor: input.actor });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const { actor } = input;
-  if (actor !== undefined) {
-    const send = clientTransport.send.bind(clientTransport);
-    clientTransport.send = (message, options) =>
-      send(message, {
-        ...options,
-        authInfo: { token: '', clientId: actor.id, scopes: [], extra: { actor } },
-      });
-  }
   const client = new Client({ name: 'spec-client', version: '1.0.0' });
-  await Promise.all([input.server.connect(serverTransport), client.connect(clientTransport)]);
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return client;
 }
 
@@ -131,7 +134,7 @@ function textOf(content: unknown): string {
     .join('');
 }
 
-describe('createAgentMcpServer', () => {
+describe('registerAgentTools', () => {
   let handlers: Handlers;
   let registry: ToolRegistry;
 
@@ -143,10 +146,8 @@ describe('createAgentMcpServer', () => {
     }
   });
 
-  function serverWith(options: Partial<CreateAgentMcpServerOptions> = {}): Server {
+  function serverWith(options: Partial<ServerSpec> = {}): ServerSpec {
     return createAgentMcpServer({
-      name: 'spec-server',
-      version: '1.0.0',
       registry,
       policy: new DefaultRolesPolicy(),
       ...options,
@@ -178,9 +179,10 @@ describe('createAgentMcpServer', () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual(['search_docs']);
     for (const tool of ui) {
-      const result = await client.callTool({ name: tool.spec.name, arguments: {} });
-      expect(result.isError).toBe(true);
-      expect(textOf(result.content)).toMatch(/shown elsewhere/);
+      // Never registered over MCP: there is nothing to call.
+      await expect(client.callTool({ name: tool.spec.name, arguments: {} })).rejects.toThrow(
+        /not found/,
+      );
     }
   });
 
@@ -199,9 +201,9 @@ describe('createAgentMcpServer', () => {
 
   it('never runs an action tool for a caller with no human to approve it', async () => {
     const client = await connect({ server: serverWith(), actor: ANALYST });
-    const result = await client.callTool({ name: 'purge_cache', arguments: { key: 'k1' } });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/approval/);
+    await expect(
+      client.callTool({ name: 'purge_cache', arguments: { key: 'k1' } }),
+    ).rejects.toThrow(/not found/);
     expect(handlers.purge).not.toHaveBeenCalled();
   });
 
@@ -215,12 +217,9 @@ describe('createAgentMcpServer', () => {
 
   it('never runs a loop-served tool, even under the action opt-in', async () => {
     const client = await connect({ server: serverWith({ actions: 'execute' }), actor: ANALYST });
-    const result = await client.callTool({
-      name: 'delegate_to_billing',
-      arguments: { task: 'refund' },
-    });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/agent loop/);
+    await expect(
+      client.callTool({ name: 'delegate_to_billing', arguments: { task: 'refund' } }),
+    ).rejects.toThrow(/not found/);
     expect(handlers.delegate).not.toHaveBeenCalled();
   });
 
@@ -232,16 +231,15 @@ describe('createAgentMcpServer', () => {
       actor: ANALYST,
     });
     expect((await client.listTools()).tools).toEqual([]);
-    const result = await client.callTool({ name: 'search_docs', arguments: { q: 'x' } });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/does not list it/);
+    await expect(client.callTool({ name: 'search_docs', arguments: { q: 'x' } })).rejects.toThrow();
     expect(handlers.search).not.toHaveBeenCalled();
   });
 
   it('refuses a tool this deployment has turned off', async () => {
     const client = await connect({ server: serverWith(), actor: ANALYST });
-    const result = await client.callTool({ name: 'retired_report', arguments: {} });
-    expect(result.isError).toBe(true);
+    await expect(client.callTool({ name: 'retired_report', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
     expect(handlers.retired).not.toHaveBeenCalled();
   });
 
@@ -256,8 +254,7 @@ describe('createAgentMcpServer', () => {
     const client = await connect({ server: serverWith({ policy }), actor: ANALYST });
     expect((await client.listTools()).tools).toEqual([]);
     expect(asked).toContain('search_docs');
-    const result = await client.callTool({ name: 'search_docs', arguments: { q: 'x' } });
-    expect(result.isError).toBe(true);
+    await expect(client.callTool({ name: 'search_docs', arguments: { q: 'x' } })).rejects.toThrow();
     expect(handlers.search).not.toHaveBeenCalled();
   });
 
@@ -281,20 +278,9 @@ describe('createAgentMcpServer', () => {
 
   it('answers a tool nobody registered without pretending it exists', async () => {
     const client = await connect({ server: serverWith(), actor: ANALYST });
-    const result = await client.callTool({ name: 'no_such_tool', arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/not registered/);
-  });
-
-  it('refuses a transport that authenticated nobody, as a protocol error', async () => {
-    // Not a tool result: a client has to be able to tell "you are not authenticated" from "the tool
-    // said no". Nothing here invents an actor to run as.
-    const client = await connect({ server: serverWith() });
-    await expect(client.listTools()).rejects.toThrow(/unauthorized/);
-    await expect(client.callTool({ name: 'search_docs', arguments: { q: 'x' } })).rejects.toThrow(
-      /unauthorized/,
+    await expect(client.callTool({ name: 'no_such_tool', arguments: {} })).rejects.toThrow(
+      /not found/,
     );
-    expect(handlers.search).not.toHaveBeenCalled();
   });
 });
 
@@ -369,7 +355,7 @@ describe('a confirmed write over MCP', () => {
   });
 });
 
-describe('createAgentMcpServer context', () => {
+describe('registerAgentTools context', () => {
   it("hands the host the call's _meta, and the tool the context it returns", async () => {
     const registry = new ToolRegistry();
     const pushed: unknown[] = [];

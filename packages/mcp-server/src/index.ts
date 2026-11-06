@@ -3,15 +3,22 @@ export {
   AgentMcpServerModule,
   AgentMcpServerOptionsModule,
 } from './agent-mcp-server.module.js';
-export { AgentMcpServerController } from './agent-mcp-server.controller.js';
+export {
+  AgentMcpAuthGuard,
+  MCP_ACTOR,
+  mcpActorOf,
+  type McpHttpRequest,
+} from './agent-mcp-auth.guard.js';
+export { AgentMcpServerBinding, findMcpServerFactory } from './agent-mcp-server.binding.js';
 export type {
   AgentMcpServerModuleAsyncOptions,
   AgentMcpServerModuleOptions,
   McpRouteExposureOptions,
 } from './agent-mcp-server.options.js';
 export {
-  createAgentMcpServer,
-  type CreateAgentMcpServerOptions,
+  describeAgentTool,
+  registerAgentTools,
+  type RegisterAgentToolsOptions,
   type McpToolContextResolver,
 } from './agent-mcp-server.js';
 export { authenticateMcpRequest } from './authenticate.js';
@@ -36,7 +43,6 @@ export {
   type McpChallenge,
   type McpChallengeError,
 } from './mcp-challenge.js';
-export { McpSessionStore, type McpSession } from './mcp-sessions.js';
 export {
   asPersonalAgent,
   poppyActorResolver,

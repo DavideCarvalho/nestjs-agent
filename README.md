@@ -870,8 +870,9 @@ AgentMcpServerModule.forRoot({
   deployment saying out loud that this caller may act without approval.
 - **Identity is required and never invented.** `auth` is the same `ActorResolver` seam `AgentModule`
   takes, with no default actor and no default role; a caller it cannot identify gets **401**, not 500.
-- **A session belongs to the actor that opened it** — a request authenticating as somebody else is
-  403, not served on it.
+- **Served by NestJS's [`@nestjs/mcp`](https://docs.nestjs.com/mcp/overview)** — stateless, both
+  protocol revisions, stdio, and the app's own `@Tool()` methods beside the agent's; every request is
+  authenticated on its own, and lists only the tools that actor may use.
 
 See [`packages/mcp-server`](./packages/mcp-server) for the full option surface.
 

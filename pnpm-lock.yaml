@@ -477,9 +477,9 @@ importers:
 
   packages/mcp-server:
     dependencies:
-      '@modelcontextprotocol/sdk':
-        specifier: 1.31.0
-        version: 1.31.0(zod@4.6.7)
+      '@modelcontextprotocol/server':
+        specifier: 2.4.0
+        version: 2.4.0
       '@standard-schema/spec':
         specifier: 1.1.0
         version: 1.1.0
@@ -493,12 +493,18 @@ importers:
       '@dudousxd/nestjs-agent-testing':
         specifier: workspace:*
         version: link:../testing
+      '@modelcontextprotocol/client':
+        specifier: 2.4.0
+        version: 2.4.0
       '@nestjs/common':
         specifier: 12.0.4
         version: 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core':
         specifier: 12.0.4
         version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/mcp':
+        specifier: 0.0.4
+        version: 0.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/server@2.4.0)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/platform-express':
         specifier: 12.0.4
         version: 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)
@@ -2504,6 +2510,14 @@ packages:
     peerDependencies:
       '@mikro-orm/core': 7.2.3
 
+  '@modelcontextprotocol/client@2.4.0':
+    resolution: {integrity: sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/core@2.4.0':
+    resolution: {integrity: sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/sdk@1.31.0':
     resolution: {integrity: sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==}
     engines: {node: '>=18'}
@@ -2513,6 +2527,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@modelcontextprotocol/server@2.4.0':
+    resolution: {integrity: sha512-rgR9yxSaAJ+bcsi/XroT/S2AfPiIWloXAnrdfYSCms9ivVju0ishu/wW0J21Ho6+ZOR1r7RyeRbjiRuF87ix5Q==}
+    engines: {node: '>=20'}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
@@ -2707,6 +2725,20 @@ packages:
     peerDependencies:
       '@nestjs/common': ^11.0.0 || ^12.0.0
       '@nestjs/core': ^11.0.0 || ^12.0.0
+
+  '@nestjs/mcp@0.0.4':
+    resolution: {integrity: sha512-f3oc2kcZmgy1tOFS/pzhKWrINWUIJqwxAuxGFeAXLqxzqIBSPsbK6XXX3EKErDKq68zGPejp+Jx7l538guSoSw==}
+    engines: {node: '>=20.19.0'}
+    peerDependencies:
+      '@modelcontextprotocol/client': ^2.4.0
+      '@modelcontextprotocol/server': ^2.4.0
+      '@nestjs/common': ^12.0.0
+      '@nestjs/core': ^12.0.0
+      reflect-metadata: ^0.1.13 || ^0.2.0
+      rxjs: ^7.1.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/client':
+        optional: true
 
   '@nestjs/platform-express@12.0.4':
     resolution: {integrity: sha512-oL6zHjeMeqwKoAlY1Y+bpCfFy6Yat6wfWnmcTgp7IE3A6TAftu6Vgu/eRi9VY5bErw4dMcYGtzvxvKP1QXr8JA==}
@@ -8714,6 +8746,20 @@ snapshots:
       better-sqlite3: 13.0.3
       kysely: 0.29.6
 
+  '@modelcontextprotocol/client@2.4.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.4.0
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.0
+      jose: 6.2.12
+      pkce-challenge: 5.0.1
+      zod: 4.6.7
+
+  '@modelcontextprotocol/core@2.4.0':
+    dependencies:
+      zod: 4.6.7
+
   '@modelcontextprotocol/sdk@1.31.0(zod@4.6.7)':
     dependencies:
       '@hono/node-server': 2.1.1(hono@4.13.7)
@@ -8735,6 +8781,11 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.6.7)
     transitivePeerDependencies:
       - supports-color
+
+  '@modelcontextprotocol/server@2.4.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.4.0
+      zod: 4.6.7
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
@@ -8890,6 +8941,16 @@ snapshots:
       '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       eventemitter2: 6.4.9
+
+  '@nestjs/mcp@0.0.4(@modelcontextprotocol/client@2.4.0)(@modelcontextprotocol/server@2.4.0)(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+    dependencies:
+      '@modelcontextprotocol/server': 2.4.0
+      '@nestjs/common': 12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core': 12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.0.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      reflect-metadata: 0.2.2
+      rxjs: 7.8.2
+    optionalDependencies:
+      '@modelcontextprotocol/client': 2.4.0
 
   '@nestjs/platform-express@12.0.4(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)':
     dependencies:

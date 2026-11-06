@@ -1,5 +1,6 @@
-import type { ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
+import type { Actor, ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
+import type { McpModuleOptions } from '@nestjs/mcp';
 import type { McpToolContextResolver } from './agent-mcp-server.js';
 import type { McpActionPolicy } from './exposed-tools.js';
 import type { McpOAuthOptions } from './protected-resource.js';
@@ -22,8 +23,20 @@ export interface AgentMcpServerModuleOptions {
    * with no roles is what "authenticated, but entitled to nothing" looks like.
    */
   auth: ActorResolver;
-  /** Route the MCP endpoint mounts at. Defaults to `'mcp'` (→ `POST|GET|DELETE /mcp`). */
+  /** Route the MCP endpoint mounts at. Defaults to `'mcp'`. */
   path?: string;
+  /**
+   * `@nestjs/mcp`'s own settings for the server it serves: `title`, `description`, `instructions`,
+   * `icons`, `http` (`allowedHosts`, `allowedOrigins`, `responseMode`, …) and `stdio`. Its `auth`
+   * is not taken: who calls is {@link auth}'s answer.
+   */
+  mcp?: Omit<McpModuleOptions, 'name' | 'version' | 'auth'>;
+  /**
+   * Serve the agent's tools over stdio too (`McpStdioServer` from `@nestjs/mcp`), as this actor:
+   * a stdio connection has no request to authenticate, so whoever starts the process is who calls.
+   * Omit → a stdio connection is served only the application's own `@Tool()` methods.
+   */
+  stdio?: { actor: Actor };
   /**
    * What an `action` tool means on a surface with no human attached. Defaults to `'deny'` — they
    * are neither listed nor callable. See {@link McpActionPolicy} before widening it.

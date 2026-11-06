@@ -1,12 +1,15 @@
 # @dudousxd/nestjs-agent-mcp-server
 
 An [MCP](https://modelcontextprotocol.io) **server** for
-[`@dudousxd/nestjs-agent`](../nestjs). It mounts a Streamable HTTP endpoint on your app, and an
-external MCP client — Claude Desktop, an editor, a CI job — reaches the tools this deployment
-already has, through the same gates a turn goes through.
+[`@dudousxd/nestjs-agent`](../nestjs), served by NestJS's own
+[`@nestjs/mcp`](https://docs.nestjs.com/mcp/overview): an external MCP client — Claude Desktop, an
+editor, a CI job — reaches the tools this deployment already has, through the same gates a turn goes
+through. `@nestjs/mcp` owns the endpoint (Streamable HTTP, stateless, both protocol revisions, stdio)
+and serves the app's own `@Tool()`/`@Resource()`/`@Prompt()` methods beside the agent's tools; this
+package adds the agent's identity, per-caller listing, the `action` policy and the scope step-up.
 
 The opposite direction to [`@dudousxd/nestjs-agent-mcp`](../mcp), which IMPORTS a remote server's
-tools into this app. The two share nothing but the SDK: one treats a remote tool as untrusted input,
+tools into this app. The two share nothing but the MCP SDK (v2): one treats a remote tool as untrusted input,
 the other treats a remote caller as an untrusted caller.
 
 ## Install
@@ -66,9 +69,9 @@ refuses them whatever `actions` says.
 cannot identify is answered **401**, not 500. An actor with no roles reaches no tools, which is the
 right starting point for a new integration.
 
-**A session belongs to the actor that opened it.** The session id travels in a plain header and owns
-an open SSE stream; a request that authenticates as somebody else is answered 403 rather than served
-on it. Unknown session id → 404, so a client re-initializes.
+**Every request is its own.** The endpoint is stateless: each request is authenticated, and the server
+built for it registers only the tools that actor may use — a tool the caller may not use is not even
+listed, and calling it is the protocol's "tool not found".
 
 **`allowedTools` is enforced on the call, not only on the list.** `ToolRegistry.invoke` knows nothing
 about it, so a caller who simply guesses a name would otherwise reach a tool this deployment
@@ -183,12 +186,12 @@ is mapped to one rather than becoming a 500.
 
 ## Beyond this package
 
-- **Rate limiting, IP allow-lists, DNS-rebinding checks** are host middleware on the route. The MCP
-  SDK's own `allowedHosts`/`allowedOrigins` options are deprecated in favour of exactly that.
-- **Sessions are held in memory, per pod.** A fleet behind a load balancer needs session affinity on
-  the MCP route, or a client's second request lands on a pod that never saw its `initialize`.
-- `McpSessionStore` is exported: how many sessions this process holds, and a `close()` that runs on
-  application shutdown.
+- **Rate limiting** is host middleware on the route; **host and origin checks** are `@nestjs/mcp`'s
+  `http.allowedHosts` / `http.allowedOrigins`, passed through `mcp`.
+- **How it reaches into `@nestjs/mcp`:** `@nestjs/mcp` has no hook for tools that are not decorated
+  methods, nor for listing a tool to one caller and not another, so this package wraps its (internal)
+  `McpServerFactory` to register the caller's tools on each server it builds. `@nestjs/mcp` is pinned
+  to the versions this was checked against, and a test fails if the factory stops being found.
 - **Middleware and exception filters** do not run for a `@Mcp()` route — see above for why.
 - **A request-scoped controller** cannot be dispatched against — there is no request to build one
   from — so `@Mcp()` on one fails the boot rather than being skipped.
