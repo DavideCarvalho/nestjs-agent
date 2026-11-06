@@ -1,4 +1,4 @@
-import type { Actor, PoppyConnectionStore } from '@dudousxd/nestjs-agent-core';
+import type { Actor, PoppyConnectionStore, ToolCanRequirement } from '@dudousxd/nestjs-agent-core';
 import type { PoppyConnectRenderer } from './http.js';
 
 /** What this app's agent may do at one Company. */
@@ -96,8 +96,8 @@ export interface PoppyConnectionToolsOptions {
   prefix?: string;
   /** Roles every tool requires. */
   roles?: string[];
-  /** An authorization ability every tool declares (for an ability-aware `RolesPolicy`). */
-  ability?: string;
+  /** `@nestjs/authorization` abilities every tool requires of the actor (see `ToolSpec.can`). */
+  can?: readonly ToolCanRequirement[];
   /**
    * `'action'` (default): `connect` is an action whose card carries the link, and completing the
    * sign-in decides it (the turn resumes). `'link'`: a read tool returning the link — for loops that
@@ -177,7 +177,7 @@ export interface AgentPoppyConnectionsModuleOptions {
    */
   insecureDev?: boolean;
   /**
-   * The tools' prefix, roles, ability, `connect` mode, writes and two-step convention.
+   * The tools' prefix, roles, `can`, `connect` mode, writes and two-step convention.
    * `register: false` registers none (an app with its own per-turn registry calls
    * `registerPoppyConnectionTools` itself).
    */

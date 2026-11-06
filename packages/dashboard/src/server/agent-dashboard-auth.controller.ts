@@ -1,3 +1,4 @@
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import {
   Body,
   Controller,
@@ -70,6 +71,7 @@ function isString(value: unknown): value is string {
  * `dashboardAuth` is unconfigured (`DASHBOARD_AUTH` resolves to `null`) — no dangling login page
  * when the feature is off.
  */
+@CanAnyone()
 @Controller('auth')
 export class AgentDashboardAuthController {
   private readonly logger = new Logger(AgentDashboardAuthController.name);

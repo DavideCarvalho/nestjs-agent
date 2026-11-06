@@ -40,7 +40,7 @@ function provideAgentTools(
 ```
 
 A `ToolSpec` is the same shape a `@AiTool({ ... })` decorator captures — `{ name, kind, description,
-inputSchema, presentation?, roles?, enabled?, ability?, terminal?, ... }` — and a `ToolHandler` is
+inputSchema, presentation?, roles?, enabled?, can?, terminal?, ... }` — and a `ToolHandler` is
 the same contract a decorated class implements: `execute(input, ctx)` plus the optional `present`,
 `preflight`, `isEnabled`, `canUse` and `describe` hooks.
 
@@ -220,7 +220,7 @@ alongside your other providers, benefits from method-level readability). Reach f
 `provideAgentTool` when the tool is more natural as data — generated per config, wrapping a single
 function, or needing DI without the ceremony of a class. See [Tools](/docs/agent/guides/tools) for
 the `@AiTool` decorator surface, `read` vs `action`, and the full `AiToolCtx` shape — everything
-there about `kind`, roles, and `ability` applies to `ToolSpec` here unchanged.
+there about `kind`, roles, and `can` applies to `ToolSpec` here unchanged.
 </Callout>
 
 ---

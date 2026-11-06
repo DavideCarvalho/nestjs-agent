@@ -12,7 +12,7 @@ others.
 
 | Layer | What it does | Where configured | Guide |
 |---|---|---|---|
-| Identity + authorization | Resolves the actor from the request — an anonymous identity per browser by default, your login when configured; gates each tool by role intersection or a delegated ability | `actorResolver`, `defaultRoles`, `emptyRoles` or `rolesPolicy` on `AgentModule.forRoot`, plus per-tool `roles`/`ability` | [Identity & Authorization](/docs/agent/guides/identity-and-authorization) |
+| Identity + authorization | Resolves the actor from the request — an anonymous identity per browser by default, your login when configured; gates each tool by role intersection and `@nestjs/authorization`'s `@Can()` | `actorResolver`, `defaultRoles`, `emptyRoles` or `rolesPolicy` on `AgentModule.forRoot`, plus per-tool `roles` and `@Can()` | [Identity & Authorization](/docs/agent/guides/identity-and-authorization) |
 | Quota | Refuses a send (`429`) while the actor's budget — day/month, tokens/USD — is used up | `quota: { limits }` or `quota: yourQuotaProvider` on `AgentModule.forRoot`; omitted → reported, never enforced | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
 | Cost | A usage row per model call, rolled into spend per model/actor/day; a gateway's reported cost wins, else a cache-aware token estimate | The store's `AgentGovernanceQueries` + a versioned `AgentModelPricing` table | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
 | Reliability | Every run's start/end is durably recorded (success/failure, duration, retries, `promptHash`), independent of thread history | Automatic once the bound `AgentStore` implements the optional recording SPI (both bundled stores do) | [Cost & Governance](/docs/agent/guides/cost-and-governance) |
@@ -23,11 +23,10 @@ others.
 
 Two questions gate every tool call: who is calling, and may they call this. Without an
 `actorResolver` every browser is its own anonymous actor (an `HttpOnly` cookie), so two visitors never
-share an identity; configure one to require login. Once an actor is resolved, each tool declares exactly one gate: `roles` (a
+share an identity; configure one to require login. Once an actor is resolved, each tool may declare two gates: `roles` (a
 tool with none declared reaches the policy as `roles: undefined`, and `DefaultRolesPolicy` applies
 `defaultRoles` there — an empty list is **open** unless `emptyRoles: 'deny'` binds `ClosedRolesPolicy`)
-or `ability` (delegated to a `nestjs-authz` Gate by `AuthzRolesPolicy` from
-[`-authz`](/docs/agent/packages/authz), which `AgentModule` picks up in either import order; without it, the built-in policies refuse a tool that has an `ability` and no `roles`). A handler's own
+and `@nestjs/authorization`'s `@Can()` ([NestJS authorization](/docs/agent/guides/identity-and-authorization#nestjs-authorization): offered only to an actor its abilities allow, checked on every call; with no `AuthorizationModule` a tool that requires one reaches nobody). A handler's own
 `isEnabled()` and `canUse(actor)` run alongside the policy, and a persona's `allowedTools` narrows the
 set further. All of it runs server-side, both when the turn's tool list is built and again on invoke,
 before the tool's `execute` is ever called — a model can *ask* for anything, it can't talk its way
@@ -115,6 +114,6 @@ the same way.
 ## Where to go next
 
 <Cards>
-  <Card title="Identity & Authorization" href="/docs/agent/guides/identity-and-authorization" description="Anonymous by default, login in one line, and role vs. ability gates." />
+  <Card title="Identity & Authorization" href="/docs/agent/guides/identity-and-authorization" description="Anonymous by default, login in one line, and the role and `@Can()` gates." />
   <Card title="Cost & Governance" href="/docs/agent/guides/cost-and-governance" description="The usage ledger, reported-cost-wins, cache-aware pricing, and the console." />
 </Cards>

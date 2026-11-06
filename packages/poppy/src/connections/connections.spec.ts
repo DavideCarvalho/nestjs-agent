@@ -44,6 +44,13 @@ function fakeOf(a: App | null): FakeCompany {
   return required(a, 'app').fake;
 }
 
+class CompaniesPolicy {
+  use() {
+    return true;
+  }
+}
+const COMPANIES = [{ policy: CompaniesPolicy, ability: 'use' }];
+
 describe('poppy-connections: identity', () => {
   it('serves its client metadata and public keys under {path}', async () => {
     app = await setup();
@@ -742,14 +749,14 @@ describe('poppy-connections: for loops that do not park on approvals', () => {
     registerPoppyConnectionTools(capture(tools), app.connections, {
       connect: 'link',
       writes: false,
-      ability: 'companies.use',
+      can: COMPANIES,
     });
     expect([...tools.keys()].sort()).toEqual(
       ['poppy_ask', 'poppy_companies', 'poppy_connect', 'poppy_read', 'poppy_tools'].sort(),
     );
     const connect = required(tools.get('poppy_connect'));
     expect(connect.spec.kind).toBe('read');
-    expect([...tools.values()].every((t) => t.spec.ability === 'companies.use')).toBe(true);
+    expect([...tools.values()].every((t) => t.spec.can === COMPANIES)).toBe(true);
     const out = (await connect.handler.execute({ company: app.fake.domain }, ctx())) as {
       connected: boolean;
       link: string;

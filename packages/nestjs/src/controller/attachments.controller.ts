@@ -4,6 +4,7 @@ import {
   AGENT_OPTIONS,
   type ActorResolver,
   type AttachmentStagingStore,
+  CanAnyone,
   type MessageAttachment,
   type StagedAttachment,
 } from '@dudousxd/nestjs-agent-core';
@@ -55,6 +56,7 @@ export const ATTACHMENT_PAGE_SIZE = 50;
  * host deleting bytes, so it stays an in-process call (`AgentService.collectableAttachments`)
  * rather than something reachable with a session cookie.
  */
+@CanAnyone()
 @Controller('attachments')
 export class AttachmentsController {
   constructor(

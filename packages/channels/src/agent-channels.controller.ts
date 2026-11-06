@@ -1,3 +1,4 @@
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { All, Controller, Inject, Param, Req, Res } from '@nestjs/common';
 import { AgentChannelsService } from './agent-channels.service.js';
 import type { ChannelHttpReply, ChannelHttpRequest } from './request.js';
@@ -8,6 +9,7 @@ import type { ChannelHttpReply, ChannelHttpRequest } from './request.js';
  * secret in the url (Evolution API's `webhookToken`). Every method reaches the channel — WhatsApp
  * Cloud verifies its subscription with a `GET`; the rest answers `405`.
  */
+@CanAnyone()
 @Controller()
 export class AgentChannelsController {
   constructor(@Inject(AgentChannelsService) private readonly channels: AgentChannelsService) {}

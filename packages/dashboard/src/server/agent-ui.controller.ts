@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import {
   Controller,
   Get,
@@ -63,6 +64,7 @@ const CONTENT_TYPES: Record<string, string> = {
  * guard's redirect-on-deny into an actual 302 response; it is a no-op when the guard never throws
  * (i.e. `dashboardAuth` unconfigured).
  */
+@CanAnyone()
 @Controller()
 @UseGuards(DashboardAuthPageGuard)
 @UseFilters(new DashboardAuthRedirectFilter())

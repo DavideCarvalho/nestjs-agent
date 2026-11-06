@@ -16,3 +16,4 @@ export {
   defaultAgentFunctionCaller,
   registerAgentFunctions,
 } from './agent-functions.js';
+export { NestAuthorizationBinding, authorizationGate } from './authorization.js';

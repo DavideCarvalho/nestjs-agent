@@ -1,4 +1,4 @@
-import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver, CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { BadRequestException, Body, Controller, Inject, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
@@ -123,6 +123,7 @@ export function answers(claimed: unknown): Record<string, string[]> | undefined 
   return validated;
 }
 
+@CanAnyone()
 @Controller('tool-call')
 export class ToolCallController {
   constructor(

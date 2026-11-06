@@ -3,6 +3,7 @@ import {
   AGENT_REGISTRY,
   type AgentCatalogEntry,
   AgentRegistry,
+  CanAnyone,
 } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
@@ -11,6 +12,7 @@ import type { AgentDepsFactory } from '../agent-deps.factory.js';
  * Lists the registered `@Agent`s — and each one's personas — so a host can render an agent or
  * persona picker instead of hardcoding one.
  */
+@CanAnyone()
 @Controller('agents')
 export class AgentsController {
   constructor(

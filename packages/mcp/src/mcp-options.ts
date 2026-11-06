@@ -1,4 +1,8 @@
-import type { Actor, ToolTransientRetrySetting } from '@dudousxd/nestjs-agent-core';
+import type {
+  Actor,
+  ToolCanRequirement,
+  ToolTransientRetrySetting,
+} from '@dudousxd/nestjs-agent-core';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { jsonSchemaValidator } from '@modelcontextprotocol/sdk/validation';
 import type { McpToolKindPolicy } from './mcp-tool-kind.js';
@@ -84,8 +88,11 @@ export interface McpServerConfig {
   namespace?: boolean | string;
   /** Roles allowed to invoke every tool from this server. Omit → the module's `defaultRoles`. */
   roles?: string[];
-  /** Ability every tool from this server is checked against by an ability-aware `RolesPolicy`. */
-  ability?: string;
+  /**
+   * `@nestjs/authorization` abilities every tool from this server requires of the actor (see
+   * `ToolSpec.can`): `[{ policy: GithubPolicy, ability: 'use' }]`.
+   */
+  can?: readonly ToolCanRequirement[];
   /** Per-actor gate applied to every tool from this server, like a handler's own `canUse`. */
   canUse?: (actor: Actor) => boolean | Promise<boolean>;
   /** Whether this server's tools exist in this deployment at all. Omit → enabled. */

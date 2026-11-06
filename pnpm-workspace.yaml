@@ -19,3 +19,4 @@ minimumReleaseAgeExclude:
   - '@dudousxd/*'
   - '@nestjs/ai@0.0.2'
   - '@nestjs/workflows@0.0.5'
+  - '@nestjs/authorization@0.1.3'

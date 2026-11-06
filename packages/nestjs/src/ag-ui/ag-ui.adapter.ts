@@ -6,6 +6,7 @@ import {
   type ActorResolver,
   type AttachmentRef,
   type AttachmentStagingStore,
+  CanAnyone,
   type PageContext,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -481,6 +482,7 @@ export function agUiAdapter(options: AgUiAdapterOptions = {}): AgentProtocolAdap
         ? {}
         : options.a2ui;
 
+  @CanAnyone()
   @Controller()
   class AgUiController extends AgUiRunHandler {
     constructor(

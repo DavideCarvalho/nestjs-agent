@@ -76,7 +76,7 @@ default in-process sink.
 
 ## `@AiTool` and discovery
 
-`@AiTool({ name, kind, description, input, roles?, ability? })` marks an ordinary provider as a tool.
+`@AiTool({ name, kind, description, input, roles? })` marks an ordinary provider as a tool (authorization: `@nestjs/authorization`'s `@Can()` on the class).
 `AiToolDiscoveryService` walks every provider at boot, reads the decorator metadata, and registers it
 into the shared `ToolRegistry` — there's no separate array to keep in sync. See
 [Tools](/docs/agent/guides/tools) for the full decorator surface and the `read` vs `action` split.

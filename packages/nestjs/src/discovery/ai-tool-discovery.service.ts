@@ -8,6 +8,7 @@ import {
   type ToolHandler,
   type ToolRegistry,
   normalizeDelegation,
+  readCanDeclarations,
 } from '@dudousxd/nestjs-agent-core';
 import { type AiToolEntry, AiTools } from '@nestjs/ai';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
@@ -43,7 +44,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     // interceptors and pipes it declares run around it.
     const aiTools = this.findAiTools();
     const caller = this.options.agentFunctionCaller ?? defaultAgentFunctionCaller;
-    const agentFunctionOf = (host: Function): AiToolEntry | undefined => {
+    const agentFunctionOf = (host: unknown): AiToolEntry | undefined => {
       if (aiTools === undefined) return undefined;
       for (const entry of aiTools.tools.values()) if (entry.host === host) return entry;
       return undefined;
@@ -86,6 +87,19 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
         this.logger.warn(`@AiTool "${meta.name}" has no execute() method — skipped`);
         continue;
       }
+      const agentFunction = agentFunctionOf(instance.constructor);
+      // `@nestjs/authorization`'s `@Can()` on the class or on execute(): what it requires of the
+      // actor alone becomes the tool's `can`; what reads the call is the method's guard's, which
+      // runs only when the call goes through `@nestjs/ai`.
+      const declared = readCanDeclarations(
+        instance.constructor,
+        (instance.constructor as { prototype?: { execute?: unknown } }).prototype?.execute,
+      );
+      if (declared.withArgs > 0 && agentFunction === undefined) {
+        throw new Error(
+          `@AiTool "${meta.name}" has a @Can() with arguments, which only its guard can check, and its guard runs only through @nestjs/ai: import AiModule, or move what the arguments decide into the tool.`,
+        );
+      }
       this.registry.register(
         {
           name: meta.name,
@@ -95,19 +109,14 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           // Leave roles unset when the tool didn't declare any — the RolesPolicy owns the default
           // (its `defaultRoles`). Baking it in here too would leak it into custom policies.
           ...(meta.roles !== undefined ? { roles: meta.roles } : {}),
-          ...(meta.ability !== undefined ? { ability: meta.ability } : {}),
+          ...(declared.requirements.length > 0 ? { can: declared.requirements } : {}),
           ...(meta.enabled !== undefined ? { enabled: meta.enabled } : {}),
           ...(meta.presentation !== undefined ? { presentation: meta.presentation } : {}),
           ...(meta.terminal === true ? { terminal: true } : {}),
           ...(meta.replacementKey !== undefined ? { replacementKey: meta.replacementKey } : {}),
         },
         {
-          execute: this.executorOf(
-            instance as ToolHandler,
-            agentFunctionOf(instance.constructor),
-            aiTools,
-            caller,
-          ),
+          execute: this.executorOf(instance as ToolHandler, agentFunction, aiTools, caller),
           ...(typeof handler.present === 'function'
             ? { present: (output, ctx) => (instance as Required<ToolHandler>).present(output, ctx) }
             : {}),
@@ -157,7 +166,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     let delegates = 0;
     for (const definition of this.agents.list()) {
       for (const edge of definition.delegatesTo ?? []) {
-        const { agent: target, detached, roles, ability } = normalizeDelegation(edge);
+        const { agent: target, detached, roles, can } = normalizeDelegation(edge);
         const targetDefinition = this.agents.get(target);
         // A dangling handoff target (a `@Agent({ handoff })` class that isn't itself an `@Agent`)
         // would otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
@@ -190,7 +199,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
             targetAgent: target,
             ...(detached ? { detached: true } : {}),
             ...(roles !== undefined ? { roles } : {}),
-            ...(ability !== undefined ? { ability } : {}),
+            ...(can !== undefined ? { can } : {}),
             description,
             inputSchema: z.object({ task: z.string() }),
           },

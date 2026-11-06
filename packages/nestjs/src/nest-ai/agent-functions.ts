@@ -1,4 +1,9 @@
-import type { Actor, AiToolCtx, ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import {
+  type Actor,
+  type AiToolCtx,
+  type ToolRegistry,
+  readCanDeclarations,
+} from '@dudousxd/nestjs-agent-core';
 import type { AiCaller, AiToolEntry, AiTools } from '@nestjs/ai';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
@@ -14,7 +19,11 @@ import { readAgentFunctionGovernance } from './agent-function.decorator.js';
 const AGENT_FUNCTION_METADATA = 'nestjs:ai:agent-function';
 
 /** Who an `@AgentFunction()` call acts for, from the actor of the turn. */
-export type AgentFunctionCaller = (actor: Actor, ctx: AiToolCtx) => AiCaller;
+/**
+ * `ctx` is the call's, when there is one; it is absent where the agent asks `@nestjs/authorization`
+ * about the actor before any call (whether to offer a tool).
+ */
+export type AgentFunctionCaller = (actor: Actor, ctx?: AiToolCtx) => AiCaller;
 
 /**
  * The default {@link AgentFunctionCaller}: the actor is the `user` (what `@nestjs/ai`'s guards read
@@ -48,6 +57,9 @@ export function registerAgentFunctions(
     }
     const method = methodOf(entry);
     const govern = readAgentFunctionGovernance(method) ?? {};
+    // `@Can()` on the method or its class: the abilities that need only the actor gate whether the
+    // tool is offered; those that read the call are the method's guard's, on every call.
+    const declared = readCanDeclarations(entry.host, method);
     registry.register(
       {
         name: entry.name,
@@ -55,7 +67,7 @@ export function registerAgentFunctions(
         description: entry.description ?? entry.name,
         inputSchema: inputSchemaOf(entry, method),
         ...(govern.roles !== undefined ? { roles: govern.roles } : {}),
-        ...(govern.ability !== undefined ? { ability: govern.ability } : {}),
+        ...(declared.requirements.length > 0 ? { can: declared.requirements } : {}),
         ...(govern.enabled !== undefined ? { enabled: govern.enabled } : {}),
         ...(govern.presentation !== undefined ? { presentation: govern.presentation } : {}),
         ...(govern.terminal === true ? { terminal: true } : {}),

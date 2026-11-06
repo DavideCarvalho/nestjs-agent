@@ -33,7 +33,6 @@ module, the React frontend). Which tables, which tenant column, which roles, whi
 | [`-store-drizzle`](/docs/agent/packages/store-drizzle) | `AgentStore` + `AgentGovernanceQueries` + `AgentPricingStore` on Drizzle, plus the action-proposal stores, `DrizzleConfirmTokenStore` and `DrizzleTokenStreamSink`. |
 | [`-transport-redis`](/docs/agent/packages/transport-redis) | `RedisTokenStreamSink` — a `TokenStreamSink` over Redis for multi-replica deployments. (A SQL sink from either store package also works, without Redis.) |
 | [`-telescope`](/docs/agent/packages/telescope) | Telescope extension — an "Agent" tab reusing the governance read-model. |
-| [`-authz`](/docs/agent/packages/authz) | Plugs `@dudousxd/nestjs-authz` into tool authorization as a `RolesPolicy`. |
 | [`-codegen`](/docs/agent/packages/codegen) | Emits `api.agent.*` into the ecosystem's unified typed client. |
 | [`-testing`](/docs/agent/packages/testing) | In-memory store/sink/quota + a deterministic fake model for offline tests. |
 
@@ -45,7 +44,6 @@ module, the React frontend). Which tables, which tenant column, which roles, whi
                                                                         │  (SPIs)
         -store-mikro-orm / -store-drizzle ─────────────────────────────┤  AgentStore + AgentGovernanceQueries + AgentPricingStore
                               -ai-sdk ──────────────────────────────────┤  ModelProvider
-                              -authz ────────────────────────────────────┤  RolesPolicy
                               -transport-redis (or a store's SQL sink) ────┤  TokenStreamSink
                               -data (createExecuteSqlTool) ───────────────────┤  a read-kind ToolSpec + ToolHandler
                               -rag ─────────────────────────────────────────────┤  Retriever + EmbeddingProvider (RAG tool / inject)
@@ -56,11 +54,12 @@ module, the React frontend). Which tables, which tenant column, which roles, whi
 ```
 
 `-core` has no NestJS dependency and defines every contract; the umbrella package owns the NestJS
-module, controllers and runners. The other NestJS-aware packages (the stores, `-authz`, `-mcp`,
+module, controllers and runners. The other NestJS-aware packages (the stores, `-mcp`,
 `-mcp-server`, `-rag-media`, `-dashboard`) only add a module that binds their implementation to an
 SPI token. Each adapter implements contracts from `-core` and nothing else: a store package
-implements the store-side SPIs, the AI SDK adapter `ModelProvider` and `EmbeddingProvider`, the authz
-adapter `RolesPolicy`. The dashboard and the Telescope extension are peers — both read the same
+implements the store-side SPIs, the AI SDK adapter `ModelProvider` and `EmbeddingProvider`. Models
+and authorization come from NestJS's own `@nestjs/ai` and `@nestjs/authorization`, which the umbrella
+package wires in. The dashboard and the Telescope extension are peers — both read the same
 `AgentGovernanceQueries` read-model and the same `aviary:agent:*` diagnostics channel, so you can run
 either, both, or neither.
 
@@ -81,7 +80,6 @@ either, both, or neither.
   <Card title="Store (Drizzle)" href="/docs/agent/packages/store-drizzle" description="AgentStore + AgentGovernanceQueries + AgentPricingStore on Drizzle." />
   <Card title="Transport (Redis)" href="/docs/agent/packages/transport-redis" description="RedisTokenStreamSink for multi-replica token streaming." />
   <Card title="Telescope" href="/docs/agent/packages/telescope" description="An 'Agent' tab reusing the governance read-model." />
-  <Card title="Authz" href="/docs/agent/packages/authz" description="Ability-aware RolesPolicy via @dudousxd/nestjs-authz." />
   <Card title="Codegen" href="/docs/agent/packages/codegen" description="api.agent.* in the unified typed client." />
   <Card title="Testing" href="/docs/agent/packages/testing" description="In-memory store/sink/quota + a deterministic fake model." />
 </Cards>

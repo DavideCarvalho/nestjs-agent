@@ -179,7 +179,7 @@ decorator is per-agent and overrides the shared defaults for that agent's turns:
 | `personas`, `defaultPersona` | `Persona[]`, `string` | See [Personas](/docs/agent/guides/personas). |
 
 So each agent runs its **own system prompt, its own model label, and its own tool allow-list** —
-and that allow-list is further **intersected with the actor's role/ability gate** on each tool. An
+and that allow-list is further **intersected with the actor's role and `@Can()` gates** on each tool. An
 agent can only reach tools it lists *and* the caller is authorized for.
 
 <Callout type="info" title="Delegation respects the roster, not the actor's ambition">
@@ -355,5 +355,5 @@ channel.
 
 - [Tools](/docs/agent/guides/tools) — the `@AiTool` surface a specialist delegates *to*, `read` vs `action`, and the handler context
 - [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability) — why a durable child run makes a sub-agent's approval pause replay-safe
-- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — the role/ability gate every delegated tool is still checked against
+- [Identity & Authorization](/docs/agent/guides/identity-and-authorization) — the role and `@Can()` gates every delegated tool is still checked against
 - [Cost & Governance](/docs/agent/guides/cost-and-governance) — the `aviary:agent:*` diagnostics channel and the governance console

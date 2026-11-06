@@ -96,7 +96,6 @@ Every option lives on the `@AiTool({ … })` object.
 | `description` | `string` | yes | What the model reads to decide when to call it. Write it for the model. |
 | `input` | Standard Schema | yes | Zod, Valibot, or ArkType. Validated before `execute` runs. |
 | `roles` | `string[]` | no | Roles allowed to invoke. Omit to inherit the module's `defaultRoles` — `[]` by default, i.e. any resolved actor (an anonymous visitor included). |
-| `ability` | `string` | no | An authz ability checked by an ability-aware policy instead of `roles`. |
 | `presentation` | `ToolPresentation` | no | How a chat talks about the tool without naming it. Never shown to the model. See [How a chat talks about a tool](#how-a-chat-talks-about-a-tool). |
 | `enabled` | `boolean \| () => boolean \| Promise<boolean>` | no | Whether the tool exists in this deployment, checked every turn before the role gate. `false` hides it from the model. When the answer needs DI, implement `isEnabled()` on the class instead. |
 | `terminal` | `boolean` | no | The turn ends once a call to this tool succeeds, with no model call to narrate it. See [Generative UI](/docs/agent/guides/generative-ui#3-pushing-from-your-own-tools-ctxemitui). |
@@ -459,12 +458,12 @@ comes out of the journaled model step.
 
 ## Authorization gates
 
-A tool declares **one** of two gates. Both are enforced by the loop before `execute` runs, so an
-unauthorized call never reaches your code.
+Two gates, and a tool may use both. Both are enforced before `execute` runs, so an unauthorized
+call never reaches your code.
 
-<Tabs items={['roles', 'ability']}>
+<Tabs items={['roles', '@Can()']}>
 <Tab value="roles">
-Built-in role policy. The actor passes if any of its `roles` intersects the tool's. Omit `roles`
+The agent's role policy. The actor passes if any of its `roles` intersects the tool's. Omit `roles`
 and the tool inherits the module's `defaultRoles`.
 
 ```ts
@@ -478,21 +477,28 @@ and the tool inherits the module's `defaultRoles`.
 export class ListUsersTool implements ToolHandler { /* … */ }
 ```
 </Tab>
-<Tab value="ability">
-Delegated policy. With `AgentAuthzModule` wired, `ability` is checked via
-`gate.forUser(actor).allows(ability)` — your `@dudousxd/nestjs-authz` abilities decide. Tools
-without an `ability` fall back to the role policy, so non-authz apps are unaffected. Without
-`AgentAuthzModule`, a tool that declares an `ability` and no `roles` is refused: the built-in policies
-cannot evaluate an ability, so it fails closed.
+<Tab value="@Can()">
+NestJS's [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization): put its `@Can()` on
+the tool. An ability that needs only the user decides whether the model is offered the tool at all;
+the guard checks every call. See [Identity & Authorization](/docs/agent/guides/identity-and-authorization#nestjs-authorization).
 
 ```ts
+import { Can, Policy } from '@nestjs/authorization';
+
+@Policy()
+export class CachePolicy {
+  purge(user: User | null) {
+    return user?.roles.includes('OPS') === true;
+  }
+}
+
 @AiTool({
   name: 'purgeCache',
   kind: 'action',
   description: 'Purge a cache key.',
   input: z.object({ key: z.string() }),
-  ability: 'cache.purge',
 })
+@Can(CachePolicy, 'purge')
 export class PurgeCacheTool implements ToolHandler { /* … */ }
 ```
 </Tab>

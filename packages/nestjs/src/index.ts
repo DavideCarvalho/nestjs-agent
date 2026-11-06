@@ -9,6 +9,7 @@ export {
   type GovernedAgentFunctionOptions,
   type AgentFunctionCaller,
   defaultAgentFunctionCaller,
+  authorizationGate,
 } from './nest-ai/index.js';
 export { type AgUiAdapterOptions, AgUiRunHandler, agUiAdapter } from './ag-ui/index.js';
 export { type A2uiAdapterOptions, A2uiRunHandler, a2uiAdapter } from './a2ui/a2ui.adapter.js';

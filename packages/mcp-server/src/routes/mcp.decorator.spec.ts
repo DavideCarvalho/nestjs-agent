@@ -77,9 +77,9 @@ describe('normalizeMcpRouteOptions', () => {
     expect(() => normalizeMcpRouteOptions({ options: { ...base, name: '' }, route })).toThrow(
       /non-empty string/,
     );
-    expect(() => normalizeMcpRouteOptions({ options: { ...base, ability: 7 }, route })).toThrow(
-      /must be a string/,
-    );
+    expect(() =>
+      normalizeMcpRouteOptions({ options: { ...base, ability: 'orders.cancel' }, route }),
+    ).toThrow(/`ability` is gone/);
     expect(() => normalizeMcpRouteOptions({ options: { ...base, enabled: 'yes' }, route })).toThrow(
       /boolean or a function/,
     );

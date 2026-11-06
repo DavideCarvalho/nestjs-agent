@@ -1,4 +1,10 @@
-import type { Actor, ToolHandler, ToolRegistry, ToolSpec } from '@dudousxd/nestjs-agent-core';
+import type {
+  Actor,
+  ToolCanRequirement,
+  ToolHandler,
+  ToolRegistry,
+  ToolSpec,
+} from '@dudousxd/nestjs-agent-core';
 import type { McpRouteRef } from './mcp-route-dispatcher.js';
 import type { McpRouteOptions } from './mcp.decorator.js';
 import type { NestRoute } from './nest-route-metadata.js';
@@ -78,8 +84,10 @@ export function buildRouteTool(input: {
   route: NestRoute;
   ref: McpRouteRef;
   dispatch: (args: McpRouteInput, actor: Actor) => Promise<unknown>;
+  /** What the route's `@Can()` requires of the actor alone (`ToolSpec.can`). */
+  can?: readonly ToolCanRequirement[];
 }): McpRouteTool {
-  const { options, route, ref, dispatch } = input;
+  const { options, route, ref, dispatch, can } = input;
   return {
     route: ref,
     spec: {
@@ -89,7 +97,7 @@ export function buildRouteTool(input: {
       inputSchema: routeInputSchema(route),
       ...(options.roles !== undefined ? { roles: options.roles } : {}),
       ...(options.enabled !== undefined ? { enabled: options.enabled } : {}),
-      ...(options.ability !== undefined ? { ability: options.ability } : {}),
+      ...(can !== undefined && can.length > 0 ? { can } : {}),
     },
     handler: {
       execute: async (args, ctx) => {

@@ -4,6 +4,7 @@ import {
   AGENT_ROLES_POLICY,
   AGENT_TOOL_REGISTRY,
   type Actor,
+  CanAnyone,
   type RolesPolicy,
   type ToolRegistry,
   closeEmptyRoles,
@@ -74,6 +75,7 @@ function authInfoFor(actor: Actor): McpAuthInfo {
  * unidentified caller is answered 401, with its `WWW-Authenticate` challenge, and the MCP machinery
  * never runs for them.
  */
+@CanAnyone()
 @Controller()
 @UseFilters(McpChallengeFilter)
 export class AgentMcpServerController {

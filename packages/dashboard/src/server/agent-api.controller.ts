@@ -1,3 +1,4 @@
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import type {
   ActorResolver,
   CurrentModelPrice,
@@ -82,6 +83,7 @@ function parseLimit(value: string | undefined, fallback: number): number {
  * that guard's own doc. Host `guards` (see {@link AgentDashboardOptions.guards}) are APPENDED onto
  * this baseline by `stampGuards` (`./guards.js`), never replacing it.
  */
+@CanAnyone()
 @Controller()
 @UseGuards(DashboardAuthGuard)
 export class AgentApiController {

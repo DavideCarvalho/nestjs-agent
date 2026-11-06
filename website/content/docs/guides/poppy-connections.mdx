@@ -62,7 +62,7 @@ in an env var. Several keys rotate: the first signs, all are published.
 | `insecureDev` | `false` | **Development only, not spec-compliant**: http companies and identity. Refused when `NODE_ENV=production`. |
 | `connectTtlSeconds` | `900` | How long a connect link — and its card — works. |
 | `replyTimeoutMs` | `90000` | How long `ask`/`request` wait for the company's agent. |
-| `tools` | `{ prefix: 'poppy_' }` | `prefix`, `roles`, `ability`, `connect` (`'action'` card that resumes, or `'link'`), `writes` (`false` = build your own confirmed writes), `register` (`false` = you call `registerPoppyConnectionTools` on your own registry), `twoStep` (see below). |
+| `tools` | `{ prefix: 'poppy_' }` | `prefix`, `roles`, `can`, `connect` (`'action'` card that resumes, or `'link'`), `writes` (`false` = build your own confirmed writes), `register` (`false` = you call `registerPoppyConnectionTools` on your own registry), `twoStep` (see below). |
 | `texts` | English | Pages and confirmation cards. |
 | `render` | built-in HTML | `(view, texts) => string` — give the connect pages your look. |
 | `api` | — | `{ actor(req) }` mounts `GET/DELETE {path}/api/connections[/:domain]` for your settings UI. `null` → `401`. |

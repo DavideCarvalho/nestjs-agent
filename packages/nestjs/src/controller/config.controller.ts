@@ -6,6 +6,7 @@ import {
   type ActorResolver,
   type AgentClientConfig,
   type AttachmentStagingStore,
+  CanAnyone,
   type ModelCatalog,
 } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, Optional, Req } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { attachmentLimits } from '../attachment-limits.js';
 import { AGENT_GENUI, type AgentGenui } from '../genui/agent-genui.token.js';
 import { AnonymousActorResolver } from '../resolver/anonymous-actor-resolver.js';
 
+@CanAnyone()
 @Controller('config')
 export class ConfigController {
   constructor(

@@ -91,7 +91,7 @@ AgentModule.forRoot({
         ? { required: true, approver: 'finance', ttlMs: 15 * 60_000 }
         : { required: true, approver: 'requester' },
     // Optional — the default: 'requester' is the thread's own actor, anything else is a role the
-    // decider must hold. Plug an authz Gate here for abilities.
+    // decider must hold. Ask @nestjs/authorization's AuthorizationService here for abilities.
     // canDecide: (actor, { approver, requesterRef, toolCallId }) => …,
   },
 });

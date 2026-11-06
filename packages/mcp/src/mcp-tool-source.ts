@@ -177,7 +177,7 @@ export class McpToolSource {
       description: tool.description ?? `The "${tool.name}" tool on MCP server ${this.config.name}.`,
       inputSchema,
       ...(this.config.roles !== undefined ? { roles: this.config.roles } : {}),
-      ...(this.config.ability !== undefined ? { ability: this.config.ability } : {}),
+      ...(this.config.can !== undefined ? { can: this.config.can } : {}),
       ...(this.config.enabled !== undefined ? { enabled: this.config.enabled } : {}),
     };
     const canUse = this.config.canUse;

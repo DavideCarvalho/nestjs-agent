@@ -18,7 +18,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/@dudousxd/nestjs-agent.svg)](https://www.npmjs.com/package/@dudousxd/nestjs-agent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DavideCarvalho/nestjs-agent/blob/master/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9+-blue.svg)](https://www.typescriptlang.org/)
-[![NestJS](https://img.shields.io/badge/NestJS-10%2B-e0234e.svg)](https://nestjs.com/)
+[![NestJS](https://img.shields.io/badge/NestJS-12%2B-e0234e.svg)](https://nestjs.com/)
 
 A **governed, durable-backed AI agent** for NestJS — the Laravel feel for building an in-app AI
 assistant. Chat + tool-calling + role/persona governance + token quota + cost tracking +
@@ -29,6 +29,18 @@ in-process when you don't need durability. The **mechanism** is the library; you
 (which tables, which tenant column, which roles/abilities) is policy you supply.
 
 Extracted and generalized from the flip-nestjs admin assistant.
+
+### Built on NestJS's first-party packages
+
+What NestJS ships, the agent uses, and documents only what it adds on top:
+
+| NestJS package | What the agent takes from it | What the agent adds |
+|---|---|---|
+| [`@nestjs/ai`](https://docs.nestjs.com/ai/overview) | The models (`AiModule.forRoot({ models })`) with their retries, timeouts, fallbacks, pricing and `onUsage`; `@AgentFunction()` methods as tools, run through Nest's guards, interceptors and pipes | Threads and history, the picker, HITL approval (`kind: 'action'`), roles, quota, cost governance, streaming to many replicas, multi-agent, generative UI |
+| [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization) | `@Policy()` / `@Can()` on tools: the guard checks every call | A tool is offered only to an actor its abilities allow |
+| [`@nestjs/resilience`](https://github.com/nestjs/resilience) | The model calls' policies (presets, circuit breakers) | — |
+
+NestJS 12 and Node 22 or later.
 
 ## Component registries and server rendering
 
@@ -45,7 +57,6 @@ See the [component rendering guide](docs/component-rendering.md) for complete ex
 | `@dudousxd/nestjs-agent` | The NestJS module: `@AiTool` + discovery, `/agent/*` SSE controllers, inline + durable runners, multi-agent `forFeature`; `/genui` (`AgentGenuiModule`: generative-UI tools from a catalog, per-request catalogs) |
 | `@dudousxd/nestjs-agent-store-mikro-orm` | MikroORM persistence (threads, messages, tool calls, usage, pricing) |
 | `@dudousxd/nestjs-agent-store-drizzle` | Drizzle persistence — the same `AgentStore` on a second ORM (SQLite/Postgres/MySQL) |
-| `@dudousxd/nestjs-agent-authz` | Plug `@dudousxd/nestjs-authz` into tool authorization (a tool's `ability` → a `Gate` check) |
 | `@dudousxd/nestjs-agent-data` | Governed read-only SQL tool (single-SELECT AST validation, fail-closed table access, tenant scoping) |
 | `@dudousxd/nestjs-agent-mcp` | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP), HITL-gated by default |
 | `@dudousxd/nestjs-agent-mcp-server` | MCP server — expose this deployment's tools to an external Model Context Protocol client, under the same registry and roles policy a turn runs through |
@@ -60,7 +71,7 @@ See the [component rendering guide](docs/component-rendering.md) for complete ex
 ## Install
 
 ```bash
-pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-ai-sdk @ai-sdk/openai zod
+pnpm add @dudousxd/nestjs-agent @nestjs/ai @nestjs/resilience ai @ai-sdk/openai zod
 ```
 
 ## Quickstart
@@ -69,7 +80,7 @@ The whole server — a public chat with one tool:
 
 ```ts
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
-import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { AiModule } from '@nestjs/ai';
 import { openai } from '@ai-sdk/openai';
 import { z } from 'zod';
 
@@ -81,7 +92,10 @@ export class GetWeatherTool {                        // name: getWeather, kind: 
 }
 
 @Module({
-  imports: [AgentModule.forRoot({ model: aiSdkModel(openai('gpt-5-mini')) })],
+  imports: [
+    AiModule.forRoot({ models: { default: openai('gpt-5-mini') } }), // NestJS's own: the models
+    AgentModule.forRoot({}),                                         // the agent runs on them
+  ],
   providers: [GetWeatherTool],
 })
 export class AppModule {}
@@ -111,7 +125,7 @@ Everything else defaults, and each default is one option away:
 | Public endpoints, each browser its own anonymous actor | `actorResolver: requestUserActorResolver()` (reads `req.user`), or your own |
 | Every tool callable by any resolved actor; `action` tools need approval | `@AiTool({ roles })`, `defaultRoles`, `rolesPolicy` |
 | `'You are a helpful assistant.'` | `systemPrompt`, or `@Agent` classes |
-| One model | `aiSdkModels({ fast: …, smart: … }, { default: 'fast' })` — its catalog feeds the picker |
+| `AiModule`'s models, `default` first in the picker | more `AiModule.forRoot({ models })` entries (each with its `retry`, `timeout`, `fallback`, `pricing`); `model` to replace them (a fake in tests) |
 | Usage reported, never enforced | `quota: { limits: { day: { tokens: 200_000 } } }` |
 | Tool name from the class, kind `read` | `@AiTool({ name, kind: 'action' })` |
 
@@ -625,27 +639,77 @@ export class AssistantAgent {
 
 No `personas` → none of this happens, and a turn is byte-identical to one before the feature.
 
-## Authorization
+## Tools as `@nestjs/ai` agent functions
 
-A tool declares **one** of two gates — `roles` or `ability`:
-
-- **`roles`** (built-in policy): `@AiTool({ roles: ['ADMIN'] })` — the actor passes if any of its
-  `roles` intersects the tool's. Omit `roles` and the tool falls back to the module's `defaultRoles`.
-- **`ability`** (delegated to an ability-aware policy): `@AiTool({ ability: 'cache.purge' })` — checked
-  by [`@dudousxd/nestjs-authz`](https://github.com/DavideCarvalho/aviary) via
-  `gate.forUser(actor).allows(ability)` once you add `AgentAuthzModule`. Tools without an `ability`
-  fall back to the role policy, so non-authz apps are unaffected. Without `AgentAuthzModule` the
-  built-in policy can't check an ability, so it refuses a tool that names an `ability` and no
-  `roles`.
+An `@AiTool` is also a [`@nestjs/ai`](https://docs.nestjs.com/ai/tools) `@AgentFunction()` (its
+`execute()`, when its input schema produces JSON Schema, as Zod 4's does): the agent's calls run
+through the guards, interceptors and pipes the class and `execute()` declare, and `AiService`'s own
+calls can offer it too. And every `@AgentFunction()` of the app is an agent tool. To govern one,
+use this library's `@AgentFunction()` — NestJS's options plus the agent's:
 
 ```ts
-@Module({ imports: [AuthzModule.forRoot(/* … */), AgentAuthzModule.forRoot()] })
-export class AppModule {}
+import { AgentFunction } from '@dudousxd/nestjs-agent';
 
-@AiTool({ name: 'purgeCache', kind: 'action', description: '…', input: z.object({ key: z.string() }),
-          ability: 'cache.purge' })
-export class PurgeCacheTool implements ToolHandler<{ key: string }> { /* … */ }
+@AgentFunction({
+  name: 'refund',
+  description: 'Refund an order',
+  inputSchema: RefundInput,
+  kind: 'action',          // waits for a person's approval
+  roles: ['SUPPORT'],
+})
+refund(input: RefundInput, ctx: AgentFunctionContext) { /* … */ }
 ```
+
+`execute()` keeps receiving the turn's `AiToolCtx`, and the agent keeps what it returned or threw
+(not `@nestjs/ai`'s JSON of it). Outside a turn (`AiService.generateText`), an `action` is refused —
+only a turn asks a person.
+
+## Authorization
+
+Two gates, and a tool may use both:
+
+- **`roles`** (the agent's own): `@AiTool({ roles: ['ADMIN'] })` — the actor passes if any of its
+  `roles` intersects the tool's. Omit `roles` and the tool falls back to the module's `defaultRoles`.
+- **`@Can()`** (NestJS's [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization)):
+  put the official decorator on the tool. The agent reads it: an ability that needs only the user
+  decides whether the model is even **offered** the tool, and the guard checks **every call** — an
+  ability whose arguments read the call (`@Can(OrderPolicy, 'refund', (ctx) => [...])`) only there.
+
+```ts
+import { AuthorizationModule, Can, Policy } from '@nestjs/authorization';
+
+@Policy()
+export class CachePolicy {
+  purge(user: User | null) {
+    return user?.roles.includes('OPS') === true;
+  }
+}
+
+@AiTool({ kind: 'action', description: 'Purge a cache key', input: z.object({ key: z.string() }) })
+@Can(CachePolicy, 'purge')
+export class PurgeCacheTool { /* … */ }
+
+@Module({
+  imports: [AiModule.forRoot({ models }), AuthorizationModule.forRoot(), AgentModule.forRoot({})],
+  providers: [CachePolicy, PurgeCacheTool],
+})
+export class AppModule {}
+```
+
+- The policy's `user` is the turn's actor (`{ id, roles }`), or what `agentFunctionCaller` maps it
+  to.
+- An argument that does not depend on the call can still gate the offer: mark its resolver with
+  `staticCanArgs(...)` — `@Can(RolePolicy, 'has', staticCanArgs('ADMIN'))`.
+- `AuthorizationModule`'s global guard denies whatever declares no `@Can()`. The agent's own routes
+  and the tools it governs (`@AiTool`, this library's `@AgentFunction`) are marked open to it
+  (`CanAnyone()`, as `Can.Anyone()` does) — the actor resolver, `guards` and the roles policy decide
+  those; a `@Can()` they declare is still checked. A plain `@nestjs/ai` `@AgentFunction()` keeps
+  NestJS's deny-by-default.
+- A tool that requires an ability with no `AuthorizationModule` imported reaches nobody (fail
+  closed); an `@AiTool` whose `@Can()` reads the call refuses the boot without `AiModule`, since only
+  its guard could check it.
+- Tools without a method to decorate (MCP-imported, generative UI, delegation, Poppy) take the same
+  requirements as data: `can: [{ policy: CachePolicy, ability: 'purge' }]`.
 
 ### An empty roles list
 
@@ -661,12 +725,11 @@ AgentMcpServerModule.forRoot({ name, version, auth, emptyRoles: 'deny' }); // th
 
 Closed, the actor needs a role the tool declares (else one of `defaultRoles`). Building the policy
 yourself: `new ClosedRolesPolicy(defaultRoles)`, `new DefaultRolesPolicy(defaultRoles, { emptyRoles:
-'deny' })`, `closeEmptyRoles(policy)` around one you did not build, or `AuthzRolesPolicy`'s
-`{ emptyRoles: 'deny' }` for its role fallback. The default stays `'allow'`.
+'deny' })`, or `closeEmptyRoles(policy)` around one you did not build. The default stays `'allow'`.
 
 ### Turning a tool off, and gating it per user
 
-`roles`/`ability` answer "may this actor use it?" with one app-wide policy, and an agent's `tools`
+`roles`/`@Can()` answer "may this actor use it?" with app-wide policies, and an agent's `tools`
 allow-list is fixed when the agent is declared. Two optional methods on the handler answer the
 questions those can't, per turn and with DI:
 
@@ -718,7 +781,7 @@ const { spec, handler } = createExecuteSqlTool({
 
 Import an external [MCP](https://modelcontextprotocol.io) server's tools instead of writing an
 `@AiTool` class for each. They land in the same registry as your own, so they inherit every gate —
-`roles` / `ability` / `canUse`, an agent's allow-list, HITL approval, tool-call rows in the thread
+`roles` / `can` / `canUse`, an agent's allow-list, HITL approval, tool-call rows in the thread
 and the dashboard.
 
 ```ts

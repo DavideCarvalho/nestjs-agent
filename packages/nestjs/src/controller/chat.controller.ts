@@ -3,6 +3,7 @@ import {
   type ActorResolver,
   AgentStreamError,
   type AttachmentRef,
+  CanAnyone,
   type PageContext,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
@@ -105,6 +106,7 @@ export function attachmentRefs(claimed: unknown): AttachmentRef[] {
   });
 }
 
+@CanAnyone()
 @Controller()
 export class ChatController {
   constructor(

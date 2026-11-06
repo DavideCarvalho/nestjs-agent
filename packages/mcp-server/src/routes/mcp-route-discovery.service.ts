@@ -1,4 +1,8 @@
-import { AGENT_TOOL_REGISTRY, type ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import {
+  AGENT_TOOL_REGISTRY,
+  type ToolRegistry,
+  readCanDeclarations,
+} from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
@@ -172,7 +176,12 @@ export class McpRouteDiscoveryService implements OnApplicationBootstrap {
       }
     }
     const ref = routeToolRef({ options, route, controllerName, methodName });
+    // `@nestjs/authorization`'s `@Can()` on the controller or the route: what needs only the actor
+    // gates whether the tool is listed; what reads the request stays the route's guard's, which
+    // runs on the dispatch like every other guard of the route.
+    const { requirements } = readCanDeclarations(instance.constructor, handler);
     return buildRouteTool({
+      can: requirements,
       options,
       route,
       ref,

@@ -1,4 +1,4 @@
-import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver, CanAnyone } from '@dudousxd/nestjs-agent-core';
 import {
   A2UI_APPROVE_ACTION,
   A2UI_REJECT_ACTION,
@@ -332,6 +332,7 @@ export function a2uiAdapter(options: A2uiAdapterOptions = {}): AgentProtocolAdap
   const path = (options.path ?? 'a2ui').replace(/^\/+|\/+$/g, '');
   const { path: _path, quietMs, maxActionBytes, maxDataModelBytes, ...projection } = options;
 
+  @CanAnyone()
   @Controller()
   class A2uiController extends A2uiRunHandler {
     constructor(

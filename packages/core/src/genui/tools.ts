@@ -8,7 +8,7 @@ import type {
   ToolInputPreviewScope,
 } from '../spi/tool.js';
 import type { ToolPresentation } from '../tool-presentation.js';
-import type { Actor, GenuiToolMarker, ToolSpec } from '../types.js';
+import type { Actor, GenuiToolMarker, ToolCanRequirement, ToolSpec } from '../types.js';
 import { negotiateCatalog } from './capabilities.js';
 import {
   type Catalog,
@@ -139,15 +139,12 @@ export interface GenuiToolsOptions {
   /** Roles allowed to call the tools (the `ToolSpec.roles` gate). Undefined → the roles policy default. */
   roles?: string[];
   /**
-   * The authorization ability the UI tools declare (`ToolSpec.ability`) — what an ability-aware
-   * authorizer (`authzToolAuthorizer` from `@adonis-agora/agent/authz`) checks the actor against.
-   * Under such an authorizer a tool with no ability is denied, so without this the UI tools are
-   * never offered. A string for every tool; a map by tool name (`{ ui__render: 'genui.render',
-   * ui__sandbox: 'genui.sandbox' }`, a tool it does not name declares none); or a function of the
-   * tool name and the component it shows (`undefined` for the tree and show tools). The authorizer
-   * still decides: nothing is allowed by default.
+   * The authorization the UI tools require (`ToolSpec.can`): `@nestjs/authorization` abilities the
+   * actor must hold. The same requirements for every tool; a map by tool name (a tool it does not
+   * name requires none); or a function of the tool name and the component it shows (`undefined`
+   * for the tree and show tools).
    */
-  ability?: GenuiAbility;
+  can?: GenuiCan;
   /** Override the generated presentation per component (or for the tree / show tool, under its tool name). */
   presentation?: (component: string) => ToolPresentation | undefined;
   /**
@@ -303,33 +300,33 @@ async function catalogFor(
     : channelCatalog(resolved, channelFor(options, scope.channel));
 }
 
-/** {@link GenuiToolsOptions.ability}: one ability, one per tool name, or a function of the tool. */
-export type GenuiAbility =
-  | string
-  | Readonly<Record<string, string>>
-  | ((tool: { name: string; component?: string }) => string | undefined);
+/** {@link GenuiToolsOptions.can}: one list for every tool, one per tool name, or a function of the tool. */
+export type GenuiCan =
+  | readonly ToolCanRequirement[]
+  | Readonly<Record<string, readonly ToolCanRequirement[]>>
+  | ((tool: { name: string; component?: string }) => readonly ToolCanRequirement[] | undefined);
 
-/** The ability a UI tool declares, from {@link GenuiToolsOptions.ability}. */
-export function genuiToolAbility(
-  ability: GenuiAbility | undefined,
+/** The requirements a UI tool declares, from {@link GenuiToolsOptions.can}. */
+export function genuiToolCan(
+  can: GenuiCan | undefined,
   tool: { name: string; component?: string },
-): string | undefined {
-  if (ability === undefined) return undefined;
-  if (typeof ability === 'string') return ability;
-  if (typeof ability === 'function') return ability(tool);
-  return ability[tool.name];
+): readonly ToolCanRequirement[] | undefined {
+  if (can === undefined) return undefined;
+  if (Array.isArray(can)) return can;
+  if (typeof can === 'function') return can(tool);
+  return (can as Readonly<Record<string, readonly ToolCanRequirement[]>>)[tool.name];
 }
 
 function common(
   options: GenuiToolsOptions,
   tool: { name: string; component?: string },
   mode: GenuiToolMarker['mode'],
-): Pick<ToolSpec, 'roles' | 'ability' | 'genui'> & { terminal?: boolean } {
-  const ability = genuiToolAbility(options.ability, tool);
+): Pick<ToolSpec, 'roles' | 'can' | 'genui'> & { terminal?: boolean } {
+  const can = genuiToolCan(options.can, tool);
   const telemetry = options.telemetry;
   return {
     ...(options.roles !== undefined ? { roles: options.roles } : {}),
-    ...(ability !== undefined ? { ability } : {}),
+    ...(can !== undefined ? { can } : {}),
     ...(options.terminal === true ? { terminal: true } : {}),
     genui: {
       mode,

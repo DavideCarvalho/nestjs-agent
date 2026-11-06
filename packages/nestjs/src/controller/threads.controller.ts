@@ -1,4 +1,4 @@
-import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver, CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
@@ -13,6 +13,7 @@ interface UpdateThreadBody {
   persona?: string | null;
 }
 
+@CanAnyone()
 @Controller('threads')
 export class ThreadsController {
   constructor(

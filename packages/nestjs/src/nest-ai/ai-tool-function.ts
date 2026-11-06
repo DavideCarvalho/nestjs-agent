@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Actor, AiToolCtx } from '@dudousxd/nestjs-agent-core';
+import { type Actor, type AiToolCtx, markCanAnyone } from '@dudousxd/nestjs-agent-core';
 import { type AgentFunctionContext, AgentFunction as NestAgentFunction } from '@nestjs/ai';
 import { ForbiddenException } from '@nestjs/common';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -52,7 +52,13 @@ function canBeAgentFunction(options: AiToolShape): boolean {
  * Returns whether it did: a tool `@nestjs/ai` cannot take (see {@link canBeAgentFunction}) is left
  * as it is.
  */
-export function defineAiToolAgentFunction(target: Function, options: AiToolShape): boolean {
+/** A method, called with its `this`. */
+type Method = (this: unknown, input: unknown, ctx: unknown) => unknown;
+
+export function defineAiToolAgentFunction(
+  target: { prototype: unknown },
+  options: AiToolShape,
+): boolean {
   const prototype = target.prototype as Record<string, unknown>;
   const original = prototype.execute;
   if (typeof original !== 'function' || !canBeAgentFunction(options)) return false;
@@ -61,7 +67,7 @@ export function defineAiToolAgentFunction(target: Function, options: AiToolShape
     const call = calls.getStore();
     if (call !== undefined) {
       return Promise.resolve()
-        .then(() => (original as Function).call(this, input, call.ctx))
+        .then(() => (original as Method).call(this, input, call.ctx))
         .then(
           (value) => {
             call.output = { value };
@@ -75,7 +81,7 @@ export function defineAiToolAgentFunction(target: Function, options: AiToolShape
     }
     // Called with the agent's own context, not through `@nestjs/ai` (no `AiModule`, or a caller that
     // holds the instance): the agent's call, as it always was.
-    if (isAiToolCtx(ctx)) return Promise.resolve((original as Function).call(this, input, ctx));
+    if (isAiToolCtx(ctx)) return Promise.resolve((original as Method).call(this, input, ctx));
     const context = ctx as AgentFunctionContext;
     if (options.kind === 'action') {
       throw new ForbiddenException(
@@ -91,7 +97,7 @@ export function defineAiToolAgentFunction(target: Function, options: AiToolShape
     if (options.enabled === false || !allowed) {
       throw new ForbiddenException(`"${options.name}" is not allowed for this caller.`);
     }
-    return Promise.resolve((original as Function).call(this, input, toolCtxOf(context, actor)));
+    return Promise.resolve((original as Method).call(this, input, toolCtxOf(context, actor)));
   }
 
   // The enhancers `execute()` declares (`@UseGuards()` and the like) are metadata on the method:
@@ -99,6 +105,10 @@ export function defineAiToolAgentFunction(target: Function, options: AiToolShape
   for (const key of Reflect.getMetadataKeys(original)) {
     Reflect.defineMetadata(key, Reflect.getMetadata(key, original), execute);
   }
+  // Governed by the agent (its roles, an `action`'s approval): open to `@nestjs/authorization`'s
+  // global guard, which would deny a method that declares no `@Can()`. A `@Can()` the tool does
+  // declare is still checked.
+  markCanAnyone(execute);
   const descriptor: PropertyDescriptor = {
     value: execute,
     writable: true,

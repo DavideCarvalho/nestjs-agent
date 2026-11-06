@@ -1,3 +1,4 @@
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { All, Controller, Delete, Get, Inject, Param, Req, Res } from '@nestjs/common';
 import { AgentPoppyConnectionsRuntime } from './agent-poppy-connections.runtime.js';
 import type { PoppyConnectionsApiRequest } from './config.js';
@@ -74,6 +75,7 @@ function json(res: HttpReply, status: number, body: unknown): void {
  * global guard the app has, so let these through it (they must be public: Companies fetch the
  * identity, and the person opens the link from a chat).
  */
+@CanAnyone()
 @Controller()
 export class AgentPoppyConnectionsController {
   constructor(

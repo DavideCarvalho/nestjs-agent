@@ -41,12 +41,6 @@ export interface AiToolOptions {
    */
   enabled?: boolean | (() => boolean | Promise<boolean>);
   /**
-   * Authz ability checked by an ability-aware RolesPolicy (e.g. `AgentAuthzModule`'s
-   * `AuthzRolesPolicy` → `gate.forUser(actor).allows(ability)`). Ignored by the default
-   * role-based policy, which uses `roles`.
-   */
-  ability?: string;
-  /**
    * How a chat surface talks about this tool without naming it — sentence templates over the
    * call's input, an icon key, the approval prompt's wording, and how its output reads. Never shown
    * to the model. Served by `GET <base>/tools` to the actors who can reach the tool:

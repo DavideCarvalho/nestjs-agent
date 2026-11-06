@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import type { ToolPresentation, ToolSpec } from '@dudousxd/nestjs-agent-core';
+import { type ToolPresentation, type ToolSpec, markCanAnyone } from '@dudousxd/nestjs-agent-core';
 import { type AgentFunctionOptions, AgentFunction as NestAgentFunction } from '@nestjs/ai';
 
 const GOVERNANCE_METADATA = Symbol.for('@dudousxd/nestjs-agent:agent-function-governance');
@@ -16,8 +16,6 @@ export interface AgentFunctionGovernance {
   kind?: 'read' | 'action';
   /** Roles allowed to call it, gated by the `RolesPolicy`. Omit → the policy's `defaultRoles`. */
   roles?: string[];
-  /** Authz ability checked by an ability-aware `RolesPolicy`. */
-  ability?: string;
   /** Whether the tool exists in this deployment at all. Omit → it does. */
   enabled?: boolean | (() => boolean | Promise<boolean>);
   /** How the approval card and the tool-call row present it. */
@@ -35,6 +33,8 @@ export type GovernedAgentFunctionOptions = AgentFunctionOptions & AgentFunctionG
  * `@nestjs/ai`'s `@AgentFunction()`, with the agent's governance: the method is an agent function
  * (`@nestjs/ai`'s calls offer it, through its guards, interceptors and pipes), and the agent offers
  * it too, governed — an `action` waits for a person's approval, `roles` gate who is offered it.
+ * Authorization is `@nestjs/authorization`'s `@Can()`, stacked on the method: the agent offers the
+ * tool only to an actor its abilities allow, and the guard checks the call.
  *
  * ```ts
  * import { AgentFunction } from '@dudousxd/nestjs-agent';
@@ -54,11 +54,10 @@ export type GovernedAgentFunctionOptions = AgentFunctionOptions & AgentFunctionG
  * of the two, not both.
  */
 export function AgentFunction(options: GovernedAgentFunctionOptions = {}): MethodDecorator {
-  const { kind, roles, ability, enabled, presentation, terminal, replacementKey, ...own } = options;
+  const { kind, roles, enabled, presentation, terminal, replacementKey, ...own } = options;
   const governance: AgentFunctionGovernance = {
     ...(kind !== undefined ? { kind } : {}),
     ...(roles !== undefined ? { roles } : {}),
-    ...(ability !== undefined ? { ability } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
     ...(presentation !== undefined ? { presentation } : {}),
     ...(terminal !== undefined ? { terminal } : {}),
@@ -68,6 +67,9 @@ export function AgentFunction(options: GovernedAgentFunctionOptions = {}): Metho
   return (target, key, descriptor) => {
     const result = nest(target, key, descriptor) ?? descriptor;
     Reflect.defineMetadata(GOVERNANCE_METADATA, governance, descriptor.value as object);
+    // Governed by the agent: open to `@nestjs/authorization`'s global guard, which denies a method
+    // that declares no `@Can()`. A `@Can()` stacked on it is still checked.
+    markCanAnyone(descriptor.value as object);
     return result;
   };
 }

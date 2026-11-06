@@ -99,7 +99,7 @@ these are the levers it has:
 |---|---|
 | the `action` default | A poisoned description can make the model *propose* a call; a human still approves it. Widening `kind` is what spends this. |
 | `include` | The tools you reviewed, by name — a server that grows a new tool cannot put it in your prompt. |
-| `roles` / `ability` / `canUse` | The imported tool reaches the actors you allowed and nobody else. |
+| `roles` / `can` / `canUse` | The imported tool reaches the actors you allowed and nobody else. |
 | an agent's `tools` allow-list | The remote tool exists for one persona, not for the whole chat surface. |
 | `importedTools()` | The descriptions actually in your prompt. Log them at boot, diff them between deploys, alert when one changes. |
 | an `InputProcessor` | The seam that sees the growing transcript before every model call — where you mark what a server sent as data. |
@@ -167,7 +167,7 @@ Imported tools go through the same gates as any other, because they are register
 | Setting | What it does |
 |---|---|
 | `roles: ['OPS']` | The actor passes if one of its roles matches. Omit → the module's `defaultRoles`. |
-| `ability: 'docs.search'` | Checked by an ability-aware `RolesPolicy` (e.g. `@dudousxd/nestjs-agent-authz`). |
+| `can: [{ policy: DocsPolicy, ability: 'search' }]` | `@nestjs/authorization` abilities every imported tool requires of the actor. |
 | `canUse: (actor) => …` | Per-actor gate, evaluated per turn, on top of the role gate. |
 | `enabled: false \| () => …` | Whether this server's tools exist in this deployment at all. |
 | `include` / `exclude` | Which of the server's tools to import at all. |

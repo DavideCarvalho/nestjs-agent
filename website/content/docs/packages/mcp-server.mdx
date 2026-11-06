@@ -184,7 +184,7 @@ AgentMcpServerModule.forRoot({ name: 'Acme Agent', version: '1.0.0', auth, empty
 ```
 
 A tool whose roles come out empty (declared `[]`, or none declared and no `defaultRoles`) is then
-neither listed nor callable over MCP; an `ability`-gated tool is left to the policy. Set
+neither listed nor callable over MCP; a tool that requires a `can` ability is left to the policy. Set
 `AgentModule`'s own `emptyRoles: 'deny'` to close both surfaces.
 
 ### `allowedTools` is enforced on the call, not only on the list

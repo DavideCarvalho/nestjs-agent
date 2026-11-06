@@ -65,6 +65,8 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import type { AgentEngine } from './engine.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { defaultAgentFunctionCaller } from './nest-ai/agent-functions.js';
+import { NestAuthorizationBinding, authorizationGate } from './nest-ai/authorization.js';
 import { NestAiModelsBinding } from './nest-ai/nest-ai-models.binding.js';
 import { PricingBootService } from './pricing-boot.service.js';
 import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
@@ -248,14 +250,27 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       useFactory: (options: AgentModuleOptions) => options.sink ?? new InProcessTokenStreamSink(),
       inject: [AGENT_OPTIONS],
     },
+    // `@nestjs/authorization`'s AuthorizationService, when the app imports AuthorizationModule.
+    NestAuthorizationBinding,
     {
       provide: AGENT_ROLES_POLICY,
       // Personal agents (a Poppy conversation, a Poppy session's MCP token) reach only the tools
       // written for them, and run only those of the scopes their user granted. A no-op for every
-      // other actor.
-      useFactory: (options: AgentModuleOptions, modules: ModulesContainer) =>
-        personalAgentGate(resolveRolesPolicy(options, modules)),
-      inject: [AGENT_OPTIONS, ModulesContainer],
+      // other actor. Around the roles policy, a tool's `@Can()` abilities are asked of
+      // `@nestjs/authorization`, for the user its agent function calls run as.
+      useFactory: (
+        options: AgentModuleOptions,
+        modules: ModulesContainer,
+        authorization: NestAuthorizationBinding,
+      ) =>
+        personalAgentGate(
+          authorizationGate(
+            resolveRolesPolicy(options, modules),
+            () => authorization.service,
+            (actor) => (options.agentFunctionCaller ?? defaultAgentFunctionCaller)(actor).user,
+          ),
+        ),
+      inject: [AGENT_OPTIONS, ModulesContainer, NestAuthorizationBinding],
     },
     {
       provide: AGENT_ACTOR_RESOLVER,
