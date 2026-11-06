@@ -1,4 +1,10 @@
 export { AgentModule } from './agent.module.js';
+export {
+  NestAiModelsBinding,
+  type NestAiModelProvider,
+  type NestAiModelProviderOptions,
+  nestAiModelProvider,
+} from './nest-ai/index.js';
 export { type AgUiAdapterOptions, AgUiRunHandler, agUiAdapter } from './ag-ui/index.js';
 export { type A2uiAdapterOptions, A2uiRunHandler, a2uiAdapter } from './a2ui/a2ui.adapter.js';
 export type { AgentProtocolAdapter } from './protocol-adapter.js';

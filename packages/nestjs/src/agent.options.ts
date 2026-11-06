@@ -178,9 +178,11 @@ export interface AgentModuleOptions {
   actionProposalText?: TextActionProposalConfig;
   // --- infrastructure ---
   /**
-   * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model
-   * picker (its catalog is used when `models` is omitted). Required unless an `engine` runs the
-   * turns instead.
+   * The LLM provider. Omit it to run on `@nestjs/ai`: the turns use the models of the application's
+   * `AiModule.forRoot({ models })` (the picker lists them by name, `default` first), with each
+   * model's settings, `retry` / `timeout` / `resilience`, `fallback`, `pricing` and `onUsage`. Set
+   * it to replace them — a `FakeModelProvider` in tests, `aiSdkModel(…)` outside `AiModule`. Not
+   * needed when an `engine` runs the turns.
    */
   model?: ModelProvider;
   /**

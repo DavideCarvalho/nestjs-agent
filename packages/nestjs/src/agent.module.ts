@@ -65,6 +65,7 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import type { AgentEngine } from './engine.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { NestAiModelsBinding } from './nest-ai/nest-ai-models.binding.js';
 import { PricingBootService } from './pricing-boot.service.js';
 import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
 import { ActionProposalController } from './proposals/action-proposal.controller.js';
@@ -188,11 +189,16 @@ function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProv
   return quota !== undefined && typeof (quota as QuotaProvider).report === 'function';
 }
 
-/** The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`). */
-function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
+/**
+ * The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`, or
+ * `AiModule`'s models when no `model` is configured).
+ */
+function resolveCatalog(
+  options: AgentModuleOptions,
+  model: ModelProvider | undefined,
+): ModelCatalog | undefined {
   if (options.models !== undefined) return options.models;
-  const carried = (options.model as (ModelProvider & { catalog?: ModelCatalog }) | undefined)
-    ?.catalog;
+  const carried = (model as (ModelProvider & { catalog?: ModelCatalog }) | undefined)?.catalog;
   return carried !== undefined && typeof carried.list === 'function' ? carried : undefined;
 }
 
@@ -264,10 +270,13 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       },
       inject: [AGENT_OPTIONS],
     },
+    // No `model` (and no `engine`): the turns run on `@nestjs/ai`'s `AiModule` models.
+    NestAiModelsBinding,
     {
       provide: AGENT_MODEL,
-      useFactory: (o: AgentModuleOptions) => o.model,
-      inject: [AGENT_OPTIONS],
+      useFactory: (o: AgentModuleOptions, nestAi: NestAiModelsBinding) =>
+        o.model ?? (nestAi.active ? nestAi : undefined),
+      inject: [AGENT_OPTIONS, NestAiModelsBinding],
     },
     {
       // `quota` is either a provider of the host's own or ceilings for the built-in ledger one;
@@ -286,8 +295,9 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
     },
     {
       provide: AGENT_MODEL_CATALOG,
-      useFactory: (o: AgentModuleOptions) => resolveCatalog(o),
-      inject: [AGENT_OPTIONS],
+      useFactory: (o: AgentModuleOptions, model: ModelProvider | undefined) =>
+        resolveCatalog(o, model),
+      inject: [AGENT_OPTIONS, AGENT_MODEL],
     },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
@@ -457,19 +467,15 @@ function routerFor(path: string): DynamicModule {
 }
 
 /**
- * Refuse a wiring that cannot run a turn, at boot rather than on the first message: no `model` and
- * no `engine` leaves the loop nothing to call, and `durable` names the loop's own durable runner,
- * which an engine replaces (an engine that wants durability brings it).
+ * Refuse a wiring that cannot run a turn, at boot rather than on the first message: `durable` names
+ * the loop's own durable runner, which an engine replaces (an engine that wants durability brings
+ * it). No `model` is not refused here: the turns then run on `AiModule`'s models, and
+ * `NestAiModelsBinding` refuses the boot when there is no `AiModule` either.
  */
-function assertRunnable(options: Pick<AgentModuleOptions, 'model' | 'engine' | 'durable'>): void {
+function assertRunnable(options: Pick<AgentModuleOptions, 'engine' | 'durable'>): void {
   if (options.engine !== undefined && options.durable === true) {
     throw new Error(
       `AgentModule: \`durable: true\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
-    );
-  }
-  if (options.engine === undefined && options.model === undefined) {
-    throw new Error(
-      'AgentModule: set `model` (the loop runs the turns) or `engine` (something else does).',
     );
   }
 }

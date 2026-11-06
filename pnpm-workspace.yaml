@@ -17,3 +17,5 @@ allowBuilds:
   ssh2: false
 minimumReleaseAgeExclude:
   - '@dudousxd/*'
+  - '@nestjs/ai@0.0.2'
+  - '@nestjs/workflows@0.0.5'

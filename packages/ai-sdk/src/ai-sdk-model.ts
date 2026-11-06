@@ -109,7 +109,8 @@ function reportsCost(model: LanguageModel): boolean {
   return provider === 'vercel' || provider === 'openrouter';
 }
 
-function describeModel(model: LanguageModel, id = idOf(model)): DescribedModel[] {
+/** How boot pricing sees one AI SDK model: its id, provider family, and whether it reports its cost. */
+export function describeAiSdkModel(model: LanguageModel, id = idOf(model)): DescribedModel[] {
   if (id === undefined) return [];
   const provider = providerOf(model);
   return [
@@ -124,7 +125,7 @@ function describeModel(model: LanguageModel, id = idOf(model)): DescribedModel[]
 export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): ModelProvider {
   const own = idOf(model);
   return {
-    describeModels: () => describeModel(model, own),
+    describeModels: () => describeAiSdkModel(model, own),
     runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
       // One model, so a pick naming another cannot be honoured — and running this one instead
       // would answer on a model nobody chose. `aiSdkModels` is the provider for a picker.
@@ -134,7 +135,7 @@ export function aiSdkModel(model: LanguageModel, opts?: AiSdkModelOptions): Mode
             `"${own ?? 'its one model'}". Offer several with aiSdkModels({ … }).`,
         );
       }
-      return runTurnOn(model, opts ?? {}, args);
+      return runAiSdkTurn(model, opts ?? {}, args).then(withoutFinishReason);
     },
   };
 }
@@ -235,7 +236,7 @@ export function aiSdkModels(
   };
   return {
     catalog: staticModelCatalog(view),
-    describeModels: () => entries.flatMap(([, entry]) => describeModel(entry.model)),
+    describeModels: () => entries.flatMap(([, entry]) => describeAiSdkModel(entry.model)),
     runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
       const id = args.model ?? fallback;
       const entry = byId.get(id);
@@ -245,17 +246,32 @@ export function aiSdkModels(
             `${[...byId.keys()].join(', ')}).`,
         );
       }
-      return runTurnOn(entry.model, settings, args);
+      return runAiSdkTurn(entry.model, settings, args).then(withoutFinishReason);
     },
   };
 }
 
-/** One model turn on `model` — the shared body of {@link aiSdkModel} and {@link aiSdkModels}. */
-async function runTurnOn(
+/** What {@link runAiSdkTurn} answers: the turn, and why the model stopped. */
+export interface AiSdkTurnResult extends ModelTurnResult {
+  /** The SDK's `finishReason` for the turn (`stop`, `tool-calls`, `length`, …). */
+  finishReason: string;
+}
+
+function withoutFinishReason({ finishReason: _, ...turn }: AiSdkTurnResult): ModelTurnResult {
+  return turn;
+}
+
+/**
+ * One model turn on an AI SDK `LanguageModel`: the body of {@link aiSdkModel} and {@link aiSdkModels},
+ * exported for providers that put their own policy around the call (the `@nestjs/ai` provider in
+ * `@dudousxd/nestjs-agent` runs it under the model's retries, timeout and fallback). Streams the turn's
+ * frames to `args.sink`, never executes a tool, and rejects with the provider's own error.
+ */
+export async function runAiSdkTurn(
   model: LanguageModel,
   settings: AiSdkModelOptions,
   args: ModelTurnArgs,
-): Promise<ModelTurnResult> {
+): Promise<AiSdkTurnResult> {
   const result = streamText({
     ...settings,
     ...withOpenRouterUsageAccounting(model, settings.providerOptions),
@@ -347,6 +363,7 @@ async function runTurnOn(
     ...(typeof modelId === 'string' && modelId.length > 0 ? { modelId } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
     ...(object !== undefined ? { object } : {}),
+    finishReason: String(finalStep.finishReason ?? 'unknown'),
   };
 }
 
