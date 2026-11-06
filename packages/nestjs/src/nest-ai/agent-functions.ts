@@ -2,7 +2,8 @@ import type { Actor, AiToolCtx, ToolRegistry } from '@dudousxd/nestjs-agent-core
 import type { AiCaller, AiToolEntry, AiTools } from '@nestjs/ai';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
-import { readGovernMetadata } from './govern.decorator.js';
+import { AI_TOOL_METADATA } from '../decorator/ai-tool.decorator.js';
+import { readAgentFunctionGovernance } from './agent-function.decorator.js';
 
 /**
  * Where `@AgentFunction()` files its options on the method — `@nestjs/ai`'s `AGENT_FUNCTION_METADATA`,
@@ -24,7 +25,7 @@ export const defaultAgentFunctionCaller: AgentFunctionCaller = (actor) => ({ use
 
 /**
  * Registers every `@AgentFunction()` of the application as an agent tool, under the agent's
- * governance (`@Govern()`), and runs each through `AiTools.call` — so the method's guards,
+ * governance (the options of this library's `@AgentFunction()`), and runs each through `AiTools.call` — so the method's guards,
  * interceptors, pipes and exception filters run around it as they do for `@nestjs/ai`'s own calls.
  * A name the registry already has (an `@AiTool` of the same name) is skipped. Returns how many were
  * registered.
@@ -37,6 +38,8 @@ export function registerAgentFunctions(
 ): number {
   let count = 0;
   for (const entry of aiTools.tools.values()) {
+    // An `@AiTool`'s `execute()`: the agent registered it as the `@AiTool` it is.
+    if (Reflect.getMetadata(AI_TOOL_METADATA, entry.host) !== undefined) continue;
     if (registry.has(entry.name)) {
       warn(
         `@AgentFunction "${entry.name}" (${entry.where}) duplicates a registered tool — skipped`,
@@ -44,7 +47,7 @@ export function registerAgentFunctions(
       continue;
     }
     const method = methodOf(entry);
-    const govern = readGovernMetadata(method) ?? {};
+    const govern = readAgentFunctionGovernance(method) ?? {};
     registry.register(
       {
         name: entry.name,

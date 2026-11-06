@@ -4,7 +4,13 @@ export {
   type NestAiModelProviderOptions,
   nestAiModelProvider,
 } from './nest-ai-model-provider.js';
-export { Govern, type GovernOptions } from './govern.decorator.js';
+export {
+  AgentFunction,
+  type AgentFunctionGovernance,
+  type GovernedAgentFunctionOptions,
+  readAgentFunctionGovernance,
+} from './agent-function.decorator.js';
+export { callThroughAgentFunction, defineAiToolAgentFunction } from './ai-tool-function.js';
 export {
   type AgentFunctionCaller,
   defaultAgentFunctionCaller,

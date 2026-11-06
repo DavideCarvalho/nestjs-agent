@@ -11,7 +11,7 @@ import { AgentModule } from '../agent.module.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
-import { Govern } from './govern.decorator.js';
+import { AgentFunction as GovernedAgentFunction } from './agent-function.decorator.js';
 
 const seen: Array<{ type: string; user: unknown; city?: string }> = [];
 
@@ -36,14 +36,17 @@ class WeatherFunctions {
     return { city, tempC: 21, toolCallId: ctx.toolCallId };
   }
 
-  @AgentFunction({ name: 'evacuate', description: 'Evacuate a city', inputSchema: CityInput })
-  @Govern({ kind: 'action' })
+  @GovernedAgentFunction({
+    name: 'evacuate',
+    description: 'Evacuate a city',
+    inputSchema: CityInput,
+    kind: 'action',
+  })
   evacuate({ city }: { city: string }) {
     return { evacuated: city };
   }
 
-  @AgentFunction({ name: 'launch', description: 'Launch the rockets' })
-  @Govern({ roles: ['ADMIN'] })
+  @GovernedAgentFunction({ name: 'launch', description: 'Launch the rockets', roles: ['ADMIN'] })
   launch() {
     return { launched: true };
   }
@@ -95,7 +98,7 @@ async function boot(model: FakeModel, options: Partial<AgentModuleOptions> = {})
 const asUser = { 'x-actor-id': 'u1', 'x-actor-role': 'USER' };
 
 describe('@nestjs/ai agent functions as agent tools', () => {
-  it('offers them governed: kind from @Govern (read by default), roles gating who sees them', async () => {
+  it('offers them governed: kind from the governance (read by default), roles gating who sees them', async () => {
     const server = await boot(new FakeModel([]));
 
     const user = await request(server).get('/agent/tools').set(asUser);

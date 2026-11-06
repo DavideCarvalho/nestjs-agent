@@ -9,7 +9,7 @@ import {
   type ToolRegistry,
   normalizeDelegation,
 } from '@dudousxd/nestjs-agent-core';
-import { AiTools } from '@nestjs/ai';
+import { type AiToolEntry, AiTools } from '@nestjs/ai';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
@@ -17,7 +17,12 @@ import { delegateToolName } from '../agent-deps.factory.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { readAiToolMetadata } from '../decorator/ai-tool.decorator.js';
 import { type FunctionalTool, isBrandedFunctionalTool } from '../functional-tool.js';
-import { defaultAgentFunctionCaller, registerAgentFunctions } from '../nest-ai/agent-functions.js';
+import {
+  type AgentFunctionCaller,
+  defaultAgentFunctionCaller,
+  registerAgentFunctions,
+} from '../nest-ai/agent-functions.js';
+import { callThroughAgentFunction } from '../nest-ai/ai-tool-function.js';
 
 /** Walks every provider at boot and registers `@AiTool` classes into the shared registry. */
 @Injectable()
@@ -33,6 +38,16 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
   ) {}
 
   onApplicationBootstrap(): void {
+    // `@nestjs/ai`'s agent functions, wherever the application imports `AiModule`. An `@AiTool`'s
+    // `execute()` is one of them; the agent's calls of it go through `AiTools.call`, so the guards,
+    // interceptors and pipes it declares run around it.
+    const aiTools = this.findAiTools();
+    const caller = this.options.agentFunctionCaller ?? defaultAgentFunctionCaller;
+    const agentFunctionOf = (host: Function): AiToolEntry | undefined => {
+      if (aiTools === undefined) return undefined;
+      for (const entry of aiTools.tools.values()) if (entry.host === host) return entry;
+      return undefined;
+    };
     let count = 0;
     let functional = 0;
     for (const wrapper of this.discovery.getProviders()) {
@@ -87,7 +102,12 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           ...(meta.replacementKey !== undefined ? { replacementKey: meta.replacementKey } : {}),
         },
         {
-          execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),
+          execute: this.executorOf(
+            instance as ToolHandler,
+            agentFunctionOf(instance.constructor),
+            aiTools,
+            caller,
+          ),
           ...(typeof handler.present === 'function'
             ? { present: (output, ctx) => (instance as Required<ToolHandler>).present(output, ctx) }
             : {}),
@@ -117,16 +137,13 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       count += 1;
     }
 
-    // `@nestjs/ai`'s `@AgentFunction()` methods, under the agent's governance (`@Govern()`).
-    const aiTools = this.findAiTools();
+    // `@nestjs/ai`'s `@AgentFunction()` methods, under the agent's governance (the options of this
+    // library's `@AgentFunction()`).
     const agentFunctions =
       aiTools === undefined || this.options.agentFunctions === false
         ? 0
-        : registerAgentFunctions(
-            this.registry,
-            aiTools,
-            this.options.agentFunctionCaller ?? defaultAgentFunctionCaller,
-            (message) => this.logger.warn(message),
+        : registerAgentFunctions(this.registry, aiTools, caller, (message) =>
+            this.logger.warn(message),
           );
 
     // Static functional tools passed straight to `forRoot({ tools })`.
@@ -186,6 +203,29 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     this.logger.log(
       `registered ${count} AI tool(s), ${agentFunctions} agent function(s), ${functional} functional tool(s) and ${delegates} delegate tool(s)`,
     );
+  }
+
+  /**
+   * How the agent runs an `@AiTool`: through `AiTools.call` when its `execute()` is an agent
+   * function `AiModule` found (so its enhancers run), else by calling it.
+   */
+  private executorOf(
+    instance: ToolHandler,
+    entry: AiToolEntry | undefined,
+    aiTools: AiTools | undefined,
+    caller: AgentFunctionCaller,
+  ): ToolHandler['execute'] {
+    if (entry === undefined || aiTools === undefined) {
+      return (input, ctx) => instance.execute(input, ctx);
+    }
+    return (input, ctx) =>
+      callThroughAgentFunction(ctx, () =>
+        aiTools.call(entry, input, caller(ctx.actor, ctx), {
+          ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+          ...(ctx.abortSignal !== undefined ? { abortSignal: ctx.abortSignal } : {}),
+          ...(ctx.idempotencyKey !== undefined ? { idempotencyKey: ctx.idempotencyKey } : {}),
+        }),
+      );
   }
 
   /** `@nestjs/ai`'s agent functions, wherever the application imports `AiModule`; none without it. */

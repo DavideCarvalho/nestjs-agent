@@ -4,8 +4,9 @@ export {
   type NestAiModelProvider,
   type NestAiModelProviderOptions,
   nestAiModelProvider,
-  Govern,
-  type GovernOptions,
+  AgentFunction,
+  type AgentFunctionGovernance,
+  type GovernedAgentFunctionOptions,
   type AgentFunctionCaller,
   defaultAgentFunctionCaller,
 } from './nest-ai/index.js';

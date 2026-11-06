@@ -188,7 +188,7 @@ export interface AgentModuleOptions {
   model?: ModelProvider;
   /**
    * Offer the application's `@nestjs/ai` `@AgentFunction()` methods as agent tools (default), each
-   * governed by its `@Govern()` and run through `AiTools.call`, so its guards, interceptors, pipes
+   * governed by this library's `@AgentFunction()` options and run through `AiTools.call`, so its guards, interceptors, pipes
    * and filters apply. `false` leaves them to `@nestjs/ai`'s own calls.
    */
   agentFunctions?: boolean;
