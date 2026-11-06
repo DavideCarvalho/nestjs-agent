@@ -9,13 +9,15 @@ import {
   type ToolRegistry,
   normalizeDelegation,
 } from '@dudousxd/nestjs-agent-core';
+import { AiTools } from '@nestjs/ai';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
-import { DiscoveryService } from '@nestjs/core';
+import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { delegateToolName } from '../agent-deps.factory.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { readAiToolMetadata } from '../decorator/ai-tool.decorator.js';
 import { type FunctionalTool, isBrandedFunctionalTool } from '../functional-tool.js';
+import { defaultAgentFunctionCaller, registerAgentFunctions } from '../nest-ai/agent-functions.js';
 
 /** Walks every provider at boot and registers `@AiTool` classes into the shared registry. */
 @Injectable()
@@ -27,6 +29,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
     @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
     @Inject(AGENT_OPTIONS) private readonly options: AgentModuleOptions,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -114,6 +117,18 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       count += 1;
     }
 
+    // `@nestjs/ai`'s `@AgentFunction()` methods, under the agent's governance (`@Govern()`).
+    const aiTools = this.findAiTools();
+    const agentFunctions =
+      aiTools === undefined || this.options.agentFunctions === false
+        ? 0
+        : registerAgentFunctions(
+            this.registry,
+            aiTools,
+            this.options.agentFunctionCaller ?? defaultAgentFunctionCaller,
+            (message) => this.logger.warn(message),
+          );
+
     // Static functional tools passed straight to `forRoot({ tools })`.
     for (const tool of this.options.tools ?? []) {
       if (this.registerFunctionalTool(tool)) {
@@ -169,8 +184,17 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       }
     }
     this.logger.log(
-      `registered ${count} AI tool(s), ${functional} functional tool(s) and ${delegates} delegate tool(s)`,
+      `registered ${count} AI tool(s), ${agentFunctions} agent function(s), ${functional} functional tool(s) and ${delegates} delegate tool(s)`,
     );
+  }
+
+  /** `@nestjs/ai`'s agent functions, wherever the application imports `AiModule`; none without it. */
+  private findAiTools(): AiTools | undefined {
+    try {
+      return this.moduleRef.get(AiTools, { strict: false }) ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

@@ -37,6 +37,7 @@ import type {
 import type { AgentEngine } from './engine.js';
 import type { FunctionalTool } from './functional-tool.js';
 import type { QuotaLimits } from './ledger-quota-provider.js';
+import type { AgentFunctionCaller } from './nest-ai/agent-functions.js';
 import type { AgentProtocolAdapter } from './protocol-adapter.js';
 
 /**
@@ -185,6 +186,18 @@ export interface AgentModuleOptions {
    * needed when an `engine` runs the turns.
    */
   model?: ModelProvider;
+  /**
+   * Offer the application's `@nestjs/ai` `@AgentFunction()` methods as agent tools (default), each
+   * governed by its `@Govern()` and run through `AiTools.call`, so its guards, interceptors, pipes
+   * and filters apply. `false` leaves them to `@nestjs/ai`'s own calls.
+   */
+  agentFunctions?: boolean;
+  /**
+   * Who an `@AgentFunction()` call acts for, from the turn's actor — what its guards read. Default:
+   * `{ user: actor }`, with no `scopes` (the agent gates by roles); map the actor to scopes here for
+   * functions that declare `scopes`.
+   */
+  agentFunctionCaller?: AgentFunctionCaller;
   /**
    * Where a configured model with no price row gets one, at boot. On application bootstrap every
    * model the `model` provider describes (`aiSdkModel` / `aiSdkModels`) that the bound
