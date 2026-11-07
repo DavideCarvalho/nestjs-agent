@@ -23,7 +23,9 @@ export type {
   AgentSkillsOptions,
   AgentMemoryOptions,
   AgentSurface,
+  AgentDurableOptions,
 } from './agent.options.js';
+export { durableEngineOf } from './agent.options.js';
 export {
   AgentService,
   NO_USER_MESSAGE_CODE,

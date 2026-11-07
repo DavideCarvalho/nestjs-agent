@@ -38,14 +38,17 @@ behaviour, including what each runner does about a turn parked on a human.
 
 | | Inline runner (default) | Durable runner (`durable: true`) |
 |---|---|---|
-| The pause | an in-process runner holds the turn open | a real durable **suspend** — the run is checkpointed to the state store |
+| The pause | an in-process runner holds the turn open | a real durable **suspend**: the run is journaled to the workflow store |
 | Surviving a restart | no — the pending turn is lost | yes — the run resumes from cache on approval |
-| Where the turn executes | the pod that received the request, start to finish | whichever worker picks up the `agent.run` workflow — and the model call and each tool call can each land on a *different* worker again (see below) |
-| Requires | nothing extra | `@dudousxd/nestjs-durable` + `AgentDurableModule` + a configured `DurableModule` |
+| Where the turn executes | the pod that received the request, start to finish | whichever worker claims the turn's workflow instance (on the `aviary` engine, the model call and each tool call can each land on a *different* worker again, see below) |
+| Requires | nothing extra | `@nestjs/workflows`: `WorkflowsModule` + `AgentWorkflowsModule` (`@dudousxd/nestjs-agent/workflows`). With `durable: { engine: 'aviary' }`: `@dudousxd/nestjs-durable`'s `DurableModule` + `AgentDurableModule` |
 | Wire protocol | identical | identical |
 
-`AgentModule.forRoot` binds `InlineAgentRunner` to the `AGENT_RUNNER` token unless `durable: true` is
-set — inline is the real, zero-dependency default, not a fallback.
+`AgentModule.forRoot` binds `InlineAgentRunner` to the `AGENT_RUNNER` token unless `durable` is set,
+inline is the real, zero-dependency default, not a fallback. `durable: true` binds
+`WorkflowsAgentRunner`, on NestJS's [`@nestjs/workflows`](https://docs.nestjs.com/reliability/workflows);
+`durable: { engine: 'aviary' }` binds `DurableAgentRunner`, on `@dudousxd/nestjs-durable`. See
+[the two engines](/docs/agent/guides/human-in-the-loop-and-durability#under-the-durable-runner).
 
 <Callout type="info" title="Independent approvals don't park a turn under either runner">
 With `actionApprovalMode: 'independent'`, an `action` call is recorded as an action proposal and the
@@ -64,14 +67,14 @@ database leases. A durable run journaled before the mode was enabled keeps block
   acceptable.
 - **Durable** once you need a turn to survive a process restart mid-approval, want every model and
   tool call individually checkpointed (so a crash replays from cache instead of re-charging the model
-  or re-running a side effect), or already run `@dudousxd/nestjs-durable` elsewhere in the app.
+  or re-running a side effect), or already run `@nestjs/workflows` (or `@dudousxd/nestjs-durable`) elsewhere in the app.
 
 Because the `AgentRunner` SPI is the only seam, you can develop against inline and flip to durable in
 production by changing configuration, not code.
 
-## Dispatched steps: what the durable runner does with a turn
+## Dispatched steps: what the `aviary` engine does with a turn
 
-Under `durable: true`, the workflow's bookkeeping (persisting a message, bumping quota, stream
+On `durable: { engine: 'aviary' }`, the workflow's bookkeeping (persisting a message, bumping quota, stream
 markers) checkpoints as `ctx.localStep` — pinned to whichever worker is running the workflow. The
 turn's two genuinely *long* operations — the model call and each tool execution — are dispatched as
 separately-routed durable steps instead (`AgentRunSteps.llm` / `AgentRunSteps.tool`), so a turn
@@ -132,15 +135,15 @@ execution context, and that the sink below is cross-process, before rolling out.
 <Callout type="warn" title="Multi-pod fleets need a cross-process sink">
 Because a dispatched step can execute on any worker, the pod that streams tokens for `llm` may not
 be the pod holding the client's SSE connection. Wire a cross-process `TokenStreamSink` (e.g.
-`RedisTokenStreamSink` from `-transport-redis`) for any multi-pod deployment under `durable: true`
+`RedisTokenStreamSink` from `-transport-redis`) for any multi-pod deployment under `durable`
 — dispatched or not, since the run itself is already not pinned to the requesting pod. A boot
 warning fires when dispatching is effectively on with the default in-process sink still bound. See
 [Architecture](/docs/agent/concepts/architecture) for the full control/data-plane picture.
 </Callout>
 
-## The one-import shortcut
+## The one-import shortcut (`aviary` engine)
 
-The long form wires `durable: true` on `AgentModule.forRoot` and imports `AgentDurableModule`
+The long form wires `durable: { engine: 'aviary' }` on `AgentModule.forRoot` and imports `AgentDurableModule`
 separately. `agentDurable(options)` collapses both into one:
 
 ```ts
@@ -162,18 +165,19 @@ export class AppModule {}
 ```
 
 `agentDurable` spreads into `imports` because it wires `AgentModule.forRoot({ ...options, durable:
-true })` and `AgentDurableModule` together — it isn't a module itself.
+{ engine: 'aviary' } })` and `AgentDurableModule` together — it isn't a module itself.
 
-<Callout type="warn" title="durable: true alone isn't enough">
-Setting `durable: true` on `AgentModule.forRoot` without importing `AgentDurableModule` throws at
+<Callout type="warn" title="durable alone isn't enough">
+Setting `durable: true` without importing `WorkflowsModule` and `AgentWorkflowsModule`, or
+`durable: { engine: 'aviary' }` without `AgentDurableModule`, throws at
 boot with a clear message rather than failing silently or falling back to inline — a forgotten import
 is a configuration error, not a degraded mode.
 </Callout>
 
 ## Full details
 
-The mechanics of the durable suspend itself — the `agent.run` workflow, `ctx.waitForSignal`, and
-resuming a dropped stream — are in
+The mechanics of the durable suspend itself (the `aviary.agent.run` workflow, `ctx.waitForSignal`, and
+resuming a dropped stream) are in
 [Human-in-the-loop & Durability](/docs/agent/guides/human-in-the-loop-and-durability); the durable
 runtime it depends on is documented in full at [`@dudousxd/nestjs-durable`](/docs/durable).
 

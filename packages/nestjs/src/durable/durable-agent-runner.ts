@@ -154,7 +154,7 @@ export class DurableAgentRunner implements AgentRunner {
     // cross-process" capability, so this is silent for any custom sink (which may well be one).
     if (this.sink instanceof InProcessTokenStreamSink) {
       this.logger.warn(
-        'durable: true with the default InProcessTokenStreamSink, which only buffers tokens in ' +
+        "durable: { engine: 'aviary' } with the default InProcessTokenStreamSink, which only buffers tokens in " +
           'this process. The worker that runs the turn — and the one that serves its dispatched ' +
           '`llm` step — cannot stream into this buffer. Wire a cross-process TokenStreamSink ' +
           '(e.g. a Redis pub/sub sink) via AgentModule.forRoot({ sink }) before running multi-pod.',

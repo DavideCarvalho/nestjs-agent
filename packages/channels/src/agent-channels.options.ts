@@ -16,7 +16,7 @@ export interface AgentChannelsModuleOptions {
   /**
    * Handle messages as `@dudousxd/nestjs-durable` runs: persisted before the `200`, one at a time per
    * conversation, retried, and resumed after a crash (a reply never lost, never sent twice).
-   * Default: on when the agent runs durably (`AgentModule.forRoot({ durable: true })` with
+   * Default: on when the agent runs durably (`AgentModule.forRoot({ durable: { engine: 'aviary' } })` with
    * `AgentDurableModule`), on the app's `WorkflowEngine`. `false` → in this process (a restart loses
    * what is in flight). An engine → that one.
    */

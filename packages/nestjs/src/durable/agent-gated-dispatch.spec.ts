@@ -74,7 +74,7 @@ async function buildApp(options: { model: ModelProvider; outputProcessors: Outpu
         store: new InMemoryAgentStore(),
         actorResolver: new HeaderActorResolver(),
         sink,
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
         outputProcessors: options.outputProcessors,
       }),

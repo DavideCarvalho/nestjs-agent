@@ -583,7 +583,9 @@ AgentModule.forRoot({
 
 ### A durable turn's model call and tools run in a worker
 
-Under `durable: true` the turn's model call and each of its tool executions are **dispatched steps**
+`durable: true` runs each turn on NestJS's `@nestjs/workflows` (import `WorkflowsModule.forRoot()` and
+`AgentWorkflowsModule` from `@dudousxd/nestjs-agent/workflows`): each model call and each tool call is a
+`ctx.step`, run by whichever process claims the turn. On `durable: { engine: 'aviary' }` the turn's model call and each of its tool executions are **dispatched steps**
 (`AgentRunSteps.llm` / `AgentRunSteps.tool`), which is what `ctx.step` means in
 [`@dudousxd/nestjs-durable`](https://davidecarvalho.github.io/aviary/docs/durable): they are routed
 to whichever worker serves those groups, not run in the pod that took the request. There is no
@@ -613,9 +615,14 @@ approval has been spent on an action that never ran.
 Multi-pod fleets also need a cross-process `TokenStreamSink` (e.g.
 `@dudousxd/nestjs-agent/sink-redis`), since the worker writing tokens is generally not the pod
 holding the reader's SSE connection. The default in-process sink logs a warning at boot under
-`durable: true` for exactly this reason.
+`durable` for exactly this reason.
 
 ### Deploying split API/worker pods
+
+On `@nestjs/workflows` (`durable: true`), the split is `WorkflowsModule`'s: API pods import
+`WorkflowsModule.forRoot({ worker: false })` (they start, signal and inspect turns, and never claim
+one) with `surface: 'http'`; worker pods keep the default worker, with `surface: 'engine'`. What
+follows is the `aviary` engine.
 
 By default `AgentModule`/`AgentDurableModule` wire everything: every controller, the `agent.run`
 durable workflow, and its dispatched steps (`AgentRunSteps.llm`/`.tool`). Fine for a single combined
@@ -629,7 +636,7 @@ business doing (and a worker pod mounts HTTP routes nothing ever calls).
 // worker container: no HTTP routes, but the workflow + dispatched steps ARE registered
 imports: [
   DurableModule.forRoot({ store, transport }),
-  AgentModule.forRoot({ model, store, actorResolver, durable: true, surface: 'engine' }),
+  AgentModule.forRoot({ model, store, actorResolver, durable: { engine: 'aviary' }, surface: 'engine' }),
   AgentDurableModule.forRoot({ surface: 'engine' }),
 ]
 
@@ -638,7 +645,7 @@ imports: [
 // polls/executes work on its own.
 imports: [
   DurableModule.forRoot({ store, transport, drive: false }),
-  AgentModule.forRoot({ model, store, actorResolver, durable: true, surface: 'http' }),
+  AgentModule.forRoot({ model, store, actorResolver, durable: { engine: 'aviary' }, surface: 'http' }),
   AgentDurableModule.forRoot({ surface: 'http' }),
 ]
 ```

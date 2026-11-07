@@ -92,7 +92,7 @@ async function buildApp() {
         model,
         store,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
       }),
       AgentDurableModule,

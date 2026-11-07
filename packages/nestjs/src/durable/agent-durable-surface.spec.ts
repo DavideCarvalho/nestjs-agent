@@ -31,7 +31,7 @@ function agentImport(surface?: 'http' | 'engine' | 'both') {
     model: new FakeModelProvider(() => ({ text: 'x' })),
     store: new InMemoryAgentStore(),
     actorResolver: new HeaderActorResolver(),
-    durable: true,
+    durable: { engine: 'aviary' },
     ...(surface !== undefined ? { surface } : {}),
   });
 }

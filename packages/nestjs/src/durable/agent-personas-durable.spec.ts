@@ -88,7 +88,7 @@ async function buildApp(shared: Shared, careful: Persona | undefined) {
         model: shared.model,
         store: shared.agentStore,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
       }),
       AgentDurableModule,

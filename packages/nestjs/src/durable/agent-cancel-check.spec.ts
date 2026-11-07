@@ -38,7 +38,7 @@ describe('the cancel check', () => {
           model: new FakeModelProvider(() => ({ text: 'x' })),
           store: new InMemoryAgentStore(),
           actorResolver: new HeaderActorResolver(),
-          durable: true,
+          durable: { engine: 'aviary' },
           defaultAgent: 'default',
         }),
         AgentDurableModule,

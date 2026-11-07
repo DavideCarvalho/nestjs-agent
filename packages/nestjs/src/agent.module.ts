@@ -17,6 +17,7 @@ import {
   AGENT_SKILL_SOURCES,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
+  AGENT_WORKFLOWS_RUNNER,
   AgentRegistry,
   type AgentRunner,
   type AgentStore,
@@ -44,7 +45,12 @@ import {
 import { DiscoveryModule, ModulesContainer, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import { AGENT_SERVICE } from './agent-service.token.js';
-import type { AgentModuleAsyncOptions, AgentModuleOptions, AgentSurface } from './agent.options.js';
+import {
+  type AgentModuleAsyncOptions,
+  type AgentModuleOptions,
+  type AgentSurface,
+  durableEngineOf,
+} from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
@@ -210,7 +216,11 @@ function resolveCatalog(
  * `AGENT_STORE` locally: when the host omits `options.store` we leave it unbound so a globally-bound
  * store module (which binds `AGENT_STORE` app-wide) satisfies the dependency instead.
  */
-function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Provider[] {
+function sharedProviders(
+  durable: AgentModuleOptions['durable'],
+  engine: AgentEngine | undefined,
+): Provider[] {
+  const durableEngine = durableEngineOf(durable);
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
     // Starts empty; AgentDiscoveryService populates it from `@Agent`-decorated providers at boot.
@@ -347,7 +357,7 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
   if (engine !== undefined) {
     // The engine runs the turns; its providers bring the runner AGENT_RUNNER points at.
     providers.push(...engine.providers, { provide: AGENT_RUNNER, useExisting: engine.runner });
-  } else if (durable) {
+  } else if (durableEngine === 'aviary') {
     // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
     // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
     providers.push({
@@ -355,13 +365,30 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       useFactory: (durableRunner: AgentRunner | undefined) => {
         if (durableRunner === undefined) {
           throw new Error(
-            'AgentModule.forRoot({ durable: true }) requires importing AgentDurableModule from ' +
+            "AgentModule.forRoot({ durable: { engine: 'aviary' } }) requires importing AgentDurableModule from " +
               "'@dudousxd/nestjs-agent/durable' (alongside a configured DurableModule). It was not found.",
           );
         }
         return durableRunner;
       },
       inject: [{ token: AGENT_DURABLE_RUNNER, optional: true }],
+    });
+  } else if (durableEngine === 'workflows') {
+    // The runner AgentWorkflowsModule provides, on NestJS's `@nestjs/workflows`.
+    providers.push({
+      provide: AGENT_RUNNER,
+      useFactory: (workflowsRunner: AgentRunner | undefined) => {
+        if (workflowsRunner === undefined) {
+          throw new Error(
+            'AgentModule.forRoot({ durable: true }) runs turns on @nestjs/workflows: import ' +
+              "WorkflowsModule.forRoot() from '@nestjs/workflows' and AgentWorkflowsModule from " +
+              "'@dudousxd/nestjs-agent/workflows'. AgentWorkflowsModule was not found. (For the " +
+              "@dudousxd/nestjs-durable engine, set durable: { engine: 'aviary' }.)",
+          );
+        }
+        return workflowsRunner;
+      },
+      inject: [{ token: AGENT_WORKFLOWS_RUNNER, optional: true }],
     });
   } else {
     providers.push({ provide: AGENT_RUNNER, useExisting: InlineAgentRunner });
@@ -458,9 +485,9 @@ function routerFor(path: string): DynamicModule {
  * `NestAiModelsBinding` refuses the boot when there is no `AiModule` either.
  */
 function assertRunnable(options: Pick<AgentModuleOptions, 'engine' | 'durable'>): void {
-  if (options.engine !== undefined && options.durable === true) {
+  if (options.engine !== undefined && durableEngineOf(options.durable) !== undefined) {
     throw new Error(
-      `AgentModule: \`durable: true\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
+      `AgentModule: \`durable\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
     );
   }
 }
@@ -484,7 +511,7 @@ export class AgentModule {
       ),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
-        ...sharedProviders(options.durable ?? false, options.engine),
+        ...sharedProviders(options.durable, options.engine),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),
@@ -528,7 +555,7 @@ export class AgentModule {
           },
           inject: options.inject ?? [],
         },
-        ...sharedProviders(options.durable ?? false, options.engine),
+        ...sharedProviders(options.durable, options.engine),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),

@@ -45,11 +45,12 @@ import type { AgentProtocolAdapter } from './protocol-adapter.js';
  * each load `AgentModule` without either one doing the other's job:
  *
  * - `'both'` (default): today's behavior, unconditionally — every controller AND the full durable
- *   engine wiring (when `durable: true`). Zero-config single-pod deployments never touch this.
+ *   engine wiring (when `durable` is on). Zero-config single-pod deployments never touch this.
  * - `'http'`: mounts every controller (chat/threads/tool-call/quota/agents/attachments) so the HTTP
- *   surface is fully functional, but under `durable: true` this pod must never EXECUTE agent work —
- *   see `AgentDurableModuleOptions.surface` (`@dudousxd/nestjs-agent/durable`), which is where the
- *   actual step-handler exclusion happens; this flag only controls the controllers here.
+ *   surface is fully functional, but under `durable` this pod must never EXECUTE agent work. On the
+ *   `'workflows'` engine that is `WorkflowsModule.forRoot({ worker: false })`; on `'aviary'`,
+ *   `AgentDurableModuleOptions.surface` (`@dudousxd/nestjs-agent/durable`). This flag only controls
+ *   the controllers here.
  * - `'engine'`: mounts NO controllers (an API pod's routes have no business existing on a worker
  *   pod that never receives HTTP traffic) — everything else (registry/tools/model/store/sinks, the
  *   `agent.run` workflow, and its dispatched steps under `AgentDurableModule`) stays wired exactly
@@ -60,6 +61,37 @@ import type { AgentProtocolAdapter } from './protocol-adapter.js';
  * metadata can't be computed from a runtime-injected value).
  */
 export type AgentSurface = 'http' | 'engine' | 'both';
+
+/**
+ * The durable engine `AgentModuleOptions.durable` runs turns on.
+ *
+ * - `'workflows'` (what `durable: true` means): NestJS's `@nestjs/workflows`. Import
+ *   `WorkflowsModule.forRoot()` and `AgentWorkflowsModule` (`@dudousxd/nestjs-agent/workflows`).
+ *   An API pod that must not run turns imports `WorkflowsModule.forRoot({ worker: false })`.
+ * - `'aviary'`: `@dudousxd/nestjs-durable`. Import `DurableModule` and `AgentDurableModule`
+ *   (`@dudousxd/nestjs-agent/durable`). Choose it for what `@nestjs/workflows` does not do: steps
+ *   dispatched to a separate fleet over a transport (BullMQ, SQS, ...), Python workers, the
+ *   SQLite/MikroORM stores, `ctx.patched` for changing a running turn's code in place.
+ */
+export interface AgentDurableOptions {
+  /** Default `'workflows'`. */
+  engine?: 'workflows' | 'aviary';
+  /**
+   * `'workflows'` only: model calls per workflow instance. After that many, the turn goes on in a
+   * child instance, so no instance's journal grows past what one segment writes (the same idea as
+   * `@nestjs/ai`'s `AiAgents` `stepsPerInstance`). Default 10.
+   */
+  stepsPerInstance?: number;
+}
+
+/** Which durable engine `durable` names: `undefined` when the turns run in-process. */
+export function durableEngineOf(
+  durable: boolean | AgentDurableOptions | undefined,
+): 'workflows' | 'aviary' | undefined {
+  if (durable === undefined || durable === false) return undefined;
+  if (durable === true) return 'workflows';
+  return durable.engine ?? 'workflows';
+}
 
 /**
  * `AgentModuleOptions.attachments` — limits for `POST <base>/attachments`, when the bound
@@ -302,22 +334,21 @@ export interface AgentModuleOptions {
   /** Route prefix the controllers mount under. Defaults to `'agent'` (→ `/agent/chat`, …). */
   path?: string;
   /**
-   * Run each turn as a durable workflow instead of in-process. Requires importing
-   * `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` and a configured `DurableModule`.
+   * Run each turn as a durable workflow instead of in-process: each model call and each tool call
+   * is a journaled step, a turn parked on a person survives restarts, and a crashed turn resumes
+   * where it was. See {@link AgentDurableOptions} for the two engines; `true` is
+   * `{ engine: 'workflows' }`, NestJS's own `@nestjs/workflows`.
    *
-   * The turn's model call and its tool executions are dispatched steps
-   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`), so a `@AiTool` handler runs in whichever worker
-   * serves the routed group rather than in the pod that took the request. A handler that resolves
-   * anything per invocation from its caller's execution context — a request-scoped ORM
-   * EntityManager, an AsyncLocalStorage tenant, a CLS transaction — must establish that context
-   * itself (`@CreateRequestContext`/`@EnsureRequestContext` under MikroORM), exactly as a `@Step`
-   * handler does.
+   * A `@AiTool` handler runs in whichever worker runs the step rather than in the pod that took the
+   * request. A handler that resolves anything per invocation from its caller's execution context (a
+   * request-scoped ORM EntityManager, an AsyncLocalStorage tenant, a CLS transaction) must
+   * establish that context itself.
    *
    * Multi-pod fleets MUST also wire a cross-process token sink (e.g. a Redis pub/sub
-   * `TokenStreamSink`): the turn runs on whichever worker takes `agent.run`, which may not be the
-   * pod holding the SSE connection.
+   * `TokenStreamSink`): the turn runs on whichever worker claims it, which may not be the pod
+   * holding the SSE connection.
    */
-  durable?: boolean;
+  durable?: boolean | AgentDurableOptions;
   /**
    * Static functional tools (`{ spec, handler }`, e.g. from `createExecuteSqlTool`) to register at
    * boot. For tools that need DI-resolved dependencies, use `provideAgentTool(factory, inject)` in a
@@ -481,11 +512,11 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    */
   path?: string;
   /**
-   * Run each turn as a durable workflow. Static wiring metadata (which `AGENT_RUNNER` to bind), so
-   * it lives here rather than in the async factory result — the factory resolves too late to swap
-   * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
+   * Run each turn as a durable workflow (see {@link AgentModuleOptions.durable}). Static wiring
+   * metadata (which `AGENT_RUNNER` to bind), so it lives here rather than in the async factory
+   * result: the factory resolves too late to swap the runner.
    */
-  durable?: boolean;
+  durable?: boolean | AgentDurableOptions;
 
   /** As {@link AgentModuleOptions.decorators}: static, so it lives here, not in `useFactory`'s result. */
   decorators?: ClassDecorator[];

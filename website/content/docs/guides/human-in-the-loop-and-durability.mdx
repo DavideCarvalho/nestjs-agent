@@ -1,7 +1,7 @@
 ---
 title: Human-in-the-loop & Durability
 icon: UserCheck
-description: Action tools pause for a human decision — and under the durable runner that pause is a real durable signal, so the run suspends in the state store and resumes on approval, surviving restarts.
+description: Action tools pause for a human decision. Under the durable runner (NestJS's @nestjs/workflows, or the aviary engine) that pause is a real durable signal, so the run parks in the store and resumes on approval, surviving restarts.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -125,13 +125,13 @@ MikroORM stores add them in `ensureAgentSchema`), and a reloaded thread carries 
 
 ## Two runners, one protocol
 
-The same pause is backed two ways, chosen by the `durable` flag on `AgentModule.forRoot`:
+The same pause is backed two ways, chosen by the `durable` option on `AgentModule.forRoot`:
 
 | | Inline runner (default) | Durable runner (`durable: true`) |
 |---|---|---|
-| The pause | an in-process runner holds the turn open | a real durable **suspend** — the run is checkpointed to the state store |
-| Surviving a restart | no — the pending turn is lost | yes — the run resumes from cache on approval |
-| Requires | nothing extra | `AgentDurableModule` + a configured `DurableModule` |
+| The pause | an in-process runner holds the turn open | a real durable **suspend**: the run is journaled to the workflow store |
+| Surviving a restart | no, the pending turn is lost | yes, the run resumes from its journal on approval |
+| Requires | nothing extra | `WorkflowsModule` + `AgentWorkflowsModule` (or, with `engine: 'aviary'`, `DurableModule` + `AgentDurableModule`) |
 | Wire protocol | identical | identical |
 
 Because the protocol is identical, you can develop against the inline runner and flip to durable in
@@ -141,25 +141,102 @@ production without touching your frontend or your tools.
 
 ## Under the durable runner
 
-With `durable: true`, each agent turn runs as a `@dudousxd/nestjs-durable` workflow (the
-`agent.run` workflow). Every model call and every tool call is a **checkpointed step** — so a crash
-mid-turn replays from cache rather than re-charging the model or re-running a side effect.
+`durable: true` runs each turn on NestJS's own durable workflows,
+[`@nestjs/workflows`](https://docs.nestjs.com/reliability/workflows): the turn is the
+`aviary.agent.run` workflow, each model call and each tool call is a `ctx.step`, and a crash mid-turn
+replays from the journal rather than re-charging the model or re-running a side effect. Import
+`WorkflowsModule` and `AgentWorkflowsModule` from `@dudousxd/nestjs-agent/workflows`:
 
 ```ts
-AgentModule.forRoot({
-  model: myModelProvider,
-  store: myAgentStore,
-  actorResolver: new HeaderActorResolver(),
-  durable: true, // each turn is the durable `agent.run` workflow
-  // ...
-});
+import { WorkflowsModule } from '@nestjs/workflows';
+import { AgentModule } from '@dudousxd/nestjs-agent';
+import { AgentWorkflowsModule } from '@dudousxd/nestjs-agent/workflows';
+
+@Module({
+  imports: [
+    // A WorkflowStore (PostgreSQL, MySQL, your ORM's) registers itself; without one the state is in memory.
+    WorkflowsModule.forRoot(),
+    AgentModule.forRoot({
+      model: myModelProvider,
+      store: myAgentStore,
+      actorResolver: new HeaderActorResolver(),
+      durable: true, // = { engine: 'workflows' }
+    }),
+    AgentWorkflowsModule,
+  ],
+})
+export class AppModule {}
 ```
 
-`durable: true` on its own configures the agent to expect the durable runner; the runner itself lives
-in `AgentDurableModule`, which you import alongside a configured `DurableModule`. The
-`agentDurable(options)` helper from `@dudousxd/nestjs-agent/durable` collapses those two imports into
-one — it wires `AgentModule.forRoot({ ...options, durable: true })` and `AgentDurableModule` together,
-so you spread it into `imports`:
+An app that sets `durable: true` without `AgentWorkflowsModule`, or without `WorkflowsModule`, fails at
+boot with a message naming the missing import. Everything about the store, the worker, retries,
+journal limits and payload encryption is `WorkflowsModule`'s, configured as the
+[NestJS docs](https://docs.nestjs.com/reliability/workflows) describe; the agent adds no options of
+its own for them.
+
+What each part of a turn becomes:
+
+| The turn | On `@nestjs/workflows` |
+|---|---|
+| a model call | `ctx.step('llm:<i>')`, retried with the module's `retry` (3 attempts, 1s doubling, by default). A configuration error (`AiConfigurationError`) is a `NonRetryableStepError`: it fails at once. |
+| a tool call | `ctx.step('tool:<callId>')`. The tool's failure is a result the model reads, not the step's; the step runs again only after a crash, with the same `ctx.idempotencyKey` (`<runId>:<toolCallId>`), so a tool that passes the key on does its side effect once. |
+| the loop's checkpoints (`persist:*`, `stream:*`, ...) | `ctx.step`s, named as on every runner |
+| an approval or a question set | `ctx.waitForSignal(AGENT_REPLY, { key: '<runId>:<toolCallId>' })`, with the policy's `ttlMs` as the wait's `timeout`. While it waits, the call is listed in the instance's custom status: `WorkflowsAgentRunner.pendingReplies(runId)` reads them (sub-agent runs included) |
+| an awaited sub-agent | `ctx.executeChild(...)`: cancelled with its parent |
+| a detached sub-agent | `ctx.startChild(..., { parentClose: 'abandon' })`: it outlives the turn, and a Stop on it |
+| the thread's next queued message | `ctx.startChild(..., { id: <messageId>, parentClose: 'abandon' })` as the turn settles |
+| Stop | `WorkflowClient.cancel(runId)`: a running turn stops at its next `ctx` call, a parked one at once |
+| "is this run still going?" | `WorkflowClient.getStatus(runId)`: anything but `completed`, `failed`, `cancelled`, `compensation_failed` |
+
+A long turn doesn't grow one journal without end: after `stepsPerInstance` model calls (default 10,
+the idea of `@nestjs/ai`'s `AiAgents`), it goes on in a child instance (`<runId>~1`, `<runId>~2`, ...),
+which starts from what the instances before it settled, so each instance's journal holds only its own
+segment and stays under the module's journal limits. The run id stays the first instance's: that is
+what a client streams, signals and stops.
+
+```ts
+AgentModule.forRoot({ ..., durable: { stepsPerInstance: 20 } });
+```
+
+### API pods and workers
+
+Every process registers the agent's workflows, so any process can start a turn, signal it or stop
+it. Which processes RUN turns is `WorkflowsModule`'s `worker` option. On an API pod that must not:
+
+```ts
+WorkflowsModule.forRoot({ worker: false }), // starts, signals, inspects; never claims a turn
+AgentModule.forRoot({ ..., durable: true, surface: 'http' }),
+AgentWorkflowsModule,
+```
+
+This replaces `AgentDurableModule.forRoot({ surface: 'http' })`, which belongs to the `aviary`
+engine. A worker pod keeps the default worker, and `surface: 'engine'` to mount no routes.
+
+The human-in-the-loop pause is a durable **signal**: on the approval boundary the run parks in the
+store instead of holding a connection open. An approve/reject POST sends the signal and any worker
+resumes the run, minutes or restarts later.
+
+<Callout type="warn" title="Streaming and durability compose, they don't fight">
+Live tokens don't go through the journal: they flow on a separate data plane (a `TokenStreamSink`),
+written by the model step from whichever worker runs it. A journaled step that replays doesn't stream
+again. When several processes run turns, wire a cross-process sink (e.g. `RedisTokenStreamSink`) so
+the tokens reach the pod holding the SSE connection; a boot warning fires with the default in-process
+sink.
+</Callout>
+
+<Callout type="warn" title="Your @AiTool handlers need their own execution context">
+A turn runs on whichever worker claims it, with nothing of the originating request around it.
+Anything your tool resolves per invocation from its caller's context (a request-scoped ORM
+EntityManager, an AsyncLocalStorage tenant, a CLS transaction) it has to establish itself.
+</Callout>
+
+---
+
+## The `aviary` engine
+
+`durable: { engine: 'aviary' }` keeps the turn on `@dudousxd/nestjs-durable`, exactly as before
+`durable: true` meant `@nestjs/workflows`: the `agent.run` workflow, imported with `DurableModule` and
+`AgentDurableModule` (or the `agentDurable(options)` helper, which sets the engine for you):
 
 ```ts
 import { DurableModule } from '@dudousxd/nestjs-durable';
@@ -167,37 +244,31 @@ import { agentDurable } from '@dudousxd/nestjs-agent/durable';
 
 @Module({
   imports: [
-    DurableModule.forRoot({ /* store, transport, … */ }),
-    ...agentDurable({
-      model: myModelProvider,
-      store: myAgentStore,
-      actorResolver: new HeaderActorResolver(),
-      // ...same options as AgentModule.forRoot, minus `durable`
-    }),
+    DurableModule.forRoot({ /* store, transport, ... */ }),
+    ...agentDurable({ model: myModelProvider, store: myAgentStore }),
   ],
 })
 export class AppModule {}
 ```
 
-The longhand — `AgentModule.forRoot({ durable: true })` plus a separate `AgentDurableModule` import —
-still works; `agentDurable` is just the one-import shortcut.
+Choose it for what `@nestjs/workflows` does not do:
 
-The human-in-the-loop pause becomes a durable **signal**: on the approval boundary the run suspends
-into the state store (via the durable `waitForSignal` primitive) instead of holding a connection
-open. An approve/reject POST delivers the signal and the run resumes — minutes or restarts later —
-replay-safe.
+- **Step fleets over a transport.** The model call and each tool run as dispatched steps
+  (`AgentRunSteps.llm` / `.tool`) on BullMQ, SQS or another transport, served by a fleet separate from
+  the one that runs the workflow body. On `@nestjs/workflows` a step runs in the process holding the
+  instance's lease.
+- **Python workers**, through `@dudousxd/durable-worker`'s wire protocol.
+- **The SQLite and MikroORM state stores.**
+- **`ctx.patched`.** A turn already running when the loop's shape changes keeps replaying the shape it
+  recorded. On `@nestjs/workflows` a change that doesn't replay is a new workflow version, and old
+  instances drain on the old code.
 
-<Callout type="warn" title="Streaming and durability compose, they don't fight">
-Live tokens don't go through the durable checkpoint path — they flow on a separate data plane (a
-`TokenStreamSink`). So you get resumable, replay-safe orchestration *and* token-by-token streaming
-at once, rather than trading one for the other.
-</Callout>
+The API/worker split on this engine is `AgentDurableModule.forRoot({ surface: 'http' })` with
+`DurableModule.forRoot({ drive: false })`.
 
----
+### Dispatched steps: the run isn't pinned to a pod
 
-## Dispatched steps: the run isn't pinned to a pod
-
-Under `durable: true`, the turn's two long steps — the model call and each tool execution — dispatch
+On the `aviary` engine, the turn's two long steps — the model call and each tool execution — dispatch
 as routed durable steps (`AgentRunSteps.llm` / `AgentRunSteps.tool`) instead of running in the
 workflow body. Always: this is what `ctx.step` means in [`nestjs-durable`](/docs/durable), which
 deliberately offers no placement choice, and the agent follows it.
@@ -240,7 +311,7 @@ release that ran those steps in the body keeps finishing on them.
 A dispatched step can run on any worker in the fleet — not necessarily the pod holding the SSE
 connection. Wire a cross-process `TokenStreamSink` (e.g. `RedisTokenStreamSink`) so streamed tokens
 reach the right connection regardless of which pod executes the step. A boot warning fires when
-`durable: true` is set with the default in-process sink.
+`durable` is set with the default in-process sink.
 </Callout>
 
 <Callout type="info" title="A suspend is never mispersisted as a tool failure">
@@ -362,7 +433,14 @@ failed, and the turn stops at the next safe point. A tool that ignores it runs t
 above. A custom runner with no journal can do the same through `AgentLoopHooks.abortSignal`. A turn parked on a human is a special case: nobody is going
 to resolve that wait, so `cancel` rejects it outright and the run unwinds through the identical path.
 
-**Durable.** `cancel` calls the runtime's own cancel in its compensating form, which does two things
+**Durable, on `@nestjs/workflows`.** `cancel` calls `WorkflowClient.cancel(runId)`: a turn running
+in a worker stops at its next `ctx` call (its current step finishes first, and sees its `signal`
+aborted), a parked one wakes at once, and the awaited sub-agent runs it is waiting on are cancelled
+with it (detached ones are abandoned children and keep running). The engine records the instance
+`cancelled`; the runner settles the agent's own state: the run row, the subscriber's stream, the
+thread's queue and live stream, a detached run's delegation.
+
+**Durable, on the `aviary` engine.** `cancel` calls the runtime's own cancel in its compensating form, which does two things
 at once: it moves the run to `cancelling` — the status the workflow's cancel observation reads — and
 re-drives it, so a turn executing in-process unwinds at its next safe point rather than finishing.
 Child runs (`ctx.child` delegations) cascade with it. A turn parked on `waitForSignal` cannot observe

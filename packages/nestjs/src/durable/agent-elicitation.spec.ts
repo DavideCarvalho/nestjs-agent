@@ -131,7 +131,7 @@ async function buildApp(model: ModelProvider, defaultAgent: string) {
         model,
         store: agentStore,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent,
       }),
       AgentDurableModule,

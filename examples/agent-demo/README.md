@@ -45,7 +45,7 @@ AgentModule.forRoot({
   store: new InMemoryAgentStore(),   // swap for @dudousxd/nestjs-agent-store-mikro-orm
   quota: { limits: { day: { tokens: 200_000 } } }, // daily token ceiling
   modelId: 'fake-demo-1',
-  durable: true,                     // run each turn as the `agent.run` durable workflow
+  durable: { engine: 'aviary' },     // run each turn as the `agent.run` nestjs-durable workflow
 }),
 AgentDurableModule,                  // from '@dudousxd/nestjs-agent/durable'
 ```

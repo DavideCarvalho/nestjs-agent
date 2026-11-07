@@ -180,7 +180,7 @@ Continue with [Hello chat](/docs/agent/hello-chat) (the smallest end-to-end app)
 | `'You are a helpful assistant.'` | `systemPrompt` (string or `({ actor, agentName, pageContext }) => string`), or `@Agent` classes |
 | `AiModule`'s models, `default` first in the picker | more `AiModule.forRoot({ models })` entries; `model` to replace them (a fake in tests) |
 | Usage reported, never enforced | `quota: { limits: { day: { tokens: 200_000 }, month: { usd: 20 } } }` |
-| Turns run in-process | `durable: true` + `AgentDurableModule` ([Runners](/docs/agent/concepts/runners)) |
+| Turns run in-process | `durable: true` + `WorkflowsModule` + `AgentWorkflowsModule` ([Runners](/docs/agent/concepts/runners)) |
 | An `action` call holds its turn until someone decides | `actionApprovalMode: 'independent'` + a `backgroundActorResolver` — the turn finishes and the call waits as a proposal ([Action proposals](/docs/agent/guides/action-proposals)) |
 | Routes under `/agent` | `path: 'api/agent'` (and `<AgentProvider path="api/agent">` on the client) |
 

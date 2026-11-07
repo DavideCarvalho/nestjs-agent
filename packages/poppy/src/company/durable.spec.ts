@@ -107,7 +107,7 @@ async function deployment(script: FakeScript) {
       AgentModule.forRoot({
         model: new FakeModelProvider(script),
         store: new InMemoryAgentStore(),
-        durable: true,
+        durable: { engine: 'aviary' },
       }),
       runtime.AgentDurableModule,
     ],

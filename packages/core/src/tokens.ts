@@ -13,11 +13,18 @@ export const AGENT_OPTIONS = Symbol.for('@dudousxd/nestjs-agent:options');
 export const AGENT_STORE = Symbol.for('@dudousxd/nestjs-agent:store');
 export const AGENT_RUNNER = Symbol.for('@dudousxd/nestjs-agent:runner');
 /**
- * The durable runner, provided ONLY by `AgentDurableModule`. When `durable: true`, the module
+ * The durable runner, provided ONLY by `AgentDurableModule`. When `durable: { engine: 'aviary' }`, the module
  * binds `AGENT_RUNNER` to this via an optional injection, so a missing `AgentDurableModule`
  * fails with a clear error instead of a cryptic unresolved-dependency one.
  */
 export const AGENT_DURABLE_RUNNER = Symbol.for('@dudousxd/nestjs-agent:durable-runner');
+/**
+ * The runner on NestJS's `@nestjs/workflows`, provided ONLY by `AgentWorkflowsModule`
+ * (`@dudousxd/nestjs-agent/workflows`). `durable: true` (or `{ engine: 'workflows' }`) binds
+ * `AGENT_RUNNER` to it, through an optional injection, so a missing import fails at boot with a
+ * clear error.
+ */
+export const AGENT_WORKFLOWS_RUNNER = Symbol.for('@dudousxd/nestjs-agent:workflows-runner');
 export const AGENT_SINK = Symbol.for('@dudousxd/nestjs-agent:sink');
 export const AGENT_MODEL = Symbol.for('@dudousxd/nestjs-agent:model');
 export const AGENT_ROLES_POLICY = Symbol.for('@dudousxd/nestjs-agent:roles-policy');

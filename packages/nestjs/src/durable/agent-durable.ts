@@ -10,7 +10,7 @@ import { AgentDurableModule } from './agent-durable.module.js';
  * imports: [DurableModule.forRoot({ ... }), ...agentDurable({ model, store, defaultAgent })]
  * ```
  *
- * It wires `AgentModule.forRoot({ ...options, durable: true })` together with `AgentDurableModule`,
+ * It wires `AgentModule.forRoot({ ...options, durable: { engine: 'aviary' } })` together with `AgentDurableModule`,
  * the equivalent of importing both by hand. A configured `DurableModule` is still required. The
  * durable runner has no configuration of its own beyond the agent options, so `options` is exactly
  * `AgentModuleOptions` — including `surface`, which this helper threads to BOTH calls so a consumer
@@ -19,7 +19,7 @@ import { AgentDurableModule } from './agent-durable.module.js';
  */
 export function agentDurable(options: AgentModuleOptions): DynamicModule[] {
   return [
-    AgentModule.forRoot({ ...options, durable: true }),
+    AgentModule.forRoot({ ...options, durable: { engine: 'aviary' } }),
     AgentDurableModule.forRoot(options.surface !== undefined ? { surface: options.surface } : {}),
   ];
 }

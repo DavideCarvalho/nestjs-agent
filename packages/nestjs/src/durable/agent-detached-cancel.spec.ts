@@ -130,7 +130,7 @@ async function boot(shared: Shared, script: FakeScript, options?: { legacy?: boo
         model: new FakeModelProvider(script),
         store: shared.agentStore,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'orch',
       }),
       AgentDurableModule,

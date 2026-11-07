@@ -146,7 +146,7 @@ async function buildDurableApp(
         model: new FakeModelProvider(script),
         store,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
         ...(toolTransientRetry !== undefined ? { toolTransientRetry } : {}),
       }),
@@ -212,7 +212,7 @@ describe('durable wiring', () => {
           model: new FakeModelProvider(() => ({ text: 'x' })),
           store: new InMemoryAgentStore(),
           actorResolver: new HeaderActorResolver(),
-          durable: true,
+          durable: { engine: 'aviary' },
           // AgentDurableModule intentionally NOT imported
         }),
       ],

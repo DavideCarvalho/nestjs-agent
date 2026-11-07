@@ -171,8 +171,9 @@ anonymous visitor is a confirmation step, not an authorization; gate consequenti
 ### Human-in-the-loop & durability
 
 A `kind: 'action'` tool never auto-executes — the loop pauses for an approve/reject decision.
-With `durable: true` (plus `AgentDurableModule` and a configured `DurableModule`), that pause is a
-real durable suspend: the run is checkpointed to the state store on `ctx.waitForSignal` and resumes
+With `durable: true` (on NestJS's `@nestjs/workflows`: `WorkflowsModule` plus `AgentWorkflowsModule`;
+or `durable: { engine: 'aviary' }` on `@dudousxd/nestjs-durable`), that pause is a
+real durable suspend: the run is journaled to the store on `ctx.waitForSignal` and resumes
 on approval — surviving restarts, replay-safe. Without durable, an in-process runner holds the turn
 open. Either way the wire protocol is identical.
 

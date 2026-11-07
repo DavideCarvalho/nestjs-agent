@@ -5,6 +5,7 @@ export default defineConfig([
     entry: [
       'src/index.ts',
       'src/durable/index.ts',
+      'src/workflows/index.ts',
       'src/sink-redis/index.ts',
       'src/guardrails/index.ts',
       'src/genui/index.ts',
@@ -23,6 +24,7 @@ export default defineConfig([
     entry: [
       'src/index.ts',
       'src/durable/index.ts',
+      'src/workflows/index.ts',
       'src/sink-redis/index.ts',
       'src/guardrails/index.ts',
       'src/genui/index.ts',

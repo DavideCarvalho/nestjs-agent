@@ -15,7 +15,7 @@
     "agent",
     "a2ui"
   ],
-  "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
+  "description": "Governed, durable-backed AI agent for NestJS \u2014 @AiTool, discovery, /agent controllers",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",
@@ -41,6 +41,16 @@
       "require": {
         "types": "./dist/durable/index.d.cts",
         "default": "./dist/durable/index.cjs"
+      }
+    },
+    "./workflows": {
+      "import": {
+        "types": "./dist/workflows/index.d.ts",
+        "default": "./dist/workflows/index.js"
+      },
+      "require": {
+        "types": "./dist/workflows/index.d.cts",
+        "default": "./dist/workflows/index.cjs"
       }
     },
     "./sink-redis": {
@@ -128,6 +138,7 @@
     "@nestjs/core": "^12.0.0",
     "@nestjs/platform-express": "^12.0.0",
     "@nestjs/resilience": ">=0.0.3 <0.1.0",
+    "@nestjs/workflows": ">=0.0.5 <0.1.0",
     "ai": "^7.0.0",
     "ioredis": "^5.0.0 || ^6.0.0",
     "reflect-metadata": "^0.2.0",
@@ -144,6 +155,9 @@
       "optional": true
     },
     "@nestjs/authorization": {
+      "optional": true
+    },
+    "@nestjs/workflows": {
       "optional": true
     },
     "ioredis": {

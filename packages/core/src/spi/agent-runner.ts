@@ -1,11 +1,12 @@
 import type { AgentRunInput, HumanReply } from '../types.js';
 
 /**
- * Runs an agent turn. Two impls exist:
+ * Runs an agent turn. Three impls exist:
  *  - InlineAgentRunner (default): the loop runs in-process — no extra dependencies. This is what
- *    `AGENT_RUNNER` binds to unless `durable: true` is set.
- *  - DurableAgentRunner (opt-in via `durable: true`): the turn is a `@dudousxd/nestjs-durable`
- *    `@Workflow`, so each model/tool call is a checkpointed step and HITL is `ctx.waitForSignal`.
+ *    `AGENT_RUNNER` binds to unless `durable` is set.
+ *  - WorkflowsAgentRunner (`durable: true`): the turn is a `@nestjs/workflows` `@Workflow`, so each
+ *    model/tool call is a journaled step and HITL is `ctx.waitForSignal`.
+ *  - DurableAgentRunner (`durable: { engine: 'aviary' }`): the same, on `@dudousxd/nestjs-durable`.
  *
  * `start` ENQUEUES and returns immediately with the runId — the live tokens flow on the
  * TokenStreamSink, not through this call.

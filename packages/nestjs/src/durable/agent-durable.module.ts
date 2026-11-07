@@ -52,7 +52,7 @@ function runnerProviders(): Provider[] {
 class AgentDurableHttpModule {}
 
 /**
- * Opt-in durable runner. Import this alongside `AgentModule.forRoot({ durable: true })` and a
+ * Opt-in durable runner. Import this alongside `AgentModule.forRoot({ durable: { engine: 'aviary' } })` and a
  * configured `DurableModule`. It registers the `agent.run` workflow (discovered by DurableModule)
  * and exposes the durable runner via `AGENT_DURABLE_RUNNER`, which AgentModule binds to
  * `AGENT_RUNNER`. Forgetting this import makes AgentModule throw a clear error at boot.
