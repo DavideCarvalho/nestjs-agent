@@ -110,5 +110,5 @@ describe('Aviary remains independent of Agora', () => {
       }
     }
     expect(violations).toEqual([]);
-  });
+  }, 60_000); // walks every source file of the repo: slow on a loaded machine
 });

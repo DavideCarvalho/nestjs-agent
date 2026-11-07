@@ -136,3 +136,9 @@ export {
   type ActionProposalSettledListener,
   ActionProposalWorkerService,
 } from './proposals/action-proposal-worker.service.js';
+// The agent's controllers, for an app that mounts the routes itself (`routes: false`).
+export { ChatController } from './controller/chat.controller.js';
+export { ThreadsController } from './controller/threads.controller.js';
+export { ToolCallController } from './controller/tool-call.controller.js';
+export { QuotaController } from './controller/quota.controller.js';
+export { AgentsController } from './controller/agents.controller.js';

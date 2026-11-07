@@ -711,6 +711,51 @@ export class AppModule {}
 - Tools without a method to decorate (MCP-imported, generative UI, delegation, Poppy) take the same
   requirements as data: `can: [{ policy: CachePolicy, ability: 'purge' }]`.
 
+### Protecting the agent's own routes
+
+The agent mounts routes (`/agent/*`, the console, the MCP endpoint, channels). Who reaches them is
+decided the way NestJS's own packages leave it to you, in this order of preference:
+
+1. **Mount them yourself** (`routes: false`; `path: false` on `AgentMcpServerModule`), and protect
+   them like any route of the app, with [`@nestjs/authentication`](https://docs.nestjs.com/security/authentication)
+   and [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization) — the pattern of
+   `@nestjs/authentication`'s "routes of your own". Extend the exported controllers under your path
+   and decorators, or call `AgentService` from controllers of your own:
+
+   ```ts
+   AgentModule.forRoot({ routes: false });
+
+   @Controller('ops/agent/threads')
+   @Can(AgentPolicy, 'chat')
+   export class Threads extends ThreadsController {}
+   ```
+
+   The MCP endpoint is served the same way, from `@nestjs/mcp`'s `McpHttpService`, behind the
+   agent's guard (`AuthorizationModule.forRoot({ globalGuard: false })`, then the official guard
+   after the agent's, as `@nestjs/authorization` says to do "after your authentication guard"):
+
+   ```ts
+   AgentMcpServerModule.forRoot({ name, version, auth, path: false });
+
+   @Controller('ops/mcp')
+   @UseGuards(AgentMcpAuthGuard, AuthorizationGuard)
+   @UseFilters(McpChallengeFilter)
+   @Can(McpPolicy, 'connect')
+   export class Mcp {
+     constructor(private readonly mcp: McpHttpService) {}
+     @All() serve(@Req() req, @Res() res) { return this.mcp.serve(req, res); }
+   }
+   ```
+
+2. **`decorators`** — when the module mounts them, as `@nestjs/mcp`'s `decorators` do: class
+   decorators applied to every controller it mounts, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`.
+   A function works too, as a guard instance: `UseGuards({ canActivate: (ctx) => … })`.
+
+3. **`guards`** and the console's built-in auth stay for compatibility.
+
+With neither, the routes are open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`)
+and the `actorResolver` decides who calls.
+
 ### An empty roles list
 
 Out of the box an empty list is **open**: a tool that names no `roles` (with no `defaultRoles`), or

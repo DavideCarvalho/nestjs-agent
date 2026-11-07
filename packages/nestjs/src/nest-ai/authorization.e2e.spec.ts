@@ -4,7 +4,7 @@ import { FakeModelProvider } from '@dudousxd/nestjs-agent-testing';
 import { AgentFunction, AiExecutionContext, AiModule } from '@nestjs/ai';
 import { FakeModel } from '@nestjs/ai/testing';
 import { AuthorizationModule, Can, Policy } from '@nestjs/authorization';
-import { Injectable } from '@nestjs/common';
+import { Controller, Injectable } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { AgentModule } from '../agent.module.js';
 import { AgentService } from '../agent.service.js';
+import { ThreadsController } from '../controller/threads.controller.js';
 import { AiTool } from '../decorator/ai-tool.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
 
@@ -249,5 +250,50 @@ describe("AgentModule({ decorators }) — who reaches the agent's routes, with @
     // Deny-by-default would refuse an undecorated route: the agent's are marked open, and the
     // ADMIN requirement of the registration before did not stick to the shared controller class.
     await request(server).get('/agent/tools').set({ 'x-actor-id': 'u1' }).expect(200);
+  });
+});
+
+describe('AgentModule({ routes: false }) — the routes on controllers of the app’s own', () => {
+  @Controller('ops/agent/threads')
+  @Can(RolePolicy, 'has', staticCanArgs('ADMIN'))
+  class OwnThreadsController extends ThreadsController {}
+
+  async function bootOwn() {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AuthorizationModule.forRoot({
+          policies: [RolePolicy],
+          getUser: (context: import('@nestjs/common').ExecutionContext) => {
+            const req = context
+              .switchToHttp()
+              .getRequest<{ headers: Record<string, string | undefined> }>();
+            const id = req.headers['x-actor-id'];
+            return id === undefined ? null : { id, roles: [req.headers['x-actor-role'] ?? ''] };
+          },
+        }),
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'hi' })),
+          actorResolver: new HeaderActorResolver(),
+          routes: false,
+        }),
+      ],
+      controllers: [OwnThreadsController],
+    }).compile();
+    const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+    await testApp.init();
+    app = testApp;
+    return testApp.getHttpServer();
+  }
+
+  it('mounts none of its own, and the app’s controller serves them under its own @Can()', async () => {
+    const server = await bootOwn();
+    await request(server).get('/agent/threads').set({ 'x-actor-id': 'a1' }).expect(404);
+    await request(server).get('/ops/agent/threads').expect(401);
+    await request(server).get('/ops/agent/threads').set({ 'x-actor-id': 'u1' }).expect(403);
+    const admin = await request(server)
+      .get('/ops/agent/threads')
+      .set({ 'x-actor-id': 'a1', 'x-actor-role': 'ADMIN' })
+      .expect(200);
+    expect(admin.body).toEqual([]);
   });
 });

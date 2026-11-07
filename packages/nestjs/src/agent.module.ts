@@ -435,8 +435,9 @@ function controllersForSurface(
   adapters: AgentProtocolAdapter[] | undefined,
   engine?: AgentEngine,
   decorators?: ClassDecorator[],
+  routes?: boolean,
 ): Type<object>[] {
-  return surface === 'engine'
+  return surface === 'engine' || routes === false
     ? []
     : withControllerDecorators(
         [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])],
@@ -516,6 +517,7 @@ export class AgentModule {
         options.adapters,
         options.engine,
         options.decorators,
+        options.routes,
       ),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
@@ -542,6 +544,7 @@ export class AgentModule {
         options.adapters,
         options.engine,
         options.decorators,
+        options.routes,
       ),
       providers: [
         {

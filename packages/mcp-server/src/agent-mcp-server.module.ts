@@ -49,7 +49,7 @@ const DEFAULT_PATH = 'mcp';
 @Module({})
 export class AgentMcpServerModule {
   static forRoot(options: AgentMcpServerModuleOptions): DynamicModule {
-    const path = options.path ?? DEFAULT_PATH;
+    const path = options.path === undefined ? DEFAULT_PATH : options.path;
     const shared = optionsModule(
       path,
       { provide: AGENT_MCP_SERVER_OPTIONS, useValue: options },
@@ -68,7 +68,7 @@ export class AgentMcpServerModule {
   }
 
   static forRootAsync(options: AgentMcpServerModuleAsyncOptions): DynamicModule {
-    const path = options.path ?? DEFAULT_PATH;
+    const path = options.path === undefined ? DEFAULT_PATH : options.path;
     const shared = optionsModule(
       path,
       {
@@ -111,7 +111,7 @@ export class AgentMcpProtectedResourceModule {}
  * guard (the agent decides who calls), behind the agent's own guard, with the agent's challenge
  * responses. `imports` give that guard what it injects.
  */
-function structure(path: string, shared: DynamicModule, decorators: ClassDecorator[] = []) {
+function structure(path: string | false, shared: DynamicModule, decorators: ClassDecorator[] = []) {
   return {
     path,
     decorators: [
@@ -125,7 +125,7 @@ function structure(path: string, shared: DynamicModule, decorators: ClassDecorat
 }
 
 function optionsModule(
-  path: string,
+  path: string | false,
   provider: Provider,
   imports: NonNullable<DynamicModule['imports']>,
 ): DynamicModule {
@@ -134,7 +134,8 @@ function optionsModule(
     imports,
     providers: [
       provider,
-      { provide: AGENT_MCP_SERVER_PATH, useValue: path },
+      // `false` (self-mounted): the guard names no protected-resource document of its own.
+      { provide: AGENT_MCP_SERVER_PATH, useValue: path === false ? '' : path },
       // The tools `@Mcp()` routes become, served beside the agent's own.
       { provide: AGENT_MCP_ROUTE_TOOLS, useFactory: () => new ToolRegistry() },
     ],
@@ -148,7 +149,7 @@ function optionsModule(
  * object, so Nest instantiates it once — an async factory runs a single time.
  */
 function moduleFor(input: {
-  path: string;
+  path: string | false;
   options: DynamicModule;
   mcp: DynamicModule;
 }): DynamicModule {
@@ -158,12 +159,19 @@ function moduleFor(input: {
       DiscoveryModule,
       input.options,
       input.mcp,
-      {
-        module: AgentMcpProtectedResourceModule,
-        imports: [input.options],
-        controllers: [mcpProtectedResourceController(input.path)],
-      },
+      ...(input.path === false
+        ? []
+        : [
+            {
+              module: AgentMcpProtectedResourceModule,
+              imports: [input.options],
+              controllers: [mcpProtectedResourceController(input.path)],
+            },
+          ]),
     ],
     providers: [AgentMcpServerBinding, McpRouteDispatcher, McpRouteDiscoveryService],
+    // What a controller of the app's own needs to serve the endpoint with `path: false`:
+    // `@nestjs/mcp`'s `McpHttpService`, and what `AgentMcpAuthGuard` injects.
+    exports: [input.options, input.mcp],
   };
 }

@@ -465,6 +465,16 @@ export interface AgentModuleOptions {
   surface?: AgentSurface;
 
   /**
+   * `false` mounts none of the agent's routes, while everything else runs — the way NestJS's own
+   * packages leave routes to you (`@nestjs/authentication`'s "routes of your own"): serve them from
+   * controllers of your own, protected with the official tools. Either call `AgentService` from
+   * them, or extend the exported controllers under your own path and decorators:
+   * `@Controller('ops/agent/threads') @Can(AgentPolicy, 'chat') class Threads extends ThreadsController {}`.
+   * Static wiring, like `surface`.
+   */
+  routes?: boolean;
+
+  /**
    * Wire protocols served alongside the native one, over the same runs — e.g. `[agUiAdapter()]`
    * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `guards`,
    * and not at all on `surface: 'engine'`. STATIC, like `surface`.
@@ -505,6 +515,8 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * which controllers exist. Omit → `'both'`, today's behavior with zero change.
    */
   surface?: AgentSurface;
+  /** As {@link AgentModuleOptions.routes}: static, so it lives here. */
+  routes?: boolean;
   /** Wire protocols served alongside the native one — see `AgentModuleOptions.adapters`. STATIC. */
   adapters?: AgentProtocolAdapter[];
   /**

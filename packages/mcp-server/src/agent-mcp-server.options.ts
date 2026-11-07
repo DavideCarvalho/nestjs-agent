@@ -23,8 +23,14 @@ export interface AgentMcpServerModuleOptions {
    * with no roles is what "authenticated, but entitled to nothing" looks like.
    */
   auth: ActorResolver;
-  /** Route the MCP endpoint mounts at. Defaults to `'mcp'`. */
-  path?: string;
+  /**
+   * Route the MCP endpoint mounts at. Defaults to `'mcp'`. `false` mounts no endpoint — serve it
+   * from a controller of your own, as NestJS's packages let you: `@nestjs/mcp`'s `McpHttpService`
+   * (`serve(req, res)`) behind this package's `AgentMcpAuthGuard` and `McpChallengeFilter`, both
+   * available to whoever imports this module. The protected-resource document is then not served
+   * either.
+   */
+  path?: string | false;
   /**
    * Class decorators added to `@nestjs/mcp`'s endpoint after the agent's own (its guard and
    * challenge filter) — the ecosystem's convention, e.g. `[Can(McpPolicy, 'connect')]`. Static.
@@ -108,9 +114,10 @@ export interface AgentMcpServerModuleAsyncOptions {
   ) => AgentMcpServerModuleOptions | Promise<AgentMcpServerModuleOptions>;
   /**
    * Route the MCP endpoint mounts at. Static routing metadata, so it lives here rather than in the
-   * async factory result — which resolves after the routes are mounted.
+   * async factory result — which resolves after the routes are mounted. `false` mounts none; see
+   * {@link AgentMcpServerModuleOptions.path}.
    */
-  path?: string;
+  path?: string | false;
   /** As {@link AgentMcpServerModuleOptions.decorators}: static, so it lives here. */
   decorators?: ClassDecorator[];
 }

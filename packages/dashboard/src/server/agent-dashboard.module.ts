@@ -75,6 +75,13 @@ export interface AgentDashboardOptions<TReq = unknown> {
    */
   decorators?: ClassDecorator[];
   /**
+   * `false` mounts none of the console's routes, while its services still run — the way NestJS's
+   * own packages leave routes to you: serve them from controllers of your own, protected with the
+   * official tools, by extending the exported `AgentApiController` / `AgentUiController` under your
+   * own path and decorators (the module exports what they inject). Static wiring.
+   */
+  routes?: boolean;
+  /**
    * Extra `imports` merged into the dashboard's dynamic module — the DI resolution path for a class
    * passed to {@link guards} (or any other provider the controllers need reachable). Typically the
    * host's own auth module, e.g. `imports: [AuthModule]` alongside `guards: [JwtAuthGuard]`.
@@ -131,6 +138,8 @@ export interface AgentDashboardAsyncOptions<TReq = unknown> {
   guards?: Type<CanActivate>[];
   /** As {@link AgentDashboardOptions.decorators}. */
   decorators?: ClassDecorator[];
+  /** As {@link AgentDashboardOptions.routes}. */
+  routes?: boolean;
   imports?: DynamicModule['imports'];
   approvalActorRef?: (req: TReq) => string | undefined;
   /** Providers injected into `useDashboardAuth`, in order. Shared with a guard class's own deps via `imports`. */
@@ -163,6 +172,7 @@ export class AgentApiModule {
     imports?: DynamicModule['imports'];
     guards?: Type<CanActivate>[];
     decorators?: ClassDecorator[];
+    routes?: boolean;
     approvalActorRef?: (req: TReq) => string | undefined;
     /** Provider for `DASHBOARD_AUTH` — a `useValue` (`forRoot`) or a `useFactory` (`forRootAsync`). */
     dashboardAuth: Provider;
@@ -171,7 +181,10 @@ export class AgentApiModule {
     return {
       module: AgentApiModule,
       imports: [...(options.imports ?? [])],
-      controllers: withControllerDecorators([AgentApiController], options.decorators),
+      controllers:
+        options.routes === false
+          ? []
+          : withControllerDecorators([AgentApiController], options.decorators),
       providers: [
         DashboardService,
         DashboardAuthGuard,
@@ -184,7 +197,8 @@ export class AgentApiModule {
       // DASHBOARD_AUTH re-exported so AgentUiController/AgentDashboardAuthController (hosted
       // directly by AgentDashboardModule, which imports this module) resolve the SAME instance
       // instead of re-running a host's async factory a second time.
-      exports: [DashboardService, DASHBOARD_AUTH],
+      // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`).
+      exports: [DashboardService, DASHBOARD_AUTH, DASHBOARD_APPROVAL_ACTOR_REF, DashboardAuthGuard],
     };
   }
 }
@@ -228,18 +242,26 @@ export class AgentDashboardModule {
           ...(options.imports ? { imports: options.imports } : {}),
           ...(options.guards ? { guards: options.guards } : {}),
           ...(options.decorators ? { decorators: options.decorators } : {}),
+          ...(options.routes === false ? { routes: false } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           dashboardAuth: dashboardAuthProvider,
         }),
-        RouterModule.register([
-          { path: basePath, module: AgentDashboardModule }, // the UI + auth controllers below
-          { path: apiBasePath, module: AgentApiModule },
-        ]),
+        ...(options.routes === false
+          ? []
+          : [
+              RouterModule.register([
+                { path: basePath, module: AgentDashboardModule }, // the UI + auth controllers below
+                { path: apiBasePath, module: AgentApiModule },
+              ]),
+            ]),
       ],
-      controllers: withControllerDecorators(
-        [AgentUiController, AgentDashboardAuthController],
-        options.decorators,
-      ),
+      controllers:
+        options.routes === false
+          ? []
+          : withControllerDecorators(
+              [AgentUiController, AgentDashboardAuthController],
+              options.decorators,
+            ),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
@@ -248,7 +270,7 @@ export class AgentDashboardModule {
         ...(options.guards ?? []).filter(isGuardClass),
       ],
       // Re-export the API module so its DashboardService reaches importers (e.g. the host's own controllers).
-      exports: [AgentApiModule],
+      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH, DashboardAuthPageGuard],
     };
   }
 
@@ -270,25 +292,33 @@ export class AgentDashboardModule {
           ...(options.imports ? { imports: options.imports } : {}),
           ...(options.guards ? { guards: options.guards } : {}),
           ...(options.decorators ? { decorators: options.decorators } : {}),
+          ...(options.routes === false ? { routes: false } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           dashboardAuth: dashboardAuthProvider,
         }),
-        RouterModule.register([
-          { path: basePath, module: AgentDashboardModule },
-          { path: apiBasePath, module: AgentApiModule },
-        ]),
+        ...(options.routes === false
+          ? []
+          : [
+              RouterModule.register([
+                { path: basePath, module: AgentDashboardModule },
+                { path: apiBasePath, module: AgentApiModule },
+              ]),
+            ]),
       ],
-      controllers: withControllerDecorators(
-        [AgentUiController, AgentDashboardAuthController],
-        options.decorators,
-      ),
+      controllers:
+        options.routes === false
+          ? []
+          : withControllerDecorators(
+              [AgentUiController, AgentDashboardAuthController],
+              options.decorators,
+            ),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
         DashboardAuthPageGuard,
         ...(options.guards ?? []).filter(isGuardClass),
       ],
-      exports: [AgentApiModule],
+      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH, DashboardAuthPageGuard],
     };
   }
 }
