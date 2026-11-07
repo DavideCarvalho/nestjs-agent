@@ -111,3 +111,38 @@ export function markCanAnyone(target: object): void {
   };
   reflect.defineMetadata?.(CAN_ANYONE_METADATA, true, target);
 }
+
+/**
+ * The controllers a module mounts, with the `decorators` its user passed (`forRoot({ decorators })`)
+ * applied — the ecosystem's convention, like `@nestjs/mcp`'s own `decorators` option: whoever mounts
+ * a library's routes decides who reaches them, with the official tools
+ * (`UseGuards(AuthenticationGuard)`, `@Can(ConsolePolicy, 'view')`, …).
+ *
+ * Each controller is subclassed for this registration and decorated there, so decorators passed to
+ * one registration never stick to the shared class, nor to another registration in the same process.
+ * Routes, injections and the library's own metadata are inherited from the class. No decorators →
+ * the classes themselves.
+ */
+export function withControllerDecorators<T extends abstract new (...args: never[]) => unknown>(
+  controllers: readonly T[],
+  decorators: readonly ClassDecorator[] | undefined,
+): T[] {
+  if (decorators === undefined || decorators.length === 0) return [...controllers];
+  return controllers.map((controller) => {
+    const Base = controller as unknown as new (...args: unknown[]) => object;
+    const Decorated = class extends Base {};
+    Object.defineProperty(Decorated, 'name', { value: controller.name });
+    // Nest reads some class metadata as the class's own (a constructor's `@Optional()` params):
+    // the subclass starts with a copy of all of it, then the decorators add to that copy.
+    const reflect = Reflect as unknown as {
+      getOwnMetadataKeys?: (target: object) => unknown[];
+      getOwnMetadata?: (key: unknown, target: object) => unknown;
+      defineMetadata?: (key: unknown, value: unknown, target: object) => void;
+    };
+    for (const key of reflect.getOwnMetadataKeys?.(controller) ?? []) {
+      reflect.defineMetadata?.(key, reflect.getOwnMetadata?.(key, controller), Decorated);
+    }
+    for (const decorator of decorators) decorator(Decorated);
+    return Decorated as unknown as T;
+  });
+}

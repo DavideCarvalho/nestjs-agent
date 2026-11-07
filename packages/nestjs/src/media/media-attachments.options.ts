@@ -98,6 +98,16 @@ export interface AgentMediaAttachmentsMountOptions {
   /** Guards for the upload routes (mirror `AgentModule`'s `guards`). */
   guards?: Type<CanActivate>[];
   /**
+   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
+   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
+   * so nothing sticks to the shared class. Without it the routes are open to
+   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
+   * checked. Static wiring.
+   */
+  decorators?: ClassDecorator[];
+
+  /**
    * Mount the resumable-upload routes. Default `true`. `false` keeps only the staging store — for a
    * host that opens tus sessions its own way and only wants resolve/list backed by media.
    */

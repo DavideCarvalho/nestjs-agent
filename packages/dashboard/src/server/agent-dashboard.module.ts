@@ -1,3 +1,4 @@
+import { withControllerDecorators } from '@dudousxd/nestjs-agent-core';
 import 'reflect-metadata';
 import {
   type CanActivate,
@@ -65,6 +66,15 @@ export interface AgentDashboardOptions<TReq = unknown> {
    */
   guards?: Type<CanActivate>[];
   /**
+   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
+   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
+   * so nothing sticks to the shared class. Without it the routes are open to
+   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
+   * checked. Static wiring.
+   */
+  decorators?: ClassDecorator[];
+  /**
    * Extra `imports` merged into the dashboard's dynamic module — the DI resolution path for a class
    * passed to {@link guards} (or any other provider the controllers need reachable). Typically the
    * host's own auth module, e.g. `imports: [AuthModule]` alongside `guards: [JwtAuthGuard]`.
@@ -119,6 +129,8 @@ export interface AgentDashboardAsyncOptions<TReq = unknown> {
   basePath?: string;
   apiBasePath?: string;
   guards?: Type<CanActivate>[];
+  /** As {@link AgentDashboardOptions.decorators}. */
+  decorators?: ClassDecorator[];
   imports?: DynamicModule['imports'];
   approvalActorRef?: (req: TReq) => string | undefined;
   /** Providers injected into `useDashboardAuth`, in order. Shared with a guard class's own deps via `imports`. */
@@ -150,6 +162,7 @@ export class AgentApiModule {
   static register<TReq = unknown>(options: {
     imports?: DynamicModule['imports'];
     guards?: Type<CanActivate>[];
+    decorators?: ClassDecorator[];
     approvalActorRef?: (req: TReq) => string | undefined;
     /** Provider for `DASHBOARD_AUTH` — a `useValue` (`forRoot`) or a `useFactory` (`forRootAsync`). */
     dashboardAuth: Provider;
@@ -158,7 +171,7 @@ export class AgentApiModule {
     return {
       module: AgentApiModule,
       imports: [...(options.imports ?? [])],
-      controllers: [AgentApiController],
+      controllers: withControllerDecorators([AgentApiController], options.decorators),
       providers: [
         DashboardService,
         DashboardAuthGuard,
@@ -214,6 +227,7 @@ export class AgentDashboardModule {
         AgentApiModule.register({
           ...(options.imports ? { imports: options.imports } : {}),
           ...(options.guards ? { guards: options.guards } : {}),
+          ...(options.decorators ? { decorators: options.decorators } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           dashboardAuth: dashboardAuthProvider,
         }),
@@ -222,7 +236,10 @@ export class AgentDashboardModule {
           { path: apiBasePath, module: AgentApiModule },
         ]),
       ],
-      controllers: [AgentUiController, AgentDashboardAuthController],
+      controllers: withControllerDecorators(
+        [AgentUiController, AgentDashboardAuthController],
+        options.decorators,
+      ),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
@@ -252,6 +269,7 @@ export class AgentDashboardModule {
         AgentApiModule.register({
           ...(options.imports ? { imports: options.imports } : {}),
           ...(options.guards ? { guards: options.guards } : {}),
+          ...(options.decorators ? { decorators: options.decorators } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           dashboardAuth: dashboardAuthProvider,
         }),
@@ -260,7 +278,10 @@ export class AgentDashboardModule {
           { path: apiBasePath, module: AgentApiModule },
         ]),
       ],
-      controllers: [AgentUiController, AgentDashboardAuthController],
+      controllers: withControllerDecorators(
+        [AgentUiController, AgentDashboardAuthController],
+        options.decorators,
+      ),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },

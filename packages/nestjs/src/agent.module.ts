@@ -30,6 +30,7 @@ import {
   ToolRegistry,
   personalAgentGate,
   personalAgentScopes,
+  withControllerDecorators,
 } from '@dudousxd/nestjs-agent-core';
 import {
   type CanActivate,
@@ -433,10 +434,14 @@ function controllersForSurface(
   surface: AgentSurface | undefined,
   adapters: AgentProtocolAdapter[] | undefined,
   engine?: AgentEngine,
+  decorators?: ClassDecorator[],
 ): Type<object>[] {
   return surface === 'engine'
     ? []
-    : [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])];
+    : withControllerDecorators(
+        [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])],
+        decorators,
+      );
 }
 
 /**
@@ -506,7 +511,12 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
+      controllers: controllersForSurface(
+        options.surface,
+        options.adapters,
+        options.engine,
+        options.decorators,
+      ),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false, options.engine),
@@ -527,7 +537,12 @@ export class AgentModule {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
+      controllers: controllersForSurface(
+        options.surface,
+        options.adapters,
+        options.engine,
+        options.decorators,
+      ),
       providers: [
         {
           provide: AGENT_OPTIONS,

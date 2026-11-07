@@ -26,6 +26,11 @@ export interface AgentMcpServerModuleOptions {
   /** Route the MCP endpoint mounts at. Defaults to `'mcp'`. */
   path?: string;
   /**
+   * Class decorators added to `@nestjs/mcp`'s endpoint after the agent's own (its guard and
+   * challenge filter) — the ecosystem's convention, e.g. `[Can(McpPolicy, 'connect')]`. Static.
+   */
+  decorators?: ClassDecorator[];
+  /**
    * `@nestjs/mcp`'s own settings for the server it serves: `title`, `description`, `instructions`,
    * `icons`, `http` (`allowedHosts`, `allowedOrigins`, `responseMode`, …) and `stdio`. Its `auth`
    * is not taken: who calls is {@link auth}'s answer.
@@ -106,4 +111,6 @@ export interface AgentMcpServerModuleAsyncOptions {
    * async factory result — which resolves after the routes are mounted.
    */
   path?: string;
+  /** As {@link AgentMcpServerModuleOptions.decorators}: static, so it lives here. */
+  decorators?: ClassDecorator[];
 }

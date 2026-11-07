@@ -62,7 +62,7 @@ export class AgentMcpServerModule {
         ...options.mcp,
         name: options.name,
         version: options.version,
-        ...structure(path, shared),
+        ...structure(path, shared, options.decorators),
       }),
     });
   }
@@ -89,7 +89,7 @@ export class AgentMcpServerModule {
           name: resolved.name,
           version: resolved.version,
         }),
-        ...structure(path, shared),
+        ...structure(path, shared, options.decorators),
       }),
     });
   }
@@ -111,10 +111,15 @@ export class AgentMcpProtectedResourceModule {}
  * guard (the agent decides who calls), behind the agent's own guard, with the agent's challenge
  * responses. `imports` give that guard what it injects.
  */
-function structure(path: string, shared: DynamicModule) {
+function structure(path: string, shared: DynamicModule, decorators: ClassDecorator[] = []) {
   return {
     path,
-    decorators: [CanAnyone(), UseGuards(AgentMcpAuthGuard), UseFilters(McpChallengeFilter)],
+    decorators: [
+      CanAnyone(),
+      UseGuards(AgentMcpAuthGuard),
+      UseFilters(McpChallengeFilter),
+      ...decorators,
+    ],
     imports: [shared],
   };
 }

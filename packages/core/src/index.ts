@@ -230,6 +230,7 @@ export {
 } from './usage-ledger.js';
 export {
   CanAnyone,
+  withControllerDecorators,
   STATIC_CAN_ARGS,
   markCanAnyone,
   readCanDeclarations,

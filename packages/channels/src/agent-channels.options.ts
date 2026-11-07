@@ -31,6 +31,15 @@ interface AgentChannelsRouteOptions {
    * Static, like any route.
    */
   path?: string | false;
+  /**
+   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
+   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
+   * so nothing sticks to the shared class. Without it the routes are open to
+   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
+   * checked. Static wiring.
+   */
+  decorators?: ClassDecorator[];
 }
 
 export type AgentChannelsModuleRootOptions = AgentChannelsModuleOptions & AgentChannelsRouteOptions;

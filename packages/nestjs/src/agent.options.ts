@@ -443,6 +443,17 @@ export interface AgentModuleOptions {
    */
   guards?: Type<CanActivate>[];
 
+  /**
+   * Class decorators applied to EVERY controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s own `decorators`: decide who reaches the agent's routes with the official
+   * tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]` from
+   * `@nestjs/authentication` / `@nestjs/authorization`. Applied to a subclass of each controller made
+   * for this registration, so nothing sticks to the shared classes. The controllers are open to
+   * `@nestjs/authorization`'s deny-by-default guard otherwise (`CanAnyone()`), and a `@Can()` passed
+   * here is still checked. Static wiring, like `guards`.
+   */
+  decorators?: ClassDecorator[];
+
   /** Upload limits when the staging store declares none. Omit → 20 MiB and the default types. */
   attachments?: AgentAttachmentsOptions;
 
@@ -484,6 +495,9 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * `useFactory`. Same default-open caveat as `AgentModuleOptions.guards`.
    */
   guards?: Type<CanActivate>[];
+
+  /** As {@link AgentModuleOptions.decorators}: static, so it lives here, not in `useFactory`'s result. */
+  decorators?: ClassDecorator[];
 
   /**
    * Which half of the module this process mounts (see {@link AgentSurface}). Same static-wiring

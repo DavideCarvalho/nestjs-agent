@@ -2,6 +2,7 @@ import {
   AGENT_ATTACHMENT_STAGING,
   AGENT_STORE,
   type AgentStore,
+  withControllerDecorators,
 } from '@dudousxd/nestjs-agent-core';
 import {
   MEDIA_STORAGE_SHARED,
@@ -91,7 +92,9 @@ function build(
           ]
         : []),
     ],
-    controllers: routes ? [AgentMediaUploadsController] : [],
+    controllers: routes
+      ? withControllerDecorators([AgentMediaUploadsController], mount.decorators)
+      : [],
     providers: [
       optionsProvider,
       stagingProvider(routes),

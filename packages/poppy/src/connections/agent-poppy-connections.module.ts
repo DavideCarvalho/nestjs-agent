@@ -1,6 +1,7 @@
 import {
   AGENT_POPPY_CONNECTION_STORE,
   type PoppyConnectionStore,
+  withControllerDecorators,
 } from '@dudousxd/nestjs-agent-core';
 import {
   type DynamicModule,
@@ -26,6 +27,16 @@ const DEFAULT_PATH = 'poppy-agent';
 /** `forRootAsync`: the options from a factory; `path` stays static (the routes mount at import). */
 export interface AgentPoppyConnectionsModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
   path?: string;
+  /**
+   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
+   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
+   * so nothing sticks to the shared class. Without it the routes are open to
+   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
+   * checked. Static wiring.
+   */
+  decorators?: ClassDecorator[];
+
   useFactory: (
     ...args: never[]
   ) =>
@@ -60,9 +71,12 @@ export interface AgentPoppyConnectionsModuleAsyncOptions extends Pick<ModuleMeta
 export class AgentPoppyConnectionsModule {
   static forRoot(options: AgentPoppyConnectionsModuleOptions): DynamicModule {
     const path = clean(options.path);
-    return build(path, [
-      { provide: AGENT_POPPY_CONNECTIONS_OPTIONS, useValue: { ...options, path } },
-    ]);
+    return build(
+      path,
+      [{ provide: AGENT_POPPY_CONNECTIONS_OPTIONS, useValue: { ...options, path } }],
+      [],
+      options.decorators,
+    );
   }
 
   static forRootAsync(options: AgentPoppyConnectionsModuleAsyncOptions): DynamicModule {
@@ -92,11 +106,12 @@ function build(
   path: string,
   providers: Provider[],
   imports: NonNullable<ModuleMetadata['imports']> = [],
+  decorators?: ClassDecorator[],
 ): DynamicModule {
   return {
     module: AgentPoppyConnectionsModule,
     imports: [RouterModule.register([{ path, module: AgentPoppyConnectionsModule }]), ...imports],
-    controllers: [AgentPoppyConnectionsController],
+    controllers: withControllerDecorators([AgentPoppyConnectionsController], decorators),
     providers: [
       ...providers,
       {

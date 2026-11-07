@@ -1,4 +1,4 @@
-import { AGENT_CHANNEL_FOLLOWER } from '@dudousxd/nestjs-agent-core';
+import { AGENT_CHANNEL_FOLLOWER, withControllerDecorators } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { RouterModule } from '@nestjs/core';
 import { AgentChannelsController } from './agent-channels.controller.js';
@@ -43,11 +43,12 @@ const DEFAULT_PATH = 'channels';
 @Module({})
 export class AgentChannelsModule {
   static forRoot(options: AgentChannelsModuleRootOptions): DynamicModule {
-    const { path, ...rest } = options;
+    const { path, decorators, ...rest } = options;
     return {
       module: AgentChannelsModule,
       imports: routing(path),
-      controllers: path === false ? [] : [AgentChannelsController],
+      controllers:
+        path === false ? [] : withControllerDecorators([AgentChannelsController], decorators),
       global: true,
       providers: [
         { provide: AGENT_CHANNELS_OPTIONS, useValue: rest },
@@ -63,7 +64,10 @@ export class AgentChannelsModule {
       module: AgentChannelsModule,
       global: true,
       imports: [...routing(options.path), ...(options.imports ?? [])],
-      controllers: options.path === false ? [] : [AgentChannelsController],
+      controllers:
+        options.path === false
+          ? []
+          : withControllerDecorators([AgentChannelsController], options.decorators),
       providers: [
         {
           provide: AGENT_CHANNELS_OPTIONS,

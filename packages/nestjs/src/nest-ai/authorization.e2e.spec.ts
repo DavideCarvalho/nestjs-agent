@@ -202,3 +202,52 @@ describe("@nestjs/authorization's @Can() on agent tools", () => {
     await testApp.close().catch(() => undefined);
   });
 });
+
+describe("AgentModule({ decorators }) — who reaches the agent's routes, with @nestjs/authorization", () => {
+  /** The official guard's user, from the same headers the agent's actor resolver reads. */
+  const getUser = (context: import('@nestjs/common').ExecutionContext) => {
+    const req = context
+      .switchToHttp()
+      .getRequest<{ headers: Record<string, string | undefined> }>();
+    const id = req.headers['x-actor-id'];
+    if (id === undefined) return null;
+    const role = req.headers['x-actor-role'];
+    return { id, roles: role !== undefined ? [role] : [] };
+  };
+
+  async function bootWith(decorators: ClassDecorator[] | undefined) {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AuthorizationModule.forRoot({ getUser, policies: [RolePolicy] }),
+        AgentModule.forRoot({
+          model: new FakeModelProvider(() => ({ text: 'hi' })),
+          actorResolver: new HeaderActorResolver(),
+          ...(decorators !== undefined ? { decorators } : {}),
+        }),
+      ],
+    }).compile();
+    const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+    await testApp.init();
+    app = testApp;
+    return testApp.getHttpServer();
+  }
+
+  it('applies a @Can() passed as decorators to every agent route', async () => {
+    const server = await bootWith([Can(RolePolicy, 'has', staticCanArgs('ADMIN'))]);
+    await request(server).get('/agent/tools').set({ 'x-actor-id': 'u1' }).expect(403);
+    await request(server).get('/agent/tools').expect(401);
+    await request(server)
+      .get('/agent/tools')
+      .set({ 'x-actor-id': 'a1', 'x-actor-role': 'ADMIN' })
+      .expect(200);
+  });
+
+  it('leaves the routes open to the official guard without decorators, and nothing leaks from a previous registration', async () => {
+    await bootWith([Can(RolePolicy, 'has', staticCanArgs('ADMIN'))]);
+    await app?.close();
+    const server = await bootWith(undefined);
+    // Deny-by-default would refuse an undecorated route: the agent's are marked open, and the
+    // ADMIN requirement of the registration before did not stick to the shared controller class.
+    await request(server).get('/agent/tools').set({ 'x-actor-id': 'u1' }).expect(200);
+  });
+});
