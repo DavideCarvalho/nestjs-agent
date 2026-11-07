@@ -1081,6 +1081,17 @@ still runs; in CI (`CI` set, or `AGENT_TEST_REQUIRE_REAL_DB=1`) a missing Docker
 instead. To use servers you already have, point `AGENT_TEST_PG_URL` / `AGENT_TEST_MYSQL_URL` at a
 user that may `CREATE DATABASE`.
 
+## Build output check
+
+Packages that build ESM and CJS in two tsup passes clean `dist/` **once**, with an `rmSync` at the top of
+`tsup.config.ts`; no pass sets `clean: true`. tsup runs the passes of a config array at the same time,
+so a pass that cleans can delete files another pass already wrote (seen as a missing `dist/index.d.cts`
+under a loaded `turbo run build`).
+
+`pnpm check:exports` (also each package's `prepack`, and a CI step after the build) fails if a path in a
+package's `exports`, `main`, `module`, `types` or `bin` does not exist. `release` runs it before
+`changeset publish`. Run it after any build you are about to pack.
+
 ## Status
 
 Early development (`0.x`). The package surface and SPIs are stabilizing.

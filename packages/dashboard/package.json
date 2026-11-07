@@ -43,6 +43,7 @@
     "dist"
   ],
   "scripts": {
+    "prepack": "node ../../scripts/check-package-exports.mjs",
     "build": "vite build && tsup && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.server.spec.json --noEmit && tsc -p tsconfig.app.json --noEmit",
     "typecheck:specs": "tsc -p tsconfig.server.spec.json --noEmit && tsc -p tsconfig.app.json --noEmit"

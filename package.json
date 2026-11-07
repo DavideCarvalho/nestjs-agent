@@ -14,6 +14,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "check:exports": "node scripts/check-package-exports.mjs --all",
     "build": "turbo run build",
     "test": "vitest run",
     "test:db": "vitest run --config vitest.db.config.ts",
@@ -25,7 +26,7 @@
     "lint:fix": "biome check --write .",
     "changeset": "changeset",
     "version-packages": "changeset version && biome check --write .",
-    "release": "pnpm --filter './packages/*' build && pnpm check:dist && changeset publish"
+    "release": "pnpm --filter './packages/*' build && pnpm check:exports && pnpm check:dist && changeset publish"
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
