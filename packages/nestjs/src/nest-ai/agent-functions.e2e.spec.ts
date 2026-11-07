@@ -21,7 +21,11 @@ class NoAtlantisGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const call = AiExecutionContext.create(context);
     const input = call.getInput<{ city?: string }>();
-    seen.push({ type: context.getType(), user: call.getContext().user, city: input.city });
+    seen.push({
+      type: context.getType(),
+      user: call.getContext().user,
+      ...(input.city !== undefined ? { city: input.city } : {}),
+    });
     return input.city !== 'Atlantis';
   }
 }
