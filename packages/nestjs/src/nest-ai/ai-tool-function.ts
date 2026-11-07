@@ -79,9 +79,12 @@ export function defineAiToolAgentFunction(
           },
         );
     }
-    // Called with the agent's own context, not through `@nestjs/ai` (no `AiModule`, or a caller that
-    // holds the instance): the agent's call, as it always was.
-    if (isAiToolCtx(ctx)) return Promise.resolve((original as Method).call(this, input, ctx));
+    // Anything but `@nestjs/ai`'s own call — the agent's context with no `AiModule`, a caller that
+    // holds the instance (a unit test calling `execute(input)`, with a partial context or none) —
+    // is the call it always was, handed to `execute()` untouched.
+    if (!isAgentFunctionContext(ctx)) {
+      return Promise.resolve((original as Method).call(this, input, ctx));
+    }
     const context = ctx as AgentFunctionContext;
     if (options.kind === 'action') {
       throw new ForbiddenException(
@@ -148,15 +151,18 @@ export async function callThroughAgentFunction(
 }
 
 /**
- * The agent's `AiToolCtx`, as opposed to `@nestjs/ai`'s `AgentFunctionContext`: only the agent's has
- * an `actor` and `emitUi`.
+ * `@nestjs/ai`'s `AgentFunctionContext`, as `AiTools.call` builds one: a tool call id, the messages
+ * the model read, an abort signal and `reportProgress`. Only such a context marks a call of
+ * `@nestjs/ai`'s own; the agent's `AiToolCtx` has none of `messages` / `reportProgress`.
  */
-function isAiToolCtx(ctx: unknown): ctx is AiToolCtx {
+function isAgentFunctionContext(ctx: unknown): ctx is AgentFunctionContext {
+  if (typeof ctx !== 'object' || ctx === null) return false;
+  const candidate = ctx as Partial<Record<keyof AgentFunctionContext, unknown>>;
   return (
-    typeof ctx === 'object' &&
-    ctx !== null &&
-    typeof (ctx as { actor?: unknown }).actor === 'object' &&
-    typeof (ctx as { emitUi?: unknown }).emitUi === 'function'
+    typeof candidate.reportProgress === 'function' &&
+    Array.isArray(candidate.messages) &&
+    typeof candidate.toolCallId === 'string' &&
+    !('actor' in candidate)
   );
 }
 

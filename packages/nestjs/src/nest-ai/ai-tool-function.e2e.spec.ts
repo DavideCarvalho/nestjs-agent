@@ -159,3 +159,17 @@ describe('@AiTool is a @nestjs/ai agent function too', () => {
     expect(text).not.toContain('purged');
   });
 });
+
+describe('@AiTool execute() called directly (a unit test holding the instance)', () => {
+  it('runs as it always did, with no context, a partial one, or the agent’s', async () => {
+    const tool = new GetWeatherTool();
+    await expect(tool.execute({ city: 'Natal' }, undefined as never)).resolves.toMatchObject({
+      city: 'Natal',
+    });
+    await expect(
+      tool.execute({ city: 'Natal' }, { actor: { id: 'u1' } } as never),
+    ).resolves.toMatchObject({ city: 'Natal' });
+    // An action tool too: only @nestjs/ai's own call is refused outside a turn.
+    await expect(new PurgeCacheTool().execute({ key: 'k' })).resolves.toEqual({ purged: 'k' });
+  });
+});
