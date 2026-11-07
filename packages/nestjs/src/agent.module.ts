@@ -437,49 +437,13 @@ function controllersForSurface(
   decorators?: ClassDecorator[],
   routes?: boolean,
 ): Type<object>[] {
-  return surface === 'engine' || routes === false
-    ? []
-    : withControllerDecorators(
-        [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])],
-        decorators,
-      );
-}
-
-/**
- * Nest's `GUARDS_METADATA` key (`@nestjs/common/constants`), inlined as a literal: `@nestjs/common`
- * has no `exports` map and its ESM-facing files are CJS, so a deep `import ... from
- * '@nestjs/common/constants'` in our ESM build is emitted extensionless and rejected by Node's
- * strict ESM resolver (surfaced by a consumer's bundler/test runner externalizing this package).
- * `agent-guards.spec.ts` asserts this literal still matches the real constant, so upstream drift
- * fails loudly instead of silently stamping a dead metadata key.
- */
-const GUARDS_METADATA = '__guards__';
-
-/**
- * Stamp (or clear) `@UseGuards`-equivalent metadata on every controller this module MIGHT mount.
- *
- * Mechanism: `@UseGuards(...guards)` on a controller just does `Reflect.defineMetadata(GUARDS_METADATA,
- * guards, ControllerClass)` (via Nest's `extendArrayMetadata`, which *appends* to any existing array).
- * We call `Reflect.defineMetadata` directly instead, so each `forRoot`/`forRootAsync` call REPLACES
- * the metadata rather than appending to it — appending would leak guards across repeated module
- * registrations in the same process (every test file that calls `forRoot` more than once, say) since
- * these controller classes are module-level singletons shared by every registration. Nest's
- * `GuardsConsumer` reads this metadata per-request via `Reflector`, not once at boot, so the LAST call
- * to stamp it before a request is served wins for that controller class in this process.
- */
-function applyGuards(
-  guards: Type<CanActivate>[] | undefined,
-  adapters: AgentProtocolAdapter[] | undefined,
-): void {
-  const resolved = guards ?? [];
-  for (const controller of [...BASE_CONTROLLERS, ...adapterControllers(adapters)]) {
-    Reflect.defineMetadata(GUARDS_METADATA, resolved, controller);
-  }
-}
-
-/** Distinct guard classes for the module's `providers`, so Nest can DI-instantiate them. */
-function guardProviders(guards: Type<CanActivate>[] | undefined): Type<CanActivate>[] {
-  return [...new Set(guards ?? [])];
+  if (surface === 'engine' || routes === false) return [];
+  // An engine's own controllers (OpenCode's tools endpoint) answer the engine's sessions, not the
+  // app's users, so the app's `decorators` are not theirs.
+  return [
+    ...withControllerDecorators([...BASE_CONTROLLERS, ...adapterControllers(adapters)], decorators),
+    ...(engine?.controllers ?? []),
+  ];
 }
 
 /** Mount the controllers under `path` (Nest applies the prefix to their relative routes). */
@@ -507,7 +471,6 @@ export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
     assertRunnable(options);
-    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
@@ -522,7 +485,6 @@ export class AgentModule {
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
         ...sharedProviders(options.durable ?? false, options.engine),
-        ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),
@@ -534,7 +496,6 @@ export class AgentModule {
     if (options.engine !== undefined) {
       assertRunnable({ engine: options.engine, durable: options.durable ?? false });
     }
-    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
@@ -568,7 +529,6 @@ export class AgentModule {
           inject: options.inject ?? [],
         },
         ...sharedProviders(options.durable ?? false, options.engine),
-        ...guardProviders(options.guards),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),

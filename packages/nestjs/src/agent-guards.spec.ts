@@ -1,10 +1,10 @@
-// Guards run in Nest's ExecutionContext pipeline, which only fires over a real HTTP request — so
-// these tests boot a real NestExpressApplication and drive it with `fetch`, mirroring the style
-// proven in @dudousxd/nestjs-media's media-guards.spec.ts (same GUARDS_METADATA mechanism).
+// Guards passed as `decorators: [UseGuards(...)]` run in Nest's ExecutionContext pipeline, which only
+// fires over a real HTTP request — so these tests boot a real NestExpressApplication and drive it
+// with `fetch`.
 import type { AddressInfo } from 'node:net';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
-import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
@@ -49,7 +49,9 @@ class DefaultAgent {}
 
 let app: NestExpressApplication | undefined;
 
-async function boot(guards?: Parameters<typeof AgentModule.forRoot>[0]['guards']): Promise<string> {
+type GuardClass = new (...args: never[]) => CanActivate;
+
+async function boot(guards?: GuardClass[]): Promise<string> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AgentModule.forRoot({
@@ -57,7 +59,7 @@ async function boot(guards?: Parameters<typeof AgentModule.forRoot>[0]['guards']
         store: new InMemoryAgentStore(),
         actorResolver: new HeaderActorResolver(),
         defaultAgent: 'default',
-        ...(guards !== undefined ? { guards } : {}),
+        ...(guards !== undefined ? { decorators: [UseGuards(...guards)] } : {}),
       }),
     ],
     providers: [DefaultAgent],
@@ -69,9 +71,7 @@ async function boot(guards?: Parameters<typeof AgentModule.forRoot>[0]['guards']
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function bootAsync(
-  guards?: Parameters<typeof AgentModule.forRootAsync>[0]['guards'],
-): Promise<string> {
+async function bootAsync(guards?: GuardClass[]): Promise<string> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       AgentModule.forRootAsync({
@@ -81,7 +81,7 @@ async function bootAsync(
           actorResolver: new HeaderActorResolver(),
           defaultAgent: 'default',
         }),
-        ...(guards !== undefined ? { guards } : {}),
+        ...(guards !== undefined ? { decorators: [UseGuards(...guards)] } : {}),
       }),
     ],
     providers: [DefaultAgent],
@@ -96,15 +96,9 @@ async function bootAsync(
 afterEach(async () => {
   await app?.close();
   app = undefined;
-  // Reset the shared controller classes' metadata so an earlier test's guards don't leak.
-  AgentModule.forRoot({
-    model: new FakeModelProvider(() => ({ text: 'ok' })),
-    store: new InMemoryAgentStore(),
-    actorResolver: new HeaderActorResolver(),
-  });
 });
 
-describe('guards option — forRoot', () => {
+describe('decorators: [UseGuards(...)] — forRoot', () => {
   it('with no guards, the surface stays open (current default behavior)', async () => {
     const baseUrl = await boot();
     const res = await fetch(`${baseUrl}/agent/chat`, {
@@ -157,7 +151,7 @@ describe('guards option — forRoot', () => {
   });
 });
 
-describe('guards option — forRootAsync (static field)', () => {
+describe('decorators: [UseGuards(...)] — forRootAsync (static field)', () => {
   it('applies guards even though options are resolved async', async () => {
     const baseUrl = await bootAsync([TokenGuard]);
     const denied = await fetch(`${baseUrl}/agent/threads`, { headers: { 'x-actor-id': 'u1' } });
@@ -176,34 +170,23 @@ describe('guards option — forRootAsync (static field)', () => {
   });
 });
 
-describe('inlined GUARDS_METADATA literal', () => {
-  // agent.module.ts inlines '__guards__' instead of deep-importing '@nestjs/common/constants'
-  // (whose extensionless ESM emit breaks strict resolvers in consumers). This pins the literal to
-  // the real upstream constant so a Nest rename fails here instead of silently stamping a dead key.
-  it('matches @nestjs/common/constants', () => {
-    expect(GUARDS_METADATA).toBe('__guards__');
-  });
-});
-
-describe('guards metadata replaces rather than accumulates across registrations', () => {
-  it('a later forRoot() call with fewer/no guards overrides an earlier one on the shared controller classes', () => {
-    const baseOptions = {
+describe('decorators never stick to the shared controller classes', () => {
+  it('leaves the classes themselves without the guards a registration passed', () => {
+    AgentModule.forRoot({
       model: new FakeModelProvider(() => ({ text: 'ok' })),
       store: new InMemoryAgentStore(),
       actorResolver: new HeaderActorResolver(),
-    };
-    AgentModule.forRoot({ ...baseOptions, guards: [TokenGuard, DenyGuard] });
-    expect(Reflect.getMetadata(GUARDS_METADATA, ChatController)).toEqual([TokenGuard, DenyGuard]);
-
-    AgentModule.forRoot({ ...baseOptions, guards: [TokenGuard] });
-    expect(Reflect.getMetadata(GUARDS_METADATA, ChatController)).toEqual([TokenGuard]);
-
-    AgentModule.forRoot(baseOptions);
-    expect(Reflect.getMetadata(GUARDS_METADATA, ChatController)).toEqual([]);
-    expect(Reflect.getMetadata(GUARDS_METADATA, ThreadsController)).toEqual([]);
-    expect(Reflect.getMetadata(GUARDS_METADATA, ToolCallController)).toEqual([]);
-    expect(Reflect.getMetadata(GUARDS_METADATA, QuotaController)).toEqual([]);
-    expect(Reflect.getMetadata(GUARDS_METADATA, AgentsController)).toEqual([]);
-    expect(Reflect.getMetadata(GUARDS_METADATA, AttachmentsController)).toEqual([]);
+      decorators: [UseGuards(TokenGuard, DenyGuard)],
+    });
+    for (const controller of [
+      ChatController,
+      ThreadsController,
+      ToolCallController,
+      QuotaController,
+      AgentsController,
+      AttachmentsController,
+    ]) {
+      expect(Reflect.getMetadata(GUARDS_METADATA, controller) ?? []).toEqual([]);
+    }
   });
 });

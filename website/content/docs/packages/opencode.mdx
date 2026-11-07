@@ -196,7 +196,7 @@ secret below must be shared.
 
 ### What guards the endpoint
 
-The module's `guards` are **not** applied to it — its callers are OpenCode sessions, not the app's
+The module's `decorators` are **not** applied to it — its callers are OpenCode sessions, not the app's
 users — and a global guard of your own must let `<path>/opencode/mcp` through. It authenticates
 callers itself, and a token alone runs nothing:
 

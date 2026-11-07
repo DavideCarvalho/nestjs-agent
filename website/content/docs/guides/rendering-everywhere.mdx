@@ -122,7 +122,7 @@ The model reads `execute`'s return value on every surface. `present` (or a direc
 the only part whose delivery differs.
 
 **4. The module.** `AgentModule` mounts the agent's routes under `path` (default `agent`), resolves
-the caller with `actorResolver`, and puts every route behind `guards`. `AgentGenuiModule` gives the
+the caller with `actorResolver`, and puts every route behind `decorators`. `AgentGenuiModule` gives the
 server its catalog. The tool is an ordinary provider:
 
 ```ts title="Backend — api/src/app.module.ts"
@@ -139,7 +139,7 @@ import { SessionGuard } from './auth/session.guard';
     AgentModule.forRoot({
       model,                                     // see Getting started
       actorResolver: requestUserActorResolver(), // who is calling: reads req.user
-      guards: [SessionGuard],                    // your guard, on every agent route
+      decorators: [UseGuards(SessionGuard)],                    // your guard, on every agent route
       // path: 'agent',                          // the default: routes under /agent
     }),
     AgentGenuiModule.forRoot({ catalog }),
@@ -213,7 +213,7 @@ because the page declared nothing else.
 | | Backend side | Frontend side |
 | --- | --- | --- |
 | **Base URL** | `AgentModule` mounts `POST /agent/chat`, `GET /agent/chat/:runId/stream`, `GET /agent/threads/:id`, … ([all routes](/docs/agent/reference/endpoints)) under `path` (default `agent`), after any global prefix | `<AgentProvider>` calls the same origin under `/agent`. Pass `path` for another prefix (global prefix included), `baseUrl` for an API on another origin |
-| **Identity** | `actorResolver` turns the request into an actor, behind `guards`; every thread, run and attachment is owner-scoped to it | the session cookie rides every request (`credentials="include"` across origins), or `getHeaders` sends a bearer token |
+| **Identity** | `actorResolver` turns the request into an actor, behind `decorators`; every thread, run and attachment is owner-scoped to it | the session cookie rides every request (`credentials="include"` across origins), or `getHeaders` sends a bearer token |
 | **CSRF** | the library checks none itself: whatever CSRF middleware or guard your app applies covers the agent's routes too | `getHeaders` sends the token per request, for example the `XSRF-TOKEN` cookie as `X-XSRF-TOKEN` (see [Cookie sessions and CSRF](/docs/agent/guides/frontend#cookie-sessions-and-csrf)) |
 | **What can be drawn** | intersects `uiCapabilities` with the catalog, validates, sends a `ui` frame or text | `uiCapabilities` on the provider (or `useAgentChat({ uiCapabilities })`) rides in the body of every `POST /agent/chat` |
 | **Component identity** | `name` and `version` of the definition | the registry key, and the `{ name, version }` declared in `uiCapabilities`. All three must match |
@@ -317,7 +317,7 @@ component registry and call `registry.render(presentation, 'whatsapp')`. See
 ## Web over AG-UI
 
 **Backend.** Add the adapter next to the native routes. It mounts `POST /agent/ag-ui`, behind the
-same `actorResolver`, `guards` and ownership checks:
+same `actorResolver`, `decorators` and ownership checks:
 
 ```ts title="Backend — api/src/app.module.ts"
 import { AgentModule, agUiAdapter } from '@dudousxd/nestjs-agent';

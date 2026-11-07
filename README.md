@@ -702,7 +702,7 @@ export class AppModule {}
   `staticCanArgs(...)` — `@Can(RolePolicy, 'has', staticCanArgs('ADMIN'))`.
 - `AuthorizationModule`'s global guard denies whatever declares no `@Can()`. The agent's own routes
   and the tools it governs (`@AiTool`, this library's `@AgentFunction`) are marked open to it
-  (`CanAnyone()`, as `Can.Anyone()` does) — the actor resolver, `guards` and the roles policy decide
+  (`CanAnyone()`, as `Can.Anyone()` does) — the actor resolver, your `decorators` and the roles policy decide
   those; a `@Can()` they declare is still checked. A plain `@nestjs/ai` `@AgentFunction()` keeps
   NestJS's deny-by-default.
 - A tool that requires an ability with no `AuthorizationModule` imported reaches nobody (fail
@@ -751,7 +751,6 @@ decided the way NestJS's own packages leave it to you, in this order of preferen
    decorators applied to every controller it mounts, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`.
    A function works too, as a guard instance: `UseGuards({ canActivate: (ctx) => … })`.
 
-3. **`guards`** and the console's built-in auth stay for compatibility.
 
 With neither, the routes are open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`)
 and the `actorResolver` decides who calls.
@@ -933,7 +932,7 @@ import { AgentModule, agUiAdapter } from '@dudousxd/nestjs-agent';
 AgentModule.forRoot({ model, adapters: [agUiAdapter()] }); // POST /agent/ag-ui
 ```
 
-- **A `RunAgentInput` in, AG-UI events out**, behind the same `actorResolver`, `guards` and
+- **A `RunAgentInput` in, AG-UI events out**, behind the same `actorResolver`, `decorators` and
   ownership checks as `POST /agent/chat`. The consumer's `threadId` names the conversation: one the
   caller owns is continued, an unknown one is created under that id.
 - **An approval or a question set ends the run** with `outcome: { type: 'interrupt' }`; the next

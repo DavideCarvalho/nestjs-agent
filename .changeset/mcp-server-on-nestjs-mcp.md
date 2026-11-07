@@ -1,5 +1,5 @@
 ---
-"@dudousxd/nestjs-agent-mcp-server": major
+"@dudousxd/nestjs-agent-mcp-server": minor
 ---
 
 The MCP server is NestJS's `@nestjs/mcp`. `AgentMcpServerModule` mounts `@nestjs/mcp`'s endpoint (Streamable HTTP, stateless, the 2025 and 2026-07-28 protocol revisions, stdio) and serves the agent's tools on it, beside whatever `@Tool()` / `@Resource()` / `@Prompt()` methods the application declares. What `@nestjs/mcp` has no word for stays this package's: the agent's `ActorResolver` (401 with its `WWW-Authenticate` challenge), the personal-agent `insufficient_scope` step-up, the `action` exposure policy, `allowedTools`, `@Mcp()` routes, and per-caller listing — the server built for a request registers only the tools its actor may use. Built on the MCP SDK v2 (`@modelcontextprotocol/server`).

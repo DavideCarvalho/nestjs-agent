@@ -23,6 +23,7 @@ import {
   Global,
   Injectable,
   Module,
+  UseGuards,
 } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
@@ -275,7 +276,7 @@ describe('POST /agent/ag-ui', () => {
         return false;
       }
     }
-    const guarded = await boot(() => ({ text: 'hi' }), { guards: [DenyAll] });
+    const guarded = await boot(() => ({ text: 'hi' }), { decorators: [UseGuards(DenyAll)] });
     expect((await post(guarded.url, input())).status).toBe(403);
     await guarded.app.close();
     booted = null;
@@ -299,7 +300,7 @@ describe('POST /agent/ag-ui', () => {
       }
     }
     const { url, service } = await boot(() => ({ text: 'hi' }), {
-      guards: [SessionGuard],
+      decorators: [UseGuards(SessionGuard)],
       actorResolver: requestUserActorResolver(),
     });
     const body = input();

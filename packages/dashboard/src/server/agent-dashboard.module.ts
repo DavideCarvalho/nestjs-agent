@@ -1,47 +1,16 @@
 import { withControllerDecorators } from '@dudousxd/nestjs-agent-core';
 import 'reflect-metadata';
-import {
-  type CanActivate,
-  type DynamicModule,
-  type InjectionToken,
-  Module,
-  type OptionalFactoryDependency,
-  type Provider,
-  type Type,
-} from '@nestjs/common';
+import { type DynamicModule, Module } from '@nestjs/common';
 import { RouterModule } from '@nestjs/core';
 import { AgentApiController } from './agent-api.controller.js';
-import { AgentDashboardAuthController } from './agent-dashboard-auth.controller.js';
 import { AgentUiController } from './agent-ui.controller.js';
-import type { DashboardAuthOptions } from './auth/dashboard-auth-config.js';
-import { resolveDashboardAuth } from './auth/dashboard-auth-config.js';
-import { DashboardAuthPageGuard } from './auth/dashboard-auth-page.guard.js';
-import { DashboardAuthGuard } from './auth/dashboard-auth.guard.js';
 import { DashboardService } from './dashboard.service.js';
-import { baseGuards, isGuardClass, stampGuards } from './guards.js';
 import { normalizeDashboardPath } from './normalize-path.js';
-import {
-  DASHBOARD_API_PATH,
-  DASHBOARD_APPROVAL_ACTOR_REF,
-  DASHBOARD_AUTH,
-  DASHBOARD_BASE_PATH,
-} from './tokens.js';
-
-/**
- * `AgentApiController`/`AgentUiController`'s own, pristine `@UseGuards(...)` metadata — the
- * built-in `dashboardAuth` guard, always present — captured once at module-load time. Every
- * `stampGuards` call below appends host `guards` onto THIS baseline (never onto whatever a prior
- * `forRoot`/`forRootAsync` call last stamped), so repeated calls in the same process never compound
- * (see `./guards.ts`).
- */
-const API_BASE_GUARDS = baseGuards(AgentApiController);
-const UI_BASE_GUARDS = baseGuards(AgentUiController);
+import { DASHBOARD_API_PATH, DASHBOARD_APPROVAL_ACTOR_REF, DASHBOARD_BASE_PATH } from './tokens.js';
 
 /**
  * `TReq` mirrors core's `ActorResolver<TReq>` convention: the transport request type
- * {@link AgentDashboardOptions.approvalActorRef} receives. Defaults to `unknown` so untyped usage
- * compiles unchanged; a host may narrow it (e.g. `forRoot<Request>({ approvalActorRef: ... })`)
- * instead of writing its own `unknown`-narrowing type guard.
+ * {@link AgentDashboardOptions.approvalActorRef} receives. Defaults to `unknown`.
  */
 export interface AgentDashboardOptions<TReq = unknown> {
   /**
@@ -56,22 +25,16 @@ export interface AgentDashboardOptions<TReq = unknown> {
    */
   apiBasePath?: string;
   /**
-   * Guard classes fronting BOTH dashboard controllers (the SPA at `basePath` and its JSON API at
-   * `apiBasePath`) — APPENDED onto the built-in `dashboardAuth` gate (a no-op unless configured;
-   * see {@link dashboardAuth}), so a request must pass BOTH. Omit to leave the routes gated by
-   * `dashboardAuth` alone (or fully open when that's unset too).
+   * Who reaches the console: class decorators applied to every controller this module mounts — the
+   * ecosystem's convention, like `@nestjs/mcp`'s `decorators` — with the official tools, e.g.
+   * `[UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')]` from `@nestjs/authentication` /
+   * `@nestjs/authorization`, or a function as a guard instance, `UseGuards({ canActivate })`.
+   * Applied to a per-registration subclass, so nothing sticks to the shared classes.
    *
-   * A guard's own DEPENDENCIES resolve from this module's `imports` (see {@link imports}) — the
-   * dashboard module has no application context of its own to pull them from otherwise.
-   */
-  guards?: Type<CanActivate>[];
-  /**
-   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
-   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
-   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
-   * so nothing sticks to the shared class. Without it the routes are open to
-   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
-   * checked. Static wiring.
+   * In production (`NODE_ENV=production`) the console refuses to boot without them, unless the app
+   * mounts the routes itself (`routes: false`): a governance console is never served open there by
+   * default. Outside production the routes are open (and to `@nestjs/authorization`'s
+   * deny-by-default guard: `CanAnyone()`). Static wiring.
    */
   decorators?: ClassDecorator[];
   /**
@@ -81,11 +44,7 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * own path and decorators (the module exports what they inject). Static wiring.
    */
   routes?: boolean;
-  /**
-   * Extra `imports` merged into the dashboard's dynamic module — the DI resolution path for a class
-   * passed to {@link guards} (or any other provider the controllers need reachable). Typically the
-   * host's own auth module, e.g. `imports: [AuthModule]` alongside `guards: [JwtAuthGuard]`.
-   */
+  /** Extra `imports` merged into the console's modules — what a decorator's guard injects. */
   imports?: DynamicModule['imports'];
   /**
    * OVERRIDE for WHO is deciding a HITL approval — invoked on the incoming
@@ -94,63 +53,10 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * DEFAULT (option omitted): the AgentModule-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is
    * consulted — the same identity seam chat requests use — and its actor id becomes the decider ref
    * (a throwing resolver, i.e. an unauthenticated request, just omits the ref). Set this only when
-   * console auth differs from chat auth (e.g. the console sits behind a separate SSO whose principal
-   * the chat resolver can't read); returning `undefined` leaves `executedByRef` unset — the explicit
-   * override wins outright, with no resolver fallback.
+   * the console's caller is identified differently from chat's; returning `undefined` leaves
+   * `executedByRef` unset — the explicit override wins outright, with no resolver fallback.
    */
   approvalActorRef?: (req: TReq) => string | undefined;
-  /**
-   * Gate the console (SPA + API) behind a built-in, signed session cookie. Two ways to mint it:
-   *
-   * - **Mode A (`session`, recommended)**: your host app already has its own auth (SSO/OIDC/
-   *   whatever) — the host frontend, carrying that auth, POSTs to `<basePath>/auth/session`, your
-   *   `session` hook validates the raw request and returns the session user, and this library
-   *   mints its cookie from that. No credential this library understands ever exists; you keep
-   *   your own identity provider as the source of truth. A page-level request with no valid
-   *   session (and only Mode A configured) gets a small server-rendered instruction page telling
-   *   the visitor to sign in through your host app, since there is no login page to redirect to.
-   * - **Mode B (`login`, standalone fallback)**: no host frontend/IdP to lean on — the console
-   *   serves its own small, dependency-free, server-rendered login page (`GET
-   *   <basePath>/auth/login`) and your `login` hook validates submitted username/password. A
-   *   missing/invalid/expired session redirects a page-level request to that login page with
-   *   `?returnTo=<original url>`.
-   *
-   * Either mode can be used alone, or both together (e.g. Mode A for normal use, Mode B as a
-   * break-glass fallback) — at least one is required, or `forRoot`/`forRootAsync` throws at boot
-   * (an un-mintable gate is a boot error, not a silently-open or silently-stuck console). An
-   * unauthenticated API call always gets a plain `401`, regardless of mode — the caller reads the
-   * status code, not HTML. Composes with `guards` — BOTH gates must pass. See
-   * `DashboardAuthOptions` for the `secret`/`ttl`/`session`/`login` shape.
-   */
-  dashboardAuth?: DashboardAuthOptions;
-}
-
-/**
- * Async variant of {@link AgentDashboardOptions}, for a `session`/`login` hook that needs injected
- * services (e.g. an EntityManager to check credentials against a DB). Everything else stays
- * static/sync — `basePath`/`apiBasePath`/`guards` are needed at module-build time (the same
- * constraint `@dudousxd/nestjs-telescope`'s and `@dudousxd/nestjs-media`'s own `forRootAsync`s
- * document), so only the auth piece itself is resolved through DI.
- */
-export interface AgentDashboardAsyncOptions<TReq = unknown> {
-  basePath?: string;
-  apiBasePath?: string;
-  guards?: Type<CanActivate>[];
-  /** As {@link AgentDashboardOptions.decorators}. */
-  decorators?: ClassDecorator[];
-  /** As {@link AgentDashboardOptions.routes}. */
-  routes?: boolean;
-  imports?: DynamicModule['imports'];
-  approvalActorRef?: (req: TReq) => string | undefined;
-  /** Providers injected into `useDashboardAuth`, in order. Shared with a guard class's own deps via `imports`. */
-  inject?: Array<InjectionToken | OptionalFactoryDependency>;
-  /**
-   * Build the `dashboardAuth` config from injected deps, or return `undefined` to leave the
-   * console open (or fronted only by `guards`). See {@link AgentDashboardOptions.dashboardAuth}.
-   */
-  useDashboardAuth: (
-    ...deps: any[]
-  ) => DashboardAuthOptions | undefined | Promise<DashboardAuthOptions | undefined>;
 }
 
 /** Leading slash, no trailing slash. */
@@ -159,25 +65,29 @@ function normalize(path: string): string {
 }
 
 /**
- * Holds the JSON API + SSE controller and its read service, mounted on its own path by `forRoot`.
- * Dynamic: guards are DI-instantiated by the CONTROLLER's host module, so this module — not the
- * outer wrapper — must carry the guard classes as providers plus the host's `imports` that resolve
- * their dependencies. A static module here made `guards: [SomeGuardWithDeps]` fail at boot with
- * "Nest can't resolve dependencies ... in the AgentApiModule context" even when the host passed
- * the right `imports` to `forRoot`.
+ * Refuse to serve a governance console open in production: either decorators state who reaches it,
+ * or the app mounts the routes itself.
  */
+function assertProtected(options: AgentDashboardOptions<unknown>): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (options.routes === false) return;
+  if ((options.decorators ?? []).length > 0) return;
+  throw new Error(
+    'AgentDashboardModule: the AI-gateway console would be served open in production. Say who reaches it, with ' +
+      "`decorators: [UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')]`, or mount its routes yourself " +
+      'with `routes: false` and extend `AgentApiController` / `AgentUiController` under your own guards.',
+  );
+}
+
+/** Holds the JSON API + SSE controller and its read service, mounted on its own path. */
 @Module({})
 export class AgentApiModule {
   static register<TReq = unknown>(options: {
     imports?: DynamicModule['imports'];
-    guards?: Type<CanActivate>[];
     decorators?: ClassDecorator[];
     routes?: boolean;
     approvalActorRef?: (req: TReq) => string | undefined;
-    /** Provider for `DASHBOARD_AUTH` — a `useValue` (`forRoot`) or a `useFactory` (`forRootAsync`). */
-    dashboardAuth: Provider;
   }): DynamicModule {
-    stampGuards(options.guards, [[AgentApiController, API_BASE_GUARDS]]);
     return {
       module: AgentApiModule,
       imports: [...(options.imports ?? [])],
@@ -187,114 +97,37 @@ export class AgentApiModule {
           : withControllerDecorators([AgentApiController], options.decorators),
       providers: [
         DashboardService,
-        DashboardAuthGuard,
-        options.dashboardAuth,
-        ...(options.guards ?? []).filter(isGuardClass),
         // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
         // injects this WITHOUT `@Optional()`.
         { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
       ],
-      // DASHBOARD_AUTH re-exported so AgentUiController/AgentDashboardAuthController (hosted
-      // directly by AgentDashboardModule, which imports this module) resolve the SAME instance
-      // instead of re-running a host's async factory a second time.
       // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`).
-      exports: [DashboardService, DASHBOARD_AUTH, DASHBOARD_APPROVAL_ACTOR_REF, DashboardAuthGuard],
+      exports: [DashboardService, DASHBOARD_APPROVAL_ACTOR_REF],
     };
   }
 }
 
 /**
- * Mounts the AI-gateway governance console: the bundled React SPA at `basePath` and its JSON + SSE
- * API at `apiBasePath` (default `<basePath>/api`), plus the built-in `dashboardAuth` routes at
- * `<basePath>/auth/*` when {@link AgentDashboardOptions.dashboardAuth} is set — `POST
- * <basePath>/auth/session` for Mode A (the host mints the session from its own auth) and/or `GET`/
- * `POST <basePath>/auth/login` for Mode B (the built-in login screen).
- *
- * Import via `AgentDashboardModule.forRoot(...)` alongside your `@dudousxd/nestjs-agent` module
- * (global), which must provide `AGENT_GOVERNANCE_QUERIES` (bound by a store adapter). Front the
- * routes with the first-class `guards` option (plus `imports` for the guards' own dependencies) —
- * see {@link AgentDashboardOptions.guards} — and/or the built-in `dashboardAuth` session cookie.
- *
- * Inertia hosts: the console is a full-page app, not an Inertia page. An in-app `<Link>` visit to
- * `basePath` (an XHR carrying `X-Inertia`) is bounced with the protocol's own external-redirect
- * mechanism — `409 Conflict` + `X-Inertia-Location: <the visited URL>` — so the Inertia client
- * performs a full `window.location` load and the console renders normally. In-app links to the
- * console therefore just work; no host-side special-casing needed.
+ * The AI-gateway console: the SPA at `basePath` and its JSON API at `apiBasePath`. Who reaches them
+ * is the app's — `decorators`, or the app mounts them itself (`routes: false`) — with
+ * `@nestjs/authentication` / `@nestjs/authorization`.
  */
 @Module({})
 export class AgentDashboardModule {
   static forRoot<TReq = unknown>(options: AgentDashboardOptions<TReq> = {}): DynamicModule {
+    assertProtected(options as AgentDashboardOptions<unknown>);
     const basePath = normalize(options.basePath ?? '/ai-gateway');
     const apiBasePath = normalize(options.apiBasePath ?? `${basePath}/api`);
-    stampGuards(options.guards, [[AgentUiController, UI_BASE_GUARDS]]);
-    const dashboardAuthProvider: Provider = {
-      provide: DASHBOARD_AUTH,
-      useValue: resolveDashboardAuth(options.dashboardAuth),
-    };
     return {
       module: AgentDashboardModule,
       imports: [
         ...(options.imports ?? []),
-        // Guards + host imports must reach the API controller's HOST module — enhancers resolve
-        // from their controller's own module, never from a parent (see AgentApiModule.register).
         // Spread-only-when-set: exactOptionalPropertyTypes rejects an explicit `undefined`.
         AgentApiModule.register({
           ...(options.imports ? { imports: options.imports } : {}),
-          ...(options.guards ? { guards: options.guards } : {}),
           ...(options.decorators ? { decorators: options.decorators } : {}),
           ...(options.routes === false ? { routes: false } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
-          dashboardAuth: dashboardAuthProvider,
-        }),
-        ...(options.routes === false
-          ? []
-          : [
-              RouterModule.register([
-                { path: basePath, module: AgentDashboardModule }, // the UI + auth controllers below
-                { path: apiBasePath, module: AgentApiModule },
-              ]),
-            ]),
-      ],
-      controllers:
-        options.routes === false
-          ? []
-          : withControllerDecorators(
-              [AgentUiController, AgentDashboardAuthController],
-              options.decorators,
-            ),
-      providers: [
-        { provide: DASHBOARD_BASE_PATH, useValue: basePath },
-        { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
-        DashboardAuthPageGuard,
-        // AgentUiController is hosted HERE, so its guards DI-instantiate from this module.
-        ...(options.guards ?? []).filter(isGuardClass),
-      ],
-      // Re-export the API module so its DashboardService reaches importers (e.g. the host's own controllers).
-      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH, DashboardAuthPageGuard],
-    };
-  }
-
-  static forRootAsync<TReq = unknown>(options: AgentDashboardAsyncOptions<TReq>): DynamicModule {
-    const basePath = normalize(options.basePath ?? '/ai-gateway');
-    const apiBasePath = normalize(options.apiBasePath ?? `${basePath}/api`);
-    stampGuards(options.guards, [[AgentUiController, UI_BASE_GUARDS]]);
-    const dashboardAuthProvider: Provider = {
-      provide: DASHBOARD_AUTH,
-      inject: options.inject ?? [],
-      useFactory: async (...deps: unknown[]) =>
-        resolveDashboardAuth(await options.useDashboardAuth(...deps)),
-    };
-    return {
-      module: AgentDashboardModule,
-      imports: [
-        ...(options.imports ?? []),
-        AgentApiModule.register({
-          ...(options.imports ? { imports: options.imports } : {}),
-          ...(options.guards ? { guards: options.guards } : {}),
-          ...(options.decorators ? { decorators: options.decorators } : {}),
-          ...(options.routes === false ? { routes: false } : {}),
-          ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
-          dashboardAuth: dashboardAuthProvider,
         }),
         ...(options.routes === false
           ? []
@@ -308,17 +141,14 @@ export class AgentDashboardModule {
       controllers:
         options.routes === false
           ? []
-          : withControllerDecorators(
-              [AgentUiController, AgentDashboardAuthController],
-              options.decorators,
-            ),
+          : withControllerDecorators([AgentUiController], options.decorators),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
-        DashboardAuthPageGuard,
-        ...(options.guards ?? []).filter(isGuardClass),
       ],
-      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH, DashboardAuthPageGuard],
+      // Re-export the API module so its DashboardService reaches importers (e.g. the host's own
+      // controllers), and the paths a self-mounted `AgentUiController` subclass injects.
+      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH],
     };
   }
 }

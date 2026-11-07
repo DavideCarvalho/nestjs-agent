@@ -37,16 +37,14 @@ import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
 export class AppModule {}
 ```
 
-## `AgentDashboardModule.forRoot(options?)` / `forRootAsync(options)`
+## `AgentDashboardModule.forRoot(options?)`
 
 | Option | Default | Purpose |
 |---|---|---|
 | `basePath` | `/ai-gateway` | Where the SPA is served — a page route, kept out of any `/api` prefix. |
 | `apiBasePath` | `<basePath>/api` | Where the JSON + SSE API is mounted (what the SPA fetches). Set it under your app's own `/api` prefix so it inherits your auth/proxy rules while the UI stays at `basePath`. |
-| `guards` | none | `Type<CanActivate>[]` stamped on both the SPA and API controllers, appended after the built-in `dashboardAuth` gate — a request must pass both. |
 | `imports` | none | Extra module imports so a guard's own dependencies (e.g. your `AuthModule`) resolve — the dashboard has no application context of its own to pull them from. |
 | `approvalActorRef` | the configured `ActorResolver` | `(req) => string \| undefined` — override for WHO is recorded as deciding a HITL approval (`Decision.executedByRef`). Default: the `AgentModule`-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is consulted, same identity seam chat uses. Set this only when console auth differs from chat auth. |
-| `dashboardAuth` | none | Built-in signed session-cookie gate for SPA + API — see [Console auth](#console-auth). |
 
 `forRootAsync` takes the same `basePath`/`apiBasePath`/`guards`/`imports`/`approvalActorRef` (static —
 routing needs them at module-build time) plus `inject` and `useDashboardAuth(...deps)`, which returns
@@ -62,38 +60,42 @@ they front both the SPA and its API. With neither set, the routes carry no authe
 `basePath` (and `apiBasePath`) another way (a global guard, your proxy).
 </Callout>
 
-## Console auth
+## Protecting the console
 
-`dashboardAuth` gates the console behind a stateless HMAC-SHA256-signed cookie. Routes live under
-`<basePath>/auth/*` and 404 when the option is unset.
+The console's routes are the app's to protect, with NestJS's own
+[`@nestjs/authentication`](https://docs.nestjs.com/security/authentication) and
+[`@nestjs/authorization`](https://docs.nestjs.com/security/authorization). Two ways:
 
-| Key | Purpose |
-|---|---|
-| `secret` | Required signing key (32+ bytes recommended). Missing/empty throws at boot. |
-| `ttl` | Cookie lifetime, `'<n><ms\|s\|m\|h\|d>'`. Default `'8h'`. |
-| `session` | Mode A: `(request) => DashboardSessionUser \| null`. Your frontend, carrying your app's auth, `POST`s `<basePath>/auth/session` (204 on success, 401 on `null`). |
-| `login` | Mode B: `(username, password) => DashboardSessionUser \| null`. Serves a built-in login page at `GET <basePath>/auth/login`; denied page loads redirect there with `?returnTo=`. |
-| `revalidate` | `(session) => boolean` — re-checks a live session when the cookie slides (at most once per `ttl/2` per cookie); `false` revokes it. |
-| `unauthenticatedPage` | `({ request, response, basePath }) => void` — render your own page at `<basePath>/auth/session-required` (Mode A only). Falls back to the built-in page if it throws or writes nothing. |
+1. **Mount it yourself** (`routes: false`), extending the exported controllers under your own path
+   and decorators — the services keep running and the module exports what the controllers inject:
 
-At least one of `session`/`login` is required, or `forRoot`/`forRootAsync` throws. `DashboardSessionUser`
-is `{ id: string; name?: string; roles?: string[] }`. Unauthenticated API calls always get `401`.
-`POST <basePath>/auth/logout` clears the cookie.
+   ```ts
+   AgentDashboardModule.forRoot({ routes: false, basePath: '/ops/ai', apiBasePath: '/ops/ai/api' });
 
-```ts
-AgentDashboardModule.forRoot({
-  dashboardAuth: {
-    secret: process.env.CONSOLE_SECRET!,
-    session: async (req) => resolveAdmin(req), // your own auth
-  },
-});
-```
+   @Controller('ops/ai/api')
+   @Can(ConsolePolicy, 'view')
+   export class ConsoleApi extends AgentApiController {}
 
-<Callout type="info" title="Inertia hosts">
-The console is a full-page app, not an Inertia page. An in-app `<Link>` visit to `basePath` is bounced
-with Inertia's own external-redirect mechanism (`409` + `X-Inertia-Location`) so the client does a full
-page load instead of rendering the SPA's HTML inside its own error modal.
-</Callout>
+   @Controller('ops/ai')
+   @Can(ConsolePolicy, 'view')
+   export class ConsoleUi extends AgentUiController {}
+   ```
+
+2. **`decorators`**, applied to every controller the module mounts:
+
+   ```ts
+   AgentDashboardModule.forRoot({
+     decorators: [UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')],
+   });
+   ```
+
+   A function works too, as a guard instance: `UseGuards({ canActivate: (ctx) => … })`.
+
+**In production the console never boots open:** with neither `decorators` nor `routes: false`,
+`forRoot` throws and says how to protect it. Outside production it mounts open.
+
+The console has no sign-in of its own: the app's session (`@nestjs/authentication`) is what a
+browser carries when it opens the console.
 
 ## Subpath `/client` — a dependency-free typed client
 
@@ -137,26 +139,6 @@ The same subpath exports the console launcher primitives for Mode A: `agentConso
 then navigate) and `ConsoleSessionError`. `OpenConsoleOptions` is `{ basePath?, headers?, fetch?,
 signal?, navigate? }`; the mint uses `credentials: 'include'` and `redirect: 'manual'`, so an auth layer
 that rewrites the 401 into a sign-in redirect surfaces as an error instead of a false success.
-
-## Subpath `/react` — console launcher
-
-`@dudousxd/nestjs-agent-dashboard/react` (peer: `react`) re-exports the launcher primitives above plus:
-
-- `useOpenAgentConsole(options?)` → `{ open, isPending, error, reset }`.
-- `<OpenAgentConsoleButton />` — unstyled `<button>`; takes `OpenConsoleOptions`, `pendingLabel`,
-  `renderError` (pass `null` to render nothing) and any button prop.
-- `openAgentConsoleMutationOptions(options?)` — `{ mutationKey, mutationFn }` for TanStack Query's
-  `useMutation`, without a TanStack dependency.
-
-```tsx
-import { OpenAgentConsoleButton } from '@dudousxd/nestjs-agent-dashboard/react';
-
-<OpenAgentConsoleButton basePath="/ai-gateway" headers={() => ({ Authorization: `Bearer ${token()}` })} />;
-```
-
-The client reads `window.__AGENT_BASE__` / `window.__AGENT_API__` (injected by the UI controller) to
-find its API base, falling back to `/ai-gateway` / `/ai-gateway/api` — so the bundled SPA needs no
-build-time configuration, and an external frontend can set those globals itself to point elsewhere.
 
 ## Reliability, approvals, and tool governance
 

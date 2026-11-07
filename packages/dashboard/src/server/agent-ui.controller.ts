@@ -15,8 +15,6 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { DashboardAuthPageGuard } from './auth/dashboard-auth-page.guard.js';
-import { DashboardAuthRedirectFilter } from './auth/dashboard-auth-redirect.js';
 import { DASHBOARD_API_PATH, DASHBOARD_BASE_PATH } from './tokens.js';
 
 /**
@@ -58,16 +56,11 @@ const CONTENT_TYPES: Record<string, string> = {
  * `<base>/assets`). The path comes from `RouterModule` (set by
  * {@link AgentDashboardModule.forRoot}({ basePath })), so the controller routes are relative.
  *
- * `@UseGuards(DashboardAuthPageGuard)` is a NO-OP unless the host configured `dashboardAuth` — see
- * that guard's own doc. Host `guards` (see {@link AgentDashboardOptions.guards}) are APPENDED onto
- * this baseline by `stampGuards` (`./guards.js`), never replacing it. `@UseFilters` turns the
- * guard's redirect-on-deny into an actual 302 response; it is a no-op when the guard never throws
- * (i.e. `dashboardAuth` unconfigured).
+ * Who reaches it is the app's: `decorators` on `AgentDashboardModule.forRoot`, or the app mounts it
+ * itself (`routes: false`) — with `@nestjs/authentication` / `@nestjs/authorization`.
  */
 @CanAnyone()
 @Controller()
-@UseGuards(DashboardAuthPageGuard)
-@UseFilters(new DashboardAuthRedirectFilter())
 export class AgentUiController {
   private readonly dir = spaDir();
 

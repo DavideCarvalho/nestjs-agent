@@ -95,8 +95,6 @@ export interface AgentMediaAttachmentsMountOptions {
    * `<path>/attachments/uploads`. Default `'agent'`.
    */
   path?: string;
-  /** Guards for the upload routes (mirror `AgentModule`'s `guards`). */
-  guards?: Type<CanActivate>[];
   /**
    * Class decorators applied to every controller this module mounts — the ecosystem's convention,
    * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`

@@ -434,23 +434,13 @@ export interface AgentModuleOptions {
   defaultAgent?: string;
 
   /**
-   * Guard(s) applied uniformly to EVERY controller this module mounts (chat, threads, tool-call,
-   * quota, agents, attachments, config, …). Third-party controller
-   * classes can't be annotated with `@UseGuards` by consumers, so without this option every route is
-   * open beyond whatever `actorResolver` itself enforces. Guard classes are added to this module's
-   * `providers` so Nest can DI-instantiate them; if a guard has its own dependencies, make sure they
-   * resolve from this module's imports or a global module.
-   */
-  guards?: Type<CanActivate>[];
-
-  /**
    * Class decorators applied to EVERY controller this module mounts — the ecosystem's convention,
    * like `@nestjs/mcp`'s own `decorators`: decide who reaches the agent's routes with the official
    * tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]` from
    * `@nestjs/authentication` / `@nestjs/authorization`. Applied to a subclass of each controller made
    * for this registration, so nothing sticks to the shared classes. The controllers are open to
    * `@nestjs/authorization`'s deny-by-default guard otherwise (`CanAnyone()`), and a `@Can()` passed
-   * here is still checked. Static wiring, like `guards`.
+   * here is still checked. Static wiring.
    */
   decorators?: ClassDecorator[];
 
@@ -476,7 +466,7 @@ export interface AgentModuleOptions {
 
   /**
    * Wire protocols served alongside the native one, over the same runs — e.g. `[agUiAdapter()]`
-   * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `guards`,
+   * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `decorators`,
    * and not at all on `surface: 'engine'`. STATIC, like `surface`.
    */
   adapters?: AgentProtocolAdapter[];
@@ -496,15 +486,6 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
    */
   durable?: boolean;
-  /**
-   * Guard(s) applied uniformly to every controller this module mounts. A STATIC field on the async
-   * config object itself — NOT part of what `useFactory` resolves — because controllers (and the
-   * enhancers bound to them) are wired at module build time, before any async factory has run. If a
-   * guard needs async-resolved config (e.g. a secret from a `ConfigService`), have the guard inject
-   * that service via DI (see `imports`/`inject` above) rather than trying to thread it through
-   * `useFactory`. Same default-open caveat as `AgentModuleOptions.guards`.
-   */
-  guards?: Type<CanActivate>[];
 
   /** As {@link AgentModuleOptions.decorators}: static, so it lives here, not in `useFactory`'s result. */
   decorators?: ClassDecorator[];

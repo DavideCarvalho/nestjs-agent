@@ -224,7 +224,7 @@ AgentMediaAttachmentsModule.forRoot({
   canAccess: ({ allowed, actor }) => allowed || actor.roles?.includes('support') === true,
   resolveUrl: (record) => signMyProxyUrl(record.id), // instead of presign / public / inline
   indexForRag: true, // see below
-  guards: [SessionGuard],
+  decorators: [UseGuards(SessionGuard)],
 });
 ```
 
@@ -269,8 +269,8 @@ for (const entry of await agents.collectableAttachments(actor, { olderThan })) {
 it on where retrieval is filtered by owner (`FilteredRetriever` on `ownerType`/`ownerId`), and
 restrict rag-media's `collections` accordingly.
 
-`forRootAsync({ imports, inject, useFactory, path, guards })` takes the same options; `path` must
-match `AgentModule`'s `path` (default `agent`), and `guards` gates the upload routes.
+`forRootAsync({ imports, inject, useFactory, path, decorators, routes })` takes the same options; `path` must
+match `AgentModule`'s `path` (default `agent`), and `decorators` gate the upload routes.
 
 ### Bring your own storage
 

@@ -276,12 +276,7 @@ The inbox lists blocking approvals (tool calls in `pending_approval`). Pending
 [action proposals](/docs/agent/guides/action-proposals) are not in it; decide those through the
 thread's action-proposal routes or `AGENT_APPROVAL_PORT.approveActionProposal`.
 
-When the dashboard is configured with `dashboardAuth`, it also mounts `<basePath>/auth/*`, outside its
-own guards: `GET`/`POST /auth/login` (a server-rendered login form) and `POST /auth/logout` for the
-`login` mode, `POST /auth/session` (the host frontend exchanges its own auth for the dashboard cookie)
-and `GET /auth/session-required` for the `session` mode. A mode's routes `404` when it is not listed
-in `auth.modes`, and all of them `404` without `dashboardAuth`. See
-[`packages/dashboard`](/docs/agent/packages/dashboard).
+The dashboard mounts no sign-in routes of its own: protect it with `decorators` or mount it yourself (`routes: false`) — see [Protecting the console](/docs/agent/packages/dashboard#protecting-the-console).
 
 `GovernancePage<T>` is `{ rows: T[]; page: number; pageSize: number; total: number }` (real `COUNT` + offset, deterministic id tiebreaks); an unknown `where` field `400`s naming it. `LiveAgentEvent` is `{ event: string; ts: number; payload: Record<string, unknown> }` — see [Diagnostics events](/docs/agent/reference/diagnostics-events) for the `event` names and `payload` shapes.
 
