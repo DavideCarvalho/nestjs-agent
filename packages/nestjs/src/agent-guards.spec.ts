@@ -3,8 +3,16 @@
 // with `fetch`.
 import type { AddressInfo } from 'node:net';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
-import type { CanActivate, ExecutionContext } from '@nestjs/common';
-import { ForbiddenException, Injectable, UnauthorizedException, UseGuards } from '@nestjs/common';
+import type { CanActivate, ExecutionContext, ModuleMetadata } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Global,
+  Inject,
+  Injectable,
+  Module,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
@@ -167,6 +175,85 @@ describe('decorators: [UseGuards(...)] — forRootAsync (static field)', () => {
     const baseUrl = await bootAsync();
     const res = await fetch(`${baseUrl}/agent/threads`, { headers: { 'x-actor-id': 'u1' } });
     expect(res.status).toBe(200);
+  });
+});
+
+/** A dependency a guard injects — provided by a module of the app's, not by the agent. */
+@Injectable()
+class TokenStore {
+  readonly token = TOKEN;
+}
+
+@Module({ providers: [TokenStore], exports: [TokenStore] })
+class TokenStoreModule {}
+
+@Global()
+@Module({ providers: [TokenStore], exports: [TokenStore] })
+class GlobalTokenStoreModule {}
+
+/** A guard with its own dependency: Nest builds it in the agent's module, from its imports. */
+@Injectable()
+class InjectedTokenGuard implements CanActivate {
+  constructor(@Inject(TokenStore) private readonly store: TokenStore) {}
+  canActivate(context: ExecutionContext): boolean {
+    const request_ = context
+      .switchToHttp()
+      .getRequest<{ headers: Record<string, string | undefined> }>();
+    if (request_.headers['x-test-token'] !== this.store.token) {
+      throw new UnauthorizedException('missing or bad token');
+    }
+    return true;
+  }
+}
+
+async function listen(imports: NonNullable<ModuleMetadata['imports']>): Promise<string> {
+  const moduleRef = await Test.createTestingModule({
+    imports,
+    providers: [DefaultAgent],
+  }).compile();
+  const testApp = moduleRef.createNestApplication<NestExpressApplication>();
+  app = testApp;
+  await testApp.listen(0);
+  const address = testApp.getHttpServer().address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+describe('a guard with dependencies of its own', () => {
+  const options = () => ({
+    model: new FakeModelProvider(() => ({ text: 'ok' })),
+    store: new InMemoryAgentStore(),
+    actorResolver: new HeaderActorResolver(),
+    defaultAgent: 'default',
+  });
+
+  async function expectGated(baseUrl: string): Promise<void> {
+    const denied = await fetch(`${baseUrl}/agent/threads`, { headers: { 'x-actor-id': 'u1' } });
+    expect(denied.status).toBe(401);
+    const allowed = await fetch(`${baseUrl}/agent/threads`, {
+      headers: { 'x-actor-id': 'u1', 'x-test-token': TOKEN },
+    });
+    expect(allowed.status).toBe(200);
+  }
+
+  it("forRootAsync: resolves the guard's dependencies from `imports` (the guard is not provided)", async () => {
+    await expectGated(
+      await listen([
+        AgentModule.forRootAsync({
+          imports: [TokenStoreModule],
+          useFactory: options,
+          decorators: [UseGuards(InjectedTokenGuard)],
+        }),
+      ]),
+    );
+  });
+
+  it("forRoot: resolves the guard's dependencies from a global module", async () => {
+    await expectGated(
+      await listen([
+        GlobalTokenStoreModule,
+        AgentModule.forRoot({ ...options(), decorators: [UseGuards(InjectedTokenGuard)] }),
+      ]),
+    );
   });
 });
 

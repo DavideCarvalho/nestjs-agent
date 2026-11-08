@@ -102,6 +102,10 @@ export interface AgentMediaAttachmentsMountOptions {
    * so nothing sticks to the shared class. Without it the routes are open to
    * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
    * checked. Static wiring.
+   *
+   * A guard class in `UseGuards(...)` needs no provider entry (Nest builds it in this module), but
+   * what it injects must resolve here: from a global module, or (with `forRootAsync`) from a module
+   * in `imports` that exports it — the removed `guards` option registered the guard class itself.
    */
   decorators?: ClassDecorator[];
 

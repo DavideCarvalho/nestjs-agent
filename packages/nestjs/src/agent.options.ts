@@ -472,6 +472,11 @@ export interface AgentModuleOptions {
    * for this registration, so nothing sticks to the shared classes. The controllers are open to
    * `@nestjs/authorization`'s deny-by-default guard otherwise (`CanAnyone()`), and a `@Can()` passed
    * here is still checked. Static wiring.
+   *
+   * A guard class in `UseGuards(...)` is built by Nest inside this module, so it needs no provider
+   * entry, but what it injects must resolve here: from a global module, or (with `forRootAsync`)
+   * from a module in `imports` that exports it. The removed `guards` option registered the guard
+   * class itself as a provider; nothing does now.
    */
   decorators?: ClassDecorator[];
 
