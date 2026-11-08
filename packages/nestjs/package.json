@@ -1,6 +1,6 @@
 {
   "name": "@dudousxd/nestjs-agent",
-  "version": "1.39.1",
+  "version": "2.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/nestjs-agent.git",
@@ -15,7 +15,7 @@
     "agent",
     "a2ui"
   ],
-  "description": "Governed, durable-backed AI agent for NestJS \u2014 @AiTool, discovery, /agent controllers",
+  "description": "Governed, durable-backed AI agent for NestJS — @AiTool, discovery, /agent controllers",
   "license": "MIT",
   "author": "Davide Carvalho",
   "type": "module",

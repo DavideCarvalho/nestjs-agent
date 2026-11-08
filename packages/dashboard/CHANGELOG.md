@@ -1,5 +1,35 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.19.0
+
+### Minor Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `decorators: ClassDecorator[]` on every module that mounts controllers — `AgentModule` (its routes, the protocol adapters' and the engine's), `AgentDashboardModule`, `AgentChannelsModule`, `AgentPoppyConnectionsModule`, `AgentMediaAttachmentsModule` and `AgentMcpServerModule` (added after the agent's own guard and filter) — the ecosystem's convention, like `@nestjs/mcp`'s: decide who reaches the routes with the official tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`. They are applied to a subclass of each controller made for that registration (`withControllerDecorators` in core), so nothing sticks to the shared classes or leaks into another registration. Without them the routes stay open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`), and a `@Can()` passed here is still checked.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Who reaches the agent's routes is decided only with NestJS's own tools — `decorators` on the module, or the app mounts the routes itself (`routes: false`) — with `@nestjs/authentication` / `@nestjs/authorization`. The options that did it before are gone:
+
+  - `guards` on `AgentModule` and on the media upload routes → `decorators: [UseGuards(MyGuard)]` (a function works too, as a guard instance: `UseGuards({ canActivate })`). `guards` registered each guard class as a provider of the module; `decorators` does not need to (Nest builds a `UseGuards` class in the module itself), but whatever the guard injects must now resolve in the agent's module: export it from a global module, or from a module in `forRootAsync({ imports })`. A guard that injects an app service and moved over as-is fails the boot with an unresolved dependency until it does.
+  - The AI-gateway console's own sign-in — `dashboardAuth` (session and login modes), its `/auth/*` routes, the session cookie, `forRootAsync` (which only built `dashboardAuth`), and the `/react` launcher and `/client` session helpers (`openAgentConsole`, `OpenAgentConsoleButton`) → the app's own session, and `decorators` or `routes: false` on `AgentDashboardModule`; its `guards` → `decorators`.
+  - In production the console refuses to boot with neither `decorators` nor `routes: false`, so it is never served open by default.
+
+  An engine's own controllers (OpenCode's tools endpoint) keep their own authentication and do not take the app's `decorators`.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Mount the agent's routes yourself, as NestJS's own packages let you. `AgentModule.forRoot({ routes: false })` and `AgentDashboardModule.forRoot({ routes: false })` mount no controllers while everything else runs, and the controllers are exported to extend under your own path and decorators (`ChatController`, `ThreadsController`, `ToolCallController`, `QuotaController` and `AgentsController` are now exported too). `AgentMcpServerModule.forRoot({ path: false })` mounts no endpoint: serve `@nestjs/mcp`'s `McpHttpService` from a controller of your own behind `AgentMcpAuthGuard` and `McpChallengeFilter`, which whoever imports the module can now use. The docs recommend, in order: mounting the routes yourself and protecting them with `@nestjs/authentication` / `@nestjs/authorization`, then `decorators`, with `guards` kept for compatibility.
+
+### Patch Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix packages that could be published without files their `exports` point to. The two tsup passes (ESM, CJS) no longer each clean `dist/` while running at the same time; `dist/` is cleaned once before the build. A new `check:exports` step (also `prepack`) fails the release if any `exports`/`main`/`types` path is missing.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tool authorization is NestJS's `@nestjs/authorization`. A tool's `@Can()` — on an `@AiTool` class or its `execute()`, on an `@AgentFunction()` method, on a route exposed with `@Mcp()` — is read off the decorator: an ability that needs only the user decides whether the model (or an MCP client) is offered the tool, asked of `AuthorizationService` for the turn's actor, and the guard checks every call; an ability whose arguments read the call is the guard's alone. `staticCanArgs(...)` marks fixed arguments so they gate the offer too.
+
+  Breaking:
+
+  - `ability: string` is gone from `ToolSpec`, `@AiTool`, `@Mcp()`, `@Agent({ handoff })`, `genuiTools` / `AgentGenuiModule` and the MCP-client and Poppy options. Tools with nothing to decorate take `can: [{ policy, ability }]` instead; `@Mcp({ ability })` refuses the boot and points at `@Can()`.
+  - `@dudousxd/nestjs-agent-authz` is removed (`AgentAuthzModule`, `AuthzRolesPolicy`): use `@nestjs/authorization`'s `AuthorizationModule` and `@Can()`.
+  - A tool that requires an ability with no `AuthorizationModule` imported reaches nobody (fail closed); an `@AiTool` whose `@Can()` reads the call refuses the boot without `AiModule`, since only its guard could check it.
+
+  `AuthorizationModule`'s global guard denies whatever declares no `@Can()`. The library's own controllers, and the tools it governs (`@AiTool`, this library's `@AgentFunction()`), carry `CanAnyone()` (`Can.Anyone()`'s mark, without the dependency): the actor resolver, `guards` and the roles policy decide who reaches them, and a `@Can()` they declare is still checked.
+
 ## 0.18.0
 
 ### Minor Changes

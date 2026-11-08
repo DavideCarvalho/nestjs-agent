@@ -1,5 +1,40 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.6.0
+
+### Minor Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `decorators: ClassDecorator[]` on every module that mounts controllers — `AgentModule` (its routes, the protocol adapters' and the engine's), `AgentDashboardModule`, `AgentChannelsModule`, `AgentPoppyConnectionsModule`, `AgentMediaAttachmentsModule` and `AgentMcpServerModule` (added after the agent's own guard and filter) — the ecosystem's convention, like `@nestjs/mcp`'s: decide who reaches the routes with the official tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`. They are applied to a subclass of each controller made for that registration (`withControllerDecorators` in core), so nothing sticks to the shared classes or leaks into another registration. Without them the routes stay open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`), and a `@Can()` passed here is still checked.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The MCP server is NestJS's `@nestjs/mcp`. `AgentMcpServerModule` mounts `@nestjs/mcp`'s endpoint (Streamable HTTP, stateless, the 2025 and 2026-07-28 protocol revisions, stdio) and serves the agent's tools on it, beside whatever `@Tool()` / `@Resource()` / `@Prompt()` methods the application declares. What `@nestjs/mcp` has no word for stays this package's: the agent's `ActorResolver` (401 with its `WWW-Authenticate` challenge), the personal-agent `insufficient_scope` step-up, the `action` exposure policy, `allowedTools`, `@Mcp()` routes, and per-caller listing — the server built for a request registers only the tools its actor may use. Built on the MCP SDK v2 (`@modelcontextprotocol/server`).
+
+  `@nestjs/mcp` has no hook for tools that are not decorated methods, nor for listing a tool to one caller and not another, so the module wraps its internal `McpServerFactory`; `@nestjs/mcp` is pinned (`>=0.0.4 <0.0.5`) and a test fails if the factory stops being found.
+
+  Breaking:
+
+  - NestJS 12, Node 22, `@nestjs/mcp` as a peer; MCP SDK v2 instead of `@modelcontextprotocol/sdk`.
+  - Stateless: `McpSessionStore`, `McpSession` and the session-ownership checks are gone (every request is authenticated on its own), as are `AgentMcpServerController` and `createAgentMcpServer` — use `registerAgentTools(server, { actor, registry, policy })` on an SDK `McpServer`.
+  - A tool the caller may not use is not registered for its request: calling it is the protocol's "tool not found", not a tool result. A status a `@Mcp()` route answered with is a tool result with `isError`, the status leading its text and in `_meta.httpStatus` (the SDK v2 reports whatever a tool throws as a result).
+  - Zod 3 input schemas are advertised as a permissive object (no JSON Schema extension); calls are still validated against them.
+
+  New: `mcp` passes `@nestjs/mcp`'s own settings through (`instructions`, `http.allowedHosts`, …), and `stdio: { actor }` serves the agent's tools over stdio as that actor.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tool authorization is NestJS's `@nestjs/authorization`. A tool's `@Can()` — on an `@AiTool` class or its `execute()`, on an `@AgentFunction()` method, on a route exposed with `@Mcp()` — is read off the decorator: an ability that needs only the user decides whether the model (or an MCP client) is offered the tool, asked of `AuthorizationService` for the turn's actor, and the guard checks every call; an ability whose arguments read the call is the guard's alone. `staticCanArgs(...)` marks fixed arguments so they gate the offer too.
+
+  Breaking:
+
+  - `ability: string` is gone from `ToolSpec`, `@AiTool`, `@Mcp()`, `@Agent({ handoff })`, `genuiTools` / `AgentGenuiModule` and the MCP-client and Poppy options. Tools with nothing to decorate take `can: [{ policy, ability }]` instead; `@Mcp({ ability })` refuses the boot and points at `@Can()`.
+  - `@dudousxd/nestjs-agent-authz` is removed (`AgentAuthzModule`, `AuthzRolesPolicy`): use `@nestjs/authorization`'s `AuthorizationModule` and `@Can()`.
+  - A tool that requires an ability with no `AuthorizationModule` imported reaches nobody (fail closed); an `@AiTool` whose `@Can()` reads the call refuses the boot without `AiModule`, since only its guard could check it.
+
+  `AuthorizationModule`'s global guard denies whatever declares no `@Can()`. The library's own controllers, and the tools it governs (`@AiTool`, this library's `@AgentFunction()`), carry `CanAnyone()` (`Can.Anyone()`'s mark, without the dependency): the actor resolver, `guards` and the roles policy decide who reaches them, and a `@Can()` they declare is still checked.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Mount the agent's routes yourself, as NestJS's own packages let you. `AgentModule.forRoot({ routes: false })` and `AgentDashboardModule.forRoot({ routes: false })` mount no controllers while everything else runs, and the controllers are exported to extend under your own path and decorators (`ChatController`, `ThreadsController`, `ToolCallController`, `QuotaController` and `AgentsController` are now exported too). `AgentMcpServerModule.forRoot({ path: false })` mounts no endpoint: serve `@nestjs/mcp`'s `McpHttpService` from a controller of your own behind `AgentMcpAuthGuard` and `McpChallengeFilter`, which whoever imports the module can now use. The docs recommend, in order: mounting the routes yourself and protecting them with `@nestjs/authentication` / `@nestjs/authorization`, then `decorators`, with `guards` kept for compatibility.
+
+### Patch Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix packages that could be published without files their `exports` point to. The two tsup passes (ESM, CJS) no longer each clean `dist/` while running at the same time; `dist/` is cleaned once before the build. A new `check:exports` step (also `prepack`) fails the release if any `exports`/`main`/`types` path is missing.
+
 ## 0.5.0
 
 ### Minor Changes

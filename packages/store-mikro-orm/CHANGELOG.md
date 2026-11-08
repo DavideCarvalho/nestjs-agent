@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.42.1
+
+### Patch Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix packages that could be published without files their `exports` point to. The two tsup passes (ESM, CJS) no longer each clean `dist/` while running at the same time; `dist/` is cleaned once before the build. A new `check:exports` step (also `prepack`) fails the release if any `exports`/`main`/`types` path is missing.
+
 ## 0.42.0
 
 ### Minor Changes

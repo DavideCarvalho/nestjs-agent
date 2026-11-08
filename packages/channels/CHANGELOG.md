@@ -1,5 +1,28 @@
 # @dudousxd/nestjs-agent-channels
 
+## 1.0.0
+
+### Minor Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `decorators: ClassDecorator[]` on every module that mounts controllers — `AgentModule` (its routes, the protocol adapters' and the engine's), `AgentDashboardModule`, `AgentChannelsModule`, `AgentPoppyConnectionsModule`, `AgentMediaAttachmentsModule` and `AgentMcpServerModule` (added after the agent's own guard and filter) — the ecosystem's convention, like `@nestjs/mcp`'s: decide who reaches the routes with the official tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`. They are applied to a subclass of each controller made for that registration (`withControllerDecorators` in core), so nothing sticks to the shared classes or leaks into another registration. Without them the routes stay open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`), and a `@Can()` passed here is still checked.
+
+### Patch Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix packages that could be published without files their `exports` point to. The two tsup passes (ESM, CJS) no longer each clean `dist/` while running at the same time; `dist/` is cleaned once before the build. A new `check:exports` step (also `prepack`) fails the release if any `exports`/`main`/`types` path is missing.
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tool authorization is NestJS's `@nestjs/authorization`. A tool's `@Can()` — on an `@AiTool` class or its `execute()`, on an `@AgentFunction()` method, on a route exposed with `@Mcp()` — is read off the decorator: an ability that needs only the user decides whether the model (or an MCP client) is offered the tool, asked of `AuthorizationService` for the turn's actor, and the guard checks every call; an ability whose arguments read the call is the guard's alone. `staticCanArgs(...)` marks fixed arguments so they gate the offer too.
+
+  Breaking:
+
+  - `ability: string` is gone from `ToolSpec`, `@AiTool`, `@Mcp()`, `@Agent({ handoff })`, `genuiTools` / `AgentGenuiModule` and the MCP-client and Poppy options. Tools with nothing to decorate take `can: [{ policy, ability }]` instead; `@Mcp({ ability })` refuses the boot and points at `@Can()`.
+  - `@dudousxd/nestjs-agent-authz` is removed (`AgentAuthzModule`, `AuthzRolesPolicy`): use `@nestjs/authorization`'s `AuthorizationModule` and `@Can()`.
+  - A tool that requires an ability with no `AuthorizationModule` imported reaches nobody (fail closed); an `@AiTool` whose `@Can()` reads the call refuses the boot without `AiModule`, since only its guard could check it.
+
+  `AuthorizationModule`'s global guard denies whatever declares no `@Can()`. The library's own controllers, and the tools it governs (`@AiTool`, this library's `@AgentFunction()`), carry `CanAnyone()` (`Can.Anyone()`'s mark, without the dependency): the actor resolver, `guards` and the roles policy decide who reaches them, and a `@Can()` they declare is still checked.
+
+- Updated dependencies [[`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33), [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33)]:
+  - @dudousxd/nestjs-agent@2.0.0
+
 ## 0.7.1
 
 ### Patch Changes

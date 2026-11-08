@@ -1,5 +1,19 @@
 # @dudousxd/nestjs-agent-ai-sdk
 
+## 0.11.0
+
+### Minor Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The agent runs on `@nestjs/ai`. With no `model` configured, `AgentModule` takes its models from the application's `AiModule.forRoot({ models })` — found wherever it is imported — and runs each turn under what `AiModule` configures for the model: its settings, `retry` / `timeout` (or `resilience` policy or preset), `fallback` models, `onUsage`, and `pricing` (seeded as price rows). The picker lists `AiModule`'s models by name. As in `@nestjs/ai`, the timeout is the time to the first frame, and once a frame has reached the reader nothing is retried and no other model takes over.
+
+  Breaking: `@nestjs/ai`, `@nestjs/resilience` and `ai` are peer dependencies; NestJS 12 and Node 22 are required (the floors of `@nestjs/ai`). A missing `model` is no longer refused at `forRoot`: the boot fails instead when there is no `AiModule` either. `model` still overrides it (a fake in tests, `aiSdkModel(…)`).
+
+  `@dudousxd/nestjs-agent-ai-sdk` exports `runAiSdkTurn` and `describeAiSdkModel`, for providers that put their own policy around the AI SDK turn.
+
+### Patch Changes
+
+- [#406](https://github.com/DavideCarvalho/nestjs-agent/pull/406) [`2163635`](https://github.com/DavideCarvalho/nestjs-agent/commit/21636350636930791f99d8decc4e0056b30e4f33) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Fix packages that could be published without files their `exports` point to. The two tsup passes (ESM, CJS) no longer each clean `dist/` while running at the same time; `dist/` is cleaned once before the build. A new `check:exports` step (also `prepack`) fails the release if any `exports`/`main`/`types` path is missing.
+
 ## 0.10.0
 
 ### Minor Changes
