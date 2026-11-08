@@ -23,9 +23,15 @@ interface McpServing {
   request?: unknown;
 }
 
-/** `@nestjs/mcp`'s `McpServerFactory`, as far as this binding relies on it. */
+/**
+ * `@nestjs/mcp`'s `McpServerFactory`, as far as this binding relies on it. Its own `create()` is
+ * synchronous; the wrapped one returns a promise when it registers the agent's tools, which every
+ * caller in `@nestjs/mcp` 0.0.4 awaits (the HTTP handler and stdio's `serveStdio` both take an
+ * SDK `McpServerFactory`, typed `McpServer | Promise<McpServer>`). Typed as such, so a caller that
+ * would use the result synchronously does not compile.
+ */
 interface McpServerFactoryLike {
-  create(serving: McpServing): McpServer;
+  create(serving: McpServing): McpServer | Promise<McpServer>;
 }
 
 /** Marks a factory this binding already wrapped, so a second registration does not wrap it twice. */
@@ -73,14 +79,14 @@ export class AgentMcpServerBinding implements OnModuleInit {
     const target = factory as McpServerFactoryLike & { [WRAPPED]?: true };
     if (target[WRAPPED] === true) return;
     const create = target.create.bind(target);
-    // Async only where it has to be: `@nestjs/mcp` awaits the HTTP server's factory, while a stdio
-    // connection with no agent actor gets `@nestjs/mcp`'s server unchanged.
-    target.create = ((serving: McpServing) => {
+    // Async only where it has to be: both `@nestjs/mcp` callers (HTTP and stdio) await the factory,
+    // and a server built for no agent actor is `@nestjs/mcp`'s, returned as it was.
+    target.create = (serving: McpServing): McpServer | Promise<McpServer> => {
       const server = create(serving);
       const actor = this.actorFor(serving);
       if (actor === undefined) return server;
       return this.serve(server, actor);
-    }) as McpServerFactoryLike['create'];
+    };
     target[WRAPPED] = true;
   }
 
@@ -90,7 +96,8 @@ export class AgentMcpServerBinding implements OnModuleInit {
     return this.options.stdio?.actor;
   }
 
-  private async serve(server: McpServer, actor: Actor): Promise<McpServer> {
+  private async serve(built: McpServer | Promise<McpServer>, actor: Actor): Promise<McpServer> {
+    const server = await built;
     await registerAgentTools(server, {
       actor,
       registry: this.registry,
