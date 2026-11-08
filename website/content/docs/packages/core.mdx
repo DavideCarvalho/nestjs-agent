@@ -140,7 +140,10 @@ classes (`ToolForbiddenError`, `ToolNotFoundError`, `ToolDisabledError`, `ToolIn
 `releaseGatedFrames`, `decodeStreamEvent`) and the structured-output helpers (`validateStructured`,
 `extractJson`, `DEFAULT_STRUCTURED_OUTPUT_INSTRUCTION`, `repairInstruction`), the
 `seedModelPrices(store, prices[])` helper (loops `upsertModelPrice` over an array — the quick way to
-seed a pricing table at boot), and the `aviary:agent:*` diagnostics helpers — re-exported by the
+seed a pricing table at boot), the authorization helpers (`CanAnyone()`, `staticCanArgs(...)`, and
+`withControllerDecorators(controllers, decorators)`, which subclasses each controller and applies
+the decorators to the subclass: how every module here implements its `decorators` option, for a
+module of your own that mounts controllers), and the `aviary:agent:*` diagnostics helpers — re-exported by the
 umbrella package too, so an app importing `@dudousxd/nestjs-agent` never needs a direct dependency on
 `-core`.
 

@@ -313,7 +313,7 @@ export class PurgeCacheTool implements ToolHandler { /* … */ }
 - **Deny by default stays NestJS's.** `AuthorizationModule`'s global guard refuses whatever declares
   no `@Can()`. The agent's own routes, and the tools it governs (`@AiTool`, this library's
   `@AgentFunction()`), are marked open to it with `CanAnyone()` — the same mark as `Can.Anyone()`;
-  who reaches them is the actor resolver's, the `guards`' and the roles policy's call, and a `@Can()`
+  who reaches them is the actor resolver's, the `decorators`' and the roles policy's call, and a `@Can()`
   they declare is still checked.
 - **Fail closed.** A tool that requires an ability, with no `AuthorizationModule` to ask, reaches
   nobody. An `@AiTool` whose `@Can()` reads the call refuses the boot without `AiModule`: only its
@@ -363,7 +363,7 @@ decided the way NestJS's own packages leave it to you, in this order of preferen
    decorators applied to every controller it mounts, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]`.
    A function works too, as a guard instance: `UseGuards({ canActivate: (ctx) => … })`.
 
-3. **`guards`** and the console's built-in auth stay for compatibility.
+The older `guards` options and the console's own sign-in are removed.
 
 With neither, the routes are open to `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`)
 and the `actorResolver` decides who calls.

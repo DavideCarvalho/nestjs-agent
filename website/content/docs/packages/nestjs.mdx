@@ -43,8 +43,8 @@ export class AppModule {}
 
 | Static method | Purpose |
 |---|---|
-| `forRoot(options: AgentModuleOptions)` | Register the module synchronously — `model` (required), then optionally systemPrompt, store, actorResolver, quota, models, attachments, sink, rolesPolicy, approvalPolicy, actionApprovalMode, path, durable, surface, adapters, tools, defaultAgent, … |
-| `forRootAsync(options: AgentModuleAsyncOptions)` | Register via a factory (`imports` / `inject` / `useFactory`); `path`, `durable`, `guards`, `surface` and `adapters` stay static since routes and the runner are wired before the factory resolves. |
+| `forRoot(options: AgentModuleOptions)` | Register the module synchronously — all optional (`model` replaces `AiModule`'s models): systemPrompt, store, actorResolver, quota, models, attachments, sink, rolesPolicy, approvalPolicy, actionApprovalMode, path, durable, surface, adapters, tools, defaultAgent, … |
+| `forRootAsync(options: AgentModuleAsyncOptions)` | Register via a factory (`imports` / `inject` / `useFactory`); `path`, `durable`, `decorators`, `surface`, `routes`, `adapters` and `engine` stay static since routes and the runner are wired before the factory resolves. |
 
 There is no `forFeature` — named agents beyond the default are declared as `@Agent`-decorated
 providers and discovered at boot (see [multi-agent](/docs/agent/guides/multi-agent)), not passed as a

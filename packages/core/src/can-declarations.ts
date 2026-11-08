@@ -95,7 +95,7 @@ const CAN_ANYONE_METADATA = 'authorization:can-anyone';
  * `@nestjs/authorization`'s `Can.Anyone()`, without depending on it: marks a class or a method as
  * open to its global guard, which denies whatever declares no `@Can()` — a forgotten check must not
  * open a route. The library's own routes and the tools it governs carry it: who reaches them is the
- * agent's decision (the `actorResolver`, its `guards`, the roles policy, the tool's own `@Can()`),
+ * agent's decision (the `actorResolver`, its `decorators`, the roles policy, the tool's own `@Can()`),
  * and a `@Can()` declared on them is still checked, since the mark only opens what requires nothing.
  */
 export function CanAnyone(): ClassDecorator & MethodDecorator {

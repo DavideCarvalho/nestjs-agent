@@ -147,19 +147,20 @@ function resolveStore(options: AgentModuleOptions, modules: ModulesContainer): A
 }
 
 /**
- * The roles policy: the `rolesPolicy` option, else one another module binds (`AgentAuthzModule`, a
- * host's own), else the role-based default. The same scan as the store, for the same reason: Nest
- * resolves a module's own provider before a global one, so a policy bound elsewhere under
- * `AGENT_ROLES_POLICY` would otherwise never reach the agent — and the role-based default, which
- * has no notion of abilities, would silently stand in for it.
+ * The roles policy: the `rolesPolicy` option, else one a host's own module binds under
+ * `AGENT_ROLES_POLICY`, else the role-based default. The same scan as the store, for the same
+ * reason: Nest resolves a module's own provider before a global one, so a policy bound elsewhere
+ * would otherwise never reach the agent and the role-based default would silently stand in for it.
+ * Ability checks are `@nestjs/authorization`'s `@Can()` on the tool, not a roles policy.
  */
 function resolveRolesPolicy(options: AgentModuleOptions, modules: ModulesContainer): RolesPolicy {
   const external = externalWrapper(modules, AGENT_ROLES_POLICY);
   if (options.rolesPolicy !== undefined) {
     if (external !== undefined) {
       logger.warn(
-        'Both a `rolesPolicy` option and a module binding AGENT_ROLES_POLICY (e.g. ' +
-          'AgentAuthzModule) are configured — the `rolesPolicy` option wins.',
+        'Both a `rolesPolicy` option and a module binding AGENT_ROLES_POLICY are configured — ' +
+          'the `rolesPolicy` option wins. (For ability checks, use `@Can()` from ' +
+          '@nestjs/authorization on the tool instead of a roles policy.)',
       );
     }
     return options.rolesPolicy;

@@ -9,7 +9,7 @@ import { Callout } from 'fumadocs-ui/components/callout';
 <Callout type="warn" title="Experimental — tracks a draft spec">
 This implements the client side of the [Personal Agent Protocol (Poppy)](https://personalagentprotocol.org/docs/spec)
 **Draft 0.1**. The spec is still in development; this surface **will change, possibly in breaking ways
-and outside semver majors**, as it evolves.
+and outside semver majors**, as it evolves. The `1.0` version number came from a breaking-change bump, not a stability promise.
 </Callout>
 
 Poppy lets personal agents talk to your app. This is the other direction: **your app's agent becomes
@@ -70,7 +70,9 @@ in an env var. Several keys rotate: the first signs, all are published.
 The routes are plain controllers under `path`. They must be **public** — companies fetch the
 identity, and the person opens the connect link from a chat — so if your app has a global guard,
 let `{path}/*` through it. They need no session or CSRF token: the connect id in the URL is the
-capability.
+capability. The controller carries `CanAnyone()`, so `@nestjs/authorization`'s deny-by-default
+guard lets it through. `decorators` on `AgentPoppyConnectionsModule.forRoot` (or `forRootAsync`)
+adds class decorators to it; a `@Can()` passed there is still checked.
 
 The tools are registered in `AGENT_TOOL_REGISTRY`, so your `RolesPolicy`, personas and agent tool
 allow-lists apply (`tools: ['poppy_companies', 'poppy_connect', …]`). Personal agents never reach

@@ -171,9 +171,13 @@ export class ChannelsModule {}
 `ChannelThreadsService` is yours: a table of `(channel, conversation, actor) → threadId`. `thread`
 returning `null` starts a new thread, reported to `onThreadCreated`.
 
-<Callout type="info" title="Guards">
-The routes are public by design — each adapter verifies its own requests. A global guard
-(`APP_GUARD`) that requires a session also runs on them: let `/channels/*` through it.
+<Callout type="info" title="Protecting the webhook routes">
+The routes are public by design — each adapter verifies its own requests. The controller carries
+`CanAnyone()`, so `@nestjs/authorization`'s deny-by-default guard lets it through. Any other global
+guard (`APP_GUARD`) that requires a session also runs on them: let `/channels/*` through it.
+`decorators` on `AgentChannelsModule.forRoot` adds class decorators to the controller (an IP
+allow-list guard, say); a `@Can()` passed there is still checked. `path: false` mounts no route:
+call `AgentChannelsService.handle(name, req, res)` from your own controller.
 </Callout>
 
 ## WhatsApp with Evolution API
@@ -704,8 +708,9 @@ A channel without `capabilities.media` gets the reply's `fallbackText` (or capti
 
 ## Options
 
-`AgentChannelsModule.forRoot({ channels, store?, durable?, path? })` (or `forRootAsync({ imports,
-inject, useFactory, path? })`, where `useFactory` returns `{ channels, store?, durable? }`):
+`AgentChannelsModule.forRoot({ channels, store?, durable?, path?, decorators? })` (or
+`forRootAsync({ imports, inject, useFactory, path?, decorators? })`, where `useFactory` returns
+`{ channels, store?, durable? }`):
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -713,6 +718,7 @@ inject, useFactory, path? })`, where `useFactory` returns `{ channels, store?, d
 | `store` | `AGENT_CHANNEL_STORE` when bound, else in-process memory | Where message ids, sent messages, cards, questions in progress and relayed outcomes are kept (`ChannelStore`). |
 | `durable` | the app's `WorkflowEngine` when the agent runs durably | `false` → in this process; an engine → that one. See [Durable processing](#durable-processing). |
 | `path` | `'channels'` | Routes are `/<path>/<name>` and `/<path>/<name>/:token`. `false` mounts none. |
+| `decorators` | `[]` | Class decorators applied to the webhook controller, e.g. `[UseGuards(IpAllowListGuard)]`. A `@Can()` passed here is still checked. Static. |
 
 Each channel:
 

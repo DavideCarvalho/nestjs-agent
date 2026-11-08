@@ -34,7 +34,7 @@ import { AgentGenuiModule } from '@dudousxd/nestjs-agent/genui';
 export class AppModule {}
 ```
 
-That mounts `POST /agent/a2ui` (under the module's `path`). The route resolves the actor with the module's `actorResolver`, sits behind its `guards`, and checks ownership exactly as `POST /agent/chat` does; `surface: 'engine'` mounts nothing. The body:
+That mounts `POST /agent/a2ui` (under the module's `path`). The route resolves the actor with the module's `actorResolver`, sits behind its `decorators`, and checks ownership exactly as `POST /agent/chat` does; `surface: 'engine'` mounts nothing. The body:
 
 | Field | Meaning |
 | --- | --- |

@@ -534,9 +534,14 @@ just that issuer when no `oauth` option is configured.
 |---|---|---|
 | `name`, `version` | — (required) | Reported to clients in the `initialize` handshake |
 | `auth` | — (required) | The `ActorResolver` deciding who the caller is |
-| `path` | `'mcp'` | Route the endpoint mounts at |
+| `path` | `'mcp'` | Route the endpoint mounts at. `false` mounts no endpoint (and no protected-resource document): serve `@nestjs/mcp`'s `McpHttpService` from your own controller behind `AgentMcpAuthGuard` and `McpChallengeFilter` |
+| `decorators` | `[]` | Class decorators added to the endpoint after the agent's own guard and challenge filter, e.g. `[Can(McpPolicy, 'connect')]`. Static |
+| `mcp` | — | `@nestjs/mcp`'s own settings: `title`, `description`, `instructions`, `icons`, `http` (`allowedHosts`, `allowedOrigins`, `responseMode`, …), `stdio`. Its `auth` is not taken |
+| `stdio` | — | `{ actor }`: serve the agent's tools over stdio too, as that actor. Omit and stdio serves only the app's own `@Tool()` methods |
 | `actions` | `'deny'` | `'execute'` lets `action` tools run with no human approval |
 | `allowedTools` | every exposable tool the actor may use | The names this surface exposes at all — on the list *and* on the call |
+| `emptyRoles` | `'allow'` | `'deny'` hides a tool whose roles come out empty, on this surface only. See [Closing an empty roles list](#closing-an-empty-roles-list-on-this-surface) |
+| `context` | — | Ties a call to the turn it serves, from the request's `_meta` (an engine such as OpenCode), so `ctx.emitUi` reaches that turn's stream |
 | `routes.principal` | the resolved actor on `request.user` | How the MCP actor becomes the dispatched request's principal |
 | `oauth` | — | `{ issuer, scopesSupported?, resourceName? }`: serve the [protected-resource metadata](#oauth-discovery) and name it in challenges |
 | `baseUrl` | the request's origin | The public origin used in the metadata and challenges |
