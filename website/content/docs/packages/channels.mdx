@@ -1,0 +1,74 @@
+---
+title: '@dudousxd/nestjs-agent-channels'
+icon: MessageCircle
+description: The agent on text channels (WhatsApp through Evolution API, Whatsmiau or the Cloud API, and Telegram), one webhook route per channel.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+<Tabs items={['pnpm', 'npm']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @dudousxd/nestjs-agent-channels
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @dudousxd/nestjs-agent-channels
+    ```
+  </Tab>
+</Tabs>
+
+`AgentChannelsModule` mounts one webhook route per channel. Each route verifies the request,
+deduplicates by the provider's message id, answers `200` at once and runs the turn in the
+background. The reply is converted to the channel's markdown and split at its length limit.
+Pending proposals arrive as buttons (or a text instruction), questions as numbered text, media as
+staged attachments. Peers: `@dudousxd/nestjs-agent` and `@dudousxd/nestjs-agent-core`. The adapters
+use the global `fetch`.
+
+The full guide is [Text channels](/docs/agent/guides/channels).
+
+## Minimal example
+
+```ts
+import { AgentChannelsModule, telegram } from '@dudousxd/nestjs-agent-channels';
+
+AgentChannelsModule.forRoot({
+  channels: [
+    {
+      adapter: telegram({ botToken: process.env.TELEGRAM_BOT_TOKEN, secretToken: process.env.TELEGRAM_SECRET }),
+      actor: (message) => accounts.forTelegram(message.from), // null → not answered
+      thread: (actor, message) => threads.get(message.conversation), // null → a new thread
+      onThreadCreated: (threadId, actor, message) => threads.set(message.conversation, threadId),
+    },
+  ],
+});
+// POST /channels/telegram
+```
+
+## `AgentChannelsModule.forRoot(options)`
+
+| Option | Default | Purpose |
+|---|---|---|
+| `channels` | — | One entry per channel: `adapter`, `actor`, `thread`, hooks. See [Options](/docs/agent/guides/channels#options). |
+| `store` | `AGENT_CHANNEL_STORE` when bound, else memory | Message ids, questions in progress, relayed outcomes. The Drizzle and MikroORM store modules bind one; `RedisChannelStore` from [`-transport-redis`](/docs/agent/packages/transport-redis) works too. |
+| `durable` | on when the agent runs on the `aviary` durable engine | `false` handles messages in this process; an engine runs them there. See [Durable processing](/docs/agent/guides/channels#durable-processing). |
+| `path` | `'channels'` | Routes are `/<path>/<name>`. `false` mounts none: call `AgentChannelsService.handle(name, req, res)` from your own controller. |
+| `decorators` | `[]` | Class decorators applied to the webhook controller. The controller carries `CanAnyone()`; a `@Can()` passed here is still checked. |
+
+`forRootAsync({ imports, inject, useFactory, path?, decorators? })` takes the same options, with
+`path` and `decorators` kept static.
+
+## Exports
+
+| Export | Purpose |
+|---|---|
+| `AgentChannelsModule`, `AgentChannelsService`, `AgentChannelsController` | The module, the service behind the route, and the controller to extend. |
+| `evolutionApi`, `whatsmiau`, `whatsappCloud`, `telegram` | The built-in adapters. Any `ChannelAdapter` works. |
+| `ptBrChannelTexts`, `DEFAULT_CHANNEL_TEXTS`, `mergeChannelTexts` | The texts the channel sends. See [Language](/docs/agent/guides/channels#language). |
+
+## Related
+
+- [Text channels](/docs/agent/guides/channels): setup per provider, proposals, media, hooks, durability
+- [Action proposals](/docs/agent/guides/action-proposals): what a channel's Confirm and Cancel buttons decide
+- [`-transport-redis`](/docs/agent/packages/transport-redis): `RedisChannelStore` for several replicas

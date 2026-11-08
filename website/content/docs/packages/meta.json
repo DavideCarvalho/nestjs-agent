@@ -15,6 +15,7 @@
     "mcp",
     "mcp-server",
     "poppy",
+    "channels",
     "evals",
     "dashboard",
     "store-mikro-orm",

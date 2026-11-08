@@ -6,7 +6,7 @@ description: The full AgentModule.forRoot() options reference, forRootAsync, and
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-Every option below is passed to `AgentModule.forRoot({ … })`. `model` is the only required option — everything else has a default. See [Architecture](/docs/agent/concepts/architecture) for how these pieces fit together, and [`packages/nestjs`](/docs/agent/packages/nestjs) for the package itself.
+Every option below is passed to `AgentModule.forRoot({ … })`. None is required: with no `model`, the turns run on the models of the app's `AiModule.forRoot({ models })` (see [Models from `AiModule`](#models-from-aimodule)). See [Architecture](/docs/agent/concepts/architecture) for how these pieces fit together, and [`packages/nestjs`](/docs/agent/packages/nestjs) for the package itself.
 
 ## `AgentModule.forRoot(options)`
 
@@ -14,19 +14,28 @@ Every option below is passed to `AgentModule.forRoot({ … })`. `model` is the o
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `model` | `ModelProvider` | — (required) | The LLM provider — `aiSdkModel(…)`, or `aiSdkModels({ … })` for a picker (its `.catalog` is used when `models` is omitted). The only required option. |
+| `model` | `ModelProvider` | `AiModule`'s models | Replaces the models of `AiModule.forRoot({ models })` — `aiSdkModel(…)`, `aiSdkModels({ … })` for a picker (its `.catalog` is used when `models` is omitted), or a fake in tests. With neither `model` nor `AiModule`, the boot fails. Not needed when an `engine` runs the turns. |
 | `systemPrompt` | `string \| (ctx) => string` | `'You are a helpful assistant.'` | Base prompt of the default agent and of any `@Agent` that declares none; the function form gets `{ actor, agentName, pageContext }`. |
-| `models` | `ModelCatalog` | the model provider's `.catalog`, else none (empty catalog) | Which models a caller may pick: answers `GET /agent/models?agent=` and gates a send's `model` and a thread's pinned `model` (400 unless listed as `available` for that actor and agent). The pick reaches `model` as `ModelTurnArgs.model` for every call of the turn. `staticModelCatalog(view)` wraps a fixed list. See [Picking a model](/docs/agent/guides/frontend#picking-a-model). |
+| `models` | `ModelCatalog` | `AiModule`'s models by name (`default` first), else the model provider's `.catalog`, else none | Which models a caller may pick: answers `GET /agent/models?agent=` and gates a send's `model` and a thread's pinned `model` (400 unless listed as `available` for that actor and agent). The pick reaches `model` as `ModelTurnArgs.model` for every call of the turn. `staticModelCatalog(view)` wraps a fixed list. See [Picking a model](/docs/agent/guides/frontend#picking-a-model). |
 | `store` | `AgentStore` | a store module's `AGENT_STORE`, else `InMemoryAgentStore` | Persistence adapter. Omit it and import a store module (e.g. `MikroOrmAgentStoreModule.forFeature()`) — its `AGENT_STORE` is found automatically, whatever the import order. With neither, the in-memory store is used and a boot warning says it is not for production. |
 | `sink` | `TokenStreamSink` | in-memory sink | Live token transport. The default is single-process only — for multi-replica, use `@dudousxd/nestjs-agent-transport-redis`'s `RedisTokenStreamSink`, or, with no Redis, `DrizzleTokenStreamSink` / `MikroOrmTokenStreamSink` over your database (see [the live stream across replicas](/docs/agent/guides/persistence#the-live-stream-across-replicas-sink)). |
 | `tools` | `FunctionalTool[]` | `[]` | Static functional tools (`{ spec, handler }`) registered at boot. DI-dependent tools use `provideAgentTool(factory, inject)` in a module's `providers` instead. |
+| `agentFunctions` | `boolean` | `true` | Offer the app's `@nestjs/ai` `@AgentFunction()` methods as agent tools, run through `AiTools.call` (so their guards, interceptors and pipes apply). `false` leaves them to `@nestjs/ai`'s own calls. See [Tools](/docs/agent/guides/tools#nestjsai-agent-functions). |
+| `agentFunctionCaller` | `(actor, ctx?) => AiCaller` | `(actor) => ({ user: actor })` | Who an `@AgentFunction()` call acts for — the `user` (and `scopes`) its guards and `@Can()` policies read. Map the actor to `scopes` here for functions that declare them; with the default, such a function is refused. |
 | `toolTransientRetry` | `{ attempts, backoffMs, classify? } \| false` | `{ attempts: 2, backoffMs: 150 }` | Re-invokes a tool in place, inside the same tool step, when it throws a transient error (deadlock, lock-wait timeout, serialization failure). `classify` changes what counts as transient; `false` turns it off. Pair with [`ctx.idempotencyKey`](/docs/agent/guides/tools#making-a-tool-safe-to-run-twice). |
 | `toolTimeoutMs` | `number` | _none_ (no timeout) | Abort a single tool call that runs longer than this and record it as failed — the model gets the timeout as the tool's result and can adapt, instead of the turn hanging. See [Tools](/docs/agent/guides/tools#per-tool-timeout). |
 | `retrieval` | `{ mode: 'inject'; retriever: Retriever; topK?: number }` | _none_ (off) | Always-on RAG: before each turn, retrieve passages for the user message and augment the system prompt with them. For agentic retrieval (the model decides when to search) don't set this — expose a tool instead: `provideAgentTool(createRetrievalTool(retriever))`. |
 | `attachments` | `{ maxBytes?: number; allowedContentTypes?: string[] }` | 20 MiB, common multimodal types | Limits for `POST /agent/attachments` when the bound staging store declares none (a store's `describe()` — `AgentMediaAttachmentsModule`'s — wins). `maxBytes` narrows — never raises — the hard 32 MiB ceiling (`HARD_MAX_ATTACHMENT_BYTES`) multer enforces while the body streams; `allowedContentTypes` defaults to `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `application/pdf`, `text/plain`, `text/csv`. The route is live whenever something is bound to `AGENT_ATTACHMENT_STAGING` (`501` otherwise). Served to clients by `GET /agent/config`. |
-| `guards` | `Type<CanActivate>[]` | `[]` | Guard(s) stamped uniformly on every controller this module mounts (chat, threads, tool-call, quota, agents, attachments, config, …) via `@nestjs/common`'s `@UseGuards`, with REPLACE semantics — a repeated registration never accumulates guards. Without this, every route is open beyond whatever `actorResolver` itself enforces. Guard classes are added to the module's `providers` for DI. |
+| `decorators` | `ClassDecorator[]` | `[]` | Class decorators applied to every controller this module mounts (chat, threads, tool-call, quota, agents, attachments, config, the protocol adapters'), e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]` from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass, so nothing sticks to the shared classes. Without them the routes carry `CanAnyone()` and are open beyond what `actorResolver` enforces. A guard in `UseGuards(...)` needs no provider entry, but what it injects must resolve in the agent's module (a global module, or `forRootAsync({ imports })`). Replaces the removed `guards`. |
+| `routes` | `boolean` | `true` | `false` mounts none of the agent's routes while everything else runs. Serve them from your own controllers: call `AgentService`, or extend the exported controllers (`ChatController`, `ThreadsController`, …) under your own path and decorators. |
 | `surface` | `'http' \| 'engine' \| 'both'` | `'both'` | Which half this process mounts. `'engine'` mounts no controllers; `'http'` mounts them and, under `durable`, executes no agent work when paired with `WorkflowsModule.forRoot({ worker: false })` (or, on the `aviary` engine, `AgentDurableModule.forRoot({ surface })`). The action-proposal worker does not start on `'http'`. Static wiring, like `path`. |
-| `adapters` | `AgentProtocolAdapter[]` | `[]` | Wire protocols served alongside the native one, over the same runs — `[agUiAdapter()]` mounts `POST /agent/ag-ui` ([AG-UI](/docs/agent/guides/ag-ui)). Their controllers mount under `path`, behind `guards`, and not at all on `surface: 'engine'`. Static wiring: on `forRootAsync` it sits on the options object, not in `useFactory`'s result. |
+| `adapters` | `AgentProtocolAdapter[]` | `[]` | Wire protocols served alongside the native one, over the same runs — `[agUiAdapter()]` mounts `POST /agent/ag-ui` ([AG-UI](/docs/agent/guides/ag-ui)). Their controllers mount under `path`, behind `decorators`, and not at all on `surface: 'engine'`. Static wiring: on `forRootAsync` it sits on the options object, not in `useFactory`'s result. |
+
+### Models from `AiModule`
+
+With no `model`, `AgentModule` uses the models of the app's `AiModule.forRoot({ models })`, wherever it is imported. The picker lists them by name, `default` first. Each turn runs under what `AiModule` configures for the model: `retry` / `timeout` (or a `resilience` policy or preset), `fallback` models, `onUsage`, and `pricing` (seeded as price rows). As in `@nestjs/ai`, the timeout is the time to the first frame.
+
+A turn sends the generation settings of the model's definition and `defaults`, the same ones `@nestjs/ai`'s own calls send: `maxOutputTokens`, `temperature`, `topP`, `topK`, `seed`, `stopSequences`, `presencePenalty`, `frequencyPenalty`, `providerOptions` and `headers`.
 
 ### Identity & authz
 
@@ -141,14 +150,16 @@ interface AgentModuleAsyncOptions {
   useFactory: (...args: never[]) => AgentModuleOptions | Promise<AgentModuleOptions>;
   path?: string;
   durable?: boolean;
-  guards?: Type<CanActivate>[];
+  decorators?: ClassDecorator[];
   surface?: 'http' | 'engine' | 'both';
+  routes?: boolean;
   adapters?: AgentProtocolAdapter[];
+  engine?: AgentEngine;
 }
 ```
 
 <Callout type="info" title="Why these fields live outside the factory">
-  `path`, `durable`, `guards`, `surface` and `adapters` are all static wiring metadata — which controllers exist, which routes they expose, and which runner `AGENT_RUNNER` binds to are all decided at module build time, before the async factory resolves. Passing them on `AgentModuleAsyncOptions` (not inside the resolved `AgentModuleOptions`) is what makes that possible.
+  `path`, `durable`, `decorators`, `surface`, `routes`, `adapters` and `engine` are all static wiring metadata — which controllers exist, which routes they expose, and which runner `AGENT_RUNNER` binds to are all decided at module build time, before the async factory resolves. Passing them on `AgentModuleAsyncOptions` (not inside the resolved `AgentModuleOptions`) is what makes that possible.
 </Callout>
 
 `AGENT_STORE` resolves the same way for `forRoot` and `forRootAsync`: the factory's `store`, else the one a store module binds (found automatically), else the in-memory store.

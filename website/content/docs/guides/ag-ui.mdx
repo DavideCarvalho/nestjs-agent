@@ -24,7 +24,7 @@ AgentModule.forRoot({
 
 That mounts `POST /agent/ag-ui`. The body is a `RunAgentInput`; the answer is `text/event-stream`,
 one AG-UI event per `data:` line, from `RUN_STARTED` to `RUN_FINISHED` or `RUN_ERROR`. The route
-resolves the actor with the module's `actorResolver`, sits behind its `guards`, and checks ownership
+resolves the actor with the module's `actorResolver`, sits behind its `decorators`, and checks ownership
 exactly as `POST /agent/chat` does. `adapters` is static wiring, like `surface`: on
 `AgentModule.forRootAsync` it sits on the options object, not in `useFactory`'s result, and
 `surface: 'engine'` mounts nothing.
@@ -200,7 +200,7 @@ resumed run.
 ## Adapters
 
 `adapters` takes any `AgentProtocolAdapter` — `{ name, controllers, providers? }`. Its controllers
-mount under the agent's path, behind `guards`, and inject what the native ones do (`AgentService`,
+mount under the agent's path, behind `decorators`, and inject what the native ones do (`AgentService`,
 `AGENT_ACTOR_RESOLVER`). `agUiAdapter()` is written against that and nothing else, so a protocol of
 your own is built the same way.
 

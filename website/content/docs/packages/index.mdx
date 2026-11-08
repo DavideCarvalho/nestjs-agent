@@ -27,6 +27,8 @@ module, the React frontend). Which tables, which tenant column, which roles, whi
 | [`-mcp`](/docs/agent/packages/mcp) | MCP client — import an external Model Context Protocol server's tools as governed agent tools (stdio + streamable HTTP). |
 | [`-mcp-server`](/docs/agent/packages/mcp-server) | MCP server — expose this deployment's tools to an external MCP client, over the agent's own registry and roles policy. |
 | [`/genui`](/docs/agent/packages/genui) | Generative UI across the packages — the isomorphic catalog (`-core/genui`), `AgentGenuiModule` (`nestjs-agent/genui`) and `GenuiProvider` (`-react/genui`). |
+| [`-poppy`](/docs/agent/packages/poppy) | Personal Agent Protocol ("Poppy", Draft 0.1, experimental): the company-side conversation endpoint, your agent's connections to other Poppy companies, and a reference Personal Agent. |
+| [`-channels`](/docs/agent/packages/channels) | The agent on text channels (WhatsApp, Telegram): one webhook route per channel, durable, with proposals as buttons. |
 | [`-evals`](/docs/agent/packages/evals) | Answer-quality scoring over stored runs — a `Scorer` SPI, a resumable batch runner, and rule / statistical / model-graded built-ins. |
 | [`-dashboard`](/docs/agent/packages/dashboard) | Standalone AI-gateway governance console (bundled SPA + API), no Telescope required. |
 | [`-store-mikro-orm`](/docs/agent/packages/store-mikro-orm) | `AgentStore` + `AgentGovernanceQueries` + `AgentPricingStore` on MikroORM, plus the action-proposal stores, `MikroOrmConfirmTokenStore` and `MikroOrmTokenStreamSink`. |
@@ -74,6 +76,8 @@ either, both, or neither.
   <Card title="MCP" href="/docs/agent/packages/mcp" description="Import an external MCP server's tools as governed agent tools." />
   <Card title="MCP server" href="/docs/agent/packages/mcp-server" description="Expose this deployment's tools to an external MCP client." />
   <Card title="Generative UI" href="/docs/agent/packages/genui" description="The isomorphic catalog, AgentGenuiModule, and GenuiProvider." />
+  <Card title="Poppy" href="/docs/agent/packages/poppy" description="Personal Agent Protocol: company endpoint, connections, reference Personal Agent." />
+  <Card title="Channels" href="/docs/agent/packages/channels" description="The agent on WhatsApp and Telegram." />
   <Card title="Evals" href="/docs/agent/packages/evals" description="Answer-quality scoring over stored runs." />
   <Card title="Dashboard" href="/docs/agent/packages/dashboard" description="The standalone AI-gateway governance console." />
   <Card title="Store (MikroORM)" href="/docs/agent/packages/store-mikro-orm" description="AgentStore + AgentGovernanceQueries + AgentPricingStore on MikroORM." />

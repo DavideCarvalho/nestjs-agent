@@ -509,6 +509,44 @@ in [Identity & Authorization](/docs/agent/guides/identity-and-authorization).
 
 ---
 
+## `@nestjs/ai` agent functions
+
+An `@AiTool` is also a [`@nestjs/ai`](https://docs.nestjs.com/ai/tools) `@AgentFunction()` on its
+`execute()` (when its input schema produces JSON Schema, as Zod 4's does). With `AiModule`
+imported, the agent's calls go through `AiTools.call`, so the guards, interceptors and pipes the
+class and `execute()` declare run around them. `AiService`'s own calls can offer the tool too;
+there, outside a turn, an `action` is refused (only a turn asks a person).
+
+The other way round, every `@AgentFunction()` method in the app is an agent tool: a `read` tool
+under the policy's default roles. To govern one, use this library's `@AgentFunction()`: NestJS's
+options plus `kind`, `roles`, `enabled`, `presentation`, `terminal` and `replacementKey`.
+
+```ts
+import { AgentFunction } from '@dudousxd/nestjs-agent';
+import type { AgentFunctionContext } from '@nestjs/ai';
+
+@Injectable()
+export class Refunds {
+  @AgentFunction({
+    name: 'refund',
+    description: 'Refund an order',
+    inputSchema: RefundInput,
+    kind: 'action', // waits for a person's approval
+    roles: ['SUPPORT'],
+  })
+  refund(input: RefundInput, ctx: AgentFunctionContext) { /* … */ }
+}
+```
+
+A method takes one of the two decorators, not both. Two `AgentModule` options control this:
+
+| Option | Default | Description |
+|---|---|---|
+| `agentFunctions` | `true` | `false` stops offering the app's `@AgentFunction()` methods to the agent; `@nestjs/ai`'s own calls still use them. |
+| `agentFunctionCaller` | `(actor) => ({ user: actor })` | Maps the turn's actor to the call's `user` and `scopes`, what the function's guards and `@Can()` policies read. The default sets no `scopes`, so a function that declares `scopes` is refused until you map them here. |
+
+---
+
 ## Tools you didn't write
 
 A tool does not have to be a class in your codebase. An [MCP](https://modelcontextprotocol.io)

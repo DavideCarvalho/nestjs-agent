@@ -1094,7 +1094,8 @@ package's `exports`, `main`, `module`, `types` or `bin` does not exist. `release
 
 ## Status
 
-Early development (`0.x`). The package surface and SPIs are stabilizing.
+`@dudousxd/nestjs-agent` is at 2.x; most other packages are still `0.x`, and their surface and SPIs are
+still stabilizing. Breaking changes follow semver and are listed in each package's CHANGELOG.
 
 ## License
 

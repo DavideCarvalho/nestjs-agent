@@ -171,11 +171,11 @@ who sent it. Turn it on only when retrieval is filtered by owner (`FilteredRetri
 | `tusBasePath` | `'/media/uploads'` | media's `tus.basePath` including the global prefix, used to build `location` |
 | `indexForRag` | `false` | publish attach/delete for rag-media |
 | `path` | `'agent'` | must match `AgentModule`'s `path` |
-| `guards` | `[]` | guards for the upload routes |
+| `decorators` | `[]` | class decorators for the upload routes, e.g. `[UseGuards(AuthenticationGuard)]` |
 | `routes` | `true` | `false` binds the store without mounting the routes |
 
 `forRootAsync({ imports, inject, useFactory, path, decorators, routes })` takes the same options. `path`,
-`guards` and `routes` stay static.
+`decorators` and `routes` stay static.
 
 ## Bring your own storage
 

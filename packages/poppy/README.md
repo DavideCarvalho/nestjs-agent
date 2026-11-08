@@ -3,7 +3,7 @@
 > **Experimental — tracks a draft spec.** Implements the
 > [Personal Agent Protocol ("Poppy")](https://personalagentprotocol.org/docs/spec) **Draft 0.1**. The
 > spec is still in development; this package **will change, possibly in breaking ways and outside
-> semver majors**, as it evolves.
+> semver majors**, as it evolves. The `1.0` version number came from a breaking-change bump, not a stability promise.
 
 Poppy for [`@dudousxd/nestjs-agent`](../nestjs):
 
