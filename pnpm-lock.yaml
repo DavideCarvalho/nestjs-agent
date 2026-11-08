@@ -222,8 +222,8 @@ importers:
         specifier: 1.0.3
         version: 1.0.3
       '@ag-ui/core':
-        specifier: 1.0.1
-        version: 1.0.1(zod@4.6.7)
+        specifier: 1.0.3
+        version: 1.0.3(zod@4.6.7)
       '@emotion/react':
         specifier: 11.14.0
         version: 11.14.0(@types/react@19.3.0)(react@19.3.0)
@@ -567,8 +567,8 @@ importers:
         specifier: 1.0.3
         version: 1.0.3
       '@ag-ui/core':
-        specifier: 1.0.1
-        version: 1.0.1(zod@4.6.7)
+        specifier: 1.0.3
+        version: 1.0.3(zod@4.6.7)
       '@dudousxd/durable-worker':
         specifier: 0.10.1
         version: 0.10.1(@dudousxd/nestjs-durable-core@0.72.1(reflect-metadata@0.2.2)(zod@4.6.7))(ioredis@6.0.0)
@@ -1206,14 +1206,6 @@ packages:
 
   '@ag-ui/client@1.0.3':
     resolution: {integrity: sha512-pqp6hEiO+gjAKIBSA/g8SzPy17XHZhbKZFK3Q4DhZ7bNLR34xNpPfXogP3bSQrzsKh2hmSc9ZYUutTpe/BQBpw==}
-
-  '@ag-ui/core@1.0.1':
-    resolution: {integrity: sha512-Q6pxgI7gcey/0pHfM37S7GNrsYqTrrjjFLpi1dckHNGX2l9VTL0CjnyNc44lwPfHIzFmmEvQfbrAeEPINGGg/Q==}
-    peerDependencies:
-      zod: ^3.25.18 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
 
   '@ag-ui/core@1.0.3':
     resolution: {integrity: sha512-HdMdZPOqworKlnzLaNktnbNYgIzOPbzt5ow6J4bPhbmHCdpWpCSZQFgkifQkn1zVHgCK1V+pmKc8xtW6FsQZKA==}
@@ -7627,13 +7619,13 @@ snapshots:
       uuid: 11.1.1
       zod: 3.25.76
 
-  '@ag-ui/core@1.0.1(zod@4.6.7)':
-    optionalDependencies:
-      zod: 4.6.7
-
   '@ag-ui/core@1.0.3(zod@3.25.76)':
     optionalDependencies:
       zod: 3.25.76
+
+  '@ag-ui/core@1.0.3(zod@4.6.7)':
+    optionalDependencies:
+      zod: 4.6.7
 
   '@ag-ui/encoder@1.0.3(zod@3.25.76)':
     dependencies:
