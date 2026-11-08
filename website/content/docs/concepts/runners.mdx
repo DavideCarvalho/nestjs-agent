@@ -164,8 +164,9 @@ import { agentDurable } from '@dudousxd/nestjs-agent/durable';
 export class AppModule {}
 ```
 
-`agentDurable` spreads into `imports` because it wires `AgentModule.forRoot({ ...options, durable:
-{ engine: 'aviary' } })` and `AgentDurableModule` together — it isn't a module itself.
+`agentDurable` spreads into `imports` because it wires
+`AgentModule.forRoot({ ...options, durable: { engine: 'aviary' } })` and `AgentDurableModule`
+together — it isn't a module itself.
 
 <Callout type="warn" title="durable alone isn't enough">
 Setting `durable: true` without importing `WorkflowsModule` and `AgentWorkflowsModule`, or
