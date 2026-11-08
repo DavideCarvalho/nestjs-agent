@@ -33,13 +33,13 @@ export type AgentDelegation =
       detached?: boolean;
       /**
        * Who may delegate along this edge: the synthesized `ask_<target>` / `start_<target>` tool's
-       * `roles` (and `ability`), gated like any other tool. Omitted → the tool declares none, which
+       * `roles` (and `can`), gated like any other tool. Omitted → the tool declares none, which
        * the default policy reads as open to every actor — but never to a personal agent
        * (`personalAgentGate` runs only tools declaring one of its roles), so an orchestrator that
        * should delegate for one names `personal_agent` (or a `scope:<id>`) here.
        */
       roles?: string[];
-      ability?: string;
+      can?: readonly ToolCanRequirement[];
     };
 
 /**
@@ -153,12 +153,26 @@ export interface ToolSpec {
    */
   enabled?: boolean | (() => boolean | Promise<boolean>);
   /**
-   * An authorization ability name (e.g. 'cache.purge'). Consumed by an ability-aware RolesPolicy
-   * such as the `@dudousxd/nestjs-agent-authz` Gate adapter. A policy that can't evaluate one (the
-   * role-based default) refuses a tool that names an `ability` and no `roles` — fail closed rather
-   * than open; a tool naming both falls back to its `roles` there.
+   * Authorization the tool requires: abilities of `@nestjs/authorization` policies, each checked
+   * for the actor (`AuthorizationService.can(policy, ability, user)`) — all of them must allow it.
+   * `@AiTool` and `@AgentFunction()` fill it from the `@Can()` decorators they carry. A policy that
+   * cannot evaluate one (the role-based default, with no `AuthorizationService` to ask) refuses a
+   * tool that requires one and names no `roles` — fail closed rather than open.
    */
-  ability?: string;
+  can?: readonly ToolCanRequirement[];
+}
+
+/**
+ * One ability a tool requires, as `@nestjs/authorization`'s `@Can(policy, ability)` names it: the
+ * policy class and the ability (one of its methods), with fixed arguments if any. Data only, so it
+ * can be checked before the model is offered the tool. What depends on the call's input is the
+ * tool's own `@Can(policy, ability, args)`, which its guard enforces on the call.
+ */
+export interface ToolCanRequirement {
+  policy: abstract new (...args: any[]) => unknown;
+  ability: string;
+  /** Arguments that do not depend on the call (a role name), handed to the ability after the user. */
+  args?: readonly unknown[];
 }
 
 /** What the model is told a tool looks like (no handler, no host types). */

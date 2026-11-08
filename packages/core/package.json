@@ -111,6 +111,7 @@
     "dist"
   ],
   "scripts": {
+    "prepack": "node ../../scripts/check-package-exports.mjs",
     "build": "node scripts/build-frame-runtime.mjs && tsup",
     "gen:frame": "node scripts/build-frame-runtime.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

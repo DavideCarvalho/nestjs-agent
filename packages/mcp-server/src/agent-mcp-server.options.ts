@@ -1,5 +1,6 @@
-import type { ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
+import type { Actor, ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-core';
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
+import type { McpModuleOptions } from '@nestjs/mcp';
 import type { McpToolContextResolver } from './agent-mcp-server.js';
 import type { McpActionPolicy } from './exposed-tools.js';
 import type { McpOAuthOptions } from './protected-resource.js';
@@ -22,8 +23,31 @@ export interface AgentMcpServerModuleOptions {
    * with no roles is what "authenticated, but entitled to nothing" looks like.
    */
   auth: ActorResolver;
-  /** Route the MCP endpoint mounts at. Defaults to `'mcp'` (→ `POST|GET|DELETE /mcp`). */
-  path?: string;
+  /**
+   * Route the MCP endpoint mounts at. Defaults to `'mcp'`. `false` mounts no endpoint — serve it
+   * from a controller of your own, as NestJS's packages let you: `@nestjs/mcp`'s `McpHttpService`
+   * (`serve(req, res)`) behind this package's `AgentMcpAuthGuard` and `McpChallengeFilter`, both
+   * available to whoever imports this module. The protected-resource document is then not served
+   * either.
+   */
+  path?: string | false;
+  /**
+   * Class decorators added to `@nestjs/mcp`'s endpoint after the agent's own (its guard and
+   * challenge filter) — the ecosystem's convention, e.g. `[Can(McpPolicy, 'connect')]`. Static.
+   */
+  decorators?: ClassDecorator[];
+  /**
+   * `@nestjs/mcp`'s own settings for the server it serves: `title`, `description`, `instructions`,
+   * `icons`, `http` (`allowedHosts`, `allowedOrigins`, `responseMode`, …) and `stdio`. Its `auth`
+   * is not taken: who calls is {@link auth}'s answer.
+   */
+  mcp?: Omit<McpModuleOptions, 'name' | 'version' | 'auth'>;
+  /**
+   * Serve the agent's tools over stdio too (`McpStdioServer` from `@nestjs/mcp`), as this actor:
+   * a stdio connection has no request to authenticate, so whoever starts the process is who calls.
+   * Omit → a stdio connection is served only the application's own `@Tool()` methods.
+   */
+  stdio?: { actor: Actor };
   /**
    * What an `action` tool means on a surface with no human attached. Defaults to `'deny'` — they
    * are neither listed nor callable. See {@link McpActionPolicy} before widening it.
@@ -90,7 +114,10 @@ export interface AgentMcpServerModuleAsyncOptions {
   ) => AgentMcpServerModuleOptions | Promise<AgentMcpServerModuleOptions>;
   /**
    * Route the MCP endpoint mounts at. Static routing metadata, so it lives here rather than in the
-   * async factory result — which resolves after the routes are mounted.
+   * async factory result — which resolves after the routes are mounted. `false` mounts none; see
+   * {@link AgentMcpServerModuleOptions.path}.
    */
-  path?: string;
+  path?: string | false;
+  /** As {@link AgentMcpServerModuleOptions.decorators}: static, so it lives here. */
+  decorators?: ClassDecorator[];
 }

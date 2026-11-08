@@ -48,10 +48,14 @@ describe('toMcpInputSchema', () => {
     expect(schema.additionalProperties).toBe(false);
   });
 
-  it('still converts an app’s Zod 3 schema, which has no JSON Schema extension', () => {
-    const schema = toMcpInputSchema(z3.object({ city: z3.string() }));
-    expect(schema.properties).toMatchObject({ city: { type: 'string' } });
-    expect(schema.required).toEqual(['city']);
+  it('describes a Zod 3 schema (no JSON Schema extension) as a permissive object', () => {
+    // Zod 3 is not supported by @nestjs/mcp or the SDK v2 either; the call is still validated
+    // against the real schema before the handler runs.
+    expect(toMcpInputSchema(z3.object({ city: z3.string() }))).toEqual({
+      type: 'object',
+      properties: {},
+      additionalProperties: true,
+    });
   });
 
   it('hands a Standard JSON Schema straight through', () => {

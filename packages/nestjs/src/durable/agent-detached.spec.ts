@@ -77,7 +77,7 @@ async function buildApp(store: AgentStore, chosen: FakeScript = script) {
         model: new FakeModelProvider(chosen),
         store,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'orch',
       }),
       AgentDurableModule,

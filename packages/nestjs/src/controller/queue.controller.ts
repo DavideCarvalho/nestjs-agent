@@ -2,6 +2,7 @@ import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
   type AttachmentRef,
+  CanAnyone,
   type ChatQueueState,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -35,6 +36,7 @@ interface UpdateQueuedMessageBody {
  * (`{ items, paused }`). A change is also announced to whoever is streaming the thread, as a `queue`
  * frame in the running turn's stream.
  */
+@CanAnyone()
 @Controller()
 export class QueueController {
   constructor(

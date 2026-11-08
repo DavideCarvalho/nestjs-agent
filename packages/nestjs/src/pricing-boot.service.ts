@@ -5,6 +5,7 @@ import {
   type AgentPricingStore,
   type DescribedModel,
   type ModelProvider,
+  type PriceCatalogEntry,
   ensureModelPricing,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -61,10 +62,17 @@ export class PricingBootService implements OnApplicationBootstrap, OnApplication
     if (models.length === 0) return;
     const catalog = this.options.priceCatalog;
     if (catalog === undefined && process.env.NODE_ENV === 'test') return;
+    // `AiModule`'s own `pricing`, after the app's `prices` (a rate card set here wins). `false`
+    // turns seeding off altogether, `AiModule`'s rows included.
+    const carried =
+      (
+        this.model as (ModelProvider & { prices?(): PriceCatalogEntry[] }) | undefined
+      )?.prices?.() ?? [];
+    const prices = catalog === false ? [] : [...(catalog?.prices ?? []), ...carried];
     await ensureModelPricing({
       models,
       pricingStore: this.pricingStore,
-      catalog: catalog ?? {},
+      catalog: catalog === false ? false : { ...catalog, ...(prices.length > 0 ? { prices } : {}) },
       log: {
         info: (message) => logger.log(message),
         warn: (message) => logger.warn(message),

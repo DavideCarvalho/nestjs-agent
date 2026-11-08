@@ -1,12 +1,14 @@
 import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
+  CanAnyone,
   type ModelCatalogView,
 } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
+@CanAnyone()
 @Controller('models')
 export class ModelsController {
   constructor(

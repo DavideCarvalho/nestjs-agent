@@ -1,4 +1,16 @@
 export { AgentModule } from './agent.module.js';
+export {
+  NestAiModelsBinding,
+  type NestAiModelProvider,
+  type NestAiModelProviderOptions,
+  nestAiModelProvider,
+  AgentFunction,
+  type AgentFunctionGovernance,
+  type GovernedAgentFunctionOptions,
+  type AgentFunctionCaller,
+  defaultAgentFunctionCaller,
+  authorizationGate,
+} from './nest-ai/index.js';
 export { type AgUiAdapterOptions, AgUiRunHandler, agUiAdapter } from './ag-ui/index.js';
 export { type A2uiAdapterOptions, A2uiRunHandler, a2uiAdapter } from './a2ui/a2ui.adapter.js';
 export type { AgentProtocolAdapter } from './protocol-adapter.js';
@@ -11,7 +23,9 @@ export type {
   AgentSkillsOptions,
   AgentMemoryOptions,
   AgentSurface,
+  AgentDurableOptions,
 } from './agent.options.js';
+export { durableEngineOf } from './agent.options.js';
 export {
   AgentService,
   NO_USER_MESSAGE_CODE,
@@ -124,3 +138,9 @@ export {
   type ActionProposalSettledListener,
   ActionProposalWorkerService,
 } from './proposals/action-proposal-worker.service.js';
+// The agent's controllers, for an app that mounts the routes itself (`routes: false`).
+export { ChatController } from './controller/chat.controller.js';
+export { ThreadsController } from './controller/threads.controller.js';
+export { ToolCallController } from './controller/tool-call.controller.js';
+export { QuotaController } from './controller/quota.controller.js';
+export { AgentsController } from './controller/agents.controller.js';

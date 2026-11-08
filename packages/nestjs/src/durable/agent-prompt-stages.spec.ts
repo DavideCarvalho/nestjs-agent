@@ -147,7 +147,7 @@ async function buildApp(options: {
         model: options.shared.model,
         store: options.shared.agentStore,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
         ...(stages.memory === true ? { memory: { provider: memoryProvider() } } : {}),
         ...(stages.retrieval === true

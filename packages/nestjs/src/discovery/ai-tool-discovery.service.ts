@@ -8,14 +8,22 @@ import {
   type ToolHandler,
   type ToolRegistry,
   normalizeDelegation,
+  readCanDeclarations,
 } from '@dudousxd/nestjs-agent-core';
+import { type AiToolEntry, AiTools } from '@nestjs/ai';
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
-import { DiscoveryService } from '@nestjs/core';
+import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { z } from 'zod';
 import { delegateToolName } from '../agent-deps.factory.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { readAiToolMetadata } from '../decorator/ai-tool.decorator.js';
 import { type FunctionalTool, isBrandedFunctionalTool } from '../functional-tool.js';
+import {
+  type AgentFunctionCaller,
+  defaultAgentFunctionCaller,
+  registerAgentFunctions,
+} from '../nest-ai/agent-functions.js';
+import { callThroughAgentFunction } from '../nest-ai/ai-tool-function.js';
 
 /** Walks every provider at boot and registers `@AiTool` classes into the shared registry. */
 @Injectable()
@@ -27,9 +35,20 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     @Inject(AGENT_TOOL_REGISTRY) private readonly registry: ToolRegistry,
     @Inject(AGENT_REGISTRY) private readonly agents: AgentRegistry,
     @Inject(AGENT_OPTIONS) private readonly options: AgentModuleOptions,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   onApplicationBootstrap(): void {
+    // `@nestjs/ai`'s agent functions, wherever the application imports `AiModule`. An `@AiTool`'s
+    // `execute()` is one of them; the agent's calls of it go through `AiTools.call`, so the guards,
+    // interceptors and pipes it declares run around it.
+    const aiTools = this.findAiTools();
+    const caller = this.options.agentFunctionCaller ?? defaultAgentFunctionCaller;
+    const agentFunctionOf = (host: unknown): AiToolEntry | undefined => {
+      if (aiTools === undefined) return undefined;
+      for (const entry of aiTools.tools.values()) if (entry.host === host) return entry;
+      return undefined;
+    };
     let count = 0;
     let functional = 0;
     for (const wrapper of this.discovery.getProviders()) {
@@ -68,6 +87,19 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
         this.logger.warn(`@AiTool "${meta.name}" has no execute() method — skipped`);
         continue;
       }
+      const agentFunction = agentFunctionOf(instance.constructor);
+      // `@nestjs/authorization`'s `@Can()` on the class or on execute(): what it requires of the
+      // actor alone becomes the tool's `can`; what reads the call is the method's guard's, which
+      // runs only when the call goes through `@nestjs/ai`.
+      const declared = readCanDeclarations(
+        instance.constructor,
+        (instance.constructor as { prototype?: { execute?: unknown } }).prototype?.execute,
+      );
+      if (declared.withArgs > 0 && agentFunction === undefined) {
+        throw new Error(
+          `@AiTool "${meta.name}" has a @Can() with arguments, which only its guard can check, and its guard runs only through @nestjs/ai: import AiModule, or move what the arguments decide into the tool.`,
+        );
+      }
       this.registry.register(
         {
           name: meta.name,
@@ -77,14 +109,14 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
           // Leave roles unset when the tool didn't declare any — the RolesPolicy owns the default
           // (its `defaultRoles`). Baking it in here too would leak it into custom policies.
           ...(meta.roles !== undefined ? { roles: meta.roles } : {}),
-          ...(meta.ability !== undefined ? { ability: meta.ability } : {}),
+          ...(declared.requirements.length > 0 ? { can: declared.requirements } : {}),
           ...(meta.enabled !== undefined ? { enabled: meta.enabled } : {}),
           ...(meta.presentation !== undefined ? { presentation: meta.presentation } : {}),
           ...(meta.terminal === true ? { terminal: true } : {}),
           ...(meta.replacementKey !== undefined ? { replacementKey: meta.replacementKey } : {}),
         },
         {
-          execute: (input, ctx) => (instance as ToolHandler).execute(input, ctx),
+          execute: this.executorOf(instance as ToolHandler, agentFunction, aiTools, caller),
           ...(typeof handler.present === 'function'
             ? { present: (output, ctx) => (instance as Required<ToolHandler>).present(output, ctx) }
             : {}),
@@ -114,6 +146,15 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       count += 1;
     }
 
+    // `@nestjs/ai`'s `@AgentFunction()` methods, under the agent's governance (the options of this
+    // library's `@AgentFunction()`).
+    const agentFunctions =
+      aiTools === undefined || this.options.agentFunctions === false
+        ? 0
+        : registerAgentFunctions(this.registry, aiTools, caller, (message) =>
+            this.logger.warn(message),
+          );
+
     // Static functional tools passed straight to `forRoot({ tools })`.
     for (const tool of this.options.tools ?? []) {
       if (this.registerFunctionalTool(tool)) {
@@ -125,7 +166,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
     let delegates = 0;
     for (const definition of this.agents.list()) {
       for (const edge of definition.delegatesTo ?? []) {
-        const { agent: target, detached, roles, ability } = normalizeDelegation(edge);
+        const { agent: target, detached, roles, can } = normalizeDelegation(edge);
         const targetDefinition = this.agents.get(target);
         // A dangling handoff target (a `@Agent({ handoff })` class that isn't itself an `@Agent`)
         // would otherwise synthesize a delegate to a phantom agent that resolves to an UNRESTRICTED
@@ -158,7 +199,7 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
             targetAgent: target,
             ...(detached ? { detached: true } : {}),
             ...(roles !== undefined ? { roles } : {}),
-            ...(ability !== undefined ? { ability } : {}),
+            ...(can !== undefined ? { can } : {}),
             description,
             inputSchema: z.object({ task: z.string() }),
           },
@@ -169,8 +210,40 @@ export class AiToolDiscoveryService implements OnApplicationBootstrap {
       }
     }
     this.logger.log(
-      `registered ${count} AI tool(s), ${functional} functional tool(s) and ${delegates} delegate tool(s)`,
+      `registered ${count} AI tool(s), ${agentFunctions} agent function(s), ${functional} functional tool(s) and ${delegates} delegate tool(s)`,
     );
+  }
+
+  /**
+   * How the agent runs an `@AiTool`: through `AiTools.call` when its `execute()` is an agent
+   * function `AiModule` found (so its enhancers run), else by calling it.
+   */
+  private executorOf(
+    instance: ToolHandler,
+    entry: AiToolEntry | undefined,
+    aiTools: AiTools | undefined,
+    caller: AgentFunctionCaller,
+  ): ToolHandler['execute'] {
+    if (entry === undefined || aiTools === undefined) {
+      return (input, ctx) => instance.execute(input, ctx);
+    }
+    return (input, ctx) =>
+      callThroughAgentFunction(ctx, () =>
+        aiTools.call(entry, input, caller(ctx.actor, ctx), {
+          ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+          ...(ctx.abortSignal !== undefined ? { abortSignal: ctx.abortSignal } : {}),
+          ...(ctx.idempotencyKey !== undefined ? { idempotencyKey: ctx.idempotencyKey } : {}),
+        }),
+      );
+  }
+
+  /** `@nestjs/ai`'s agent functions, wherever the application imports `AiModule`; none without it. */
+  private findAiTools(): AiTools | undefined {
+    try {
+      return this.moduleRef.get(AiTools, { strict: false }) ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

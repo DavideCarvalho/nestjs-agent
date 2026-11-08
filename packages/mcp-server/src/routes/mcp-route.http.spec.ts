@@ -2,10 +2,7 @@ import type { Server as HttpServer } from 'node:http';
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
 import type { Actor } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import {
   Body,
   type CallHandler,
@@ -160,7 +157,7 @@ async function connect(input: {
     requestInit: { headers: { authorization: `Bearer ${input.token}` } },
   });
   const client = new Client({ name: 'spec-client', version: '1.0.0' });
-  await client.connect(transport as Transport);
+  await client.connect(transport);
   clients.push(client);
   return client;
 }
@@ -172,19 +169,6 @@ function textOf(content: unknown): string {
   const [first]: unknown[] = content;
   const text: unknown = Reflect.get(Object(first), 'text');
   return typeof text === 'string' ? text : '';
-}
-
-/** What a `tools/call` rejection actually was, so a spec can assert on the status it carried. */
-async function refusalOf(call: Promise<unknown>): Promise<McpError> {
-  try {
-    await call;
-  } catch (error) {
-    if (error instanceof McpError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error('the call was expected to be refused, and was not');
 }
 
 afterEach(async () => {
@@ -237,11 +221,13 @@ describe('@Mcp() routes over MCP', () => {
   it('answers a value the route’s pipe rejects with the status the pipe chose', async () => {
     const context = await boot();
     const client = await connect({ context, token: ANALYST_KEY });
-    const refusal = await refusalOf(
-      client.callTool({ name: 'orders_find_one', arguments: { params: { id: 'not-a-number' } } }),
-    );
-    expect(refusal.code).toBe(ErrorCode.InvalidParams);
-    expect(refusal.data).toEqual({ httpStatus: 400 });
+    const result = await client.callTool({
+      name: 'orders_find_one',
+      arguments: { params: { id: 'not-a-number' } },
+    });
+    expect(result.isError).toBe(true);
+    expect(result._meta).toEqual({ httpStatus: 400 });
+    expect(textOf(result.content)).toMatch(/^400: /);
   });
 
   it('runs the route’s interceptors', async () => {
@@ -270,16 +256,17 @@ describe('@Mcp() routes over MCP', () => {
 
   it('fails the call with the guard’s own status, and never reaches the handler', async () => {
     // The whole reason a route is safe to expose is the authorization its author wrote. An MCP
-    // caller the guard refuses must be refused, with the guard's status — not answered 200 with an
-    // error in the body, which reads to a model as "try different arguments".
+    // caller the guard refuses must be refused, with the guard's status leading the answer (the SDK
+    // reports what a tool throws as a tool result) — not as "try different arguments".
     const context = await boot({ actions: 'execute' });
     const client = await connect({ context, token: ANALYST_KEY });
-    const refusal = await refusalOf(
-      client.callTool({ name: 'orders_cancel', arguments: { params: { id: '42' } } }),
-    );
-    expect(refusal.code).toBe(ErrorCode.InvalidRequest);
-    expect(refusal.data).toEqual({ httpStatus: 403 });
-    expect(refusal.message).toMatch(/cancelling an order is for OPS/);
+    const result = await client.callTool({
+      name: 'orders_cancel',
+      arguments: { params: { id: '42' } },
+    });
+    expect(result.isError).toBe(true);
+    expect(result._meta).toEqual({ httpStatus: 403 });
+    expect(textOf(result.content)).toMatch(/^403: .*cancelling an order is for OPS/);
     expect(cancelled).not.toHaveBeenCalled();
   });
 
@@ -300,12 +287,10 @@ describe('@Mcp() routes over MCP', () => {
     expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain(
       'orders_cancel',
     );
-    const result = await client.callTool({
-      name: 'orders_cancel',
-      arguments: { params: { id: '42' } },
-    });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/approval/);
+    // Never registered on this surface: there is nothing to call.
+    await expect(
+      client.callTool({ name: 'orders_cancel', arguments: { params: { id: '42' } } }),
+    ).rejects.toThrow(/not found/);
     expect(cancelled).not.toHaveBeenCalled();
   });
 
@@ -313,12 +298,9 @@ describe('@Mcp() routes over MCP', () => {
     const context = await boot({ allowedTools: ['orders_find_one'] });
     const client = await connect({ context, token: ANALYST_KEY });
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['orders_find_one']);
-    const result = await client.callTool({
-      name: 'orders_list',
-      arguments: { query: { status: 'open' } },
-    });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/does not list it/);
+    await expect(
+      client.callTool({ name: 'orders_list', arguments: { query: { status: 'open' } } }),
+    ).rejects.toThrow(/not found/);
     expect(listed).not.toHaveBeenCalled();
   });
 
@@ -328,12 +310,9 @@ describe('@Mcp() routes over MCP', () => {
     const context = await boot();
     const client = await connect({ context, token: VIEWER_KEY });
     expect((await client.listTools()).tools).toEqual([]);
-    const result = await client.callTool({
-      name: 'orders_list',
-      arguments: { query: { status: 'open' } },
-    });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/not allowed for this role/);
+    await expect(
+      client.callTool({ name: 'orders_list', arguments: { query: { status: 'open' } } }),
+    ).rejects.toThrow();
     expect(listed).not.toHaveBeenCalled();
   });
 
@@ -346,8 +325,8 @@ describe('@Mcp() routes over MCP', () => {
   it('refuses a name no registry holds rather than dispatching something else', async () => {
     const context = await boot();
     const client = await connect({ context, token: ANALYST_KEY });
-    const result = await client.callTool({ name: 'orders_destroy', arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(textOf(result.content)).toMatch(/is not registered/);
+    await expect(client.callTool({ name: 'orders_destroy', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
   });
 });

@@ -5,6 +5,7 @@ import {
   ALL_AGENTS,
   type ActorResolver,
   AgentRegistry,
+  CanAnyone,
   type ToolCatalogEntry,
 } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, NotFoundException, Query, Req } from '@nestjs/common';
@@ -25,6 +26,7 @@ import type { AgentDepsFactory } from '../agent-deps.factory.js';
  * Posture mirrors `GET /agent/skills`: a plain array, and nothing the caller can pass to widen it —
  * the actor comes from the resolver, and `agent` only ever narrows to that agent's allow-list.
  */
+@CanAnyone()
 @Controller('tools')
 export class ToolsController {
   constructor(

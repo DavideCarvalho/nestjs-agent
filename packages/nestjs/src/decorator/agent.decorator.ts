@@ -1,5 +1,10 @@
 import 'reflect-metadata';
-import type { AgentHistoryWindow, AgentIntake, Persona } from '@dudousxd/nestjs-agent-core';
+import type {
+  AgentHistoryWindow,
+  AgentIntake,
+  Persona,
+  ToolCanRequirement,
+} from '@dudousxd/nestjs-agent-core';
 import type { Type } from '@nestjs/common';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
@@ -53,10 +58,19 @@ export interface AgentOptions {
    * orchestrator and worth backgrounding in another, and only the person wiring the edge knows
    * which side of that the user is sitting on.
    *
-   * `roles` / `ability` gate who may delegate along the edge (the delegate tool's own), e.g.
-   * `{ agent: Helper, roles: ['personal_agent'] }` to let a personal agent's turn delegate.
+   * `roles` / `can` gate who may delegate along the edge (the delegate tool's own), e.g.
+   * `{ agent: Helper, roles: ['personal_agent'] }` to let a personal agent's turn delegate, or
+   * `{ agent: Billing, can: [{ policy: BillingPolicy, ability: 'delegate' }] }`.
    */
-  handoff?: (Type | { agent: Type; detached?: boolean; roles?: string[]; ability?: string })[];
+  handoff?: (
+    | Type
+    | {
+        agent: Type;
+        detached?: boolean;
+        roles?: string[];
+        can?: readonly ToolCanRequirement[];
+      }
+  )[];
   /**
    * How much of the thread this agent's turns carry, overriding `AgentModule.forRoot({ history })`.
    * `{ maxMessages }` and/or `{ maxTokens }` keep the newest that fit; `{ summarize: true }` folds

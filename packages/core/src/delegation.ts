@@ -1,5 +1,5 @@
 import type { AgentStore } from './spi/agent-store.js';
-import type { AgentDelegation, DetachedDelivery } from './types.js';
+import type { AgentDelegation, DetachedDelivery, ToolCanRequirement } from './types.js';
 
 /** An agent->agent edge with its awaited-or-not resolved, whichever form it was authored in. */
 export interface ResolvedDelegation {
@@ -7,7 +7,7 @@ export interface ResolvedDelegation {
   detached: boolean;
   /** The edge's gate, carried onto its delegate tool's spec. */
   roles?: string[];
-  ability?: string;
+  can?: readonly ToolCanRequirement[];
 }
 
 /** Read one {@link AgentDelegation} entry in either of its forms. */
@@ -18,7 +18,7 @@ export function normalizeDelegation(entry: AgentDelegation): ResolvedDelegation 
         agent: entry.agent,
         detached: entry.detached === true,
         ...(entry.roles !== undefined ? { roles: entry.roles } : {}),
-        ...(entry.ability !== undefined ? { ability: entry.ability } : {}),
+        ...(entry.can !== undefined ? { can: entry.can } : {}),
       };
 }
 

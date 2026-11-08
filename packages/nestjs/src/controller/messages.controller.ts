@@ -1,6 +1,7 @@
 import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
+  CanAnyone,
   type MessageFeedback,
   type MessageFeedbackValue,
 } from '@dudousxd/nestjs-agent-core';
@@ -14,6 +15,7 @@ interface FeedbackBody {
   comment?: string;
 }
 
+@CanAnyone()
 @Controller('messages')
 export class MessagesController {
   constructor(

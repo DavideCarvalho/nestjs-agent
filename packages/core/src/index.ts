@@ -77,6 +77,9 @@ export {
   DefaultRolesPolicy,
   ClosedRolesPolicy,
   closeEmptyRoles,
+  requiresAbility,
+  DEFAULT_ROLES_OF,
+  defaultRolesOf,
   type EmptyRoles,
   type RolesPolicyOptions,
   ToolDisabledError,
@@ -225,3 +228,12 @@ export {
   recordUsageRow,
   usageAttribution,
 } from './usage-ledger.js';
+export {
+  CanAnyone,
+  withControllerDecorators,
+  STATIC_CAN_ARGS,
+  markCanAnyone,
+  readCanDeclarations,
+  staticCanArgs,
+  type ToolCanDeclarations,
+} from './can-declarations.js';

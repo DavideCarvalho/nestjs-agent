@@ -37,6 +37,7 @@ import type {
 import type { AgentEngine } from './engine.js';
 import type { FunctionalTool } from './functional-tool.js';
 import type { QuotaLimits } from './ledger-quota-provider.js';
+import type { AgentFunctionCaller } from './nest-ai/agent-functions.js';
 import type { AgentProtocolAdapter } from './protocol-adapter.js';
 
 /**
@@ -44,11 +45,12 @@ import type { AgentProtocolAdapter } from './protocol-adapter.js';
  * each load `AgentModule` without either one doing the other's job:
  *
  * - `'both'` (default): today's behavior, unconditionally — every controller AND the full durable
- *   engine wiring (when `durable: true`). Zero-config single-pod deployments never touch this.
+ *   engine wiring (when `durable` is on). Zero-config single-pod deployments never touch this.
  * - `'http'`: mounts every controller (chat/threads/tool-call/quota/agents/attachments) so the HTTP
- *   surface is fully functional, but under `durable: true` this pod must never EXECUTE agent work —
- *   see `AgentDurableModuleOptions.surface` (`@dudousxd/nestjs-agent/durable`), which is where the
- *   actual step-handler exclusion happens; this flag only controls the controllers here.
+ *   surface is fully functional, but under `durable` this pod must never EXECUTE agent work. On the
+ *   `'workflows'` engine that is `WorkflowsModule.forRoot({ worker: false })`; on `'aviary'`,
+ *   `AgentDurableModuleOptions.surface` (`@dudousxd/nestjs-agent/durable`). This flag only controls
+ *   the controllers here.
  * - `'engine'`: mounts NO controllers (an API pod's routes have no business existing on a worker
  *   pod that never receives HTTP traffic) — everything else (registry/tools/model/store/sinks, the
  *   `agent.run` workflow, and its dispatched steps under `AgentDurableModule`) stays wired exactly
@@ -59,6 +61,37 @@ import type { AgentProtocolAdapter } from './protocol-adapter.js';
  * metadata can't be computed from a runtime-injected value).
  */
 export type AgentSurface = 'http' | 'engine' | 'both';
+
+/**
+ * The durable engine `AgentModuleOptions.durable` runs turns on.
+ *
+ * - `'workflows'` (what `durable: true` means): NestJS's `@nestjs/workflows`. Import
+ *   `WorkflowsModule.forRoot()` and `AgentWorkflowsModule` (`@dudousxd/nestjs-agent/workflows`).
+ *   An API pod that must not run turns imports `WorkflowsModule.forRoot({ worker: false })`.
+ * - `'aviary'`: `@dudousxd/nestjs-durable`. Import `DurableModule` and `AgentDurableModule`
+ *   (`@dudousxd/nestjs-agent/durable`). Choose it for what `@nestjs/workflows` does not do: steps
+ *   dispatched to a separate fleet over a transport (BullMQ, SQS, ...), Python workers, the
+ *   SQLite/MikroORM stores, `ctx.patched` for changing a running turn's code in place.
+ */
+export interface AgentDurableOptions {
+  /** Default `'workflows'`. */
+  engine?: 'workflows' | 'aviary';
+  /**
+   * `'workflows'` only: model calls per workflow instance. After that many, the turn goes on in a
+   * child instance, so no instance's journal grows past what one segment writes (the same idea as
+   * `@nestjs/ai`'s `AiAgents` `stepsPerInstance`). Default 10.
+   */
+  stepsPerInstance?: number;
+}
+
+/** Which durable engine `durable` names: `undefined` when the turns run in-process. */
+export function durableEngineOf(
+  durable: boolean | AgentDurableOptions | undefined,
+): 'workflows' | 'aviary' | undefined {
+  if (durable === undefined || durable === false) return undefined;
+  if (durable === true) return 'workflows';
+  return durable.engine ?? 'workflows';
+}
 
 /**
  * `AgentModuleOptions.attachments` — limits for `POST <base>/attachments`, when the bound
@@ -178,11 +211,25 @@ export interface AgentModuleOptions {
   actionProposalText?: TextActionProposalConfig;
   // --- infrastructure ---
   /**
-   * The LLM provider — `aiSdkModel(openai('gpt-5-mini'))`, or `aiSdkModels({ … })` for a model
-   * picker (its catalog is used when `models` is omitted). Required unless an `engine` runs the
-   * turns instead.
+   * The LLM provider. Omit it to run on `@nestjs/ai`: the turns use the models of the application's
+   * `AiModule.forRoot({ models })` (the picker lists them by name, `default` first), with each
+   * model's settings, `retry` / `timeout` / `resilience`, `fallback`, `pricing` and `onUsage`. Set
+   * it to replace them — a `FakeModelProvider` in tests, `aiSdkModel(…)` outside `AiModule`. Not
+   * needed when an `engine` runs the turns.
    */
   model?: ModelProvider;
+  /**
+   * Offer the application's `@nestjs/ai` `@AgentFunction()` methods as agent tools (default), each
+   * governed by this library's `@AgentFunction()` options and run through `AiTools.call`, so its guards, interceptors, pipes
+   * and filters apply. `false` leaves them to `@nestjs/ai`'s own calls.
+   */
+  agentFunctions?: boolean;
+  /**
+   * Who an `@AgentFunction()` call acts for, from the turn's actor — what its guards read. Default:
+   * `{ user: actor }`, with no `scopes` (the agent gates by roles); map the actor to scopes here for
+   * functions that declare `scopes`.
+   */
+  agentFunctionCaller?: AgentFunctionCaller;
   /**
    * Where a configured model with no price row gets one, at boot. On application bootstrap every
    * model the `model` provider describes (`aiSdkModel` / `aiSdkModels`) that the bound
@@ -287,22 +334,21 @@ export interface AgentModuleOptions {
   /** Route prefix the controllers mount under. Defaults to `'agent'` (→ `/agent/chat`, …). */
   path?: string;
   /**
-   * Run each turn as a durable workflow instead of in-process. Requires importing
-   * `AgentDurableModule` from `@dudousxd/nestjs-agent/durable` and a configured `DurableModule`.
+   * Run each turn as a durable workflow instead of in-process: each model call and each tool call
+   * is a journaled step, a turn parked on a person survives restarts, and a crashed turn resumes
+   * where it was. See {@link AgentDurableOptions} for the two engines; `true` is
+   * `{ engine: 'workflows' }`, NestJS's own `@nestjs/workflows`.
    *
-   * The turn's model call and its tool executions are dispatched steps
-   * (`AgentRunSteps.llm` / `AgentRunSteps.tool`), so a `@AiTool` handler runs in whichever worker
-   * serves the routed group rather than in the pod that took the request. A handler that resolves
-   * anything per invocation from its caller's execution context — a request-scoped ORM
-   * EntityManager, an AsyncLocalStorage tenant, a CLS transaction — must establish that context
-   * itself (`@CreateRequestContext`/`@EnsureRequestContext` under MikroORM), exactly as a `@Step`
-   * handler does.
+   * A `@AiTool` handler runs in whichever worker runs the step rather than in the pod that took the
+   * request. A handler that resolves anything per invocation from its caller's execution context (a
+   * request-scoped ORM EntityManager, an AsyncLocalStorage tenant, a CLS transaction) must
+   * establish that context itself.
    *
    * Multi-pod fleets MUST also wire a cross-process token sink (e.g. a Redis pub/sub
-   * `TokenStreamSink`): the turn runs on whichever worker takes `agent.run`, which may not be the
-   * pod holding the SSE connection.
+   * `TokenStreamSink`): the turn runs on whichever worker claims it, which may not be the pod
+   * holding the SSE connection.
    */
-  durable?: boolean;
+  durable?: boolean | AgentDurableOptions;
   /**
    * Static functional tools (`{ spec, handler }`, e.g. from `createExecuteSqlTool`) to register at
    * boot. For tools that need DI-resolved dependencies, use `provideAgentTool(factory, inject)` in a
@@ -419,14 +465,20 @@ export interface AgentModuleOptions {
   defaultAgent?: string;
 
   /**
-   * Guard(s) applied uniformly to EVERY controller this module mounts (chat, threads, tool-call,
-   * quota, agents, attachments, config, …). Third-party controller
-   * classes can't be annotated with `@UseGuards` by consumers, so without this option every route is
-   * open beyond whatever `actorResolver` itself enforces. Guard classes are added to this module's
-   * `providers` so Nest can DI-instantiate them; if a guard has its own dependencies, make sure they
-   * resolve from this module's imports or a global module.
+   * Class decorators applied to EVERY controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s own `decorators`: decide who reaches the agent's routes with the official
+   * tools, e.g. `[UseGuards(AuthenticationGuard), Can(AgentPolicy, 'chat')]` from
+   * `@nestjs/authentication` / `@nestjs/authorization`. Applied to a subclass of each controller made
+   * for this registration, so nothing sticks to the shared classes. The controllers are open to
+   * `@nestjs/authorization`'s deny-by-default guard otherwise (`CanAnyone()`), and a `@Can()` passed
+   * here is still checked. Static wiring.
+   *
+   * A guard class in `UseGuards(...)` is built by Nest inside this module, so it needs no provider
+   * entry, but what it injects must resolve here: from a global module, or (with `forRootAsync`)
+   * from a module in `imports` that exports it. The removed `guards` option registered the guard
+   * class itself as a provider; nothing does now.
    */
-  guards?: Type<CanActivate>[];
+  decorators?: ClassDecorator[];
 
   /** Upload limits when the staging store declares none. Omit → 20 MiB and the default types. */
   attachments?: AgentAttachmentsOptions;
@@ -439,8 +491,18 @@ export interface AgentModuleOptions {
   surface?: AgentSurface;
 
   /**
+   * `false` mounts none of the agent's routes, while everything else runs — the way NestJS's own
+   * packages leave routes to you (`@nestjs/authentication`'s "routes of your own"): serve them from
+   * controllers of your own, protected with the official tools. Either call `AgentService` from
+   * them, or extend the exported controllers under your own path and decorators:
+   * `@Controller('ops/agent/threads') @Can(AgentPolicy, 'chat') class Threads extends ThreadsController {}`.
+   * Static wiring, like `surface`.
+   */
+  routes?: boolean;
+
+  /**
    * Wire protocols served alongside the native one, over the same runs — e.g. `[agUiAdapter()]`
-   * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `guards`,
+   * mounts `POST <path>/ag-ui` (AG-UI 1.0). Their controllers mount under `path`, behind `decorators`,
    * and not at all on `surface: 'engine'`. STATIC, like `surface`.
    */
   adapters?: AgentProtocolAdapter[];
@@ -455,20 +517,14 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    */
   path?: string;
   /**
-   * Run each turn as a durable workflow. Static wiring metadata (which `AGENT_RUNNER` to bind), so
-   * it lives here rather than in the async factory result — the factory resolves too late to swap
-   * the runner. Requires importing `AgentDurableModule` and a configured `DurableModule`.
+   * Run each turn as a durable workflow (see {@link AgentModuleOptions.durable}). Static wiring
+   * metadata (which `AGENT_RUNNER` to bind), so it lives here rather than in the async factory
+   * result: the factory resolves too late to swap the runner.
    */
-  durable?: boolean;
-  /**
-   * Guard(s) applied uniformly to every controller this module mounts. A STATIC field on the async
-   * config object itself — NOT part of what `useFactory` resolves — because controllers (and the
-   * enhancers bound to them) are wired at module build time, before any async factory has run. If a
-   * guard needs async-resolved config (e.g. a secret from a `ConfigService`), have the guard inject
-   * that service via DI (see `imports`/`inject` above) rather than trying to thread it through
-   * `useFactory`. Same default-open caveat as `AgentModuleOptions.guards`.
-   */
-  guards?: Type<CanActivate>[];
+  durable?: boolean | AgentDurableOptions;
+
+  /** As {@link AgentModuleOptions.decorators}: static, so it lives here, not in `useFactory`'s result. */
+  decorators?: ClassDecorator[];
 
   /**
    * Which half of the module this process mounts (see {@link AgentSurface}). Same static-wiring
@@ -476,6 +532,8 @@ export interface AgentModuleAsyncOptions extends Pick<ModuleMetadata, 'imports'>
    * which controllers exist. Omit → `'both'`, today's behavior with zero change.
    */
   surface?: AgentSurface;
+  /** As {@link AgentModuleOptions.routes}: static, so it lives here. */
+  routes?: boolean;
   /** Wire protocols served alongside the native one — see `AgentModuleOptions.adapters`. STATIC. */
   adapters?: AgentProtocolAdapter[];
   /**

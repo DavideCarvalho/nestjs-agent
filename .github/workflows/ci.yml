@@ -18,6 +18,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
+      - run: pnpm check:exports
       # The files people install, not the source: no built module may call `React.x` without
       # importing React, and every entry of the React package loads and renders with no global
       # React. A classic-JSX build passes every other step here and breaks in the consumer's browser.

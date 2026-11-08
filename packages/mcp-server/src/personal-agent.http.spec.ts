@@ -7,9 +7,7 @@ import {
   type PoppyAuthenticate,
 } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { type INestApplication, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -148,12 +146,15 @@ async function connect(input: {
     requestInit: { headers: { authorization: `Bearer ${input.token}` } },
   });
   const client = new Client({ name: 'spec-client', version: '1.0.0' });
-  await client.connect(transport as Transport);
+  await client.connect(transport);
   clients.push(client);
   return { client, sessionId: transport.sessionId ?? '' };
 }
 
-/** A raw `tools/call` on an open session — to read the HTTP status and challenge. */
+/**
+ * A raw `tools/call` — to read the HTTP status and challenge. The endpoint is stateless: the
+ * session id is only what the client was told, and the guard answers before the SDK runs.
+ */
 function rawCall(input: {
   context: INestApplication;
   token: string;
@@ -164,7 +165,7 @@ function rawCall(input: {
     .post('/mcp')
     .set('authorization', `Bearer ${input.token}`)
     .set('accept', 'application/json, text/event-stream')
-    .set('mcp-session-id', input.sessionId)
+    .set('content-type', 'application/json')
     .send(input.body as object);
 }
 
@@ -236,16 +237,20 @@ describe('a personal agent on the MCP server', () => {
     // `cancel_order` is an action, and actions are not exposed by default: no step-up for it.
     const context = await boot({ actions: 'deny' });
     const { client } = await connect({ context, token: 'pa-read' });
-    const result = await client.callTool({ name: 'cancel_order', arguments: {} });
-    expect(result.isError).toBe(true);
+    // Never registered for this caller: the server's own "unknown tool", not a step-up.
+    await expect(client.callTool({ name: 'cancel_order', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
     expect(ran).not.toHaveBeenCalled();
   });
 
   it('never reaches a tool not written for personal agents (the server’s refusal, not a step-up)', async () => {
     const context = await boot();
     const { client } = await connect({ context, token: 'pa-read' });
-    const result = await client.callTool({ name: 'internal_tool', arguments: {} });
-    expect(result.isError).toBe(true);
+    // Never registered for this caller: the server's own "unknown tool", not a step-up.
+    await expect(client.callTool({ name: 'internal_tool', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
     expect(ran).not.toHaveBeenCalled();
   });
 

@@ -337,7 +337,7 @@ export function registerPoppyConnectionTools(
   const p = options.prefix ?? 'poppy_';
   const roles = {
     ...(options.roles !== undefined ? { roles: options.roles } : {}),
-    ...(options.ability !== undefined ? { ability: options.ability } : {}),
+    ...(options.can !== undefined ? { can: options.can } : {}),
   };
   const texts = connections.texts;
   const owner = (ctx: AiToolCtx) => connections.ownerOf(ctx.actor);

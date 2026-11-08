@@ -369,10 +369,11 @@ describe('openCode engine', () => {
 });
 
 describe('AgentModule wiring', () => {
-  it('needs a model or an engine', () => {
-    expect(() => AgentModule.forRoot({ actorResolver: new HeaderActorResolver() })).toThrow(
-      /set `model`.*or `engine`/,
-    );
+  it("needs a model, an engine, or @nestjs/ai's AiModule", async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AgentModule.forRoot({ actorResolver: new HeaderActorResolver() })],
+    }).compile();
+    await expect(moduleRef.init()).rejects.toThrow(/no `model` is configured, and no AiModule/);
   });
 
   it('refuses durable with an engine', () => {

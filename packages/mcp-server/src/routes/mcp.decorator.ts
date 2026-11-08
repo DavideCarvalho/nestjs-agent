@@ -37,8 +37,6 @@ export interface McpRouteOptions {
   roles?: string[];
   /** Whether the tool exists in this deployment at all. Omit → it does. */
   enabled?: boolean | (() => boolean | Promise<boolean>);
-  /** Authz ability checked by an ability-aware `RolesPolicy`. Ignored by the default one. */
-  ability?: string;
 }
 
 /** Thrown at boot for a route whose `@Mcp()` cannot be turned into a tool. Names the route. */
@@ -106,9 +104,11 @@ export function normalizeMcpRouteOptions(input: {
   if (enabled !== undefined && !isEnabled(enabled)) {
     throw new McpRouteDeclarationError(route, 'its `enabled` must be a boolean or a function.');
   }
-  const ability: unknown = Reflect.get(options, 'ability');
-  if (ability !== undefined && typeof ability !== 'string') {
-    throw new McpRouteDeclarationError(route, 'its `ability` must be a string.');
+  if (Reflect.get(options, 'ability') !== undefined) {
+    throw new McpRouteDeclarationError(
+      route,
+      "`ability` is gone: put @nestjs/authorization's @Can() on the route instead.",
+    );
   }
   return {
     kind,
@@ -116,7 +116,6 @@ export function normalizeMcpRouteOptions(input: {
     ...(name !== undefined ? { name } : {}),
     ...(roles !== undefined ? { roles } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
-    ...(ability !== undefined ? { ability } : {}),
   };
 }
 

@@ -389,13 +389,19 @@ describe('DefaultRolesPolicy — the default', () => {
     expect(policy.can({ id: 'u1', roles: ['USER'] }, spec())).toBe(true);
   });
 
-  it('refuses a tool gated by an ability it cannot evaluate, rather than opening it to all', () => {
+  it('refuses a tool that requires an ability it cannot evaluate, rather than opening it to all', () => {
     const policy = new DefaultRolesPolicy();
-    const gated = { ...(spec() as object), ability: 'cache.purge' } as never;
+    class CachePolicy {
+      purge() {
+        return true;
+      }
+    }
+    const can = [{ policy: CachePolicy, ability: 'purge' }];
+    const gated = { ...(spec() as object), can } as never;
     expect(policy.can({ id: 'u1', roles: ['ADMIN'] }, gated)).toBe(false);
     expect(policy.can({ id: 'anon:abc' }, gated)).toBe(false);
     // Naming roles as well lets the role-based default decide on those.
-    const both = { ...(spec(['ADMIN']) as object), ability: 'cache.purge' } as never;
+    const both = { ...(spec(['ADMIN']) as object), can } as never;
     expect(policy.can({ id: 'u1', roles: ['ADMIN'] }, both)).toBe(true);
   });
 });
@@ -471,13 +477,19 @@ describe('an empty roles list', () => {
       expect(asked).toEqual(['listInvoices']);
     });
 
-    it("keeps a DefaultRolesPolicy's default roles, and leaves ability-gated tools to the inner policy", async () => {
+    it("keeps a DefaultRolesPolicy's default roles, and leaves tools that require an ability to the inner policy", async () => {
       const closed = closeEmptyRoles(new DefaultRolesPolicy(['STAFF']));
       expect(await closed.can(staff, tool())).toBe(true);
       expect(await closed.can(nobody, tool())).toBe(false);
       expect(await closed.can(staff, tool([]))).toBe(false);
       const byAbility = closeEmptyRoles({ can: () => true });
-      expect(await byAbility.can(nobody, tool(undefined, { ability: 'invoices.read' }))).toBe(true);
+      class InvoicePolicy {
+        read() {
+          return true;
+        }
+      }
+      const can = [{ policy: InvoicePolicy, ability: 'read' }];
+      expect(await byAbility.can(nobody, tool(undefined, { can }))).toBe(true);
     });
   });
 });

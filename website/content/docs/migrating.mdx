@@ -16,14 +16,12 @@ thing — outright, with no compatibility aliases. The versions that carry it:
 | `@dudousxd/nestjs-agent-react` | `0.23.0` (provider in `0.21.0`, chat wiring in `0.22.0`) |
 | `@dudousxd/nestjs-agent-ai-sdk` | `0.8.0` |
 | `@dudousxd/nestjs-agent-testing` | `0.20.0` (needs `-core` ≥ `0.27`) |
-| `@dudousxd/nestjs-agent-authz` | `0.4.0` |
 | `@dudousxd/nestjs-agent-store-drizzle` / `-store-mikro-orm` | `0.18.0` / `0.24.0` |
 | `@dudousxd/nestjs-agent-codegen` | `0.10.0` |
 
 <Callout type="warn" title="Behaviour changes that do not fail to compile">
 1. **Tools are no longer ADMIN-only by default.** A tool without `roles` is callable by any resolved
-   actor. Keep the old behaviour with `defaultRoles: ['ADMIN']` (and
-   `new AuthzRolesPolicy(gate, { fallbackRoles: ['ADMIN'] })`).
+   actor. Keep the old behaviour with `defaultRoles: ['ADMIN']`.
 2. **No `actorResolver` no longer throws** — the endpoints become public with one anonymous actor per
    browser. If you relied on the throw, configure a resolver.
 3. **`useAgentChat({ threadId })` now reads the thread** (history + resume). Pass `history: false`

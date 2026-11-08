@@ -1,12 +1,14 @@
-import { ToolRegistry } from '@dudousxd/nestjs-agent-core';
-import { type DynamicModule, Module, type Provider } from '@nestjs/common';
-import { DiscoveryModule, RouterModule } from '@nestjs/core';
-import { AgentMcpServerController } from './agent-mcp-server.controller.js';
+import { CanAnyone, ToolRegistry } from '@dudousxd/nestjs-agent-core';
+import { type DynamicModule, Module, type Provider, UseFilters, UseGuards } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
+import { McpModule } from '@nestjs/mcp';
+import { AgentMcpAuthGuard } from './agent-mcp-auth.guard.js';
+import { AgentMcpServerBinding } from './agent-mcp-server.binding.js';
 import type {
   AgentMcpServerModuleAsyncOptions,
   AgentMcpServerModuleOptions,
 } from './agent-mcp-server.options.js';
-import { McpSessionStore } from './mcp-sessions.js';
+import { McpChallengeFilter } from './mcp-challenge.js';
 import { mcpProtectedResourceController } from './protected-resource.js';
 import { McpRouteDiscoveryService } from './routes/mcp-route-discovery.service.js';
 import { McpRouteDispatcher } from './routes/mcp-route-dispatcher.js';
@@ -20,12 +22,18 @@ import {
 const DEFAULT_PATH = 'mcp';
 
 /**
- * Exposes this deployment's tools to an external MCP client over Streamable HTTP.
+ * Exposes this deployment's tools to an external MCP client, served by NestJS's own `@nestjs/mcp`.
  *
- * The opposite direction to `@dudousxd/nestjs-agent-mcp`, which IMPORTS a remote server's tools.
+ * `@nestjs/mcp` owns the endpoint: Streamable HTTP, stateless (any replica answers any request),
+ * both protocol revisions, and stdio from a standalone context — and whatever `@Tool()`,
+ * `@Resource()` and `@Prompt()` methods the application declares are served beside the agent's
+ * tools. This module adds what it has no word for: who is calling (the agent's `ActorResolver`,
+ * answered 401 with its challenge when nobody), the agent's tools (`@AiTool`s, MCP-imported tools,
+ * `@Mcp()` routes) listed to each caller as the agent's roles policy allows, the `action` exposure
+ * policy, and the personal-agent scope step-up.
+ *
  * Import it after `AgentModule`, whose (global) `AGENT_TOOL_REGISTRY` and `AGENT_ROLES_POLICY` it
- * serves from: the tools an MCP caller reaches are the tools the agent loop runs, gated by the same
- * policy, and never a second list that has to be kept in step.
+ * serves from.
  *
  * ```ts
  * imports: [
@@ -41,85 +49,129 @@ const DEFAULT_PATH = 'mcp';
 @Module({})
 export class AgentMcpServerModule {
   static forRoot(options: AgentMcpServerModuleOptions): DynamicModule {
+    const path = options.path === undefined ? DEFAULT_PATH : options.path;
+    const shared = optionsModule(
+      path,
+      { provide: AGENT_MCP_SERVER_OPTIONS, useValue: options },
+      [],
+    );
     return moduleFor({
-      path: options.path ?? DEFAULT_PATH,
-      options: optionsModule({ provide: AGENT_MCP_SERVER_OPTIONS, useValue: options }, []),
+      path,
+      options: shared,
+      mcp: McpModule.forRoot({
+        ...options.mcp,
+        name: options.name,
+        version: options.version,
+        ...structure(path, shared, options.decorators),
+      }),
     });
   }
 
   static forRootAsync(options: AgentMcpServerModuleAsyncOptions): DynamicModule {
+    const path = options.path === undefined ? DEFAULT_PATH : options.path;
+    const shared = optionsModule(
+      path,
+      {
+        provide: AGENT_MCP_SERVER_OPTIONS,
+        useFactory: options.useFactory,
+        inject: options.inject ?? [],
+      },
+      options.imports ?? [],
+    );
     return moduleFor({
-      path: options.path ?? DEFAULT_PATH,
-      options: optionsModule(
-        {
-          provide: AGENT_MCP_SERVER_OPTIONS,
-          useFactory: options.useFactory,
-          inject: options.inject ?? [],
-        },
-        options.imports ?? [],
-      ),
+      path,
+      options: shared,
+      mcp: McpModule.forRootAsync({
+        // `imports` (the options module, which the factory injects from) comes with the structure.
+        inject: [AGENT_MCP_SERVER_OPTIONS],
+        useFactory: (resolved: AgentMcpServerModuleOptions) => ({
+          ...resolved.mcp,
+          name: resolved.name,
+          version: resolved.version,
+        }),
+        ...structure(path, shared, options.decorators),
+      }),
     });
   }
 }
 
-/** Holds the resolved options, shared by the MCP endpoint and its metadata document. */
+/** Holds the resolved options and what both the endpoint's guard and the binding read. */
 @Module({})
 export class AgentMcpServerOptionsModule {}
 
 /**
  * Serves the protected-resource metadata. A module of its own because the document lives at the app
- * root, and the route prefix `RouterModule` gives {@link AgentMcpServerModule} would apply to it.
+ * root, not under the endpoint's path.
  */
 @Module({})
 export class AgentMcpProtectedResourceModule {}
 
+/**
+ * How `@nestjs/mcp`'s endpoint is mounted: at `path`, open to `@nestjs/authorization`'s global
+ * guard (the agent decides who calls), behind the agent's own guard, with the agent's challenge
+ * responses. `imports` give that guard what it injects.
+ */
+function structure(path: string | false, shared: DynamicModule, decorators: ClassDecorator[] = []) {
+  return {
+    path,
+    decorators: [
+      CanAnyone(),
+      UseGuards(AgentMcpAuthGuard),
+      UseFilters(McpChallengeFilter),
+      ...decorators,
+    ],
+    imports: [shared],
+  };
+}
+
 function optionsModule(
+  path: string | false,
   provider: Provider,
   imports: NonNullable<DynamicModule['imports']>,
 ): DynamicModule {
   return {
     module: AgentMcpServerOptionsModule,
     imports,
-    providers: [provider],
-    exports: [AGENT_MCP_SERVER_OPTIONS],
+    providers: [
+      provider,
+      // `false` (self-mounted): the guard names no protected-resource document of its own.
+      { provide: AGENT_MCP_SERVER_PATH, useValue: path === false ? '' : path },
+      // The tools `@Mcp()` routes become, served beside the agent's own.
+      { provide: AGENT_MCP_ROUTE_TOOLS, useFactory: () => new ToolRegistry() },
+    ],
+    exports: [AGENT_MCP_SERVER_OPTIONS, AGENT_MCP_SERVER_PATH, AGENT_MCP_ROUTE_TOOLS],
   };
 }
 
 /**
- * Both variants: the endpoint under `path`, and the metadata module beside it. They import the SAME
- * options module object, so Nest instantiates it once — an async factory runs a single time.
+ * Both variants: `@nestjs/mcp`'s endpoint, the binding that serves the agent's tools on it, the
+ * `@Mcp()` route discovery, and the metadata module beside it. They import the SAME options module
+ * object, so Nest instantiates it once — an async factory runs a single time.
  */
-function moduleFor(input: { path: string; options: DynamicModule }): DynamicModule {
+function moduleFor(input: {
+  path: string | false;
+  options: DynamicModule;
+  mcp: DynamicModule;
+}): DynamicModule {
   return {
     module: AgentMcpServerModule,
     imports: [
       DiscoveryModule,
-      routerFor(input.path),
       input.options,
-      {
-        module: AgentMcpProtectedResourceModule,
-        imports: [input.options],
-        controllers: [mcpProtectedResourceController(input.path)],
-      },
+      input.mcp,
+      ...(input.path === false
+        ? []
+        : [
+            {
+              module: AgentMcpProtectedResourceModule,
+              imports: [input.options],
+              controllers: [mcpProtectedResourceController(input.path)],
+            },
+          ]),
     ],
-    controllers: [AgentMcpServerController],
-    providers: [{ provide: AGENT_MCP_SERVER_PATH, useValue: input.path }, ...ROUTE_PROVIDERS],
-    exports: [McpSessionStore],
+    providers: [AgentMcpServerBinding, McpRouteDispatcher, McpRouteDiscoveryService],
+    // What a controller of the app's own needs to serve the endpoint with `path: false`:
+    // `@nestjs/mcp`'s `McpHttpService`, and what `AgentMcpAuthGuard` injects.
+    exports: [input.options, input.mcp],
   };
-}
-
-/**
- * Everything both variants provide: the live sessions, the registry `@Mcp()` routes land in, the
- * dispatcher that runs one through its request pipeline, and the boot walk that finds them.
- */
-const ROUTE_PROVIDERS: Provider[] = [
-  McpSessionStore,
-  { provide: AGENT_MCP_ROUTE_TOOLS, useFactory: () => new ToolRegistry() },
-  McpRouteDispatcher,
-  McpRouteDiscoveryService,
-];
-
-/** Mount the controller under `path` (Nest applies the prefix to its relative routes). */
-function routerFor(path: string): DynamicModule {
-  return RouterModule.register([{ path, module: AgentMcpServerModule }]);
 }

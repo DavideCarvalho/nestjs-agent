@@ -1,5 +1,5 @@
 import type { Actor } from '@dudousxd/nestjs-agent-core';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 
 /**
  * The MCP SDK's `AuthInfo` carrying the acting {@link Actor} the transport authenticated. The HTTP

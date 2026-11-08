@@ -50,6 +50,7 @@
     "dist"
   ],
   "scripts": {
+    "prepack": "node ../../scripts/check-package-exports.mjs",
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:specs": "tsc -p tsconfig.spec.json"

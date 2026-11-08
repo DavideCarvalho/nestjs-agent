@@ -15,13 +15,21 @@ import type {
   ToolResult,
   UpdateToolCallInput,
 } from '@dudousxd/nestjs-agent-core';
-import { AGENT_APPROVAL_PORT, AGENT_PRICING_STORE } from '@dudousxd/nestjs-agent-core';
+import {
+  AGENT_APPROVAL_PORT,
+  AGENT_PRICING_STORE,
+  AGENT_ROLES_POLICY,
+  AGENT_TOOL_REGISTRY,
+  type ToolRegistry,
+  type ToolSpec,
+} from '@dudousxd/nestjs-agent-core';
 import {
   FakeModelProvider,
   type FakeScript,
   InMemoryAgentStore,
   InMemoryPricingStore,
 } from '@dudousxd/nestjs-agent-testing';
+import { Can, Policy } from '@nestjs/authorization';
 import {
   type DynamicModule,
   ForbiddenException,
@@ -155,13 +163,20 @@ class PurgeCacheTool {
   }
 }
 
+@Policy()
+class CachePolicy {
+  purge(user: { roles?: string[] } | null) {
+    return user?.roles?.includes('ADMIN') === true;
+  }
+}
+
 @AiTool({
   name: 'abilityTool',
   kind: 'read',
   description: 'ability-gated',
   input: z.object({}),
-  ability: 'cache.purge',
 })
+@Can(CachePolicy, 'purge')
 @Injectable()
 class AbilityTool {
   async execute() {
@@ -700,26 +715,16 @@ describe('AgentModule (inline)', () => {
     ).toBe(true);
   });
 
-  it("passes a tool's @AiTool ability through to the RolesPolicy", async () => {
-    const seen: { name: string; ability?: string }[] = [];
-    const recordingPolicy: RolesPolicy = {
-      can: (_actor, tool) => {
-        seen.push({
-          name: tool.name,
-          ...(tool.ability !== undefined ? { ability: tool.ability } : {}),
-        });
-        return true;
-      },
-    };
-    const built = await buildApp(() => ({ text: 'noop' }), { rolesPolicy: recordingPolicy });
+  it("carries a tool's @Can() onto its spec, and offers it only to an actor the policy allows", async () => {
+    const built = await buildApp(() => ({ text: 'noop' }));
     app = built.app;
-    const { runId } = await built.service.chat({
-      actor: { id: 'u1', roles: ['ADMIN'] },
-      message: 'hi',
-    });
-    await collect(built.service.subscribe(runId));
-
-    expect(seen.find((tool) => tool.name === 'abilityTool')?.ability).toBe('cache.purge');
+    expect(built.app.get<ToolRegistry>(AGENT_TOOL_REGISTRY).spec('abilityTool')?.can).toEqual([
+      { policy: CachePolicy, ability: 'purge' },
+    ]);
+    // No AuthorizationModule in this app: a tool that requires an ability reaches nobody.
+    const policy = built.app.get<RolesPolicy>(AGENT_ROLES_POLICY);
+    const spec = built.app.get<ToolRegistry>(AGENT_TOOL_REGISTRY).spec('abilityTool');
+    expect(await policy.can({ id: 'u1', roles: ['ADMIN'] }, spec as ToolSpec)).toBe(false);
   });
 });
 

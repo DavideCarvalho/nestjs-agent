@@ -1,8 +1,9 @@
-import { AGENT_ACTOR_RESOLVER, type ActorResolver } from '@dudousxd/nestjs-agent-core';
+import { AGENT_ACTOR_RESOLVER, type ActorResolver, CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { AgentService } from '../agent.service.js';
 
+@CanAnyone()
 @Controller('quota')
 export class QuotaController {
   constructor(

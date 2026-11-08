@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { CanAnyone } from '@dudousxd/nestjs-agent-core';
 import { Body, Controller, Delete, Get, Inject, Post, Req, Res } from '@nestjs/common';
 import type { OpenCodeMcpEndpoint } from './mcp.js';
 import { OPENCODE_MCP_ENDPOINT } from './tokens.js';
@@ -16,6 +17,7 @@ function notAllowed(res: ServerResponse): void {
  * minted for the session), so the module's `guards` are not applied to it. Stateless: no
  * server-sent stream to resume, no session to close.
  */
+@CanAnyone()
 @Controller('opencode/mcp')
 export class OpenCodeMcpController {
   constructor(@Inject(OPENCODE_MCP_ENDPOINT) private readonly endpoint: OpenCodeMcpEndpoint) {}

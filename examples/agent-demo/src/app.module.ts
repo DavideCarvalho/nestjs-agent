@@ -87,7 +87,7 @@ class OpsOrchestratorAgent {}
       quota: { limits: { day: { tokens: 200_000 } } },
       // Demo/gateway identity: trust x-actor-id / x-actor-role headers. Never fabricates a caller.
       actorResolver: new HeaderActorResolver(),
-      durable: true,
+      durable: { engine: 'aviary' },
       // Agents are declared as `@Agent` providers below; this just picks which one an unqualified
       // turn uses (there are three registered, so it can't fall back to "the single agent").
       defaultAgent: 'default',

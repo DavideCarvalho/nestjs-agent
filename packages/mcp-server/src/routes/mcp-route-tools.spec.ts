@@ -87,6 +87,13 @@ describe('routeToolRef', () => {
   });
 });
 
+class OrderPolicy {
+  cancel() {
+    return true;
+  }
+}
+const CANCEL = [{ policy: OrderPolicy, ability: 'cancel' }];
+
 describe('buildRouteTool', () => {
   it('produces an ordinary ToolSpec, carrying everything the gates read', () => {
     const { spec } = buildRouteTool({
@@ -95,11 +102,11 @@ describe('buildRouteTool', () => {
         description: 'Cancel an order.',
         roles: ['OPS'],
         enabled: false,
-        ability: 'orders.cancel',
       },
       route: ROUTE,
       ref: refFor('orders_cancel', 'OrdersController.cancel'),
       dispatch: async () => undefined,
+      can: CANCEL,
     });
     expect(spec).toMatchObject({
       name: 'orders_cancel',
@@ -107,11 +114,11 @@ describe('buildRouteTool', () => {
       description: 'Cancel an order.',
       roles: ['OPS'],
       enabled: false,
-      ability: 'orders.cancel',
+      can: CANCEL,
     });
   });
 
-  it('leaves roles, enabled and ability off when the route declared none, so the policy owns them', () => {
+  it('leaves roles, enabled and can off when the route declared none, so the policy owns them', () => {
     const { spec } = buildRouteTool({
       options: { kind: 'read', description: 'Read one order.' },
       route: ROUTE,

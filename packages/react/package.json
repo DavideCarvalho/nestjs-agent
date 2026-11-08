@@ -113,6 +113,7 @@
     "dist"
   ],
   "scripts": {
+    "prepack": "node ../../scripts/check-package-exports.mjs",
     "build": "tsup",
     "test:dist": "node scripts/verify-dist.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

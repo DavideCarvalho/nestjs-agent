@@ -6,6 +6,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { table } from '@dudousxd/nestjs-agent-core/genui';
 import { FakeModelProvider } from '@dudousxd/nestjs-agent-testing';
+import type { ModuleRef } from '@nestjs/core';
 import type { DiscoveryService } from '@nestjs/core';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -20,6 +21,13 @@ const context = () => ({
   requestId: 'q',
   emitUi: vi.fn(createNoopEmitUi()),
 });
+
+/** No `AiModule` in this app: the discovery finds no official agent functions. */
+const noAiModule = {
+  get: () => {
+    throw new Error('no AiModule');
+  },
+} as unknown as ModuleRef;
 
 describe('Nest tool presentations', () => {
   it('authors and registers an object-form functional tool', async () => {
@@ -54,9 +62,15 @@ describe('Nest tool presentations', () => {
     const instance = new Records();
     const discovery = { getProviders: () => [{ instance }] } as unknown as DiscoveryService;
     const registry = new ToolRegistry();
-    new AiToolDiscoveryService(discovery, registry, new AgentRegistry(), {
-      model: new FakeModelProvider(() => ({ text: 'done' })),
-    }).onApplicationBootstrap();
+    new AiToolDiscoveryService(
+      discovery,
+      registry,
+      new AgentRegistry(),
+      {
+        model: new FakeModelProvider(() => ({ text: 'done' })),
+      },
+      noAiModule,
+    ).onApplicationBootstrap();
     const ctx = context();
     expect(await registry.invoke('classRecords', {}, ctx, new DefaultRolesPolicy())).toEqual({
       n: 2,

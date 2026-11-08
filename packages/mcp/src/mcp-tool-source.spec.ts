@@ -101,15 +101,21 @@ describe('McpToolSource.import', () => {
   });
 
   it('carries the per-server authorization settings onto every imported spec', async () => {
+    class WeatherPolicy {
+      read() {
+        return true;
+      }
+    }
+    const can = [{ policy: WeatherPolicy, ability: 'read' }];
     const tools = await source({
       create: linkedTransport([weatherTool], okCall),
       roles: ['OPS'],
-      ability: 'weather.read',
+      can,
       enabled: false,
     }).import();
 
     expect(tools[0]?.spec.roles).toEqual(['OPS']);
-    expect(tools[0]?.spec.ability).toBe('weather.read');
+    expect(tools[0]?.spec.can).toEqual(can);
     expect(tools[0]?.spec.enabled).toBe(false);
   });
 

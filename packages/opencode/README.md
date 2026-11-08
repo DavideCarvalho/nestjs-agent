@@ -188,7 +188,7 @@ The endpoint serves turns, nothing else. A token alone runs nothing:
 - `remember` is served here only — it is not added to the module's registry, so it is not on
   `AgentMcpServerModule` or the `/tools` catalog.
 
-The module's `guards` are not applied to the endpoint (its callers are OpenCode sessions, not the
+The module's `decorators` are not applied to the endpoint (its callers are OpenCode sessions, not the
 app's users); a global guard of your own must let `opencode/mcp` through.
 
 ## Several processes

@@ -16,7 +16,7 @@ export interface AgentChannelsModuleOptions {
   /**
    * Handle messages as `@dudousxd/nestjs-durable` runs: persisted before the `200`, one at a time per
    * conversation, retried, and resumed after a crash (a reply never lost, never sent twice).
-   * Default: on when the agent runs durably (`AgentModule.forRoot({ durable: true })` with
+   * Default: on when the agent runs durably (`AgentModule.forRoot({ durable: { engine: 'aviary' } })` with
    * `AgentDurableModule`), on the app's `WorkflowEngine`. `false` → in this process (a restart loses
    * what is in flight). An engine → that one.
    */
@@ -31,6 +31,15 @@ interface AgentChannelsRouteOptions {
    * Static, like any route.
    */
   path?: string | false;
+  /**
+   * Class decorators applied to every controller this module mounts — the ecosystem's convention,
+   * like `@nestjs/mcp`'s `decorators`: e.g. `[UseGuards(AuthenticationGuard), Can(Policy, 'ability')]`
+   * from `@nestjs/authentication` / `@nestjs/authorization`. Applied to a per-registration subclass,
+   * so nothing sticks to the shared class. Without it the routes are open to
+   * `@nestjs/authorization`'s deny-by-default guard (`CanAnyone()`); a `@Can()` passed here is still
+   * checked. Static wiring.
+   */
+  decorators?: ClassDecorator[];
 }
 
 export type AgentChannelsModuleRootOptions = AgentChannelsModuleOptions & AgentChannelsRouteOptions;

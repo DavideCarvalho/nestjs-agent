@@ -2,17 +2,15 @@ import type { Server as HttpServer } from 'node:http';
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
 import type { ActorResolver } from '@dudousxd/nestjs-agent-core';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { type INestApplication, Injectable, type Type } from '@nestjs/common';
+import { Tool } from '@nestjs/mcp';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AgentMcpServerModule } from './agent-mcp-server.module.js';
 import { BearerTokenActorResolver } from './bearer-token-actor-resolver.js';
-import { McpSessionStore } from './mcp-sessions.js';
 
 const ANALYST_KEY = 'analyst-key-0123456789';
 const OPS_KEY = 'ops-key-9876543210';
@@ -62,6 +60,15 @@ const INITIALIZE = {
     clientInfo: { name: 'probe', version: '1.0.0' },
   },
 };
+
+/** An application's own `@nestjs/mcp` tool, served beside the agent's to everyone the guard lets in. */
+@Injectable()
+class PingTools {
+  @Tool({ description: 'Ping', inputSchema: z.object({}) })
+  ping() {
+    return 'pong';
+  }
+}
 
 /** A tool that names no roles — open by default, closed under `emptyRoles: 'deny'`. */
 @AiTool({
@@ -130,10 +137,7 @@ async function connect(input: {
     requestInit: { headers: { authorization: `Bearer ${input.token}` } },
   });
   const client = new Client({ name: 'spec-client', version: '1.0.0' });
-  // The SDK's own transports expose `sessionId` as `string | undefined` where the `Transport`
-  // interface declares the property optional, which `exactOptionalPropertyTypes` reads as a
-  // mismatch — the class does implement the interface it is declared against.
-  await client.connect(transport as Transport);
+  await client.connect(transport);
   clients.push(client);
   return { client, transport };
 }
@@ -206,64 +210,36 @@ describe('AgentMcpServerModule over HTTP', () => {
     const context = await boot({ tools: [ServerTimeTool], emptyRoles: 'deny' });
     const { client } = await connect({ context, token: ANALYST_KEY });
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(['search_docs']);
-    const result = await client.callTool({ name: 'server_time', arguments: {} });
-    expect(result.isError).toBe(true);
+    // Not registered for this caller at all: the call is refused as an unknown tool.
+    await expect(client.callTool({ name: 'server_time', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
   });
 
-  it('refuses a session id presented by a different actor', async () => {
-    const context = await boot();
-    const { transport } = await connect({ context, token: ANALYST_KEY });
-    const sessionId = transport.sessionId;
-    expect(sessionId).toBeDefined();
-    // The session id travels in a plain header and owns an open stream; holding one is not
-    // permission to act as the identity that opened it.
-    await request(httpServer(context))
-      .post('/mcp')
-      .set('authorization', `Bearer ${OPS_KEY}`)
-      .set('accept', 'application/json, text/event-stream')
-      .set('mcp-session-id', sessionId ?? '')
-      .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
-      .expect(403);
+  it('serves the application’s own @nestjs/mcp @Tool() methods beside the agent’s tools', async () => {
+    const context = await boot({ tools: [PingTools] });
+    const { client } = await connect({ context, token: ANALYST_KEY });
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual([
+      'ping',
+      'search_docs',
+    ]);
+    const result = await client.callTool({ name: 'ping', arguments: {} });
+    expect(result.content).toEqual([{ type: 'text', text: 'pong' }]);
   });
 
-  it('tells a client to start again when it names a session this process does not hold', async () => {
+  it('authenticates every request on its own: a list from one caller is not another’s', async () => {
+    // Stateless: there is no session to borrow. Each request is listed for whoever it
+    // authenticated as.
     const context = await boot();
-    await request(httpServer(context))
-      .post('/mcp')
-      .set('authorization', `Bearer ${ANALYST_KEY}`)
-      .set('mcp-session-id', 'a-session-that-never-existed')
-      .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
-      .expect(404);
-  });
-
-  it('rejects a request that is neither a session nor an initialize', async () => {
-    const context = await boot();
-    await request(httpServer(context))
-      .post('/mcp')
-      .set('authorization', `Bearer ${ANALYST_KEY}`)
-      .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
-      .expect(400);
-    await request(httpServer(context))
-      .get('/mcp')
-      .set('authorization', `Bearer ${ANALYST_KEY}`)
-      .expect(400);
-  });
-
-  it('forgets a session the client terminated', async () => {
-    const context = await boot();
-    const sessions = context.get(McpSessionStore);
-    const { transport } = await connect({ context, token: ANALYST_KEY });
-    expect(sessions.size).toBe(1);
-    await transport.terminateSession();
-    expect(sessions.size).toBe(0);
-  });
-
-  it('closes what it is still holding when the application shuts down', async () => {
-    const context = await boot();
-    const sessions = context.get(McpSessionStore);
-    await connect({ context, token: ANALYST_KEY });
-    expect(sessions.size).toBe(1);
-    await sessions.onApplicationShutdown();
-    expect(sessions.size).toBe(0);
+    const analyst = await connect({ context, token: ANALYST_KEY });
+    const ops = await connect({ context, token: OPS_KEY });
+    expect((await analyst.client.listTools()).tools.map((tool) => tool.name)).toEqual([
+      'search_docs',
+    ]);
+    expect((await ops.client.listTools()).tools).toEqual([]);
+    // Never registered for this caller: there is nothing to call.
+    await expect(
+      ops.client.callTool({ name: 'search_docs', arguments: { q: 'x' } }),
+    ).rejects.toThrow();
   });
 });

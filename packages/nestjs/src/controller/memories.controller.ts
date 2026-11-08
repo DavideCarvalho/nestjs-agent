@@ -2,6 +2,7 @@ import {
   AGENT_ACTOR_RESOLVER,
   AGENT_MEMORY,
   type ActorResolver,
+  CanAnyone,
   type MemoryConfig,
   type MemoryDigestEntry,
   memoryForgetVerdict,
@@ -31,6 +32,7 @@ import type { Request } from 'express';
  * whether or not it is true. That is also why `MemoryProvider.forget` is required rather than
  * optional — see `memory.ts`.
  */
+@CanAnyone()
 @Controller('memories')
 export class MemoriesController {
   constructor(

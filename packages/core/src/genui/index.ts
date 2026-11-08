@@ -91,13 +91,13 @@ export {
 } from './text.js';
 export {
   GENUI_SHOW_TOOL,
-  type GenuiAbility,
+  type GenuiCan,
   type GenuiCatalogScope,
   type GenuiTelemetryOptions,
   type GenuiTool,
   type GenuiToolOutput,
   type GenuiToolsOptions,
-  genuiToolAbility,
+  genuiToolCan,
   genuiTools,
   jsonStandardSchema,
   type ResolveGenuiCatalog,

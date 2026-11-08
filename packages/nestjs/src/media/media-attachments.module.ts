@@ -2,6 +2,7 @@ import {
   AGENT_ATTACHMENT_STAGING,
   AGENT_STORE,
   type AgentStore,
+  withControllerDecorators,
 } from '@dudousxd/nestjs-agent-core';
 import {
   MEDIA_STORAGE_SHARED,
@@ -76,8 +77,6 @@ function build(
   imports: DynamicModule['imports'] = [],
 ): DynamicModule {
   const routes = mount.routes !== false;
-  Reflect.defineMetadata(GUARDS_METADATA, mount.guards ?? [], AgentMediaUploadsController);
-  const guards: Type<CanActivate>[] = [...new Set(mount.guards ?? [])];
   return {
     module: AgentMediaAttachmentsModule,
     global: true,
@@ -91,13 +90,14 @@ function build(
           ]
         : []),
     ],
-    controllers: routes ? [AgentMediaUploadsController] : [],
+    controllers: routes
+      ? withControllerDecorators([AgentMediaUploadsController], mount.decorators)
+      : [],
     providers: [
       optionsProvider,
       stagingProvider(routes),
       { provide: AGENT_ATTACHMENT_STAGING, useExisting: AGENT_MEDIA_ATTACHMENTS },
       { provide: MediaAttachmentStaging, useExisting: AGENT_MEDIA_ATTACHMENTS },
-      ...guards,
     ],
     exports: [AGENT_ATTACHMENT_STAGING, AGENT_MEDIA_ATTACHMENTS, MediaAttachmentStaging],
   };

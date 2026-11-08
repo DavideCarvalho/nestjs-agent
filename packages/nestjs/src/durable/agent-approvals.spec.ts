@@ -56,7 +56,7 @@ async function buildApp(approvalPolicy?: ApprovalPolicy) {
         model: new FakeModelProvider(purgeOnce),
         store,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
         ...(approvalPolicy !== undefined ? { approvalPolicy } : {}),
       }),

@@ -1,6 +1,7 @@
 import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
+  CanAnyone,
   type MessageAttachment,
 } from '@dudousxd/nestjs-agent-core';
 import {
@@ -28,6 +29,7 @@ import { AGENT_MEDIA_ATTACHMENTS } from './tokens.js';
  *
  * Mounted at `<AgentModule path>/attachments/uploads`.
  */
+@CanAnyone()
 @Controller('attachments/uploads')
 export class AgentMediaUploadsController {
   constructor(

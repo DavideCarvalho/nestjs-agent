@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import type { ToolPresentation, ToolSpec } from '@dudousxd/nestjs-agent-core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { defineAiToolAgentFunction } from '../nest-ai/ai-tool-function.js';
 
 export const AI_TOOL_METADATA = Symbol('nestjs-agent:ai-tool');
 
@@ -39,12 +40,6 @@ export interface AiToolOptions {
    * import time, and can't reach the container.
    */
   enabled?: boolean | (() => boolean | Promise<boolean>);
-  /**
-   * Authz ability checked by an ability-aware RolesPolicy (e.g. `AgentAuthzModule`'s
-   * `AuthzRolesPolicy` → `gate.forUser(actor).allows(ability)`). Ignored by the default
-   * role-based policy, which uses `roles`.
-   */
-  ability?: string;
   /**
    * How a chat surface talks about this tool without naming it — sentence templates over the
    * call's input, an icon key, the approval prompt's wording, and how its output reads. Never shown
@@ -87,6 +82,12 @@ export function toolNameFromClass(className: string): string {
 /**
  * Marks a provider class as an AI tool. The class must implement `execute(input, ctx)`.
  * `AiToolDiscoveryService` registers every `@AiTool` provider into the `ToolRegistry` at boot.
+ *
+ * `execute()` is also a `@nestjs/ai` `@AgentFunction()` (when the input schema produces JSON Schema,
+ * as Zod 4's does): with `AiModule` imported, the agent's calls run through the guards, interceptors
+ * and pipes `execute()` and the class declare, and `@nestjs/ai`'s own calls can offer the tool —
+ * outside a turn, an `action` is refused (only a turn asks a person) and `roles` are checked
+ * against the call's `user`.
  * Only `description` and `input` are required:
  *
  * ```ts
@@ -116,6 +117,9 @@ export function AiTool(options: AiToolOptions): ClassDecorator {
       kind: options.kind ?? 'read',
     };
     Reflect.defineMetadata(AI_TOOL_METADATA, resolved, target);
+    // `execute()` is a `@nestjs/ai` agent function too: `@nestjs/ai`'s calls can offer it, and the
+    // agent's run it through its guards, interceptors and pipes.
+    defineAiToolAgentFunction(target, resolved);
   };
 }
 

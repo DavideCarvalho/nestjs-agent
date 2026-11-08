@@ -21,7 +21,6 @@
     "store-drizzle",
     "transport-redis",
     "telescope",
-    "authz",
     "codegen",
     "testing"
   ]

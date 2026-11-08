@@ -1,6 +1,7 @@
 import {
   AGENT_ACTOR_RESOLVER,
   type ActorResolver,
+  CanAnyone,
   type ListActionProposals,
   validateActionProposalListQuery,
 } from '@dudousxd/nestjs-agent-core';
@@ -36,6 +37,7 @@ function bodyFields(body: unknown, field: 'remember' | 'reason'): Record<string,
     throw new BadRequestException(`Invalid ${field}`);
   return value;
 }
+@CanAnyone()
 @Controller('threads/:threadId/action-proposals')
 export class ActionProposalController {
   constructor(

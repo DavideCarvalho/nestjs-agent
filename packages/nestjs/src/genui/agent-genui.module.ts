@@ -1,7 +1,7 @@
 import type { ToolPresentation } from '@dudousxd/nestjs-agent-core';
 import type {
   Catalog,
-  GenuiAbility,
+  GenuiCan,
   GenuiCatalogScope,
   GenuiChannels,
   GenuiStreaming,
@@ -110,12 +110,10 @@ export interface AgentGenuiOptions {
   /** Roles allowed to call the tools. Undefined → the roles policy default. */
   roles?: string[];
   /**
-   * The authorization ability the UI tools declare (`ToolSpec.ability`), for an ability-aware
-   * authorizer such as `authzToolAuthorizer`, which denies a tool with none. A string for every
-   * tool; a map by tool name (`{ ui__render: 'genui.render', ui__sandbox: 'genui.sandbox' }`, a tool
-   * left out declares none); or a function of `{ name, component }`. The authorizer decides.
+   * The `@nestjs/authorization` abilities the UI tools require (`ToolSpec.can`). One list for every
+   * tool; a map by tool name (a tool left out requires none); or a function of `{ name, component }`.
    */
-  ability?: GenuiAbility;
+  can?: GenuiCan;
   /** Override the generated presentation per component (or per tree / show tool name). */
   presentation?: (component: string) => ToolPresentation | undefined;
   /**

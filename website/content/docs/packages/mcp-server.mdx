@@ -20,15 +20,20 @@ import { Callout } from 'fumadocs-ui/components/callout';
   </Tab>
 </Tabs>
 
-An [MCP](https://modelcontextprotocol.io) **server** for the agent. It mounts a Streamable HTTP
-endpoint on your app, and an external MCP client — Claude Desktop, an editor, a CI job — reaches the
+An [MCP](https://modelcontextprotocol.io) **server** for the agent, served by NestJS's own
+[`@nestjs/mcp`](https://docs.nestjs.com/mcp/overview): an external MCP client — Claude Desktop, an editor, a CI job — reaches the
 tools this deployment already has, through the gates a turn goes through and no wider.
 
 Two things reach that client: your `@AiTool` classes, and any controller route you mark
 [`@Mcp()`](#a-route-you-already-wrote) — dispatched through its own guards, pipes and interceptors,
 so a capability that already exists as an endpoint does not have to be written out again as a tool.
 
-Built on the official [`@modelcontextprotocol/sdk`](https://www.npmjs.com/package/@modelcontextprotocol/sdk).
+`@nestjs/mcp` owns the endpoint — Streamable HTTP, **stateless** (any replica answers any request),
+both protocol revisions (2025 and 2026-07-28), stdio — and serves the application's own `@Tool()`,
+`@Resource()` and `@Prompt()` methods beside the agent's tools. This package adds what it has no word
+for: who is calling (the agent's `ActorResolver`), the agent's tools listed to each caller as the
+roles policy and `@Can()` allow, the `action` exposure policy, and the personal-agent scope step-up.
+Built on the MCP SDK v2 (`@modelcontextprotocol/server`).
 
 <Callout type="info" title="The opposite direction to -mcp">
 [`@dudousxd/nestjs-agent-mcp`](/docs/agent/packages/mcp) is the **client**: it imports a remote
@@ -63,8 +68,9 @@ import { AgentMcpServerModule, BearerTokenActorResolver } from '@dudousxd/nestjs
 export class AppModule {}
 ```
 
-`POST | GET | DELETE /mcp` is the endpoint — `POST` for `initialize` and requests, `GET` for the
-server-to-client SSE stream, `DELETE` to terminate the session. `path` moves it.
+`/mcp` is the endpoint (`@nestjs/mcp`'s, so the global prefix and middleware apply); `path` moves
+it, and `mcp` passes `@nestjs/mcp`'s own settings through (`instructions`, `http.allowedHosts`, …).
+`stdio: { actor }` serves the agent's tools over stdio too, as that actor.
 
 <Callout type="warn">
 Import `AgentMcpServerModule` **after** `AgentModule`, whose global `AGENT_TOOL_REGISTRY` and
@@ -107,8 +113,9 @@ A role-checked tool stays role-checked, a `canUse` still runs, a disabled tool i
 client holding a list taken before a demotion gains nothing by calling from it. See
 [Identity & authorization](/docs/agent/guides/identity-and-authorization) for what those gates are.
 
-The acting actor is read from the transport's verified auth on **every** request, not once at
-`initialize` — a long-lived MCP session cannot outlive the identity it was opened with.
+The acting actor is resolved on **every** request — the endpoint is stateless, so there is no
+session to outlive the identity it was opened with — and the server built for that request
+registers only the tools that actor may use.
 
 ---
 
@@ -184,7 +191,7 @@ AgentMcpServerModule.forRoot({ name: 'Acme Agent', version: '1.0.0', auth, empty
 ```
 
 A tool whose roles come out empty (declared `[]`, or none declared and no `defaultRoles`) is then
-neither listed nor callable over MCP; an `ability`-gated tool is left to the policy. Set
+neither listed nor callable over MCP; a tool that requires a `can` ability is left to the policy. Set
 `AgentModule`'s own `emptyRoles: 'deny'` to close both surfaces.
 
 ### `allowedTools` is enforced on the call, not only on the list
@@ -248,31 +255,23 @@ verify a JWT, call your gateway.
 
 ---
 
-## Sessions, and how a request is refused
+## How a request is refused
 
-A session id travels in a plain `mcp-session-id` header and owns an open SSE stream that server
-messages are written to. Holding one is not permission to act as the identity that opened it, so a
-session is **bound to its opener**.
+The agent's guard runs on `@nestjs/mcp`'s route before the SDK sees the request.
 
 | Situation | Answer |
 |---|---|
-| No credential, or one the resolver does not know, on `POST` / `GET` / `DELETE` | `401`, with a `WWW-Authenticate: Bearer` challenge |
+| No credential, or one the resolver does not know | `401`, with a `WWW-Authenticate: Bearer` challenge |
 | A personal agent calling an offered tool whose scope it was not granted | `403` `insufficient_scope` — see [personal agents](#personal-agents-poppy) |
 | The host resolver threw a plain `Error`, or returned a non-actor | `401` |
-| A session id presented by a **different** actor | `403` |
-| A session id this process does not hold | `404` — the client re-initializes rather than retrying |
-| `POST` with no session id whose body is not an `initialize` | `400` |
-| `GET` / `DELETE` with no session id | `400` |
 
-Every method authenticates **first**, before the transport is handed the request, so an unidentified
-caller never reaches the MCP machinery.
-
-Refusals *inside* a call are different in kind: a tool that is not exposed, not enabled, not allowed
-by the policy, or called with arguments that fail its schema comes back as a normal MCP tool result
-with `isError: true` and the reason as text. A request with no resolvable identity is a **protocol**
-error, so a client can tell "you are not authenticated" from "the tool said no" — and so is a status
-a [`@Mcp()` route](#a-call-runs-the-pipeline-not-the-method) answered with, which is the route's verdict on
-the call rather than a result it produced.
+Inside a call: a tool the caller may not use (not exposed, not enabled, not allowed by the policy) is
+**not registered** for that request at all, so calling it is the protocol's own "tool not found". A
+tool demoted between the list and the call, or called with arguments that fail its schema, comes back
+as a tool result with `isError: true`. A status a [`@Mcp()` route](#a-call-runs-the-pipeline-not-the-method)
+answered with is a tool result too (the SDK reports whatever a tool throws as one), with the status
+leading the text (`403: …`) and in `_meta.httpStatus`, so it does not read as "try different
+arguments".
 
 ---
 
@@ -547,8 +546,9 @@ just that issuer when no `oauth` option is configured.
 ## Input schemas
 
 A tool's [Standard Schema](https://standardschema.dev) becomes the JSON Schema `tools/list`
-advertises: Zod goes through the SDK's own converter, and a schema carrying the Standard JSON Schema
-extension (Valibot, ArkType, Zod 4) hands its `input()` document over. Other keywords — `$defs`,
+advertises: a schema carrying the Standard JSON Schema extension (Zod 4, ArkType, Valibot with
+`toStandardJsonSchema`) hands its `input()` document over; Zod 3 has none, as `@nestjs/mcp` does not
+support it either. Other keywords — `$defs`,
 `additionalProperties`, descriptions — ride along untouched, so nested references still resolve on
 the client.
 
@@ -580,8 +580,7 @@ the parts it does not supply.
 | A route on a request-scoped controller | There is no request to build the instance from, so it fails the boot rather than being served against a half-built one. |
 | An approval flow for MCP callers | Parking a `tools/call` on a human decision needs a run, a persisted tool-call row and a signal to wait on. A half-built version of that is worse than an explicit refusal, so `action` tools are refused instead — see [HITL](/docs/agent/guides/human-in-the-loop-and-durability) for what the real one costs. |
 | Rate limiting | Host middleware on the route. |
-| IP allow-lists, DNS-rebinding protection | Host middleware on the route. The MCP SDK's own `allowedHosts` / `allowedOrigins` options are deprecated in favour of exactly that. |
-| A shared session store | Sessions are held **in memory, per pod**. A fleet behind a load balancer needs session affinity on the MCP route, or a client's second request lands on a pod that never saw its `initialize`. |
+| IP allow-lists, DNS-rebinding protection | `@nestjs/mcp`'s `http.allowedHosts` / `http.allowedOrigins`, through `mcp`. |
 
 ---
 
@@ -589,15 +588,15 @@ the parts it does not supply.
 
 | Export | What it is |
 |---|---|
-| `AgentMcpServerModule.forRoot(options)` / `.forRootAsync(options)` | The NestJS wiring — mounts the controller under `path`. |
-| `AgentMcpServerController` | The Streamable HTTP endpoint itself. |
-| `createAgentMcpServer(options)` | The MCP `Server` over a registry + policy, framework-free. |
+| `AgentMcpServerModule.forRoot(options)` / `.forRootAsync(options)` | The NestJS wiring — `@nestjs/mcp`'s endpoint under `path`, with the agent's guard, and the binding. |
+| `AgentMcpAuthGuard` · `mcpActorOf` · `MCP_ACTOR` | The guard on the endpoint, and the actor it leaves on the request. |
+| `AgentMcpServerBinding` · `findMcpServerFactory` | Registers the agent's tools on each server `@nestjs/mcp` builds. |
+| `registerAgentTools(server, options)` · `describeAgentTool` | The agent's tools for one actor on an SDK `McpServer`, framework-free. |
 | `BearerTokenActorResolver` / `McpBearerGrant` | Issued tokens bound to the identities they act as. |
 | `authenticateMcpRequest({ auth, request })` | One request's identity, or an `HttpException`. |
 | `mcpExposureRefusal` · `isToolExposedOverMcp` · `assertToolExposedOverMcp` · `McpToolNotExposedError` | The exposure decision on its own, and its refusal reason. |
 | `McpActionPolicy` · `McpExposureInput` | `'deny' \| 'execute'`, and what the decision reads. |
 | `actorFromAuthInfo` · `isActor` · `McpUnauthenticatedError` · `McpAuthInfo` | Reading the acting actor off a verified `AuthInfo`. |
-| `McpSessionStore` / `McpSession` | The live sessions this process holds — `size`, and a shutdown hook that closes them. Exported by the module. |
 | `Mcp(options)` · `McpRouteOptions` | The route decorator, and what it takes. |
 | `McpRouteDeclarationError` · `McpRouteToolNameCollisionError` | The two boot refusals, each naming the route. |
 | `McpRouteHttpError` | An `HttpException` a route answered a dispatched call with, keeping its status. |
@@ -615,18 +614,18 @@ the parts it does not supply.
 
 ## Without the module
 
-`createAgentMcpServer` is the whole feature; the controller is HTTP wiring around it.
+`registerAgentTools` is the whole feature; the module is the wiring that calls it for each request's
+actor.
 
 ```ts
-const server = createAgentMcpServer({
-  name: 'Acme Agent',
-  version: '1.0.0',
+import { McpServer } from '@modelcontextprotocol/server';
+
+const server = new McpServer({ name: 'Acme Agent', version: '1.0.0' });
+await registerAgentTools(server, {
+  actor,               // who this server answers for
   registry,            // the agent's own ToolRegistry
   policy,              // the agent's own RolesPolicy
   actions: 'deny',
 });
 await server.connect(transport);
 ```
-
-`actorFromAuth` is the seam for where the acting actor is read from the transport's verified
-`AuthInfo`; its default refuses a request that carries none.

@@ -17,6 +17,7 @@ import {
   AGENT_SKILL_SOURCES,
   AGENT_STORE,
   AGENT_TOOL_REGISTRY,
+  AGENT_WORKFLOWS_RUNNER,
   AgentRegistry,
   type AgentRunner,
   type AgentStore,
@@ -30,6 +31,7 @@ import {
   ToolRegistry,
   personalAgentGate,
   personalAgentScopes,
+  withControllerDecorators,
 } from '@dudousxd/nestjs-agent-core';
 import {
   type CanActivate,
@@ -43,7 +45,12 @@ import {
 import { DiscoveryModule, ModulesContainer, RouterModule } from '@nestjs/core';
 import { AgentDepsFactory } from './agent-deps.factory.js';
 import { AGENT_SERVICE } from './agent-service.token.js';
-import type { AgentModuleAsyncOptions, AgentModuleOptions, AgentSurface } from './agent.options.js';
+import {
+  type AgentModuleAsyncOptions,
+  type AgentModuleOptions,
+  type AgentSurface,
+  durableEngineOf,
+} from './agent.options.js';
 import { AgentService } from './agent.service.js';
 import { AgentApprovalPortAdapter } from './approval-port.adapter.js';
 import { AgentsController } from './controller/agents.controller.js';
@@ -65,6 +72,9 @@ import { type DeclaredSkill, SkillDiscoveryService } from './discovery/skill-dis
 import type { AgentEngine } from './engine.js';
 import { InProcessTokenStreamSink } from './in-process-sink.js';
 import { LedgerQuotaProvider } from './ledger-quota-provider.js';
+import { defaultAgentFunctionCaller } from './nest-ai/agent-functions.js';
+import { NestAuthorizationBinding, authorizationGate } from './nest-ai/authorization.js';
+import { NestAiModelsBinding } from './nest-ai/nest-ai-models.binding.js';
 import { PricingBootService } from './pricing-boot.service.js';
 import { ActionProposalWorkerService } from './proposals/action-proposal-worker.service.js';
 import { ActionProposalController } from './proposals/action-proposal.controller.js';
@@ -188,11 +198,16 @@ function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProv
   return quota !== undefined && typeof (quota as QuotaProvider).report === 'function';
 }
 
-/** The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`). */
-function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
+/**
+ * The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`, or
+ * `AiModule`'s models when no `model` is configured).
+ */
+function resolveCatalog(
+  options: AgentModuleOptions,
+  model: ModelProvider | undefined,
+): ModelCatalog | undefined {
   if (options.models !== undefined) return options.models;
-  const carried = (options.model as (ModelProvider & { catalog?: ModelCatalog }) | undefined)
-    ?.catalog;
+  const carried = (model as (ModelProvider & { catalog?: ModelCatalog }) | undefined)?.catalog;
   return carried !== undefined && typeof carried.list === 'function' ? carried : undefined;
 }
 
@@ -201,7 +216,11 @@ function resolveCatalog(options: AgentModuleOptions): ModelCatalog | undefined {
  * `AGENT_STORE` locally: when the host omits `options.store` we leave it unbound so a globally-bound
  * store module (which binds `AGENT_STORE` app-wide) satisfies the dependency instead.
  */
-function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Provider[] {
+function sharedProviders(
+  durable: AgentModuleOptions['durable'],
+  engine: AgentEngine | undefined,
+): Provider[] {
+  const durableEngine = durableEngineOf(durable);
   const providers: Provider[] = [
     { provide: AGENT_TOOL_REGISTRY, useFactory: () => new ToolRegistry() },
     // Starts empty; AgentDiscoveryService populates it from `@Agent`-decorated providers at boot.
@@ -242,14 +261,27 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       useFactory: (options: AgentModuleOptions) => options.sink ?? new InProcessTokenStreamSink(),
       inject: [AGENT_OPTIONS],
     },
+    // `@nestjs/authorization`'s AuthorizationService, when the app imports AuthorizationModule.
+    NestAuthorizationBinding,
     {
       provide: AGENT_ROLES_POLICY,
       // Personal agents (a Poppy conversation, a Poppy session's MCP token) reach only the tools
       // written for them, and run only those of the scopes their user granted. A no-op for every
-      // other actor.
-      useFactory: (options: AgentModuleOptions, modules: ModulesContainer) =>
-        personalAgentGate(resolveRolesPolicy(options, modules)),
-      inject: [AGENT_OPTIONS, ModulesContainer],
+      // other actor. Around the roles policy, a tool's `@Can()` abilities are asked of
+      // `@nestjs/authorization`, for the user its agent function calls run as.
+      useFactory: (
+        options: AgentModuleOptions,
+        modules: ModulesContainer,
+        authorization: NestAuthorizationBinding,
+      ) =>
+        personalAgentGate(
+          authorizationGate(
+            resolveRolesPolicy(options, modules),
+            () => authorization.service,
+            (actor) => (options.agentFunctionCaller ?? defaultAgentFunctionCaller)(actor).user,
+          ),
+        ),
+      inject: [AGENT_OPTIONS, ModulesContainer, NestAuthorizationBinding],
     },
     {
       provide: AGENT_ACTOR_RESOLVER,
@@ -264,10 +296,13 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       },
       inject: [AGENT_OPTIONS],
     },
+    // No `model` (and no `engine`): the turns run on `@nestjs/ai`'s `AiModule` models.
+    NestAiModelsBinding,
     {
       provide: AGENT_MODEL,
-      useFactory: (o: AgentModuleOptions) => o.model,
-      inject: [AGENT_OPTIONS],
+      useFactory: (o: AgentModuleOptions, nestAi: NestAiModelsBinding) =>
+        o.model ?? (nestAi.active ? nestAi : undefined),
+      inject: [AGENT_OPTIONS, NestAiModelsBinding],
     },
     {
       // `quota` is either a provider of the host's own or ceilings for the built-in ledger one;
@@ -286,8 +321,9 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
     },
     {
       provide: AGENT_MODEL_CATALOG,
-      useFactory: (o: AgentModuleOptions) => resolveCatalog(o),
-      inject: [AGENT_OPTIONS],
+      useFactory: (o: AgentModuleOptions, model: ModelProvider | undefined) =>
+        resolveCatalog(o, model),
+      inject: [AGENT_OPTIONS, AGENT_MODEL],
     },
     AgentDepsFactory,
     { provide: AGENT_DEPS_FACTORY, useExisting: AgentDepsFactory },
@@ -321,7 +357,7 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
   if (engine !== undefined) {
     // The engine runs the turns; its providers bring the runner AGENT_RUNNER points at.
     providers.push(...engine.providers, { provide: AGENT_RUNNER, useExisting: engine.runner });
-  } else if (durable) {
+  } else if (durableEngine === 'aviary') {
     // Bind AGENT_RUNNER to the durable runner AgentDurableModule provides. Optional injection turns
     // a forgotten `AgentDurableModule` import into a clear error instead of an unresolved-dep crash.
     providers.push({
@@ -329,13 +365,30 @@ function sharedProviders(durable: boolean, engine: AgentEngine | undefined): Pro
       useFactory: (durableRunner: AgentRunner | undefined) => {
         if (durableRunner === undefined) {
           throw new Error(
-            'AgentModule.forRoot({ durable: true }) requires importing AgentDurableModule from ' +
+            "AgentModule.forRoot({ durable: { engine: 'aviary' } }) requires importing AgentDurableModule from " +
               "'@dudousxd/nestjs-agent/durable' (alongside a configured DurableModule). It was not found.",
           );
         }
         return durableRunner;
       },
       inject: [{ token: AGENT_DURABLE_RUNNER, optional: true }],
+    });
+  } else if (durableEngine === 'workflows') {
+    // The runner AgentWorkflowsModule provides, on NestJS's `@nestjs/workflows`.
+    providers.push({
+      provide: AGENT_RUNNER,
+      useFactory: (workflowsRunner: AgentRunner | undefined) => {
+        if (workflowsRunner === undefined) {
+          throw new Error(
+            'AgentModule.forRoot({ durable: true }) runs turns on @nestjs/workflows: import ' +
+              "WorkflowsModule.forRoot() from '@nestjs/workflows' and AgentWorkflowsModule from " +
+              "'@dudousxd/nestjs-agent/workflows'. AgentWorkflowsModule was not found. (For the " +
+              "@dudousxd/nestjs-durable engine, set durable: { engine: 'aviary' }.)",
+          );
+        }
+        return workflowsRunner;
+      },
+      inject: [{ token: AGENT_WORKFLOWS_RUNNER, optional: true }],
     });
   } else {
     providers.push({ provide: AGENT_RUNNER, useExisting: InlineAgentRunner });
@@ -408,47 +461,16 @@ function controllersForSurface(
   surface: AgentSurface | undefined,
   adapters: AgentProtocolAdapter[] | undefined,
   engine?: AgentEngine,
+  decorators?: ClassDecorator[],
+  routes?: boolean,
 ): Type<object>[] {
-  return surface === 'engine'
-    ? []
-    : [...BASE_CONTROLLERS, ...adapterControllers(adapters), ...(engine?.controllers ?? [])];
-}
-
-/**
- * Nest's `GUARDS_METADATA` key (`@nestjs/common/constants`), inlined as a literal: `@nestjs/common`
- * has no `exports` map and its ESM-facing files are CJS, so a deep `import ... from
- * '@nestjs/common/constants'` in our ESM build is emitted extensionless and rejected by Node's
- * strict ESM resolver (surfaced by a consumer's bundler/test runner externalizing this package).
- * `agent-guards.spec.ts` asserts this literal still matches the real constant, so upstream drift
- * fails loudly instead of silently stamping a dead metadata key.
- */
-const GUARDS_METADATA = '__guards__';
-
-/**
- * Stamp (or clear) `@UseGuards`-equivalent metadata on every controller this module MIGHT mount.
- *
- * Mechanism: `@UseGuards(...guards)` on a controller just does `Reflect.defineMetadata(GUARDS_METADATA,
- * guards, ControllerClass)` (via Nest's `extendArrayMetadata`, which *appends* to any existing array).
- * We call `Reflect.defineMetadata` directly instead, so each `forRoot`/`forRootAsync` call REPLACES
- * the metadata rather than appending to it — appending would leak guards across repeated module
- * registrations in the same process (every test file that calls `forRoot` more than once, say) since
- * these controller classes are module-level singletons shared by every registration. Nest's
- * `GuardsConsumer` reads this metadata per-request via `Reflector`, not once at boot, so the LAST call
- * to stamp it before a request is served wins for that controller class in this process.
- */
-function applyGuards(
-  guards: Type<CanActivate>[] | undefined,
-  adapters: AgentProtocolAdapter[] | undefined,
-): void {
-  const resolved = guards ?? [];
-  for (const controller of [...BASE_CONTROLLERS, ...adapterControllers(adapters)]) {
-    Reflect.defineMetadata(GUARDS_METADATA, resolved, controller);
-  }
-}
-
-/** Distinct guard classes for the module's `providers`, so Nest can DI-instantiate them. */
-function guardProviders(guards: Type<CanActivate>[] | undefined): Type<CanActivate>[] {
-  return [...new Set(guards ?? [])];
+  if (surface === 'engine' || routes === false) return [];
+  // An engine's own controllers (OpenCode's tools endpoint) answer the engine's sessions, not the
+  // app's users, so the app's `decorators` are not theirs.
+  return [
+    ...withControllerDecorators([...BASE_CONTROLLERS, ...adapterControllers(adapters)], decorators),
+    ...(engine?.controllers ?? []),
+  ];
 }
 
 /** Mount the controllers under `path` (Nest applies the prefix to their relative routes). */
@@ -457,19 +479,15 @@ function routerFor(path: string): DynamicModule {
 }
 
 /**
- * Refuse a wiring that cannot run a turn, at boot rather than on the first message: no `model` and
- * no `engine` leaves the loop nothing to call, and `durable` names the loop's own durable runner,
- * which an engine replaces (an engine that wants durability brings it).
+ * Refuse a wiring that cannot run a turn, at boot rather than on the first message: `durable` names
+ * the loop's own durable runner, which an engine replaces (an engine that wants durability brings
+ * it). No `model` is not refused here: the turns then run on `AiModule`'s models, and
+ * `NestAiModelsBinding` refuses the boot when there is no `AiModule` either.
  */
-function assertRunnable(options: Pick<AgentModuleOptions, 'model' | 'engine' | 'durable'>): void {
-  if (options.engine !== undefined && options.durable === true) {
+function assertRunnable(options: Pick<AgentModuleOptions, 'engine' | 'durable'>): void {
+  if (options.engine !== undefined && durableEngineOf(options.durable) !== undefined) {
     throw new Error(
-      `AgentModule: \`durable: true\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
-    );
-  }
-  if (options.engine === undefined && options.model === undefined) {
-    throw new Error(
-      'AgentModule: set `model` (the loop runs the turns) or `engine` (something else does).',
+      `AgentModule: \`durable\` runs turns on the library's loop, but the \`${options.engine.name}\` engine runs them instead. Drop \`durable\` (the engine decides how its turns survive a restart).`,
     );
   }
 }
@@ -480,16 +498,20 @@ export class AgentModule {
   static forRoot(options: AgentModuleOptions): DynamicModule {
     const path = options.path ?? DEFAULT_PATH;
     assertRunnable(options);
-    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path)],
-      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
+      controllers: controllersForSurface(
+        options.surface,
+        options.adapters,
+        options.engine,
+        options.decorators,
+        options.routes,
+      ),
       providers: [
         { provide: AGENT_OPTIONS, useValue: options },
-        ...sharedProviders(options.durable ?? false, options.engine),
-        ...guardProviders(options.guards),
+        ...sharedProviders(options.durable, options.engine),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),
@@ -501,12 +523,17 @@ export class AgentModule {
     if (options.engine !== undefined) {
       assertRunnable({ engine: options.engine, durable: options.durable ?? false });
     }
-    applyGuards(options.guards, options.adapters);
     return {
       module: AgentModule,
       global: true,
       imports: [DiscoveryModule, routerFor(path), ...(options.imports ?? [])],
-      controllers: controllersForSurface(options.surface, options.adapters, options.engine),
+      controllers: controllersForSurface(
+        options.surface,
+        options.adapters,
+        options.engine,
+        options.decorators,
+        options.routes,
+      ),
       providers: [
         {
           provide: AGENT_OPTIONS,
@@ -528,8 +555,7 @@ export class AgentModule {
           },
           inject: options.inject ?? [],
         },
-        ...sharedProviders(options.durable ?? false, options.engine),
-        ...guardProviders(options.guards),
+        ...sharedProviders(options.durable, options.engine),
         ...adapterProviders(options.adapters),
       ],
       exports: exportsFor(options.engine),

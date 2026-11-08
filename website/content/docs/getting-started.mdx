@@ -14,7 +14,7 @@ system prompt — has a default you can override one option at a time.
 
 ## Prerequisites
 
-- **Node.js 20+**, **NestJS 10+** (v10, v11 and v12 are supported) on the Express platform
+- **Node.js 22+**, **NestJS 12+** on the Express platform — the floors of NestJS's `@nestjs/ai`, which the agent runs on
 - **TypeScript 5+** with `experimentalDecorators` and `emitDecoratorMetadata` enabled
 - A model — any Vercel AI SDK v7 `LanguageModel` (`openai('gpt-5-mini')`, `anthropic('claude-sonnet-4-5')`,
   an AI Gateway id like `'openai/gpt-5-mini'`), or anything implementing the `ModelProvider` SPI
@@ -24,11 +24,12 @@ system prompt — has a default you can override one option at a time.
 ## Step 1 — Install
 
 ```bash
-pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-ai-sdk @ai-sdk/openai zod
+pnpm add @dudousxd/nestjs-agent @nestjs/ai @nestjs/resilience ai @ai-sdk/openai zod
 ```
 
 `@dudousxd/nestjs-agent` is the NestJS module (it re-exports the whole `-core` surface);
-`@dudousxd/nestjs-agent-ai-sdk` adapts an AI SDK model so you write no provider code.
+the models are NestJS's own [`@nestjs/ai`](https://docs.nestjs.com/ai/overview) (`AiModule`), which the
+agent runs on.
 
 ---
 
@@ -38,13 +39,14 @@ pnpm add @dudousxd/nestjs-agent @dudousxd/nestjs-agent-ai-sdk @ai-sdk/openai zod
 // src/app.module.ts
 import { Module } from '@nestjs/common';
 import { AgentModule } from '@dudousxd/nestjs-agent';
-import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { AiModule } from '@nestjs/ai';
 import { openai } from '@ai-sdk/openai';
 
 @Module({
   imports: [
+    // NestJS's models: retries, timeouts, fallbacks and pricing are configured here.
+    AiModule.forRoot({ models: { default: openai('gpt-5-mini') } }),
     AgentModule.forRoot({
-      model: aiSdkModel(openai('gpt-5-mini')),
       systemPrompt: 'You are a helpful assistant for Acme.', // optional
     }),
   ],
@@ -176,9 +178,9 @@ Continue with [Hello chat](/docs/agent/hello-chat) (the smallest end-to-end app)
 | Public endpoints, one anonymous actor per browser | `actorResolver: requestUserActorResolver()`, or your own `ActorResolver` |
 | Every tool callable by any resolved actor | `@AiTool({ roles })`, `defaultRoles`, or a `rolesPolicy` |
 | `'You are a helpful assistant.'` | `systemPrompt` (string or `({ actor, agentName, pageContext }) => string`), or `@Agent` classes |
-| One model, no picker | `model: aiSdkModels({ fast: …, smart: … }, { default: 'fast' })` |
+| `AiModule`'s models, `default` first in the picker | more `AiModule.forRoot({ models })` entries; `model` to replace them (a fake in tests) |
 | Usage reported, never enforced | `quota: { limits: { day: { tokens: 200_000 }, month: { usd: 20 } } }` |
-| Turns run in-process | `durable: true` + `AgentDurableModule` ([Runners](/docs/agent/concepts/runners)) |
+| Turns run in-process | `durable: true` + `WorkflowsModule` + `AgentWorkflowsModule` ([Runners](/docs/agent/concepts/runners)) |
 | An `action` call holds its turn until someone decides | `actionApprovalMode: 'independent'` + a `backgroundActorResolver` — the turn finishes and the call waits as a proposal ([Action proposals](/docs/agent/guides/action-proposals)) |
 | Routes under `/agent` | `path: 'api/agent'` (and `<AgentProvider path="api/agent">` on the client) |
 

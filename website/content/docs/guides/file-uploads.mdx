@@ -83,7 +83,7 @@ AgentMediaAttachmentsModule.forRoot({
   canAccess: ({ allowed, actor }) => allowed || actor.roles?.includes('support') === true,
   resolveUrl: (record) => signMyProxyUrl(record.id),
   indexForRag: true,
-  guards: [SessionGuard],
+  decorators: [UseGuards(SessionGuard)],
 });
 ```
 
@@ -174,7 +174,7 @@ who sent it. Turn it on only when retrieval is filtered by owner (`FilteredRetri
 | `guards` | `[]` | guards for the upload routes |
 | `routes` | `true` | `false` binds the store without mounting the routes |
 
-`forRootAsync({ imports, inject, useFactory, path, guards, routes })` takes the same options. `path`,
+`forRootAsync({ imports, inject, useFactory, path, decorators, routes })` takes the same options. `path`,
 `guards` and `routes` stay static.
 
 ## Bring your own storage

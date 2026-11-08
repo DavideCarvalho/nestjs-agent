@@ -119,7 +119,7 @@ async function buildApp() {
         model: new FakeModelProvider(twoActions),
         store,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
       }),
       AgentDurableModule,

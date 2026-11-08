@@ -2,6 +2,7 @@ import {
   AGENT_ACTOR_RESOLVER,
   AGENT_SKILLS,
   type ActorResolver,
+  CanAnyone,
   type SkillCatalogEntry,
   type SkillsConfig,
   offerSkills,
@@ -22,6 +23,7 @@ import type { Request } from 'express';
  * Ownership posture mirrors `GET /agent/agents`: a plain array, no envelope, and nothing the caller
  * can pass to widen it — the actor comes from the resolver, never from a parameter.
  */
+@CanAnyone()
 @Controller('skills')
 export class SkillsController {
   constructor(

@@ -1,5 +1,8 @@
 export {
   aiSdkModel,
+  type AiSdkTurnResult,
+  describeAiSdkModel,
+  runAiSdkTurn,
   type AiSdkModelEntry,
   type AiSdkModelOptions,
   aiSdkModels,

@@ -99,7 +99,7 @@ async function buildDurableApp() {
         model: new TwoToolModel(),
         store: agentStore,
         actorResolver: new HeaderActorResolver(),
-        durable: true,
+        durable: { engine: 'aviary' },
         defaultAgent: 'default',
       }),
       AgentDurableModule,

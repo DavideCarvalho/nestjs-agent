@@ -139,7 +139,7 @@ has.
 | the `action` default | A poisoned description can make the model *propose* a call; a human still approves it. Widening `kind` is what spends this. |
 | `include` | The tools you reviewed, by name — a server that grows a new tool cannot put it in your prompt. |
 | `screen` | A check on every listed definition **before** it is imported; a refused tool never reaches the prompt. |
-| `roles` / `ability` / `canUse` | The imported tool reaches the actors you allowed and nobody else. |
+| `roles` / `can` / `canUse` | The imported tool reaches the actors you allowed and nobody else. |
 | an agent's `tools` allow-list | The remote tool exists for one persona, not for the whole chat surface. |
 | `importedTools()` | The descriptions actually in your prompt. Log them at boot, diff them between deploys, alert when one changes. |
 | an [`InputProcessor`](/docs/agent/guides/processors) | The seam that sees the growing transcript before every model call — where you mark what a server sent as data. |

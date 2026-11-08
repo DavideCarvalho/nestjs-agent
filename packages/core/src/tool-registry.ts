@@ -392,10 +392,16 @@ export interface ToolPreparationResult {
  * `AgentModule.forRoot({ defaultRoles })` module-wide, or a `rolesPolicy` of your own. `action`
  * tools still park on approval either way.
  *
- * A tool gated by an `ability` and naming no `roles` is refused: this policy cannot evaluate an
- * ability, and falling through to the open default would hand the tool to everyone. Bind an
- * ability-aware policy (`AgentAuthzModule`) to reach it — or give the tool `roles` as well.
+ * A tool that requires a `can` ability and names no `roles` is refused: this policy cannot evaluate
+ * an ability, and falling through to the open default would hand the tool to everyone. In a Nest
+ * app, `AgentModule` evaluates `can` with `@nestjs/authorization` around this policy — or give the
+ * tool `roles` as well.
  */
+/** Whether the tool requires an authorization ability (`ToolSpec.can`). */
+export function requiresAbility(tool: ToolSpec): boolean {
+  return (tool.can?.length ?? 0) > 0;
+}
+
 export class DefaultRolesPolicy implements RolesPolicy {
   /** What an empty roles list means here — see {@link EmptyRoles}. */
   readonly emptyRoles: EmptyRoles;
@@ -408,7 +414,7 @@ export class DefaultRolesPolicy implements RolesPolicy {
   }
 
   can(actor: Actor, tool: ToolSpec): boolean {
-    if (tool.ability !== undefined && tool.roles === undefined) return false;
+    if (requiresAbility(tool) && tool.roles === undefined) return false;
     const allowed = tool.roles ?? this.defaultRoles;
     if (allowed.length === 0) return this.emptyRoles === 'allow';
     return (actor.roles ?? []).some((role) => allowed.includes(role));
@@ -460,14 +466,14 @@ export function defaultRolesOf(policy: RolesPolicy): string[] | undefined {
  * with no default roles to fall back on — reaches nobody; anything else is the inner policy's call.
  *
  * The default roles are read off a {@link DefaultRolesPolicy}; any other inner policy keeps its own
- * defaults to itself, so for it an undeclared list counts as empty. A tool gated by `ability` has
- * nothing to do with roles and is always left to the inner policy. What the MCP server's
+ * defaults to itself, so for it an undeclared list counts as empty. A tool that requires a `can`
+ * ability has nothing to do with roles and is always left to the inner policy. What the MCP server's
  * `emptyRoles: 'deny'` wraps the agent's shared policy in.
  */
 export function closeEmptyRoles(inner: RolesPolicy): RolesPolicy {
   const defaults = defaultRolesOf(inner) ?? [];
   const closed = (tool: ToolSpec) =>
-    tool.ability === undefined && (tool.roles ?? defaults).length === 0;
+    !requiresAbility(tool) && (tool.roles ?? defaults).length === 0;
   return {
     can(actor: Actor, tool: ToolSpec): boolean | Promise<boolean> {
       if (closed(tool)) {

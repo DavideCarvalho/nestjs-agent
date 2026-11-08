@@ -6,7 +6,16 @@ description: "Durable is the production posture — every model call and tool ex
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
-`durable: true` is one dependency and one flag away from the default in-process runner, and it brings
+<Callout type="info" title="This recipe is the aviary engine">
+`durable: true` now runs turns on NestJS's `@nestjs/workflows`: import `WorkflowsModule.forRoot()` and
+`AgentWorkflowsModule` from `@dudousxd/nestjs-agent/workflows`, see
+[Under the durable runner](/docs/agent/guides/human-in-the-loop-and-durability#under-the-durable-runner).
+What follows is the `@dudousxd/nestjs-durable` path, `durable: { engine: 'aviary' }`, for transports,
+Python workers, the SQLite/MikroORM stores and `ctx.patched`. What your tool handlers owe applies to
+both engines.
+</Callout>
+
+`durable: { engine: 'aviary' }` is one dependency and one flag away from the default in-process runner, and it brings
 one thing with it that is not optional: **the turn's two long steps — the model call and each tool
 execution — are dispatched** as durable steps (`AgentRunSteps.llm` / `AgentRunSteps.tool`), served by
 whichever worker picks them up rather than pinned to the pod that started the run. The llm step gets
@@ -93,7 +102,7 @@ That's it — there is no separate flag for dispatching, and no flag that turns 
 ```ts
 export function agentDurable(options: AgentModuleOptions): DynamicModule[] {
   return [
-    AgentModule.forRoot({ ...options, durable: true }),
+    AgentModule.forRoot({ ...options, durable: { engine: 'aviary' } }),
     AgentDurableModule.forRoot(options.surface !== undefined ? { surface: options.surface } : {}),
   ];
 }
@@ -110,7 +119,7 @@ import { AgentDurableModule } from '@dudousxd/nestjs-agent/durable';
 @Module({
   imports: [
     DurableModule.forRoot({ store: myStateStore, transport: myTransport }),
-    AgentModule.forRoot({ /* same options as above */ durable: true }),
+    AgentModule.forRoot({ /* same options as above */ durable: { engine: 'aviary' } }),
     AgentDurableModule,
   ],
 })
@@ -118,7 +127,7 @@ export class AppModule {}
 ```
 
 <Callout type="warn" title="Forgetting AgentDurableModule fails loudly, not silently">
-`AgentModule.forRoot({ durable: true })` binds `AGENT_RUNNER` to whatever `AgentDurableModule`
+`AgentModule.forRoot({ durable: { engine: 'aviary' } })` binds `AGENT_RUNNER` to whatever `AgentDurableModule`
 provides via `AGENT_DURABLE_RUNNER` — optional injection, so a missing import throws a clear error
 at boot ("requires importing `AgentDurableModule` from `@dudousxd/nestjs-agent/durable`") instead of
 an opaque unresolved-dependency crash. `agentDurable(options)` can't hit this: it always imports both
@@ -156,10 +165,10 @@ export class CloseWorkOrderTool implements ToolHandler<{ id: string }> {
 </Callout>
 
 <Callout type="warn" title="Multi-pod fleets need a cross-process sink">
-  Wire a cross-process `TokenStreamSink` via `sink` under `durable: true`: the turn runs on
+  Wire a cross-process `TokenStreamSink` via `sink` under `durable`: the turn runs on
   whichever worker takes `agent.run` and dispatches its model call from there, so the process
   writing tokens is generally not the pod holding the SSE connection. A boot warning fires when
-  `durable: true` is on with the default `InProcessTokenStreamSink`.
+  `durable` is on with the default `InProcessTokenStreamSink`.
 </Callout>
 
 Two kinds of cross-process sink ship. With Redis, `RedisTokenStreamSink` from
