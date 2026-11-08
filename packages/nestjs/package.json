@@ -179,7 +179,7 @@
     "@dudousxd/nestjs-durable-core": "0.72.1",
     "@dudousxd/nestjs-durable-transport-event-emitter": "0.5.1",
     "@dudousxd/nestjs-media": "0.9.3",
-    "@dudousxd/nestjs-media-core": "0.9.1",
+    "@dudousxd/nestjs-media-core": "0.9.2",
     "@dudousxd/nestjs-media-testing": "0.6.0",
     "@nestjs/ai": "0.0.2",
     "@nestjs/authorization": "0.1.3",
