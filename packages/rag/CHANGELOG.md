@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-rag
 
+## 0.14.6
+
+### Patch Changes
+
+- [#411](https://github.com/DavideCarvalho/nestjs-agent/pull/411) [`b9825db`](https://github.com/DavideCarvalho/nestjs-agent/commit/b9825db7994c55b0d3bf4685d108c9f387593ee7) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Depend on `@dudousxd/nestjs-diagnostics` `>=0.7.0 <1.0.0` instead of the exact `0.7.2`, so an app on diagnostics 0.8.0 shares one copy (and one channel registry) instead of installing a second one.
+
 ## 0.14.5
 
 ### Patch Changes

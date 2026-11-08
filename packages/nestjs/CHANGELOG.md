@@ -1,5 +1,15 @@
 # @dudousxd/nestjs-agent
 
+## 2.0.1
+
+### Patch Changes
+
+- [#413](https://github.com/DavideCarvalho/nestjs-agent/pull/413) [`0bff991`](https://github.com/DavideCarvalho/nestjs-agent/commit/0bff991992ab609482d693cd84d1db6ca34b6d5f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs: the boot warning about both a `rolesPolicy` option and a bound `AGENT_ROLES_POLICY` no longer names the removed `AgentAuthzModule` (ability checks are `@Can()` from `@nestjs/authorization`). `CanAnyone()`'s doc names `decorators`, not the removed `guards`. The dashboard README no longer refers to the removed `./react` entry, the Poppy README says its 1.0 is not a stability promise, and `transport-redis` ships a README.
+
+- Updated dependencies [[`b9825db`](https://github.com/DavideCarvalho/nestjs-agent/commit/b9825db7994c55b0d3bf4685d108c9f387593ee7), [`0bff991`](https://github.com/DavideCarvalho/nestjs-agent/commit/0bff991992ab609482d693cd84d1db6ca34b6d5f)]:
+  - @dudousxd/nestjs-agent-core@0.62.1
+  - @dudousxd/nestjs-agent-ai-sdk@0.11.0
+
 ## 2.0.0
 
 ### Major Changes

@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-transport-redis
 
+## 0.6.3
+
+### Patch Changes
+
+- [#413](https://github.com/DavideCarvalho/nestjs-agent/pull/413) [`0bff991`](https://github.com/DavideCarvalho/nestjs-agent/commit/0bff991992ab609482d693cd84d1db6ca34b6d5f) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Docs: the boot warning about both a `rolesPolicy` option and a bound `AGENT_ROLES_POLICY` no longer names the removed `AgentAuthzModule` (ability checks are `@Can()` from `@nestjs/authorization`). `CanAnyone()`'s doc names `decorators`, not the removed `guards`. The dashboard README no longer refers to the removed `./react` entry, the Poppy README says its 1.0 is not a stability promise, and `transport-redis` ships a README.
+
 ## 0.6.2
 
 ### Patch Changes
