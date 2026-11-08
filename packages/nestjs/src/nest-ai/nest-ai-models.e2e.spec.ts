@@ -161,6 +161,38 @@ describe('AgentModule on @nestjs/ai models (no `model` configured)', () => {
     expect(fast.calls).toHaveLength(0);
   });
 
+  it("sends the model's generation settings as @nestjs/ai's own calls do, the model's over `defaults`", async () => {
+    const model = new FakeModel(['Tuned.']);
+    // `@nestjs/ai`'s call plan forwards these off a model definition and `defaults` too, beyond the
+    // four its `AiCallSettings` type names.
+    const tuned = {
+      model,
+      temperature: 0.2,
+      topP: 0.9,
+      topK: 40,
+      seed: 7,
+      stopSequences: ['END'],
+      presencePenalty: 0.1,
+    };
+    const server = await boot({
+      models: { default: tuned },
+      defaults: { ...FAST, maxOutputTokens: 256, frequencyPenalty: 0.3, temperature: 1 } as never,
+    });
+
+    await request(server).post('/agent/chat').send({ message: 'hi' });
+
+    expect(model.calls[0]?.options).toMatchObject({
+      temperature: 0.2,
+      topP: 0.9,
+      topK: 40,
+      seed: 7,
+      stopSequences: ['END'],
+      presencePenalty: 0.1,
+      frequencyPenalty: 0.3,
+      maxOutputTokens: 256,
+    });
+  });
+
   it('refuses to boot with neither a `model` nor an AiModule', async () => {
     await expect(boot(undefined)).rejects.toThrow(/no AiModule was found/);
   });

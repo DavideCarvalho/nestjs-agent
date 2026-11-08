@@ -17,6 +17,7 @@ import type {
   AiModelPricing,
   AiModels,
   AiModuleOptions,
+  AiResilienceSettings,
   AiUsageEvent,
 } from '@nestjs/ai';
 import { Logger } from '@nestjs/common';
@@ -37,6 +38,33 @@ import { APICallError, type LanguageModel, RetryError } from 'ai';
 import { Observable } from 'rxjs';
 
 const logger = new Logger('AgentModels');
+
+/**
+ * The generation settings a model's definition (or `defaults`) passes to the SDK call — the list
+ * `@nestjs/ai`'s own call plan forwards, so a model runs the same under the agent as under
+ * `AiService`. `retry`, `timeout` and `resilience` are not sent: they build the model's policy.
+ */
+const FORWARDED_SETTINGS = [
+  'maxOutputTokens',
+  'temperature',
+  'topP',
+  'topK',
+  'seed',
+  'stopSequences',
+  'presencePenalty',
+  'frequencyPenalty',
+  'providerOptions',
+  'headers',
+] as const;
+
+/** Fails to compile when `AiCallSettings` grows a setting that is neither forwarded nor resilience. */
+type UnforwardedSettings = Exclude<
+  keyof AiCallSettings,
+  (typeof FORWARDED_SETTINGS)[number] | keyof AiResilienceSettings
+>;
+const allSettingsForwarded: [UnforwardedSettings] extends [never] ? true : UnforwardedSettings =
+  true;
+void allSettingsForwarded;
 
 /** `@nestjs/ai`'s defaults, kept in step with it: a model call's timeout and retry backoff. */
 const DEFAULT_TIMEOUT: Duration = '60s';
@@ -153,15 +181,14 @@ export function nestAiModelProvider(config: NestAiModelProviderOptions): NestAiM
   };
 
   const settingsFor = (model: ResolvedModel) => {
-    const pick = <K extends 'maxOutputTokens' | 'temperature' | 'providerOptions' | 'headers'>(
-      key: K,
-    ): AiCallSettings[K] => model.settings[key] ?? defaults[key];
+    const own = model.settings as Record<string, unknown>;
+    const fallback = defaults as Record<string, unknown>;
     const settings: Record<string, unknown> = {
       // Retries are the policy's: the SDK's own would retry inside one attempt, behind its timeout.
       maxRetries: 0,
     };
-    for (const key of ['maxOutputTokens', 'temperature', 'providerOptions', 'headers'] as const) {
-      const value = pick(key);
+    for (const key of FORWARDED_SETTINGS) {
+      const value = own[key] ?? fallback[key];
       if (value !== undefined) settings[key] = value;
     }
     return settings;
