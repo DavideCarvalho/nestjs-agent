@@ -59,6 +59,7 @@ import {
   markControlFlow,
   rebuildTurnError,
   serializeTurnError,
+  stepFailureCause,
 } from './turn-journal.js';
 
 /** The workflow a turn runs as. */
@@ -350,7 +351,7 @@ export class AgentTurnExecutor {
           } catch (error) {
             // The model's own failure, as the loop knows it: `No output generated`, a provider error.
             if (error instanceof StepFailedError) {
-              throw rebuildTurnError({ name: error.cause.name, message: error.cause.message });
+              throw rebuildTurnError(stepFailureCause(error));
             }
             throw error;
           }

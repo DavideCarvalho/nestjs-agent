@@ -70,6 +70,32 @@ export function serializeTurnError(error: unknown): SerializedTurnError {
   };
 }
 
+/**
+ * The failure a `StepFailedError` gave up on — its `cause`, the step's error as the journal kept it
+ * (`{ name, message }`). Read defensively: a cause that is missing or not that shape (an older
+ * journal, an engine change) falls back to the cause as text, or to the step error's own message,
+ * rather than throwing a `TypeError` in place of the turn's real failure.
+ */
+export function stepFailureCause(error: { cause?: unknown; message: string }): SerializedTurnError {
+  const cause = error.cause;
+  if (typeof cause === 'object' && cause !== null) {
+    const { name, message } = cause as { name?: unknown; message?: unknown };
+    if (typeof message === 'string') {
+      return { name: typeof name === 'string' ? name : 'Error', message };
+    }
+  }
+  if (cause === undefined || cause === null) return { name: 'Error', message: error.message };
+  return { name: 'Error', message: typeof cause === 'string' ? cause : safeString(cause) };
+}
+
+function safeString(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 /** Core's errors the runners branch on by class (`agentFailureCode`), rebuilt as themselves. */
 const KNOWN_ERRORS: Record<string, { prototype: Error }> = {
   QuotaExceededError,
