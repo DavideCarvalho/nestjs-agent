@@ -210,7 +210,7 @@ see [Identity & authorization](/docs/agent/guides/identity-and-authorization).
 | Setting | What it does |
 |---|---|
 | `roles: ['OPS']` | The actor passes if one of its roles matches. Omit → the module's `defaultRoles`. |
-| `ability: 'docs.search'` | Checked by an ability-aware `RolesPolicy` (e.g. [`-authz`](/docs/agent/packages/authz)). |
+| `can: [{ policy: DocsPolicy, ability: 'search' }]` | `@nestjs/authorization` abilities the actor needs for every tool from this server (see [NestJS authorization](/docs/agent/guides/identity-and-authorization#nestjs-authorization)). |
 | `canUse: (actor) => …` | Per-actor gate, evaluated per turn, on top of the role gate. |
 | `enabled: false \| () => …` | Whether this server's tools exist in this deployment at all. |
 | `include` / `exclude` | Which of the server's tools to import at all. |
