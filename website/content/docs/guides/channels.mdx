@@ -171,7 +171,7 @@ export class ChannelsModule {}
 `ChannelThreadsService` is yours: a table of `(channel, conversation, actor) → threadId`. `thread`
 returning `null` starts a new thread, reported to `onThreadCreated`.
 
-<Callout type="info" title="Guards">
+<Callout type="info" title="Protecting the webhook routes">
 The routes are public by design — each adapter verifies its own requests. The controller carries
 `CanAnyone()`, so `@nestjs/authorization`'s deny-by-default guard lets it through. Any other global
 guard (`APP_GUARD`) that requires a session also runs on them: let `/channels/*` through it.
