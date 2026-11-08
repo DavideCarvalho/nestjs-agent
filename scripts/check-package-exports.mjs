@@ -15,7 +15,7 @@
  * hole a hard failure before anything is packed or published.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,18 +33,31 @@ function collectTargets(value, where, out) {
 }
 
 function patternMatches(pkgDir, target) {
-  // `./dist/*.js` → any file under dist/ whose relative path fits the pattern.
-  const [prefix, suffix] = target.split('*');
-  const base = join(pkgDir, prefix);
-  const baseDir = prefix.endsWith('/') ? base : dirname(base);
+  // A subpath pattern's `*` stands for any string, `/` included (Node's semantics): `./dist/*.js`
+  // matches any file under dist/ ending in `.js`. Compared on the path relative to the package, in
+  // `/` form, so `./dist/server/*` needs the `dist/server/` directory itself (not `dist/server2/`),
+  // and the prefix and suffix may not overlap (`./dist/a*a.js` does not match `dist/a.js`).
+  const [rawPrefix, suffix] = target.split('*');
+  const prefix = rawPrefix.replace(/^\.\//, '');
+  const baseDir = join(pkgDir, prefix.slice(0, prefix.lastIndexOf('/') + 1));
   if (!existsSync(baseDir)) return false;
   const stack = [baseDir];
   while (stack.length) {
     const dir = stack.pop();
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else if (full.startsWith(base) && full.endsWith(suffix)) return true;
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      const rel = relative(pkgDir, full).split(sep).join('/');
+      if (
+        rel.length >= prefix.length + suffix.length &&
+        rel.startsWith(prefix) &&
+        rel.endsWith(suffix)
+      ) {
+        return true;
+      }
     }
   }
   return false;
