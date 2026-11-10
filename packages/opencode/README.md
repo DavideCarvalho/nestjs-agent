@@ -120,6 +120,58 @@ of settling it as an empty success. It needs the client's `message.list`. `openC
 same steps in memory (single replica). Several processes need a cross-process sink and a persistent
 `OpenCodeSessionStore`.
 
+### Limits, stops and lifecycle hooks
+
+Everything here is optional; without these options a turn runs exactly as before. They work with
+`openCode()` too.
+
+```ts
+openCodeDurable({
+  host: MyOpenCodeHost,
+  // Per engine, or `(input) => limits` per turn.
+  limits: { steps: 40, compactions: 2, wallClockMs: 10 * 60_000 },
+  onTurnStart: ({ turnId, threadId, sessionId, resumed }) => turnState.open(turnId),
+  onTurnEvent: ({ turnId, type, sessionId }) => turnState.saw(turnId, type),
+  onStop: ({ turnId, reason, counts }) => credentials.revoke(turnId),
+  onTurnEnd: ({ turnId, status, stop }) => turnState.close(turnId, status, stop?.reason),
+});
+
+// A stop the app starts (a revoked credential, a budget it keeps itself):
+await app.get(OpenCodeTurns).stopTurn(runId, 'budget'); // 'aborted' | 'settling' | 'pending' | 'ignored'
+```
+
+| Option | Type | What it does |
+| --- | --- | --- |
+| `limits.steps` | `number` | Stops the turn on the model round after this many (`session.step.started`). |
+| `limits.compactions` | `number` | Stops the turn when it reaches this many compactions (`session.compaction.started`). |
+| `limits.wallClockMs` | `number` | Stops the turn this long after its `begin`, time parked on a person included. |
+| `onTurnStart` | `({ turnId, threadId, sessionId, resumed }) => void \| Promise<void>` | This process starts executing the turn; `resumed: true` when it took the run over from another (a crash, a run resumed elsewhere after a person answered). |
+| `onTurnEvent` | `({ turnId, type, sessionId }) => void` | One OpenCode event of the turn's own session: its type, never its payload. |
+| `onStop` | `({ turnId, reason, counts }) => void \| Promise<void>` | A stop landed. `counts` is `{ steps, compactions, elapsedMs }`. |
+| `onTurnEnd` | `({ turnId, status, stop? }) => void \| Promise<void>` | The turn settled here. `status` is `'succeeded' \| 'failed' \| 'interrupted'`. |
+
+`turnId` is the run id. Only OpenCode's events for the turn's own session count (another thread's
+session or a subagent's do not). A stop aborts the session (`session.interrupt`), so OpenCode starts
+no new round, and the turn ends `failed` with `outcome.stop = { reason, counts }` on the
+`OpenCodeRunResult` the host's `beforeSettle` and `onSettled` see, error code `opencode_stopped` on
+the run row and the stream, and `{ outcome: 'failed', stop: reason }` as the durable workflow's
+result. `reason` is `'steps' | 'compactions' | 'wall-clock'`, or what the app passed to `stopTurn`.
+Return `{ error }` from `beforeSettle` to word the message the person reads. When the answer was
+already settling as the stop landed, the answer is kept: the turn ends `succeeded`, with `stop` still
+set and `onStop` still called.
+
+A thread's session is reused by its next turn, so a stop only aborts while its turn still owns the
+session, checked immediately before the abort; a stop for a turn that ended does nothing. A stop asked
+while the turn is parked on a person lands when the turn observes OpenCode again (`'pending'`); to
+end a parked run, cancel it.
+
+The hooks are called in the process that executes the turn's steps: with `openCodeDurable()`, any
+worker may claim a run, so it is the worker that runs them, not the one that admitted the question.
+They can also be set on the host (both are called, the options' first). Their errors are logged and
+never fail the turn. `stopTurn` acts in the process executing the turn and returns `'ignored'`
+elsewhere. A worker that loses a run to another (it was parked, then resumed elsewhere) gets no
+`onTurnEnd` for it; the one that settles it does.
+
 ## What the session gets from the module
 
 | Option | In the session |

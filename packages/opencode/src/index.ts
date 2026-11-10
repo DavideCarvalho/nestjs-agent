@@ -48,6 +48,16 @@ export {
   OPENCODE_TURNS,
 } from './tokens.js';
 export {
+  type OpenCodeStopReason,
+  type OpenCodeStopResult,
+  type OpenCodeTurnCounts,
+  type OpenCodeTurnHooks,
+  type OpenCodeTurnLimits,
+  type OpenCodeTurnLimitsOption,
+  type OpenCodeTurnStop,
+  STOPPED_ERROR_CODE,
+} from './turn-limits.js';
+export {
   addUsage,
   emptyUsage,
   LOST_ANSWER_ERROR,

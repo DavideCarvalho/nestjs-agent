@@ -5,14 +5,18 @@ import type {
   StoredMessage,
 } from '@dudousxd/nestjs-agent-core';
 import type { OpenCodeClient, OpenCodePromptFile, OpenCodeSessionCreate } from './client.js';
+import type { OpenCodeTurnHooks } from './turn-limits.js';
 import type { OpenCodeUsage, PendingAsk, TurnOutcome } from './turn.js';
 
 /**
  * Where a turn runs and how its OpenCode session is set up — the part only the host knows. The
  * engine owns everything between the library and OpenCode (sessions per thread, the event stream,
  * the turn's frames, approvals and questions, cancel); the host answers these questions.
+ *
+ * The turn lifecycle hooks (`onTurnStart`, `onTurnEvent`, `onStop`, `onTurnEnd`) can be set here
+ * as well as on the engine's options; both are called, the options' first.
  */
-export interface OpenCodeHost {
+export interface OpenCodeHost extends OpenCodeTurnHooks {
   /**
    * The OpenCode server this actor's turns run on — one per tenant in a sandbox, one for the whole
    * deployment, anything. Asked once per turn, so a server that restarted is picked up.

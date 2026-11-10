@@ -29,11 +29,16 @@ import type {
   OpenCodeTokens,
 } from './client.js';
 import { toElicitation, toFormAnswer } from './forms.js';
+import type { OpenCodeTurnStop } from './turn-limits.js';
 
-/** How an OpenCode execution ended. */
+/**
+ * How an OpenCode execution ended. `stop` is set when a stop landed on the turn (a limit, or
+ * `stopTurn`): on a `failed` outcome the stop aborted it; on a `succeeded` one the answer was
+ * already settling and was kept.
+ */
 export type TurnOutcome =
-  | { status: 'succeeded' }
-  | { status: 'failed'; error: string }
+  | { status: 'succeeded'; stop?: OpenCodeTurnStop }
+  | { status: 'failed'; error: string; stop?: OpenCodeTurnStop }
   | { status: 'interrupted' };
 
 /**
@@ -127,6 +132,8 @@ export interface TurnProgress {
   settled: string[];
   /** Assistant messages whose step's usage was counted. */
   steps: string[];
+  /** The rounds and compactions the turn's limits counted so far (absent before limits travelled). */
+  counts?: { steps: number; compactions: number };
 }
 
 /** What a turn says when it was rebuilt after a restart and the session left no answer for it. */

@@ -21,4 +21,9 @@ export function openCodeDurable(options: OpenCodeEngineOptions): AgentEngine {
 }
 
 export { DurableOpenCodeAgentRunner } from './runner.js';
-export { OPENCODE_RUN_WORKFLOW, OpenCodeRunWorkflow, decisionToken } from './workflow.js';
+export {
+  OPENCODE_RUN_WORKFLOW,
+  OpenCodeRunWorkflow,
+  type OpenCodeRunWorkflowResult,
+  decisionToken,
+} from './workflow.js';
