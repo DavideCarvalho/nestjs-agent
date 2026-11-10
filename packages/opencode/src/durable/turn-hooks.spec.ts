@@ -11,6 +11,7 @@ import { InMemoryOpenCodeSessionStore } from '../host.js';
 import { FakeOpenCode, type FakeScript } from '../testing/fake-opencode.js';
 import { type Harness, bootEngine, eventually } from '../testing/harness.js';
 import type { OpenCodeTurnHooks } from '../turn-limits.js';
+import { OpenCodeTurns } from '../turns.js';
 import { openCodeDurable } from './index.js';
 
 const actor: Actor = { id: 'u1', roles: ['ADMIN'] };
@@ -137,7 +138,10 @@ describe('openCodeDurable turn hooks', () => {
     expect(run.status).toBe('completed');
     expect(d.fake.callsOf('permission.reply')[0]?.args).toMatchObject({ decision: 'once' });
     expect(d.by('api')).toEqual([]);
-    expect(d.by('first', 'onTurnEnd')).toEqual([]);
+    // Shut down while the turn was parked: this process is done with it, and says so once.
+    expect(d.by('first', 'onTurnEnd').map((l) => l.event)).toEqual([
+      { turnId: runId, status: 'released' },
+    ]);
     expect(d.by('second', 'onTurnStart').map((l) => l.event)).toEqual([
       { turnId: runId, threadId, sessionId: 'ses_1', resumed: true },
     ]);
@@ -147,5 +151,68 @@ describe('openCodeDurable turn hooks', () => {
     expect(d.by('second', 'onTurnEvent').map((l) => l.event.type)).toContain(
       'session.execution.succeeded',
     );
+  });
+
+  it('end once on the worker when the API cancels a turn parked there', async () => {
+    d = deployment(async (t) => {
+      t.emit('session.step.started');
+      t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+      await t.next('permission.reply');
+      t.succeed();
+    });
+    const api = await d.boot('api', { drive: false });
+    const worker = await d.boot('worker');
+    const { runId } = await api.service.chat({ actor, message: 'send it' });
+    await eventually(
+      async () => (await d?.store.toolCallApproval?.('per_1')) != null,
+      'the turn parks on the approval',
+    );
+    await api.service.cancel(actor, runId);
+    await eventually(() => (d?.by('worker', 'onTurnEnd').length ?? 0) > 0, 'the worker lets go');
+
+    expect(d.by('worker', 'onTurnEnd').map((l) => l.event)).toEqual([
+      { turnId: runId, status: 'interrupted' },
+    ]);
+    expect(d.by('api')).toEqual([]);
+    // Its state is gone: a late stop there neither aborts nor reports anything.
+    expect(await worker.app.get(OpenCodeTurns).stopTurn(runId, 'wall-clock')).toBe('ignored');
+    expect(d.by('worker', 'onStop')).toEqual([]);
+    expect(d.fake.callsOf('session.interrupt')).toHaveLength(1);
+    expect(worker.app.get(OpenCodeTurns).liveRuns()).toEqual([]);
+  });
+
+  it('release the turn on the worker that lost it to another', async () => {
+    d = deployment(async (t) => {
+      t.emit('session.step.started');
+      t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+      await t.next('permission.reply');
+      t.emit('session.text.delta', { delta: 'Sent.' });
+      t.succeed();
+    });
+    const api = await d.boot('api', { drive: false });
+    const first = await d.boot('first');
+    const { runId } = await api.service.chat({ actor, message: 'send it' });
+    await eventually(
+      async () => (await d?.store.toolCallApproval?.('per_1')) != null,
+      'the turn parks on the approval',
+    );
+    // The first worker stays up; the decision reaches another one, which runs the rest.
+    const second = await d.boot('second');
+    await second.service.approve(actor, 'per_1');
+    const run = await second.app
+      .get(WorkflowEngine)
+      .waitForRun(runId, { timeoutMs: 5000, until: 'terminal' });
+    await eventually(() => (d?.by('first', 'onTurnEnd').length ?? 0) > 0, 'the first lets go');
+
+    expect(run.status).toBe('completed');
+    expect(d.by('first', 'onTurnEnd').map((l) => l.event)).toEqual([
+      { turnId: runId, status: 'released' },
+    ]);
+    expect(d.by('second', 'onTurnStart').map((l) => l.event.resumed)).toEqual([true]);
+    expect(d.by('second', 'onTurnEnd').map((l) => l.event)).toEqual([
+      { turnId: runId, status: 'succeeded' },
+    ]);
+    expect(first.app.get(OpenCodeTurns).liveRuns()).toEqual([]);
+    expect(await first.app.get(OpenCodeTurns).stopTurn(runId, 'wall-clock')).toBe('ignored');
   });
 });

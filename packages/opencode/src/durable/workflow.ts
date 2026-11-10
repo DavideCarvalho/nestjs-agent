@@ -8,7 +8,7 @@ import {
 } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { OpenCodeTurnStop } from '../turn-limits.js';
-import { type TurnProgress, addUsage, emptyUsage, errorText } from '../turn.js';
+import { type TurnOutcome, type TurnProgress, addUsage, emptyUsage, errorText } from '../turn.js';
 import { OpenCodeTurns, type SessionHandle } from '../turns.js';
 
 export const OPENCODE_RUN_WORKFLOW = 'agent.opencode.run';
@@ -74,22 +74,23 @@ export class OpenCodeRunWorkflow {
         spent = addUsage(spent, milestone.usage);
         const total = spent;
         if (milestone.kind === 'finished') {
-          await ctx.localStep('finish', async () => {
+          // How the turn settled — a stop that landed after `observe` journaled included. A run
+          // journaled before settle returned its outcome (`true`) reads the milestone's.
+          const settled = await ctx.localStep('finish', async (): Promise<TurnOutcome | true> => {
             // A cancel settles the run itself (it may be parked where no step runs again).
-            if (await this.cancelled(ctx.runId)) await this.turns.abandon(ctx.runId);
-            else
-              await this.turns.settle(
-                ctx.runId,
-                input,
-                milestone.outcome,
-                Date.now() - begun.startedAt,
-                total,
-              );
-            return true;
+            if (await this.cancelled(ctx.runId)) {
+              await this.turns.abandon(ctx.runId);
+              return milestone.outcome;
+            }
+            return this.turns.settle(
+              ctx.runId,
+              input,
+              milestone.outcome,
+              Date.now() - begun.startedAt,
+              total,
+            );
           });
-          const outcome = milestone.outcome;
-          const stop = outcome.status === 'interrupted' ? undefined : outcome.stop;
-          return { outcome: outcome.status, ...(stop !== undefined ? { stop: stop.reason } : {}) };
+          return resultOf(settled === true ? milestone.outcome : settled);
         }
         let reply: HumanReply;
         try {
@@ -110,17 +111,12 @@ export class OpenCodeRunWorkflow {
       }
     } catch (error) {
       if (isWorkflowControlFlowSignal(error)) throw error;
-      await ctx.localStep('fail', async () => {
-        await this.turns.settleFailed(
-          ctx.runId,
-          input,
-          errorText(error, 'the turn failed'),
-          0,
-          spent,
-        );
-        return true;
-      });
-      return { outcome: 'failed' };
+      const settled = await ctx.localStep(
+        'fail',
+        async (): Promise<TurnOutcome | true> =>
+          this.turns.settleFailed(ctx.runId, input, errorText(error, 'the turn failed'), 0, spent),
+      );
+      return settled === true ? { outcome: 'failed' } : resultOf(settled);
     }
   }
 
@@ -132,4 +128,9 @@ export class OpenCodeRunWorkflow {
       return false;
     }
   }
+}
+
+function resultOf(outcome: TurnOutcome): OpenCodeRunWorkflowResult {
+  const stop = outcome.status === 'interrupted' ? undefined : outcome.stop;
+  return { outcome: outcome.status, ...(stop !== undefined ? { stop: stop.reason } : {}) };
 }

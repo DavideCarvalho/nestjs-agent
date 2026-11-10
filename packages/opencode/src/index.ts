@@ -51,6 +51,7 @@ export {
   type OpenCodeStopReason,
   type OpenCodeStopResult,
   type OpenCodeTurnCounts,
+  type OpenCodeTurnEndStatus,
   type OpenCodeTurnHooks,
   type OpenCodeTurnLimits,
   type OpenCodeTurnLimitsOption,

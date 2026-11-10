@@ -132,10 +132,10 @@ describe('openCodeDurable turn limits', () => {
     expect(messages.map((m) => m.content)).toEqual(['go', 'Working.']);
   });
 
-  it('stops a turn when it reaches its compactions', async () => {
+  it('stops a turn that goes past its compactions', async () => {
     const r = recorder();
     h = await boot({
-      limits: { compactions: 2 },
+      limits: { compactions: 1 },
       hooks: r.hooks,
       script: async (t) => {
         t.emit('session.step.started');
@@ -358,14 +358,83 @@ describe('openCodeDurable turn limits', () => {
     await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
     expect(await turns.stopTurn(runId, 'credentials-revoked')).toBe('pending');
     expect(h.fake.callsOf('session.interrupt')).toHaveLength(0);
+    // The person approves, but the turn is being stopped: the action is refused, never run.
     await h.service.approve(actor, 'per_1');
     const { fs, error } = await stopped(h, runId);
+    expect(h.fake.callsOf('permission.reply').map((c) => c.args.decision)).toEqual(['reject']);
+    expect((await h.store.toolCallApproval?.('per_1'))?.status).toBe('rejected');
 
     expect(error).toMatchObject({ name: 'AgentStreamError', code: 'opencode_stopped' });
     expect(h.fake.callsOf('session.interrupt')).toHaveLength(1);
     expect(r.of('onStop')).toEqual([
       expect.objectContaining({ turnId: runId, reason: 'credentials-revoked' }),
     ]);
+  });
+});
+
+describe('stopTurn guards the session the next turn may use', () => {
+  let h: Harness | undefined;
+  let release: () => void = () => undefined;
+  afterEach(async () => {
+    release();
+    await h?.app.close();
+    h = undefined;
+  });
+
+  /** A turn that runs until released, observed by this process (its `session.wait` is out). */
+  async function running() {
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    h = await boot({
+      script: async (t) => {
+        t.emit('session.step.started');
+        await held;
+        t.emit('session.text.delta', { delta: `done ${t.text}` });
+        t.succeed();
+      },
+    });
+    const harness = h;
+    const turns = harness.app.get(OpenCodeTurns);
+    const turn = await harness.service.chat({ actor, message: 'a' });
+    await eventually(() => harness.fake.callsOf('session.wait').length > 0, 'turn A observes');
+    return { h: harness, turns, ...turn };
+  }
+
+  it("refuses to abort when the thread's store already runs another turn", async () => {
+    const { h, turns, runId, threadId } = await running();
+    // Turn A was cancelled elsewhere and turn B holds the thread; A's interrupted event is not in.
+    await h.store.setActiveStream(threadId, 'turn-b');
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('ignored');
+    expect(h.fake.callsOf('session.interrupt')).toHaveLength(0);
+    // The same stop, once the store says A again, aborts: the refusal was the guard's.
+    await h.store.setActiveStream(threadId, runId);
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('aborted');
+    expect(h.fake.callsOf('session.interrupt')).toHaveLength(1);
+  });
+
+  it('refuses to abort a session another turn owns now', async () => {
+    const { h, turns, runId, threadId } = await running();
+    // Turn B starts on the reused session in this process while A's state is still here.
+    const session = { sessionId: 'ses_1', serverKey: 'tenant-1', bootId: 'boot-1' };
+    await turns.prompt('turn-b', { threadId, actor, userText: 'b' }, session);
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('ignored');
+    expect(h.fake.callsOf('session.interrupt')).toHaveLength(0);
+    // B's own stop is B's to make: it is held until B observes.
+    expect(await turns.stopTurn('turn-b', 'wall-clock')).toBe('pending');
+    expect(h.fake.callsOf('session.interrupt')).toHaveLength(0);
+  });
+
+  it("aborts nothing when the thread's store cannot be read", async () => {
+    const { h, turns, runId } = await running();
+    const read = h.store.activeRunForThread.bind(h.store);
+    h.store.activeRunForThread = async () => {
+      throw new Error('store down');
+    };
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('unconfirmed');
+    expect(h.fake.callsOf('session.interrupt')).toHaveLength(0);
+    h.store.activeRunForThread = read;
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('aborted');
   });
 });
 

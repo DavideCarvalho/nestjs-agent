@@ -6,12 +6,13 @@ export type OpenCodeStopReason = 'steps' | 'compactions' | 'wall-clock';
 
 /**
  * Bounds on one turn, counted from OpenCode's own events for the turn's session. Every bound is
- * optional; a turn without any runs until OpenCode ends it (or `turnTimeoutMs`).
+ * optional; a turn without any runs until OpenCode ends it (or `turnTimeoutMs`). The counts are
+ * what the turn may do: a limit of N allows N, and the one after stops the turn.
  */
 export interface OpenCodeTurnLimits {
-  /** Model rounds (`session.step.started`) the turn may run. The round after the last one stops it. */
+  /** Model rounds (`session.step.started`) the turn may run; the round after the last stops it. */
   steps?: number;
-  /** Compactions (`session.compaction.started`): the turn stops when it reaches this many. */
+  /** Compactions (`session.compaction.started`) the turn may run; the one after the last stops it. */
   compactions?: number;
   /**
    * Milliseconds from the turn's start (its `begin`) to stop at, time parked on a person included.
@@ -43,16 +44,27 @@ export interface OpenCodeTurnStop {
  * - `aborted`: the session was aborted; the turn ends failed with `outcome.stop` (code `opencode_stopped`).
  * - `settling`: the answer was already settling; it is kept, and `outcome.stop` still reports the stop.
  * - `pending`: the turn is parked on a person; the stop lands when it observes OpenCode again.
- * - `ignored`: the turn has ended, is not executed in this process, no longer owns its session, or
- *   was already stopped.
+ * - `ignored`: the turn has ended, is not executed in this process (any more), no longer owns its
+ *   session, the thread's store says another run holds the thread, or the turn was already stopped.
+ * - `unconfirmed`: the thread's store could not be read, so nothing was aborted (the abort could
+ *   have landed on the thread's next turn). Ask again.
  */
-export type OpenCodeStopResult = 'aborted' | 'settling' | 'pending' | 'ignored';
+export type OpenCodeStopResult = 'aborted' | 'settling' | 'pending' | 'ignored' | 'unconfirmed';
+
+/**
+ * How a turn ended for the process that executed it: its outcome when it settled here, or
+ * `released` when this process stopped executing it without it ending here (another worker took
+ * the run over, or this process shut down).
+ */
+export type OpenCodeTurnEndStatus = TurnOutcome['status'] | 'released';
 
 /**
  * Lifecycle hooks of a turn, always called in the process that executes the turn's steps (with
  * `openCodeDurable()`, the worker that runs them, which may not be the one that admitted the
  * question). They carry ids and event types only, never prompts, tool input or output. Errors are
- * logged and never fail the turn.
+ * logged and never fail the turn. Only `onTurnStart` is waited for, at most `hookTimeoutMs`.
+ *
+ * Every process that gets `onTurnStart` for a turn gets exactly one `onTurnEnd` for it.
  */
 export interface OpenCodeTurnHooks {
   /**
@@ -73,10 +85,14 @@ export interface OpenCodeTurnHooks {
     reason: OpenCodeTurnStop['reason'];
     counts: OpenCodeTurnCounts;
   }): void | Promise<void>;
-  /** The turn settled in this process. `stop` is set when a stop landed on it. */
+  /**
+   * This process is done with the turn: it settled here (`succeeded`, `failed`, `interrupted`), it
+   * was cancelled while parked here (`interrupted`), or this process let it go (`released`: another
+   * worker took it over, or shutdown). `stop` is set when a stop landed on it and is on its outcome.
+   */
   onTurnEnd?(event: {
     turnId: string;
-    status: TurnOutcome['status'];
+    status: OpenCodeTurnEndStatus;
     stop?: OpenCodeTurnStop;
   }): void | Promise<void>;
 }
@@ -95,7 +111,7 @@ export function stopErrorText(stop: OpenCodeTurnStop): string {
     case 'steps':
       return `The turn was stopped after ${stop.counts.steps - 1} steps, its limit.`;
     case 'compactions':
-      return `The turn was stopped after ${stop.counts.compactions} compactions, its limit.`;
+      return `The turn was stopped after ${stop.counts.compactions - 1} compactions, its limit.`;
     case 'wall-clock':
       return 'The turn was stopped: it ran longer than allowed.';
     default:
