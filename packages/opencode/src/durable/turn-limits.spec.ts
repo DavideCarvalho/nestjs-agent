@@ -372,6 +372,157 @@ describe('openCodeDurable turn limits', () => {
   });
 });
 
+describe('a turn parked on a person', () => {
+  let h: Harness | undefined;
+  let go: () => void = () => undefined;
+  afterEach(async () => {
+    go();
+    await h?.app.close();
+    h = undefined;
+  });
+
+  /** Asks for `per_1`, then (once let go) runs a parallel `read` tool while the ask waits. */
+  function parallelRead(after?: (t: Parameters<FakeScript>[0]) => void): FakeScript {
+    const gate = new Promise<void>((resolve) => {
+      go = resolve;
+    });
+    return async (t) => {
+      t.emit('session.step.started');
+      t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+      await gate;
+      t.emit('session.tool.input.started', { id: 'call_read', name: 'read' });
+      t.emit('session.tool.called', { id: 'call_read', name: 'read', input: { path: 'a.md' } });
+      t.emit('session.tool.success', { id: 'call_read' });
+      after?.(t);
+      const reply = await t.next('permission.reply');
+      t.emit('session.text.delta', { delta: reply.args.decision === 'once' ? 'Sent.' : 'No.' });
+      t.succeed();
+    };
+  }
+
+  const readOutput = (f: AgentStreamEvent) => f.kind === 'tool-output' && f.id === 'call_read';
+
+  it("keeps following the step's other tools, with no options", async () => {
+    h = await boot({ script: parallelRead() });
+    const turns = h.app.get(OpenCodeTurns);
+    const { runId, threadId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    go();
+    await framesUntil(h.service, runId, readOutput);
+    expect(turns.liveRuns()).toEqual([runId]);
+
+    await h.service.approve(actor, 'per_1');
+    const fs = await frames(h.service, runId);
+    expect(textOf(fs)).toBe('Sent.');
+    expect(h.fake.callsOf('permission.reply').map((c) => c.args.decision)).toEqual(['once']);
+    // The parallel tool is streamed and persisted as it always was.
+    const ofRead = fs.filter((f) => 'id' in f && f.id === 'call_read').map((f) => f.kind);
+    expect(ofRead).toEqual(['tool-input-start', 'tool-input-available', 'tool-output']);
+    const messages = (await h.store.getThread(threadId))?.messages ?? [];
+    const last = messages.at(-1);
+    expect(last?.toolCalls?.map((c) => [c.id, c.name])).toEqual([['call_read', 'read']]);
+    expect(last?.toolResults?.map((r) => [r.id, r.output])).toEqual([['call_read', { ok: true }]]);
+  });
+
+  it("keeps following the step's other tools with limits and hooks, and a stop still refuses the ask", async () => {
+    const r = recorder();
+    h = await boot({ limits: { steps: 5 }, hooks: r.hooks, script: parallelRead() });
+    const turns = h.app.get(OpenCodeTurns);
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    go();
+    await framesUntil(h.service, runId, readOutput);
+    expect(turns.liveRuns()).toEqual([runId]);
+    expect(await turns.stopTurn(runId, 'credentials-revoked')).toBe('pending');
+
+    await h.service.approve(actor, 'per_1');
+    await stopped(h, runId);
+    expect(h.fake.callsOf('permission.reply').map((c) => c.args.decision)).toEqual(['reject']);
+    expect(r.of('onTurnStart')).toHaveLength(1);
+    // The refused ask ends the execution at once here, so the stop lands as it settles.
+    expect(r.of('onTurnEnd')).toEqual([
+      {
+        turnId: runId,
+        status: 'succeeded',
+        stop: expect.objectContaining({ reason: 'credentials-revoked' }),
+      },
+    ]);
+    expect(r.of('onStop')).toHaveLength(1);
+  });
+
+  it('lets the turn go when a new round starts without this process', async () => {
+    const r = recorder();
+    h = await boot({ hooks: r.hooks, script: parallelRead() });
+    const turns = h.app.get(OpenCodeTurns);
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    // Another worker answered the ask and OpenCode started the next round.
+    h.fake.emit({ type: 'session.step.started', data: { sessionID: 'ses_1' } });
+    await eventually(() => r.of('onTurnEnd').length > 0, 'the turn is let go');
+    expect(r.of('onTurnEnd')).toEqual([{ turnId: runId, status: 'released' }]);
+    expect(turns.liveRuns()).toEqual([]);
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('ignored');
+  });
+
+  it('keeps a turn whose execution ended while its ask is still open, and starts it once', async () => {
+    const r = recorder();
+    h = await boot({
+      hooks: r.hooks,
+      script: parallelRead((t) =>
+        t.emit('session.execution.failed', { error: { message: 'gone' } }),
+      ),
+    });
+    const turns = h.app.get(OpenCodeTurns);
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    go();
+    await framesUntil(h.service, runId, readOutput);
+    // Past the first rechecks of the store: the ask is still open, so the turn stays.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(turns.liveRuns()).toEqual([runId]);
+    expect(r.of('onTurnEnd')).toEqual([]);
+
+    await h.service.approve(actor, 'per_1');
+    await stopped(h, runId);
+    expect(r.of('onTurnStart')).toHaveLength(1);
+    expect(r.of('onTurnEnd')).toEqual([{ turnId: runId, status: 'failed' }]);
+  });
+
+  it('opens and prompts no new session for a stopping turn whose server restarted', async () => {
+    const r = recorder();
+    h = await boot({ hooks: r.hooks, script: parallelRead() });
+    const turns = h.app.get(OpenCodeTurns);
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    expect(await turns.stopTurn(runId, 'credentials-revoked')).toBe('pending');
+    h.host.bootId = 'boot-2';
+    await h.service.approve(actor, 'per_1');
+    const { error } = await stopped(h, runId);
+
+    expect(error).toMatchObject({ code: 'opencode_stopped' });
+    expect(h.fake.callsOf('session.create')).toHaveLength(1);
+    expect(h.fake.callsOf('session.prompt')).toHaveLength(1);
+    expect(h.fake.callsOf('permission.reply')).toHaveLength(0);
+    expect((await h.store.toolCallApproval?.('per_1'))?.status).toBe('rejected');
+    expect(r.of('onStop')).toEqual([
+      expect.objectContaining({ turnId: runId, reason: 'credentials-revoked' }),
+    ]);
+    expect(r.of('onTurnEnd')).toEqual([
+      {
+        turnId: runId,
+        status: 'failed',
+        stop: expect.objectContaining({ reason: 'credentials-revoked' }),
+      },
+    ]);
+  });
+
+  it('refuses a hook timeout that is not a positive number', async () => {
+    await expect(
+      bootEngine({ engine: (host) => openCode({ host, hookTimeoutMs: 0 }) }),
+    ).rejects.toThrow('hookTimeoutMs must be a positive number');
+  });
+});
+
 describe('stopTurn guards the session the next turn may use', () => {
   let h: Harness | undefined;
   let release: () => void = () => undefined;
