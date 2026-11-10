@@ -203,7 +203,7 @@ importers:
   packages/core:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@standard-schema/spec':
         specifier: 1.1.0
@@ -291,7 +291,7 @@ importers:
   packages/dashboard:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       react-is:
         specifier: 19.3.0
@@ -403,7 +403,7 @@ importers:
         specifier: 5.4.0
         version: 5.4.0
       zod:
-        specifier: ^4.6.6
+        specifier: 4.6.7
         version: 4.6.7
     devDependencies:
       tsup:
@@ -416,7 +416,7 @@ importers:
   packages/evals:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-agent-core':
@@ -557,7 +557,7 @@ importers:
         specifier: '>=5'
         version: 5.4.21(@types/node@22.20.5)(lightningcss@1.32.0)(sass@1.105.1)(terser@5.51.2)
       zod:
-        specifier: ^4.6.6
+        specifier: 4.6.7
         version: 4.6.7
     devDependencies:
       '@a2ui/web_core':
@@ -800,7 +800,7 @@ importers:
   packages/rag:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
       '@standard-schema/spec':
         specifier: 1.1.0
@@ -855,7 +855,7 @@ importers:
   packages/rag-media:
     dependencies:
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-agent-core':
@@ -938,7 +938,7 @@ importers:
         specifier: 0.16.45
         version: 0.16.45
       playwright-core:
-        specifier: ^1.63.0
+        specifier: 1.63.0
         version: 1.63.0
       prism-react-renderer:
         specifier: 2.4.1
@@ -1098,7 +1098,7 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@dudousxd/nestjs-diagnostics':
-        specifier: '>=0.7.0 <1.0.0'
+        specifier: 0.8.0
         version: 0.8.0(@nestjs/common@12.0.4(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.4)(reflect-metadata@0.2.2)
     devDependencies:
       '@dudousxd/nestjs-telescope':
