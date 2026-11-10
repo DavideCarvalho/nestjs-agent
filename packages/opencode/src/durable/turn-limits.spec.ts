@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import type { Actor, AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
-import { DurableModule } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
+import { DurableModule, RUN_GATEWAY } from '@dudousxd/nestjs-durable';
+import { InMemoryStateStore, type RunGateway, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -537,6 +537,106 @@ describe('a turn parked on a person', () => {
     expect(turns.liveRuns()).toEqual([]);
     expect(await turns.stopTurn(runId, 'wall-clock')).toBe('ignored');
     expect((await h.store.toolCallApproval?.('per_1'))?.status).toBe('pending_approval');
+  });
+
+  it('keeps what a turn let go of had spent for a cancel that settles it here later', async () => {
+    const settled: OpenCodeRunResult[] = [];
+    h = await boot({
+      settled,
+      script: async (t) => {
+        t.emit('session.step.started');
+        t.emit('session.step.ended', { tokens: { input: 3, output: 4 } });
+        t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+        await t.next('permission.reply');
+      },
+    });
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    // A store that cannot say the ask was settled lets the turn go ~250 ms after the interrupt,
+    // well before this process's own cancel gets to settle the run.
+    Object.defineProperty(h.store, 'toolCallApproval', { value: undefined });
+    const runs = h.app.get<RunGateway>(RUN_GATEWAY);
+    const cancel = runs.cancel.bind(runs);
+    runs.cancel = async (...args: Parameters<RunGateway['cancel']>) => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return cancel(...args);
+    };
+    await h.service.cancel(actor, runId);
+
+    expect(settled[0]?.outcome).toEqual({ status: 'interrupted' });
+    expect(settled[0]?.usage).toMatchObject({ inputTokens: 3, outputTokens: 4 });
+  });
+
+  it('reads the store for a parked ask one read at a time, at most every 250 ms', async () => {
+    h = await boot({ script: parallelRead() });
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    let reads = 0;
+    const read = h.store.toolCallApproval.bind(h.store);
+    h.store.toolCallApproval = async (id: string) => {
+      if (id === 'per_1') reads += 1;
+      return read(id);
+    };
+    // Ten events of the session while parked, 20 ms apart (other tools, status: no evidence).
+    for (let i = 0; i < 10; i += 1) {
+      h.fake.emit({ type: 'session.status', data: { sessionID: 'ses_1' } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(reads).toBeGreaterThan(0);
+    expect(reads).toBeLessThanOrEqual(3);
+    expect(h.app.get(OpenCodeTurns).liveRuns()).toEqual([runId]);
+  });
+
+  it('checks a new ask asked for while a read of the old one was still out', async () => {
+    const r = recorder();
+    h = await boot({
+      hooks: r.hooks,
+      script: async (t) => {
+        t.emit('session.step.started');
+        t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+        await t.next('permission.reply');
+        t.emit('permission.asked', { id: 'per_2', action: 'company.gmail__send_email' });
+        await t.next('permission.reply');
+        t.succeed();
+      },
+    });
+    const harness = h;
+    const { runId } = await harness.service.chat({ actor, message: 'send it' });
+    await framesUntil(harness.service, runId, (f) => f.kind === 'approval-requested');
+    // The next read of the store hangs until let go.
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    let hold = true;
+    const read = harness.store.toolCallApproval.bind(harness.store);
+    harness.store.toolCallApproval = async (id: string) => {
+      if (hold) {
+        hold = false;
+        await blocked;
+      }
+      return read(id);
+    };
+    harness.fake.emit({ type: 'session.status', data: { sessionID: 'ses_1' } });
+    await eventually(() => !hold, "the read of per_1's state is out");
+    // Meanwhile the first ask is answered here and the turn parks on a second one, which another
+    // process decides; an event of the session asks for a check while the old read is still out.
+    await harness.service.approve(actor, 'per_1');
+    await framesUntil(
+      harness.service,
+      runId,
+      (f) => f.kind === 'approval-requested' && f.id === 'per_2',
+    );
+    await eventually(
+      async () => (await read('per_2'))?.status === 'pending_approval',
+      'parked on per_2',
+    );
+    await harness.store.updateToolCall({ toolCallId: 'per_2', status: 'rejected' });
+    harness.fake.emit({ type: 'session.status', data: { sessionID: 'ses_1' } });
+    unblock();
+    await eventually(() => r.of('onTurnEnd').length > 0, 'the second ask is checked');
+    expect(r.of('onTurnEnd')).toEqual([{ turnId: runId, status: 'released' }]);
   });
 
   it('refuses a hook timeout that is not a positive number', async () => {

@@ -266,6 +266,8 @@ const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
 const PARKED_RECHECKS_MS = [250, 1_000, 3_000, 10_000, 30_000] as const;
 /** The least time between two reads of one parked turn's ask. */
 const PARKED_READ_GAP_MS = 250;
+/** How long what a released turn spent is kept for a settle that may follow in this process. */
+const RELEASED_USAGE_MS = 10 * 60_000;
 
 /**
  * The steps of an OpenCode turn — `begin` (thread, session, instructions), `prompt`, `observe`
@@ -284,6 +286,20 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   private readonly spent = new Set<string>();
   /** When the tools endpoint was last registered for a location (`server|boot|directory|actor`). */
   private readonly toolsIssued = new Map<string, number>();
+  /**
+   * What a turn let go of here had spent, for a settle that follows here (a cancel in this process
+   * that settles after the turn was released). Dropped when the run settles here, or after
+   * {@link RELEASED_USAGE_MS} when it settles elsewhere, so no run is kept for good.
+   */
+  private readonly releasedUsage = new Map<string, OpenCodeUsage>();
+
+  private keepReleasedUsage(runId: string, usage: OpenCodeUsage): void {
+    this.releasedUsage.set(runId, usage);
+    setTimeout(() => {
+      if (this.releasedUsage.get(runId) === usage) this.releasedUsage.delete(runId);
+    }, RELEASED_USAGE_MS).unref?.();
+  }
+
   /** The turns this process executes, and which turn owns each session (`server|session`). */
   private readonly watches = new Map<string, TurnWatch>();
   private readonly owners = new Map<string, string>();
@@ -1209,6 +1225,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    */
   private forget(runId: string): TurnWatch | undefined {
     this.drop(runId);
+    this.releasedUsage.delete(runId);
     for (const grant of this.grants.get(runId) ?? []) this.spent.delete(grant.id);
     this.grants.delete(runId);
     const watch = this.watches.get(runId);
@@ -1237,6 +1254,9 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   private release(runId: string, status: 'interrupted' | 'released'): void {
     const watch = this.watches.get(runId);
     if (watch === undefined) return;
+    // A cancel in this process settles the run after letting it go here: keep what it spent.
+    const seen = this.live.get(runId)?.turn.totalUsage();
+    if (seen !== undefined) this.keepReleasedUsage(runId, seen);
     this.drop(runId);
     watch.settled = true;
     this.watches.delete(runId);
@@ -1331,7 +1351,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    * two milestones.
    */
   private spentBy(runId: string, spent: OpenCodeUsage | undefined): OpenCodeUsage {
-    const seen = this.live.get(runId)?.turn.totalUsage();
+    const seen = this.live.get(runId)?.turn.totalUsage() ?? this.releasedUsage.get(runId);
     if (spent === undefined) return seen ?? emptyUsage();
     if (seen === undefined) return spent;
     const tokens = (u: OpenCodeUsage) => u.inputTokens + u.outputTokens;
@@ -1564,12 +1584,27 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       return;
     }
     watch.checking = true;
-    void this.runParkedChecks(watch).finally(() => {
-      watch.checking = false;
-    });
+    void this.runParkedChecks(watch);
   }
 
+  /**
+   * The checks of {@link checkParked}. `checking` is cleared in the same step the loop returns in,
+   * so a check asked for afterwards starts a new loop; one asked for while it ran (`again`) but not
+   * read because the loop returned starts one too.
+   */
   private async runParkedChecks(watch: TurnWatch): Promise<void> {
+    try {
+      await this.parkedChecks(watch);
+    } finally {
+      watch.checking = false;
+      if (watch.again && !watch.settled && watch.parkedOn !== undefined) {
+        watch.checking = true;
+        void this.runParkedChecks(watch);
+      }
+    }
+  }
+
+  private async parkedChecks(watch: TurnWatch): Promise<void> {
     const ask = watch.parkedOn;
     const gone = () => watch.settled || ask === undefined || watch.parkedOn !== ask;
     let step = 0;

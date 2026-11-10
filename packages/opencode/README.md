@@ -173,7 +173,9 @@ does nothing.
 
 **A stop while the turn waits on a person** returns `'pending'`. The ask it waits on is refused,
 whatever the person answers (an approval becomes a rejection, a form is skipped), so no action runs.
-The stop then lands as soon as the turn observes OpenCode again. If the OpenCode server restarted
+The stop then lands as soon as the turn observes OpenCode again. A pending stop on a turn that is
+then cancelled while parked (released as `interrupted`, below) is dropped with it: no `onStop`
+fires, and `onTurnEnd` carries no `stop`. If the OpenCode server restarted
 while the turn waited, no new session is opened or prompted: the turn ends stopped. To end a parked run at once, cancel
 it.
 
