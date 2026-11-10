@@ -181,6 +181,32 @@ describe('openCodeDurable turn hooks', () => {
     expect(worker.app.get(OpenCodeTurns).liveRuns()).toEqual([]);
   });
 
+  it('end on the worker as cancelled when the store cannot say the ask was settled', async () => {
+    d = deployment(async (t) => {
+      t.emit('session.step.started');
+      t.emit('permission.asked', { id: 'per_1', action: 'company.gmail__send_email' });
+      await t.next('permission.reply');
+      t.succeed();
+    });
+    const api = await d.boot('api', { drive: false });
+    const worker = await d.boot('worker');
+    const { runId } = await api.service.chat({ actor, message: 'send it' });
+    await eventually(
+      async () => (await d?.store.toolCallApproval?.('per_1')) != null,
+      'the turn parks on the approval',
+    );
+    // A store without the optional `toolCallApproval`: nothing tells the worker the ask was settled.
+    Object.defineProperty(d.store, 'toolCallApproval', { value: undefined });
+    await api.service.cancel(actor, runId);
+    await eventually(() => (d?.by('worker', 'onTurnEnd').length ?? 0) > 0, 'the worker lets go');
+
+    expect(d.by('worker', 'onTurnEnd').map((l) => l.event)).toEqual([
+      { turnId: runId, status: 'interrupted' },
+    ]);
+    expect(worker.app.get(OpenCodeTurns).liveRuns()).toEqual([]);
+    expect(await worker.app.get(OpenCodeTurns).stopTurn(runId, 'wall-clock')).toBe('ignored');
+  });
+
   it('release the turn on the worker that lost it to another', async () => {
     d = deployment(async (t) => {
       t.emit('session.step.started');

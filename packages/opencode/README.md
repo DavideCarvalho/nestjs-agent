@@ -187,9 +187,11 @@ Their errors are logged and never fail the turn. Only `onTurnStart` is waited fo
 exactly one `onTurnEnd` for it, and its per-turn state goes with it:
 
 - The turn settled there: `succeeded`, `failed` or `interrupted`.
-- It was cancelled from another process while parked there: `interrupted`. This fires once the
-  session's execution ended and the store shows the parked ask settled by the cancel; the store is
-  asked again for up to about 45 seconds after the execution ends.
+- It was cancelled from another process while parked there: `interrupted`. The session's execution
+  was interrupted under the parked turn, so the store is read again: right away, then at about
+  0.25, 1.25, 4.25, 14.25 and 44.25 seconds (one read at a time, at most one every 250 ms). The turn
+  is let go when the store shows the ask settled, when the store cannot tell (no `toolCallApproval`,
+  a failed read, the ask not on file) after the first recheck, or when the rechecks run out.
 - Another worker went on with it after a person answered: `released`. This fires on the next round
   (`session.step.started`), or when an event of the session finds the parked ask decided in the
   store by someone else.
@@ -197,7 +199,8 @@ exactly one `onTurnEnd` for it, and its per-turn state goes with it:
 
 While a turn is parked here, OpenCode may keep running the step's other tool calls. Their events
 are streamed and recorded as usual, and they do not count as the turn moving elsewhere. If the
-session's execution ends while the ask is still open, the turn stays here for its answer.
+session's execution ends some other way (succeeded or failed) while the ask is still open, the turn
+stays here for its answer, and a stop asked meanwhile returns `'pending'`.
 
 A process that never executed the turn (the API that admitted or cancelled it) gets no hooks.
 `stopTurn` acts only in the process executing the turn; anywhere else, and after `onTurnEnd`, it

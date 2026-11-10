@@ -242,8 +242,14 @@ interface TurnWatch {
   parkedOn?: string | undefined;
   /** The session's execution ended while parked: how this process ends the turn if it lets go. */
   parkedEnd?: 'interrupted' | 'released' | undefined;
-  /** A check of the store for the parked ask is running (one at a time). */
+  /** A check of the store for the parked ask is running (one at a time), and what it is asked. */
   checking: boolean;
+  /** Another check was asked for while one ran: it reads once more. */
+  again?: boolean;
+  /** The execution ended while parked: the store is asked again over a while. */
+  series?: boolean;
+  /** When the store was last read for the parked ask (epoch ms, 0 before). */
+  lastRead: number;
   pending?: OpenCodeTurnStop['reason'] | undefined;
 }
 
@@ -256,6 +262,10 @@ interface Grant {
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_TOOLS_TTL_MS = 7 * 24 * 60 * 60_000;
 const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
+/** The waits between a parked turn's rereads of its ask after its execution ended. */
+const PARKED_RECHECKS_MS = [250, 1_000, 3_000, 10_000, 30_000] as const;
+/** The least time between two reads of one parked turn's ask. */
+const PARKED_READ_GAP_MS = 250;
 
 /**
  * The steps of an OpenCode turn — `begin` (thread, session, instructions), `prompt`, `observe`
@@ -952,6 +962,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const live = await this.ensureLive(runId, input, handle, true, spent, progress);
     watch.parkedOn = undefined;
     watch.parkedEnd = undefined;
+    watch.series = false;
     watch.observing = true;
     const wall = this.watchClock(watch);
     try {
@@ -1027,6 +1038,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const watch = await this.adopt(runId, input, handle, true, progress?.counts);
     watch.parkedOn = undefined;
     watch.parkedEnd = undefined;
+    watch.series = false;
     // A turn being stopped runs nothing more: what it waited for is refused, whatever was answered.
     const stopping = watch.pending !== undefined || watch.stop !== undefined;
     const answer = stopping ? refusalOf(ask) : reply;
@@ -1472,6 +1484,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       settled: false,
       aborted: false,
       checking: false,
+      lastRead: 0,
     };
     this.watches.set(runId, watch);
     // The one hook a step waits for (state the app keeps for the turn is there before it runs), and
@@ -1532,30 +1545,84 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const ended = event.type.startsWith('session.execution.');
     if (ended)
       watch.parkedEnd = event.type === 'session.execution.interrupted' ? 'interrupted' : 'released';
-    void this.checkParked(watch, ended ? PARKED_RECHECKS_MS : [0]);
+    this.checkParked(watch, ended);
     return false;
   }
 
-  /** Ask the store whether the parked ask was decided elsewhere; let the turn go when it was. */
-  private async checkParked(watch: TurnWatch, delays: readonly number[]): Promise<void> {
-    if (watch.checking && delays.length === 1) return;
+  /**
+   * Ask the store whether the parked ask was decided elsewhere, and let the turn go when it was —
+   * one read at a time, at most one every {@link PARKED_READ_GAP_MS}. `series`: the session's
+   * execution ended, so the store is asked again over {@link parkedRechecksMs}. An execution that
+   * was interrupted under a parked turn means a cancel elsewhere: when the store cannot say (it has
+   * no `toolCallApproval`, the read fails, the ask is not on file) past the first recheck, or the
+   * rechecks run out with the ask still open, the turn is let go as `interrupted` anyway.
+   */
+  private checkParked(watch: TurnWatch, series: boolean): void {
+    if (series) watch.series = true;
+    if (watch.checking) {
+      watch.again = true;
+      return;
+    }
     watch.checking = true;
+    void this.runParkedChecks(watch).finally(() => {
+      watch.checking = false;
+    });
+  }
+
+  private async runParkedChecks(watch: TurnWatch): Promise<void> {
     const ask = watch.parkedOn;
-    try {
-      for (const delay of delays) {
-        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay).unref?.());
-        if (watch.settled || ask === undefined || watch.parkedOn !== ask) return;
-        const state = await Promise.resolve(this.store.toolCallApproval?.(ask)).catch(() => null);
-        if (watch.settled || watch.parkedOn !== ask) return;
-        if (state != null && state.status !== 'pending_approval') {
-          this.release(watch.runId, watch.parkedEnd ?? 'released');
+    const gone = () => watch.settled || ask === undefined || watch.parkedOn !== ask;
+    let step = 0;
+    for (;;) {
+      watch.again = false;
+      const wait = watch.lastRead + PARKED_READ_GAP_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+      if (gone()) return;
+      const answer = await this.parkedAsk(ask as string);
+      watch.lastRead = Date.now();
+      if (gone()) return;
+      if (answer === 'decided') {
+        this.release(watch.runId, watch.parkedEnd ?? 'released');
+        return;
+      }
+      if (watch.series) {
+        const cancelled = watch.parkedEnd === 'interrupted';
+        if (cancelled && answer === 'unknown' && step > 0) {
+          this.release(watch.runId, 'interrupted');
           return;
         }
+        const gap = this.parkedRechecksMs[step];
+        step += 1;
+        if (gap === undefined) {
+          if (cancelled) this.release(watch.runId, 'interrupted');
+          return;
+        }
+        await sleep(gap);
+        continue;
       }
-    } finally {
-      watch.checking = false;
+      if (!watch.again) return;
     }
   }
+
+  /** What the store says of an ask: decided, still open, or nothing it can tell. */
+  private async parkedAsk(id: string): Promise<'decided' | 'open' | 'unknown'> {
+    if (this.store.toolCallApproval === undefined) return 'unknown';
+    try {
+      const state = await this.store.toolCallApproval(id);
+      if (state == null) return 'unknown';
+      return state.status === 'pending_approval' ? 'open' : 'decided';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * The waits between the store's rereads of a parked ask after its execution ended (cumulative
+   * 0.25, 1.25, 4.25, 14.25 and 44.25 seconds after the first). Overridden by tests only.
+   *
+   * @internal
+   */
+  parkedRechecksMs: readonly number[] = PARKED_RECHECKS_MS;
 
   /** A limit's stop: what it did is the engine's to log, there is no caller to tell. */
   private async limitStop(runId: string, reason: OpenCodeStopReason): Promise<void> {
@@ -1593,6 +1660,11 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     const watch = this.watches.get(runId);
     if (watch === undefined || watch.settled || watch.stop !== undefined) return 'ignored';
     const live = this.live.get(runId);
+    // Parked on a person, the ask is refused when it is answered, even if the execution ended.
+    if (watch.parkedOn !== undefined) {
+      watch.pending ??= reason;
+      return 'pending';
+    }
     if (watch.ending || live?.turn.finished === true) return this.landed(watch, reason);
     if (!watch.observing || live === undefined) {
       watch.pending ??= reason;
@@ -1745,8 +1817,9 @@ function passed(count: number, limit: number | undefined): boolean {
   return limit !== undefined && count > limit;
 }
 
-/** When a parked turn whose execution ended asks the store again whether its ask was decided. */
-const PARKED_RECHECKS_MS = [0, 250, 1_000, 3_000, 10_000, 30_000] as const;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
 
 /** What a stopping turn answers the ask it waited on with: nothing it asked for runs. */
 function refusalOf(ask: PendingAsk): HumanReply {

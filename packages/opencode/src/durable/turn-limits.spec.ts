@@ -516,10 +516,39 @@ describe('a turn parked on a person', () => {
     ]);
   });
 
+  it('lets the turn go as cancelled when its execution was interrupted and nobody settles the ask', async () => {
+    const r = recorder();
+    h = await boot({ hooks: r.hooks, script: parallelRead() });
+    const turns = h.app.get(OpenCodeTurns);
+    turns.parkedRechecksMs = [150, 150];
+    const { runId } = await h.service.chat({ actor, message: 'send it' });
+    await framesUntil(h.service, runId, (f) => f.kind === 'approval-requested');
+    // A cancel elsewhere interrupted the session, and never settled the ask.
+    h.fake.emit({ type: 'session.execution.interrupted', data: { sessionID: 'ses_1' } });
+    await eventually(
+      () => r.of('onTurnEvent').some((e) => e.type === 'session.execution.interrupted'),
+      'the turn hears its execution end',
+    );
+    // Still parked here: a stop is held for the ask, not reported as an answer settling.
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('pending');
+    await eventually(() => r.of('onTurnEnd').length > 0, 'the turn is let go');
+
+    expect(r.of('onTurnEnd')).toEqual([{ turnId: runId, status: 'interrupted' }]);
+    expect(turns.liveRuns()).toEqual([]);
+    expect(await turns.stopTurn(runId, 'wall-clock')).toBe('ignored');
+    expect((await h.store.toolCallApproval?.('per_1'))?.status).toBe('pending_approval');
+  });
+
   it('refuses a hook timeout that is not a positive number', async () => {
-    await expect(
-      bootEngine({ engine: (host) => openCode({ host, hookTimeoutMs: 0 }) }),
-    ).rejects.toThrow('hookTimeoutMs must be a positive number');
+    const booted = await bootEngine({
+      engine: (host) => openCode({ host, hookTimeoutMs: 0 }),
+    }).then(
+      (harness) => harness,
+      (error: unknown) => error,
+    );
+    if (!(booted instanceof Error)) await (booted as Harness).app.close();
+    expect(booted).toBeInstanceOf(Error);
+    expect((booted as Error).message).toContain('hookTimeoutMs must be a positive number');
   });
 });
 
