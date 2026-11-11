@@ -43,10 +43,13 @@ export async function bootEngine(args: {
   options?: Partial<AgentModuleOptions>;
   imports?: DynamicModule[];
   providers?: Type<unknown>[];
+  /** Share an OpenCode server or a store with another app (two processes of one deployment). */
+  fake?: FakeOpenCode;
+  store?: InMemoryAgentStore;
 }): Promise<Harness> {
-  const fake = new FakeOpenCode(args.script);
+  const fake = args.fake ?? new FakeOpenCode(args.script);
   const host = new TestHost(fake);
-  const store = new InMemoryAgentStore();
+  const store = args.store ?? new InMemoryAgentStore();
   const moduleRef = await Test.createTestingModule({
     imports: [
       ...(args.imports ?? []),

@@ -53,8 +53,8 @@ import {
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
 import { Inject, Injectable, Logger, type OnApplicationShutdown, Optional } from '@nestjs/common';
-import type { OpenCodeClient, OpenCodePermissionRule } from './client.js';
-import { OpenCodeEventHub } from './event-hub.js';
+import type { OpenCodeClient, OpenCodeEvent, OpenCodePermissionRule } from './client.js';
+import { OpenCodeEventHub, sessionOf } from './event-hub.js';
 import type {
   OpenCodeAmendment,
   OpenCodeHost,
@@ -70,6 +70,19 @@ import {
   OPENCODE_SESSIONS,
   OPENCODE_TOOLS_TOKENS,
 } from './tokens.js';
+import {
+  type OpenCodeStopReason,
+  type OpenCodeStopResult,
+  type OpenCodeTurnCounts,
+  type OpenCodeTurnEndStatus,
+  type OpenCodeTurnHooks,
+  type OpenCodeTurnLimits,
+  type OpenCodeTurnLimitsOption,
+  type OpenCodeTurnStop,
+  STOPPED_ERROR_CODE,
+  cleanLimits,
+  stopErrorText,
+} from './turn-limits.js';
 import {
   type Milestone,
   OpenCodeTurn,
@@ -111,7 +124,7 @@ export interface OpenCodeToolsOptions {
   ttlMs?: number;
 }
 
-export interface OpenCodeEngineSettings {
+export interface OpenCodeEngineSettings extends OpenCodeTurnHooks {
   /** The id a run gets (e.g. a tenant prefix your durable store partitions by). Default: a random UUID. */
   runId?: (input: AgentRunInput) => string;
   /**
@@ -140,6 +153,19 @@ export interface OpenCodeEngineSettings {
    */
   turnTimeoutMs?: number;
   /**
+   * Bounds on each turn: model rounds, compactions, wall-clock time — fixed, or per turn. A turn that
+   * passes one is stopped: its session is aborted (while the turn still owns it) and the turn ends
+   * failed with `outcome.stop` (code `opencode_stopped`), or, when its answer was already settling,
+   * succeeded with the answer kept and `outcome.stop` set. Omit → no bounds besides `turnTimeoutMs`.
+   */
+  limits?: OpenCodeTurnLimitsOption;
+  /**
+   * How long a step waits for `onTurnStart` before going on. The other hooks are not waited for (they
+   * observe); each is still given this long before a warning is logged. Default 5 seconds; it must
+   * be a positive number (anything else is refused when the module starts).
+   */
+  hookTimeoutMs?: number;
+  /**
    * Whose figure a model call is recorded at. OpenCode prices each call itself, off its model
    * catalog (the `cost` its config declares, else models.dev's list price):
    *
@@ -160,6 +186,8 @@ export interface SessionHandle {
   serverKey: string;
   bootId?: string;
   directory?: string;
+  /** When the turn began (epoch ms): what `limits.wallClockMs` is measured from, in any process. */
+  startedAt?: number;
 }
 
 /** What the engine's MCP endpoint tells the turns about the call it is serving. */
@@ -188,6 +216,43 @@ interface LiveTurn {
   stop: () => void;
 }
 
+/**
+ * A turn this process executes: its counts for the limits, the stop that landed on it, and whether
+ * it is observing OpenCode now (a stop only aborts then; a parked turn takes it when it observes).
+ */
+interface TurnWatch {
+  runId: string;
+  input: AgentRunInput;
+  handle: SessionHandle;
+  limits: OpenCodeTurnLimits;
+  startedAt: number;
+  steps: number;
+  compactions: number;
+  observing: boolean;
+  /** An execution-ending event of the session arrived: the answer is settling. */
+  ending: boolean;
+  settled: boolean;
+  stop?: OpenCodeTurnStop;
+  /** The stop aborted the session (rather than landing while the answer settled). */
+  aborted: boolean;
+  /**
+   * Parked on a person: the id of the ask the last milestone this process observed put to them,
+   * until this process hands the answer back.
+   */
+  parkedOn?: string | undefined;
+  /** The session's execution ended while parked: how this process ends the turn if it lets go. */
+  parkedEnd?: 'interrupted' | 'released' | undefined;
+  /** A check of the store for the parked ask is running (one at a time), and what it is asked. */
+  checking: boolean;
+  /** Another check was asked for while one ran: it reads once more. */
+  again?: boolean;
+  /** The execution ended while parked: the store is asked again over a while. */
+  series?: boolean;
+  /** When the store was last read for the parked ask (epoch ms, 0 before). */
+  lastRead: number;
+  pending?: OpenCodeTurnStop['reason'] | undefined;
+}
+
 /** One action OpenCode was allowed to run in a run: an approval the MCP endpoint may spend. */
 interface Grant {
   id: string;
@@ -196,6 +261,13 @@ interface Grant {
 
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_TOOLS_TTL_MS = 7 * 24 * 60 * 60_000;
+const DEFAULT_HOOK_TIMEOUT_MS = 5_000;
+/** The waits between a parked turn's rereads of its ask after its execution ended. */
+const PARKED_RECHECKS_MS = [250, 1_000, 3_000, 10_000, 30_000] as const;
+/** The least time between two reads of one parked turn's ask. */
+const PARKED_READ_GAP_MS = 250;
+/** How long what a released turn spent is kept for a settle that may follow in this process. */
+const RELEASED_USAGE_MS = 10 * 60_000;
 
 /**
  * The steps of an OpenCode turn — `begin` (thread, session, instructions), `prompt`, `observe`
@@ -214,6 +286,23 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   private readonly spent = new Set<string>();
   /** When the tools endpoint was last registered for a location (`server|boot|directory|actor`). */
   private readonly toolsIssued = new Map<string, number>();
+  /**
+   * What a turn let go of here had spent, for a settle that follows here (a cancel in this process
+   * that settles after the turn was released). Dropped when the run settles here, or after
+   * {@link RELEASED_USAGE_MS} when it settles elsewhere, so no run is kept for good.
+   */
+  private readonly releasedUsage = new Map<string, OpenCodeUsage>();
+
+  private keepReleasedUsage(runId: string, usage: OpenCodeUsage): void {
+    this.releasedUsage.set(runId, usage);
+    setTimeout(() => {
+      if (this.releasedUsage.get(runId) === usage) this.releasedUsage.delete(runId);
+    }, RELEASED_USAGE_MS).unref?.();
+  }
+
+  /** The turns this process executes, and which turn owns each session (`server|session`). */
+  private readonly watches = new Map<string, TurnWatch>();
+  private readonly owners = new Map<string, string>();
 
   constructor(
     @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
@@ -235,6 +324,12 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     @Inject(AGENT_OPTIONS)
     agentOptions?: { priceCatalog?: PriceCatalogOptions | false },
   ) {
+    const hookTimeoutMs = settings.hookTimeoutMs;
+    if (hookTimeoutMs !== undefined && !(Number.isFinite(hookTimeoutMs) && hookTimeoutMs > 0)) {
+      throw new Error(
+        `hookTimeoutMs must be a positive number of milliseconds, not ${hookTimeoutMs}`,
+      );
+    }
     this.prices = new ModelPriceResolver({
       pricingStore,
       catalog: agentOptions?.priceCatalog,
@@ -502,8 +597,11 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   }
 
   onApplicationShutdown(): void {
+    // The turns this process executed end here for it; whichever process takes them over says so.
+    for (const runId of [...this.watches.keys()]) this.release(runId, 'released');
     for (const live of this.live.values()) live.stop();
     this.live.clear();
+    this.owners.clear();
     this.events.close();
   }
 
@@ -515,7 +613,9 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    * durable `begin` re-run after a crash): the run's user message is written once.
    */
   async begin(runId: string, input: AgentRunInput): Promise<SessionHandle> {
-    const earlier = await this.prepareThread(runId, input);
+    // A `begin` run again in this process keeps the turn's clock.
+    const startedAt = this.watches.get(runId)?.startedAt ?? Date.now();
+    const { earlier, rerun } = await this.prepareThread(runId, input);
     const server = await this.host.server(input.actor);
     const known = await this.sessions.get(input.threadId);
     const reusable =
@@ -553,7 +653,12 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       created,
     });
     await this.refreshInstructions(runId, input, server.client, handle.sessionId);
-    return handle;
+    // The clock travels with the handle (journaled by a durable run) only when a limit reads it.
+    const begun: SessionHandle =
+      this.limitsFor(input).wallClockMs !== undefined ? { ...handle, startedAt } : handle;
+    // A `begin` that finds its user message already written is a re-run elsewhere (a crash).
+    await this.adopt(runId, input, begun, rerun, undefined, startedAt);
+    return begun;
   }
 
   private async createSession(
@@ -613,7 +718,10 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   }
 
   /** The user message, as the loop persists it (or, on a regenerate, the thread rewound to it). */
-  private async prepareThread(runId: string, input: AgentRunInput): Promise<StoredMessage[]> {
+  private async prepareThread(
+    runId: string,
+    input: AgentRunInput,
+  ): Promise<{ earlier: StoredMessage[]; rerun: boolean }> {
     const thread = await this.store.getThread(input.threadId);
     const messages = thread?.messages ?? [];
     if (input.regenerate === true) {
@@ -626,12 +734,12 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       const firstDropped = messages[lastUser + 1];
       if (firstDropped !== undefined)
         await this.store.truncateFrom(input.threadId, firstDropped.id);
-      return messages.slice(0, Math.max(lastUser, 0));
+      return { earlier: messages.slice(0, Math.max(lastUser, 0)), rerun: false };
     }
     // Already written by an earlier attempt at this step (a durable `begin` re-run after a crash):
     // the run's user message is keyed by its run id, and what came before it is the history.
     const mine = messages.findIndex((m) => m.role === 'user' && m.runId === runId);
-    if (mine >= 0) return messages.slice(0, mine);
+    if (mine >= 0) return { earlier: messages.slice(0, mine), rerun: true };
     await this.store.appendMessage({
       threadId: input.threadId,
       role: 'user',
@@ -643,7 +751,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     if (thread !== null && (thread.title === '' || thread.title === 'New chat')) {
       await this.store.setTitle(input.threadId, titleOf(input.userText));
     }
-    return messages;
+    return { earlier: messages, rerun: false };
   }
 
   /** Rewind the session to before its last user message, so the regenerated answer replaces it. */
@@ -823,6 +931,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     handle: SessionHandle,
     spent?: OpenCodeUsage,
   ): Promise<void> {
+    await this.adopt(runId, input, handle, true);
     const live = await this.ensureLive(runId, input, handle, false, spent);
     try {
       const prompt = (await this.host.promptFor?.({
@@ -865,7 +974,31 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     spent?: OpenCodeUsage,
     progress?: TurnProgress,
   ): Promise<Milestone> {
+    const watch = await this.adopt(runId, input, handle, true, progress?.counts);
     const live = await this.ensureLive(runId, input, handle, true, spent, progress);
+    watch.parkedOn = undefined;
+    watch.parkedEnd = undefined;
+    watch.series = false;
+    watch.observing = true;
+    const wall = this.watchClock(watch);
+    try {
+      // A stop that came while the turn was parked lands now.
+      if (watch.pending !== undefined) await this.requestStop(runId, watch.pending);
+      const milestone = this.marked(watch, await this.observeLive(runId, input, handle, live));
+      if (milestone.kind === 'ask') watch.parkedOn = milestone.ask.id;
+      return milestone;
+    } finally {
+      watch.observing = false;
+      if (wall !== undefined) clearTimeout(wall);
+    }
+  }
+
+  private async observeLive(
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    live: LiveTurn,
+  ): Promise<Milestone> {
     const { turn, client } = live;
     if (turn.hasMilestone()) return this.reached(runId, input, handle, await turn.next());
     // Set once this observation has its milestone: the safety nets below only act while it waits.
@@ -918,12 +1051,51 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     spent?: OpenCodeUsage,
     progress?: TurnProgress,
   ): Promise<SessionHandle> {
+    const watch = await this.adopt(runId, input, handle, true, progress?.counts);
+    watch.parkedOn = undefined;
+    watch.parkedEnd = undefined;
+    watch.series = false;
+    // A turn being stopped runs nothing more: what it waited for is refused, whatever was answered.
+    const stopping = watch.pending !== undefined || watch.stop !== undefined;
+    const answer = stopping ? refusalOf(ask) : reply;
     const server = await this.host.server(input.actor);
     if (server.key !== handle.serverKey || server.bootId !== handle.bootId) {
-      return this.continueAfterRestart(runId, input, server, ask, reply, spent);
+      if (stopping) return this.stopAfterRestart(watch, runId, input, handle, ask, answer, spent);
+      return this.continueAfterRestart(runId, input, server, ask, answer, spent, handle.startedAt);
     }
     const live = await this.ensureLive(runId, input, handle, false, spent, progress);
-    await live.turn.decide(ask, reply);
+    await live.turn.decide(ask, answer);
+    return handle;
+  }
+
+  /**
+   * A stopping turn whose OpenCode server restarted while it waited: there is no session left to
+   * abort, and none is opened or prompted. The ask is settled as refused and the turn ends stopped.
+   */
+  private async stopAfterRestart(
+    watch: TurnWatch,
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    ask: PendingAsk,
+    answer: HumanReply,
+    spent: OpenCodeUsage | undefined,
+  ): Promise<SessionHandle> {
+    const live = await this.ensureLive(runId, input, handle, false, spent);
+    await live.turn.decide(ask, answer, { tellOpenCode: false });
+    const reason = watch.pending ?? watch.stop?.reason ?? 'stopped';
+    if (watch.stop === undefined) {
+      const stop: OpenCodeTurnStop = { reason, counts: this.counts(watch) };
+      watch.stop = stop;
+      this.hook('onStop', { turnId: runId, reason, counts: stop.counts });
+    }
+    watch.aborted = true;
+    watch.pending = undefined;
+    // What the old session would have said, had it been there to abort.
+    live.turn.handle({
+      type: 'session.execution.interrupted',
+      data: { sessionID: handle.sessionId },
+    });
     return handle;
   }
 
@@ -934,6 +1106,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     ask: PendingAsk,
     reply: HumanReply,
     spent: OpenCodeUsage | undefined,
+    startedAt: number | undefined,
   ): Promise<SessionHandle> {
     const approved = 'approved' in reply && reply.approved === true;
     const note =
@@ -943,7 +1116,8 @@ export class OpenCodeTurns implements OnApplicationShutdown {
           : `The user did not approve the action ${ask.action}. Continue without it and explain.`
         : `The user answered your question: ${JSON.stringify('answers' in reply ? reply.answers : {})}. Continue.`;
     const thread = await this.store.getThread(input.threadId);
-    const handle = await this.createSession(runId, input, server, thread?.messages ?? [], note);
+    const created = await this.createSession(runId, input, server, thread?.messages ?? [], note);
+    const handle: SessionHandle = { ...created, ...(startedAt !== undefined ? { startedAt } : {}) };
     await this.refreshInstructions(runId, input, server.client, handle.sessionId);
     this.drop(runId);
     const live = await this.ensureLive(runId, input, handle, false, spent);
@@ -1021,11 +1195,20 @@ export class OpenCodeTurns implements OnApplicationShutdown {
         this.grants.set(runId, grants);
       },
     });
-    const stop = await this.events.listen(server.key, server.client, handle.sessionId, (event) =>
-      turn.handle(event),
-    );
+    const sessionId = handle.sessionId;
+    const stop = await this.events.listen(server.key, server.client, sessionId, (event) => {
+      turn.handle(event);
+      this.sawEvent(runId, sessionId, event);
+    });
     const live: LiveTurn = { turn, input, handle, client: server.client, stop };
     this.live.set(runId, live);
+    // The session is this turn's now: a late stop of the turn before it can no longer abort it.
+    this.owners.set(ownerKey(handle), runId);
+    const watch = this.watches.get(runId);
+    if (watch !== undefined && watch.handle.sessionId !== sessionId) {
+      watch.handle = { ...handle, startedAt: watch.startedAt };
+      watch.ending = false;
+    }
     if (resumed) await turn.catchUp().catch(() => undefined);
     return live;
   }
@@ -1036,11 +1219,49 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     this.live.delete(runId);
   }
 
-  /** Stop following a run and drop the approvals it was granted: it is over. */
-  private forget(runId: string): void {
+  /**
+   * Stop following a run and drop the approvals it was granted: it is over. Returns the turn this
+   * process executed, now settled (no stop reaches it any more), for its `onTurnEnd`.
+   */
+  private forget(runId: string): TurnWatch | undefined {
     this.drop(runId);
+    this.releasedUsage.delete(runId);
     for (const grant of this.grants.get(runId) ?? []) this.spent.delete(grant.id);
     this.grants.delete(runId);
+    const watch = this.watches.get(runId);
+    if (watch === undefined) return undefined;
+    watch.settled = true;
+    this.watches.delete(runId);
+    for (const [key, owner] of this.owners) if (owner === runId) this.owners.delete(key);
+    return watch;
+  }
+
+  /**
+   * A run that ended without settling here (cancelled while this process executed it; whoever
+   * cancelled settled it): stop following it, and end the turn this process executed.
+   */
+  async abandon(runId: string): Promise<void> {
+    const watch = this.forget(runId);
+    if (watch !== undefined) this.ended(watch, 'interrupted', undefined);
+  }
+
+  /**
+   * Let go of a turn this process executed without settling it here: it was cancelled while parked
+   * (its session ended under it, `interrupted`), another worker took it over, or this process shuts
+   * down (`released`). The per-turn state goes, `onTurnEnd` fires once, and a later stop of the turn
+   * here is ignored. Nothing settles the run here afterwards: whoever answered or cancelled it does.
+   */
+  private release(runId: string, status: 'interrupted' | 'released'): void {
+    const watch = this.watches.get(runId);
+    if (watch === undefined) return;
+    // A cancel in this process settles the run after letting it go here: keep what it spent.
+    const seen = this.live.get(runId)?.turn.totalUsage();
+    if (seen !== undefined) this.keepReleasedUsage(runId, seen);
+    this.drop(runId);
+    watch.settled = true;
+    this.watches.delete(runId);
+    for (const [key, owner] of this.owners) if (owner === runId) this.owners.delete(key);
+    this.ended(watch, status, undefined);
   }
 
   // ---- settle --------------------------------------------------------------------------------
@@ -1130,7 +1351,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
    * two milestones.
    */
   private spentBy(runId: string, spent: OpenCodeUsage | undefined): OpenCodeUsage {
-    const seen = this.live.get(runId)?.turn.totalUsage();
+    const seen = this.live.get(runId)?.turn.totalUsage() ?? this.releasedUsage.get(runId);
     if (spent === undefined) return seen ?? emptyUsage();
     if (seen === undefined) return spent;
     const tokens = (u: OpenCodeUsage) => u.inputTokens + u.outputTokens;
@@ -1144,16 +1365,16 @@ export class OpenCodeTurns implements OnApplicationShutdown {
   async settle(
     runId: string,
     input: AgentRunInput,
-    outcome: TurnOutcome,
+    ended: TurnOutcome,
     durationMs: number,
     spent?: OpenCodeUsage,
-  ) {
+  ): Promise<TurnOutcome> {
+    const outcome = this.withStop(ended, this.watches.get(runId));
     if (outcome.status === 'failed') {
-      await this.settleFailed(runId, input, outcome.error, durationMs, spent);
-      return;
+      return this.settleFailed(runId, input, outcome.error, durationMs, spent, outcome.stop);
     }
     const usage = this.spentBy(runId, spent);
-    this.forget(runId);
+    const watch = this.forget(runId);
     const writer = await this.sink.open(runId);
     const result = await this.runResult(runId, input, outcome, durationMs, usage);
     await this.amend(writer, result);
@@ -1180,6 +1401,9 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       await this.store.recordRunEnd?.({ runId, status: 'completed', durationMs });
     }
     await this.settled(result);
+    if (watch !== undefined)
+      this.ended(watch, outcome.status, outcome.status === 'succeeded' ? outcome.stop : undefined);
+    return outcome;
   }
 
   async settleFailed(
@@ -1188,27 +1412,33 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     error: string,
     durationMs = 0,
     spent?: OpenCodeUsage,
-  ): Promise<void> {
+    stop?: OpenCodeTurnStop,
+  ): Promise<TurnOutcome> {
     const usage = this.spentBy(runId, spent);
-    this.forget(runId);
+    const watch = this.forget(runId);
+    // A stop that landed on the turn: on its outcome, its run row's code and `onTurnEnd` alike.
+    const stopped = stop ?? watch?.stop;
     const writer = await this.sink.open(runId);
     const result = await this.runResult(
       runId,
       input,
-      { status: 'failed', error },
+      { status: 'failed', error, ...(stopped !== undefined ? { stop: stopped } : {}) },
       durationMs,
       usage,
     );
     const worded = (await this.amend(writer, result)).error;
     // The host's wording is for the person and shown as is. OpenCode's own error follows the
     // library's rule for a provider's: logged and on the run row everywhere, on the stream only
-    // outside production (or with `exposeStreamErrorDetails(true)`).
-    const message = worded ?? streamFailure(new Error(error)).message;
-    this.logger.error(`agent run ${runId} failed: ${error}`);
+    // outside production (or with `exposeStreamErrorDetails(true)`). A stop's text is the engine's own.
+    const message =
+      worded ?? (stopped !== undefined ? error : streamFailure(new Error(error)).message);
+    const code = stopped !== undefined ? STOPPED_ERROR_CODE : 'opencode_failed';
+    if (stopped !== undefined) this.logger.log(`agent run ${runId} stopped: ${stopped.reason}`);
+    else this.logger.error(`agent run ${runId} failed: ${error}`);
     publishAgentRunFailed({
       runId,
       threadId: input.threadId,
-      code: 'opencode_failed',
+      code,
       message: error,
       durationMs,
       context: agentRunContext(input),
@@ -1217,7 +1447,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       runId,
       status: 'failed',
       durationMs,
-      errorCode: 'opencode_failed',
+      errorCode: code,
       errorMessage: error,
     });
     await Promise.resolve(
@@ -1225,8 +1455,365 @@ export class OpenCodeTurns implements OnApplicationShutdown {
     ).catch(() => 0);
     await this.handoff(writer, input, runId, 'failed', error);
     await releaseThreadRun(this.store, input.threadId, runId);
-    await writer.fail({ code: 'opencode_failed', message });
-    await this.settled({ ...result, outcome: { status: 'failed', error: worded ?? error } });
+    await writer.fail({ code, message });
+    await this.settled({
+      ...result,
+      outcome: {
+        status: 'failed',
+        error: worded ?? error,
+        ...(stopped !== undefined ? { stop: stopped } : {}),
+      },
+    });
+    if (watch !== undefined) this.ended(watch, 'failed', stopped);
+    return { status: 'failed', error, ...(stopped !== undefined ? { stop: stopped } : {}) };
+  }
+
+  // ---- limits, stops and the turn's lifecycle -------------------------------------------------
+
+  /**
+   * Stop a turn's own work: abort its session so OpenCode starts no new round, only while the turn
+   * still owns the session (a thread's session is reused by its next turn) — checked immediately
+   * before the abort. Acts in the process executing the turn; see {@link OpenCodeStopResult}. The
+   * turn ends failed with `outcome.stop` (code `opencode_stopped`), and `onStop` is called.
+   */
+  stopTurn(turnId: string, reason: OpenCodeTurnStop['reason']): Promise<OpenCodeStopResult> {
+    return this.requestStop(turnId, reason);
+  }
+
+  /** The turn this process executes, made known here on its first step in this process. */
+  private async adopt(
+    runId: string,
+    input: AgentRunInput,
+    handle: SessionHandle,
+    resumed: boolean,
+    counts?: TurnProgress['counts'],
+    startedAt?: number,
+  ): Promise<TurnWatch> {
+    const known = this.watches.get(runId);
+    if (known !== undefined) return known;
+    const watch: TurnWatch = {
+      runId,
+      input,
+      handle,
+      limits: this.limitsFor(input),
+      startedAt: handle.startedAt ?? startedAt ?? Date.now(),
+      steps: counts?.steps ?? 0,
+      compactions: counts?.compactions ?? 0,
+      observing: false,
+      ending: false,
+      settled: false,
+      aborted: false,
+      checking: false,
+      lastRead: 0,
+    };
+    this.watches.set(runId, watch);
+    // The one hook a step waits for (state the app keeps for the turn is there before it runs), and
+    // for no longer than `hookTimeoutMs`.
+    await this.hook('onTurnStart', {
+      turnId: runId,
+      threadId: input.threadId,
+      sessionId: handle.sessionId,
+      resumed,
+    });
+    return watch;
+  }
+
+  private limitsFor(input: AgentRunInput): OpenCodeTurnLimits {
+    const limits = this.settings.limits;
+    return cleanLimits(typeof limits === 'function' ? limits(input) : limits);
+  }
+
+  /**
+   * One event of the turn's session: counted for the limits, and told to `onTurnEvent`. While the
+   * turn is parked on a person here, it may also say the turn went on without this process
+   * ({@link wentOnElsewhere}).
+   */
+  private sawEvent(runId: string, sessionId: string, event: OpenCodeEvent): void {
+    if (sessionOf(event) !== sessionId) return;
+    const watch = this.watches.get(runId);
+    if (watch === undefined || watch.settled || watch.handle.sessionId !== sessionId) return;
+    if (watch.parkedOn !== undefined && this.wentOnElsewhere(watch, event)) return;
+    let reached: OpenCodeStopReason | undefined;
+    if (event.type.startsWith('session.execution.')) watch.ending = true;
+    else if (event.type === 'session.step.started') {
+      watch.steps += 1;
+      if (passed(watch.steps, watch.limits.steps)) reached = 'steps';
+    } else if (event.type === 'session.compaction.started') {
+      watch.compactions += 1;
+      if (passed(watch.compactions, watch.limits.compactions)) reached = 'compactions';
+    }
+    // Counted first, so a stop the hook asks for sees where the turn stands.
+    this.hook('onTurnEvent', { turnId: runId, type: event.type, sessionId });
+    if (reached !== undefined) void this.limitStop(runId, reached);
+  }
+
+  /**
+   * Whether a turn parked here went on without this process, which then lets it go. While a tool of
+   * the step waits on a person, OpenCode keeps running the step's other tools, so their events say
+   * nothing. What does: a new round (`session.step.started`, which cannot begin while the step
+   * waits), or the store showing the parked ask decided by someone else (another worker answered
+   * it, or a cancel elsewhere settled it) — this process clears the park before it answers. When
+   * the session's execution ends while parked, the store is asked again for a while, as a cancel
+   * elsewhere settles the ask just after it interrupted the session; with the ask still open, the
+   * turn stays here for its answer.
+   */
+  private wentOnElsewhere(watch: TurnWatch, event: OpenCodeEvent): boolean {
+    if (event.type === 'session.step.started') {
+      this.release(watch.runId, 'released');
+      return true;
+    }
+    const ended = event.type.startsWith('session.execution.');
+    if (ended)
+      watch.parkedEnd = event.type === 'session.execution.interrupted' ? 'interrupted' : 'released';
+    this.checkParked(watch, ended);
+    return false;
+  }
+
+  /**
+   * Ask the store whether the parked ask was decided elsewhere, and let the turn go when it was —
+   * one read at a time, at most one every {@link PARKED_READ_GAP_MS}. `series`: the session's
+   * execution ended, so the store is asked again over {@link parkedRechecksMs}. An execution that
+   * was interrupted under a parked turn means a cancel elsewhere: when the store cannot say (it has
+   * no `toolCallApproval`, the read fails, the ask is not on file) past the first recheck, or the
+   * rechecks run out with the ask still open, the turn is let go as `interrupted` anyway.
+   */
+  private checkParked(watch: TurnWatch, series: boolean): void {
+    if (series) watch.series = true;
+    if (watch.checking) {
+      watch.again = true;
+      return;
+    }
+    watch.checking = true;
+    void this.runParkedChecks(watch);
+  }
+
+  /**
+   * The checks of {@link checkParked}. `checking` is cleared in the same step the loop returns in,
+   * so a check asked for afterwards starts a new loop; one asked for while it ran (`again`) but not
+   * read because the loop returned starts one too.
+   */
+  private async runParkedChecks(watch: TurnWatch): Promise<void> {
+    try {
+      await this.parkedChecks(watch);
+    } finally {
+      watch.checking = false;
+      if (watch.again && !watch.settled && watch.parkedOn !== undefined) {
+        watch.checking = true;
+        void this.runParkedChecks(watch);
+      }
+    }
+  }
+
+  private async parkedChecks(watch: TurnWatch): Promise<void> {
+    const ask = watch.parkedOn;
+    const gone = () => watch.settled || ask === undefined || watch.parkedOn !== ask;
+    let step = 0;
+    for (;;) {
+      watch.again = false;
+      const wait = watch.lastRead + PARKED_READ_GAP_MS - Date.now();
+      if (wait > 0) await sleep(wait);
+      if (gone()) return;
+      const answer = await this.parkedAsk(ask as string);
+      watch.lastRead = Date.now();
+      if (gone()) return;
+      if (answer === 'decided') {
+        this.release(watch.runId, watch.parkedEnd ?? 'released');
+        return;
+      }
+      if (watch.series) {
+        const cancelled = watch.parkedEnd === 'interrupted';
+        if (cancelled && answer === 'unknown' && step > 0) {
+          this.release(watch.runId, 'interrupted');
+          return;
+        }
+        const gap = this.parkedRechecksMs[step];
+        step += 1;
+        if (gap === undefined) {
+          if (cancelled) this.release(watch.runId, 'interrupted');
+          return;
+        }
+        await sleep(gap);
+        continue;
+      }
+      if (!watch.again) return;
+    }
+  }
+
+  /** What the store says of an ask: decided, still open, or nothing it can tell. */
+  private async parkedAsk(id: string): Promise<'decided' | 'open' | 'unknown'> {
+    if (this.store.toolCallApproval === undefined) return 'unknown';
+    try {
+      const state = await this.store.toolCallApproval(id);
+      if (state == null) return 'unknown';
+      return state.status === 'pending_approval' ? 'open' : 'decided';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * The waits between the store's rereads of a parked ask after its execution ended (cumulative
+   * 0.25, 1.25, 4.25, 14.25 and 44.25 seconds after the first). Overridden by tests only.
+   *
+   * @internal
+   */
+  parkedRechecksMs: readonly number[] = PARKED_RECHECKS_MS;
+
+  /** A limit's stop: what it did is the engine's to log, there is no caller to tell. */
+  private async limitStop(runId: string, reason: OpenCodeStopReason): Promise<void> {
+    const result = await this.requestStop(runId, reason);
+    if (result === 'unconfirmed')
+      this.logger.warn(`run ${runId}: passed its ${reason} limit, but its owner could not be read`);
+  }
+
+  /** The wall-clock bound of an observation: a timer for what is left of it, if anything. */
+  private watchClock(watch: TurnWatch): ReturnType<typeof setTimeout> | undefined {
+    const max = watch.limits.wallClockMs;
+    if (max === undefined) return undefined;
+    const left = watch.startedAt + max - Date.now();
+    if (left <= 0) {
+      watch.pending ??= 'wall-clock';
+      return undefined;
+    }
+    const timer = setTimeout(() => void this.limitStop(watch.runId, 'wall-clock'), left);
+    timer.unref?.();
+    return timer;
+  }
+
+  private counts(watch: TurnWatch): OpenCodeTurnCounts {
+    return {
+      steps: watch.steps,
+      compactions: watch.compactions,
+      elapsedMs: Date.now() - watch.startedAt,
+    };
+  }
+
+  private async requestStop(
+    runId: string,
+    reason: OpenCodeTurnStop['reason'],
+  ): Promise<OpenCodeStopResult> {
+    const watch = this.watches.get(runId);
+    if (watch === undefined || watch.settled || watch.stop !== undefined) return 'ignored';
+    const live = this.live.get(runId);
+    // Parked on a person, the ask is refused when it is answered, even if the execution ended.
+    if (watch.parkedOn !== undefined) {
+      watch.pending ??= reason;
+      return 'pending';
+    }
+    if (watch.ending || live?.turn.finished === true) return this.landed(watch, reason);
+    if (!watch.observing || live === undefined) {
+      watch.pending ??= reason;
+      return 'pending';
+    }
+    watch.pending = undefined;
+    // Which run the store says the thread is running. A store that cannot be read says nothing
+    // we may abort on: the abort could land on the thread's next turn.
+    let active: string | null;
+    try {
+      active = await this.activeRun(watch.input.threadId);
+    } catch (error) {
+      this.logger.warn(
+        `run ${runId}: could not read the thread's run: ${errorText(error, 'error')}`,
+      );
+      return 'unconfirmed';
+    }
+    // Immediately before the abort: still running, still the session's owner, still this live turn.
+    if (watch.settled || watch.stop !== undefined || this.live.get(runId) !== live)
+      return 'ignored';
+    if (active !== null && active !== runId) return 'ignored';
+    if (this.owners.get(ownerKey(watch.handle)) !== runId) return 'ignored';
+    if (watch.ending || live.turn.finished) return this.landed(watch, reason);
+    const stop: OpenCodeTurnStop = { reason, counts: this.counts(watch) };
+    watch.stop = stop;
+    watch.aborted = true;
+    try {
+      await live.client.session.interrupt({ sessionID: watch.handle.sessionId });
+    } catch (error) {
+      this.logger.warn(`run ${runId}: could not abort the session: ${errorText(error, 'error')}`);
+    }
+    this.hook('onStop', { turnId: runId, reason, counts: stop.counts });
+    return 'aborted';
+  }
+
+  /** A stop that arrived while the answer settles: recorded and reported, the answer kept. */
+  private landed(watch: TurnWatch, reason: OpenCodeTurnStop['reason']): OpenCodeStopResult {
+    const stop: OpenCodeTurnStop = { reason, counts: this.counts(watch) };
+    watch.stop = stop;
+    watch.pending = undefined;
+    this.hook('onStop', { turnId: watch.runId, reason, counts: stop.counts });
+    return 'settling';
+  }
+
+  /** The milestone as the runner journals it: the limits' counts on an ask, the stop on an end. */
+  private marked(watch: TurnWatch, milestone: Milestone): Milestone {
+    if (milestone.kind === 'finished')
+      return { ...milestone, outcome: this.withStop(milestone.outcome, watch) };
+    if (milestone.progress === undefined) return milestone;
+    const counts = { steps: watch.steps, compactions: watch.compactions };
+    return { ...milestone, progress: { ...milestone.progress, counts } };
+  }
+
+  /**
+   * How a turn a stop landed on ends. An answer that settled anyway is kept, with the stop on it; an
+   * execution that failed on its own keeps its error, with the stop on it; an execution the stop
+   * aborted ends failed with the stop's own text. One interrupted by a person's cancel stays so.
+   */
+  private withStop(outcome: TurnOutcome, watch: TurnWatch | undefined): TurnOutcome {
+    const stop = watch?.stop;
+    if (stop === undefined) return outcome;
+    if (outcome.status !== 'interrupted')
+      return outcome.stop !== undefined ? outcome : { ...outcome, stop };
+    if (!watch?.aborted) return outcome;
+    return { status: 'failed', error: stopErrorText(stop), stop };
+  }
+
+  /** `onTurnEnd`, once per turn this process executed; not waited for. */
+  private ended(
+    watch: TurnWatch,
+    status: OpenCodeTurnEndStatus,
+    stop: OpenCodeTurnStop | undefined,
+  ): void {
+    this.hook('onTurnEnd', {
+      turnId: watch.runId,
+      status,
+      ...(stop !== undefined ? { stop } : {}),
+    });
+  }
+
+  /**
+   * A lifecycle hook, from the settings and the host, called at once. The promise settles when both
+   * have, or after `hookTimeoutMs` (default 5 s) — only `onTurnStart` is waited for. Errors are
+   * logged, never the turn's.
+   */
+  private hook<K extends keyof OpenCodeTurnHooks>(
+    name: K,
+    event: Parameters<NonNullable<OpenCodeTurnHooks[K]>>[0],
+  ): Promise<void> {
+    const calls: Promise<unknown>[] = [];
+    for (const target of [this.settings, this.host] as OpenCodeTurnHooks[]) {
+      const fn = target[name] as ((event: unknown) => unknown) | undefined;
+      if (typeof fn !== 'function') continue;
+      calls.push(
+        Promise.resolve()
+          .then(() => fn.call(target, event))
+          .catch((error: unknown) =>
+            this.logger.warn(`${name} failed: ${errorText(error, 'error')}`),
+          ),
+      );
+    }
+    if (calls.length === 0) return Promise.resolve();
+    const ms = this.settings.hookTimeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.warn(`${name} took longer than ${ms}ms; the turn went on`);
+        resolve();
+      }, ms);
+      timer.unref?.();
+    });
+    return Promise.race([Promise.all(calls).then(() => undefined), late]).finally(() =>
+      clearTimeout(timer),
+    );
   }
 
   /** Starts the next queued message of the thread; set by the runner (it owns `start`). */
@@ -1258,6 +1845,27 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       );
     }
   }
+}
+
+/** A count past its limit: a limit of N allows N, and the one after stops the turn. */
+function passed(count: number, limit: number | undefined): boolean {
+  return limit !== undefined && count > limit;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
+}
+
+/** What a stopping turn answers the ask it waited on with: nothing it asked for runs. */
+function refusalOf(ask: PendingAsk): HumanReply {
+  return ask.kind === 'approval'
+    ? { approved: false, reason: 'The turn was stopped.' }
+    : { answers: {}, skipped: true };
+}
+
+/** Which turn owns a session is kept per server and session. */
+function ownerKey(handle: Pick<SessionHandle, 'serverKey' | 'sessionId'>): string {
+  return `${handle.serverKey}|${handle.sessionId}`;
 }
 
 function titleOf(text: string): string {

@@ -123,8 +123,15 @@ export class OpenCodeAgentRunner implements AgentRunner {
     } catch (error) {
       if (error instanceof RunCancelledError) {
         await this.turns.interrupt(input).catch(() => undefined);
-        // Unset: the turn this process follows also saw what was spent since the last milestone.
-        await this.turns.settle(runId, input, { status: 'interrupted' }, Date.now() - started);
+        // What the milestones journaled; the turn this process follows (or let go of) may have
+        // seen more since the last one, and the larger figure wins.
+        await this.turns.settle(
+          runId,
+          input,
+          { status: 'interrupted' },
+          Date.now() - started,
+          spent,
+        );
         return;
       }
       await this.turns.settleFailed(

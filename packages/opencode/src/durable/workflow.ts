@@ -7,10 +7,20 @@ import {
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { type TurnProgress, addUsage, emptyUsage, errorText } from '../turn.js';
+import type { OpenCodeTurnStop } from '../turn-limits.js';
+import { type TurnOutcome, type TurnProgress, addUsage, emptyUsage, errorText } from '../turn.js';
 import { OpenCodeTurns, type SessionHandle } from '../turns.js';
 
 export const OPENCODE_RUN_WORKFLOW = 'agent.opencode.run';
+
+/**
+ * What a turn's workflow run returns: how it ended, and the reason of a stop that landed on it (a
+ * limit, or `stopTurn`) — `failed` when the stop aborted it, `succeeded` when the answer was kept.
+ */
+export interface OpenCodeRunWorkflowResult {
+  outcome: string;
+  stop?: OpenCodeTurnStop['reason'];
+}
 
 /** The token a person's answer to `toolCallId` is signalled under — the library's own convention. */
 export function decisionToken(runId: string, toolCallId: string): string {
@@ -38,7 +48,7 @@ export class OpenCodeRunWorkflow {
     @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
   ) {}
 
-  async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<{ outcome: string }> {
+  async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<OpenCodeRunWorkflowResult> {
     // What the run spent: every milestone carries its share, journaled with it, so a run resumed in
     // another process adds up the same figure (a milestone journaled before usage travelled adds 0).
     let spent = emptyUsage();
@@ -64,20 +74,23 @@ export class OpenCodeRunWorkflow {
         spent = addUsage(spent, milestone.usage);
         const total = spent;
         if (milestone.kind === 'finished') {
-          await ctx.localStep('finish', async () => {
+          // How the turn settled — a stop that landed after `observe` journaled included. A run
+          // journaled before settle returned its outcome (`true`) reads the milestone's.
+          const settled = await ctx.localStep('finish', async (): Promise<TurnOutcome | true> => {
             // A cancel settles the run itself (it may be parked where no step runs again).
-            if (await this.cancelled(ctx.runId)) this.turns.drop(ctx.runId);
-            else
-              await this.turns.settle(
-                ctx.runId,
-                input,
-                milestone.outcome,
-                Date.now() - begun.startedAt,
-                total,
-              );
-            return true;
+            if (await this.cancelled(ctx.runId)) {
+              await this.turns.abandon(ctx.runId);
+              return milestone.outcome;
+            }
+            return this.turns.settle(
+              ctx.runId,
+              input,
+              milestone.outcome,
+              Date.now() - begun.startedAt,
+              total,
+            );
           });
-          return { outcome: milestone.outcome.status };
+          return resultOf(settled === true ? milestone.outcome : settled);
         }
         let reply: HumanReply;
         try {
@@ -98,17 +111,12 @@ export class OpenCodeRunWorkflow {
       }
     } catch (error) {
       if (isWorkflowControlFlowSignal(error)) throw error;
-      await ctx.localStep('fail', async () => {
-        await this.turns.settleFailed(
-          ctx.runId,
-          input,
-          errorText(error, 'the turn failed'),
-          0,
-          spent,
-        );
-        return true;
-      });
-      return { outcome: 'failed' };
+      const settled = await ctx.localStep(
+        'fail',
+        async (): Promise<TurnOutcome | true> =>
+          this.turns.settleFailed(ctx.runId, input, errorText(error, 'the turn failed'), 0, spent),
+      );
+      return settled === true ? { outcome: 'failed' } : resultOf(settled);
     }
   }
 
@@ -120,4 +128,9 @@ export class OpenCodeRunWorkflow {
       return false;
     }
   }
+}
+
+function resultOf(outcome: TurnOutcome): OpenCodeRunWorkflowResult {
+  const stop = outcome.status === 'interrupted' ? undefined : outcome.stop;
+  return { outcome: outcome.status, ...(stop !== undefined ? { stop: stop.reason } : {}) };
 }

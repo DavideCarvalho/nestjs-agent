@@ -120,6 +120,94 @@ of settling it as an empty success. It needs the client's `message.list`. `openC
 same steps in memory (single replica). Several processes need a cross-process sink and a persistent
 `OpenCodeSessionStore`.
 
+### Limits, stops and lifecycle hooks
+
+Everything here is optional; without these options a turn runs exactly as before. They work with
+`openCode()` too.
+
+```ts
+openCodeDurable({
+  host: MyOpenCodeHost,
+  // Per engine, or `(input) => limits` per turn.
+  limits: { steps: 40, compactions: 2, wallClockMs: 10 * 60_000 },
+  onTurnStart: ({ turnId, threadId, sessionId, resumed }) => turnState.open(turnId),
+  onTurnEvent: ({ turnId, type, sessionId }) => turnState.saw(turnId, type),
+  onStop: ({ turnId, reason, counts }) => credentials.revoke(turnId),
+  onTurnEnd: ({ turnId, status, stop }) => turnState.close(turnId, status, stop?.reason),
+});
+
+// A stop the app starts (a revoked credential, a budget it keeps itself):
+await app.get(OpenCodeTurns).stopTurn(runId, 'budget');
+// → 'aborted' | 'settling' | 'pending' | 'ignored' | 'unconfirmed'
+```
+
+| Option | Type | What it does |
+| --- | --- | --- |
+| `limits.steps` | `number` | Model rounds (`session.step.started`) the turn may run; the next one stops it. |
+| `limits.compactions` | `number` | Compactions (`session.compaction.started`) the turn may run; the next one stops it. |
+| `limits.wallClockMs` | `number` | Stops the turn this long after its `begin`, time parked on a person included. |
+| `onTurnStart` | `({ turnId, threadId, sessionId, resumed }) => void \| Promise<void>` | This process starts executing the turn; `resumed: true` when it took the run over from another (a crash, a run resumed elsewhere after a person answered). |
+| `onTurnEvent` | `({ turnId, type, sessionId }) => void` | One OpenCode event of the turn's own session: its type, never its payload. |
+| `onStop` | `({ turnId, reason, counts }) => void \| Promise<void>` | A stop landed. `counts` is `{ steps, compactions, elapsedMs }`. |
+| `onTurnEnd` | `({ turnId, status, stop? }) => void \| Promise<void>` | This process is done with the turn. `status` is `'succeeded' \| 'failed' \| 'interrupted' \| 'released'`. |
+| `hookTimeoutMs` | `number` | How long a step waits for `onTurnStart`. Default 5 seconds; must be positive. |
+
+Limits count what a turn may do: a limit of N allows N steps (or compactions), and the next one
+stops the turn. `turnId` is the run id. Only OpenCode's events for the turn's own session count
+(another thread's session or a subagent's do not).
+
+**How a stop ends the turn.** A stop aborts the session (`session.interrupt`), so OpenCode starts no
+new round. The turn ends `failed` with `outcome.stop = { reason, counts }`, which the host's
+`beforeSettle` and `onSettled` see on the `OpenCodeRunResult`. The run row and the stream carry the
+error code `opencode_stopped`, and the durable workflow returns `{ outcome: 'failed', stop: reason }`.
+`reason` is `'steps' | 'compactions' | 'wall-clock'`, or what the app passed to `stopTurn`. Return
+`{ error }` from `beforeSettle` to word the message the person reads. When the answer was already
+settling as the stop landed, the answer is kept: the turn ends `succeeded`, with `stop` still set on
+the outcome, `onTurnEnd` and the workflow result, and `onStop` still called.
+
+**What a stop aborts.** A thread's session is reused by its next turn. So, immediately before the
+abort, the engine checks that the turn is still running here, still owns its session, and is still
+the run the thread's store holds. If any check fails, the stop is `'ignored'`. If the store cannot be
+read, nothing is aborted and the stop is `'unconfirmed'` (ask again). A stop for a turn that ended
+does nothing.
+
+**A stop while the turn waits on a person** returns `'pending'`. The ask it waits on is refused,
+whatever the person answers (an approval becomes a rejection, a form is skipped), so no action runs.
+The stop then lands as soon as the turn observes OpenCode again. A pending stop on a turn that is
+then cancelled while parked (released as `interrupted`, below) is dropped with it: no `onStop`
+fires, and `onTurnEnd` carries no `stop`. If the OpenCode server restarted
+while the turn waited, no new session is opened or prompted: the turn ends stopped. To end a parked run at once, cancel
+it.
+
+**Where the hooks run.** The hooks are called in the process that executes the turn's steps. With
+`openCodeDurable()` any worker may claim a run, so that is the worker that runs them, not the one
+that admitted the question. They can also be set on the host (both are called, the options' first).
+Their errors are logged and never fail the turn. Only `onTurnStart` is waited for, at most
+`hookTimeoutMs`; the others are called and not waited for.
+
+**`onTurnEnd` is paired with `onTurnStart`.** Every process that gets `onTurnStart` for a turn gets
+exactly one `onTurnEnd` for it, and its per-turn state goes with it:
+
+- The turn settled there: `succeeded`, `failed` or `interrupted`.
+- It was cancelled from another process while parked there: `interrupted`. The session's execution
+  was interrupted under the parked turn, so the store is read again: right away, then at about
+  0.25, 1.25, 4.25, 14.25 and 44.25 seconds (one read at a time, at most one every 250 ms). The turn
+  is let go when the store shows the ask settled, when the store cannot tell (no `toolCallApproval`,
+  a failed read, the ask not on file) after the first recheck, or when the rechecks run out.
+- Another worker went on with it after a person answered: `released`. This fires on the next round
+  (`session.step.started`), or when an event of the session finds the parked ask decided in the
+  store by someone else.
+- The process shut down while executing it: `released`.
+
+While a turn is parked here, OpenCode may keep running the step's other tool calls. Their events
+are streamed and recorded as usual, and they do not count as the turn moving elsewhere. If the
+session's execution ends some other way (succeeded or failed) while the ask is still open, the turn
+stays here for its answer, and a stop asked meanwhile returns `'pending'`.
+
+A process that never executed the turn (the API that admitted or cancelled it) gets no hooks.
+`stopTurn` acts only in the process executing the turn; anywhere else, and after `onTurnEnd`, it
+returns `'ignored'`.
+
 ## What the session gets from the module
 
 | Option | In the session |
