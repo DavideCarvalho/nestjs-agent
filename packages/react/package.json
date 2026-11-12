@@ -235,5 +235,8 @@
     "unist-util-visit": "5.1.0",
     "vitest": "2.1.9",
     "zod": "4.6.7"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

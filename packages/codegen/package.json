@@ -53,5 +53,8 @@
     "@dudousxd/nestjs-codegen": "0.27.2",
     "tsup": "8.5.1",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

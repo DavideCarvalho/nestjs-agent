@@ -87,5 +87,8 @@
   },
   "bin": {
     "poppy-agent": "./dist/client/bin/poppy-agent.js"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

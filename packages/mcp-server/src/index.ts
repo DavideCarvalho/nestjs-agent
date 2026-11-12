@@ -51,8 +51,8 @@ export {
 } from './poppy-actor-resolver.js';
 // The Poppy slot contracts are core's (shared with `@dudousxd/nestjs-agent-poppy`), re-exported.
 export {
-  announcedPoppyIssuer,
   globalPoppyAuthenticate,
+  globalPoppyIssuer,
   POPPY_AUTHENTICATE_SLOT,
   POPPY_ISSUER_SLOT,
   type PoppyAuthenticate,

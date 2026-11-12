@@ -50,5 +50,8 @@
     "@dudousxd/nestjs-agent-core": "workspace:*",
     "tsup": "8.5.1",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

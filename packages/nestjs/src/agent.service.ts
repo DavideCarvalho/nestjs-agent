@@ -1215,11 +1215,6 @@ export class AgentService implements OnApplicationBootstrap {
     return this.store.forkThread(threadId, fromMessageId, options);
   }
 
-  /** Kept for source compatibility — a thin wrapper over the more general `updateThread`. */
-  async renameThread(actor: Actor, threadId: string, title: string): Promise<void> {
-    return this.updateThread(actor, threadId, { title });
-  }
-
   /**
    * Rename a thread and/or set its default agent. Title-only patches work against ANY store (via
    * the required `setTitle`); a `defaultAgent` change requires the bound store to implement the

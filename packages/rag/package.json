@@ -83,5 +83,8 @@
     "@nestjs/common": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

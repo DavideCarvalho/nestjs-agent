@@ -93,5 +93,8 @@
     "@dudousxd/nestjs-durable-core": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

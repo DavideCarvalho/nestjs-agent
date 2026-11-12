@@ -65,8 +65,7 @@ describe('agentTelescopeExtension', () => {
         'agent.usage.trend',
       ].sort(),
     );
-    // The ephemeral, watcher-fed 'agent.tools' provider is NOT in the shipped extension — retired
-    // in favour of the durable 'agent.tools.recent' (see agent-data-providers.ts's @deprecated note).
+    // Recent tool calls come from the durable 'agent.tools.recent', not an ephemeral 'agent.tools'.
     expect(ext.dataProviders?.(ctx).map((p) => p.name)).not.toContain('agent.tools');
   });
 

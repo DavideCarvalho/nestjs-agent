@@ -40,7 +40,7 @@ What NestJS ships, the agent uses, and documents only what it adds on top:
 | [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization) | `@Policy()` / `@Can()` on tools: the guard checks every call | A tool is offered only to an actor its abilities allow |
 | [`@nestjs/resilience`](https://github.com/nestjs/resilience) | The model calls' policies (presets, circuit breakers) | — |
 
-NestJS 12 and Node 22 or later.
+NestJS 12 and Node 24 or later.
 
 ## Component registries and server rendering
 

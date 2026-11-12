@@ -441,25 +441,6 @@ describe('zero-config discovery', () => {
   });
 });
 
-describe('options from before core 0.53', () => {
-  it('the plugin, the docs writer and defineSandbox say what replaced them', async () => {
-    expect(() => genuiSandboxKit({ include: 'components/ui/*.tsx' } as never)).toThrow(
-      /option `include` was removed in nestjs-agent-core 0\.53 — `include: G` is now `components: G`/,
-    );
-    expect(() =>
-      genuiSandboxKit({ entry: 'kit.ts', tailwind: true, tailwindCss: ['a.css'] } as never),
-    ).toThrow(
-      /options `entry`, `tailwind`, `tailwindCss` were removed in nestjs-agent-core 0\.53.*`components: X`.*detected from `styles`.*pass the stylesheet itself as `styles`/,
-    );
-    await expect(writeSandboxKitDocs({ output: 'x.json', include: 'a' } as never)).rejects.toThrow(
-      /writeSandboxKitDocs/,
-    );
-    expect(() => defineSandbox({ kit: true, tailwind: true } as never)).toThrow(
-      /defineSandbox: `tailwind` was removed in nestjs-agent-core 0\.53/,
-    );
-  });
-});
-
 describe('the prompt describes only what exists', () => {
   it('no kit docs (yet): the plain sandbox, no JSX', () => {
     const sandbox = defineSandbox({ kit: () => undefined });
