@@ -341,6 +341,17 @@ authorize: (ctx) => {
 },
 ```
 
+## The Organization
+
+With the agent's [tenancy](/docs/agent/guides/tenancy) on, every read is scoped to the viewer's
+tenant, and the header shows that Organization with its labels (`Clinic One › Unit One`), "All
+organizations" inside `Context.allTenants()`, or "No organization". The labels come from the
+context's `tenancy.label`, else the tenant's slug, else its id. See
+[The Organization in the console](/docs/agent/guides/tenancy#the-organization-in-the-console).
+
+With a tenant `required`, a viewer without one gets a 403 on the console's reads, and the search
+finds nothing here.
+
 ## When to use it
 
 Reach for `-dashboard` when you want a governance console but aren't running Telescope, or want the

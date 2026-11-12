@@ -7,6 +7,7 @@ import { AccessDenied } from './AccessDenied';
 import { ConsoleSearch } from './ConsoleSearch';
 import { ConsoleSwitcher, readSwitcherConfig } from './ConsoleSwitcher';
 import { LiveSection } from './LiveSection';
+import { OrganizationChip } from './OrganizationChip';
 import { SectionBoundary } from './SectionBoundary';
 import { ActorsContainer } from './containers/ActorsContainer';
 import { ApprovalsContainer } from './containers/ApprovalsContainer';
@@ -259,6 +260,7 @@ function Header({
       />
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
+        <OrganizationChip />
         <Button size="md" variant="outline" className="gap-2 rounded-lg" onClick={onSearch}>
           Search
           <kbd className="mono text-[10px] text-muted-foreground">⌘K</kbd>

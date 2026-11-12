@@ -40,6 +40,7 @@ import {
   parseThreadWhere,
   parseToolCallWhere,
 } from './parse-page-query.js';
+import type { ConsoleTenancy } from './tenancy.js';
 import { AGENT_ACTOR_RESOLVER, DASHBOARD_APPROVAL_ACTOR_REF } from './tokens.js';
 
 const DAY_MS = 86_400_000;
@@ -97,6 +98,15 @@ export class AgentApiController {
     @Inject(AGENT_ACTOR_RESOLVER)
     private readonly actorResolver?: ActorResolver,
   ) {}
+
+  /**
+   * The Organization the console is scoped to: `{ enabled, scope, tenant, chain }`, each level with
+   * its `label` (the app's `tenancy.label`, else slug, else id).
+   */
+  @Get('tenancy')
+  tenancy(): Promise<ConsoleTenancy> {
+    return this.dashboard.tenancy();
+  }
 
   /** `{ byModel, byActor, trend }` for a day range (defaults to the last 30 days). */
   @Get('spend')

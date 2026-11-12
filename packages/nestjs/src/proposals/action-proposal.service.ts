@@ -72,7 +72,12 @@ export class ActionProposalService {
     if (!scope) throw new NotFoundException('Thread not found');
     // With tenancy on, a thread the request's tenant may not see is not found, never forbidden.
     const filter = tenantRowFilter(
-      readTenancy(this.options.tenancy ?? 'inherit', this.contextAccessor),
+      readTenancy(
+        this.options.tenancy ?? 'inherit',
+        this.contextAccessor,
+        // An actor that names its tenant needs none from the context, even when one is `required`.
+        typeof actor.tenantRef === 'string' ? { required: false } : {},
+      ),
       actor.tenantRef,
     );
     if (filter !== undefined && !tenantRowVisible(filter, scope.tenantRef))

@@ -12,7 +12,8 @@ import {
  * the resolver sets wins. With `tenancy: false` the resolver is returned as is.
  *
  * The wrapper inherits from `resolver` (only `resolve` is its own), so `instanceof` and the
- * resolver's other members still read through.
+ * resolver's other members still read through. With `kinds`, the tenant is the matching level of
+ * the request's chain (context 2.1+): `kinds: ['clinic']` gives a unit's request its clinic.
  */
 export function tenantFillingResolver(
   resolver: ActorResolver,
@@ -25,7 +26,9 @@ export function tenantFillingResolver(
     value: async (req: unknown): Promise<Actor> =>
       withContextTenant(
         await resolver.resolve(req),
-        readTenancy(tenancy ?? 'inherit', contextAccessor ?? undefined),
+        // Never `required` here: the reads and writes that need a tenant refuse on their own, so
+        // endpoints that are not tenant-scoped (models, config) still answer.
+        readTenancy(tenancy ?? 'inherit', contextAccessor ?? undefined, { required: false }),
       ),
     enumerable: false,
   });

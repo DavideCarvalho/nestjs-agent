@@ -1,68 +1,90 @@
-// Local reader for the @dudousxd/nestjs-context tenancy contract. It imports nothing from the
-// context, so the agent works with any context version, or with none at all: a missing or older
-// accessor reads as `{ enabled: false }` and behaviour is unchanged.
+// The agent's tenancy, built on the local reader for the @dudousxd/nestjs-context tenancy contract
+// (`./tenancy-reader.ts`, a verbatim copy of the context's). It imports nothing from the context, so
+// the agent works with any context version, or with none at all: a missing or older accessor reads
+// as `{ enabled: false }` and behaviour is unchanged.
 
+import {
+  type Tenancy as ReaderTenancy,
+  type TenancyOption as ReaderTenancyOption,
+  type TenantFilter,
+  type TenantLevel,
+  type TenantRef,
+  readTenancy as readContextTenancy,
+  tenantLabels as readTenantLabels,
+} from './tenancy-reader.js';
 import type { Actor } from './types.js';
 
-/** The tenant the request runs in, as the context reports it. */
-export interface ContextTenantRef {
-  id: string;
-  kind: string;
-  source: string;
-  slug?: string;
-  role?: string;
-}
+/** One level of the request's tenant chain (clinic → unit), as the context reports it. */
+export type ContextTenantLevel = TenantLevel;
 
-/** How data must be scoped right now. See the context "Tenancy" docs. */
-export type ContextTenantFilter =
-  | { mode: 'system' }
-  | { mode: 'all' }
-  | { mode: 'tenantless' }
-  | { mode: 'tenant'; tenant: ContextTenantRef };
+/**
+ * The tenant the request runs in, as the context reports it. `chain` (context 2.1+) is the active
+ * path, root first, with this tenant last; `family` names a secondary tenant.
+ */
+export type ContextTenantRef = TenantRef;
+
+/**
+ * How data must be scoped right now. See the context "Tenancy" docs. With `kinds`, `tenant` is the
+ * matching level of the chain (context 2.1+), and `chain` the path down to it.
+ */
+export type ContextTenantFilter = TenantFilter;
 
 /**
  * The `tenancy` option of `AgentModule.forRoot`.
  *
  * - `'inherit'` (default): follow `ContextModule`'s `tenancy.enabled`, which is off by default.
  * - `false`: never scope by tenant.
- * - an object: `enabled` (`'inherit'` or a boolean), the agent's own `kinds` allow-list, and
- *   `nullRows` (`'tenantless'` by default; `'shared'` also shows rows with no tenant to every tenant).
+ * - an object:
+ *   - `enabled`: `'inherit'` or a boolean;
+ *   - `kinds`: the level of the tenant chain the agent scopes by (`['clinic']` from a unit request
+ *     stamps and reads the clinic);
+ *   - `family`: scope by a secondary tenant instead of the primary one;
+ *   - `required`: with no tenant, a tenant-scoped read or write throws the context's
+ *     `TenantRequiredError` (403). Defaults to the context's `tenancy.required`;
+ *   - `nullRows`: `'tenantless'` by default; `'shared'` also shows rows with no tenant to every
+ *     tenant.
  */
-export type TenancyOption =
-  | 'inherit'
-  | false
-  | { enabled?: 'inherit' | boolean; kinds?: string[]; nullRows?: 'tenantless' | 'shared' };
+export type TenancyOption = ReaderTenancyOption;
 
-export type Tenancy =
-  | { enabled: false }
-  | { enabled: true; nullRows: 'tenantless' | 'shared'; filter(): ContextTenantFilter };
+export type Tenancy = ReaderTenancy;
 
 /** The `CONTEXT_ACCESSOR` token `@dudousxd/nestjs-context` binds. Inject it with `@Optional()`. */
 export const CONTEXT_ACCESSOR = Symbol.for('@dudousxd/nestjs-context:accessor');
 
-interface Accessor {
-  tenancy?(): { enabled: boolean; kinds?: string[] };
-  tenantFilter?(options?: { kinds?: string[] }): ContextTenantFilter;
+/** Per-call overrides of the option {@link readTenancy} reads. */
+export interface ReadTenancyOverrides {
+  /**
+   * `false` for work outside a request (a worker, a durable turn, a schedule, the proposal worker,
+   * usage recording): a missing tenant runs tenantless instead of throwing.
+   */
+  required?: boolean;
 }
-const SLOT = Symbol.for('@dudousxd/nestjs-diagnostics:accessor');
 
-/** `accessor`: the `CONTEXT_ACCESSOR` injected with `@Optional()`, if any. Call per operation. */
-export function readTenancy(option: TenancyOption = 'inherit', accessor?: unknown): Tenancy {
-  const slot = (globalThis as unknown as Record<symbol, { current?: unknown } | undefined>)[SLOT];
-  const a = (accessor ?? slot?.current) as Accessor | null | undefined;
-  if (option === false || typeof a?.tenancy !== 'function' || !a.tenantFilter) {
-    return { enabled: false };
+/**
+ * The agent's tenancy for one operation. `accessor`: the `CONTEXT_ACCESSOR` injected with
+ * `@Optional()`, if any. Call per operation: the context's switch can be flipped at any time.
+ */
+export function readTenancy(
+  option: TenancyOption = 'inherit',
+  accessor?: unknown,
+  overrides: ReadTenancyOverrides = {},
+): Tenancy {
+  if (option === false || overrides.required === undefined) {
+    return readContextTenancy(option, accessor ?? undefined);
   }
-  const tenantFilter = a.tenantFilter.bind(a);
   const own = typeof option === 'object' ? option : {};
-  const inherit = own.enabled === undefined || own.enabled === 'inherit';
-  if (!(inherit ? a.tenancy().enabled : own.enabled)) return { enabled: false };
-  const kinds = own.kinds;
-  return {
-    enabled: true,
-    nullRows: own.nullRows ?? 'tenantless',
-    filter: () => tenantFilter(kinds ? { kinds } : undefined),
-  };
+  return readContextTenancy({ ...own, required: overrides.required }, accessor ?? undefined);
+}
+
+/**
+ * Labels for the console's Organization display, keyed by tenant id: the app's `tenancy.label`
+ * (context 2.1+), else the slug, else the id. Never throws.
+ */
+export function tenantLabels(
+  tenants: ContextTenantLevel[],
+  accessor?: unknown,
+): Promise<Record<string, string>> {
+  return readTenantLabels(tenants, accessor ?? undefined);
 }
 
 /**
