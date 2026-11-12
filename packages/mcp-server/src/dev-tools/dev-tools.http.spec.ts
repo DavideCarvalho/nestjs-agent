@@ -343,6 +343,28 @@ describe('dev MCP endpoint: access per lib', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('serves a 2025-era client (Claude Code) its initialize and tools/list', async () => {
+    register(durableLib());
+    const context = await boot();
+    const init = await post(
+      context,
+      rpc('initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'claude-code', version: '1.0.0' },
+      }),
+      ALL,
+    );
+    expect(init.status).toBe(200);
+    expect(init.text).toContain('Durable workflows');
+    const list = await post(context, rpc('tools/list'), ALL).set(
+      'mcp-protocol-version',
+      '2025-06-18',
+    );
+    expect(list.status).toBe(200);
+    expect(list.text).toContain('durable_list_runs');
+  });
+
   it('answers GET and DELETE with 405 once authorized, 401 before', async () => {
     register(durableLib());
     const context = await boot();
