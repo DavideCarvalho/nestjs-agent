@@ -501,9 +501,43 @@ function apiBase(): string {
   return `${base}/api`;
 }
 
+/** What the console's access check answered, for a non-2xx API response that carries one. */
+export type ConsoleAccessEvent = { kind: 'forbidden' } | { kind: 'redirect'; redirectTo: string };
+
+const accessListeners = new Set<(event: ConsoleAccessEvent) => void>();
+
+/**
+ * Be told when the API denies access: `forbidden` for a 403 `{ error: 'forbidden' }`, `redirect` for
+ * a 401 that carries `redirectTo` (the console's `authorize` asked for sign-in). The failing call
+ * still rejects as usual. Returns an unsubscribe function.
+ */
+export function onConsoleAccess(listener: (event: ConsoleAccessEvent) => void): () => void {
+  accessListeners.add(listener);
+  return () => {
+    accessListeners.delete(listener);
+  };
+}
+
+/** Throw for a non-2xx response, telling access listeners about a denial first. */
+async function fail(res: Response): Promise<never> {
+  if ((res.status === 401 || res.status === 403) && accessListeners.size > 0) {
+    const body = (await res.json().catch(() => undefined)) as
+      | { error?: unknown; redirectTo?: unknown }
+      | undefined;
+    const event: ConsoleAccessEvent | undefined =
+      res.status === 401 && typeof body?.redirectTo === 'string' && body.redirectTo !== ''
+        ? { kind: 'redirect', redirectTo: body.redirectTo }
+        : res.status === 403 && body?.error === 'forbidden'
+          ? { kind: 'forbidden' }
+          : undefined;
+    if (event !== undefined) for (const listener of accessListeners) listener(event);
+  }
+  throw new Error(`${res.status} ${res.statusText}`);
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(apiBase() + path, init);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }
 
@@ -594,7 +628,7 @@ export const agentClient = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) await fail(res);
   },
   /** Per-tool call/failure/rejection/latency rollup for a day range (the Tools section). */
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
@@ -632,7 +666,7 @@ export const agentClient = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) await fail(res);
   },
   /**
    * Live-tail `aviary:agent:*` events over SSE. Calls `onEvent` per event; returns a function that

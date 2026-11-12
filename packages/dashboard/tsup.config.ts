@@ -28,6 +28,7 @@ const common = {
     '@dudousxd/nestjs-agent-core',
     '@dudousxd/nestjs-diagnostics',
     '@nestjs/common',
+    '@nestjs/authorization',
     '@nestjs/core',
     'rxjs',
     'reflect-metadata',

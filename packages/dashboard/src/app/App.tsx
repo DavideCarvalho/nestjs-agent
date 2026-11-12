@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import type { GovernanceRange } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
+import { AccessDenied } from './AccessDenied';
 import { LiveSection } from './LiveSection';
 import { SectionBoundary } from './SectionBoundary';
 import { ActorsContainer } from './containers/ActorsContainer';
@@ -34,6 +35,7 @@ import { BareInput } from './ui/input';
 import { StatusDot } from './ui/kit';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { TooltipProvider } from './ui/tooltip';
+import { useConsoleAccess } from './use-console-access';
 import { useApprovalsCount } from './use-governance';
 import { useLiveEvents } from './use-live-events';
 
@@ -92,6 +94,9 @@ export function App() {
   const { section, params } = useHashRoute();
   const live = useLiveEvents();
   const approvalsCount = useApprovalsCount();
+  const access = useConsoleAccess();
+
+  if (access.denied) return <AccessDenied />;
 
   return (
     // One provider for every tooltip in the console: the open delay is shared across it, so moving

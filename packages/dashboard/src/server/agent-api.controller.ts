@@ -21,7 +21,6 @@ import {
   Query,
   Req,
   Sse,
-  UseGuards,
 } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import {
@@ -78,8 +77,9 @@ function parseLimit(value: string | undefined, fallback: number): number {
  * JSON + SSE API consumed by the AI-gateway console SPA. Mounted at `apiBasePath` (set by
  * `RouterModule` in {@link AgentDashboardModule.forRoot}), so the controller routes are relative.
  *
- * Who reaches it is the app's: `decorators` on `AgentDashboardModule.forRoot`, or the app mounts it
- * itself (`routes: false`) — with `@nestjs/authentication` / `@nestjs/authorization`.
+ * Who reaches it: `authorize` on `AgentDashboardModule.forRoot` (checked by `ConsoleAuthorizeGuard`,
+ * after the app's `decorators`). Mounted by the app itself (`routes: false`), apply
+ * `UseConsoleAuthorize()` to your subclass.
  */
 @CanAnyone()
 @Controller()
