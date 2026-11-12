@@ -1,4 +1,5 @@
 import type { GenuiStats } from '../genui-telemetry.js';
+import type { TenantRowFilter } from '../tenancy.js';
 import type { RunTimings } from './agent-store.js';
 
 /**
@@ -520,4 +521,11 @@ export interface AgentGovernanceQueries {
    * "Generative UI" page). Absent → the page says the store does not record it.
    */
   genuiStats?(range: GovernanceRange): Promise<GenuiStats>;
+  /**
+   * OPTIONAL (tenancy): these queries narrowed to the rows `filter` may see — threads by their
+   * `tenant_ref`; runs, messages, tool calls and generative-UI calls by their thread's; usage by its
+   * own `tenant_ref`. What the dashboard reads through when the agent's `tenancy` is on; without it
+   * a tenant-scoped console shows nothing rather than every tenant's rows.
+   */
+  forTenant?(filter: TenantRowFilter): AgentGovernanceQueries;
 }

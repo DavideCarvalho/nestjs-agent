@@ -103,6 +103,7 @@ describeEachDialect(
         expect.arrayContaining([
           'agent_token_usage_actor_created_idx',
           'agent_token_usage_feature_created_idx',
+          'agent_token_usage_tenant_created_idx',
         ]),
       );
       // The foreign key survived: a deleted thread still takes its rows with it.

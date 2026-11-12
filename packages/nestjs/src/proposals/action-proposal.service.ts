@@ -8,6 +8,7 @@ import {
   type ActionProposalView,
   type Actor,
   type AgentStore,
+  CONTEXT_ACCESSOR,
   DEFAULT_TEXT_ACTION_PROPOSAL_REPLIES,
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type ListActionProposals,
@@ -15,7 +16,10 @@ import {
   type TextActionProposalVocabulary,
   mayDecideApproval,
   parseTextActionProposalCommand,
+  readTenancy,
   resolveTextActionProposalDecision,
+  tenantRowFilter,
+  tenantRowVisible,
   textActionProposalReply,
   toActionProposalMutationView,
   toActionProposalView,
@@ -26,6 +30,7 @@ import {
   Injectable,
   NotFoundException,
   NotImplementedException,
+  Optional,
 } from '@nestjs/common';
 import type { AgentModuleOptions } from '../agent.options.js';
 
@@ -34,7 +39,13 @@ export class ActionProposalService {
   constructor(
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_OPTIONS)
-    private readonly options: Pick<AgentModuleOptions, 'approvalPolicy' | 'actionProposalText'>,
+    private readonly options: Pick<
+      AgentModuleOptions,
+      'approvalPolicy' | 'actionProposalText' | 'tenancy'
+    >,
+    @Optional()
+    @Inject(CONTEXT_ACCESSOR)
+    private readonly contextAccessor?: unknown,
   ) {
     const text = options.actionProposalText;
     this.vocabulary = { ...DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY, ...text?.vocabulary };
@@ -59,6 +70,13 @@ export class ActionProposalService {
   private async scope(threadId: string, actor: Actor): Promise<ActionProposalScope> {
     const scope = await this.capability().getThreadActionProposalScope(threadId);
     if (!scope) throw new NotFoundException('Thread not found');
+    // With tenancy on, a thread the request's tenant may not see is not found, never forbidden.
+    const filter = tenantRowFilter(
+      readTenancy(this.options.tenancy ?? 'inherit', this.contextAccessor),
+      actor.tenantRef,
+    );
+    if (filter !== undefined && !tenantRowVisible(filter, scope.tenantRef))
+      throw new NotFoundException('Thread not found');
     if (scope.tenantRef !== (actor.tenantRef ?? null))
       throw new ForbiddenException('Wrong proposal tenant');
     return scope;

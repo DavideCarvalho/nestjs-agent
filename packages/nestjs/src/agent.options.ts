@@ -24,6 +24,7 @@ import type {
   RolesPolicy,
   ScopeResolver,
   SkillProvider,
+  TenancyOption,
   TokenStreamSink,
   ToolTransientRetrySetting,
 } from '@dudousxd/nestjs-agent-core';
@@ -36,7 +37,7 @@ import type {
 } from '@nestjs/common';
 import type { AgentEngine } from './engine.js';
 import type { FunctionalTool } from './functional-tool.js';
-import type { QuotaLimits } from './ledger-quota-provider.js';
+import type { QuotaLimits, QuotaPer } from './ledger-quota-provider.js';
 import type { AgentFunctionCaller } from './nest-ai/agent-functions.js';
 import type { AgentProtocolAdapter } from './protocol-adapter.js';
 
@@ -292,8 +293,23 @@ export interface AgentModuleOptions {
    * provider that reports none (marked `cost_source = 'estimate'`). `countEstimatedCost: false` counts
    * reported cost only. The default (`true`) is there because otherwise a USD ceiling on Bedrock /
    * OpenAI / Anthropic direct would read $0 and never block.
+   *
+   * `per` picks whose spend the windows sum: `'actor'` (default) the actor's own; `'tenant'` every
+   * actor's in the actor's tenant (`Actor.tenantRef`); `'actor-in-tenant'` the actor's own within
+   * that tenant. An actor with no tenant is counted per actor.
    */
-  quota?: { limits: QuotaLimits; warnAt?: number; countEstimatedCost?: boolean } | QuotaProvider;
+  quota?:
+    | { limits: QuotaLimits; warnAt?: number; countEstimatedCost?: boolean; per?: QuotaPer }
+    | QuotaProvider;
+  /**
+   * Scope the agent by the request's tenant (from `@dudousxd/nestjs-context`). Default
+   * `'inherit'`: follow `ContextModule`'s `tenancy.enabled`, which is off by default. With tenancy
+   * on, an actor the `actorResolver` resolved without a `tenantRef` gets the context tenant's id,
+   * `recordUsage` records it when the input names none, and thread and run reads (and the governance
+   * dashboard) see only the request tenant's rows: another tenant's thread or run answers `404`.
+   * A `tenantRef` your resolver sets always wins. `false` keeps the agent out of tenancy.
+   */
+  tenancy?: TenancyOption;
   /**
    * Which models a caller may pick — `GET <base>/models`, a send's `model`, a thread's pinned model
    * (`PATCH <base>/threads/:id { model }`). Omit → the catalog the model provider carries

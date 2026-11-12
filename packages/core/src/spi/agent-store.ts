@@ -1,6 +1,7 @@
 import type { ToolCallOutcome } from '../dangling-tool-calls.js';
 import type { RecordGenuiCallInput } from '../genui-telemetry.js';
 import type { AgentUiComponent } from '../stream-events.js';
+import type { TenantRowFilter } from '../tenancy.js';
 import type { ToolConfirmation } from '../tool-presentation.js';
 import type {
   Actor,
@@ -16,6 +17,9 @@ import type {
   UsagePurpose,
 } from '../types.js';
 import type { ActionProposalOutcome } from './action-proposal-outcome-store.js';
+
+/** What {@link AgentStore.tenantOf} looks the tenant up for. */
+export type TenantTarget = { threadId: string } | { runId: string } | { toolCallId: string };
 
 /**
  * Who owns a fork. Absent → the source thread's owner (forking your own conversation). Given, the
@@ -459,6 +463,22 @@ export interface AgentStore {
    * the run they abort. Resolvable during the live window (a run cancel only matters while active).
    */
   ownerOfActiveStream(runId: string): Promise<string | null>;
+  /**
+   * OPTIONAL (tenancy): the `tenant_ref` of a live thread, of the thread currently streaming a run
+   * (as {@link ownerOfActiveStream} finds it) or of the thread a tool call belongs to (as
+   * {@link ownerOfToolCall} finds it). `null` when there is no such row. What the service checks
+   * the matching rule against when the agent's `tenancy` is on; a store without it cannot back that.
+   */
+  tenantOf?(target: TenantTarget): Promise<{ tenantRef: string | null } | null>;
+  /**
+   * OPTIONAL (tenancy): {@link listThreads} narrowed to the threads `filter` may see by their
+   * `tenant_ref` (see {@link TenantRowFilter}).
+   */
+  listThreadsForTenant?(
+    actorRef: string,
+    filter: TenantRowFilter,
+    limit?: number,
+  ): Promise<ThreadSummary[]>;
 
   appendMessage(input: AppendMessageInput): Promise<StoredMessage>;
   /**
@@ -592,5 +612,15 @@ export interface AgentStore {
   usageWindows?(
     actorRef: string,
     ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]>;
+  /**
+   * OPTIONAL: {@link usageWindows} summed by the rows' `tenant_ref` instead of their actor — every
+   * actor's spend in `tenantRef`, or only `actorRef`'s spend there when given. What a quota with
+   * `per: 'tenant'` / `'actor-in-tenant'` reads; a store without it cannot back one.
+   */
+  usageWindowsForTenant?(
+    tenantRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+    actorRef?: string,
   ): Promise<UsageTotals[]>;
 }

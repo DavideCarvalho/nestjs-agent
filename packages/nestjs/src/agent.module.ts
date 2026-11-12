@@ -21,6 +21,7 @@ import {
   AgentRegistry,
   type AgentRunner,
   type AgentStore,
+  CONTEXT_ACCESSOR,
   ClosedRolesPolicy,
   DefaultRolesPolicy,
   InMemoryAgentStore,
@@ -83,6 +84,7 @@ import type { AgentProtocolAdapter } from './protocol-adapter.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { AGENT_CHAT_QUEUE } from './queue/chat-queue.token.js';
 import { AnonymousActorResolver } from './resolver/anonymous-actor-resolver.js';
+import { tenantFillingResolver } from './resolver/tenant-filling-resolver.js';
 import { InlineAgentRunner } from './runner/inline-agent-runner.js';
 import { resolveSkillsConfig } from './skills-config.js';
 
@@ -286,16 +288,23 @@ function sharedProviders(
     },
     {
       provide: AGENT_ACTOR_RESOLVER,
-      useFactory: (options: AgentModuleOptions) => {
-        if (options.actorResolver !== undefined) return options.actorResolver;
+      // With tenancy on, an actor the resolver left without a `tenantRef` gets the context tenant's.
+      useFactory: (options: AgentModuleOptions, contextAccessor: unknown) => {
+        if (options.actorResolver !== undefined) {
+          return tenantFillingResolver(options.actorResolver, options.tenancy, contextAccessor);
+        }
         logger.warn(
           'No `actorResolver` configured — the agent endpoints are PUBLIC: every browser gets its ' +
             'own anonymous identity (an HttpOnly cookie). Set `actorResolver: ' +
             'requestUserActorResolver()` (or your own) to require login.',
         );
-        return new AnonymousActorResolver();
+        return tenantFillingResolver(
+          new AnonymousActorResolver(),
+          options.tenancy,
+          contextAccessor,
+        );
       },
-      inject: [AGENT_OPTIONS],
+      inject: [AGENT_OPTIONS, { token: CONTEXT_ACCESSOR, optional: true }],
     },
     // No `model` (and no `engine`): the turns run on `@nestjs/ai`'s `AiModule` models.
     NestAiModelsBinding,
@@ -317,6 +326,7 @@ function sharedProviders(
               ...(o.quota?.countEstimatedCost !== undefined
                 ? { countEstimatedCost: o.quota.countEstimatedCost }
                 : {}),
+              ...(o.quota?.per !== undefined ? { per: o.quota.per } : {}),
             }),
       inject: [AGENT_OPTIONS, AGENT_STORE],
     },

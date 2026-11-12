@@ -95,6 +95,7 @@ import {
   skillInputSchema,
   withSkillTool,
 } from './skills.js';
+import type { ActionProposalOutcomeStore } from './spi/action-proposal-outcome-store.js';
 import type {
   ActionProposalStore,
   ActionProposalSupersessionStore,
@@ -2253,12 +2254,17 @@ async function claimToolCall(
                 throw new Error('Independent replacement requires atomic supersession store');
               return store.createReplacingActionProposal.bind(store);
             })();
+      // The thread is the proposal's scope: listing and deciding read the thread's tenant, so the
+      // proposal takes it too, whatever tenant the turn's actor carries.
+      const threadScope = await (
+        proposalStore as Partial<ActionProposalOutcomeStore>
+      ).getThreadActionProposalScope?.(input.threadId);
       const created = await create({
         ...(prepared.replacementKey !== undefined
           ? { replacementKey: prepared.replacementKey }
           : {}),
         id: proposalId,
-        tenantRef: input.actor.tenantRef ?? null,
+        tenantRef: threadScope ? threadScope.tenantRef : (input.actor.tenantRef ?? null),
         actorRef: input.actor.id,
         threadId: input.threadId,
         originRunId: hooks.runId,

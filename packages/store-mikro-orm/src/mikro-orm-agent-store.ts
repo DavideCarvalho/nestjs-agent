@@ -27,6 +27,8 @@ import {
   type RecordToolCallInput,
   type RecordUsageInput,
   type StoredMessage,
+  type TenantRowFilter,
+  type TenantTarget,
   type ThreadDetail,
   type ThreadSettings,
   type ThreadSettingsReader,
@@ -46,7 +48,7 @@ import {
   sumUsage,
   toolCallApprovalFromRow,
 } from '@dudousxd/nestjs-agent-core';
-import { type EntityManager, QueryOrder, raw } from '@mikro-orm/core';
+import { type EntityManager, type FilterQuery, QueryOrder, raw } from '@mikro-orm/core';
 import { AgentGenuiCall } from './entities/agent-genui-call.entity';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentQueuedMessage } from './entities/agent-queued-message.entity';
@@ -396,10 +398,32 @@ export class MikroOrmAgentStore
   }
 
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
+    return this.listThreadsWhere(actorRef, {}, limit);
+  }
+
+  async listThreadsForTenant(
+    actorRef: string,
+    filter: TenantRowFilter,
+    limit = 50,
+  ): Promise<ThreadSummary[]> {
+    const tenant: FilterQuery<AgentThread> =
+      filter.tenant === undefined
+        ? { tenantRef: null }
+        : filter.nulls
+          ? { $or: [{ tenantRef: filter.tenant }, { tenantRef: null }] }
+          : { tenantRef: filter.tenant };
+    return this.listThreadsWhere(actorRef, tenant, limit);
+  }
+
+  private async listThreadsWhere(
+    actorRef: string,
+    tenant: FilterQuery<AgentThread>,
+    limit: number,
+  ): Promise<ThreadSummary[]> {
     const em = this.em.fork();
     const threads = await em.find(
       AgentThread,
-      { actorRef, transient: false, deletedAt: null },
+      { $and: [{ actorRef, transient: false, deletedAt: null }, tenant] },
       { orderBy: { updatedAt: 'desc' }, limit },
     );
     const previews = await this.lastMessageContents(
@@ -559,6 +583,26 @@ export class MikroOrmAgentStore
       { populate: ['message.thread'] },
     );
     return toolCall?.runId ?? toolCall?.message.thread.activeStreamId ?? null;
+  }
+
+  async tenantOf(target: TenantTarget): Promise<{ tenantRef: string | null } | null> {
+    const em = this.em.fork();
+    if ('toolCallId' in target) {
+      const toolCall = await em.findOne(
+        AgentToolCall,
+        { id: target.toolCallId },
+        { populate: ['message.thread'] },
+      );
+      return toolCall === null ? null : { tenantRef: toolCall.message.thread.tenantRef ?? null };
+    }
+    const thread = await em.findOne(
+      AgentThread,
+      'threadId' in target
+        ? { id: target.threadId, deletedAt: null }
+        : { activeStreamId: target.runId, deletedAt: null },
+      { fields: ['tenantRef'] },
+    );
+    return thread === null ? null : { tenantRef: thread.tenantRef ?? null };
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -1245,6 +1289,29 @@ export class MikroOrmAgentStore
     actorRef: string,
     ranges: readonly { fromDay: string; toDay: string }[],
   ): Promise<UsageTotals[]> {
+    return this.sumUsageWindows('actor_ref = ?', [actorRef], ranges);
+  }
+
+  /**
+   * {@link usageWindows} over the tenant's rows (every actor's, or `actorRef`'s only), served by the
+   * `(tenant_ref, created_at)` index.
+   */
+  async usageWindowsForTenant(
+    tenantRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+    actorRef?: string,
+  ): Promise<UsageTotals[]> {
+    return actorRef === undefined
+      ? this.sumUsageWindows('tenant_ref = ?', [tenantRef], ranges)
+      : this.sumUsageWindows('tenant_ref = ? and actor_ref = ?', [tenantRef, actorRef], ranges);
+  }
+
+  /** `owner`: a fixed SQL condition with `?` placeholders, bound to `ownerParams` (never input). */
+  private async sumUsageWindows(
+    owner: string,
+    ownerParams: unknown[],
+    ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]> {
     if (ranges.length === 0) {
       return [];
     }
@@ -1269,11 +1336,11 @@ export class MikroOrmAgentStore
     });
     const from = Math.min(...bounds.map(({ start }) => start.getTime()));
     const to = Math.max(...bounds.map(({ end }) => end.getTime()));
-    params.push(actorRef, param(new Date(from)), param(new Date(to)));
+    params.push(...ownerParams, param(new Date(from)), param(new Date(to)));
     const [row] = (await em.getConnection().execute(
-      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) index
-      // already narrows to one actor's window.
-      `select ${columns.join(', ')} from agent_token_usage where actor_ref = ? and created_at >= ? and created_at <= ? and counts_towards_quota = true`,
+      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) or
+      // (tenant_ref, created_at) index already narrows to one owner's window.
+      `select ${columns.join(', ')} from agent_token_usage where ${owner} and created_at >= ? and created_at <= ? and counts_towards_quota = true`,
       params,
       'all',
     )) as Record<string, unknown>[];

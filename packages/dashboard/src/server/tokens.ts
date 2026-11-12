@@ -47,6 +47,10 @@ export const AGENT_APPROVAL_PORT = Symbol.for('@dudousxd/nestjs-agent:approval-p
  * unauthenticated), `executedByRef` is simply omitted.
  */
 export const AGENT_ACTOR_RESOLVER = Symbol.for('@dudousxd/nestjs-agent:actor-resolver');
+/** `AgentModule`'s options — read for their `tenancy`. Optional: absent → tenancy `'inherit'`. */
+export const AGENT_OPTIONS = Symbol.for('@dudousxd/nestjs-agent:options');
+/** `@dudousxd/nestjs-context`'s accessor. Optional: absent → the global slot, else tenancy off. */
+export const CONTEXT_ACCESSOR = Symbol.for('@dudousxd/nestjs-context:accessor');
 
 /** DI token carrying the UI mount base (e.g. `/ai-gateway`). */
 export const DASHBOARD_BASE_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:base-path');

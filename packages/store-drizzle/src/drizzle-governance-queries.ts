@@ -24,6 +24,7 @@ import type {
   RunToolCallRow,
   RunTrendPoint,
   RunWhere,
+  TenantRowFilter,
   ThreadActivityRow,
   ThreadMessageRow,
   ThreadMeta,
@@ -53,6 +54,8 @@ import {
   usageRangeBounds,
 } from '@dudousxd/nestjs-agent-core';
 import {
+  type Column,
+  type SQL,
   and,
   asc,
   count,
@@ -64,6 +67,7 @@ import {
   like,
   lt,
   lte,
+  or,
   sql,
   sum,
 } from 'drizzle-orm';
@@ -284,13 +288,52 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
   private readonly dialect: AgentDialect;
   private readonly t: AgentTables;
 
+  /**
+   * `tenant`: the rows these queries may see (see {@link forTenant}); absent → every row. Threads by
+   * their `tenant_ref`; runs, messages, tool calls and generative-UI calls by their thread's; usage
+   * by its own `tenant_ref`.
+   */
   constructor(
-    db: AgentDrizzleDb,
+    private readonly source: AgentDrizzleDb,
     private readonly pricingStore: AgentPricingStore,
+    private readonly tenant?: TenantRowFilter,
   ) {
-    this.dialect = agentDialectOf(db);
+    this.dialect = agentDialectOf(source);
     this.t = agentTablesFor(this.dialect);
-    this.db = asBuilder(db);
+    this.db = asBuilder(source);
+  }
+
+  /** These queries narrowed to the rows `filter` may see — the console's tenant scope. */
+  forTenant(filter: TenantRowFilter): DrizzleGovernanceQueries {
+    return new DrizzleGovernanceQueries(this.source, this.pricingStore, filter);
+  }
+
+  /** The matching rule on a `tenant_ref` column; `undefined` (no condition) without a scope. */
+  private tenantOn(column: Column): SQL | undefined {
+    const filter = this.tenant;
+    if (filter === undefined) return undefined;
+    if (filter.tenant === undefined) return isNull(column);
+    return filter.nulls ? or(eq(column, filter.tenant), isNull(column)) : eq(column, filter.tenant);
+  }
+
+  /** Rows keyed by a thread id whose thread the scope may see; `undefined` without a scope. */
+  private threadIn(threadId: Column): SQL | undefined {
+    const visible = this.tenantOn(this.t.agentThread.tenantRef);
+    if (visible === undefined) return undefined;
+    return inArray(
+      threadId,
+      this.db.select({ id: this.t.agentThread.id }).from(this.t.agentThread).where(visible),
+    );
+  }
+
+  /** Tool calls (by `message_id`) on a thread the scope may see; `undefined` without a scope. */
+  private toolCallIn(messageId: Column): SQL | undefined {
+    const visible = this.threadIn(this.t.agentMessage.threadId);
+    if (visible === undefined) return undefined;
+    return inArray(
+      messageId,
+      this.db.select({ id: this.t.agentMessage.id }).from(this.t.agentMessage).where(visible),
+    );
   }
 
   private async loadPricing(): Promise<Map<string, ModelPrice>> {
@@ -346,6 +389,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         and(
           gte(this.t.agentTokenUsage.createdAt, start),
           lt(this.t.agentTokenUsage.createdAt, end),
+          this.tenantOn(usage.tenantRef),
         ),
       );
     return rows.map(toUsageInput);
@@ -420,6 +464,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       })
       .from(this.t.agentToolCall)
       .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+      .where(this.threadIn(this.t.agentMessage.threadId))
       .orderBy(desc(this.t.agentToolCall.createdAt), desc(this.t.agentToolCall.id))
       .limit(limit);
     return rows.map((row) => ({
@@ -500,7 +545,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const threads = await this.db
       .select()
       .from(this.t.agentThread)
-      .where(isNull(this.t.agentThread.deletedAt))
+      .where(and(isNull(this.t.agentThread.deletedAt), this.tenantOn(this.t.agentThread.tenantRef)))
       .orderBy(desc(this.t.agentThread.updatedAt), desc(this.t.agentThread.id))
       .limit(limit);
     return this.toThreadActivityRows(threads);
@@ -521,7 +566,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
         startedAt: run.startedAt,
       })
       .from(run)
-      .where(and(gte(run.startedAt, start), lte(run.startedAt, end)));
+      .where(and(gte(run.startedAt, start), lte(run.startedAt, end), this.threadIn(run.threadId)));
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
@@ -593,6 +638,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
           gte(this.t.agentRun.startedAt, start),
           lte(this.t.agentRun.startedAt, end),
           eq(this.t.agentRun.status, 'failed'),
+          this.threadIn(this.t.agentRun.threadId),
         ),
       );
     const byError = new Map<string, number>();
@@ -632,6 +678,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const runs = await this.db
       .select()
       .from(this.t.agentRun)
+      .where(this.threadIn(this.t.agentRun.threadId))
       .orderBy(desc(this.t.agentRun.startedAt), desc(this.t.agentRun.id))
       .limit(limit);
     return runs.map(toRecentRunRow);
@@ -658,7 +705,12 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .from(this.t.agentToolCall)
       .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
       .innerJoin(this.t.agentThread, eq(this.t.agentMessage.threadId, this.t.agentThread.id))
-      .where(eq(this.t.agentToolCall.status, 'pending_approval'))
+      .where(
+        and(
+          eq(this.t.agentToolCall.status, 'pending_approval'),
+          this.tenantOn(this.t.agentThread.tenantRef),
+        ),
+      )
       .orderBy(this.t.agentToolCall.createdAt, this.t.agentToolCall.id)
       .limit(limit);
     return rows.map((row) => ({
@@ -692,7 +744,11 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       })
       .from(this.t.agentToolCall)
       .where(
-        and(gte(this.t.agentToolCall.createdAt, start), lte(this.t.agentToolCall.createdAt, end)),
+        and(
+          gte(this.t.agentToolCall.createdAt, start),
+          lte(this.t.agentToolCall.createdAt, end),
+          this.toolCallIn(this.t.agentToolCall.messageId),
+        ),
       );
     const byTool = new Map<
       string,
@@ -777,6 +833,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       filters?.toDay !== undefined
         ? lte(this.t.agentToolCall.createdAt, dayEndUtc(filters.toDay))
         : undefined,
+      this.threadIn(this.t.agentMessage.threadId),
     );
     const [totalRow] = await this.db
       .select({ value: count() })
@@ -839,6 +896,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       filters?.toDay !== undefined
         ? lte(this.t.agentThread.updatedAt, dayEndUtc(filters.toDay))
         : undefined,
+      this.tenantOn(this.t.agentThread.tenantRef),
     );
     const [totalRow] = await this.db
       .select({ value: count() })
@@ -881,6 +939,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       filters?.toDay !== undefined
         ? lte(this.t.agentRun.startedAt, dayEndUtc(filters.toDay))
         : undefined,
+      this.threadIn(this.t.agentRun.threadId),
     );
     const [totalRow] = await this.db
       .select({ value: count() })
@@ -933,6 +992,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       filters?.toDay !== undefined
         ? lte(this.t.agentToolCall.createdAt, dayEndUtc(filters.toDay))
         : undefined,
+      this.tenantOn(this.t.agentThread.tenantRef),
     );
     const [totalRow] = await this.db
       .select({ value: count() })
@@ -987,7 +1047,7 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
       .select({ run: this.t.agentRun, thread: this.t.agentThread })
       .from(this.t.agentRun)
       .innerJoin(this.t.agentThread, eq(this.t.agentRun.threadId, this.t.agentThread.id))
-      .where(eq(this.t.agentRun.id, runId))
+      .where(and(eq(this.t.agentRun.id, runId), this.tenantOn(this.t.agentThread.tenantRef)))
       .limit(1);
     if (row === undefined) {
       return null;
@@ -1020,7 +1080,9 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const [thread] = await this.db
       .select()
       .from(this.t.agentThread)
-      .where(eq(this.t.agentThread.id, query.threadId))
+      .where(
+        and(eq(this.t.agentThread.id, query.threadId), this.tenantOn(this.t.agentThread.tenantRef)),
+      )
       .limit(1);
     if (thread === undefined) {
       return null;
@@ -1094,7 +1156,13 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     const rows = await this.db
       .select()
       .from(table)
-      .where(and(gte(table.createdAt, start.getTime()), lte(table.createdAt, end.getTime())));
+      .where(
+        and(
+          gte(table.createdAt, start.getTime()),
+          lte(table.createdAt, end.getTime()),
+          this.threadIn(table.threadId),
+        ),
+      );
     return summarizeGenuiCalls(rows.map(toGenuiCallRow));
   }
 

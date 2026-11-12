@@ -60,7 +60,8 @@ A turn sends the generation settings of the model's definition and `defaults`, t
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `quota` | `{ limits: { day?: { tokens?, usd? }; month?: { tokens?, usd? } }; warnAt?: number } \| QuotaProvider` | _none_ (reported, not enforced) | The budget behind `GET /agent/quota`. `{ limits }` puts ceilings on the built-in `LedgerQuotaProvider`, and `warnAt` (`0..1`, e.g. `0.8`) adds a soft limit past which the report carries a `warning`; a `QuotaProvider` replaces it (an AI-gateway spend cap). Either turns on the send gate: a `blocked` report refuses `POST /agent/chat` with `429`. Limits apply per actor (per browser in anonymous mode). |
+| `quota` | `{ limits: { day?: { tokens?, usd? }; month?: { tokens?, usd? } }; warnAt?: number; per?: 'actor' \| 'tenant' \| 'actor-in-tenant' } \| QuotaProvider` | _none_ (reported, not enforced) | The budget behind `GET /agent/quota`. `{ limits }` puts ceilings on the built-in `LedgerQuotaProvider`, and `warnAt` (`0..1`, e.g. `0.8`) adds a soft limit past which the report carries a `warning`; a `QuotaProvider` replaces it (an AI-gateway spend cap). Either turns on the send gate: a `blocked` report refuses `POST /agent/chat` with `429`. Limits apply per actor (per browser in anonymous mode); `per: 'tenant' \| 'actor-in-tenant'` sums by `Actor.tenantRef` instead (see [Tenancy](/docs/agent/guides/tenancy#usage-and-quota)). |
+| `tenancy` | `'inherit' \| false \| { enabled?, kinds?, nullRows? }` | `'inherit'` | Scope threads, runs, usage and the console by the request's tenant from `@dudousxd/nestjs-context`. `'inherit'` follows `ContextModule`'s `tenancy.enabled` (off by default). See [Tenancy](/docs/agent/guides/tenancy). |
 
 ### Routing
 
