@@ -1,0 +1,116 @@
+---
+title: Developer tools over MCP
+icon: Terminal
+description: Point Claude Code, Cursor or any MCP client at your running app and let it read your Aviary consoles (agent runs, spend, approvals and more) through one endpoint, gated by each console's own authorize.
+---
+
+`AgentMcpServerModule` mounts a second MCP endpoint, `/mcp/aviary`. It serves the developer tools that your Aviary libraries register. The agent dashboard registers its governance reads there, and the other Aviary consoles add their own. You list nothing. Each library's tools are gated by the `authorize` you already gave its console.
+
+## Connect a client
+
+Protect the consoles with a token (or [any `authorize`](/docs/packages/dashboard#protecting-the-console)):
+
+```ts
+import { AgentDashboardModule, authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+import { AgentMcpServerModule } from '@dudousxd/nestjs-agent-mcp-server';
+
+@Module({
+  imports: [
+    AgentModule.forRoot({ /* … */ }),
+    AgentDashboardModule.forRoot({
+      authorize: authorizeByToken({ token: process.env.CONSOLE_TOKEN }),
+    }),
+    AgentMcpServerModule.forRoot({ name: 'Acme', version: '1.0.0', auth: myResolver }),
+  ],
+})
+export class AppModule {}
+```
+
+Then add the endpoint to Claude Code:
+
+```bash
+claude mcp add --transport http aviary http://localhost:3000/mcp/aviary --header "Authorization: Bearer $CONSOLE_TOKEN"
+```
+
+Ask it things like "why did the last support run fail?" or "what did we spend on models this week?".
+
+## How access works
+
+Every request is authorized again, per library:
+
+- A `tools/list` runs the `authorize` of every library that registered tools. The caller sees the tools of the libraries that allowed it, and nothing else. A library that denied the caller does not appear at all.
+- A `tools/call` runs only the `authorize` of the library that owns the tool.
+- When no library allows the caller, the endpoint answers like a console: `401 { error: 'unauthenticated' }` with `WWW-Authenticate: Bearer realm="aviary-dev"`, or `403 { error: 'forbidden' }`.
+- A console with no `authorize` follows its usual rule: open outside production, denied in production.
+
+The `authorize` runs with the MCP request's own `ExecutionContext`, so `authorizeByToken` reads the `Authorization` header the client sends. A rule that needs a signed-in session (`request.user`) needs a guard that sets it on this endpoint too. Pass that guard in `devTools.decorators`.
+
+### Token or session: `anyAuthorize`
+
+A browser session and a CLI token usually need different rules. `anyAuthorize` allows a request when any of its rules allows it:
+
+```ts
+import { anyAuthorize, authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentDashboardModule.forRoot({
+  decorators: [UseGuards(SessionGuard)],
+  authorize: anyAuthorize(
+    authorizeByToken({ token: process.env.CONSOLE_TOKEN }),
+    (ctx) => ctx.switchToHttp().getRequest().user?.role === 'admin',
+  ),
+});
+```
+
+Each argument is any `authorize` form: a function, a class, a lazy import, `{ policy, ability }` or a gate name. When none allows the request, the result is `unauthenticated` if any rule said so, otherwise `forbidden`.
+
+## Options
+
+```ts
+AgentMcpServerModule.forRoot({
+  // …
+  devTools: {
+    path: 'mcp/aviary',                     // default
+    exclude: ['agent_get_spend'],           // lib ids or tool names
+    actions: 'refuse',                      // default; 'execute' or ['durable'] to opt in
+    decorators: [UseGuards(SessionGuard)],  // run before the per-lib authorize
+  },
+});
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `path` | `'mcp/aviary'` | Where the endpoint mounts. It must differ from the product endpoint's `path`, or the boot fails |
+| `exclude` | `[]` | Library ids or full tool names that are never served |
+| `actions` | `'refuse'` | Tools that change data are hidden and cannot be called. `'execute'` allows them all; a list allows the actions of these library ids or tool names |
+| `decorators` | `[]` | Class decorators on the endpoint, before the per-library check: an authentication guard, a rate limit |
+
+`devTools: false` mounts nothing. The dev endpoint shares nothing with the product endpoint: not its `auth`, its tools, its `allowedTools` nor its `actions`. A product key opens nothing here unless a console's `authorize` accepts it. It also inherits the product endpoint's `mcp.http` `allowedHosts` and `allowedOrigins` checks.
+
+The boot log lists what is served:
+
+```
+[AgentDevTools] dev tools at /mcp/aviary: agent (7), durable (8)
+```
+
+To keep the agent dashboard's tools while mounting its routes yourself (`routes: false`), set `devTools: true` on `AgentDashboardModule.forRoot`. To turn off the dashboard's tools only, set `devTools: false`.
+
+## What the tools return
+
+- Tools return what the console shows, through the same service methods. List tools take `page` and `limit` (at most 100) and return `{ items, next, total }`. To get the next page, pass `next` as `page`.
+- A result over 48 KB is cut and marked `truncated: true`.
+- Keys that look like secrets (`secret`, `token`, `password`, `authorization`, `cookie`, `api_key`) are redacted. Token counts are kept.
+- Every call writes one log line: the tool, the library, the caller, the duration and whether it worked. Read tools log at `debug` and actions at `log`. A bearer caller appears as `token:<hash>`, never the token. With `@dudousxd/nestjs-diagnostics` installed, each call is also an `agent:devtools.call` event.
+
+## The agent's tools
+
+| Tool | Returns |
+|---|---|
+| `agent_list_runs` | Runs, newest first. Filters: `agent`, `status`, `errorCode`, `threadId`, `from`/`to` |
+| `agent_get_run` | One run with its thread, tool calls and timings. `includeMessages: true` adds the thread's latest 50 messages, each cut to 2 KB |
+| `agent_get_spend` | Spend by model, actor and feature, and the trend. `by` returns one of them |
+| `agent_get_tool_stats` | Calls, failures, rejections and latency per tool |
+| `agent_get_reliability` | Run metrics, breakdowns by agent and by error, and the trend |
+| `agent_list_pending_approvals` | Tool calls waiting for a human. Approve them in the app |
+| `agent_list_recent_tool_calls` | Tool calls of every agent, newest first |
+
+Days are UTC `YYYY-MM-DD` and default to the last 30 days. None of these tools changes data.
