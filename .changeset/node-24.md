@@ -29,3 +29,5 @@ Removed, with no alias (see the docs' Upgrading page):
 - `@dudousxd/nestjs-agent`: `AgentService.renameThread()`. Use `updateThread(actor, threadId, { title })`.
 - `@dudousxd/nestjs-agent-mcp-server`: the `announcedPoppyIssuer` re-export. It now re-exports `globalPoppyIssuer`.
 - `@dudousxd/nestjs-agent-telescope`: `agentToolsProvider()`, the ephemeral `agent.tools` table the extension no longer registered. Use `agentRecentToolCallsTableProvider()`.
+
+`@dudousxd/nestjs-agent` and `@dudousxd/nestjs-agent-opencode` inject the run gateway by the `RunGateway` class instead of the deprecated `RUN_GATEWAY` alias from `@dudousxd/nestjs-durable`. It is the same DI token in every `@dudousxd/nestjs-durable` they support.

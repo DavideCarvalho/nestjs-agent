@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import type { Actor, AgentStreamEvent } from '@dudousxd/nestjs-agent-core';
-import { DurableModule, RUN_GATEWAY } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore, type RunGateway, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { InMemoryStateStore, RunGateway, WorkflowEngine } from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -555,7 +555,7 @@ describe('a turn parked on a person', () => {
     // A store that cannot say the ask was settled lets the turn go ~250 ms after the interrupt,
     // well before this process's own cancel gets to settle the run.
     Object.defineProperty(h.store, 'toolCallApproval', { value: undefined });
-    const runs = h.app.get<RunGateway>(RUN_GATEWAY);
+    const runs = h.app.get(RunGateway);
     const cancel = runs.cancel.bind(runs);
     runs.cancel = async (...args: Parameters<RunGateway['cancel']>) => {
       await new Promise((resolve) => setTimeout(resolve, 700));

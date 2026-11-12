@@ -7,8 +7,8 @@ import {
   type AgentStore,
   type HumanReply,
 } from '@dudousxd/nestjs-agent-core';
-import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
-import { type RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
+import { WorkflowService } from '@dudousxd/nestjs-durable';
+import { RunGateway, isWorkflowControlFlowSignal } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { OpenCodeHost } from '../host.js';
 import { OPENCODE_HOST, OPENCODE_OPTIONS } from '../tokens.js';
@@ -37,7 +37,7 @@ export class DurableOpenCodeAgentRunner implements AgentRunner {
 
   constructor(
     private readonly workflows: WorkflowService,
-    @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
+    @Inject(RunGateway) private readonly runs: RunGateway,
     private readonly turns: OpenCodeTurns,
     @Inject(OPENCODE_OPTIONS) private readonly settings: OpenCodeEngineSettings,
     @Inject(OPENCODE_HOST) private readonly host: OpenCodeHost,
