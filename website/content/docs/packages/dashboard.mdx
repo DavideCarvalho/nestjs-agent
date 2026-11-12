@@ -117,6 +117,10 @@ What `authorize` returns:
 
 The SPA follows a `redirectTo` it gets from the API and shows an access-denied screen on a `403`.
 
+An allow can also name who it let in: `{ allowed: true, caller: 'user:42' }`. The [MCP tools](#mcp-tools)
+log that name as the caller of each call. Never put a secret in it. `authorizeByToken` names its caller
+`token:<hash>`.
+
 ### A bearer token
 
 `authorizeByToken` allows a request whose `Authorization: Bearer <token>` header matches:

@@ -34,13 +34,23 @@ claude mcp add --transport http aviary http://localhost:3000/mcp/aviary --header
 
 Ask it things like "why did the last support run fail?" or "what did we spend on models this week?".
 
+### With a global prefix
+
+`app.setGlobalPrefix('api')` moves the endpoint to `/api/mcp/aviary`. Point the client there, or keep it at `/mcp/aviary` by excluding it from the prefix:
+
+```ts
+app.setGlobalPrefix('api', { exclude: ['mcp/aviary'] });
+```
+
+The boot log shows the path the endpoint answers at.
+
 ## How access works
 
 Every request is authorized again, per library:
 
 - A `tools/list` runs the `authorize` of every library that registered tools. The caller sees the tools of the libraries that allowed it, and nothing else. A library that denied the caller does not appear at all.
 - A `tools/call` runs only the `authorize` of the library that owns the tool.
-- When no library allows the caller, the endpoint answers like a console: `401 { error: 'unauthenticated' }` with `WWW-Authenticate: Bearer realm="aviary-dev"`, or `403 { error: 'forbidden' }`.
+- When no library allows the caller, the endpoint answers like a console: `401 { error: 'unauthenticated' }` with `WWW-Authenticate: Bearer realm="aviary-dev"`, or `403 { error: 'forbidden' }`. The endpoint writes these itself, so your app's exception filters do not change them.
 - A console with no `authorize` follows its usual rule: open outside production, denied in production.
 
 The `authorize` runs with the MCP request's own `ExecutionContext`, so `authorizeByToken` reads the `Authorization` header the client sends. A rule that needs a signed-in session (`request.user`) needs a guard that sets it on this endpoint too. Pass that guard in `devTools.decorators`.
@@ -99,14 +109,27 @@ To keep the agent dashboard's tools while mounting its routes yourself (`routes:
 - Tools return what the console shows, through the same service methods. List tools take `page` and `limit` (at most 100) and return `{ items, next, total }`. To get the next page, pass `next` as `page`.
 - A result over 48 KB is cut and marked `truncated: true`.
 - Keys that look like secrets (`secret`, `token`, `password`, `authorization`, `cookie`, `api_key`) are redacted. Token counts are kept.
-- Every call writes one log line: the tool, the library, the caller, the duration and whether it worked. Read tools log at `debug` and actions at `log`. A bearer caller appears as `token:<hash>`, never the token. With `@dudousxd/nestjs-diagnostics` installed, each call is also an `agent:devtools.call` event.
+- Every call writes one log line: the tool, the library, the caller, the duration and whether it worked. Read tools log at `debug` and actions at `log`. With `@dudousxd/nestjs-diagnostics` installed, each call is also an `agent:devtools.call` event.
+- A tool that cannot find what you asked for (`agent_get_run` with an unknown id) answers an MCP error, such as `run <id> not found`.
+
+The caller comes from whatever let the request in:
+
+| Allowed by | Caller |
+|---|---|
+| `authorizeByToken` | `token:<hash>`, never the token |
+| an `authorize` that answers `{ allowed: true, caller }` | that `caller` |
+| any other `authorize`, with `request.user.id` set | `user:<id>` |
+| any other `authorize`, without `request.user` | `session` |
+| no `authorize` (outside production) | `dev-open` |
+
+A `Bearer` header that no `authorize` accepted never becomes the caller.
 
 ## The agent's tools
 
 | Tool | Returns |
 |---|---|
 | `agent_list_runs` | Runs, newest first. Filters: `agent`, `status`, `errorCode`, `threadId`, `from`/`to` |
-| `agent_get_run` | One run with its thread, tool calls and timings. `includeMessages: true` adds the thread's latest 50 messages, each cut to 2 KB |
+| `agent_get_run` | One run with its thread, tool calls and timings. `includeMessages: true` adds the thread's latest 50 messages, each cut to 2 KB. An unknown id is an error |
 | `agent_get_spend` | Spend by model, actor and feature, and the trend. `by` returns one of them |
 | `agent_get_tool_stats` | Calls, failures, rejections and latency per tool |
 | `agent_get_reliability` | Run metrics, breakdowns by agent and by error, and the trend |
