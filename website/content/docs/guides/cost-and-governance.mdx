@@ -364,7 +364,8 @@ AgentModule.forRoot({
 Either form turns on the send gate: while the report is `blocked`, `POST /agent/chat` answers `429`
 with `{ code: 'quota_exceeded', period, message }` before any work — no model call, no usage row.
 The limits apply per actor — per browser in [anonymous mode](/docs/agent/guides/identity-and-authorization#the-default-anonymous-one-identity-per-browser),
-where a public deployment without them has unbounded spend. On the client, `useAgentChat` reads the
+where a public deployment without them has unbounded spend. To count a whole organization's spend instead, set
+`per: 'tenant'` (or `'actor-in-tenant'`); see [Tenancy](/docs/agent/guides/tenancy#usage-and-quota). On the client, `useAgentChat` reads the
 report and refuses to send while it is blocked (`chat.blocked`, `composer.blockedBy === 'quota'`),
 and `chat.quota.warning` names the window past `warnAt` — see
 [Frontend](/docs/agent/guides/frontend#quota). A message waiting in a thread's

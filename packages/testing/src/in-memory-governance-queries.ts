@@ -21,6 +21,7 @@ import type {
   RunToolCallRow,
   RunTrendPoint,
   RunWhere,
+  TenantRowFilter,
   ThreadActivityRow,
   ThreadMessageRow,
   ThreadMeta,
@@ -158,11 +159,50 @@ export type InMemoryModelPrice = ModelPrice;
  * read-model that still reports token usage. Mirrors the SQL adapters' cost formula and inclusive-day
  * semantics because it runs the exact same helpers.
  */
+/**
+ * A view of `store` whose governance feeds hold only the rows `filter` may see. Everything else
+ * reads through to the store.
+ */
+function tenantScopedFeed(store: InMemoryAgentStore, filter: TenantRowFilter): InMemoryAgentStore {
+  // The matching rule, inlined so this package keeps loading against an older core.
+  const tenantRowVisible = (scope: TenantRowFilter, row: string | null): boolean =>
+    row === null ? scope.nulls : scope.tenant === row;
+  const byThread = (threadId: string | null | undefined): boolean => {
+    if (threadId === null || threadId === undefined) return false;
+    const tenantRef = store.threadTenantRef(threadId);
+    return tenantRef !== undefined && tenantRowVisible(filter, tenantRef);
+  };
+  const view = Object.create(store) as InMemoryAgentStore;
+  const feeds = {
+    governanceUsage: () =>
+      store.governanceUsage().filter((row) => tenantRowVisible(filter, row.tenantRef ?? null)),
+    governanceToolCalls: () => store.governanceToolCalls().filter((row) => byThread(row.threadId)),
+    governanceMessages: () => store.governanceMessages().filter((row) => byThread(row.threadId)),
+    governancePendingApprovals: () =>
+      store.governancePendingApprovals().filter((row) => byThread(row.threadId)),
+    governanceThreads: () => store.governanceThreads().filter((row) => byThread(row.threadId)),
+    governanceRuns: () => store.governanceRuns().filter((row) => byThread(row.threadId)),
+    genuiCallRows: () => store.genuiCallRows().filter((row) => byThread(row.threadId)),
+  };
+  for (const [name, value] of Object.entries(feeds)) {
+    Object.defineProperty(view, name, { value, enumerable: false });
+  }
+  return view;
+}
+
 export class InMemoryGovernanceQueries implements AgentGovernanceQueries {
   constructor(
     private readonly store: InMemoryAgentStore,
     private readonly pricing: ReadonlyMap<string, InMemoryModelPrice> = new Map(),
   ) {}
+
+  /**
+   * These queries narrowed to the rows `filter` may see: threads by their tenant; runs, messages,
+   * tool calls and generative-UI calls by their thread's; usage by its own `tenantRef`.
+   */
+  forTenant(filter: TenantRowFilter): InMemoryGovernanceQueries {
+    return new InMemoryGovernanceQueries(tenantScopedFeed(this.store, filter), this.pricing);
+  }
 
   /**
    * The recorded usage rows within the range, already in the shared bucketer shape: whole UTC days

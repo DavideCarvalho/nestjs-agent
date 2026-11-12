@@ -55,6 +55,8 @@ export function agentTokenUsageSchema(collation?: string): EntitySchema<AgentTok
       { name: 'agent_token_usage_created_idx', properties: ['createdAt'] },
       { properties: ['thread'] },
       { name: 'agent_token_usage_feature_created_idx', properties: ['feature', 'createdAt'] },
+      // `quota.per: 'tenant' | 'actor-in-tenant'` sums a tenant's window.
+      { name: 'agent_token_usage_tenant_created_idx', properties: ['tenantRef', 'createdAt'] },
     ],
     properties: {
       id: { type: 'string', primary: true, ...str },

@@ -23,8 +23,17 @@ export interface QuotaLimits {
   month?: QuotaWindowLimits;
 }
 
+/**
+ * Whose spend a window sums: the actor's own (`'actor'`, the default), every actor's in the actor's
+ * tenant (`'tenant'`), or the actor's own within that tenant (`'actor-in-tenant'`). The tenant is
+ * `Actor.tenantRef`; an actor without one is counted per actor.
+ */
+export type QuotaPer = 'actor' | 'tenant' | 'actor-in-tenant';
+
 /** {@link LedgerQuotaProvider}'s tuning beyond the ceilings. */
 export interface LedgerQuotaOptions {
+  /** See {@link QuotaPer}. Default `'actor'`. Needs a store with `usageWindowsForTenant` otherwise. */
+  per?: QuotaPer;
   /**
    * The soft limit: the share of a ceiling (`0..1`) past which the report carries a `warning`.
    * Stamped on every window that has a ceiling. Omit → no warnings.
@@ -46,14 +55,21 @@ export interface LedgerQuotaOptions {
  * - `month` — when the store implements `usageBetween` or `usageWindows`.
  *
  * `limits` add ceilings per window (tokens and/or USD). A window that reaches one makes the report
- * `blocked`.
+ * `blocked`. `options.per` sums the windows by tenant instead of by actor (see {@link QuotaPer}).
  */
 export class LedgerQuotaProvider implements QuotaProvider {
   constructor(
     private readonly store: AgentStore,
     private readonly limits: QuotaLimits = {},
     private readonly options: LedgerQuotaOptions = {},
-  ) {}
+  ) {
+    const per = options.per ?? 'actor';
+    if (per !== 'actor' && typeof store.usageWindowsForTenant !== 'function') {
+      throw new Error(
+        `quota.per: '${per}' sums the usage ledger by tenant, and ${store.constructor.name} does not implement usageWindowsForTenant. Use a store that does (in-memory, Drizzle, MikroORM) or a QuotaProvider of your own.`,
+      );
+    }
+  }
 
   async report(query: QuotaQuery): Promise<QuotaReport> {
     const now = query.now ?? new Date();
@@ -61,7 +77,22 @@ export class LedgerQuotaProvider implements QuotaProvider {
     const day = quotaPeriodRange('day', now);
     const month = quotaPeriodRange('month', now);
     const windows: QuotaWindow[] = [];
-    if (this.store.usageWindows !== undefined) {
+    const per = this.options.per ?? 'actor';
+    const tenantRef = query.actor.tenantRef;
+    if (
+      per !== 'actor' &&
+      typeof tenantRef === 'string' &&
+      tenantRef !== '' &&
+      this.store.usageWindowsForTenant !== undefined
+    ) {
+      const [dayUsed, monthUsed] = await this.store.usageWindowsForTenant(
+        tenantRef,
+        [day, month],
+        per === 'actor-in-tenant' ? actorRef : undefined,
+      );
+      windows.push(this.usedWindow('day', dayUsed, day.resetsAt));
+      windows.push(this.usedWindow('month', monthUsed, month.resetsAt));
+    } else if (this.store.usageWindows !== undefined) {
       const [dayUsed, monthUsed] = await this.store.usageWindows(actorRef, [day, month]);
       windows.push(this.usedWindow('day', dayUsed, day.resetsAt));
       windows.push(this.usedWindow('month', monthUsed, month.resetsAt));

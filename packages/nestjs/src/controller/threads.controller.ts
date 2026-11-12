@@ -24,7 +24,7 @@ export class ThreadsController {
   @Get()
   async list(@Req() req: Request) {
     const actor = await this.actorResolver.resolve(req);
-    return this.agent.listThreads(actor.id);
+    return this.agent.listThreads(actor);
   }
 
   @Get(':id')

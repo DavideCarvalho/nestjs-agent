@@ -19,6 +19,7 @@ import {
   type AiUsageResult,
   type AttachmentRef,
   type AttachmentStagingStore,
+  CONTEXT_ACCESSOR,
   type ChatQueueState,
   DEFAULT_TEXT_ACTION_PROPOSAL_VOCABULARY,
   type Decision,
@@ -38,15 +39,21 @@ import {
   type StagedAttachment,
   type StoredMessage,
   type SubscribeOptions,
+  type Tenancy,
+  type TenantTarget,
   type TextActionProposalVocabulary,
   type ThreadDetail,
   type ThreadSummary,
   type UpdateThreadInput,
+  contextTenantRef,
   findCatalogModel,
   mayDecideApproval,
   readElicitationQuestions,
+  readTenancy,
   recordAiUsage,
   settleDeadRun,
+  tenantRowFilter,
+  tenantRowVisible,
   textActionProposalReply,
   validateElicitationAnswer,
 } from '@dudousxd/nestjs-agent-core';
@@ -63,6 +70,7 @@ import {
   Logger,
   NotFoundException,
   NotImplementedException,
+  type OnApplicationBootstrap,
   Optional,
   PayloadTooLargeException,
   UnsupportedMediaTypeException,
@@ -236,7 +244,7 @@ export interface ThreadModelReader {
 
 /** The orchestration facade the controllers call. */
 @Injectable()
-export class AgentService {
+export class AgentService implements OnApplicationBootstrap {
   constructor(
     @Inject(AGENT_RUNNER) private readonly runner: AgentRunner,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
@@ -254,11 +262,68 @@ export class AgentService {
     @Inject(AGENT_OPTIONS)
     private readonly options?: Pick<
       AgentModuleOptions,
-      'quota' | 'actionApprovalMode' | 'attachments'
+      'quota' | 'actionApprovalMode' | 'attachments' | 'tenancy'
     >,
     @Optional() private readonly queue?: ChatQueueService,
     @Optional() private readonly proposals?: ActionProposalService,
+    // The nestjs-context accessor, read structurally. Absent → the global slot, else tenancy off.
+    @Optional()
+    @Inject(CONTEXT_ACCESSOR)
+    private readonly contextAccessor?: unknown,
   ) {}
+
+  /**
+   * With tenancy on, the store must be able to tell a thread's tenant: fail the boot with the fix
+   * rather than answer every thread read `404` at runtime.
+   */
+  onApplicationBootstrap(): void {
+    if (!this.tenancy().enabled) return;
+    const missing = (['tenantOf', 'listThreadsForTenant'] as const).filter(
+      (method) => typeof this.store[method] !== 'function',
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `AgentModule tenancy is on, and ${this.store.constructor.name} does not implement ${missing.join(' / ')}, so thread reads cannot be scoped by tenant. Use a store that does (in-memory, Drizzle, MikroORM), implement them, or set AgentModule's \`tenancy: false\`.`,
+      );
+    }
+  }
+
+  /**
+   * The matching rule for a decision that comes from outside the thread's own actor (the console's
+   * approvals inbox): with tenancy on, a tool call on a thread the request's context tenant may not
+   * see is not found. A no-op with tenancy off.
+   */
+  async assertToolCallInRequestTenant(toolCallId: string): Promise<void> {
+    const filter = tenantRowFilter(this.tenancy());
+    if (filter === undefined) return;
+    const row =
+      typeof this.store.tenantOf === 'function' ? await this.store.tenantOf({ toolCallId }) : null;
+    if (row === null || !tenantRowVisible(filter, row.tenantRef)) {
+      throw new NotFoundException(`tool call ${toolCallId} not found`);
+    }
+  }
+
+  /** The agent's tenancy, read per call: the context's switch can be flipped at any time. */
+  private tenancy(): Tenancy {
+    return readTenancy(this.options?.tenancy ?? 'inherit', this.contextAccessor);
+  }
+
+  /**
+   * The matching rule for one thread, run or tool call: with tenancy on, a row of another tenant
+   * (or, for a request with a tenant, one with no tenant unless `nullRows: 'shared'`) is not found.
+   * The request's tenant is `actor.tenantRef` (the resolver's, else the context's), else none.
+   */
+  private async assertTenantVisible(
+    actor: Actor,
+    target: TenantTarget,
+    notFound: () => Error,
+  ): Promise<void> {
+    const filter = tenantRowFilter(this.tenancy(), actor.tenantRef);
+    if (filter === undefined) return;
+    const row =
+      typeof this.store.tenantOf === 'function' ? await this.store.tenantOf(target) : null;
+    if (row === null || !tenantRowVisible(filter, row.tenantRef)) throw notFound();
+  }
 
   /**
    * Decide one independent proposal through the scoped proposal service — what the native
@@ -1047,6 +1112,7 @@ export class AgentService {
     if (owner === null) {
       throw new RunNotActiveException(runId);
     }
+    await this.assertTenantVisible(actor, { runId }, () => new RunNotActiveException(runId));
     if (owner !== actor.id) {
       throw new ForbiddenException('run belongs to another actor');
     }
@@ -1077,8 +1143,23 @@ export class AgentService {
     return this.runner.cancel(runId);
   }
 
-  async listThreads(actorRef: string): Promise<ThreadSummary[]> {
-    const threads = await this.store.listThreads(actorRef);
+  /**
+   * The actor's threads. With tenancy on, only those the request's tenant may see: pass the
+   * {@link Actor} so a `tenantRef` its resolver set is the tenant; a bare `actorRef` uses the
+   * context's.
+   */
+  async listThreads(actor: Actor | string): Promise<ThreadSummary[]> {
+    const actorRef = typeof actor === 'string' ? actor : actor.id;
+    const filter = tenantRowFilter(
+      this.tenancy(),
+      typeof actor === 'string' ? undefined : actor.tenantRef,
+    );
+    const threads =
+      filter === undefined
+        ? await this.store.listThreads(actorRef)
+        : typeof this.store.listThreadsForTenant === 'function'
+          ? await this.store.listThreadsForTenant(actorRef, filter)
+          : [];
     return Promise.all(threads.map((thread) => this.toSummaryView(thread)));
   }
 
@@ -1108,6 +1189,11 @@ export class AgentService {
       if ((await this.store.ownerOfThread(threadId)) === null) {
         throw new NotFoundException(`thread ${threadId} not found`);
       }
+      await this.assertTenantVisible(
+        actor,
+        { threadId },
+        () => new NotFoundException(`thread ${threadId} not found`),
+      );
     } else {
       await this.assertOwnsThread(actor, threadId);
     }
@@ -1469,6 +1555,11 @@ export class AgentService {
     if (owner === null) {
       throw new NotFoundException(`thread ${threadId} not found`);
     }
+    await this.assertTenantVisible(
+      actor,
+      { threadId },
+      () => new NotFoundException(`thread ${threadId} not found`),
+    );
     if (owner !== actor.id) {
       throw new ForbiddenException('thread belongs to another actor');
     }
@@ -1484,6 +1575,11 @@ export class AgentService {
     if (owner === null) {
       throw new NotFoundException(`tool call ${toolCallId} not found`);
     }
+    await this.assertTenantVisible(
+      actor,
+      { toolCallId },
+      () => new NotFoundException(`tool call ${toolCallId} not found`),
+    );
     if (owner !== actor.id) {
       throw new ForbiddenException('tool call belongs to another actor');
     }
@@ -1530,6 +1626,11 @@ export class AgentService {
     if (requesterRef === null) {
       throw new NotFoundException(`tool call ${toolCallId} not found`);
     }
+    await this.assertTenantVisible(
+      actor,
+      { toolCallId },
+      () => new NotFoundException(`tool call ${toolCallId} not found`),
+    );
     const allowed = await mayDecideApproval(this.deps.forAgent().approvalPolicy, actor, {
       toolCallId,
       approver,
@@ -1582,6 +1683,11 @@ export class AgentService {
     if (owner === null) {
       throw new NotFoundException(`no active run ${runId}`);
     }
+    await this.assertTenantVisible(
+      actor,
+      { runId },
+      () => new NotFoundException(`no active run ${runId}`),
+    );
     if (owner !== actor.id) {
       throw new ForbiddenException('run belongs to another actor');
     }
@@ -1603,11 +1709,14 @@ export class AgentService {
    * against nobody.
    */
   recordUsage(input: AiUsageInput, options: AiUsageOptions = {}): Promise<AiUsageResult> {
+    // With tenancy on, a row that names no tenant is the context tenant's.
+    const tenantRef = input.tenantRef ?? contextTenantRef(this.tenancy());
     return recordAiUsage({
       store: this.store,
       quota: this.deps.forAgent().quota,
       day: utcDay(),
-      input,
+      input:
+        tenantRef !== undefined && input.tenantRef === undefined ? { ...input, tenantRef } : input,
       options,
       warn: (message: string) => usageLogger.warn(message),
     });

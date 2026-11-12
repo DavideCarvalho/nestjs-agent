@@ -214,6 +214,8 @@ export const agentTokenUsage = mysqlTable(
     index('agent_token_usage_created_idx').on(table.createdAt),
     index('agent_token_usage_thread_idx').on(table.threadId),
     index('agent_token_usage_feature_created_idx').on(table.feature, table.createdAt),
+    // `quota.per: 'tenant' | 'actor-in-tenant'` sums a tenant's window.
+    index('agent_token_usage_tenant_created_idx').on(table.tenantRef, table.createdAt),
   ],
 );
 

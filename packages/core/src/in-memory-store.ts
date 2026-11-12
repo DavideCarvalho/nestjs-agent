@@ -23,6 +23,7 @@ import {
   type RecordToolCallInput,
   type RecordUsageInput,
   type RunTimings,
+  type TenantTarget,
   type ThreadSettings,
   type ThreadSettingsReader,
   type ToolCallApprovalState,
@@ -40,6 +41,7 @@ import type {
   QueuedMessagePatch,
 } from './spi/chat-queue.js';
 import { type AgentUiComponent } from './stream-events.js';
+import { type TenantRowFilter, tenantRowVisible } from './tenancy.js';
 import type { ToolConfirmation } from './tool-presentation.js';
 import {
   type MessageFeedback,
@@ -370,6 +372,34 @@ export class InMemoryAgentStore
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit)
       .map((row) => this.toSummary(row));
+  }
+
+  async listThreadsForTenant(
+    actorRef: string,
+    filter: TenantRowFilter,
+    limit = 50,
+  ): Promise<ThreadSummary[]> {
+    return [...this.threads.values()]
+      .filter(
+        (row) =>
+          row.actorRef === actorRef && !row.transient && tenantRowVisible(filter, row.tenantRef),
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit)
+      .map((row) => this.toSummary(row));
+  }
+
+  async tenantOf(target: TenantTarget): Promise<{ tenantRef: string | null } | null> {
+    let thread: ThreadRow | undefined;
+    if ('threadId' in target) {
+      thread = this.threads.get(target.threadId);
+    } else if ('toolCallId' in target) {
+      const call = this.toolCalls.get(target.toolCallId);
+      thread = call === undefined ? undefined : this.threads.get(call.threadId);
+    } else {
+      thread = [...this.threads.values()].find((row) => row.activeStreamId === target.runId);
+    }
+    return thread === undefined ? null : { tenantRef: thread.tenantRef };
   }
 
   async softDeleteThread(threadId: string): Promise<void> {
@@ -1032,6 +1062,25 @@ export class InMemoryAgentStore
     return sumUsage(rows);
   }
 
+  async usageWindowsForTenant(
+    tenantRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+    actorRef?: string,
+  ): Promise<UsageTotals[]> {
+    return ranges.map(({ fromDay, toDay }) =>
+      sumUsage(
+        this.usage.filter(
+          (row) =>
+            row.tenantRef === tenantRef &&
+            (actorRef === undefined || row.actorRef === actorRef) &&
+            row.day >= fromDay &&
+            row.day <= toDay &&
+            row.countsTowardsQuota !== false,
+        ),
+      ),
+    );
+  }
+
   /** Test helper: read the recorded usage rows (modelId + token totals). */
   usageRows(): { actorRef: string; tokens: number; modelId: string }[] {
     return this.usage.map((row) => ({
@@ -1126,6 +1175,11 @@ export class InMemoryAgentStore
   }
 
   /** Governance read-model feed: thread metadata (title/actor/message count/last activity). */
+  /** The `tenant_ref` of a live thread, `undefined` when there is none (the governance feed's scope). */
+  threadTenantRef(threadId: string): string | null | undefined {
+    return this.threads.get(threadId)?.tenantRef;
+  }
+
   governanceThreads(): GovernanceThreadRow[] {
     return [...this.threads.values()].map((row) => ({
       threadId: row.id,

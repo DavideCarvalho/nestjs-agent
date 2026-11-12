@@ -1,0 +1,153 @@
+---
+title: Tenancy
+icon: Building2
+description: Scope threads, runs, usage, quota and the console by the request's organization, from @dudousxd/nestjs-context. Off until you turn it on.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The agent can follow the tenant of the request (the customer the data belongs to, usually an
+organization) that [`@dudousxd/nestjs-context`](/docs/context/tenancy) carries. With tenancy on, each
+tenant sees only its own threads, runs and spend, and quota can be counted per tenant.
+
+Nothing changes until you turn it on. The context's switch is off by default, and the agent works
+the same without `@dudousxd/nestjs-context` installed.
+
+---
+
+## Turning it on
+
+Turn on tenancy in the context, and set the tenant once your auth resolves the organization:
+
+```ts
+ContextModule.forRoot({ tenancy: { enabled: true, kinds: ['organization'] } });
+
+// in your auth guard / interceptor, after you resolve the organization
+Context.setTenant({ id: org.id, kind: 'organization' });
+```
+
+`AgentModule` follows that switch by default (`tenancy: 'inherit'`). Its own option:
+
+```ts
+AgentModule.forRoot({
+  actorResolver: requestUserActorResolver(),
+  // 'inherit' (default) | false | { enabled?, kinds?, nullRows? }
+  tenancy: { nullRows: 'tenantless' },
+});
+```
+
+| Field | Default | |
+|---|---|---|
+| `enabled` | `'inherit'` | `'inherit'` follows `ContextModule`'s `tenancy.enabled`. `true` / `false` override it for the agent. |
+| `kinds` | the context's | Tenant kinds the agent honours. A tenant of another kind counts as no tenant. |
+| `nullRows` | `'tenantless'` | Rows with no tenant (written before tenancy, or by a request without one). `'shared'` shows them to every tenant too. |
+
+`tenancy: false` keeps the agent out of tenancy even when the context turns it on.
+
+---
+
+## The actor's tenant
+
+When your `actorResolver` returns an actor without a `tenantRef`, the agent fills it with the
+context tenant's id. A resolver that sets `tenantRef` wins, so an app that already maps its own
+tenant keeps doing so:
+
+```ts
+// tenantRef comes from the context
+actorResolver: { resolve: (req) => ({ id: req.user.id, roles: req.user.roles }) },
+
+// tenantRef stays the clinic: the resolver set it
+actorResolver: { resolve: (req) => ({ id: req.user.id, tenantRef: req.user.clinicId }) },
+```
+
+A new thread belongs to its actor's tenant, and every usage row of its turns records it.
+
+---
+
+## What is scoped
+
+Each read compares the row's tenant with the request's tenant (the actor's `tenantRef`):
+
+| Request | Own tenant's rows | Another tenant's rows | Rows with no tenant |
+|---|---|---|---|
+| With a tenant | visible | not found | not found (visible with `nullRows: 'shared'`) |
+| Without a tenant | — | not found | visible |
+| Inside `Context.allTenants()` | visible | visible | visible |
+
+A row the request cannot see answers **404**, never 403, so ids of other tenants don't leak.
+Ownership still applies on top: a thread of another actor in the same tenant is still a 403.
+
+This covers:
+
+- `GET /threads`, a thread's detail, delete, fork (also with `authorized: true`), rename/update,
+  promote, truncate and its message queue;
+- run streams: subscribe, resume and cancel;
+- tool-call approve, reject, answer and skip, and action proposals;
+- the [governance dashboard](/docs/agent/guides/cost-and-governance#surfacing-it): spend, runs,
+  tool calls, approvals, threads and their details show the viewer's context tenant. Approving or
+  rejecting from the console's inbox checks the tool call's tenant too. Code inside
+  `Context.allTenants()` sees every tenant.
+
+`AgentService.listThreads(actor)` takes the actor, so a `tenantRef` your resolver set is the one
+used. A bare `actorRef` string uses the context tenant.
+
+---
+
+## Usage and quota
+
+`AgentService.recordUsage` records the context tenant on a row that names no `tenantRef`; an explicit
+`tenantRef` wins.
+
+The built-in quota sums by actor. `per` sums by tenant instead:
+
+```ts
+AgentModule.forRoot({
+  quota: {
+    limits: { month: { usd: 500 } },
+    per: 'tenant', // 'actor' (default) | 'tenant' | 'actor-in-tenant'
+  },
+});
+```
+
+| `per` | The windows sum |
+|---|---|
+| `'actor'` | the actor's own usage, in every tenant |
+| `'tenant'` | every actor's usage in the actor's tenant |
+| `'actor-in-tenant'` | the actor's own usage in that tenant |
+
+An actor without a `tenantRef` is counted per actor. `per` works whether tenancy is on or not; it
+reads `Actor.tenantRef`, which your resolver may set on its own. The ledger is indexed on
+`(tenant_ref, created_at)` for these reads; the Drizzle and MikroORM stores add the index on boot.
+
+---
+
+## Stores
+
+The in-memory, Drizzle and MikroORM stores support tenancy with no schema change: threads and usage
+rows already carry `tenant_ref`. A custom store needs these optional methods:
+
+| Method | Used for |
+|---|---|
+| `tenantOf({ threadId } \| { runId } \| { toolCallId })` | the tenant of a thread, of the thread streaming a run, or of a tool call's thread |
+| `listThreadsForTenant(actorRef, filter, limit?)` | `GET /threads` under tenancy |
+| `usageWindowsForTenant(tenantRef, ranges, actorRef?)` | `quota.per: 'tenant'` / `'actor-in-tenant'` |
+| governance `forTenant(filter)` | the dashboard under tenancy |
+
+`filter` is `{ tenant?: string; nulls: boolean }`: `tenant` set matches that tenant (plus rows with
+no tenant when `nulls`), no `tenant` matches only rows with no tenant.
+
+<Callout type="warn">
+With tenancy on, a store without `tenantOf` / `listThreadsForTenant` fails the boot, and a
+dashboard over governance queries without `forTenant` answers `501`, rather than show every
+tenant's data. A quota with `per: 'tenant'` on a store without `usageWindowsForTenant` fails at
+boot.
+</Callout>
+
+---
+
+## Existing data
+
+Threads and usage rows written before you turn tenancy on keep the tenant their actor had then.
+Rows with no tenant are visible only to requests without a tenant, or to every tenant with
+`nullRows: 'shared'`. To move them to a tenant, set `agent_thread.tenant_ref` and
+`agent_token_usage.tenant_ref` with SQL.

@@ -4,6 +4,7 @@
   "pages": [
     "tools",
     "identity-and-authorization",
+    "tenancy",
     "human-in-the-loop-and-durability",
     "action-proposals",
     "channels",

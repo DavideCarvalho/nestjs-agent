@@ -24,6 +24,7 @@ import type {
   RunToolCallRow,
   RunTrendPoint,
   RunWhere,
+  TenantRowFilter,
   ThreadActivityRow,
   ThreadMessageRow,
   ThreadMeta,
@@ -267,10 +268,43 @@ function toUsageInput(
  * store, and aggregates in-process (like `quotaToday`) so the day-bucketing stays engine-portable.
  */
 export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
+  /**
+   * `tenant`: the rows these queries may see (see {@link forTenant}); absent → every row. Threads by
+   * their `tenant_ref`; runs, messages, tool calls and generative-UI calls by their thread's; usage
+   * by its own `tenant_ref`.
+   */
   constructor(
     private readonly em: EntityManager,
     private readonly pricingStore: AgentPricingStore,
+    private readonly tenant?: TenantRowFilter,
   ) {}
+
+  /** These queries narrowed to the rows `filter` may see — the console's tenant scope. */
+  forTenant(filter: TenantRowFilter): MikroOrmGovernanceQueries {
+    return new MikroOrmGovernanceQueries(this.em, this.pricingStore, filter);
+  }
+
+  /**
+   * `where` narrowed by the matching rule on a `tenantRef` reached through `via`: the entity's own
+   * (`'self'`), its thread's, or its message's thread's. Unchanged without a scope.
+   */
+  private scoped<W extends object>(where: W, via: 'self' | 'thread' | 'message.thread'): W {
+    const filter = this.tenant;
+    if (filter === undefined) return where;
+    const condition =
+      filter.tenant === undefined
+        ? { tenantRef: null }
+        : filter.nulls
+          ? { $or: [{ tenantRef: filter.tenant }, { tenantRef: null }] }
+          : { tenantRef: filter.tenant };
+    const scope =
+      via === 'self'
+        ? condition
+        : via === 'thread'
+          ? { thread: condition }
+          : { message: { thread: condition } };
+    return { $and: [where, scope] } as unknown as W;
+  }
 
   private async loadPricing(): Promise<Map<string, ModelPrice>> {
     const prices = await this.pricingStore.listCurrentPrices();
@@ -294,7 +328,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = usageRangeBounds(range);
     const rows = await em.find(
       AgentTokenUsage,
-      { createdAt: { $gte: start, $lt: end } },
+      this.scoped({ createdAt: { $gte: start, $lt: end } }, 'self'),
       { fields: withFeature ? FEATURE_INPUT_FIELDS : USAGE_INPUT_FIELDS },
     );
     return rows.map(toUsageInput);
@@ -304,9 +338,10 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
     const em = this.em.fork();
     const { start, end } = dayBoundsUtc(range);
-    const rows = await em.find(AgentGenuiCall, {
-      createdAt: { $gte: start.getTime(), $lte: end.getTime() },
-    });
+    const rows = await em.find(
+      AgentGenuiCall,
+      this.scoped({ createdAt: { $gte: start.getTime(), $lte: end.getTime() } }, 'thread'),
+    );
     return summarizeGenuiCalls(rows.map(toGenuiCallRow));
   }
 
@@ -369,11 +404,11 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
     const em = this.em.fork();
-    const rows = await em.find(
-      AgentToolCall,
-      {},
-      { orderBy: { createdAt: 'desc', id: 'desc' }, limit, populate: ['message'] },
-    );
+    const rows = await em.find(AgentToolCall, this.scoped({}, 'message.thread'), {
+      orderBy: { createdAt: 'desc', id: 'desc' },
+      limit,
+      populate: ['message'],
+    });
     return rows.map((toolCall) => ({
       toolCallId: toolCall.id,
       toolName: toolCall.toolName,
@@ -454,11 +489,10 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
     const em = this.em.fork();
-    const threads = await em.find(
-      AgentThread,
-      { deletedAt: null },
-      { orderBy: { updatedAt: 'desc', id: 'desc' }, limit },
-    );
+    const threads = await em.find(AgentThread, this.scoped({ deletedAt: null }, 'self'), {
+      orderBy: { updatedAt: 'desc', id: 'desc' },
+      limit,
+    });
     return this.toThreadActivityRows(em, threads);
   }
 
@@ -469,11 +503,9 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     fields: F,
   ): Promise<Pick<AgentRun, F[number]>[]> {
     const { start, end } = dayBoundsUtc(range);
-    return em.find(
-      AgentRun,
-      { startedAt: { $gte: start, $lte: end } },
-      { fields: fields as unknown as never[] },
-    );
+    return em.find(AgentRun, this.scoped({ startedAt: { $gte: start, $lte: end } }, 'thread'), {
+      fields: fields as unknown as never[],
+    });
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
@@ -548,7 +580,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const runs = await em.find(
       AgentRun,
-      { startedAt: { $gte: start, $lte: end }, status: 'failed' },
+      this.scoped({ startedAt: { $gte: start, $lte: end }, status: 'failed' as const }, 'thread'),
       { fields: ['errorCode'] },
     );
     const byError = new Map<string, number>();
@@ -587,7 +619,10 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   async recentRuns(limit: number): Promise<RecentRunRow[]> {
     const em = this.em.fork();
-    const runs = await em.find(AgentRun, {}, { orderBy: { startedAt: 'desc', id: 'desc' }, limit });
+    const runs = await em.find(AgentRun, this.scoped({}, 'thread'), {
+      orderBy: { startedAt: 'desc', id: 'desc' },
+      limit,
+    });
     return runs.map(toRecentRunRow);
   }
 
@@ -600,7 +635,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const em = this.em.fork();
     const rows = await em.find(
       AgentToolCall,
-      { status: 'pending_approval' },
+      this.scoped({ status: 'pending_approval' as const }, 'message.thread'),
       {
         orderBy: { createdAt: 'asc', id: 'asc' },
         limit,
@@ -632,7 +667,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     const { start, end } = dayBoundsUtc(range);
     const calls = await em.find(
       AgentToolCall,
-      { createdAt: { $gte: start, $lte: end } },
+      this.scoped({ createdAt: { $gte: start, $lte: end } }, 'message.thread'),
       { fields: ['toolName', 'toolType', 'status', 'executionMs'] },
     );
     const byTool = new Map<
@@ -718,12 +753,16 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
           }
         : {}),
     };
-    const [rows, total] = await em.findAndCount(AgentToolCall, where, {
-      orderBy: { createdAt: 'desc', id: 'desc' },
-      limit: query.pageSize,
-      offset: (query.page - 1) * query.pageSize,
-      populate: ['message'],
-    });
+    const [rows, total] = await em.findAndCount(
+      AgentToolCall,
+      this.scoped(where, 'message.thread'),
+      {
+        orderBy: { createdAt: 'desc', id: 'desc' },
+        limit: query.pageSize,
+        offset: (query.page - 1) * query.pageSize,
+        populate: ['message'],
+      },
+    );
     return {
       rows: rows.map((toolCall) => ({
         toolCallId: toolCall.id,
@@ -766,7 +805,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
           }
         : {}),
     };
-    const [threads, total] = await em.findAndCount(AgentThread, where, {
+    const [threads, total] = await em.findAndCount(AgentThread, this.scoped(where, 'self'), {
       orderBy: { updatedAt: 'desc', id: 'desc' },
       limit: query.pageSize,
       offset: (query.page - 1) * query.pageSize,
@@ -801,7 +840,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
           }
         : {}),
     };
-    const [runs, total] = await em.findAndCount(AgentRun, where, {
+    const [runs, total] = await em.findAndCount(AgentRun, this.scoped(where, 'thread'), {
       orderBy: { startedAt: 'desc', id: 'desc' },
       limit: query.pageSize,
       offset: (query.page - 1) * query.pageSize,
@@ -845,12 +884,16 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
           }
         : {}),
     };
-    const [rows, total] = await em.findAndCount(AgentToolCall, where, {
-      orderBy: { createdAt: 'asc', id: 'asc' },
-      limit: query.pageSize,
-      offset: (query.page - 1) * query.pageSize,
-      populate: ['message', 'message.thread'],
-    });
+    const [rows, total] = await em.findAndCount(
+      AgentToolCall,
+      this.scoped(where, 'message.thread'),
+      {
+        orderBy: { createdAt: 'asc', id: 'asc' },
+        limit: query.pageSize,
+        offset: (query.page - 1) * query.pageSize,
+        populate: ['message', 'message.thread'],
+      },
+    );
     return {
       rows: rows.map((toolCall) => ({
         toolCallId: toolCall.id,
@@ -876,7 +919,9 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    */
   async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
     const em = this.em.fork();
-    const run = await em.findOne(AgentRun, { id: runId }, { populate: ['thread'] });
+    const run = await em.findOne(AgentRun, this.scoped({ id: runId }, 'thread'), {
+      populate: ['thread'],
+    });
     if (run === null) {
       return null;
     }
@@ -906,7 +951,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    */
   async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
     const em = this.em.fork();
-    const thread = await em.findOne(AgentThread, { id: query.threadId });
+    const thread = await em.findOne(AgentThread, this.scoped({ id: query.threadId }, 'self'));
     if (thread === null) {
       return null;
     }

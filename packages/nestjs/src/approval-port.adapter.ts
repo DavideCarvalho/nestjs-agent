@@ -12,7 +12,8 @@ import { ActionProposalService } from './proposals/action-proposal.service.js';
  * Deliberately WITHOUT `AgentService.approve`/`reject`'s ownership check: a console caller reaches
  * this port only through the dashboard's own guards (already authorized), not as the thread's own
  * actor — re-deriving "does this actor own the thread" here would reject a legitimate operator
- * decision. `opts.executedByRef` is an OPAQUE decider ref, not re-authorized against anything: it
+ * decision. With the agent's tenancy on, a tool call outside the request's context tenant is not
+ * found (`404`). `opts.executedByRef` is an OPAQUE decider ref, not re-authorized against anything: it
  * rides the `Decision` and the loop records it as the tool call's decider
  * (`decision.executedByRef ?? input.actor.id`, on both the executed and rejected paths).
  */
@@ -51,6 +52,7 @@ export class AgentApprovalPortAdapter implements AgentApprovalPort {
     toolCallId: string,
     opts?: { executedByRef?: string; remember?: boolean; decidedVia?: string },
   ): Promise<void> {
+    await this.agent.assertToolCallInRequestTenant(toolCallId);
     await this.agent.signalToolCall(toolCallId, {
       approved: true,
       ...(opts?.executedByRef !== undefined ? { executedByRef: opts.executedByRef } : {}),
@@ -63,6 +65,7 @@ export class AgentApprovalPortAdapter implements AgentApprovalPort {
     toolCallId: string,
     opts?: { executedByRef?: string; reason?: string; decidedVia?: string },
   ): Promise<void> {
+    await this.agent.assertToolCallInRequestTenant(toolCallId);
     await this.agent.signalToolCall(toolCallId, {
       approved: false,
       ...(opts?.executedByRef !== undefined ? { executedByRef: opts.executedByRef } : {}),

@@ -43,11 +43,14 @@ import { Observable } from 'rxjs';
 import type { ActorDirectory } from './actor-directory.js';
 import { parseApprovalDecision } from './parse-approval-decision.js';
 import { parsePriceInput } from './parse-price-input.js';
+import { type AgentTenancyOption, consoleTenantFilter } from './tenancy.js';
 import {
   AGENT_ACTOR_DIRECTORY,
   AGENT_APPROVAL_PORT,
   AGENT_GOVERNANCE_QUERIES,
+  AGENT_OPTIONS,
   AGENT_PRICING_STORE,
+  CONTEXT_ACCESSOR,
 } from './tokens.js';
 
 /** An actor-scoped row decorated with its resolved display label — `null` when unbound or unresolved. */
@@ -105,6 +108,11 @@ const APPROVAL_PORT_UNBOUND_MESSAGE =
   'read-only until then.';
 
 /** The message returned as a 501 when the bound read-model does not implement `genuiStats`. */
+const TENANT_SCOPE_UNSUPPORTED_MESSAGE =
+  'The agent console is tenant-scoped (AgentModule tenancy is on), and the bound ' +
+  'AGENT_GOVERNANCE_QUERIES store does not implement forTenant. Use a store adapter that does ' +
+  '(Drizzle, MikroORM, in-memory) or set AgentModule `tenancy: false`.';
+
 const GENUI_STATS_UNSUPPORTED_MESSAGE =
   'Generative UI telemetry is unavailable: the bound AGENT_GOVERNANCE_QUERIES store does not ' +
   'implement genuiStats. Use a store adapter that records generative-UI calls (recordGenuiCalls) ' +
@@ -181,15 +189,39 @@ export class DashboardService {
     @Optional()
     @Inject(AGENT_APPROVAL_PORT)
     private readonly approvalPort?: AgentApprovalPort,
+    @Optional()
+    @Inject(AGENT_OPTIONS)
+    private readonly agentOptions?: { tenancy?: AgentTenancyOption },
+    @Optional()
+    @Inject(CONTEXT_ACCESSOR)
+    private readonly contextAccessor?: unknown,
   ) {}
+
+  /**
+   * The read-model for this request: with the agent's tenancy on, narrowed to the viewer's context
+   * tenant (another tenant's thread or run is not found). A store without `forTenant` cannot be
+   * narrowed, so the console refuses (`501`) rather than show every tenant's rows.
+   */
+  private scoped(): AgentGovernanceQueries {
+    const filter = consoleTenantFilter(
+      this.agentOptions?.tenancy ?? 'inherit',
+      this.contextAccessor,
+    );
+    if (filter === undefined) return this.queries;
+    if (typeof this.queries.forTenant !== 'function') {
+      throw new NotImplementedException(TENANT_SCOPE_UNSUPPORTED_MESSAGE);
+    }
+    return this.queries.forTenant(filter);
+  }
 
   /** Spend/usage overview for a day range: by-model + by-actor spend and the daily trend, in parallel. */
   async spend(range: GovernanceRange): Promise<SpendOverview> {
+    const queries = this.scoped();
     const [byModel, byActorRaw, trend, byFeature] = await Promise.all([
-      this.queries.spendByModel(range),
-      this.queries.spendByActor(range),
-      this.queries.usageTrend(range),
-      this.queries.spendByFeature?.(range),
+      queries.spendByModel(range),
+      queries.spendByActor(range),
+      queries.usageTrend(range),
+      queries.spendByFeature?.(range),
     ]);
     const byActor = await this.withActorLabels(byActorRaw);
     return { byModel, byActor, trend, ...(byFeature !== undefined ? { byFeature } : {}) };
@@ -197,41 +229,42 @@ export class DashboardService {
 
   /** Top threads by cost for a day range (default 10, highest cost first). */
   async topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRowWithLabel[]> {
-    const rows = await this.queries.spendByThread(range, limit);
+    const rows = await this.scoped().spendByThread(range, limit);
     return this.withActorLabels(rows);
   }
 
   /** Run reliability for a day range: metrics, by-agent/by-error breakdowns and the trend, in parallel. */
   async reliability(range: GovernanceRange): Promise<ReliabilityOverview> {
+    const queries = this.scoped();
     const [metrics, byAgent, errors, trend] = await Promise.all([
-      this.queries.runMetrics(range),
-      this.queries.runsByAgent(range),
-      this.queries.runErrors(range),
-      this.queries.runTrend(range),
+      queries.runMetrics(range),
+      queries.runsByAgent(range),
+      queries.runErrors(range),
+      queries.runTrend(range),
     ]);
     return { metrics, byAgent, errors, trend };
   }
 
   /** Most recent runs (status/agent/duration/error) for the Reliability recent-runs table. */
   recentRuns(limit: number): Promise<RecentRunRow[]> {
-    return this.queries.recentRuns(limit);
+    return this.scoped().recentRuns(limit);
   }
 
   /** Most recent tool calls (status/type/thread) for the Runs & tools activity feed. */
   recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
-    return this.queries.recentToolCalls(limit);
+    return this.scoped().recentToolCalls(limit);
   }
 
   /** Paged, filterable tool calls for the Runs & tools activity table. */
   toolCallsPage(
     query: GovernancePageQuery<ToolCallWhere>,
   ): Promise<GovernancePage<ToolCallActivityRow>> {
-    return this.queries.toolCallsPage(query);
+    return this.scoped().toolCallsPage(query);
   }
 
   /** Paged, filterable runs for the Reliability recent-runs table. */
   runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
-    return this.queries.runsPage(query);
+    return this.scoped().runsPage(query);
   }
 
   /**
@@ -240,14 +273,14 @@ export class DashboardService {
    * {@link approvalsPage}, which reports how much of the backlog the cap hid.
    */
   pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
-    return this.queries.pendingApprovals(limit);
+    return this.scoped().pendingApprovals(limit);
   }
 
   /** Paged, filterable approvals inbox with a total — the backlog-safe read of the HITL queue. */
   approvalsPage(
     query: GovernancePageQuery<ApprovalWhere>,
   ): Promise<GovernancePage<PendingApprovalRow>> {
-    return this.queries.approvalsPage(query);
+    return this.scoped().approvalsPage(query);
   }
 
   /**
@@ -256,7 +289,7 @@ export class DashboardService {
    * that conflates them sends an operator looking for a bug that isn't there.
    */
   async runDetail(runId: string): Promise<RunDetailWithLabel> {
-    const detail = await this.queries.runDetail(runId);
+    const detail = await this.scoped().runDetail(runId);
     if (detail === null) {
       throw new NotFoundException(`No run "${runId}".`);
     }
@@ -267,7 +300,7 @@ export class DashboardService {
 
   /** One thread with its usage rollup, runs and messages. 404s on an unknown id, like {@link runDetail}. */
   async threadDetail(query: GovernanceThreadDetailQuery): Promise<ThreadDetailWithLabel> {
-    const detail = await this.queries.threadDetail(query);
+    const detail = await this.scoped().threadDetail(query);
     if (detail === null) {
       throw new NotFoundException(`No thread "${query.threadId}".`);
     }
@@ -277,7 +310,7 @@ export class DashboardService {
 
   /** Per-tool call/failure/rejection/latency rollup for a day range, for the Tools section. */
   toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
-    return this.queries.toolStats(range);
+    return this.scoped().toolStats(range);
   }
 
   /**
@@ -287,10 +320,11 @@ export class DashboardService {
    * same posture as an unbound pricing store — the console renders that as its own state.
    */
   async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
-    if (this.queries.genuiStats === undefined) {
+    const queries = this.scoped();
+    if (queries.genuiStats === undefined) {
       throw new NotImplementedException(GENUI_STATS_UNSUPPORTED_MESSAGE);
     }
-    return this.queries.genuiStats(range);
+    return queries.genuiStats(range);
   }
 
   /**
@@ -323,7 +357,7 @@ export class DashboardService {
 
   /** Most recent threads with rolled-up message/token counts. */
   async recentThreads(limit: number): Promise<ThreadActivityRowWithLabel[]> {
-    const rows = await this.queries.recentThreads(limit);
+    const rows = await this.scoped().recentThreads(limit);
     return this.withActorLabels(rows);
   }
 
@@ -334,7 +368,7 @@ export class DashboardService {
   async threadsPage(
     query: GovernancePageQuery<ThreadWhere>,
   ): Promise<GovernancePage<ThreadActivityRowWithLabel>> {
-    const page = await this.queries.threadsPage(query);
+    const page = await this.scoped().threadsPage(query);
     const rows = await this.withActorLabels(page.rows);
     return { ...page, rows };
   }

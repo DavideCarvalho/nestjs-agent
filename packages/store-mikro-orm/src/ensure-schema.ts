@@ -62,8 +62,9 @@ const SCHEMA_LOCK_NAME = 'agent_schema';
  * 5: the usage ledger beyond agent turns (`agent_token_usage.thread_id` nullable, `feature`, the
  * units, `metadata`) and the run timings (`agent_run.queue_ms`, `model_ms`, `tools_ms`, …).
  * 6: `agent_token_usage.counts_towards_quota`.
+ * 7: the `agent_token_usage (tenant_ref, created_at)` index (`quota.per: 'tenant'`).
  */
-const SCHEMA_REVISION = 6;
+const SCHEMA_REVISION = 7;
 
 /**
  * Non-destructive, fingerprint-gated schema management for the agent tables — the "autoSchema" the

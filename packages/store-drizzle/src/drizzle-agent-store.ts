@@ -22,6 +22,8 @@ import {
   type RecordToolCallInput,
   type RecordUsageInput,
   type StoredMessage,
+  type TenantRowFilter,
+  type TenantTarget,
   type ThreadDetail,
   type ThreadSettings,
   type ThreadSettingsReader,
@@ -328,6 +330,29 @@ export class DrizzleAgentStore
   }
 
   async listThreads(actorRef: string, limit = 50): Promise<ThreadSummary[]> {
+    return this.listThreadsWhere(actorRef, undefined, limit);
+  }
+
+  async listThreadsForTenant(
+    actorRef: string,
+    filter: TenantRowFilter,
+    limit = 50,
+  ): Promise<ThreadSummary[]> {
+    const column = this.t.agentThread.tenantRef;
+    const visible =
+      filter.tenant === undefined
+        ? isNull(column)
+        : filter.nulls
+          ? or(eq(column, filter.tenant), isNull(column))
+          : eq(column, filter.tenant);
+    return this.listThreadsWhere(actorRef, visible, limit);
+  }
+
+  private async listThreadsWhere(
+    actorRef: string,
+    tenant: SQL | undefined,
+    limit: number,
+  ): Promise<ThreadSummary[]> {
     const threads = await this.db
       .select()
       .from(this.t.agentThread)
@@ -336,6 +361,7 @@ export class DrizzleAgentStore
           eq(this.t.agentThread.actorRef, actorRef),
           eq(this.t.agentThread.transient, false),
           isNull(this.t.agentThread.deletedAt),
+          tenant,
         ),
       )
       .orderBy(desc(this.t.agentThread.updatedAt))
@@ -585,6 +611,31 @@ export class DrizzleAgentStore
       approver: row.approver,
       expiresAt: row.expiresAt?.toISOString() ?? null,
     };
+  }
+
+  async tenantOf(target: TenantTarget): Promise<{ tenantRef: string | null } | null> {
+    const thread = this.t.agentThread;
+    if ('toolCallId' in target) {
+      const [row] = await this.db
+        .select({ tenantRef: thread.tenantRef })
+        .from(this.t.agentToolCall)
+        .innerJoin(this.t.agentMessage, eq(this.t.agentToolCall.messageId, this.t.agentMessage.id))
+        .innerJoin(thread, eq(this.t.agentMessage.threadId, thread.id))
+        .where(eq(this.t.agentToolCall.id, target.toolCallId));
+      return row === undefined ? null : { tenantRef: row.tenantRef ?? null };
+    }
+    const [row] = await this.db
+      .select({ tenantRef: thread.tenantRef })
+      .from(thread)
+      .where(
+        and(
+          'threadId' in target
+            ? eq(thread.id, target.threadId)
+            : eq(thread.activeStreamId, target.runId),
+          isNull(thread.deletedAt),
+        ),
+      );
+    return row === undefined ? null : { tenantRef: row.tenantRef ?? null };
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
@@ -1302,6 +1353,32 @@ export class DrizzleAgentStore
     actorRef: string,
     ranges: readonly { fromDay: string; toDay: string }[],
   ): Promise<UsageTotals[]> {
+    return this.sumUsageWindows(eq(this.t.agentTokenUsage.actorRef, actorRef), ranges);
+  }
+
+  /**
+   * {@link usageWindows} over the tenant's rows (every actor's, or `actorRef`'s only), served by the
+   * `(tenant_ref, created_at)` index.
+   */
+  async usageWindowsForTenant(
+    tenantRef: string,
+    ranges: readonly { fromDay: string; toDay: string }[],
+    actorRef?: string,
+  ): Promise<UsageTotals[]> {
+    const usage = this.t.agentTokenUsage;
+    return this.sumUsageWindows(
+      and(
+        eq(usage.tenantRef, tenantRef),
+        actorRef !== undefined ? eq(usage.actorRef, actorRef) : undefined,
+      ) as SQL,
+      ranges,
+    );
+  }
+
+  private async sumUsageWindows(
+    owner: SQL,
+    ranges: readonly { fromDay: string; toDay: string }[],
+  ): Promise<UsageTotals[]> {
     if (ranges.length === 0) {
       return [];
     }
@@ -1326,11 +1403,12 @@ export class DrizzleAgentStore
     const [row] = (await this.db
       .select(columns)
       .from(usage)
-      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) index
-      // already narrows to one actor's window.
-      .where(
-        and(eq(usage.actorRef, actorRef), within(from, to), eq(usage.countsTowardsQuota, true)),
-      )) as Record<string, unknown>[];
+      // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) or
+      // (tenant_ref, created_at) index already narrows to one owner's window.
+      .where(and(owner, within(from, to), eq(usage.countsTowardsQuota, true)))) as Record<
+      string,
+      unknown
+    >[];
     return bounds.map((_, index) => ({
       usedTokens: Number(row?.[`tokens${index}`] ?? 0),
       costUsd: Number(row?.[`cost${index}`] ?? 0),

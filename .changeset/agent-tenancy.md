@@ -1,0 +1,19 @@
+---
+"@dudousxd/nestjs-agent-core": minor
+"@dudousxd/nestjs-agent": minor
+"@dudousxd/nestjs-agent-dashboard": minor
+"@dudousxd/nestjs-agent-testing": minor
+"@dudousxd/nestjs-agent-store-drizzle": minor
+"@dudousxd/nestjs-agent-store-mikro-orm": minor
+---
+
+Tenancy: the agent can follow the request's tenant from `@dudousxd/nestjs-context` (read structurally, no new dependency). Off unless the app turns it on.
+
+- `AgentModule.forRoot({ tenancy })`: `'inherit'` (default, follows `ContextModule`'s `tenancy.enabled`), `false`, or `{ enabled, kinds, nullRows }`.
+- With tenancy on, an actor your `actorResolver` returns without a `tenantRef` gets the context tenant's id. A resolver that sets `tenantRef` wins.
+- Thread and run reads apply the matching rule: thread list, detail, delete, fork, update and queue, run streams (subscribe, resume, cancel), tool-call decisions and action proposals. A thread or run of another tenant answers `404`, never `403`. Rows with no tenant are visible only to requests without one, unless `nullRows: 'shared'`.
+- The governance dashboard shows the viewer's context tenant, and its approvals inbox checks the tool call's tenant.
+- `AgentService.recordUsage` records the context tenant when the input names no `tenantRef`. `AgentService.listThreads` also takes an `Actor`.
+- `quota.per: 'actor' | 'tenant' | 'actor-in-tenant'` (default `'actor'`, today's behaviour) sums the built-in quota's windows by `Actor.tenantRef`.
+- Store SPI: optional `tenantOf`, `listThreadsForTenant` and `usageWindowsForTenant`, plus governance `forTenant`. The in-memory, Drizzle and MikroORM stores implement them. Drizzle and MikroORM add an `agent_token_usage (tenant_ref, created_at)` index on boot (MikroORM schema revision 7).
+- Core exports the local tenancy reader: `readTenancy`, `tenantRowFilter`, `tenantRowVisible` and `withContextTenant`.
