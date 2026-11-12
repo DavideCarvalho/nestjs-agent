@@ -12,12 +12,14 @@ import {
 } from './console-authorize.guard.js';
 import type { ConsoleAuthorize } from './console-authorize.js';
 import { DashboardService } from './dashboard.service.js';
+import { AgentDevToolsRegistration } from './dev-tools.js';
 import { normalizeDashboardPath } from './normalize-path.js';
 import {
   DASHBOARD_API_PATH,
   DASHBOARD_APPROVAL_ACTOR_REF,
   DASHBOARD_BASE_PATH,
   DASHBOARD_CONSOLE_OPTIONS,
+  DASHBOARD_DEV_TOOLS,
 } from './tokens.js';
 
 /**
@@ -74,6 +76,12 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * `executedByRef` unset — the explicit override wins outright, with no resolver fallback.
    */
   approvalActorRef?: (req: TReq) => string | undefined;
+  /**
+   * Register the console's reads as developer tools on the agent MCP server's dev endpoint
+   * (`/mcp/aviary`), gated by this console's `authorize`. Default: on when the console's routes are
+   * mounted, off with `routes: false`.
+   */
+  devTools?: boolean;
 }
 
 /** Leading slash, no trailing slash. */
@@ -99,6 +107,7 @@ export class AgentApiModule {
     routes?: boolean;
     approvalActorRef?: (req: TReq) => string | undefined;
     authorize?: ConsoleAuthorize;
+    devTools?: boolean;
   }): DynamicModule {
     // The warning for an omitted `authorize` logs with `routes: false` too: the exported guard still
     // answers 403 in production.
@@ -119,6 +128,8 @@ export class AgentApiModule {
         { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
         { provide: DASHBOARD_CONSOLE_OPTIONS, useValue: consoleOptions },
         DashboardConsoleAccess,
+        { provide: DASHBOARD_DEV_TOOLS, useValue: options.devTools ?? options.routes !== false },
+        AgentDevToolsRegistration,
       ],
       // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`), and the
       // access check `UseConsoleAuthorize()` runs.
@@ -147,6 +158,7 @@ export class AgentDashboardModule {
           ...(options.routes === false ? { routes: false } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           ...(options.authorize !== undefined ? { authorize: options.authorize } : {}),
+          ...(options.devTools !== undefined ? { devTools: options.devTools } : {}),
         }),
         ...(options.routes === false
           ? []

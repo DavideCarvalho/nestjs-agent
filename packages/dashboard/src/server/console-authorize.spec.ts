@@ -10,6 +10,7 @@ import {
   type ConsoleAuthorize,
   type ConsoleAuthorizeResult,
   type ConsoleAuthorizer,
+  anyAuthorize,
   authorizeByToken,
   normalizeConsoleResult,
   resolveConsoleAuthorize,
@@ -340,5 +341,51 @@ describe('authorizeByToken', () => {
   it('throws on an empty token, at config time', () => {
     expect(() => authorizeByToken({ token: '' })).toThrow(/empty/);
     expect(() => authorizeByToken({ token: undefined })).toThrow(/empty/);
+  });
+});
+
+describe('anyAuthorize', () => {
+  const TOKEN = 'console-token-123';
+
+  async function decideWith(...forms: ConsoleAuthorize[]) {
+    const ref = await moduleRefWith();
+    return resolveConsoleAuthorize(anyAuthorize(...forms), ref);
+  }
+
+  it('allows when any form allows: a token OR an admin session (a DI class)', async () => {
+    const decide = await decideWith(authorizeByToken({ token: TOKEN }), AdminOnly);
+    expect(await decide(httpContext({ headers: { authorization: `Bearer ${TOKEN}` } }))).toEqual({
+      allowed: true,
+    });
+    expect(await decide(httpContext({ user: { admin: true } }))).toEqual({ allowed: true });
+  });
+
+  it('is unauthenticated when any form said so, keeping the first redirectTo', async () => {
+    const decide = await decideWith(
+      () => false,
+      () => ({ redirectTo: '/login' }),
+      () => ({ allowed: false, reason: 'unauthenticated' }) as const,
+    );
+    expect(await decide(httpContext({}))).toEqual({
+      allowed: false,
+      reason: 'unauthenticated',
+      redirectTo: '/login',
+    });
+  });
+
+  it('is forbidden when every form forbids, and stops at the first allow', async () => {
+    const last = vi.fn(() => true);
+    const forbidden = await decideWith(
+      () => false,
+      () => ({ allowed: false, reason: 'forbidden' }) as const,
+    );
+    expect(await forbidden(httpContext({}))).toEqual({ allowed: false, reason: 'forbidden' });
+    const first = await decideWith(() => true, last);
+    expect(await first(httpContext({}))).toEqual({ allowed: true });
+    expect(last).not.toHaveBeenCalled();
+  });
+
+  it('needs at least one form', () => {
+    expect(() => anyAuthorize()).toThrow(/at least one/);
   });
 });
