@@ -1,5 +1,25 @@
 # @dudousxd/nestjs-agent-telescope
 
+## 0.10.0
+
+### Minor Changes
+
+- [#426](https://github.com/DavideCarvalho/nestjs-agent/pull/426) [`93179c1`](https://github.com/DavideCarvalho/nestjs-agent/commit/93179c121f7fe1b38dc57267958c3e82ef490270) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Require Node.js 24 or newer: `engines.node` is now `>=24` (was `>=20`, `>=22`, or unset). CI tests on Node 24 and 26. Upgrade Node, then the packages.
+
+  Removed, with no alias (see the docs' Upgrading page):
+
+  - `@dudousxd/nestjs-agent-core`: `AGENT_QUOTA_STORE` (nothing has bound it since the quota rework; use `AGENT_QUOTA_PROVIDER`), `announcedPoppyIssuer` (use `globalPoppyIssuer`, the same function), and `assertNoLegacyKitOptions` with the migration errors `genuiSandboxKit()`, `writeSandboxKitDocs()` and `defineSandbox()` threw for options removed in 0.53.
+  - `@dudousxd/nestjs-agent`: `AgentService.renameThread()`. Use `updateThread(actor, threadId, { title })`.
+  - `@dudousxd/nestjs-agent-mcp-server`: the `announcedPoppyIssuer` re-export. It now re-exports `globalPoppyIssuer`.
+  - `@dudousxd/nestjs-agent-telescope`: `agentToolsProvider()`, the ephemeral `agent.tools` table the extension no longer registered. Use `agentRecentToolCallsTableProvider()`.
+
+  `@dudousxd/nestjs-agent` and `@dudousxd/nestjs-agent-opencode` inject the run gateway by the `RunGateway` class instead of the deprecated `RUN_GATEWAY` alias from `@dudousxd/nestjs-durable`. It is the same DI token in every `@dudousxd/nestjs-durable` they support.
+
+### Patch Changes
+
+- Updated dependencies [[`93179c1`](https://github.com/DavideCarvalho/nestjs-agent/commit/93179c121f7fe1b38dc57267958c3e82ef490270)]:
+  - @dudousxd/nestjs-agent-core@0.64.0
+
 ## 0.9.8
 
 ### Patch Changes
