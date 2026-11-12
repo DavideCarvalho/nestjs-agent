@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.22.0
+
+### Minor Changes
+
+- [#424](https://github.com/DavideCarvalho/nestjs-agent/pull/424) [`493f295`](https://github.com/DavideCarvalho/nestjs-agent/commit/493f295d5b37ea468b0eb724ac4d14caa6788c77) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console switcher: when other Aviary consoles are mounted in the same app, the governance console's brand becomes a menu linking to the ones the viewer may open (each one's own `authorize` decides). The console lists itself as "Agents" while its routes are mounted. New `GET <apiBasePath>/consoles`, behind the console's `authorize`. The page now carries a JSON config block (`agent-dashboard-config`).
+
 ## 0.21.0
 
 ### Minor Changes
