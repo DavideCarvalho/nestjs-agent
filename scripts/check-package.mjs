@@ -44,6 +44,7 @@ for (const dir of dirs) {
     execFileSync(bin('publint'), ['run', '--strict', dir], { stdio: 'inherit' });
     execFileSync('pnpm', ['pack', '--pack-destination', out], { cwd: dir, stdio: 'ignore' });
     const tarball = readdirSync(out).find((f) => f.endsWith('.tgz'));
+    if (tarball === undefined) throw new Error(`pnpm pack wrote no .tgz to ${out}`);
     // `node16` profile: the packages need Node 24, so the pre-`exports` node10 resolution is moot.
     execFileSync(
       bin('attw'),
