@@ -1,0 +1,24 @@
+---
+title: Upgrading
+icon: CircleArrowUp
+description: What to change in your project for the Node.js 24 release of the nestjs-agent packages, and the APIs it removed.
+---
+
+## Node.js 24
+
+Every `@dudousxd/nestjs-agent*` package now requires **Node.js 24 or newer** (`engines.node` is `>=24`). The ≥1.x
+packages (`@dudousxd/nestjs-agent`, `-channels`, `-opencode`, `-poppy`) move to a new major, and the 0.x packages
+move to a new minor. Upgrade the Node.js version your app runs and builds on, then upgrade the packages. Under
+`engine-strict`, installing on Node 22 fails.
+
+## Removed APIs
+
+None of these has an alias.
+
+| Removed | Use instead |
+|---|---|
+| `AGENT_QUOTA_STORE` (`-core`). Nothing has bound or injected it since the quota rework | `AGENT_QUOTA_PROVIDER`, configured with `AgentModule.forRoot({ quota })` |
+| `AgentService.renameThread(actor, threadId, title)` (`@dudousxd/nestjs-agent`) | `updateThread(actor, threadId, { title })` |
+| `announcedPoppyIssuer()` (`-core`, re-exported by `-mcp-server`) | `globalPoppyIssuer()`, the same function |
+| `agentToolsProvider()` (`-telescope`), the ephemeral `agent.tools` table the extension no longer registered | `agentRecentToolCallsTableProvider()` (`agent.tools.recent`), which reads the durable tool-call read model |
+| `assertNoLegacyKitOptions()` (`-core`), and the errors `genuiSandboxKit()`, `writeSandboxKitDocs()` and `defineSandbox()` threw for options removed in `-core` 0.53 (`entry`, `include`, `tailwind`, `tailwindCss`, `css`) | Pass `components` and `styles` as the sandbox kit docs describe. Options from before 0.53 are no longer reported, just ignored |

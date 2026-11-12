@@ -113,9 +113,6 @@ export function globalPoppyIssuer(): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-/** The Poppy issuer announced in this process, if any — alias of {@link globalPoppyIssuer}. */
-export const announcedPoppyIssuer = globalPoppyIssuer;
-
 /**
  * Announce this app's Poppy endpoints to an authorization server in the same process — it reads
  * this slot when it builds `poppy.json`, so the conversation endpoint never has to be repeated in

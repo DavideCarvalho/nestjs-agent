@@ -27,9 +27,9 @@ import {
   settleUnsettledDelegation,
   streamFailure,
 } from '@dudousxd/nestjs-agent-core';
-import { RUN_GATEWAY, Workflow, WorkflowService } from '@dudousxd/nestjs-durable';
+import { Workflow, WorkflowService } from '@dudousxd/nestjs-durable';
 import {
-  type RunGateway,
+  RunGateway,
   type WorkflowCtx,
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
@@ -85,7 +85,7 @@ export class AgentRunWorkflow {
     // UNCONDITIONALLY below. Its presence decides how many checkpoints a turn writes, and that must
     // not vary between two pods of the same deployment; only the ANSWER may degrade, and the answer
     // is journaled.
-    @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
+    @Optional() @Inject(RunGateway) private readonly runs?: RunGateway,
     // The thread's message queue. Provided by `AgentModule` on every surface, so whether a turn
     // writes the queue checkpoints depends on the bound STORE (the same on every pod of a
     // deployment), never on which pod replays it. By token: this file ships in the `/durable`

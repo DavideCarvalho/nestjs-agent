@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http';
-import { announcedPoppyIssuer } from '@dudousxd/nestjs-agent-core';
+import { globalPoppyIssuer } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, NotFoundException, Req, type Type } from '@nestjs/common';
 import type { AgentMcpServerModuleOptions } from './agent-mcp-server.options.js';
 import { AGENT_MCP_SERVER_OPTIONS } from './tokens.js';
@@ -28,7 +28,7 @@ export interface ProtectedResourceMetadata {
 
 /** Whether a metadata document is served: an `oauth` option, or an announced Poppy issuer. */
 export function servesProtectedResourceMetadata(oauth: McpOAuthOptions | undefined): boolean {
-  return oauth !== undefined || announcedPoppyIssuer() !== undefined;
+  return oauth !== undefined || globalPoppyIssuer() !== undefined;
 }
 
 /**
@@ -42,7 +42,7 @@ export function protectedResourceMetadata(input: {
   resource: string;
 }): ProtectedResourceMetadata | undefined {
   const { oauth, resource } = input;
-  const poppyIssuer = announcedPoppyIssuer();
+  const poppyIssuer = globalPoppyIssuer();
   const servers = [
     ...new Set([
       ...(oauth !== undefined ? [oauth.issuer] : []),

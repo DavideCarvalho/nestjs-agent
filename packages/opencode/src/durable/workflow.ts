@@ -1,7 +1,7 @@
 import type { AgentRunInput, Decision, HumanReply } from '@dudousxd/nestjs-agent-core';
-import { RUN_GATEWAY, Workflow } from '@dudousxd/nestjs-durable';
+import { Workflow } from '@dudousxd/nestjs-durable';
 import {
-  type RunGateway,
+  RunGateway,
   SignalTimeoutError,
   type WorkflowCtx,
   isWorkflowControlFlowSignal,
@@ -45,7 +45,7 @@ export function decisionToken(runId: string, toolCallId: string): string {
 export class OpenCodeRunWorkflow {
   constructor(
     private readonly turns: OpenCodeTurns,
-    @Optional() @Inject(RUN_GATEWAY) private readonly runs?: RunGateway,
+    @Optional() @Inject(RunGateway) private readonly runs?: RunGateway,
   ) {}
 
   async run(ctx: WorkflowCtx, input: AgentRunInput): Promise<OpenCodeRunWorkflowResult> {

@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import type { Actor } from '@dudousxd/nestjs-agent-core';
-import { DurableModule, RUN_GATEWAY } from '@dudousxd/nestjs-durable';
-import { InMemoryStateStore, type RunGateway } from '@dudousxd/nestjs-durable-core';
+import { DurableModule } from '@dudousxd/nestjs-durable';
+import { InMemoryStateStore, RunGateway } from '@dudousxd/nestjs-durable-core';
 import { EventEmitterTransport } from '@dudousxd/nestjs-durable-transport-event-emitter';
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -42,7 +42,7 @@ describe('openCodeDurable start options', () => {
     const { runId } = await h.service.chat({ actor, message: 'hi' });
     expect(runId).toMatch(/^turn:t1:[0-9a-f-]{36}$/);
     await frames(h.service, runId);
-    const detail = await h.app.get<RunGateway>(RUN_GATEWAY).getRunDetail(runId);
+    const detail = await h.app.get(RunGateway).getRunDetail(runId);
     expect(detail?.run.tags).toEqual(expect.arrayContaining(['chat', 'tenant:t1']));
   });
 

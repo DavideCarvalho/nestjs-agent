@@ -36,7 +36,6 @@ export {
   agentRunsProvider,
   agentRunsTtftDistributionProvider,
   agentTokensProvider,
-  agentToolsProvider,
   agentToolStatusProvider,
   toFailureCodeSegments,
   toTtftDistribution,

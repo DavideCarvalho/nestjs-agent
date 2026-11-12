@@ -15,10 +15,10 @@ import {
   releaseThreadRun,
   settleUnsettledDelegation,
 } from '@dudousxd/nestjs-agent-core';
-import { RUN_GATEWAY, WorkflowService } from '@dudousxd/nestjs-durable';
+import { WorkflowService } from '@dudousxd/nestjs-durable';
 import {
   type RunDetail,
-  type RunGateway,
+  RunGateway,
   isWorkflowControlFlowSignal,
 } from '@dudousxd/nestjs-durable-core';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
@@ -140,7 +140,7 @@ export class DurableAgentRunner implements AgentRunner {
     // The runtime's own read/control surface, bound by `DurableModule` under BOTH topologies — the
     // store-backed gateway on an operator, a transport proxy on a tenant. `WorkflowService` has no
     // cancel, and reaching for `WorkflowEngine` instead would work only on the operator.
-    @Inject(RUN_GATEWAY) private readonly runs: RunGateway,
+    @Inject(RunGateway) private readonly runs: RunGateway,
     @Inject(AGENT_STORE) private readonly store: AgentStore,
     @Inject(AGENT_SINK) private readonly sink: TokenStreamSink,
     // By token: this file ships in the `/durable` bundle, whose copy of the `ChatQueueService`

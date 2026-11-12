@@ -29,7 +29,6 @@ import { generateSandboxKitDocs } from './docs.js';
 import {
   type SandboxKitFiles,
   type SandboxKitSourceOptions,
-  assertNoLegacyKitOptions,
   resolveSandboxKitFiles,
 } from './files.js';
 import {
@@ -205,7 +204,6 @@ export function createGenuiSandboxKitPlugin(
   options: GenuiSandboxKitOptions,
   defaults: GenuiSandboxKitDefaults,
 ): GenuiSandboxKitPlugin {
-  assertNoLegacyKitOptions(options, 'genuiSandboxKit');
   // Read once: the kit's identity (its urls, files, manifest keys) does not change while it runs.
   const kitName = options.name;
   assertSandboxKitName(kitName);

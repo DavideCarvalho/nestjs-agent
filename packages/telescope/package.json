@@ -54,5 +54,8 @@
     "@dudousxd/nestjs-telescope": "1.29.1",
     "tsup": "8.5.1",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
