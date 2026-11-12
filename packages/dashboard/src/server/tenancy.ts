@@ -54,7 +54,7 @@ export interface ConsoleTenancy {
 
 /**
  * The viewer's Organization, labelled through the app's `tenancy.label` (context 2.1+), else slug,
- * else id. Never throws: a `required` tenant that is missing reads as `tenantless`.
+ * else id. A `required` tenant that is missing reads as `tenantless`; other errors throw.
  */
 export async function consoleTenancy(
   option: AgentTenancyOption = 'inherit',
@@ -67,7 +67,9 @@ export async function consoleTenancy(
   let filter: ReturnType<typeof tenancy.filter>;
   try {
     filter = tenancy.filter();
-  } catch {
+  } catch (error) {
+    // Only a missing required tenant reads as "No organization"; any other failure surfaces.
+    if ((error as { code?: unknown } | null)?.code !== 'E_TENANT_REQUIRED') throw error;
     return { enabled: true, scope: 'tenantless', tenant: null, chain: [] };
   }
   if (filter.mode === 'system' || filter.mode === 'all') {
@@ -84,7 +86,7 @@ export async function consoleTenancy(
     return {
       id: level.id,
       kind: level.kind,
-      label: typeof label === 'string' && label !== '' ? label : level.id,
+      label: typeof label === 'string' && label !== '' ? label : level.slug || level.id,
     };
   };
   return {
