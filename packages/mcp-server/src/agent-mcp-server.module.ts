@@ -8,6 +8,13 @@ import type {
   AgentMcpServerModuleAsyncOptions,
   AgentMcpServerModuleOptions,
 } from './agent-mcp-server.options.js';
+import {
+  AGENT_DEV_TOOLS_OPTIONS,
+  AgentDevToolsEndpoint,
+  AgentDevToolsGuard,
+  agentDevToolsController,
+} from './dev-tools/endpoint.js';
+import { type ResolvedDevToolsOptions, resolveDevToolsOptions } from './dev-tools/options.js';
 import { McpChallengeFilter } from './mcp-challenge.js';
 import { mcpProtectedResourceController } from './protected-resource.js';
 import { McpRouteDiscoveryService } from './routes/mcp-route-discovery.service.js';
@@ -50,6 +57,7 @@ const DEFAULT_PATH = 'mcp';
 export class AgentMcpServerModule {
   static forRoot(options: AgentMcpServerModuleOptions): DynamicModule {
     const path = options.path === undefined ? DEFAULT_PATH : options.path;
+    const devTools = resolveDevToolsOptions(options.devTools, path);
     const shared = optionsModule(
       path,
       { provide: AGENT_MCP_SERVER_OPTIONS, useValue: options },
@@ -58,6 +66,8 @@ export class AgentMcpServerModule {
     return moduleFor({
       path,
       options: shared,
+      devTools,
+      devToolsDecorators: options.devTools === false ? [] : (options.devTools?.decorators ?? []),
       mcp: McpModule.forRoot({
         ...options.mcp,
         name: options.name,
@@ -69,6 +79,7 @@ export class AgentMcpServerModule {
 
   static forRootAsync(options: AgentMcpServerModuleAsyncOptions): DynamicModule {
     const path = options.path === undefined ? DEFAULT_PATH : options.path;
+    const devTools = resolveDevToolsOptions(options.devTools, path);
     const shared = optionsModule(
       path,
       {
@@ -81,6 +92,8 @@ export class AgentMcpServerModule {
     return moduleFor({
       path,
       options: shared,
+      devTools,
+      devToolsDecorators: options.devTools === false ? [] : (options.devTools?.decorators ?? []),
       mcp: McpModule.forRootAsync({
         // `imports` (the options module, which the factory injects from) comes with the structure.
         inject: [AGENT_MCP_SERVER_OPTIONS],
@@ -105,6 +118,38 @@ export class AgentMcpServerOptionsModule {}
  */
 @Module({})
 export class AgentMcpProtectedResourceModule {}
+
+/**
+ * The dev MCP endpoint (`/mcp/aviary`): the developer tools Aviary libs register, each gated by its
+ * own console `authorize`. Nothing of the product endpoint (auth, registry, `allowedTools`,
+ * `actions`) is shared with it.
+ */
+@Module({})
+export class AgentDevToolsModule {}
+
+function devToolsModule(
+  devTools: ResolvedDevToolsOptions,
+  decorators: ClassDecorator[],
+  shared: DynamicModule,
+): DynamicModule {
+  return {
+    module: AgentDevToolsModule,
+    imports: [shared],
+    controllers: [
+      agentDevToolsController(devTools.path, [
+        CanAnyone(),
+        ...decorators,
+        UseGuards(AgentDevToolsGuard),
+      ]),
+    ],
+    providers: [
+      { provide: AGENT_DEV_TOOLS_OPTIONS, useValue: devTools },
+      AgentDevToolsEndpoint,
+      AgentDevToolsGuard,
+    ],
+    exports: [AgentDevToolsEndpoint],
+  };
+}
 
 /**
  * How `@nestjs/mcp`'s endpoint is mounted: at `path`, open to `@nestjs/authorization`'s global
@@ -151,6 +196,8 @@ function optionsModule(
 function moduleFor(input: {
   path: string | false;
   options: DynamicModule;
+  devTools: ResolvedDevToolsOptions | undefined;
+  devToolsDecorators: ClassDecorator[];
   mcp: DynamicModule;
 }): DynamicModule {
   return {
@@ -168,6 +215,9 @@ function moduleFor(input: {
               controllers: [mcpProtectedResourceController(input.path)],
             },
           ]),
+      ...(input.devTools === undefined
+        ? []
+        : [devToolsModule(input.devTools, input.devToolsDecorators, input.options)]),
     ],
     providers: [AgentMcpServerBinding, McpRouteDispatcher, McpRouteDiscoveryService],
     // What a controller of the app's own needs to serve the endpoint with `path: false`:

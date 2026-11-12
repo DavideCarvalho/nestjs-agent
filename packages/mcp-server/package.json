@@ -52,7 +52,8 @@
     "@dudousxd/nestjs-agent-core": ">=0.57.0 <1.0.0",
     "@nestjs/common": "^12.0.0",
     "@nestjs/core": "^12.0.0",
-    "@nestjs/mcp": ">=0.0.4 <0.0.5"
+    "@nestjs/mcp": ">=0.0.4 <0.0.5",
+    "@dudousxd/nestjs-diagnostics": ">=0.7.0 <1.0.0"
   },
   "devDependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",
@@ -72,9 +73,15 @@
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "@dudousxd/nestjs-diagnostics": ">=0.7.0 <1.0.0"
   },
   "engines": {
     "node": ">=22"
+  },
+  "peerDependenciesMeta": {
+    "@dudousxd/nestjs-diagnostics": {
+      "optional": true
+    }
   }
 }

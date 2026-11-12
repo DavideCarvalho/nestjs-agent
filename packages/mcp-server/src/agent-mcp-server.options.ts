@@ -2,6 +2,7 @@ import type { Actor, ActorResolver, EmptyRoles } from '@dudousxd/nestjs-agent-co
 import type { DynamicModule, InjectionToken, OptionalFactoryDependency } from '@nestjs/common';
 import type { McpModuleOptions } from '@nestjs/mcp';
 import type { McpToolContextResolver } from './agent-mcp-server.js';
+import type { AgentDevToolsOptions } from './dev-tools/options.js';
 import type { McpActionPolicy } from './exposed-tools.js';
 import type { McpOAuthOptions } from './protected-resource.js';
 import type { McpRoutePrincipalFactory } from './routes/mcp-route-dispatcher.js';
@@ -90,6 +91,12 @@ export interface AgentMcpServerModuleOptions {
    * `trust proxy`, and its `Host`).
    */
   baseUrl?: string;
+  /**
+   * The dev MCP endpoint (`/mcp/aviary` by default): the developer tools Aviary libs register (the
+   * agent dashboard's governance reads, and the other consoles'), each lib gated by its own console
+   * `authorize`. On by default; `false` mounts nothing. See {@link AgentDevToolsOptions}.
+   */
+  devTools?: false | AgentDevToolsOptions;
 }
 
 /** Settings for the tools derived from `@Mcp()` controller routes. */
@@ -120,4 +127,6 @@ export interface AgentMcpServerModuleAsyncOptions {
   path?: string | false;
   /** As {@link AgentMcpServerModuleOptions.decorators}: static, so it lives here. */
   decorators?: ClassDecorator[];
+  /** As {@link AgentMcpServerModuleOptions.devTools}: static, so it lives here. */
+  devTools?: false | AgentDevToolsOptions;
 }

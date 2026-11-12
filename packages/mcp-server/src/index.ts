@@ -1,4 +1,5 @@
 export {
+  AgentDevToolsModule,
   AgentMcpProtectedResourceModule,
   AgentMcpServerModule,
   AgentMcpServerOptionsModule,
@@ -98,3 +99,4 @@ export {
   AGENT_MCP_SERVER_OPTIONS,
   AGENT_MCP_SERVER_PATH,
 } from './tokens.js';
+export * from './dev-tools/index.js';
