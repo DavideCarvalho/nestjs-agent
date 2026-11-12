@@ -69,9 +69,11 @@ describe('ConsoleSearch', () => {
     await type('run 1');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`${ENDPOINT}?q=run%201`);
-    const group = screen.getByRole('group', { name: 'Workflows' });
+    const group = screen.getByRole('region', { name: 'Workflows' });
     expect(group.textContent).toContain('Run run-1');
-    expect(screen.getByRole('option').getAttribute('href')).toBe('/durable#/runs/run-1');
+    expect(screen.getByRole('link', { name: /Run run-1/ }).getAttribute('href')).toBe(
+      '/durable#/runs/run-1',
+    );
     expect(screen.getByRole('status').textContent).toContain('did not answer in time');
 
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
@@ -91,10 +93,26 @@ describe('ConsoleSearch', () => {
     await type('a');
     fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Enter' });
     expect(navigate).toHaveBeenCalledWith('/a');
+    // Navigating closes the palette (a hit in this console is only a hash change).
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
 
     serve({ results: [], partial: false });
     await type('zzz');
     expect(screen.getByText('No results.')).toBeTruthy();
+  });
+
+  it('reads a failed search as partial, not as no results', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 500 })),
+    );
+    render(<Palette />);
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+    await type('x');
+    expect(screen.queryByText('No results.')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('did not answer in time');
   });
 
   it('drops unsafe hrefs and malformed groups', () => {
@@ -103,7 +121,12 @@ describe('ConsoleSearch', () => {
         partial: false,
         results: [
           { id: 'x', title: 'X', icon: 'nope', hits: [{ title: 'bad', href: '//evil.test' }] },
-          { id: 'y', title: 'Y', icon: 'media', hits: [{ title: 'ok', href: '/y' }, 'junk'] },
+          {
+            id: 'y',
+            title: 'Y',
+            icon: 'media',
+            hits: [{ title: 'ok', href: '/y' }, { title: '', href: '/blank' }, 'junk'],
+          },
           { title: 'no id', hits: [] },
         ],
       }),

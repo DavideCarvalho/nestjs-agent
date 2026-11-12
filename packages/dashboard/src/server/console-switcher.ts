@@ -154,7 +154,7 @@ export async function withAviaryProbe<T>(
   try {
     return await fn();
   } finally {
-    delete request.aviaryProbe;
+    Reflect.deleteProperty(request, 'aviaryProbe');
   }
 }
 
@@ -207,7 +207,8 @@ export function sanitizeSearchHits(value: unknown, limit: number): AviaryConsole
  * console with a `search` whose `authorize` allows the viewer (run as a probe, see
  * {@link withAviaryProbe}). Each console gets `timeoutMs` for its `authorize` and again for its
  * `search`, and keeps `limit` hits; a console that times out or fails is left out and marks the
- * answer `partial`. A denial is not partial: it is simply not searched. All in parallel.
+ * answer `partial`. A denial is not partial: it is simply not searched. The gates run in parallel,
+ * then the searches in parallel, so no `search` ever runs while the request carries the probe.
  */
 export async function searchConsoles(
   registry: AviaryConsoleRegistry | undefined,
@@ -223,23 +224,36 @@ export async function searchConsoles(
   const searchable = (registry?.entries ?? [])
     .filter((entry) => typeof entry.search === 'function' && isSameOriginPath(entry.path))
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-  const outcomes = await withAviaryProbe(context, () =>
+  // First every other console's gate, as a probe (in parallel, one budget each); then the searches,
+  // never under the probe marker: a search is a real use of the console, not a visibility check.
+  const gates = await withAviaryProbe(context, () =>
     Promise.all(
-      searchable.map(async (entry) => {
-        if (entry.id !== selfId) {
-          const gate = await within(() => entry.authorize(context), timeoutMs);
-          if (!gate.ok) return { entry, hits: [], partial: true };
-          if (gate.value?.allowed !== true) return { entry, hits: [], partial: false };
-        }
-        const found = await within(
-          () => (entry.search as NonNullable<AviaryConsoleEntry['search']>)(context, q, limit),
-          timeoutMs,
-        );
-        return found.ok
-          ? { entry, hits: sanitizeSearchHits(found.value, limit), partial: false }
-          : { entry, hits: [], partial: true };
-      }),
+      searchable.map(async (entry) =>
+        entry.id === selfId
+          ? ('allowed' as const)
+          : await within(() => entry.authorize(context), timeoutMs).then((gate) =>
+              !gate.ok
+                ? ('late' as const)
+                : gate.value?.allowed === true
+                  ? ('allowed' as const)
+                  : ('denied' as const),
+            ),
+      ),
     ),
+  );
+  const outcomes = await Promise.all(
+    searchable.map(async (entry, index) => {
+      const gate = gates[index];
+      if (gate === 'late') return { entry, hits: [], partial: true };
+      if (gate !== 'allowed') return { entry, hits: [], partial: false };
+      const found = await within(
+        () => (entry.search as NonNullable<AviaryConsoleEntry['search']>)(context, q, limit),
+        timeoutMs,
+      );
+      return found.ok
+        ? { entry, hits: sanitizeSearchHits(found.value, limit), partial: false }
+        : { entry, hits: [], partial: true };
+    }),
   );
   return {
     version: 1,

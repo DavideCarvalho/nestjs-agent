@@ -153,6 +153,22 @@ describe('searchConsoles', () => {
 });
 
 describe('the probe marker', () => {
+  it('is never set while a search runs, this console’s or another’s', async () => {
+    const req: Record<string, unknown> = {};
+    const seen: unknown[] = [];
+    const search = async () => {
+      seen.push(req.aviaryProbe);
+      return [hit('x')];
+    };
+    await searchConsoles(
+      registry(entry({ id: 'agent', search }), entry({ id: 'durable', search })),
+      'agent',
+      contextOver(req),
+      'q',
+    );
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
   it('is set on the request while another console’s authorize runs, and removed after', async () => {
     const req: Record<string, unknown> = {};
     const seen: unknown[] = [];

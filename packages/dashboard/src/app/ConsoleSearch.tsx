@@ -38,7 +38,7 @@ export function sanitizeSearchAnswer(value: unknown): ConsoleSearchAnswer {
     const hits = g.hits.flatMap((hit: unknown): ConsoleSearchHit[] => {
       if (typeof hit !== 'object' || hit === null) return [];
       const h = hit as Record<string, unknown>;
-      if (typeof h.title !== 'string' || !isSafeHref(h.href)) return [];
+      if (typeof h.title !== 'string' || h.title === '' || !isSafeHref(h.href)) return [];
       return [
         {
           title: h.title,
@@ -64,9 +64,10 @@ export async function fetchConsoleSearch(
       credentials: 'same-origin',
       ...(signal !== undefined ? { signal } : {}),
     });
-    return res.ok ? sanitizeSearchAnswer(await res.json()) : { results: [], partial: false };
+    // A failed search is partial, never "no results": nothing was searched.
+    return res.ok ? sanitizeSearchAnswer(await res.json()) : { results: [], partial: true };
   } catch {
-    return { results: [], partial: false };
+    return { results: [], partial: true };
   }
 }
 
@@ -136,8 +137,7 @@ export function ConsoleSearch({
 
   if (!open) return null;
 
-  const options = () =>
-    Array.from(list.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+  const options = () => Array.from(list.current?.querySelectorAll<HTMLElement>('a[href]') ?? []);
   const onKey = (event: ReactKeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -163,12 +163,12 @@ export function ConsoleSearch({
       }}
       data-aviary-search=""
     >
-      <div
-        role="dialog"
+      <dialog
+        open
         aria-modal="true"
         aria-label="Search all consoles"
         onKeyDown={onKey}
-        className="w-full max-w-lg overflow-hidden rounded-lg border border-line bg-popover shadow-lg shadow-black/50"
+        className="static m-0 w-full max-w-lg overflow-hidden rounded-lg border border-line bg-popover p-0 text-foreground shadow-lg shadow-black/50"
       >
         <input
           ref={input}
@@ -178,6 +178,7 @@ export function ConsoleSearch({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && first !== undefined) {
               event.preventDefault();
+              onOpenChange(false);
               navigate(first.href);
             }
           }}
@@ -185,14 +186,9 @@ export function ConsoleSearch({
           aria-label="Search all consoles"
           className="w-full border-b border-line bg-transparent px-3 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
         />
-        <div
-          ref={list}
-          role="listbox"
-          aria-label="Results"
-          className="max-h-[60vh] overflow-y-auto p-1"
-        >
+        <div ref={list} className="max-h-[60vh] overflow-y-auto p-1">
           {answer.results.map((group) => (
-            <div key={group.id} role="group" aria-label={group.title} className="py-1">
+            <section key={group.id} aria-label={group.title} className="py-1">
               <div className="flex items-center gap-2 px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
                 <ConsoleIcon icon={group.icon} />
                 {group.title}
@@ -200,9 +196,9 @@ export function ConsoleSearch({
               {group.hits.map((hit) => (
                 <a
                   key={hit.href}
-                  role="option"
-                  aria-selected="false"
                   href={hit.href}
+                  // A hit in this console is only a hash change: close the palette over it.
+                  onClick={() => onOpenChange(false)}
                   className="block rounded-md px-2 py-1.5 text-sm text-foreground outline-none hover:bg-panel focus:bg-panel"
                 >
                   <span className="block truncate">{hit.title}</span>
@@ -213,18 +209,18 @@ export function ConsoleSearch({
                   )}
                 </a>
               ))}
-            </div>
+            </section>
           ))}
-          {q.trim() !== '' && !loading && answer.results.length === 0 && (
+          {q.trim() !== '' && !loading && answer.results.length === 0 && !answer.partial && (
             <p className="px-2 py-3 text-sm text-muted-foreground">No results.</p>
           )}
           {answer.partial && (
-            <p className="px-2 py-1.5 text-[11px] text-muted-foreground" role="status">
+            <output className="block px-2 py-1.5 text-[11px] text-muted-foreground">
               Some consoles did not answer in time; their results are missing.
-            </p>
+            </output>
           )}
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
