@@ -190,7 +190,9 @@ describe('the model a turn runs on', () => {
     await send(server, 'admin', { threadId }, 'ADMIN');
     expect(seen.at(-1)).toBe('fast');
 
-    expect((await patch({ model: 'legacy' })).status).toBe(400);
+    const refused = await patch({ model: 'legacy' });
+    expect(refused.status).toBe(400);
+    expect(refused.body).toMatchObject({ code: 'model_not_allowed' });
     expect((await patch({ model: null })).status).toBe(200);
     expect((await service.getThread({ id: 'admin' }, threadId))?.model).toBeNull();
     await send(server, 'admin', { threadId }, 'ADMIN');

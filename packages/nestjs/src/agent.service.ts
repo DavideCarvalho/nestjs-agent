@@ -572,14 +572,14 @@ export class AgentService implements OnApplicationBootstrap {
    */
   private async assertModelAllowed(actor: Actor, agent: string, model: string): Promise<string> {
     const catalog = this.models;
-    if (catalog === undefined) {
-      throw new BadRequestException(
-        `model "${model}" cannot be selected: no ModelCatalog is configured (AgentModule.forRoot({ models }))`,
-      );
-    }
-    return asBadRequest(async () =>
-      assertCatalogModel(await catalog.list({ actor, agent }), model),
-    );
+    return asBadRequest(async () => {
+      if (catalog === undefined) {
+        throw new ModelNotAllowedError(
+          `model "${model}" cannot be selected: no ModelCatalog is configured (AgentModule.forRoot({ models }))`,
+        );
+      }
+      return assertCatalogModel(await catalog.list({ actor, agent }), model);
+    });
   }
 
   /**
