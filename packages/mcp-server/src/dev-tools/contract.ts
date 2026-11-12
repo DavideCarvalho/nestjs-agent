@@ -26,9 +26,14 @@ export interface DevToolsSlot {
   register(lib: DevToolsLib): () => void;
 }
 
-/** What a lib's `authorize` answers: the consoles' resolved decision. */
+/**
+ * What a lib's `authorize` answers: the consoles' resolved decision. An allow may name who was let
+ * in (`caller`), for the audit trail: a token form answers `token:<first 12 hex of sha256(token)>`,
+ * never the token; the open default (no `authorize`, outside production) answers `dev-open`.
+ * Without it, the endpoint uses `request.user.id`, else `session`.
+ */
 export type DevToolsDecision =
-  | { allowed: true }
+  | { allowed: true; caller?: string }
   | { allowed: false; reason: 'unauthenticated' | 'forbidden'; redirectTo?: string };
 
 /** One lib's tools and the gate that decides who may use them. */
@@ -73,7 +78,7 @@ export interface DevToolCall {
 
 /** Who is calling, for audit trails. Never a token value. */
 export interface DevToolsCaller {
-  /** `'token:3f9a1c2b7d10'`, `'user:42'`, `'dev-open'`. */
+  /** `'token:3f9a1c2b7d10'`, `'user:42'`, `'session'`, `'dev-open'`. */
   id: string;
   via: 'token' | 'session' | 'open';
 }

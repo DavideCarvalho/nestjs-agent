@@ -188,15 +188,27 @@ describe('options', () => {
 });
 
 describe('caller id', () => {
-  it('hashes a bearer token, never keeps it', () => {
-    const caller = callerOf({ headers: { authorization: 'Bearer s3cret-token' } });
-    expect(caller.via).toBe('token');
-    expect(caller.id).toMatch(/^token:[0-9a-f]{12}$/);
-    expect(caller.id).not.toContain('s3cret');
+  it('is the caller the allowing decision named (a token form, hashed)', () => {
+    const decisions = [
+      { allowed: false, reason: 'forbidden' } as const,
+      { allowed: true, caller: 'token:3f9a1c2b7d10' } as const,
+    ];
+    expect(callerOf({ user: { id: 1 } }, decisions)).toEqual({
+      id: 'token:3f9a1c2b7d10',
+      via: 'token',
+    });
   });
 
-  it('falls back to request.user, then dev-open', () => {
-    expect(callerOf({ headers: {}, user: { id: 42 } })).toEqual({ id: 'user:42', via: 'session' });
-    expect(callerOf({ headers: {} })).toEqual({ id: 'dev-open', via: 'open' });
+  it('falls back to request.user, then session; dev-open only for the open default', () => {
+    const allowed = [{ allowed: true } as const];
+    expect(callerOf({ user: { id: 42 } }, allowed)).toEqual({ id: 'user:42', via: 'session' });
+    expect(callerOf({}, allowed)).toEqual({ id: 'session', via: 'session' });
+    const open = [{ allowed: true, caller: 'dev-open' } as const];
+    expect(callerOf({}, open)).toEqual({ id: 'dev-open', via: 'open' });
+    expect(callerOf({ user: { id: 42 } }, open)).toEqual({ id: 'user:42', via: 'session' });
+    expect(callerOf({}, [{ allowed: false, reason: 'unauthenticated' }])).toEqual({
+      id: 'anonymous',
+      via: 'open',
+    });
   });
 });

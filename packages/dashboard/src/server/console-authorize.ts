@@ -2,10 +2,14 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { type ExecutionContext, Logger, type Type } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 
-/** What an `authorize` check answers. */
+/**
+ * What an `authorize` check answers. An allow may name who it let in (`caller`, for example
+ * `'user:42'`): the dev MCP endpoint logs it as the caller of a developer tool. Never put a secret
+ * in it.
+ */
 export type ConsoleAuthorizeResult =
   | boolean
-  | { allowed: true }
+  | { allowed: true; caller?: string }
   | { allowed: false; reason?: 'unauthenticated' | 'forbidden' }
   | { redirectTo: string };
 
@@ -31,7 +35,7 @@ export type ConsoleAuthorize =
 
 /** A normalized `authorize` answer. */
 export type ConsoleDecision =
-  | { allowed: true }
+  | { allowed: true; caller?: string }
   | { allowed: false; reason: 'unauthenticated' | 'forbidden'; redirectTo?: string };
 
 /** What a resolved `authorize` is: called once per request, never throws. */
@@ -55,7 +59,8 @@ const logger = new Logger(MODULE);
 export const CONSOLE_AUTHORIZE_MISSING_WARNING = `[${PACKAGE}] console has no \`authorize\` configured: it is open outside production and denies every request in production. Set \`authorize\` in ${MODULE}.forRoot().`;
 
 // Fresh objects on every call: a decision is never a shared, mutable singleton.
-const allow = (): ConsoleDecision => ({ allowed: true });
+const allow = (caller?: string): ConsoleDecision =>
+  caller !== undefined && caller !== '' ? { allowed: true, caller } : { allowed: true };
 const forbidden = (): ConsoleDecision => ({ allowed: false, reason: 'forbidden' });
 const unauthenticated = (): ConsoleDecision => ({ allowed: false, reason: 'unauthenticated' });
 
@@ -67,11 +72,18 @@ function isProduction(): boolean {
 export function normalizeConsoleResult(result: unknown): ConsoleDecision {
   if (result === true) return allow();
   if (result === null || typeof result !== 'object') return forbidden();
-  const value = result as { allowed?: unknown; reason?: unknown; redirectTo?: unknown };
+  const value = result as {
+    allowed?: unknown;
+    reason?: unknown;
+    redirectTo?: unknown;
+    caller?: unknown;
+  };
   if (typeof value.redirectTo === 'string' && value.redirectTo !== '' && value.allowed !== true) {
     return { allowed: false, reason: 'unauthenticated', redirectTo: value.redirectTo };
   }
-  if (value.allowed === true) return allow();
+  if (value.allowed === true) {
+    return allow(typeof value.caller === 'string' ? value.caller : undefined);
+  }
   return value.reason === 'unauthenticated' ? unauthenticated() : forbidden();
 }
 
@@ -189,7 +201,7 @@ export async function resolveConsoleAuthorize(
   if (authorize === undefined) {
     if (options.warnIfMissing !== false) log.warn(CONSOLE_AUTHORIZE_MISSING_WARNING);
     const production = isProduction();
-    return async () => (production ? forbidden() : allow());
+    return async () => (production ? forbidden() : allow('dev-open'));
   }
 
   const instanceOf = classInstances(moduleRef);
@@ -245,6 +257,7 @@ function sha256(value: string): Buffer {
 /**
  * `authorize` by a bearer token: allows when `Authorization: Bearer <token>` matches (compared in
  * constant time), else `unauthenticated`. Header only. An empty token throws here, at config time.
+ * The allow names its caller `token:<first 12 hex of sha256(token)>`, never the token.
  */
 export function authorizeByToken(options: { token: string | undefined }): (
   context: ExecutionContext,
@@ -254,6 +267,7 @@ export function authorizeByToken(options: { token: string | undefined }): (
     throw new Error('authorizeByToken: `token` is empty; set it (e.g. from an env var).');
   }
   const expected = sha256(token);
+  const caller = `token:${expected.toString('hex').slice(0, 12)}`;
   return (context) => {
     const req = context
       .switchToHttp()
@@ -261,14 +275,16 @@ export function authorizeByToken(options: { token: string | undefined }): (
     const header = req?.headers?.authorization;
     const value = Array.isArray(header) ? header[0] : header;
     const match = typeof value === 'string' ? /^Bearer\s+(.+)$/i.exec(value.trim()) : null;
-    if (match?.[1] !== undefined && timingSafeEqual(sha256(match[1]), expected)) return true;
+    if (match?.[1] !== undefined && timingSafeEqual(sha256(match[1]), expected)) {
+      return { allowed: true, caller };
+    }
     return { allowed: false, reason: 'unauthenticated' };
   };
 }
 
 /**
  * One `authorize` from several: allowed when any form allows (checked in order, stopping at the
- * first that does); otherwise `unauthenticated` when any form said so (keeping the first
+ * first that does, whose `caller` it keeps); otherwise `unauthenticated` when any form said so (keeping the first
  * `redirectTo`), else `forbidden`. Each form is any `authorize` value: a function, a class, a lazy
  * import, `{ policy, ability }` or a gate name.
  *
@@ -296,7 +312,7 @@ export function anyAuthorize(...forms: ConsoleAuthorize[]): ConsoleAuthorizerCla
       let unauthenticated: ConsoleDecision | undefined;
       for (const decide of await this.#decides) {
         const decision = await decide(context);
-        if (decision.allowed) return { allowed: true };
+        if (decision.allowed) return decision;
         if (decision.reason === 'unauthenticated') unauthenticated ??= decision;
       }
       if (unauthenticated === undefined) return { allowed: false, reason: 'forbidden' };

@@ -140,6 +140,7 @@ describe('agent dev tools registration', () => {
     const [agent] = slotLibs();
     expect(await agent?.authorize(httpContext({ authorization: `Bearer ${TOKEN}` }))).toEqual({
       allowed: true,
+      caller: expect.stringMatching(/^token:[0-9a-f]{12}$/),
     });
     expect(await agent?.authorize(httpContext({}))).toEqual({
       allowed: false,
@@ -190,9 +191,9 @@ describe('agent dev tools', () => {
     await expect(tool('agent_list_runs').run({ from: 'yesterday' })).rejects.toThrow(/YYYY-MM-DD/);
   });
 
-  it('agent_get_run answers null for an unknown id, and cuts messages to 2 KB', async () => {
+  it('agent_get_run fails for an unknown id, and cuts messages to 2 KB', async () => {
     await boot(AgentDashboardModule.forRoot({ authorize: () => true }));
-    expect(await tool('agent_get_run').run({ id: 'nope' })).toBeNull();
+    await expect(tool('agent_get_run').run({ id: 'nope' })).rejects.toThrow('run nope not found');
     const withMessages = (await tool('agent_get_run').run({
       id: 'r1',
       includeMessages: true,

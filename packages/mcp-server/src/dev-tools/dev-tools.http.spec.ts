@@ -1,10 +1,14 @@
+import { createHash } from 'node:crypto';
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import type { Server as HttpServer } from 'node:http';
 import { AgentModule, AiTool } from '@dudousxd/nestjs-agent';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import {
+  type ArgumentsHost,
   type CanActivate,
+  Catch,
+  type ExceptionFilter,
   type ExecutionContext,
   type INestApplication,
   Injectable,
@@ -25,6 +29,7 @@ import {
   type DevToolsLib,
   registerDevTools,
 } from './contract.js';
+import { AgentDevToolsEndpoint } from './endpoint.js';
 
 const PRODUCT_KEY = 'product-key-0123456789';
 const ALL = 'all-libs-token';
@@ -111,15 +116,42 @@ function readTool(name: string): DevTool {
   };
 }
 
-/** Allowed for these tokens; no token → unauthenticated; another token → forbidden. */
+const tokenCaller = (token: string) =>
+  `token:${createHash('sha256').update(token).digest('hex').slice(0, 12)}`;
+
+/**
+ * Allowed for these tokens (naming the caller as a token form does); no token → unauthenticated;
+ * another token → forbidden.
+ */
 function byToken(tokens: string[]) {
   return async (context: ExecutionContext): Promise<DevToolsDecision> => {
     const header = bearer(context);
     if (header === undefined) return { allowed: false, reason: 'unauthenticated' };
-    return tokens.some((token) => header === `Bearer ${token}`)
-      ? { allowed: true }
+    const token = tokens.find((candidate) => header === `Bearer ${candidate}`);
+    return token !== undefined
+      ? { allowed: true, caller: tokenCaller(token) }
       : { allowed: false, reason: 'forbidden' };
   };
+}
+
+/** A cookie session check that leaves `request.user` unset, as many apps' authorizers do. */
+const byCookie = vi.fn(async (context: ExecutionContext): Promise<DevToolsDecision> => {
+  const req = context.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>();
+  return req.headers.cookie === 'session=admin'
+    ? { allowed: true }
+    : { allowed: false, reason: 'unauthenticated' };
+});
+
+/** An app-wide filter that reshapes every error, as many apps install. */
+@Catch()
+class ReshapeEverythingFilter implements ExceptionFilter {
+  catch(_exception: unknown, host: ArgumentsHost): void {
+    host
+      .switchToHttp()
+      .getResponse<{ status(code: number): { json(body: unknown): void } }>()
+      .status(418)
+      .json({ reshaped: true });
+  }
 }
 
 @AiTool({
@@ -160,6 +192,7 @@ function register(...libs: DevToolsLib[]): void {
 
 async function boot(
   overrides: Partial<Pick<AgentMcpServerModuleOptions, 'devTools' | 'actions'>> = {},
+  setup: (app: INestApplication) => void = () => {},
 ): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -179,6 +212,7 @@ async function boot(
     providers: [SearchDocsTool],
   }).compile();
   const created = moduleRef.createNestApplication({ logger: false });
+  setup(created);
   await created.listen(0, '127.0.0.1');
   app = created;
   return created;
@@ -219,9 +253,9 @@ const rpc = (method: string, params: Record<string, unknown> = {}) => ({
   params,
 });
 
-const post = (context: INestApplication, body: unknown, token?: string) => {
+const post = (context: INestApplication, body: unknown, token?: string, path = '/mcp/aviary') => {
   const req = request(server(context))
-    .post('/mcp/aviary')
+    .post(path)
     .set('accept', 'application/json, text/event-stream')
     .set('content-type', 'application/json');
   return (token === undefined ? req : req.set('authorization', `Bearer ${token}`)).send(
@@ -272,7 +306,7 @@ describe('dev MCP endpoint: access per lib', () => {
       caller: string;
     };
     expect(body.items[0]).toEqual({ id: 'r1', status: 'failed', secretToken: '[redacted]' });
-    expect(body.caller).toMatch(/^token:[0-9a-f]{12}$/);
+    expect(body.caller).toBe(tokenCaller(ALL));
   });
 
   it('answers a call to a denied lib with the console’s 403', async () => {
@@ -291,6 +325,25 @@ describe('dev MCP endpoint: access per lib', () => {
     expect(res.body).toEqual({ error: 'unauthenticated' });
     expect(res.headers['www-authenticate']).toBe('Bearer realm="aviary-dev"');
     expect(res.headers['www-authenticate']).not.toContain('resource_metadata');
+  });
+
+  it('writes its 401 / 403 itself: an app-wide exception filter does not reshape them', async () => {
+    register(durableLib(), telescopeLib());
+    const context = await boot({}, (app) => app.useGlobalFilters(new ReshapeEverythingFilter()));
+    const unauthenticated = await post(context, rpc('tools/list'));
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.body).toEqual({ error: 'unauthenticated' });
+    expect(unauthenticated.headers['www-authenticate']).toBe('Bearer realm="aviary-dev"');
+    const forbidden = await post(context, rpc('tools/list'), 'wrong-token');
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body).toEqual({ error: 'forbidden' });
+    const otherOrigin = await post(context, rpc('tools/list'), ALL).set(
+      'origin',
+      'https://evil.example',
+    );
+    expect(otherOrigin.status).toBe(403);
+    expect(otherOrigin.body).toEqual({ error: 'forbidden' });
+    await request(server(context)).get('/mcp/aviary').expect(401, { error: 'unauthenticated' });
   });
 
   it('treats an authorize that throws as forbidden', async () => {
@@ -396,6 +449,36 @@ describe('dev MCP endpoint: access per lib', () => {
     const result = await client.callTool({ name: 'durable_list_runs', arguments: {} });
     expect((JSON.parse(textOf(result)) as { caller: string }).caller).toBe('user:42');
   });
+
+  const callerAs = async (client: Client) =>
+    (
+      JSON.parse(textOf(await client.callTool({ name: 'durable_list_runs', arguments: {} }))) as {
+        caller: string;
+      }
+    ).caller;
+
+  it('logs a session allow as session, not dev-open, when request.user is unset', async () => {
+    register(durableLib(byCookie));
+    const context = await boot();
+    expect(await callerAs(await connect(context, { cookie: 'session=admin' }))).toBe('session');
+  });
+
+  it('never names the caller by a Bearer no authorize accepted', async () => {
+    register(durableLib(byCookie));
+    const context = await boot();
+    const client = await connect(context, {
+      authorization: 'Bearer nope',
+      cookie: 'session=admin',
+    });
+    expect(await callerAs(client)).toBe('session');
+  });
+
+  it('is dev-open only for the open default, and request.user wins over it', async () => {
+    register(durableLib(vi.fn(async () => ({ allowed: true, caller: 'dev-open' }) as const)));
+    const context = await boot({ devTools: { decorators: [UseGuards(SessionGuard)] } });
+    expect(await callerAs(await connect(context, {}))).toBe('dev-open');
+    expect(await callerAs(await connect(context, { 'x-user': '7' }))).toBe('user:7');
+  });
 });
 
 describe('dev MCP endpoint: actions', () => {
@@ -434,6 +517,20 @@ describe('dev MCP endpoint: isolation and options', () => {
     await request(server(context))
       .get('/.well-known/oauth-protected-resource/mcp/aviary')
       .expect(404);
+  });
+
+  it('answers under the global prefix, and at its own path when the prefix excludes it', async () => {
+    register(durableLib());
+    const prefixed = await boot({}, (app) => app.setGlobalPrefix('api'));
+    expect(prefixed.get(AgentDevToolsEndpoint).url()).toBe('/api/mcp/aviary');
+    await post(prefixed, rpc('tools/list'), ALL, '/api/mcp/aviary').expect(200);
+    await prefixed.close();
+
+    const excluded = await boot({}, (app) =>
+      app.setGlobalPrefix('api', { exclude: ['mcp/aviary'] }),
+    );
+    expect(excluded.get(AgentDevToolsEndpoint).url()).toBe('/mcp/aviary');
+    await post(excluded, rpc('tools/list'), ALL).expect(200);
   });
 
   it('mounts nothing with devTools: false', async () => {

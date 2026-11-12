@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { createHash } from 'node:crypto';
 import { AuthorizationModule, Policy } from '@nestjs/authorization';
 import { type ExecutionContext, Global, Inject, Injectable, Logger, Module } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
@@ -132,6 +133,10 @@ describe('resolveConsoleAuthorize', () => {
     const moduleRef = await moduleRefWith();
     const cases: [ConsoleAuthorizeResult, unknown][] = [
       [{ allowed: true }, { allowed: true }],
+      [
+        { allowed: true, caller: 'user:7' },
+        { allowed: true, caller: 'user:7' },
+      ],
       [
         { allowed: false, reason: 'unauthenticated' },
         { allowed: false, reason: 'unauthenticated' },
@@ -284,7 +289,7 @@ describe('resolveConsoleAuthorize — `authorize` omitted', () => {
     const moduleRef = await moduleRefWith();
     process.env.NODE_ENV = 'development';
     const dev = await resolveConsoleAuthorize(undefined, moduleRef);
-    expect(await dev(httpContext({}))).toEqual({ allowed: true });
+    expect(await dev(httpContext({}))).toEqual({ allowed: true, caller: 'dev-open' });
     process.env.NODE_ENV = 'production';
     const prod = await resolveConsoleAuthorize(undefined, moduleRef);
     expect(await prod(httpContext({}))).toEqual({ allowed: false, reason: 'forbidden' });
@@ -321,8 +326,13 @@ describe('denials are fresh objects', () => {
 describe('authorizeByToken', () => {
   const byToken = authorizeByToken({ token: 'tok-123' });
 
-  it('allows a matching Bearer token', () => {
-    expect(byToken(httpContext({ headers: { authorization: 'Bearer tok-123' } }))).toBe(true);
+  it('allows a matching Bearer token, naming the caller by a hash of the token', () => {
+    const decision = byToken(httpContext({ headers: { authorization: 'Bearer tok-123' } }));
+    expect(decision).toEqual({
+      allowed: true,
+      caller: `token:${createHash('sha256').update('tok-123').digest('hex').slice(0, 12)}`,
+    });
+    expect(JSON.stringify(decision)).not.toContain('tok-123');
   });
 
   it('a wrong token, or none, is unauthenticated', () => {
@@ -356,8 +366,20 @@ describe('anyAuthorize', () => {
     const decide = await decideWith(authorizeByToken({ token: TOKEN }), AdminOnly);
     expect(await decide(httpContext({ headers: { authorization: `Bearer ${TOKEN}` } }))).toEqual({
       allowed: true,
+      caller: expect.stringMatching(/^token:[0-9a-f]{12}$/),
     });
     expect(await decide(httpContext({ user: { admin: true } }))).toEqual({ allowed: true });
+  });
+
+  it('keeps the caller of the form that allowed, not of a token that did not match', async () => {
+    const decide = await decideWith(authorizeByToken({ token: TOKEN }), () => ({
+      allowed: true,
+      caller: 'user:9',
+    }));
+    expect(await decide(httpContext({ headers: { authorization: 'Bearer nope' } }))).toEqual({
+      allowed: true,
+      caller: 'user:9',
+    });
   });
 
   it('is unauthenticated when any form said so, keeping the first redirectTo', async () => {

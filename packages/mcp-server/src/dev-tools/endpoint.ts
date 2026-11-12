@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type CallToolResult,
@@ -15,18 +14,19 @@ import {
   Delete,
   type ExecutionContext,
   Get,
-  HttpException,
   Inject,
   Injectable,
   Logger,
   type OnApplicationBootstrap,
   type OnApplicationShutdown,
   type OnModuleInit,
+  Optional,
   Post,
   Req,
   Res,
   type Type,
 } from '@nestjs/common';
+import { ApplicationConfig } from '@nestjs/core';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
 import { AGENT_MCP_SERVER_OPTIONS } from '../tokens.js';
 import { type DevToolsSnapshot, type ServedDevToolsLib, servedLibs, snapshot } from './catalog.js';
@@ -52,6 +52,9 @@ export const AGENT_DEV_TOOLS_OPTIONS = Symbol.for('@dudousxd/nestjs-agent-mcp-se
 /** Where the guard leaves its admission for the controller. */
 const ADMISSION = Symbol.for('@dudousxd/nestjs-agent-mcp-server:dev-tools-admission');
 
+/** Where the guard leaves a refusal for the controller to write. */
+const REFUSAL = Symbol.for('@dudousxd/nestjs-agent-mcp-server:dev-tools-refusal');
+
 const logger = new Logger('AgentDevTools');
 
 /** What the guard decided for one request. */
@@ -65,12 +68,27 @@ type DevRequest = IncomingMessage & {
   body?: unknown;
   user?: unknown;
   [ADMISSION]?: Admission;
+  [REFUSAL]?: DevToolsRefusal;
 };
 
-/** The 401 / 403 the dev endpoint answers, in the consoles' JSON shape. */
-export class DevToolsRefusal extends HttpException {
-  constructor(status: 401 | 403, error: string) {
-    super({ error }, status);
+/**
+ * The 401 / 403 the dev endpoint answers, in the consoles' JSON shape. Written by the endpoint
+ * itself, never thrown: an app's exception filter cannot reshape it.
+ */
+export class DevToolsRefusal {
+  constructor(
+    readonly status: 401 | 403,
+    readonly error: 'unauthenticated' | 'forbidden',
+  ) {}
+
+  /** Writes `{ error }`, with the Bearer challenge on a 401. */
+  write(res: ServerResponse): void {
+    if (res.headersSent || res.destroyed) return;
+    res.writeHead(this.status, {
+      'content-type': 'application/json',
+      ...(this.status === 401 ? { 'www-authenticate': 'Bearer realm="aviary-dev"' } : {}),
+    });
+    res.end(JSON.stringify({ error: this.error }));
   }
 }
 
@@ -93,6 +111,7 @@ export class AgentDevToolsEndpoint
   constructor(
     @Inject(AGENT_DEV_TOOLS_OPTIONS) readonly options: ResolvedDevToolsOptions,
     @Inject(AGENT_MCP_SERVER_OPTIONS) private readonly server: AgentMcpServerModuleOptions,
+    @Optional() private readonly appConfig?: ApplicationConfig,
   ) {
     const http = server.mcp?.http;
     this.#allowedHosts = http?.allowedHosts !== undefined ? [...http.allowedHosts] : undefined;
@@ -127,7 +146,20 @@ export class AgentDevToolsEndpoint
       libs.length === 0
         ? 'no lib registered tools yet'
         : libs.map((lib) => `${lib.lib} (${lib.tools.length})`).join(', ');
-    logger.log(`dev tools at /${this.options.path}: ${list}`);
+    logger.log(`dev tools at ${this.url()}: ${list}`);
+  }
+
+  /** The path the endpoint answers at: the app's global prefix applies unless it excludes the path. */
+  url(): string {
+    const path = `/${this.options.path}`;
+    const prefix = (this.appConfig?.getGlobalPrefix() ?? '').replace(/^\/+|\/+$/g, '');
+    if (prefix === '') return path;
+    const exclude = this.appConfig?.getGlobalPrefixOptions().exclude ?? [];
+    const excluded = exclude.some((route) => {
+      const regex = (route as { pathRegex?: RegExp }).pathRegex;
+      return regex instanceof RegExp && regex.test(path);
+    });
+    return excluded ? path : `/${prefix}${path}`;
   }
 
   async onApplicationShutdown(): Promise<void> {
@@ -160,11 +192,25 @@ export class AgentDevToolsEndpoint
     return rejected ? new DevToolsRefusal(403, 'forbidden') : undefined;
   }
 
+  /**
+   * Writes the guard's refusal, if it left one (or forbids a request the guard never saw).
+   * `true` when the request was answered.
+   */
+  refuse(platformRequest: unknown, platformResponse: unknown): boolean {
+    const { req, res } = unwrap(platformRequest, platformResponse);
+    const refusal =
+      req[REFUSAL] ??
+      (req[ADMISSION] === undefined ? new DevToolsRefusal(403, 'forbidden') : undefined);
+    if (refusal === undefined) return false;
+    refusal.write(res);
+    return true;
+  }
+
   /** Serves one admitted `POST`. */
   async serve(platformRequest: unknown, platformResponse: unknown): Promise<void> {
+    if (this.refuse(platformRequest, platformResponse)) return;
     const { req, res } = unwrap(platformRequest, platformResponse);
-    const admission = req[ADMISSION];
-    if (admission === undefined) throw new DevToolsRefusal(403, 'forbidden');
+    const admission = req[ADMISSION] as Admission;
     const abort = new AbortController();
     res.once('close', () => {
       if (!res.writableFinished) abort.abort();
@@ -272,6 +318,8 @@ export class AgentDevToolsEndpoint
 /**
  * Decides who reaches the dev endpoint: the libs a message needs each run their own console
  * `authorize`, once; none allowed → `401` / `403`. Runs after the app's `devTools.decorators`.
+ * A refusal is left on the request and written by the controller, so no exception filter of the
+ * app sees (or reshapes) it.
  */
 @Injectable()
 export class AgentDevToolsGuard implements CanActivate {
@@ -282,14 +330,16 @@ export class AgentDevToolsGuard implements CanActivate {
     const http = context.switchToHttp();
     const req = unwrapRequest(http.getRequest());
     const refusedOrigin = this.endpoint.checkOrigin(req);
-    if (refusedOrigin !== undefined) throw refusedOrigin;
+    if (refusedOrigin !== undefined) {
+      req[REFUSAL] = refusedOrigin;
+      return true;
+    }
 
     const snap = this.endpoint.snapshot();
     const needed =
       (req.method ?? 'GET').toUpperCase() === 'POST'
         ? neededLibs(req.body, snap)
         : servedLibs(snap);
-    const caller = callerOf(req);
 
     // One after the other: an `authorize` may touch shared request state (an auth guard's cache).
     const decisions: Array<{ lib: ServedDevToolsLib; decision: DevToolsDecision }> = [];
@@ -297,6 +347,10 @@ export class AgentDevToolsGuard implements CanActivate {
       decisions.push({ lib, decision: await safeAuthorize(lib, context) });
     }
     const allowed = decisions.filter(({ decision }) => decision.allowed).map(({ lib }) => lib);
+    const caller = callerOf(
+      req,
+      decisions.map(({ decision }) => decision),
+    );
     if (needed.length > 0 && allowed.length === 0) {
       const unauthenticated = decisions.some(
         ({ decision }) => !decision.allowed && decision.reason === 'unauthenticated',
@@ -307,11 +361,10 @@ export class AgentDevToolsGuard implements CanActivate {
         libs: needed.map((lib) => lib.lib),
         status: unauthenticated ? 401 : 403,
       });
-      if (unauthenticated) {
-        setHeader(http.getResponse(), 'WWW-Authenticate', 'Bearer realm="aviary-dev"');
-        throw new DevToolsRefusal(401, 'unauthenticated');
-      }
-      throw new DevToolsRefusal(403, 'forbidden');
+      req[REFUSAL] = unauthenticated
+        ? new DevToolsRefusal(401, 'unauthenticated')
+        : new DevToolsRefusal(403, 'forbidden');
+      return true;
     }
     req[ADMISSION] = { caller, allowed, context };
     return true;
@@ -340,23 +393,33 @@ export function neededLibs(body: unknown, snap: DevToolsSnapshot): ServedDevTool
   return [...needed];
 }
 
-/** Bearer → `token:<first 12 hex of sha256>`; else `request.user.id` → `user:<id>`; else `dev-open`. */
-export function callerOf(req: {
-  headers: IncomingMessage['headers'];
-  user?: unknown;
-}): DevToolsCaller {
-  const header = req.headers.authorization;
-  const value = Array.isArray(header) ? header[0] : header;
-  const match = typeof value === 'string' ? /^Bearer\s+(\S.*)$/i.exec(value.trim()) : null;
-  if (match?.[1] !== undefined) {
-    const hash = createHash('sha256').update(match[1].trim()).digest('hex').slice(0, 12);
-    return { id: `token:${hash}`, via: 'token' };
+/**
+ * Who a request is, from what actually let it in (never from a header no `authorize` accepted):
+ * the `caller` an allowing decision named (`token:<hash>` from a token form); else
+ * `request.user.id` → `user:<id>`; else `session` when some `authorize` allowed it; `dev-open` only
+ * when the allowing decision was the open default. A refused request is `anonymous`.
+ */
+export function callerOf(
+  req: { user?: unknown },
+  decisions: readonly DevToolsDecision[],
+): DevToolsCaller {
+  const allowed = decisions.filter(
+    (decision): decision is Extract<DevToolsDecision, { allowed: true }> => decision.allowed,
+  );
+  const named = allowed
+    .map((decision) => decision.caller)
+    .filter((caller): caller is string => typeof caller === 'string' && caller !== '');
+  const identity = named.find((caller) => caller !== 'dev-open');
+  if (identity !== undefined) {
+    return { id: identity, via: identity.startsWith('token:') ? 'token' : 'session' };
   }
   const id = (req.user as { id?: unknown } | null | undefined)?.id;
   if (typeof id === 'string' || typeof id === 'number' || typeof id === 'bigint') {
     return { id: `user:${String(id)}`, via: 'session' };
   }
-  return { id: 'dev-open', via: 'open' };
+  if (named.length > 0) return { id: 'dev-open', via: 'open' };
+  if (allowed.length > 0) return { id: 'session', via: 'session' };
+  return { id: 'anonymous', via: 'open' };
 }
 
 /** A lib's `authorize`, read the way consoles read it. A throw or a malformed answer is `forbidden`. */
@@ -366,7 +429,12 @@ async function safeAuthorize(
 ): Promise<DevToolsDecision> {
   try {
     const decision = (await lib.authorize(context)) as Partial<DevToolsDecision> | undefined;
-    if (decision?.allowed === true) return { allowed: true };
+    if (decision?.allowed === true) {
+      const caller = (decision as { caller?: unknown }).caller;
+      return typeof caller === 'string' && caller !== ''
+        ? { allowed: true, caller }
+        : { allowed: true };
+    }
     const reason = (decision as { reason?: unknown } | undefined)?.reason;
     return {
       allowed: false,
@@ -412,13 +480,13 @@ class AgentDevToolsControllerBase {
   }
 
   @Get()
-  get(@Res() res: unknown): void {
-    methodNotAllowed(res);
+  get(@Req() req: unknown, @Res() res: unknown): void {
+    if (!this.endpoint.refuse(req, res)) methodNotAllowed(res);
   }
 
   @Delete()
-  delete(@Res() res: unknown): void {
-    methodNotAllowed(res);
+  delete(@Req() req: unknown, @Res() res: unknown): void {
+    if (!this.endpoint.refuse(req, res)) methodNotAllowed(res);
   }
 }
 
@@ -475,15 +543,6 @@ function unwrapRequest(platformRequest: unknown): DevRequest {
     return raw;
   }
   return wrapper;
-}
-
-function setHeader(platformResponse: unknown, name: string, value: string): void {
-  const res = platformResponse as {
-    setHeader?: (n: string, v: string) => void;
-    header?: (n: string, v: string) => void;
-  };
-  if (typeof res.setHeader === 'function') res.setHeader(name, value);
-  else res.header?.(name, value);
 }
 
 const HOP_BY_HOP = new Set([
