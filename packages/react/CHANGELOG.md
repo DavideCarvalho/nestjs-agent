@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.43.9
+
+### Patch Changes
+
+- Updated dependencies [[`1c3996e`](https://github.com/DavideCarvalho/nestjs-agent/commit/1c3996ec4c947bcd5ddaeac009b845dd8ec072db)]:
+  - @dudousxd/nestjs-agent-core@0.62.2
+
 ## 0.43.8
 
 ### Patch Changes
