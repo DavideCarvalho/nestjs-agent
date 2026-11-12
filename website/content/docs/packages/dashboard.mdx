@@ -301,6 +301,15 @@ and `agent_list_recent_tool_calls`. They are registered while the console's rout
 `devTools: true` keeps them with `routes: false`, and `devTools: false` turns them off. See
 [Developer tools over MCP](/docs/guides/dev-tools-over-mcp).
 
+## Switching between consoles
+
+When the app mounts other Aviary consoles too (durable's Workflows, Telescope, Media), the
+console's brand becomes a menu that lists the ones the viewer may open, and links to them. Each is
+listed only when its own `authorize` allows the viewer. That `authorize` then also runs once each
+time the page loads. With no other console, or none the viewer may open, the brand stays as it is.
+There is nothing to configure. The agent console is listed in the other consoles' menus while its
+routes are mounted.
+
 ## When to use it
 
 Reach for `-dashboard` when you want a governance console but aren't running Telescope, or want the

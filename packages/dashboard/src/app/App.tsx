@@ -3,6 +3,7 @@ import type { GovernanceRange } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { AccessDenied } from './AccessDenied';
+import { ConsoleSwitcher, readSwitcherConfig } from './ConsoleSwitcher';
 import { LiveSection } from './LiveSection';
 import { SectionBoundary } from './SectionBoundary';
 import { ActorsContainer } from './containers/ActorsContainer';
@@ -78,6 +79,9 @@ function useHashRoute(): { section: SectionKey; params: URLSearchParams } {
 
   return route;
 }
+
+/** The switcher config the server put in the page (absent when this console is alone). */
+const switcherConfig = readSwitcherConfig('agent-dashboard-config');
 
 /**
  * The AI-gateway console shell: brand, section nav, a UTC day-range picker, and the live-connection
@@ -224,17 +228,23 @@ function Header({
 }) {
   return (
     <header className="mb-5 flex flex-wrap items-center gap-4">
-      <div className="flex items-center gap-2.5">
-        <div className="grid h-8 w-8 place-items-center rounded-lg border border-brand/40 bg-brand/10">
-          <LogoMark className="h-4 w-4 text-brand" />
-        </div>
-        <div className="leading-none">
-          <div className="text-sm font-semibold tracking-tight">AI gateway</div>
-          <div className="mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-            governance console
+      <ConsoleSwitcher
+        config={switcherConfig}
+        current={{ title: 'Agents', icon: 'agent' }}
+        brand={
+          <div className="flex items-center gap-2.5">
+            <div className="grid h-8 w-8 place-items-center rounded-lg border border-brand/40 bg-brand/10">
+              <LogoMark className="h-4 w-4 text-brand" />
+            </div>
+            <div className="leading-none">
+              <div className="text-sm font-semibold tracking-tight">AI gateway</div>
+              <div className="mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                governance console
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
         <RangePicker range={range} onRange={onRange} />

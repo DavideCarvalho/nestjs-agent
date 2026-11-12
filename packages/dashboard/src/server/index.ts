@@ -28,6 +28,21 @@ export {
   type ConsoleGate,
   type ConsolePolicyCheck,
 } from './console-authorize.js';
+export {
+  AGENT_CONSOLE_ID,
+  AVIARY_CONSOLES_SLOT,
+  AgentConsoleRegistration,
+  AgentConsolesController,
+  CONSOLE_PROBE_TIMEOUT_MS,
+  listVisibleConsoles,
+  registerAviaryConsole,
+  type AviaryConsoleDecision,
+  type AviaryConsoleEntry,
+  type AviaryConsoleIcon,
+  type AviaryConsoleRegistry,
+  type VisibleConsole,
+  type VisibleConsoles,
+} from './console-switcher.js';
 export * from './dashboard.service.js';
 export { AgentDevToolsRegistration, agentDevTools, type AgentDevTool } from './dev-tools.js';
 export * from './parse-price-input.js';
