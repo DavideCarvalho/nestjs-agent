@@ -164,7 +164,7 @@ describe('AgentDashboardModule — `authorize`', () => {
     });
   });
 
-  it('unauthenticated: 401 JSON', async () => {
+  it('unauthenticated: 401 JSON for the API, a 401 sign-in page for a page navigation', async () => {
     const server = await boot(
       AgentDashboardModule.forRoot({
         authorize: () => ({ allowed: false, reason: 'unauthenticated' }) as const,
@@ -173,7 +173,22 @@ describe('AgentDashboardModule — `authorize`', () => {
     expect((await request(server).get('/ai-gateway/api/spend').expect(401)).body).toEqual({
       error: 'unauthenticated',
     });
-    await request(server).get('/ai-gateway').set(HTML).expect(401);
+    const page = await request(server).get('/ai-gateway').set(HTML).expect(401);
+    expect(page.headers['content-type']).toMatch(/text\/html/);
+    expect(page.text).toMatch(/Sign in required/);
+  });
+
+  it('`{ policy, ability }` without AuthorizationModule fails the boot with a tailored message', async () => {
+    class ConsolePolicy {
+      view() {
+        return true;
+      }
+    }
+    await expect(
+      boot(AgentDashboardModule.forRoot({ authorize: { policy: ConsolePolicy, ability: 'view' } })),
+    ).rejects.toThrow(
+      '`authorize: { policy, ability }` needs AuthorizationModule.forRoot() from @nestjs/authorization imported in the app',
+    );
   });
 
   it('redirectTo: 302 for a page navigation, 401 JSON with redirectTo for the API', async () => {

@@ -5,7 +5,7 @@ import { RouterModule } from '@nestjs/core';
 import { AgentApiController } from './agent-api.controller.js';
 import { AgentUiController } from './agent-ui.controller.js';
 import {
-  ConsoleAccessDeniedFilter,
+  ConsoleAuthorizeFilter,
   ConsoleAuthorizeGuard,
   DashboardConsoleAccess,
   type DashboardConsoleOptions,
@@ -57,7 +57,7 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * `false` mounts none of the console's routes, while its services still run — the way NestJS's
    * own packages leave routes to you: serve them from controllers of your own, protected with the
    * official tools, by extending the exported `AgentApiController` / `AgentUiController` under your
-   * own path and decorators (the module exports what they inject); `ConsoleAuthorized()` applies
+   * own path and decorators (the module exports what they inject); `UseConsoleAuthorize()` applies
    * this module's `authorize` to them. Static wiring.
    */
   routes?: boolean;
@@ -86,7 +86,7 @@ function consoleDecorators(decorators: ClassDecorator[] | undefined): ClassDecor
   return [
     ...(decorators ?? []),
     UseGuards(ConsoleAuthorizeGuard),
-    UseFilters(ConsoleAccessDeniedFilter),
+    UseFilters(ConsoleAuthorizeFilter),
   ];
 }
 
@@ -100,9 +100,10 @@ export class AgentApiModule {
     approvalActorRef?: (req: TReq) => string | undefined;
     authorize?: ConsoleAuthorize;
   }): DynamicModule {
+    // The warning for an omitted `authorize` logs with `routes: false` too: the exported guard still
+    // answers 403 in production.
     const consoleOptions: DashboardConsoleOptions = {
       ...(options.authorize !== undefined ? { authorize: options.authorize } : {}),
-      warnWhenOmitted: options.routes !== false,
     };
     return {
       module: AgentApiModule,
@@ -120,7 +121,7 @@ export class AgentApiModule {
         DashboardConsoleAccess,
       ],
       // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`), and the
-      // access check `ConsoleAuthorized()` runs.
+      // access check `UseConsoleAuthorize()` runs.
       exports: [DashboardService, DASHBOARD_APPROVAL_ACTOR_REF, DashboardConsoleAccess],
     };
   }

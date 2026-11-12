@@ -34,40 +34,45 @@ export type ConsoleDecision =
   | { allowed: true }
   | { allowed: false; reason: 'unauthenticated' | 'forbidden'; redirectTo?: string };
 
-/** The resolved check: never throws; a throw inside `authorize` is a `forbidden`. */
-export type ConsoleAccessCheck = ((context: ExecutionContext) => Promise<ConsoleDecision>) & {
-  /** Settles once boot-time requirements are met; rejects with a clear message when they are not. */
-  readonly ready: Promise<void>;
-};
+/** What a resolved `authorize` is: called once per request, never throws. */
+export type ConsoleDecide = (context: ExecutionContext) => Promise<ConsoleDecision>;
 
 /**
  * The provider that resolves gate names (`authorize: 'console.agent'`), bound globally by
- * `@dudousxd/nestjs-authz`'s `AuthzModule`.
+ * `@dudousxd/nestjs-authz`'s `AuthzModule`. A registry symbol, so it is found without depending on
+ * that package.
  */
 export const CONSOLE_GATE = Symbol.for('@dudousxd/aviary:console-gate');
-
-interface ConsoleGate {
+export interface ConsoleGate {
   allows(name: string, context: ExecutionContext): Promise<ConsoleAuthorizeResult>;
 }
 
-const logger = new Logger('AgentDashboardModule');
+const PACKAGE = '@dudousxd/nestjs-agent-dashboard';
+const MODULE = 'AgentDashboardModule';
+const logger = new Logger(MODULE);
 
-const ALLOW: ConsoleDecision = { allowed: true };
-const FORBID: ConsoleDecision = { allowed: false, reason: 'forbidden' };
+/** The one boot warning for a console with no `authorize`. Same wording in every Aviary console. */
+export const CONSOLE_AUTHORIZE_MISSING_WARNING = `[${PACKAGE}] console has no \`authorize\` configured: it is open outside production and denies every request in production. Set \`authorize\` in ${MODULE}.forRoot().`;
 
-/** Normalize any {@link ConsoleAuthorizeResult} into a {@link ConsoleDecision}. */
-export function normalizeConsoleDecision(result: unknown): ConsoleDecision {
-  if (result === true) return ALLOW;
-  if (result === null || typeof result !== 'object') return FORBID;
+// Fresh objects on every call: a decision is never a shared, mutable singleton.
+const allow = (): ConsoleDecision => ({ allowed: true });
+const forbidden = (): ConsoleDecision => ({ allowed: false, reason: 'forbidden' });
+const unauthenticated = (): ConsoleDecision => ({ allowed: false, reason: 'unauthenticated' });
+
+function isProduction(): boolean {
+  return (process.env.NODE_ENV ?? '').trim().toLowerCase() === 'production';
+}
+
+/** Turns any {@link ConsoleAuthorizeResult} into a {@link ConsoleDecision}. */
+export function normalizeConsoleResult(result: unknown): ConsoleDecision {
+  if (result === true) return allow();
+  if (result === null || typeof result !== 'object') return forbidden();
   const value = result as { allowed?: unknown; reason?: unknown; redirectTo?: unknown };
-  if (typeof value.redirectTo === 'string' && value.redirectTo !== '') {
+  if (typeof value.redirectTo === 'string' && value.redirectTo !== '' && value.allowed !== true) {
     return { allowed: false, reason: 'unauthenticated', redirectTo: value.redirectTo };
   }
-  if (value.allowed === true) return ALLOW;
-  if (value.allowed === false && value.reason === 'unauthenticated') {
-    return { allowed: false, reason: 'unauthenticated' };
-  }
-  return FORBID;
+  if (value.allowed === true) return allow();
+  return value.reason === 'unauthenticated' ? unauthenticated() : forbidden();
 }
 
 function isAuthorizerClass(value: unknown): value is ConsoleAuthorizerClass {
@@ -117,18 +122,22 @@ function classInstances(moduleRef: ModuleRef) {
   };
 }
 
-/** `@nestjs/authorization`'s service + `getUser`, imported lazily (an optional peer). */
-async function loadPolicyChecker(moduleRef: ModuleRef): Promise<{
-  can(policy: Type<unknown>, ability: string, user: unknown): Promise<boolean>;
-  getUser(context: ExecutionContext): unknown;
-}> {
+/** `null`, `undefined` and `false` mean "nobody signed in", like `@nestjs/authorization`'s guard. */
+function hasUser(user: unknown): boolean {
+  return user !== null && user !== undefined && user !== false;
+}
+
+/** `{ policy, ability }`: `@nestjs/authorization` (an optional peer) imported lazily, checked at boot. */
+async function policyDecider(
+  check: ConsolePolicyCheck,
+  moduleRef: ModuleRef,
+): Promise<(context: ExecutionContext) => Promise<ConsoleDecision>> {
   let mod: typeof import('@nestjs/authorization');
   try {
     mod = await import('@nestjs/authorization');
   } catch {
     throw new Error(
-      'AgentDashboardModule: `authorize: { policy, ability }` needs `@nestjs/authorization` installed ' +
-        '(and its AuthorizationModule imported); or pass a function, a class, or a gate name.',
+      `${MODULE}: \`authorize: { policy, ability }\` needs @nestjs/authorization installed and AuthorizationModule imported; or pass a function, a class, or a gate name.`,
     );
   }
   const service = tryGet<{
@@ -136,54 +145,60 @@ async function loadPolicyChecker(moduleRef: ModuleRef): Promise<{
   }>(moduleRef, mod.AuthorizationService);
   if (service === undefined) {
     throw new Error(
-      'AgentDashboardModule: `authorize: { policy, ability }` needs `@nestjs/authorization`’s ' +
-        'AuthorizationModule imported in the app; or pass a function, a class, or a gate name.',
+      `${MODULE}: \`authorize: { policy, ability }\` needs AuthorizationModule.forRoot() from @nestjs/authorization imported in the app.`,
     );
   }
   const options = tryGet<{ getUser?: (context: ExecutionContext) => unknown }>(
     moduleRef,
     mod.AUTHORIZATION_MODULE_OPTIONS,
   );
-  const getUser = options?.getUser ?? mod.defaultGetUser;
-  return {
-    can: (policy, ability, user) => service.can(policy as never, ability as never, user as never),
-    getUser,
+  const fallback = mod.defaultGetUser as (context: ExecutionContext) => unknown;
+  const getUser = async (context: ExecutionContext): Promise<unknown> => {
+    // Only `undefined` means "look further"; `null` / `false` are a guest.
+    const user = options?.getUser !== undefined ? await options.getUser(context) : undefined;
+    return user === undefined ? fallback(context) : user;
+  };
+  return async (context) => {
+    const user = await getUser(context);
+    const signedIn = hasUser(user);
+    if (await service.can(check.policy, check.ability, signedIn ? user : null)) return allow();
+    return signedIn ? forbidden() : unauthenticated();
   };
 }
 
 /**
- * Turn any {@link ConsoleAuthorize} form into one check. Requirements are validated when the
- * returned check's `ready` settles (the module awaits it at init, so a missing `AuthzModule` or
- * `@nestjs/authorization` fails the boot); the check itself never throws.
+ * Resolves `authorize` into one function the guard calls per request. Configuration mistakes (a
+ * gate name without nestjs-authz, a policy without `@nestjs/authorization`) throw here, so call it
+ * at boot. The returned function never throws: an error is a `forbidden`.
+ *
+ * `authorize` omitted: open outside production, `forbidden` for every request in production (read
+ * when this runs), and one warning logged (unless `warnIfMissing: false`).
  */
-export function resolveConsoleAuthorize(
-  authorize: ConsoleAuthorize,
+export async function resolveConsoleAuthorize(
+  authorize: ConsoleAuthorize | undefined,
   moduleRef: ModuleRef,
-): ConsoleAccessCheck {
+  options: { logger?: Logger; warnIfMissing?: boolean } = {},
+): Promise<ConsoleDecide> {
+  const log = options.logger ?? logger;
+  if (authorize === undefined) {
+    if (options.warnIfMissing !== false) log.warn(CONSOLE_AUTHORIZE_MISSING_WARNING);
+    const production = isProduction();
+    return async () => (production ? forbidden() : allow());
+  }
+
   const instanceOf = classInstances(moduleRef);
   let decide: (context: ExecutionContext) => Promise<unknown>;
-  let ready: Promise<void> = Promise.resolve();
-
   if (typeof authorize === 'string') {
     const name = authorize;
     const gate = tryGet<ConsoleGate>(moduleRef, CONSOLE_GATE);
     if (gate === undefined) {
       throw new Error(
-        `AgentDashboardModule: \`authorize: '${name}'\` needs @dudousxd/nestjs-authz's AuthzModule (it resolves gate names); or pass a function, a class, or { policy, ability }.`,
+        `${MODULE}: \`authorize: '${name}'\` needs @dudousxd/nestjs-authz's AuthzModule (it resolves gate names); or pass a function, a class, or { policy, ability }.`,
       );
     }
     decide = (context) => gate.allows(name, context);
   } else if (isPolicyCheck(authorize)) {
-    const { policy, ability } = authorize;
-    const checker = loadPolicyChecker(moduleRef);
-    ready = checker.then(() => undefined);
-    decide = async (context) => {
-      const { can, getUser } = await checker;
-      const user = await getUser(context);
-      if (await can(policy, ability, user)) return true;
-      const guest = user === null || user === undefined || user === false;
-      return { allowed: false, reason: guest ? 'unauthenticated' : 'forbidden' } as const;
-    };
+    decide = await policyDecider(authorize, moduleRef);
   } else if (isAuthorizerClass(authorize)) {
     const Class = authorize;
     decide = async (context) => (await instanceOf(Class)).authorize(context);
@@ -195,42 +210,27 @@ export function resolveConsoleAuthorize(
       const result = await fn(context);
       const Class = lazyModuleClass(result);
       if (Class === undefined) return result;
+      // A lazy import: remember the class, so the import runs once per registration.
       lazyClass = Class;
       return (await instanceOf(Class)).authorize(context);
     };
   } else {
     throw new Error(
-      'AgentDashboardModule: `authorize` must be a function, a ConsoleAuthorizer class, a lazy ' +
-        "import (`() => import('./access.js')`), `{ policy, ability }`, or a gate name.",
+      `${MODULE}: \`authorize\` must be a function, a class with authorize(), a lazy import, { policy, ability } or a gate name.`,
     );
   }
 
-  // Marked handled once: a direct caller that never awaits `ready` gets no unhandled rejection,
-  // and the per-request path still denies (the throw below becomes a `forbidden`).
-  ready.catch(() => undefined);
-  const check = async (context: ExecutionContext): Promise<ConsoleDecision> => {
+  return async (context) => {
     try {
-      return normalizeConsoleDecision(await decide(context));
+      return normalizeConsoleResult(await decide(context));
     } catch (error) {
-      logger.warn(
+      log.warn(
         `console \`authorize\` threw, denying the request: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return FORBID;
+      return forbidden();
     }
   };
-  return Object.assign(check, { ready });
 }
-
-/** The check used when `authorize` is omitted: open outside production, denied in production. */
-export function defaultConsoleAccess(production: boolean): ConsoleAccessCheck {
-  const decision = production ? FORBID : ALLOW;
-  return Object.assign(async () => decision, { ready: Promise.resolve() });
-}
-
-/** The one boot warning for an omitted `authorize`. */
-export const CONSOLE_AUTHORIZE_MISSING_WARNING =
-  '[@dudousxd/nestjs-agent-dashboard] console has no `authorize` configured: it is open outside ' +
-  'production and denies every request in production. Set `authorize` in AgentDashboardModule.forRoot().';
 
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value).digest();

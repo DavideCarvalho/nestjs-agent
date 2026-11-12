@@ -7,7 +7,6 @@ import {
   HttpException,
   Inject,
   Injectable,
-  Logger,
   type OnModuleInit,
   SetMetadata,
   UseFilters,
@@ -16,11 +15,9 @@ import {
 } from '@nestjs/common';
 import { HttpAdapterHost, ModuleRef } from '@nestjs/core';
 import {
-  CONSOLE_AUTHORIZE_MISSING_WARNING,
-  type ConsoleAccessCheck,
   type ConsoleAuthorize,
+  type ConsoleDecide,
   type ConsoleDecision,
-  defaultConsoleAccess,
   resolveConsoleAuthorize,
 } from './console-authorize.js';
 import { DASHBOARD_CONSOLE_OPTIONS } from './tokens.js';
@@ -28,49 +25,45 @@ import { DASHBOARD_CONSOLE_OPTIONS } from './tokens.js';
 /** What {@link DashboardConsoleAccess} is built from (bound per `forRoot`). */
 export interface DashboardConsoleOptions {
   authorize?: ConsoleAuthorize;
-  /** Log the boot warning when `authorize` is omitted. */
-  warnWhenOmitted: boolean;
 }
-
-const logger = new Logger('AgentDashboardModule');
 
 /** Holds the console's resolved `authorize` check for one registration. */
 @Injectable()
 export class DashboardConsoleAccess implements OnModuleInit {
-  #check: ConsoleAccessCheck | undefined;
+  #decide: ConsoleDecide | undefined;
 
   constructor(
     @Inject(DASHBOARD_CONSOLE_OPTIONS) private readonly options: DashboardConsoleOptions,
     private readonly moduleRef: ModuleRef,
   ) {}
 
+  #resolving: Promise<ConsoleDecide> | undefined;
+
+  /** Resolves `authorize` at boot: a configuration mistake fails the boot, and the warning logs once. */
   async onModuleInit(): Promise<void> {
-    if (this.#check !== undefined) return;
-    if (this.options.authorize === undefined) {
-      if (this.options.warnWhenOmitted) logger.warn(CONSOLE_AUTHORIZE_MISSING_WARNING);
-      this.#check = defaultConsoleAccess(process.env.NODE_ENV === 'production');
-      return;
-    }
-    const check = resolveConsoleAuthorize(this.options.authorize, this.moduleRef);
-    await check.ready;
-    this.#check = check;
+    this.#resolving ??= resolveConsoleAuthorize(this.options.authorize, this.moduleRef);
+    this.#decide = await this.#resolving;
   }
 
   /** The decision for one request. */
   async check(context: ExecutionContext): Promise<ConsoleDecision> {
-    if (this.#check === undefined) await this.onModuleInit();
-    return (this.#check as ConsoleAccessCheck)(context);
+    if (this.#decide === undefined) await this.onModuleInit();
+    return (this.#decide as ConsoleDecide)(context);
   }
 }
 
-/** Marks a handler as a page the browser navigates to (denials there are HTML / a redirect). */
-const CONSOLE_PAGE = Symbol.for('@dudousxd/nestjs-agent-dashboard:console-page');
+/** Marks a controller or handler as serving pages: a denied browser navigation gets HTML or a 302. */
+export const CONSOLE_PAGE_METADATA = '@dudousxd/nestjs-agent-dashboard:console-page';
 
-/** On a handler that serves a page: a denied browser navigation gets HTML or a 302, not JSON. */
-export const ConsolePage = (): MethodDecorator => SetMetadata(CONSOLE_PAGE, true);
+/**
+ * On a controller or a handler that serves pages: a denied `GET` that accepts HTML gets a page (or a
+ * 302 for `redirectTo`), not JSON.
+ */
+export const ConsolePage = (): ClassDecorator & MethodDecorator =>
+  SetMetadata(CONSOLE_PAGE_METADATA, true);
 
 /** Thrown by {@link ConsoleAuthorizeGuard}; its body is the JSON answer even without the filter. */
-export class ConsoleAccessDeniedException extends HttpException {
+export class ConsoleAccessDenied extends HttpException {
   constructor(
     readonly decision: Exclude<ConsoleDecision, { allowed: true }>,
     readonly page: boolean,
@@ -93,8 +86,11 @@ interface HttpRequestLike {
 }
 
 function isPageNavigation(context: ExecutionContext): boolean {
-  const handler = context.getHandler();
-  if (Reflect.getMetadata(CONSOLE_PAGE, handler) !== true) return false;
+  if (context.getType() !== 'http') return false;
+  const page =
+    Reflect.getMetadata(CONSOLE_PAGE_METADATA, context.getHandler()) === true ||
+    Reflect.getMetadata(CONSOLE_PAGE_METADATA, context.getClass()) === true;
+  if (!page) return false;
   const req = context.switchToHttp().getRequest<HttpRequestLike>();
   if ((req.method ?? 'GET').toUpperCase() !== 'GET') return false;
   const accept = req.headers?.accept;
@@ -105,7 +101,7 @@ function isPageNavigation(context: ExecutionContext): boolean {
 /**
  * Runs the console's `authorize` on every route of a controller it guards. Applied by the module
  * after the app's `decorators` (so authentication guards have already set `request.user`); a
- * self-mounted controller (`routes: false`) applies it with {@link ConsoleAuthorized}.
+ * self-mounted controller (`routes: false`) applies it with {@link UseConsoleAuthorize}.
  */
 @Injectable()
 export class ConsoleAuthorizeGuard implements CanActivate {
@@ -114,24 +110,27 @@ export class ConsoleAuthorizeGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const decision = await this.access.check(context);
     if (decision.allowed) return true;
-    throw new ConsoleAccessDeniedException(decision, isPageNavigation(context));
+    throw new ConsoleAccessDenied(decision, isPageNavigation(context));
   }
 }
 
-const DENIED_PAGE =
-  '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" ' +
-  'content="width=device-width,initial-scale=1"><title>Access denied</title></head>' +
-  '<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0">' +
-  '<main style="text-align:center"><h1>Access denied</h1>' +
-  '<p>You are not allowed to open this console.</p></main></body></html>';
+/** The minimal page a denied browser navigation gets. */
+function deniedPage(title: string, message: string): string {
+  const body =
+    'font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body style="${body}"><main style="text-align:center"><h1>${title}</h1><p>${message}</p></main></body></html>`;
+}
 
-/** Writes a console denial: JSON for API calls, HTML or a 302 for page navigations. */
-@Catch(ConsoleAccessDeniedException)
+const FORBIDDEN_PAGE = deniedPage('Access denied', 'You do not have access to this console.');
+const UNAUTHENTICATED_PAGE = deniedPage('Sign in required', 'Sign in to open this console.');
+
+/** Writes a console denial: JSON for API calls; a 302 or an HTML page (403 / 401) for page navigations. */
+@Catch(ConsoleAccessDenied)
 @Injectable()
-export class ConsoleAccessDeniedFilter implements ExceptionFilter<ConsoleAccessDeniedException> {
+export class ConsoleAuthorizeFilter implements ExceptionFilter<ConsoleAccessDenied> {
   constructor(private readonly adapterHost: HttpAdapterHost) {}
 
-  catch(exception: ConsoleAccessDeniedException, host: ArgumentsHost): void {
+  catch(exception: ConsoleAccessDenied, host: ArgumentsHost): void {
     const adapter = this.adapterHost.httpAdapter;
     const res = host.switchToHttp().getResponse<unknown>();
     const { decision, page } = exception;
@@ -139,9 +138,10 @@ export class ConsoleAccessDeniedFilter implements ExceptionFilter<ConsoleAccessD
       adapter.redirect(res, 302, decision.redirectTo);
       return;
     }
-    if (page && decision.reason === 'forbidden') {
+    if (page) {
+      const forbidden = decision.reason === 'forbidden';
       adapter.setHeader(res, 'Content-Type', 'text/html; charset=utf-8');
-      adapter.reply(res, DENIED_PAGE, 403);
+      adapter.reply(res, forbidden ? FORBIDDEN_PAGE : UNAUTHENTICATED_PAGE, forbidden ? 403 : 401);
       return;
     }
     adapter.reply(res, exception.getResponse(), exception.getStatus());
@@ -154,6 +154,6 @@ export class ConsoleAccessDeniedFilter implements ExceptionFilter<ConsoleAccessD
  * authentication decorators: class decorators apply bottom-up, so it then runs after them and
  * `request.user` is set.
  */
-export function ConsoleAuthorized(): ClassDecorator & MethodDecorator {
-  return applyDecorators(UseGuards(ConsoleAuthorizeGuard), UseFilters(ConsoleAccessDeniedFilter));
+export function UseConsoleAuthorize(): ClassDecorator & MethodDecorator {
+  return applyDecorators(UseGuards(ConsoleAuthorizeGuard), UseFilters(ConsoleAuthorizeFilter));
 }

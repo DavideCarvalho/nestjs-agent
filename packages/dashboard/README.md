@@ -102,7 +102,7 @@ What `authorize` returns:
 |---|---|---|
 | `true` / `{ allowed: true }` | allowed | allowed |
 | `false` / `{ allowed: false }` | `403 { error: 'forbidden' }` | `403` access-denied page |
-| `{ allowed: false, reason: 'unauthenticated' }` | `401 { error: 'unauthenticated' }` | `401` |
+| `{ allowed: false, reason: 'unauthenticated' }` | `401 { error: 'unauthenticated' }` | `401` sign-in-required page |
 | `{ redirectTo: '/login' }` | `401 { error: 'unauthenticated', redirectTo }` | `302` to `redirectTo` |
 | throws | `403` | `403` |
 
@@ -126,14 +126,15 @@ Only the header counts (no query string). An empty token throws when the module 
 
 - Outside production (`NODE_ENV !== 'production'`) the console is open.
 - In production every request answers `403 { error: 'forbidden' }`.
-- Either way, one warning is logged at boot telling you to set `authorize`.
+- Either way, one warning is logged at boot telling you to set `authorize`, also with `routes: false`
+  (`UseConsoleAuthorize()` applies the same production `403`).
 
 `decorators` alone do not change this: set `authorize`.
 
 ### Mounting it yourself
 
 With `routes: false` the module mounts nothing; extend the exported controllers under your own path,
-and apply the module's `authorize` with `ConsoleAuthorized()`. Put it above your authentication
+and apply the module's `authorize` with `UseConsoleAuthorize()`. Put it above your authentication
 decorators: Nest applies class decorators bottom-up, so the one written higher runs later.
 
 ```ts
@@ -145,12 +146,12 @@ AgentDashboardModule.forRoot({
 });
 
 @Controller('ops/ai/api')
-@ConsoleAuthorized() // above the auth guard: class decorators apply bottom-up
+@UseConsoleAuthorize() // above the auth guard: class decorators apply bottom-up
 @UseGuards(AuthenticationGuard)
 export class ConsoleApi extends AgentApiController {}
 
 @Controller('ops/ai')
-@ConsoleAuthorized() // above the auth guard: class decorators apply bottom-up
+@UseConsoleAuthorize() // above the auth guard: class decorators apply bottom-up
 @UseGuards(AuthenticationGuard)
 export class ConsoleUi extends AgentUiController {}
 ```

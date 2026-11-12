@@ -79,7 +79,7 @@ function parseLimit(value: string | undefined, fallback: number): number {
  *
  * Who reaches it: `authorize` on `AgentDashboardModule.forRoot` (checked by `ConsoleAuthorizeGuard`,
  * after the app's `decorators`). Mounted by the app itself (`routes: false`), apply
- * `ConsoleAuthorized()` to your subclass.
+ * `UseConsoleAuthorize()` to your subclass.
  */
 @CanAnyone()
 @Controller()

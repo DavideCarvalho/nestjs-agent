@@ -77,7 +77,8 @@ class OpsOrchestratorAgent {}
     // Durable engine, fully in-process (no Redis) via the default transport + in-memory state store.
     DurableModule.forRoot({ store: new InMemoryStateStore() }),
     // The standalone AI-gateway governance console at /ai-gateway (JSON API at /ai-gateway/api).
-    AgentDashboardModule.forRoot(),
+    // Demo only: open locally, closed in production. A real app decides on `request.user` here.
+    AgentDashboardModule.forRoot({ authorize: () => process.env.NODE_ENV !== 'production' }),
     // The agent — each turn runs as the durable `agent.run` workflow.
     AgentModule.forRoot({
       // --- infrastructure ---

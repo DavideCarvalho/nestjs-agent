@@ -5,12 +5,13 @@ import { ModuleRef } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONSOLE_AUTHORIZE_MISSING_WARNING,
   CONSOLE_GATE,
   type ConsoleAuthorize,
   type ConsoleAuthorizeResult,
   type ConsoleAuthorizer,
   authorizeByToken,
-  normalizeConsoleDecision,
+  normalizeConsoleResult,
   resolveConsoleAuthorize,
 } from './console-authorize.js';
 
@@ -62,7 +63,7 @@ afterEach(() => {
   AdminOnly.instances = 0;
 });
 
-describe('normalizeConsoleDecision', () => {
+describe('normalizeConsoleResult', () => {
   it.each([
     [true, { allowed: true }],
     [{ allowed: true }, { allowed: true }],
@@ -80,14 +81,14 @@ describe('normalizeConsoleDecision', () => {
     [undefined, { allowed: false, reason: 'forbidden' }],
     ['yes', { allowed: false, reason: 'forbidden' }],
   ])('%j → %j', (input, expected) => {
-    expect(normalizeConsoleDecision(input)).toEqual(expected);
+    expect(normalizeConsoleResult(input)).toEqual(expected);
   });
 });
 
 describe('resolveConsoleAuthorize', () => {
   it('inline function: gets the context and its result is normalized', async () => {
     const moduleRef = await moduleRefWith();
-    const check = resolveConsoleAuthorize(
+    const check = await resolveConsoleAuthorize(
       (ctx) => ctx.switchToHttp().getRequest<{ user?: { admin: boolean } }>().user?.admin === true,
       moduleRef,
     );
@@ -97,7 +98,7 @@ describe('resolveConsoleAuthorize', () => {
 
   it('class form: created with DI, once per registration', async () => {
     const moduleRef = await moduleRefWith();
-    const check = resolveConsoleAuthorize(AdminOnly, moduleRef);
+    const check = await resolveConsoleAuthorize(AdminOnly, moduleRef);
     expect(await check(httpContext({ user: { admin: true } }))).toEqual({ allowed: true });
     expect(await check(httpContext({ user: { admin: false } }))).toEqual({
       allowed: false,
@@ -111,7 +112,7 @@ describe('resolveConsoleAuthorize', () => {
     class AccessModule {}
     const moduleRef = await moduleRefWith(AccessModule);
     expect(AdminOnly.instances).toBe(1);
-    const check = resolveConsoleAuthorize(AdminOnly, moduleRef);
+    const check = await resolveConsoleAuthorize(AdminOnly, moduleRef);
     expect(await check(httpContext({ user: { admin: true } }))).toEqual({ allowed: true });
     expect(AdminOnly.instances).toBe(1);
   });
@@ -119,7 +120,7 @@ describe('resolveConsoleAuthorize', () => {
   it('lazy import: the import runs once, the class is created with DI once', async () => {
     const moduleRef = await moduleRefWith();
     const load = vi.fn(async () => ({ default: AdminOnly }));
-    const check = resolveConsoleAuthorize(load, moduleRef);
+    const check = await resolveConsoleAuthorize(load, moduleRef);
     expect(await check(httpContext({ user: { admin: true } }))).toEqual({ allowed: true });
     expect(await check(httpContext({}))).toEqual({ allowed: false, reason: 'forbidden' });
     expect(load).toHaveBeenCalledTimes(1);
@@ -140,7 +141,7 @@ describe('resolveConsoleAuthorize', () => {
       ],
     ];
     for (const [result, expected] of cases) {
-      const check = resolveConsoleAuthorize(async () => result, moduleRef);
+      const check = await resolveConsoleAuthorize(async () => result, moduleRef);
       expect(await check(httpContext({}))).toEqual(expected);
     }
   });
@@ -148,7 +149,7 @@ describe('resolveConsoleAuthorize', () => {
   it('a throw is a denial, never an allow', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const moduleRef = await moduleRefWith();
-    const check = resolveConsoleAuthorize(() => {
+    const check = await resolveConsoleAuthorize(() => {
       throw new Error('boom');
     }, moduleRef);
     expect(await check(httpContext({}))).toEqual({ allowed: false, reason: 'forbidden' });
@@ -167,8 +168,10 @@ describe('resolveConsoleAuthorize', () => {
       const moduleRef = await moduleRefWith(
         AuthorizationModule.forRoot({ policies: [ConsolePolicy], globalGuard: false }),
       );
-      const check = resolveConsoleAuthorize({ policy: ConsolePolicy, ability: 'view' }, moduleRef);
-      await check.ready;
+      const check = await resolveConsoleAuthorize(
+        { policy: ConsolePolicy, ability: 'view' },
+        moduleRef,
+      );
       expect(await check(httpContext({ user: { roles: ['OPS'] } }))).toEqual({ allowed: true });
       expect(await check(httpContext({ user: { roles: [] } }))).toEqual({
         allowed: false,
@@ -189,16 +192,45 @@ describe('resolveConsoleAuthorize', () => {
           },
         }),
       );
-      const check = resolveConsoleAuthorize({ policy: ConsolePolicy, ability: 'view' }, moduleRef);
+      const check = await resolveConsoleAuthorize(
+        { policy: ConsolePolicy, ability: 'view' },
+        moduleRef,
+      );
       expect(await check(httpContext({ headers: { 'x-role': 'OPS' } }))).toEqual({
         allowed: true,
       });
     });
 
-    it('without AuthorizationModule, `ready` rejects (a boot error)', async () => {
+    it('without AuthorizationModule, rejects at resolution (boot) with a tailored message', async () => {
       const moduleRef = await moduleRefWith();
-      const check = resolveConsoleAuthorize({ policy: ConsolePolicy, ability: 'view' }, moduleRef);
-      await expect(check.ready).rejects.toThrow(/AuthorizationModule/);
+      await expect(
+        resolveConsoleAuthorize({ policy: ConsolePolicy, ability: 'view' }, moduleRef),
+      ).rejects.toThrow(
+        '`authorize: { policy, ability }` needs AuthorizationModule.forRoot() from @nestjs/authorization imported in the app',
+      );
+    });
+
+    it('getUser: `null` and `false` are a guest; only `undefined` falls back to `request.user`', async () => {
+      const answers: unknown[] = [];
+      const moduleRef = await moduleRefWith(
+        AuthorizationModule.forRoot({
+          policies: [ConsolePolicy],
+          globalGuard: false,
+          getUser: () => answers.shift() as never,
+        }),
+      );
+      const check = await resolveConsoleAuthorize(
+        { policy: ConsolePolicy, ability: 'view' },
+        moduleRef,
+      );
+      const ops = httpContext({ user: { roles: ['OPS'] } });
+      const guest = { allowed: false, reason: 'unauthenticated' };
+      answers.push(null);
+      expect(await check(ops)).toEqual(guest);
+      answers.push(false);
+      expect(await check(ops)).toEqual(guest);
+      answers.push(undefined);
+      expect(await check(ops)).toEqual({ allowed: true });
     });
   });
 
@@ -215,7 +247,7 @@ describe('resolveConsoleAuthorize', () => {
       })
       class FakeAuthzModule {}
       const moduleRef = await moduleRefWith(FakeAuthzModule);
-      const check = resolveConsoleAuthorize('console.agent', moduleRef);
+      const check = await resolveConsoleAuthorize('console.agent', moduleRef);
       expect(await check(httpContext({ user: 'ana' }))).toEqual({ allowed: true });
       expect(await check(httpContext({ user: 'bob' }))).toEqual({
         allowed: false,
@@ -226,7 +258,7 @@ describe('resolveConsoleAuthorize', () => {
 
     it('without the provider, throws with a clear message', async () => {
       const moduleRef = await moduleRefWith();
-      expect(() => resolveConsoleAuthorize('console.agent', moduleRef)).toThrow(
+      await expect(resolveConsoleAuthorize('console.agent', moduleRef)).rejects.toThrow(
         /`authorize: 'console.agent'` needs @dudousxd\/nestjs-authz's AuthzModule/,
       );
     });
@@ -234,9 +266,54 @@ describe('resolveConsoleAuthorize', () => {
 
   it('rejects a value that is none of the forms', async () => {
     const moduleRef = await moduleRefWith();
-    expect(() => resolveConsoleAuthorize(42 as unknown as ConsoleAuthorize, moduleRef)).toThrow(
-      /`authorize` must be/,
+    await expect(
+      resolveConsoleAuthorize(42 as unknown as ConsoleAuthorize, moduleRef),
+    ).rejects.toThrow(/`authorize` must be/);
+  });
+});
+
+describe('resolveConsoleAuthorize — `authorize` omitted', () => {
+  const previousEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    process.env.NODE_ENV = previousEnv;
+  });
+
+  it('open outside production, forbidden in production, and one warning each time', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const moduleRef = await moduleRefWith();
+    process.env.NODE_ENV = 'development';
+    const dev = await resolveConsoleAuthorize(undefined, moduleRef);
+    expect(await dev(httpContext({}))).toEqual({ allowed: true });
+    process.env.NODE_ENV = 'production';
+    const prod = await resolveConsoleAuthorize(undefined, moduleRef);
+    expect(await prod(httpContext({}))).toEqual({ allowed: false, reason: 'forbidden' });
+    expect(warn.mock.calls.map(([m]) => m)).toEqual([
+      CONSOLE_AUTHORIZE_MISSING_WARNING,
+      CONSOLE_AUTHORIZE_MISSING_WARNING,
+    ]);
+    await resolveConsoleAuthorize(undefined, moduleRef, { warnIfMissing: false });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('the warning text', () => {
+    expect(CONSOLE_AUTHORIZE_MISSING_WARNING).toBe(
+      '[@dudousxd/nestjs-agent-dashboard] console has no `authorize` configured: it is open outside production and denies every request in production. Set `authorize` in AgentDashboardModule.forRoot().',
     );
+  });
+});
+
+describe('denials are fresh objects', () => {
+  it('no shared singleton is returned by reference', async () => {
+    const moduleRef = await moduleRefWith();
+    const deny = await resolveConsoleAuthorize(() => false, moduleRef);
+    const first = await deny(httpContext({}));
+    const second = await deny(httpContext({}));
+    expect(first).toEqual(second);
+    expect(first).not.toBe(second);
+    expect(normalizeConsoleResult({ allowed: false, reason: 'unauthenticated' })).not.toBe(
+      normalizeConsoleResult({ allowed: false, reason: 'unauthenticated' }),
+    );
+    expect(normalizeConsoleResult(true)).not.toBe(normalizeConsoleResult(true));
   });
 });
 
