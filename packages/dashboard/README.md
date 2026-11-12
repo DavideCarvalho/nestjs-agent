@@ -133,8 +133,8 @@ Only the header counts (no query string). An empty token throws when the module 
 ### Mounting it yourself
 
 With `routes: false` the module mounts nothing; extend the exported controllers under your own path,
-and apply the module's `authorize` with `ConsoleAuthorized()` (after your own authentication
-decorators):
+and apply the module's `authorize` with `ConsoleAuthorized()`. Put it above your authentication
+decorators: Nest applies class decorators bottom-up, so the one written higher runs later.
 
 ```ts
 AgentDashboardModule.forRoot({
@@ -145,13 +145,13 @@ AgentDashboardModule.forRoot({
 });
 
 @Controller('ops/ai/api')
+@ConsoleAuthorized() // above the auth guard: class decorators apply bottom-up
 @UseGuards(AuthenticationGuard)
-@ConsoleAuthorized()
 export class ConsoleApi extends AgentApiController {}
 
 @Controller('ops/ai')
+@ConsoleAuthorized() // above the auth guard: class decorators apply bottom-up
 @UseGuards(AuthenticationGuard)
-@ConsoleAuthorized()
 export class ConsoleUi extends AgentUiController {}
 ```
 

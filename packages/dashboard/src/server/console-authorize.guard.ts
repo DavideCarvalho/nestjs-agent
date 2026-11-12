@@ -150,8 +150,9 @@ export class ConsoleAccessDeniedFilter implements ExceptionFilter<ConsoleAccessD
 
 /**
  * The console's access check on a controller of your own (with `routes: false`): the
- * {@link ConsoleAuthorizeGuard} plus the filter that writes its denials. Put it after your own
- * authentication decorators.
+ * {@link ConsoleAuthorizeGuard} plus the filter that writes its denials. Write it ABOVE your own
+ * authentication decorators: class decorators apply bottom-up, so it then runs after them and
+ * `request.user` is set.
  */
 export function ConsoleAuthorized(): ClassDecorator & MethodDecorator {
   return applyDecorators(UseGuards(ConsoleAuthorizeGuard), UseFilters(ConsoleAccessDeniedFilter));

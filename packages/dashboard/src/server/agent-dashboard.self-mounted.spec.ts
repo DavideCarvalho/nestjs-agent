@@ -1,7 +1,15 @@
 import 'reflect-metadata';
 import { AGENT_ACTOR_RESOLVER, AGENT_GOVERNANCE_QUERIES } from '@dudousxd/nestjs-agent-core';
 import { AuthorizationModule, Can, Policy } from '@nestjs/authorization';
-import { Controller, type ExecutionContext, Global, Module } from '@nestjs/common';
+import {
+  type CanActivate,
+  Controller,
+  type ExecutionContext,
+  Global,
+  Injectable,
+  Module,
+  UseGuards,
+} from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -75,8 +83,22 @@ describe('AgentDashboardModule({ routes: false }) — the console on controllers
 });
 
 /** The console's `authorize` on an app-mounted controller, via `ConsoleAuthorized()`. */
+/** Plays the app's authentication guard: `x-user` → `request.user`. */
+@Injectable()
+class HeaderAuth implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const req = context
+      .switchToHttp()
+      .getRequest<{ headers: Record<string, string | undefined>; user?: unknown }>();
+    req.user = req.headers['x-user'] ?? null;
+    return true;
+  }
+}
+
+// As documented: ConsoleAuthorized() above the auth guard, so it runs after it.
 @Controller('own/ai-gateway/api')
 @ConsoleAuthorized()
+@UseGuards(HeaderAuth)
 class AuthorizedConsoleApi extends AgentApiController {}
 
 @Module({
@@ -84,10 +106,7 @@ class AuthorizedConsoleApi extends AgentApiController {}
     HostStoreModule,
     AgentDashboardModule.forRoot({
       routes: false,
-      authorize: (ctx) =>
-        ctx.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>().headers[
-          'x-user'
-        ] === 'o1',
+      authorize: (ctx) => ctx.switchToHttp().getRequest<{ user?: unknown }>().user === 'o1',
     }),
   ],
   controllers: [AuthorizedConsoleApi],
