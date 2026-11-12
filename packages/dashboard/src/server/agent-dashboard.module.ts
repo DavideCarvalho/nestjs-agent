@@ -1,12 +1,24 @@
 import { withControllerDecorators } from '@dudousxd/nestjs-agent-core';
 import 'reflect-metadata';
-import { type DynamicModule, Module } from '@nestjs/common';
+import { type DynamicModule, Module, UseFilters, UseGuards } from '@nestjs/common';
 import { RouterModule } from '@nestjs/core';
 import { AgentApiController } from './agent-api.controller.js';
 import { AgentUiController } from './agent-ui.controller.js';
+import {
+  ConsoleAccessDeniedFilter,
+  ConsoleAuthorizeGuard,
+  DashboardConsoleAccess,
+  type DashboardConsoleOptions,
+} from './console-authorize.guard.js';
+import type { ConsoleAuthorize } from './console-authorize.js';
 import { DashboardService } from './dashboard.service.js';
 import { normalizeDashboardPath } from './normalize-path.js';
-import { DASHBOARD_API_PATH, DASHBOARD_APPROVAL_ACTOR_REF, DASHBOARD_BASE_PATH } from './tokens.js';
+import {
+  DASHBOARD_API_PATH,
+  DASHBOARD_APPROVAL_ACTOR_REF,
+  DASHBOARD_BASE_PATH,
+  DASHBOARD_CONSOLE_OPTIONS,
+} from './tokens.js';
 
 /**
  * `TReq` mirrors core's `ActorResolver<TReq>` convention: the transport request type
@@ -25,23 +37,28 @@ export interface AgentDashboardOptions<TReq = unknown> {
    */
   apiBasePath?: string;
   /**
-   * Who reaches the console: class decorators applied to every controller this module mounts — the
-   * ecosystem's convention, like `@nestjs/mcp`'s `decorators` — with the official tools, e.g.
-   * `[UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')]` from `@nestjs/authentication` /
-   * `@nestjs/authorization`, or a function as a guard instance, `UseGuards({ canActivate })`.
-   * Applied to a per-registration subclass, so nothing sticks to the shared classes.
+   * Who reaches the console (the SPA and every API/SSE route): an inline function
+   * `(ctx) => boolean | { allowed } | { redirectTo }`, an `@Injectable()` `ConsoleAuthorizer` class,
+   * a lazy import of one, `{ policy, ability }` (`@nestjs/authorization`), or a gate name
+   * (`@dudousxd/nestjs-authz`). `authorizeByToken({ token })` checks a bearer token.
    *
-   * In production (`NODE_ENV=production`) the console refuses to boot without them, unless the app
-   * mounts the routes itself (`routes: false`): a governance console is never served open there by
-   * default. Outside production the routes are open (and to `@nestjs/authorization`'s
-   * deny-by-default guard: `CanAnyone()`). Static wiring.
+   * Omitted: open outside production; in production every request answers 403 (and a warning is
+   * logged at boot).
+   */
+  authorize?: ConsoleAuthorize;
+  /**
+   * Class decorators applied to every controller this module mounts, before the console's own
+   * `authorize` check — e.g. `[UseGuards(AuthenticationGuard)]` so `request.user` is set when
+   * `authorize` runs. Applied to a per-registration subclass, so nothing sticks to the shared
+   * classes. They do not replace `authorize`. Static wiring.
    */
   decorators?: ClassDecorator[];
   /**
    * `false` mounts none of the console's routes, while its services still run — the way NestJS's
    * own packages leave routes to you: serve them from controllers of your own, protected with the
    * official tools, by extending the exported `AgentApiController` / `AgentUiController` under your
-   * own path and decorators (the module exports what they inject). Static wiring.
+   * own path and decorators (the module exports what they inject); `ConsoleAuthorized()` applies
+   * this module's `authorize` to them. Static wiring.
    */
   routes?: boolean;
   /** Extra `imports` merged into the console's modules — what a decorator's guard injects. */
@@ -64,19 +81,13 @@ function normalize(path: string): string {
   return normalizeDashboardPath(path);
 }
 
-/**
- * Refuse to serve a governance console open in production: either decorators state who reaches it,
- * or the app mounts the routes itself.
- */
-function assertProtected(options: AgentDashboardOptions<unknown>): void {
-  if (process.env.NODE_ENV !== 'production') return;
-  if (options.routes === false) return;
-  if ((options.decorators ?? []).length > 0) return;
-  throw new Error(
-    'AgentDashboardModule: the AI-gateway console would be served open in production. Say who reaches it, with ' +
-      "`decorators: [UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')]`, or mount its routes yourself " +
-      'with `routes: false` and extend `AgentApiController` / `AgentUiController` under your own guards.',
-  );
+/** The decorators every mounted controller gets: the app's, then the console's access check. */
+function consoleDecorators(decorators: ClassDecorator[] | undefined): ClassDecorator[] {
+  return [
+    ...(decorators ?? []),
+    UseGuards(ConsoleAuthorizeGuard),
+    UseFilters(ConsoleAccessDeniedFilter),
+  ];
 }
 
 /** Holds the JSON API + SSE controller and its read service, mounted on its own path. */
@@ -87,35 +98,41 @@ export class AgentApiModule {
     decorators?: ClassDecorator[];
     routes?: boolean;
     approvalActorRef?: (req: TReq) => string | undefined;
+    authorize?: ConsoleAuthorize;
   }): DynamicModule {
+    const consoleOptions: DashboardConsoleOptions = {
+      ...(options.authorize !== undefined ? { authorize: options.authorize } : {}),
+      warnWhenOmitted: options.routes !== false,
+    };
     return {
       module: AgentApiModule,
       imports: [...(options.imports ?? [])],
       controllers:
         options.routes === false
           ? []
-          : withControllerDecorators([AgentApiController], options.decorators),
+          : withControllerDecorators([AgentApiController], consoleDecorators(options.decorators)),
       providers: [
         DashboardService,
         // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
         // injects this WITHOUT `@Optional()`.
         { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
+        { provide: DASHBOARD_CONSOLE_OPTIONS, useValue: consoleOptions },
+        DashboardConsoleAccess,
       ],
-      // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`).
-      exports: [DashboardService, DASHBOARD_APPROVAL_ACTOR_REF],
+      // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`), and the
+      // access check `ConsoleAuthorized()` runs.
+      exports: [DashboardService, DASHBOARD_APPROVAL_ACTOR_REF, DashboardConsoleAccess],
     };
   }
 }
 
 /**
  * The AI-gateway console: the SPA at `basePath` and its JSON API at `apiBasePath`. Who reaches them
- * is the app's — `decorators`, or the app mounts them itself (`routes: false`) — with
- * `@nestjs/authentication` / `@nestjs/authorization`.
+ * is `authorize` (see {@link AgentDashboardOptions.authorize}).
  */
 @Module({})
 export class AgentDashboardModule {
   static forRoot<TReq = unknown>(options: AgentDashboardOptions<TReq> = {}): DynamicModule {
-    assertProtected(options as AgentDashboardOptions<unknown>);
     const basePath = normalize(options.basePath ?? '/ai-gateway');
     const apiBasePath = normalize(options.apiBasePath ?? `${basePath}/api`);
     return {
@@ -128,6 +145,7 @@ export class AgentDashboardModule {
           ...(options.decorators ? { decorators: options.decorators } : {}),
           ...(options.routes === false ? { routes: false } : {}),
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
+          ...(options.authorize !== undefined ? { authorize: options.authorize } : {}),
         }),
         ...(options.routes === false
           ? []
@@ -141,7 +159,7 @@ export class AgentDashboardModule {
       controllers:
         options.routes === false
           ? []
-          : withControllerDecorators([AgentUiController], options.decorators),
+          : withControllerDecorators([AgentUiController], consoleDecorators(options.decorators)),
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },

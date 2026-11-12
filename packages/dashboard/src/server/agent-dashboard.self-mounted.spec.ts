@@ -7,6 +7,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentApiController } from './agent-api.controller.js';
 import { AgentDashboardModule } from './agent-dashboard.module.js';
+import { ConsoleAuthorized } from './console-authorize.guard.js';
 
 @Policy()
 class ConsolePolicy {
@@ -69,6 +70,43 @@ describe('AgentDashboardModule({ routes: false }) — the console on controllers
       .get('/ops/ai-gateway/api/spend')
       .set({ 'x-user': 'o1', 'x-role': 'OPS' });
     // Past the app's @Can(): the console's own handling answers (not the 401/403/404 above).
+    expect([401, 403, 404]).not.toContain(allowed.status);
+  });
+});
+
+/** The console's `authorize` on an app-mounted controller, via `ConsoleAuthorized()`. */
+@Controller('own/ai-gateway/api')
+@ConsoleAuthorized()
+class AuthorizedConsoleApi extends AgentApiController {}
+
+@Module({
+  imports: [
+    HostStoreModule,
+    AgentDashboardModule.forRoot({
+      routes: false,
+      authorize: (ctx) =>
+        ctx.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>().headers[
+          'x-user'
+        ] === 'o1',
+    }),
+  ],
+  controllers: [AuthorizedConsoleApi],
+})
+class AuthorizedHostModule {}
+
+describe('ConsoleAuthorized() — the console’s `authorize` on a self-mounted controller', () => {
+  it('denies and allows with the module’s `authorize`', async () => {
+    const app = await NestFactory.create(AuthorizedHostModule, {
+      logger: false,
+      abortOnError: false,
+    });
+    await app.init();
+    close = () => app.close();
+    const server = app.getHttpServer();
+
+    const denied = await request(server).get('/own/ai-gateway/api/spend').expect(403);
+    expect(denied.body).toEqual({ error: 'forbidden' });
+    const allowed = await request(server).get('/own/ai-gateway/api/spend').set({ 'x-user': 'o1' });
     expect([401, 403, 404]).not.toContain(allowed.status);
   });
 });

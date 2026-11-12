@@ -276,7 +276,7 @@ The inbox lists blocking approvals (tool calls in `pending_approval`). Pending
 [action proposals](/docs/agent/guides/action-proposals) are not in it; decide those through the
 thread's action-proposal routes or `AGENT_APPROVAL_PORT.approveActionProposal`.
 
-The dashboard mounts no sign-in routes of its own: protect it with `decorators` or mount it yourself (`routes: false`) — see [Protecting the console](/docs/agent/packages/dashboard#protecting-the-console).
+The dashboard mounts no sign-in routes of its own: say who reaches it with `authorize` — see [Protecting the console](/docs/agent/packages/dashboard#protecting-the-console).
 
 `GovernancePage<T>` is `{ rows: T[]; page: number; pageSize: number; total: number }` (real `COUNT` + offset, deterministic id tiebreaks); an unknown `where` field `400`s naming it. `LiveAgentEvent` is `{ event: string; ts: number; payload: Record<string, unknown> }` — see [Diagnostics events](/docs/agent/reference/diagnostics-events) for the `event` names and `payload` shapes.
 

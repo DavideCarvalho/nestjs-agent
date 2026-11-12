@@ -12,9 +12,8 @@ import {
   Req,
   Res,
   StreamableFile,
-  UseFilters,
-  UseGuards,
 } from '@nestjs/common';
+import { ConsolePage } from './console-authorize.guard.js';
 import { DASHBOARD_API_PATH, DASHBOARD_BASE_PATH } from './tokens.js';
 
 /**
@@ -56,8 +55,9 @@ const CONTENT_TYPES: Record<string, string> = {
  * `<base>/assets`). The path comes from `RouterModule` (set by
  * {@link AgentDashboardModule.forRoot}({ basePath })), so the controller routes are relative.
  *
- * Who reaches it is the app's: `decorators` on `AgentDashboardModule.forRoot`, or the app mounts it
- * itself (`routes: false`) — with `@nestjs/authentication` / `@nestjs/authorization`.
+ * Who reaches it: `authorize` on `AgentDashboardModule.forRoot` (checked by `ConsoleAuthorizeGuard`,
+ * after the app's `decorators`). Mounted by the app itself (`routes: false`), apply
+ * `ConsoleAuthorized()` to your subclass.
  */
 @CanAnyone()
 @Controller()
@@ -72,6 +72,7 @@ export class AgentUiController {
   // index.html references hash-named bundles, so it MUST NOT be cached (stale bundle = the classic
   // "stuck loading after a deploy"). The hashed assets below are immutable.
   @Get()
+  @ConsolePage()
   @Header('Content-Type', 'text/html; charset=utf-8')
   @Header('Cache-Control', 'no-store, must-revalidate')
   index(@Req() req: UiPageRequest, @Res({ passthrough: true }) res: UiPageResponse): string {

@@ -33,7 +33,7 @@ import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
 export class AppModule {}
 ```
 
-The controllers are **path-relative and guard-frontable** — front `basePath`/`apiBasePath` with your own auth guard/middleware.
+The controllers are **path-relative**; who reaches them is `authorize` (see below).
 
 ### `forRoot` options
 
@@ -41,7 +41,8 @@ The controllers are **path-relative and guard-frontable** — front `basePath`/`
 AgentDashboardModule.forRoot({
   basePath?: string;             // where the SPA is served. Default '/ai-gateway'
   apiBasePath?: string;          // where the JSON/SSE API is mounted. Default '<basePath>/api'
-  decorators?: ClassDecorator[]; // who reaches it — see "Protecting the console" below
+  authorize?: ConsoleAuthorize;  // who reaches it — see "Protecting the console" below
+  decorators?: ClassDecorator[]; // applied to every mounted controller, before `authorize`
   routes?: boolean;              // false: mount it yourself
   imports?: DynamicModule['imports'];
   approvalActorRef?: (req) => string | undefined;
@@ -50,40 +51,132 @@ AgentDashboardModule.forRoot({
 
 ## Protecting the console
 
-The console's routes are the app's to protect, with NestJS's own
-[`@nestjs/authentication`](https://docs.nestjs.com/security/authentication) and
-[`@nestjs/authorization`](https://docs.nestjs.com/security/authorization). Two ways:
+`authorize` decides who reaches the console: the SPA and every API and SSE route. It runs after any
+`decorators` you pass, so an authentication guard there has already set `request.user`.
 
-1. **Mount it yourself** (`routes: false`), extending the exported controllers under your own path
-   and decorators — the services keep running and the module exports what the controllers inject:
+```ts
+AgentDashboardModule.forRoot({
+  decorators: [UseGuards(AuthenticationGuard)],
+  authorize: (ctx) => ctx.switchToHttp().getRequest().user?.isAdmin === true,
+});
+```
 
-   ```ts
-   AgentDashboardModule.forRoot({ routes: false, basePath: '/ops/ai', apiBasePath: '/ops/ai/api' });
+`authorize` takes any of these forms:
 
-   @Controller('ops/ai/api')
-   @Can(ConsolePolicy, 'view')
-   export class ConsoleApi extends AgentApiController {}
+```ts
+// 1. An inline function.
+authorize: (ctx) => ctx.switchToHttp().getRequest().user?.isAdmin === true,
 
-   @Controller('ops/ai')
-   @Can(ConsolePolicy, 'view')
-   export class ConsoleUi extends AgentUiController {}
-   ```
+// 2. A class: an @Injectable() ConsoleAuthorizer (constructor injection works).
+authorize: ConsoleAccess,
 
-2. **`decorators`**, applied to every controller the module mounts:
+// 3. A lazy import of that class.
+authorize: () => import('./console-access.js'),
 
-   ```ts
-   AgentDashboardModule.forRoot({
-     decorators: [UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')],
-   });
-   ```
+// 4. A policy from @nestjs/authorization: policy[ability](user).
+authorize: { policy: ConsolePolicy, ability: 'view' },
 
-   A function works too, as a guard instance: `UseGuards({ canActivate: (ctx) => … })`.
+// 5. A gate ability name from @dudousxd/nestjs-authz (needs its AuthzModule).
+authorize: 'console.agent',
+```
 
-**In production the console never boots open:** with neither `decorators` nor `routes: false`,
-`forRoot` throws and says how to protect it. Outside production it mounts open.
+```ts
+import { Injectable, type ExecutionContext } from '@nestjs/common';
+import type { ConsoleAuthorizer } from '@dudousxd/nestjs-agent-dashboard';
 
-The console has no sign-in of its own: the app's session (`@nestjs/authentication`) is what a
-browser carries when it opens the console.
+@Injectable()
+export default class ConsoleAccess implements ConsoleAuthorizer {
+  constructor(private readonly audit: AuditService) {}
+
+  async authorize(ctx: ExecutionContext) {
+    const user = ctx.switchToHttp().getRequest().user;
+    if (!user) return { redirectTo: '/login' };
+    return user.roles.includes('ops');
+  }
+}
+```
+
+What `authorize` returns:
+
+| Result | API call | Page navigation |
+|---|---|---|
+| `true` / `{ allowed: true }` | allowed | allowed |
+| `false` / `{ allowed: false }` | `403 { error: 'forbidden' }` | `403` access-denied page |
+| `{ allowed: false, reason: 'unauthenticated' }` | `401 { error: 'unauthenticated' }` | `401` |
+| `{ redirectTo: '/login' }` | `401 { error: 'unauthenticated', redirectTo }` | `302` to `redirectTo` |
+| throws | `403` | `403` |
+
+The SPA follows a `redirectTo` it gets from the API and shows an access-denied screen on a `403`.
+
+### A bearer token
+
+`authorizeByToken` allows a request whose `Authorization: Bearer <token>` header matches:
+
+```ts
+import { authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentDashboardModule.forRoot({
+  authorize: authorizeByToken({ token: process.env.CONSOLE_TOKEN }),
+});
+```
+
+Only the header counts (no query string). An empty token throws when the module is configured.
+
+### Without `authorize`
+
+- Outside production (`NODE_ENV !== 'production'`) the console is open.
+- In production every request answers `403 { error: 'forbidden' }`.
+- Either way, one warning is logged at boot telling you to set `authorize`.
+
+`decorators` alone do not change this: set `authorize`.
+
+### Mounting it yourself
+
+With `routes: false` the module mounts nothing; extend the exported controllers under your own path,
+and apply the module's `authorize` with `ConsoleAuthorized()` (after your own authentication
+decorators):
+
+```ts
+AgentDashboardModule.forRoot({
+  routes: false,
+  basePath: '/ops/ai',
+  apiBasePath: '/ops/ai/api',
+  authorize: { policy: ConsolePolicy, ability: 'view' },
+});
+
+@Controller('ops/ai/api')
+@UseGuards(AuthenticationGuard)
+@ConsoleAuthorized()
+export class ConsoleApi extends AgentApiController {}
+
+@Controller('ops/ai')
+@UseGuards(AuthenticationGuard)
+@ConsoleAuthorized()
+export class ConsoleUi extends AgentUiController {}
+```
+
+The console has no sign-in of its own: the app's session is what a browser carries when it opens
+the console, and `authorize` can send it to your sign-in with `{ redirectTo }`.
+
+### Migrating from the production boot refusal
+
+The console no longer refuses to boot in production without `decorators`; set `authorize` instead.
+
+```ts
+// Before
+AgentDashboardModule.forRoot({
+  decorators: [UseGuards(AuthenticationGuard), Can(ConsolePolicy, 'view')],
+});
+
+// After
+AgentDashboardModule.forRoot({
+  decorators: [UseGuards(AuthenticationGuard)],
+  authorize: { policy: ConsolePolicy, ability: 'view' },
+});
+```
+
+A `decorators` list that still decides access (a `Can()`, a guard that denies) keeps working, but
+without `authorize` the console answers `403` to every request in production.
 
 ## JSON + SSE API
 

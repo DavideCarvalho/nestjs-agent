@@ -64,3 +64,8 @@ export const DASHBOARD_API_PATH = Symbol.for('@dudousxd/nestjs-agent-dashboard:a
 export const DASHBOARD_APPROVAL_ACTOR_REF = Symbol.for(
   '@dudousxd/nestjs-agent-dashboard:approval-actor-ref',
 );
+
+/** DI token carrying the console's `authorize` (and whether to warn when it is omitted). */
+export const DASHBOARD_CONSOLE_OPTIONS = Symbol.for(
+  '@dudousxd/nestjs-agent-dashboard:console-options',
+);
