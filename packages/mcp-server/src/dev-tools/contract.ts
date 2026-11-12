@@ -155,6 +155,9 @@ export function registerDevTools(lib: DevToolsLib): (() => void) | undefined {
   return slot.register(lib);
 }
 
+/** Marks a `supports` this copy installed, so serving the slot twice does not stack it. */
+const SERVED = Symbol.for('@dudousxd/aviary:dev-tools:served');
+
 /** The optional features this package's endpoint supports (see {@link DevToolsSlot.supports}). */
 const ENDPOINT_FEATURES: ReadonlySet<string> = new Set(['endpoint-authorize']);
 
@@ -163,9 +166,14 @@ const ENDPOINT_FEATURES: ReadonlySet<string> = new Set(['endpoint-authorize']);
  * does when it is built, before any module's `onModuleInit` registers tools.
  */
 export function serveDevToolsSlot(): DevToolsSlot {
-  const slot = devToolsSlot() as DevToolsSlot & { supports?: DevToolsSlot['supports'] };
-  if (slot.version === DEV_TOOLS_VERSION) {
-    slot.supports = (feature) => ENDPOINT_FEATURES.has(feature);
-  }
+  const slot = devToolsSlot() as DevToolsSlot & {
+    supports?: DevToolsSlot['supports'] & { [SERVED]?: true };
+  };
+  if (slot.version !== DEV_TOOLS_VERSION || slot.supports?.[SERVED] === true) return slot;
+  // Combined with whatever another endpoint copy already advertised, never replacing it.
+  const previous = slot.supports;
+  const supports = (feature: DevToolsFeature): boolean =>
+    ENDPOINT_FEATURES.has(feature) || previous?.call(slot, feature) === true;
+  slot.supports = Object.assign(supports, { [SERVED]: true as const });
   return slot;
 }

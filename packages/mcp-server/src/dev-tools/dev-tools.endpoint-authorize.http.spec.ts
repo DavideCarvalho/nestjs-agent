@@ -231,6 +231,14 @@ describe('the slot advertises endpoint-authorize', () => {
     const slot = devToolsSlot();
     expect(slot.supports?.('endpoint-authorize')).toBe(true);
     expect(slot.supports?.('something-else')).toBe(false);
+  });
+
+  it('keeps the features another endpoint copy advertised', async () => {
+    const slot = devToolsSlot() as DevToolsSlot & { supports?: (feature: string) => boolean };
+    slot.supports = (feature) => feature === 'future-feature';
+    await boot({ authorize: () => true });
+    expect(slot.supports?.('future-feature')).toBe(true);
+    expect(slot.supports?.('endpoint-authorize')).toBe(true);
     expect(slot.libs.map((lib) => lib.lib).sort()).toEqual(['durable', 'resilience']);
   });
 });

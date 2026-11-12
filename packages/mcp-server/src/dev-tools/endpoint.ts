@@ -381,10 +381,13 @@ export class AgentDevToolsGuard implements CanActivate {
     let endpointDecision: Promise<DevToolsDecision> | undefined;
     const decisions: Array<{ lib: ServedDevToolsLib; decision: DevToolsDecision }> = [];
     for (const lib of needed) {
+      if (lib.authorize === undefined && endpointDecision === undefined) {
+        endpointDecision = this.endpoint.endpointGate(context);
+      }
       const decision =
         lib.authorize !== undefined
           ? await safeAuthorize(lib, context)
-          : await (endpointDecision ??= this.endpoint.endpointGate(context));
+          : await (endpointDecision as Promise<DevToolsDecision>);
       decisions.push({ lib, decision });
     }
     const allowed = decisions.filter(({ decision }) => decision.allowed).map(({ lib }) => lib);

@@ -193,16 +193,15 @@ async function policyDecider(
  * at boot. The returned function never throws: an error is a `forbidden`.
  *
  * `authorize` omitted: open outside production, `forbidden` for every request in production (read
- * when this runs), and `missingWarning` logged when given.
+ * when this runs). The endpoint logs the one boot warning itself, naming the libraries concerned.
  */
 export async function resolveDevToolsAuthorize(
   authorize: ConsoleAuthorize | undefined,
   moduleRef: ModuleRef,
-  options: { logger?: Logger; missingWarning?: string } = {},
+  options: { logger?: Logger } = {},
 ): Promise<ConsoleDecide> {
   const log = options.logger ?? logger;
   if (authorize === undefined) {
-    if (options.missingWarning !== undefined) log.warn(options.missingWarning);
     const production = isProduction();
     return async () => (production ? forbidden() : allow('dev-open'));
   }
