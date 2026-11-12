@@ -3,7 +3,7 @@ import { DetailDrawer } from './DetailDrawer';
 import { RunDetailPanel } from './RunDetailPanel';
 import { InlineError } from './SectionBoundary';
 import { ThreadDetailPanel } from './ThreadDetailPanel';
-import { hashForSection } from './hash-section';
+import { hashForSection, routeFromHash } from './hash-section';
 import { Card } from './ui/card';
 import { Empty } from './ui/kit';
 import { useRunDetail, useThreadDetail } from './use-governance';
@@ -45,10 +45,17 @@ export function DrillDownProvider({ children }: { children: ReactNode }) {
 
   // A drawer belongs to the section it was opened from. Navigating away — including via the
   // drawer's own "show all runs on this thread" link — must not leave it hanging over the new one.
+  // A route that names one (`#/runs?run=<id>`, `#/runs?thread=<id>`, what a search hit links to)
+  // opens it instead, on load too.
   useEffect(() => {
-    window.addEventListener('hashchange', close);
-    return () => window.removeEventListener('hashchange', close);
-  }, [close]);
+    const follow = () => {
+      const target = drillTargetFromHash(window.location.hash);
+      setTrail(target !== undefined ? [target] : []);
+    };
+    if (drillTargetFromHash(window.location.hash) !== undefined) follow();
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   const current = trail[trail.length - 1];
 
@@ -72,6 +79,16 @@ export function DrillDownProvider({ children }: { children: ReactNode }) {
       )}
     </DrillDownContext.Provider>
   );
+}
+
+/** The drill-down a hash route names (`?run=<id>` or `?thread=<id>`), or `undefined`. */
+export function drillTargetFromHash(hash: string): DrillTarget | undefined {
+  const { params } = routeFromHash(hash);
+  const runId = params.get('run');
+  if (runId !== null && runId !== '') return { kind: 'run', runId };
+  const threadId = params.get('thread');
+  if (threadId !== null && threadId !== '') return { kind: 'thread', threadId };
+  return undefined;
 }
 
 function targetKey(target: DrillTarget): string {

@@ -495,6 +495,11 @@ declare global {
   }
 }
 
+/** `GET <api>/consoles/search`: the global search across the Aviary consoles. */
+export function consoleSearchEndpoint(): string {
+  return `${apiBase()}/consoles/search`;
+}
+
 function apiBase(): string {
   if (typeof window !== 'undefined' && window.__AGENT_API__) return window.__AGENT_API__;
   const base = (typeof window !== 'undefined' && window.__AGENT_BASE__) || '/ai-gateway';

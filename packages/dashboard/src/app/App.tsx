@@ -1,8 +1,10 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import type { GovernanceRange } from '../client/agent-client';
+import { consoleSearchEndpoint } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { AccessDenied } from './AccessDenied';
+import { ConsoleSearch } from './ConsoleSearch';
 import { ConsoleSwitcher, readSwitcherConfig } from './ConsoleSwitcher';
 import { LiveSection } from './LiveSection';
 import { SectionBoundary } from './SectionBoundary';
@@ -99,6 +101,7 @@ export function App() {
   const live = useLiveEvents();
   const approvalsCount = useApprovalsCount();
   const access = useConsoleAccess();
+  const [searching, setSearching] = useState(false);
 
   if (access.denied) return <AccessDenied />;
 
@@ -115,6 +118,12 @@ export function App() {
               onRange={setRange}
               connected={live.connected}
               liveCount={live.events.length}
+              onSearch={() => setSearching(true)}
+            />
+            <ConsoleSearch
+              endpoint={consoleSearchEndpoint()}
+              open={searching}
+              onOpenChange={setSearching}
             />
 
             <nav className="mb-5 flex flex-wrap gap-1">
@@ -220,17 +229,20 @@ function Header({
   onRange,
   connected,
   liveCount,
+  onSearch,
 }: {
   range: GovernanceRange;
   onRange: (range: GovernanceRange) => void;
   connected: boolean;
   liveCount: number;
+  onSearch: () => void;
 }) {
   return (
     <header className="mb-5 flex flex-wrap items-center gap-4">
       <ConsoleSwitcher
         config={switcherConfig}
         current={{ title: 'Agents', icon: 'agent' }}
+        onSearch={onSearch}
         brand={
           <div className="flex items-center gap-2.5">
             <div className="grid h-8 w-8 place-items-center rounded-lg border border-brand/40 bg-brand/10">
@@ -247,6 +259,10 @@ function Header({
       />
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
+        <Button size="md" variant="outline" className="gap-2 rounded-lg" onClick={onSearch}>
+          Search
+          <kbd className="mono text-[10px] text-muted-foreground">⌘K</kbd>
+        </Button>
         <RangePicker range={range} onRange={onRange} />
         <span className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] text-muted-foreground">
           <StatusDot tone={connected ? 'live' : 'bad'} />

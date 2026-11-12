@@ -263,6 +263,56 @@ export class DashboardService {
   }
 
   /** Paged, filterable runs for the Reliability recent-runs table. */
+  /**
+   * Global search (the console switcher's): runs and threads matching `q`, scoped like every other
+   * read (tenancy included). An exact run id, an exact thread id, threads whose title contains `q`,
+   * then the newest runs of an agent named `q`. At most `limit` hits, linking into the console at
+   * `page` (`#/runs?run=<id>`, `#/runs?thread=<id>`).
+   */
+  async search(
+    q: string,
+    limit: number,
+    page: string,
+  ): Promise<Array<{ title: string; subtitle?: string; href: string }>> {
+    const queries = this.scoped();
+    const quiet = <T>(read: () => Promise<T>, fallback: T): Promise<T> =>
+      Promise.resolve()
+        .then(read)
+        .catch(() => fallback);
+    const runHit = (run: RecentRunRow) => ({
+      title: `Run ${run.runId}`,
+      subtitle: [run.agentName ?? 'default agent', run.status, run.startedAt.slice(0, 10)].join(
+        ' · ',
+      ),
+      href: `${page}#/runs?run=${encodeURIComponent(run.runId)}`,
+    });
+    const threadHit = (thread: ThreadActivityRow) => ({
+      title: thread.title !== '' ? thread.title : `Thread ${thread.threadId}`,
+      subtitle: `Thread · ${thread.messageCount} messages · ${thread.lastActivityAt.slice(0, 10)}`,
+      href: `${page}#/runs?thread=${encodeURIComponent(thread.threadId)}`,
+    });
+    const [run, thread, titled, byAgent] = await Promise.all([
+      quiet(() => queries.runDetail(q), null),
+      quiet(() => queries.threadDetail({ threadId: q, messageLimit: 1, runLimit: 1 }), null),
+      quiet(() => queries.threadsPage({ page: 1, pageSize: limit, where: { title: q } }), null),
+      quiet(() => queries.runsPage({ page: 1, pageSize: limit, where: { agentName: q } }), null),
+    ]);
+    const hits = [
+      ...(run !== null ? [runHit(run.run)] : []),
+      ...(thread !== null ? [threadHit(thread.thread)] : []),
+      ...(titled?.rows ?? []).map(threadHit),
+      ...(byAgent?.rows ?? []).map(runHit),
+    ];
+    const seen = new Set<string>();
+    return hits
+      .filter((hit) => {
+        if (seen.has(hit.href)) return false;
+        seen.add(hit.href);
+        return true;
+      })
+      .slice(0, limit);
+  }
+
   runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
     return this.scoped().runsPage(query);
   }
