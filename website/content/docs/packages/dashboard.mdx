@@ -130,6 +130,11 @@ AgentDashboardModule.forRoot({
 
 Only the header counts (no query string). An empty token throws when the module is configured.
 
+A token is for callers you script, such as the JSON API. The console UI in a browser sends no
+`Authorization` header, so a console protected by a token alone answers `401` to its own UI. For
+browser use, sign in with your app's authentication (in `decorators`) and use a function, a class,
+a policy or a gate name.
+
 ### Without `authorize`
 
 - Outside production (`NODE_ENV !== 'production'`) the console is open.
