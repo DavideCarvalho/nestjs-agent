@@ -1,6 +1,7 @@
 import {
   type ActionProposal,
   type Actor,
+  type ModelCatalog,
   type ToolUiChannelGuide,
   assertIndependentActionCapabilities,
   createToolUiChannelGuide,
@@ -8,6 +9,7 @@ import {
 import {
   AGENT_MEMORY,
   AGENT_MODEL,
+  AGENT_MODEL_CATALOG,
   AGENT_PRICING_STORE,
   AGENT_PROMPT_CONTRIBUTORS,
   AGENT_REGISTRY,
@@ -43,7 +45,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { AGENT_OPTIONS } from '@dudousxd/nestjs-agent-core';
 import type { Catalog } from '@dudousxd/nestjs-agent-core/genui';
-import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { AgentDeps } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import {
@@ -52,6 +54,7 @@ import {
   GENUI_CATALOG,
   GenuiCatalogResolver,
 } from './genui/agent-genui.module.js';
+import { type ConfiguredModel, describeConfigured, resolveTurnModel } from './model-resolution.js';
 
 /**
  * The synthesized `agent`-kind tool name an orchestrator uses to hand off to `target`.
@@ -96,6 +99,7 @@ export class AgentDepsFactory {
     @Optional() @Inject(GENUI_CATALOG) private readonly uiCatalog?: Catalog,
     @Optional() private readonly uiCatalogResolver?: GenuiCatalogResolver,
     @Optional() @Inject(AGENT_GENUI) private readonly genui?: AgentGenui,
+    @Optional() @Inject(AGENT_MODEL_CATALOG) private readonly modelCatalog?: ModelCatalog,
   ) {
     if (options.actionApprovalMode === 'independent')
       assertIndependentActionCapabilities(store, options.backgroundActorResolver);
@@ -150,6 +154,75 @@ export class AgentDepsFactory {
       ? { agentName: name }
       : { agentName: alias.agent, persona: alias.persona };
   }
+
+  /**
+   * The models configured for a turn of `agentName` under `persona`, most specific first: the
+   * persona's own `model`, then the agent's. A name a persona took over ({@link Persona.aliases})
+   * reads that persona. Empty → neither sets one.
+   */
+  configuredModels(agentName: string, persona?: string): ConfiguredModel[] {
+    const target = this.resolveAgent(agentName);
+    const definition = this.agents.get(target.agentName);
+    const own = findPersona(definition, persona ?? target.persona);
+    return [
+      ...(own?.model !== undefined
+        ? [{ model: own.model, agent: target.agentName, persona: own.id }]
+        : []),
+      ...(definition?.modelId !== undefined
+        ? [{ model: definition.modelId, agent: target.agentName }]
+        : []),
+    ];
+  }
+
+  /** Every model an agent or persona configures, for the boot check. */
+  allConfiguredModels(): ConfiguredModel[] {
+    return this.agents
+      .list()
+      .flatMap((definition) => [
+        ...(definition.modelId !== undefined
+          ? [{ model: definition.modelId, agent: definition.name }]
+          : []),
+        ...(definition.personas ?? []).flatMap((persona) =>
+          persona.model !== undefined
+            ? [{ model: persona.model, agent: definition.name, persona: persona.id }]
+            : [],
+        ),
+      ]);
+  }
+
+  readonly #labelWarned = new Set<string>();
+
+  /**
+   * Warn, once per agent/persona and name, that a configured `model` names no model the catalog
+   * lists: it stays an accounting label (an agent's) or is ignored (a persona's).
+   */
+  warnModelLabel = (configured: ConfiguredModel): void => {
+    const key = `${configured.agent}\u0000${configured.persona ?? ''}\u0000${configured.model}`;
+    if (this.#labelWarned.has(key)) return;
+    this.#labelWarned.add(key);
+    new Logger('AgentModule').warn(
+      `${describeConfigured(configured)} sets model "${configured.model}", which names no configured model, so ${
+        configured.persona !== undefined ? 'it is ignored' : 'it is only the usage accounting label'
+      }. Configure it (AgentModule.forRoot({ model: { ${configured.model}: provider } }), aiSdkModels, or AiModule's models) to run the agent on it.`,
+    );
+  };
+
+  /**
+   * The model a delegation to `target` runs on: its alias persona's or its default persona's
+   * `model`, else its own, else the catalog's lock — checked against the catalog for `actor`.
+   */
+  resolveDelegateModel = async (actor: Actor, target: string): Promise<string | undefined> => {
+    const resolved = this.resolveAgent(target);
+    const persona = resolved.persona ?? this.defaultPersona(resolved.agentName);
+    return resolveTurnModel({
+      catalog: this.modelCatalog,
+      actor,
+      agent: resolved.agentName,
+      ...(persona !== undefined ? { persona } : {}),
+      configured: this.configuredModels(resolved.agentName, persona),
+      onLabel: this.warnModelLabel,
+    });
+  };
 
   /** `agentName`'s personas as a picker reads them. Empty when it declares none. */
   personaCatalog(agentName: string): PersonaCatalogEntry[] {
@@ -285,6 +358,8 @@ export class AgentDepsFactory {
         ? { maxAgentAppearances: definition.maxAgentAppearances }
         : {}),
       ...(definition?.modelId !== undefined ? { modelId: definition.modelId } : {}),
+      // A delegation from this agent runs the target on the TARGET's model, never this turn's pick.
+      resolveDelegateModel: this.resolveDelegateModel,
       ...(this.pricingStore !== undefined ? { pricingStore: this.pricingStore } : {}),
       ...(historyPolicy !== undefined ? { historyPolicy } : {}),
       inputProcessors: this.options.inputProcessors ?? [],

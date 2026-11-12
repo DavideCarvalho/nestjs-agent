@@ -384,7 +384,7 @@ export class AgentRunWorkflow {
       // (engine in-process throws durable-core's WorkflowSuspended/ContinueAsNew; the BullMQ thin
       // worker throws durable-worker's own Suspend), so only the Symbol.for marker is reliable.
       isControlFlowError: (error) => isWorkflowControlFlowSignal(error),
-      runAgent: async (agentName, task) => {
+      runAgent: async (agentName, task, options) => {
         const subThreadId = await stepOf(ctx)(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({
             actor: input.actor,
@@ -402,6 +402,8 @@ export class AgentRunWorkflow {
           delegationPath: chainBelow,
           parentRunId: ctx.runId,
           sinkRunId,
+          // The delegate's own model (journaled in the claim), never this turn's pick.
+          ...(options?.model !== undefined ? { model: options.model } : {}),
         });
       },
       // The same delegation, not awaited: `ctx.startChild` records a `spawn:<childRunId>` at this
@@ -419,7 +421,7 @@ export class AgentRunWorkflow {
       //     run is started on its own (`startDetached`), not as a `spawn:` child. A run that
       //     journaled the `spawn:` before this release replays it: `ctx.patched` answers false at a
       //     position that already holds one.
-      startAgent: async ({ agentName, task, toolCallId }) => {
+      startAgent: async ({ agentName, task, toolCallId, model }) => {
         const subThreadId = await stepOf(ctx)(`subthread:${agentName}`, async () => {
           const thread = await this.store.createThread({ actor: input.actor, transient: true });
           return thread.id;
@@ -434,6 +436,7 @@ export class AgentRunWorkflow {
           delegationPath: chainBelow,
           parentRunId: ctx.runId,
           deliverTo: { threadId: input.threadId, toolCallId },
+          ...(model !== undefined ? { model } : {}),
         };
         if (!(await ctx.patched('agent:detached-unlinked'))) {
           return { runId: await ctx.startChild(AgentRunWorkflow, childInput) };

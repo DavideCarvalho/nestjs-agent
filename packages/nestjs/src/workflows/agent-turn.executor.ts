@@ -274,7 +274,7 @@ export class AgentTurnExecutor {
       step,
       parallel: settleAll,
       isControlFlowError: isEngineControlFlow,
-      runAgent: async (agentName, task) => {
+      runAgent: async (agentName, task, options) => {
         // Named on the call, before any await: parallel delegations get the same names on a replay.
         const name = journal.unique(`delegate:${agentName}`);
         const subThreadId = await subThread(agentName);
@@ -288,6 +288,8 @@ export class AgentTurnExecutor {
           delegationPath: chainBelow,
           parentRunId: runId,
           sinkRunId,
+          // The delegate's own model (journaled in the claim), never this turn's pick.
+          ...(options?.model !== undefined ? { model: options.model } : {}),
         };
         return journal.op(name, () =>
           this.ctxCall(() =>
@@ -299,7 +301,7 @@ export class AgentTurnExecutor {
       },
       // A detached delegation outlives the turn that started it, and a Stop on that turn: an
       // abandoned child, not a cancelled one.
-      startAgent: async ({ agentName, task, toolCallId }) => {
+      startAgent: async ({ agentName, task, toolCallId, model }) => {
         const name = journal.unique(`detach:${toolCallId}`);
         const subThreadId = await subThread(agentName);
         const child: AgentRunInput = {
@@ -312,6 +314,7 @@ export class AgentTurnExecutor {
           delegationPath: chainBelow,
           parentRunId: runId,
           deliverTo: { threadId: input.threadId, toolCallId },
+          ...(model !== undefined ? { model } : {}),
         };
         const childRunId = await journal.op(name, async () => {
           const handle = await this.ctxCall(() =>

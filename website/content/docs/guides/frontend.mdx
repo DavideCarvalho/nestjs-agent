@@ -254,6 +254,52 @@ the thread's pinned model, else the server default. `pinToThread(id)` persists t
 still override with `sendMessage(msg, { body: { model } })`. `useModels()` / `useAgents()` are the
 standalone hooks.
 
+### A model per agent and per persona
+
+Configure named models on the module, then name one on an agent or a persona:
+
+```ts
+import { aiSdkModel } from '@dudousxd/nestjs-agent-ai-sdk';
+import { anthropic } from '@ai-sdk/anthropic';
+
+AgentModule.forRoot({
+  model: {
+    fast: aiSdkModel(anthropic('claude-haiku-4-5')),
+    smart: aiSdkModel(anthropic('claude-opus-4-5')),
+  },
+  defaultModel: 'fast', // omit → the first name
+});
+
+@Agent({ name: 'writer', model: 'smart', personas: [{ id: 'quick', label: 'Quick', model: 'fast' }] })
+@Injectable()
+export class WriterAgent {}
+```
+
+The names can also come from `aiSdkModels({ … })` or from `AiModule.forRoot({ models })`; `model`
+names one of them either way. A turn runs on the first of these that is set:
+
+1. the catalog's `locked` model, which wins over everything;
+2. the send's `model`;
+3. the thread's pinned model;
+4. the persona's `model`;
+5. the agent's `model`;
+6. the default model.
+
+Every pick goes through the `ModelCatalog` for the caller. When the catalog lists the agent's or
+persona's model but not as available to this caller, the send gets `400 model_not_allowed`, and the
+message names the agent or persona. A send that names a model the caller can use still goes through.
+
+`GET /agent/models?agent=&persona=` answers that agent's model (under that persona, else its default
+persona) as `default`, so `models.selected` and `useModels({ agent, persona })` show the model the
+chat will run on.
+
+A delegated agent (`handoff`) runs on its own model, not the caller's pick or pin. If the caller may
+not use that model, the delegation is refused and the calling agent reads why as the tool result.
+
+An agent's `model` that names no configured model works as before: it is only the label usage is
+recorded under, and the boot logs one warning about it. A single `model` provider keeps working with
+no change.
+
 ## Quota
 
 `useAgentChat` reads `GET /agent/quota` and refuses to send while a window is exhausted —

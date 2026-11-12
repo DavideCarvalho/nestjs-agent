@@ -436,6 +436,13 @@ export interface Persona {
    * resolving, with no data migration.
    */
   aliases?: string[];
+  /**
+   * The model a turn under this persona runs on, by its configured name (`'smart'`, a catalog id).
+   * Wins over the agent's `model`; a send's own `model` and the thread's pinned one win over it.
+   * Checked against the catalog for the caller on every turn. A name no configured model answers to
+   * is ignored (with a boot warning), and the agent's model applies.
+   */
+  model?: string;
 }
 
 /** What a prompt builder and a tool see of the turn's persona. */
@@ -576,6 +583,10 @@ export interface AgentDefinition {
    * finish without its answer — see {@link ToolSpec.detached}.
    */
   delegatesTo?: AgentDelegation[];
+  /**
+   * The model this agent runs on (`@Agent({ model })`), by its configured name. When it names no
+   * configured model it is only the usage accounting label, as it always was.
+   */
   modelId?: string;
   maxSteps?: number;
   /**

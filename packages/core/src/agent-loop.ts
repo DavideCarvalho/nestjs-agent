@@ -161,6 +161,7 @@ import {
 } from './tool-ui.js';
 import { observeTurnFrames, withTurnFrames } from './turn-frames.js';
 import type {
+  Actor,
   AgentRunInput,
   Decision,
   HumanReply,
@@ -207,6 +208,14 @@ export interface AgentLoopDeps<TOutput = unknown> {
    * Optional — a provider that reports its own model makes this unnecessary.
    */
   modelId?: string;
+  /**
+   * The model a delegation to `target` runs on: the target agent's own resolution (its persona's or
+   * its own configured `model`, or the catalog's lock), never this turn's pick or pin. Resolved
+   * inside the delegation's `persist:toolcall` checkpoint, so a replay starts the child on the model
+   * the first attempt chose. Throwing refuses the delegation: the model reads the error as the tool
+   * result. Undefined, or answering `undefined` → the child runs on the provider's default.
+   */
+  resolveDelegateModel?: (actor: Actor, target: string) => Promise<string | undefined>;
   /** Pre-computed (YYYY-MM-DD) so the loop body stays deterministic under durable replay. */
   day: string;
   /** The agent's base prompt. A flat string, or a {@link PromptBuilder} resolved per turn. */
@@ -514,7 +523,11 @@ export interface AgentLoopHooks {
    * Run another named agent and return its answer. Provided only when the host wired multi-agent
    * support (durable → child workflow, inline → nested loop). Exposed to tools as `ctx.runAgent`.
    */
-  runAgent?(agentName: string, task: string): Promise<{ text: string }>;
+  runAgent?(
+    agentName: string,
+    task: string,
+    options?: { model?: string },
+  ): Promise<{ text: string }>;
   /**
    * Start another named agent and return its run id WITHOUT waiting for it, so the calling turn can
    * finish while the delegate is still working. The durable runner maps this to `ctx.startChild`
@@ -533,6 +546,8 @@ export interface AgentLoopHooks {
     agentName: string;
     task: string;
     toolCallId: string;
+    /** The model the delegate runs on (its own resolution). Absent → the provider's default. */
+    model?: string;
   }): Promise<{ runId: string }>;
   /**
    * Checkpoint wrapper. Inline = call fn directly; durable = ctx.localStep(name, fn) — the
@@ -1995,6 +2010,10 @@ interface ClaimedToolCall {
   targetAgent?: string;
   /** For an `agent` call — whether the journal says this delegation runs detached. */
   detached?: boolean;
+  /** For an `agent` call — the model the journal says the delegate runs on. */
+  delegateModel?: string;
+  /** For an `agent` call — why the delegate's model refused it (the catalog does not offer it). */
+  delegateRefusal?: string;
   /** The journal says a successful call ends the turn (`ToolSpec.terminal`). */
   terminal?: boolean;
   /** Opt in to the completed-preflight presentation checkpoint from the journaled claim. */
@@ -2337,8 +2356,21 @@ async function claimToolCall(
         }),
       );
     }
+    // The delegate's model is its OWN (configured model or catalog lock), resolved here so a replay
+    // starts the child on the model the first attempt chose. Absent unless one resolves, so a
+    // deployment with no per-agent model writes the bytes this checkpoint always held.
+    const delegate =
+      kind === 'agent' && deps.resolveDelegateModel !== undefined
+        ? await resolveDelegateModelSafely(
+            deps.resolveDelegateModel,
+            input.actor,
+            spec?.targetAgent ?? call.name,
+          )
+        : undefined;
     return {
       kind,
+      ...(delegate?.model !== undefined ? { delegateModel: delegate.model } : {}),
+      ...(delegate?.refusal !== undefined ? { delegateRefusal: delegate.refusal } : {}),
       ...(spec?.targetAgent !== undefined ? { targetAgent: spec.targetAgent } : {}),
       // Only an `agent` spec ever carries this, and only when the author declared it — so a
       // deployment with no detached edge writes the same bytes here it always has.
@@ -2359,6 +2391,8 @@ async function claimToolCall(
         kind?: ToolKind;
         targetAgent?: string;
         detached?: boolean;
+        delegateModel?: string;
+        delegateRefusal?: string;
         terminal?: boolean;
         presentCompletedPreflight?: true;
         approval?: ClaimedApproval;
@@ -2375,6 +2409,10 @@ async function claimToolCall(
     toolType,
     ...(persisted?.targetAgent !== undefined ? { targetAgent: persisted.targetAgent } : {}),
     ...(persisted?.detached === true ? { detached: true } : {}),
+    ...(persisted?.delegateModel !== undefined ? { delegateModel: persisted.delegateModel } : {}),
+    ...(persisted?.delegateRefusal !== undefined
+      ? { delegateRefusal: persisted.delegateRefusal }
+      : {}),
     ...(persisted?.terminal === true ? { terminal: true } : {}),
     ...(persisted?.presentCompletedPreflight === true ? { presentCompletedPreflight: true } : {}),
     ...(toolType === 'action' && persisted?.approval !== undefined
@@ -2867,16 +2905,32 @@ async function recordToolOutcome(
  * is decided by `persist:toolcall`, whose answer comes out of the journal, so the loop's sequence
  * cannot depend on a registry the replaying process happens to hold.
  */
+/** {@link AgentLoopDeps.resolveDelegateModel}, with a refusal returned instead of thrown. */
+async function resolveDelegateModelSafely(
+  resolve: NonNullable<AgentLoopDeps['resolveDelegateModel']>,
+  actor: Actor,
+  target: string,
+): Promise<{ model?: string; refusal?: string }> {
+  try {
+    const model = await resolve(actor, target);
+    return model !== undefined ? { model } : {};
+  } catch (error) {
+    return { refusal: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function delegateToolCall(
   turn: ToolTurnContext,
   claimed: ClaimedToolCall,
 ): Promise<ToolResult> {
   const { deps, input, hooks } = turn;
-  const { call, targetAgent = call.name } = claimed;
+  const { call, targetAgent = call.name, delegateModel: model } = claimed;
   const task = extractTask(call.input);
   // A detached hop counts like any other: a cycle is cheaper to start that way, not less unbounded.
   const refusal =
-    personaRefusal(turn.persona, call.name) ?? delegationRefusal({ deps, input, targetAgent });
+    personaRefusal(turn.persona, call.name) ??
+    delegationRefusal({ deps, input, targetAgent }) ??
+    (claimed.delegateRefusal !== undefined ? `(${claimed.delegateRefusal})` : null);
   const start = claimed.detached === true && refusal === null ? hooks.startAgent : undefined;
   publishAgentDelegated({
     runId: hooks.runId,
@@ -2888,10 +2942,18 @@ async function delegateToolCall(
   if (refusal !== null) {
     sub = { text: refusal };
   } else if (start !== undefined) {
-    const started = await start({ agentName: targetAgent, task, toolCallId: call.id });
+    const started = await start({
+      agentName: targetAgent,
+      task,
+      toolCallId: call.id,
+      ...(model !== undefined ? { model } : {}),
+    });
     sub = detachedStarted({ agent: targetAgent, runId: started.runId });
   } else if (hooks.runAgent) {
-    sub = await hooks.runAgent(targetAgent, task);
+    sub =
+      model !== undefined
+        ? await hooks.runAgent(targetAgent, task, { model })
+        : await hooks.runAgent(targetAgent, task);
   } else {
     sub = { text: `(no multi-agent support wired; cannot reach "${targetAgent}")` };
   }

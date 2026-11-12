@@ -169,7 +169,7 @@ decorator is per-agent and overrides the shared defaults for that agent's turns:
 | `systemPrompt` | `string` | This agent's flat base prompt. For a dynamic prompt add a `@SystemPrompt()` method instead. A flat string is also surfaced in the `ask_` tool's description. |
 | `tools` | `string[]` | Allow-list of tool names this agent may use (a subset of all registered tools). Omit → every tool its role allows. |
 | `handoff` | `(Type \| { agent: Type; detached?: boolean })[]` | Other `@Agent` classes this agent may hand off to. A bare class becomes an `ask_<name>` tool the turn waits on; `{ agent, detached: true }` becomes a `start_<name>` tool the turn does not. |
-| `model` | `string` | Accounting/label override for this agent's turns (the model provider itself is shared). |
+| `model` | `string` | The configured model this agent runs on, also when another agent delegates to it. A name that matches no configured model is only the accounting label. |
 | `maxSteps` | `number` | Tool-calling step cap for this agent's loop (default `8`). |
 | `maxDelegationDepth` | `number` | How deep delegation may nest below this agent (default `5`). |
 | `maxAgentAppearances` | `number` | How many times one agent may appear on a single delegation chain (default `1`). |
@@ -178,7 +178,7 @@ decorator is per-agent and overrides the shared defaults for that agent's turns:
 | `intake`, `ask` | `AgentIntake`, `boolean` | See [Asking the user](/docs/agent/guides/asking-the-user). |
 | `personas`, `defaultPersona` | `Persona[]`, `string` | See [Personas](/docs/agent/guides/personas). |
 
-So each agent runs its **own system prompt, its own model label, and its own tool allow-list** —
+So each agent runs its **own system prompt, its own model, and its own tool allow-list** —
 and that allow-list is further **intersected with the actor's role and `@Can()` gates** on each tool. An
 agent can only reach tools it lists *and* the caller is authorized for.
 

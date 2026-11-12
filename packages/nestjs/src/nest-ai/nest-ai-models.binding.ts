@@ -8,6 +8,7 @@ import {
   type ModelTurnArgs,
   type ModelTurnResult,
   type PriceCatalogEntry,
+  staticCatalogView,
 } from '@dudousxd/nestjs-agent-core';
 import { AI_MODULE_OPTIONS, AiModels, type AiModuleOptions } from '@nestjs/ai';
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
@@ -55,10 +56,17 @@ export class NestAiModelsBinding implements ModelProvider, OnModuleInit {
   }
 
   /** The picker's catalog, read through to `AiModule`'s models once they are resolved. */
-  readonly catalog: ModelCatalog = {
+  readonly catalog: ModelCatalog & { readonly view: ModelCatalogView | undefined } = ((
+    binding: NestAiModelsBinding,
+  ) => ({
     list: (query: ModelCatalogQuery): ModelCatalogView | Promise<ModelCatalogView> =>
-      this.provider.catalog.list(query),
-  };
+      binding.provider.catalog.list(query),
+    // `AiModule`'s models are one fixed list: what the boot check reads agents' `model`s against.
+    get view(): ModelCatalogView | undefined {
+      const provider = binding.#provider;
+      return provider === undefined ? undefined : staticCatalogView(provider.catalog);
+    },
+  }))(this);
 
   runTurn(args: ModelTurnArgs): Promise<ModelTurnResult> {
     return this.provider.runTurn(args);

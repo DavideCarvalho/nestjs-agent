@@ -418,9 +418,16 @@ export class AgentClient implements AgentBackend {
     );
   }
 
-  /** `GET <path>/models?agent=` — the models this caller may pick, grouped by provider. */
-  listModels(agent?: string): Promise<ModelCatalogView> {
-    const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
+  /**
+   * `GET <path>/models?agent=&persona=` — the models this caller may pick, grouped by provider, with
+   * `default` the model that agent (under that persona) runs on.
+   */
+  listModels(agent?: string, persona?: string): Promise<ModelCatalogView> {
+    const params = [
+      ...(agent !== undefined ? [`agent=${encodeURIComponent(agent)}`] : []),
+      ...(persona !== undefined ? [`persona=${encodeURIComponent(persona)}`] : []),
+    ];
+    const query = params.length === 0 ? '' : `?${params.join('&')}`;
     return this.request<ModelCatalogView>('GET', `/models${query}`);
   }
 
