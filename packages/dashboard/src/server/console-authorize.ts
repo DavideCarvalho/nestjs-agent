@@ -75,11 +75,18 @@ export function normalizeConsoleResult(result: unknown): ConsoleDecision {
   return value.reason === 'unauthenticated' ? unauthenticated() : forbidden();
 }
 
+/**
+ * A class with `authorize()`: on the prototype, or (an instance-property arrow function,
+ * `authorize = (ctx) => ...`) only on instances, so any `class`.
+ */
 function isAuthorizerClass(value: unknown): value is ConsoleAuthorizerClass {
-  return (
-    typeof value === 'function' &&
+  if (typeof value !== 'function') return false;
+  if (
     typeof (value as { prototype?: { authorize?: unknown } }).prototype?.authorize === 'function'
-  );
+  ) {
+    return true;
+  }
+  return /^class[\s{]/.test(Function.prototype.toString.call(value));
 }
 
 function isPolicyCheck(value: unknown): value is ConsolePolicyCheck {
