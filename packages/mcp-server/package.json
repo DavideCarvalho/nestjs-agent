@@ -58,7 +58,9 @@
   "devDependencies": {
     "@dudousxd/nestjs-agent": "workspace:*",
     "@dudousxd/nestjs-agent-core": "workspace:*",
+    "@dudousxd/nestjs-agent-dashboard": "workspace:*",
     "@dudousxd/nestjs-agent-testing": "workspace:*",
+    "@dudousxd/nestjs-diagnostics": ">=0.7.0 <1.0.0",
     "@modelcontextprotocol/client": "2.4.0",
     "@nestjs/authorization": "0.1.3",
     "@nestjs/common": "12.0.4",
@@ -73,8 +75,7 @@
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "2.1.9",
-    "zod": "4.6.7",
-    "@dudousxd/nestjs-diagnostics": ">=0.7.0 <1.0.0"
+    "zod": "4.6.7"
   },
   "engines": {
     "node": ">=22"

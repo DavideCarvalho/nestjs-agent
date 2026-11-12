@@ -493,6 +493,9 @@ importers:
       '@dudousxd/nestjs-agent-core':
         specifier: workspace:*
         version: link:../core
+      '@dudousxd/nestjs-agent-dashboard':
+        specifier: workspace:*
+        version: link:../dashboard
       '@dudousxd/nestjs-agent-testing':
         specifier: workspace:*
         version: link:../testing
