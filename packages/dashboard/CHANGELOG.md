@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.21.0
+
+### Minor Changes
+
+- [#423](https://github.com/DavideCarvalho/nestjs-agent/pull/423) [`5e65baa`](https://github.com/DavideCarvalho/nestjs-agent/commit/5e65baa49572109362cb6acdb029f7b67c177060) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The governance console's reads are now developer tools on the agent MCP server's dev endpoint (`/mcp/aviary`): `agent_list_runs`, `agent_get_run`, `agent_get_spend`, `agent_get_tool_stats`, `agent_get_reliability`, `agent_list_pending_approvals` and `agent_list_recent_tool_calls`. They are gated by the console's own `authorize` and registered while the console is mounted. Set `devTools: true` with `routes: false` to keep them, or `devTools: false` to turn them off. New `anyAuthorize(...forms)`: it allows when any of its `authorize` forms allows, for example a token or an admin session. An allow may now name its caller, `{ allowed: true, caller }`, which the dev endpoint logs; `authorizeByToken` names it `token:<hash>`, and `anyAuthorize` keeps the caller of the form that allowed.
+
 ## 0.20.0
 
 ### Minor Changes

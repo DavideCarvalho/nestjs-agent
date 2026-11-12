@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.7.0
+
+### Minor Changes
+
+- [#423](https://github.com/DavideCarvalho/nestjs-agent/pull/423) [`5e65baa`](https://github.com/DavideCarvalho/nestjs-agent/commit/5e65baa49572109362cb6acdb029f7b67c177060) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A dev MCP endpoint at `/mcp/aviary`, on by default: it serves the developer tools Aviary libs register in the process-wide `Symbol.for('@dudousxd/aviary:dev-tools')` slot, each lib gated by its own console `authorize`. Configure it with `devTools: { path, exclude, actions, decorators }`, or turn it off with `devTools: false`. It is stateless and read-only by default. Results are capped at 48 KB, secret-looking keys are redacted, and every call is audited. It shares nothing with the product endpoint.
+
 ## 0.6.0
 
 ### Minor Changes
