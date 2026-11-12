@@ -210,7 +210,7 @@ describe('resolveConsoleAuthorize', () => {
       );
     });
 
-    it('getUser: `null` and `false` are a guest; only `undefined` falls back to `request.user`', async () => {
+    it('a configured getUser answering `undefined`, `null` or `false` is a guest (as @Can() sees it)', async () => {
       const answers: unknown[] = [];
       const moduleRef = await moduleRefWith(
         AuthorizationModule.forRoot({
@@ -230,7 +230,7 @@ describe('resolveConsoleAuthorize', () => {
       answers.push(false);
       expect(await check(ops)).toEqual(guest);
       answers.push(undefined);
-      expect(await check(ops)).toEqual({ allowed: true });
+      expect(await check(ops)).toEqual(guest);
     });
   });
 

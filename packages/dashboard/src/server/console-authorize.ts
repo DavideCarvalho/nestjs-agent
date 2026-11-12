@@ -152,12 +152,11 @@ async function policyDecider(
     moduleRef,
     mod.AUTHORIZATION_MODULE_OPTIONS,
   );
-  const fallback = mod.defaultGetUser as (context: ExecutionContext) => unknown;
-  const getUser = async (context: ExecutionContext): Promise<unknown> => {
-    // Only `undefined` means "look further"; `null` / `false` are a guest.
-    const user = options?.getUser !== undefined ? await options.getUser(context) : undefined;
-    return user === undefined ? fallback(context) : user;
-  };
+  // The user the official `@Can()` sees: the module's `getUser` when one is configured, else the
+  // package default (`request.user`). `undefined`, `null` and `false` all mean a guest.
+  const getUser = (options?.getUser ?? mod.defaultGetUser) as (
+    context: ExecutionContext,
+  ) => unknown;
   return async (context) => {
     const user = await getUser(context);
     const signedIn = hasUser(user);
