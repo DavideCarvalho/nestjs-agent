@@ -545,6 +545,7 @@ just that issuer when no `oauth` option is configured.
 | `routes.principal` | the resolved actor on `request.user` | How the MCP actor becomes the dispatched request's principal |
 | `oauth` | — | `{ issuer, scopesSupported?, resourceName? }`: serve the [protected-resource metadata](#oauth-discovery) and name it in challenges |
 | `baseUrl` | the request's origin | The public origin used in the metadata and challenges |
+| `devTools` | on, at `mcp/aviary` | The dev endpoint serving the Aviary consoles' developer tools. `false` mounts nothing. See [Developer tools over MCP](/docs/guides/dev-tools-over-mcp) |
 
 ---
 

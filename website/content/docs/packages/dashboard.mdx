@@ -48,6 +48,7 @@ export class AppModule {}
 | `routes` | `true` | `false` mounts none of the console's routes; the services keep running. Extend `AgentApiController` / `AgentUiController` under your own path, with `UseConsoleAuthorize()`. |
 | `imports` | none | Extra module imports so a guard's own dependencies (e.g. your `AuthModule`) resolve — the dashboard has no application context of its own to pull them from. |
 | `approvalActorRef` | the configured `ActorResolver` | `(req) => string \| undefined` — override for WHO is recorded as deciding a HITL approval (`Decision.executedByRef`). Default: the `AgentModule`-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is consulted, same identity seam chat uses. Set this only when console auth differs from chat auth. |
+| `devTools` | on when `routes` is not `false` | Register the console's reads as [MCP tools](#mcp-tools) on `/mcp/aviary` |
 
 It requires `AGENT_GOVERNANCE_QUERIES` to already be bound — import it alongside your
 `AgentModule.forRoot(...)` and a store adapter (MikroORM or Drizzle) that provides the read-model.
@@ -116,6 +117,10 @@ What `authorize` returns:
 
 The SPA follows a `redirectTo` it gets from the API and shows an access-denied screen on a `403`.
 
+An allow can also name who it let in: `{ allowed: true, caller: 'user:42' }`. The [MCP tools](#mcp-tools)
+log that name as the caller of each call. Never put a secret in it. `authorizeByToken` names its caller
+`token:<hash>`.
+
 ### A bearer token
 
 `authorizeByToken` allows a request whose `Authorization: Bearer <token>` header matches:
@@ -134,6 +139,18 @@ A token is for callers you script, such as the JSON API. The console UI in a bro
 `Authorization` header, so a console protected by a token alone answers `401` to its own UI. For
 browser use, sign in with your app's authentication (in `decorators`) and use a function, a class,
 a policy or a gate name.
+
+### A token or a session: `anyAuthorize`
+
+`anyAuthorize(...forms)` allows a request when any of its forms allows it. If none does, the result is `unauthenticated` when any form said so, and `forbidden` otherwise:
+
+```ts
+import { anyAuthorize, authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentDashboardModule.forRoot({
+  authorize: anyAuthorize(authorizeByToken({ token: process.env.CONSOLE_TOKEN }), AdminAuthorizer),
+});
+```
 
 ### Without `authorize`
 
@@ -274,6 +291,15 @@ Tool calls, threads, runs, and pending approvals are each backed by a paged read
 400s). The SPA's list sections use these for prev/next pagination with debounced per-column filters;
 the older `recentToolCalls`/`recentThreads`/`recentRuns` latest-N reads remain in place for the
 Telescope bridge, which only needs the tail.
+
+## MCP tools
+
+When `AgentMcpServerModule` is imported, the console's reads are also served as developer tools on
+`/mcp/aviary`, gated by this console's `authorize`. The tools are `agent_list_runs`, `agent_get_run`,
+`agent_get_spend`, `agent_get_tool_stats`, `agent_get_reliability`, `agent_list_pending_approvals`
+and `agent_list_recent_tool_calls`. They are registered while the console's routes are mounted.
+`devTools: true` keeps them with `routes: false`, and `devTools: false` turns them off. See
+[Developer tools over MCP](/docs/guides/dev-tools-over-mcp).
 
 ## When to use it
 

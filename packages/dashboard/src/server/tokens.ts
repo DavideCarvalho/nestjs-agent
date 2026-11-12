@@ -69,3 +69,6 @@ export const DASHBOARD_APPROVAL_ACTOR_REF = Symbol.for(
 export const DASHBOARD_CONSOLE_OPTIONS = Symbol.for(
   '@dudousxd/nestjs-agent-dashboard:console-options',
 );
+
+/** DI token: whether the agent's dev tools register into the dev-tools slot. */
+export const DASHBOARD_DEV_TOOLS = Symbol.for('@dudousxd/nestjs-agent-dashboard:dev-tools');

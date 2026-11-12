@@ -19,6 +19,7 @@
     "processors",
     "structured-output",
     "cost-and-governance",
+    "dev-tools-over-mcp",
     "evals",
     "persistence",
     "frontend",

@@ -15,6 +15,7 @@ export {
 export {
   CONSOLE_AUTHORIZE_MISSING_WARNING,
   CONSOLE_GATE,
+  anyAuthorize,
   authorizeByToken,
   normalizeConsoleResult,
   resolveConsoleAuthorize,
@@ -28,5 +29,6 @@ export {
   type ConsolePolicyCheck,
 } from './console-authorize.js';
 export * from './dashboard.service.js';
+export { AgentDevToolsRegistration, agentDevTools, type AgentDevTool } from './dev-tools.js';
 export * from './parse-price-input.js';
 export * from './tokens.js';
