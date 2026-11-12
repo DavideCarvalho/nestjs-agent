@@ -81,8 +81,9 @@ const SCHEMA_REVISION = 7;
  * from the platform — so it ignores any `schemaGenerator.skipTables` the host set (hosts skip
  * `agent_` in their own snapshot precisely because this owns those tables) — and applies only the
  * statements whose every table is an agent table, including the multi-statement table rebuild SQLite
- * uses in place of `add column`. `safe` means create + add-column only; existing columns are never
- * dropped. The one alteration it makes is on MySQL: a string column whose collation differs from the
+ * uses in place of `add column`. It creates and adds only: `safe` keeps columns and tables, and the
+ * index, key and column drops the diff still emits are filtered out, so an older release never drops
+ * an index a newer one added, and no release drops one the host added. The one alteration it makes is on MySQL: a string column whose collation differs from the
  * one its entity declares (MikroORM before 7.2 created every column in the table default) is
  * corrected — after checking no row would collide or lose its parent under the declared collation,
  * and refusing with {@link AgentSchemaCollationError} when one would (see `mysql-collations.ts`).
@@ -260,7 +261,23 @@ async function agentUpdateStatements(em: EntityManager): Promise<string[]> {
   return sql
     .split(';')
     .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0 && belongsToAgent(statement));
+    .filter(
+      (statement) => statement.length > 0 && belongsToAgent(statement) && !isDestructive(statement),
+    );
+}
+
+/**
+ * A statement that removes structure from a live table. `safe: true` keeps columns and tables, yet
+ * still drops every index and foreign key the entities no longer declare. A store one release behind
+ * (a rollback, an old replica in a rolling deploy) would drop an index the newer release added, and
+ * any store would drop an index or key the host app added to an agent table. The heal only creates
+ * and adds, so these never run. The SQLite rebuild's `drop table` is not one: it drops the old copy
+ * after the rows moved into the new one.
+ */
+function isDestructive(statement: string): boolean {
+  return /\bdrop\s+(?:index|key|foreign\s+key|constraint|column|primary\s+key|unique)\b/i.test(
+    statement,
+  );
 }
 
 /**

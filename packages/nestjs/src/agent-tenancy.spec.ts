@@ -353,4 +353,16 @@ describe('boot', () => {
     expect(() => service(bare, context(false).accessor).onApplicationBootstrap()).not.toThrow();
     expect(() => service(store, ctx.accessor).onApplicationBootstrap()).not.toThrow();
   });
+
+  it('fails when tenancy is enabled explicitly and no context accessor answers', () => {
+    const store = new InMemoryAgentStore();
+    expect(() => service(store, undefined, { enabled: true }).onApplicationBootstrap()).toThrow(
+      /no `@dudousxd\/nestjs-context` accessor/,
+    );
+    // 'inherit' with no context is simply off, and an accessor that answers boots.
+    expect(() => service(store, undefined).onApplicationBootstrap()).not.toThrow();
+    expect(() =>
+      service(store, context().accessor, { enabled: true }).onApplicationBootstrap(),
+    ).not.toThrow();
+  });
 });

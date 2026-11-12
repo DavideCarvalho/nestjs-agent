@@ -330,3 +330,47 @@ it('keeps the roles of a personal agent that proposed, for the worker to run it 
   });
   expect(proposal?.executionContext?.personalAgentRoles).toEqual(actor.roles);
 });
+
+it("files the proposal under the thread's tenant, not the turn actor's", async () => {
+  const store = new InMemoryAgentStore();
+  const thread = await store.createThread({ actor: { id: 'a', tenantRef: 'acme' } });
+  const registry = new ToolRegistry();
+  registry.register(
+    {
+      name: 'send',
+      kind: 'action',
+      terminal: true,
+      description: 'send',
+      inputSchema: z.object({}),
+    },
+    {
+      preflight: () => ({ status: 'ready', confirmation: { title: 'Send', verb: 'Send' } }),
+      execute: async () => 'sent',
+    },
+  );
+  const sink = new InMemoryTokenStreamSink();
+  await runAgentLoop(
+    {
+      store,
+      registry,
+      model: new FakeModelProvider(() => ({ text: '', toolCall: { name: 'send', input: {} } })),
+      rolesPolicy: new DefaultRolesPolicy(),
+      systemPrompt: 'test',
+      day: '2026-10-01',
+      actionApprovalMode: 'independent',
+    },
+    // The turn runs under another tenant than the one the thread belongs to.
+    { threadId: thread.id, actor: { id: 'a', tenantRef: 'other' }, userText: 'send' },
+    {
+      runId: 'r',
+      openSink: () => sink.open('r'),
+      step: (_name, fn) => fn(),
+      awaitApproval: async () => ({ approved: true }),
+    },
+  );
+  const scope = required(await store.getThreadActionProposalScope(thread.id));
+  expect(scope.tenantRef).toBe('acme');
+  const proposals = await store.listActionProposals(scope);
+  expect(proposals).toHaveLength(1);
+  expect(proposals[0]?.tenantRef).toBe('acme');
+});

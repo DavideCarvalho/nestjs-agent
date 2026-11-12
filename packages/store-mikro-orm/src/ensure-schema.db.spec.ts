@@ -542,6 +542,23 @@ describeEachDialect('ensureAgentSchema on a real database', (dialect) => {
     expect(await columnsOf(instance, 'host_note')).toEqual(['id', 'body']);
   });
 
+  it("keeps an index it does not declare when it heals: a newer release's, or the host's", async () => {
+    const instance = await fresh();
+    await ensureAgentSchema(instance);
+    // The host indexes an agent table itself; a store one release behind does not declare the
+    // tenant index the current one added. Either way the diff asks to drop an index.
+    await rawSql(instance, 'create index host_usage_feature_idx on agent_token_usage (feature)');
+    // A changed fingerprint is what an older or newer release sees: it forces the heal.
+    await rawSql(instance, "delete from agent_schema_meta where id = 'agent'");
+
+    await ensureAgentSchema(instance);
+
+    expect((await indexesOf(instance, 'agent_token_usage')).map((index) => index.name)).toEqual(
+      expect.arrayContaining(['host_usage_feature_idx', 'agent_token_usage_tenant_created_idx']),
+    );
+    expect(await storedFingerprint(instance)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it('lets several replicas boot at once against an empty database', async () => {
     if (dialect === 'sqlite') return; // one in-memory connection: there is no second replica
     const first = await fresh();

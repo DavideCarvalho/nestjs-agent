@@ -274,10 +274,21 @@ export class AgentService implements OnApplicationBootstrap {
 
   /**
    * With tenancy on, the store must be able to tell a thread's tenant: fail the boot with the fix
-   * rather than answer every thread read `404` at runtime.
+   * rather than answer every thread read `404` at runtime. Tenancy enabled explicitly with no
+   * context accessor to read the tenant from fails the boot too.
    */
   onApplicationBootstrap(): void {
-    if (!this.tenancy().enabled) return;
+    if (!this.tenancy().enabled) {
+      // `enabled: true` reads as off only when no context accessor answers: fail rather than run
+      // every read unscoped behind an explicit opt-in.
+      const option = this.options?.tenancy;
+      if (typeof option === 'object' && option.enabled === true) {
+        throw new Error(
+          'AgentModule tenancy is enabled explicitly, but no `@dudousxd/nestjs-context` accessor (1.2.0 or later) is available to read the tenant from, so every read would be unscoped. Import `ContextModule`, or remove `tenancy.enabled: true`.',
+        );
+      }
+      return;
+    }
     const missing = (['tenantOf', 'listThreadsForTenant'] as const).filter(
       (method) => typeof this.store[method] !== 'function',
     );

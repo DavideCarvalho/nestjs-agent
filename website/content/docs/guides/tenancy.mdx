@@ -38,7 +38,7 @@ AgentModule.forRoot({
 
 | Field | Default | |
 |---|---|---|
-| `enabled` | `'inherit'` | `'inherit'` follows `ContextModule`'s `tenancy.enabled`. `true` / `false` override it for the agent. |
+| `enabled` | `'inherit'` | `'inherit'` follows `ContextModule`'s `tenancy.enabled`. `true` / `false` override it for the agent. `true` without `ContextModule` (1.2.0 or later) fails the boot. |
 | `kinds` | the context's | Tenant kinds the agent honours. A tenant of another kind counts as no tenant. |
 | `nullRows` | `'tenantless'` | Rows with no tenant (written before tenancy, or by a request without one). `'shared'` shows them to every tenant too. |
 
