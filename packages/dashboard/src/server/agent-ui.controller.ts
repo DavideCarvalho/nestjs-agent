@@ -14,6 +14,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { ConsolePage } from './console-authorize.guard.js';
+import { AGENT_CONSOLE_ID, consoleSwitcherConfig } from './console-switcher.js';
 import { DASHBOARD_API_PATH, DASHBOARD_BASE_PATH } from './tokens.js';
 
 /**
@@ -34,6 +35,9 @@ interface UiPageResponse {
 
 /** The base the SPA bundle was built with (Vite `base`); rewritten to the configured base at serve time. */
 const BUILD_BASE = '/ai-gateway';
+
+/** The id of the page's JSON config block. */
+export const AGENT_DASHBOARD_CONFIG_ID = 'agent-dashboard-config';
 
 /** dist/server/agent-ui.controller.js -> ../spa (the Vite build output). */
 function spaDir(): string {
@@ -99,8 +103,21 @@ export class AgentUiController {
       `="${this.basePath}/`,
     );
     // __AGENT_BASE__ = where assets load; __AGENT_API__ = where the SPA fetches the JSON API.
-    const inject = `<script>window.__AGENT_BASE__='${this.basePath}';window.__AGENT_API__='${this.apiBasePath}';</script>`;
+    const inject = `<script>window.__AGENT_BASE__='${this.basePath}';window.__AGENT_API__='${this.apiBasePath}';</script>${this.configBlock()}`;
     return html.includes('</head>') ? html.replace('</head>', `${inject}</head>`) : inject + html;
+  }
+
+  /**
+   * The page's JSON config block (`agent-dashboard-config`, CSP-safe: data, not script). It carries
+   * `switcher` only when another Aviary console is registered.
+   */
+  private configBlock(): string {
+    const switcher = consoleSwitcherConfig(AGENT_CONSOLE_ID, `${this.apiBasePath}/consoles`);
+    const json = JSON.stringify({
+      apiBase: this.apiBasePath,
+      ...(switcher !== undefined ? { switcher } : {}),
+    }).replaceAll('<', '\\u003c');
+    return `<script type="application/json" id="${AGENT_DASHBOARD_CONFIG_ID}">${json}</script>`;
   }
 
   @Get('assets/:file')

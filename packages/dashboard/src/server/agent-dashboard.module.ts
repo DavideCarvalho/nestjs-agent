@@ -11,6 +11,7 @@ import {
   type DashboardConsoleOptions,
 } from './console-authorize.guard.js';
 import type { ConsoleAuthorize } from './console-authorize.js';
+import { AgentConsoleRegistration, AgentConsolesController } from './console-switcher.js';
 import { DashboardService } from './dashboard.service.js';
 import { AgentDevToolsRegistration } from './dev-tools.js';
 import { normalizeDashboardPath } from './normalize-path.js';
@@ -120,7 +121,10 @@ export class AgentApiModule {
       controllers:
         options.routes === false
           ? []
-          : withControllerDecorators([AgentApiController], consoleDecorators(options.decorators)),
+          : withControllerDecorators(
+              [AgentApiController, AgentConsolesController],
+              consoleDecorators(options.decorators),
+            ),
       providers: [
         DashboardService,
         // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
@@ -176,6 +180,8 @@ export class AgentDashboardModule {
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
+        // The console switcher lists this console only where it serves its own page.
+        ...(options.routes === false ? [] : [AgentConsoleRegistration]),
       ],
       // Re-export the API module so its DashboardService reaches importers (e.g. the host's own
       // controllers), and the paths a self-mounted `AgentUiController` subclass injects.
