@@ -19,3 +19,5 @@ Tenancy: the agent can follow the request's tenant from `@dudousxd/nestjs-contex
 - An action proposal belongs to its thread's tenant, the one listing and deciding it check, even when the turn's actor carries another.
 - The MikroORM schema heal only creates and adds: it no longer runs the index, foreign-key or column drops the safe diff emits, so a store one release behind (a rollback, an old replica) keeps the indexes a newer release added, and the indexes the host added to agent tables stay.
 - Core exports the local tenancy reader: `readTenancy`, `tenantRowFilter`, `tenantRowVisible` and `withContextTenant`.
+
+- Rolling back the MikroORM store below this release (e.g. to 0.42.x) drops `agent_token_usage_tenant_created_idx` on that boot: older stores heal by dropping indexes they do not declare. The next boot on this release adds it back. From this release on, the heal never drops anything.
