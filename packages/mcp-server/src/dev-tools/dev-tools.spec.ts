@@ -67,9 +67,12 @@ describe('registration checks', () => {
       /prefixed by its lib/,
     );
     expect(libProblem(lib({ tools: [tool(), tool()] }))).toMatch(/registered twice/);
-    expect(
-      libProblem(lib({ authorize: undefined as unknown as DevToolsLib['authorize'] })),
-    ).toMatch(/no authorize/);
+    // No authorize is a lib with no console, gated by the endpoint; a non-function one is wrong.
+    const { authorize: _gate, ...consoleLess } = lib();
+    expect(libProblem(consoleLess)).toBeNull();
+    expect(libProblem({ ...lib(), authorize: 'yes' } as unknown as DevToolsLib)).toMatch(
+      /not a function/,
+    );
     expect(
       libProblem(
         lib({

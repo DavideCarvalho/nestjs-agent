@@ -8,7 +8,8 @@ const TOOL_NAME = /^[a-z][a-z0-9]*(_[a-z0-9]+)+$/;
 export interface ServedDevToolsLib {
   lib: string;
   title: string;
-  authorize: DevToolsLib['authorize'];
+  /** Absent → a lib with no console, gated by the endpoint's `devTools.authorize`. */
+  authorize?: DevToolsLib['authorize'];
   tools: DevTool[];
   /** How many tools it registered before `exclude` (for the boot log). */
   registered: number;
@@ -27,8 +28,8 @@ export function libProblem(lib: unknown): string | null {
   if (typeof candidate.lib !== 'string' || !LIB_ID.test(candidate.lib)) {
     return `lib id ${JSON.stringify(candidate.lib)} must match /^[a-z][a-z0-9]*$/`;
   }
-  if (typeof candidate.authorize !== 'function') {
-    return `the lib "${candidate.lib}" has no authorize function`;
+  if (candidate.authorize !== undefined && typeof candidate.authorize !== 'function') {
+    return `the lib "${candidate.lib}" has an authorize that is not a function`;
   }
   if (!Array.isArray(candidate.tools)) return `"${candidate.lib}".tools must be an array`;
   const names = new Set<string>();
@@ -88,7 +89,7 @@ export function snapshot(exclude: ReadonlySet<string>): DevToolsSnapshot {
     libs.push({
       lib: lib.lib,
       title: typeof lib.title === 'string' && lib.title !== '' ? lib.title : lib.lib,
-      authorize: lib.authorize,
+      ...(lib.authorize !== undefined ? { authorize: lib.authorize } : {}),
       tools,
       registered: lib.tools.length,
     });

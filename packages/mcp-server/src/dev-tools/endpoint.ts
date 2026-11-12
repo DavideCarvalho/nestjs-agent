@@ -26,7 +26,7 @@ import {
   Res,
   type Type,
 } from '@nestjs/common';
-import { ApplicationConfig } from '@nestjs/core';
+import { ApplicationConfig, ModuleRef } from '@nestjs/core';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
 import { AGENT_MCP_SERVER_OPTIONS } from '../tokens.js';
 import { type DevToolsSnapshot, type ServedDevToolsLib, servedLibs, snapshot } from './catalog.js';
@@ -34,8 +34,9 @@ import {
   type DevTool,
   type DevToolsCaller,
   type DevToolsDecision,
-  devToolsSlot,
+  serveDevToolsSlot,
 } from './contract.js';
+import { type ConsoleDecide, resolveDevToolsAuthorize } from './endpoint-authorize.js';
 import {
   DEV_TOOLS_MAX_BYTES,
   DEV_TOOLS_MAX_ROWS,
@@ -107,12 +108,18 @@ export class AgentDevToolsEndpoint
   readonly #reported = new Set<string>();
   readonly #allowedHosts: string[] | undefined;
   readonly #allowedOrigins: string[] | undefined;
+  /** `devTools.authorize`, resolved at `onModuleInit`: the gate of libs without a console. */
+  #endpointGate: ConsoleDecide | undefined;
 
   constructor(
     @Inject(AGENT_DEV_TOOLS_OPTIONS) readonly options: ResolvedDevToolsOptions,
     @Inject(AGENT_MCP_SERVER_OPTIONS) private readonly server: AgentMcpServerModuleOptions,
     @Optional() private readonly appConfig?: ApplicationConfig,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
+    // Here, not in `onModuleInit`: every provider is built before any module's `onModuleInit`, so a
+    // lib that registers from there sees the slot, and that it `supports('endpoint-authorize')`.
+    serveDevToolsSlot();
     const http = server.mcp?.http;
     this.#allowedHosts = http?.allowedHosts !== undefined ? [...http.allowedHosts] : undefined;
     this.#allowedOrigins =
@@ -133,15 +140,43 @@ export class AgentDevToolsEndpoint
     );
   }
 
-  /** The slot exists once the endpoint does, so a lib that boots later finds it. */
-  onModuleInit(): void {
-    devToolsSlot();
+  /**
+   * Resolves `devTools.authorize` (a configuration mistake, such as a gate name without nestjs-authz,
+   * fails the boot here).
+   */
+  async onModuleInit(): Promise<void> {
+    serveDevToolsSlot();
+    if (this.options.authorize !== undefined && this.moduleRef === undefined) {
+      throw new Error('AgentMcpServerModule: `devTools.authorize` needs ModuleRef to resolve.');
+    }
+    this.#endpointGate = await resolveDevToolsAuthorize(
+      this.options.authorize,
+      this.moduleRef as ModuleRef,
+      { logger },
+    );
+  }
+
+  /**
+   * The endpoint's own gate, for a lib that registered without `authorize`. Never throws. Before
+   * `onModuleInit` resolved it, it denies.
+   */
+  endpointGate(context: ExecutionContext): Promise<DevToolsDecision> {
+    const gate = this.#endpointGate;
+    return gate === undefined
+      ? Promise.resolve({ allowed: false, reason: 'forbidden' })
+      : (gate(context) as Promise<DevToolsDecision>);
   }
 
   /** One line listing the libs and their tools, once every module has registered. */
   onApplicationBootstrap(): void {
     const snap = this.snapshot();
     const libs = servedLibs(snap);
+    const ungated = snap.libs.filter((lib) => lib.authorize === undefined).map((lib) => lib.lib);
+    if (ungated.length > 0 && this.options.authorize === undefined) {
+      logger.warn(
+        `[@dudousxd/nestjs-agent-mcp-server] dev tools for ${ungated.join(', ')} have no authorize: open outside production, denied in production. Set devTools.authorize in AgentMcpServerModule.forRoot().`,
+      );
+    }
     const list =
       libs.length === 0
         ? 'no lib registered tools yet'
@@ -342,9 +377,15 @@ export class AgentDevToolsGuard implements CanActivate {
         : servedLibs(snap);
 
     // One after the other: an `authorize` may touch shared request state (an auth guard's cache).
+    // The endpoint's own gate (libs with no console) runs at most once per request.
+    let endpointDecision: Promise<DevToolsDecision> | undefined;
     const decisions: Array<{ lib: ServedDevToolsLib; decision: DevToolsDecision }> = [];
     for (const lib of needed) {
-      decisions.push({ lib, decision: await safeAuthorize(lib, context) });
+      const decision =
+        lib.authorize !== undefined
+          ? await safeAuthorize(lib, context)
+          : await (endpointDecision ??= this.endpoint.endpointGate(context));
+      decisions.push({ lib, decision });
     }
     const allowed = decisions.filter(({ decision }) => decision.allowed).map(({ lib }) => lib);
     const caller = callerOf(
@@ -428,7 +469,7 @@ async function safeAuthorize(
   context: ExecutionContext,
 ): Promise<DevToolsDecision> {
   try {
-    const decision = (await lib.authorize(context)) as Partial<DevToolsDecision> | undefined;
+    const decision = (await lib.authorize?.(context)) as Partial<DevToolsDecision> | undefined;
     if (decision?.allowed === true) {
       const caller = (decision as { caller?: unknown }).caller;
       return typeof caller === 'string' && caller !== ''

@@ -24,7 +24,17 @@ export interface DevToolsSlot {
   readonly libs: DevToolsLib[];
   /** Adds a lib. Throws on a duplicate lib id. Returns a function that removes it again. */
   register(lib: DevToolsLib): () => void;
+  /**
+   * Whether the endpoint serving this slot supports an optional feature. Absent on endpoints that
+   * support none (and on a slot no endpoint serves yet):
+   * - `'endpoint-authorize'`: a lib may register WITHOUT `authorize` (a lib that has no console);
+   *   the endpoint's own `devTools.authorize` gates its tools.
+   */
+  supports?(feature: DevToolsFeature): boolean;
 }
+
+/** Optional endpoint features a lib can probe with {@link DevToolsSlot.supports}. */
+export type DevToolsFeature = 'endpoint-authorize' | (string & {});
 
 /**
  * What a lib's `authorize` answers: the consoles' resolved decision. An allow may name who was let
@@ -45,8 +55,11 @@ export interface DevToolsLib {
   /**
    * The lib's RESOLVED console gate: the same function its console routes call, run once per MCP
    * request with the MCP request's own `ExecutionContext`. Never throws (a throw is `forbidden`).
+   *
+   * Omit it only for a lib that has no console, and only when the slot
+   * `supports('endpoint-authorize')`: the endpoint's `devTools.authorize` gates the lib instead.
    */
-  authorize(context: ExecutionContext): Promise<DevToolsDecision>;
+  authorize?(context: ExecutionContext): Promise<DevToolsDecision>;
   tools: DevTool[];
 }
 
@@ -130,10 +143,29 @@ export function devToolsSlot(): DevToolsSlot {
 
 /**
  * Register a lib's tools into the slot, creating it when absent. Returns the function that removes
- * them (call it from `onModuleDestroy`), or `undefined` when the slot speaks another version.
+ * them (call it from `onModuleDestroy`), or `undefined` when the slot speaks another version, or when
+ * the lib has no `authorize` and no endpoint that gates such a lib serves the slot.
  */
 export function registerDevTools(lib: DevToolsLib): (() => void) | undefined {
   const slot = devToolsSlot() as Partial<DevToolsSlot>;
   if (slot.version !== DEV_TOOLS_VERSION || typeof slot.register !== 'function') return undefined;
+  if (lib.authorize === undefined && slot.supports?.('endpoint-authorize') !== true) {
+    return undefined;
+  }
   return slot.register(lib);
+}
+
+/** The optional features this package's endpoint supports (see {@link DevToolsSlot.supports}). */
+const ENDPOINT_FEATURES: ReadonlySet<string> = new Set(['endpoint-authorize']);
+
+/**
+ * Marks the slot as served by an endpoint with this package's features: what the dev endpoint
+ * does when it is built, before any module's `onModuleInit` registers tools.
+ */
+export function serveDevToolsSlot(): DevToolsSlot {
+  const slot = devToolsSlot() as DevToolsSlot & { supports?: DevToolsSlot['supports'] };
+  if (slot.version === DEV_TOOLS_VERSION) {
+    slot.supports = (feature) => ENDPOINT_FEATURES.has(feature);
+  }
+  return slot;
 }
