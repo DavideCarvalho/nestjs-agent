@@ -193,7 +193,7 @@ export function agentDevTools(dashboard: DashboardService): AgentDevTool[] {
       name: 'agent_get_run',
       kind: 'read',
       description:
-        "One run: the run, its thread, its tool calls and timings. With includeMessages: true, the thread's latest 50 messages, each cut to 2 KB. null when the id is unknown.",
+        "One run: the run, its thread, its tool calls and timings. With includeMessages: true, the thread's latest 50 messages, each cut to 2 KB. An error when no run has that id.",
       input: {
         type: 'object',
         properties: {
@@ -207,7 +207,9 @@ export function agentDevTools(dashboard: DashboardService): AgentDevTool[] {
         try {
           detail = await dashboard.runDetail(String(input.id));
         } catch (error) {
-          if (error instanceof NotFoundException) return null;
+          // The endpoint answers a throw as an MCP `isError` result.
+          if (error instanceof NotFoundException)
+            throw new Error(`run ${String(input.id)} not found`);
           throw error;
         }
         if (input.includeMessages !== true) return detail;

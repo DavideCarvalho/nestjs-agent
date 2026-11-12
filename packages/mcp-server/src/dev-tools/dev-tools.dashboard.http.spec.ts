@@ -1,9 +1,21 @@
 import { AgentModule } from '@dudousxd/nestjs-agent';
 import { AGENT_GOVERNANCE_QUERIES } from '@dudousxd/nestjs-agent-core';
-import { AgentDashboardModule, authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+import {
+  AgentDashboardModule,
+  type ConsoleAuthorize,
+  anyAuthorize,
+  authorizeByToken,
+} from '@dudousxd/nestjs-agent-dashboard';
 import { FakeModelProvider, InMemoryAgentStore } from '@dudousxd/nestjs-agent-testing';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { Global, type INestApplication, Module } from '@nestjs/common';
+import {
+  type ExecutionContext,
+  Global,
+  type INestApplication,
+  Logger,
+  Module,
+  NotFoundException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -34,7 +46,17 @@ const runsPage = vi.fn(async (query: { page: number; pageSize: number }) => ({
 /** The governance read-model a store module binds globally. */
 @Global()
 @Module({
-  providers: [{ provide: AGENT_GOVERNANCE_QUERIES, useValue: { runsPage } }],
+  providers: [
+    {
+      provide: AGENT_GOVERNANCE_QUERIES,
+      useValue: {
+        runsPage,
+        runDetail: async (id: string) => {
+          throw new NotFoundException(`run ${id}`);
+        },
+      },
+    },
+  ],
   exports: [AGENT_GOVERNANCE_QUERIES],
 })
 class GovernanceModule {}
@@ -49,7 +71,9 @@ afterEach(async () => {
   delete (globalThis as Record<symbol, unknown>)[DEV_TOOLS_SLOT];
 });
 
-async function boot(): Promise<INestApplication> {
+async function boot(
+  authorize: ConsoleAuthorize = authorizeByToken({ token: CONSOLE_TOKEN }),
+): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [
       GovernanceModule,
@@ -57,7 +81,7 @@ async function boot(): Promise<INestApplication> {
         model: new FakeModelProvider(() => ({ text: 'ok' })),
         store: new InMemoryAgentStore(),
       }),
-      AgentDashboardModule.forRoot({ authorize: authorizeByToken({ token: CONSOLE_TOKEN }) }),
+      AgentDashboardModule.forRoot({ authorize }),
       AgentMcpServerModule.forRoot({
         name: 'spec-server',
         version: '1.0.0',
@@ -75,6 +99,35 @@ function devUrl(context: INestApplication): URL {
   const address = context.getHttpServer().address();
   if (address === null || typeof address === 'string') throw new Error('not listening');
   return new URL(`http://127.0.0.1:${address.port}/mcp/aviary`);
+}
+
+async function connect(context: INestApplication, headers: Record<string, string>) {
+  const transport = new StreamableHTTPClientTransport(devUrl(context), {
+    requestInit: { headers },
+  });
+  const client = new Client({ name: 'claude-code', version: '1.0.0' });
+  await client.connect(transport);
+  clients.push(client);
+  return client;
+}
+
+/** A cookie session authorizer that leaves `request.user` unset. */
+const adminCookie = (context: ExecutionContext) =>
+  context.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>().headers
+    .cookie === 'session=admin';
+
+/** The caller the audit line of the last `agent_list_runs` call named. */
+async function auditedCaller(client: Client): Promise<unknown> {
+  const debug = vi.spyOn(Logger.prototype, 'debug');
+  try {
+    await client.callTool({ name: 'agent_list_runs', arguments: {} });
+    const line = debug.mock.calls
+      .map(([message]) => message as { devTool?: string; caller?: string })
+      .find((message) => message?.devTool === 'agent_list_runs');
+    return line?.caller;
+  } finally {
+    debug.mockRestore();
+  }
 }
 
 describe('dev MCP endpoint with the agent dashboard', () => {
@@ -108,5 +161,28 @@ describe('dev MCP endpoint with the agent dashboard', () => {
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
     expect(res.status).toBe(401);
     await request(context.getHttpServer()).get('/ai-gateway/api/runs-page').expect(401);
+  });
+
+  it('answers agent_get_run for an unknown id with an isError result', async () => {
+    const context = await boot();
+    const client = await connect(context, { authorization: `Bearer ${CONSOLE_TOKEN}` });
+    const result = await client.callTool({ name: 'agent_get_run', arguments: { id: 'nope' } });
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0]?.text).toBe('run nope not found');
+  });
+
+  it('audits the caller by what authorized: token, then session; never an unmatched Bearer', async () => {
+    const context = await boot(
+      anyAuthorize(authorizeByToken({ token: CONSOLE_TOKEN }), adminCookie),
+    );
+    const byToken = await connect(context, { authorization: `Bearer ${CONSOLE_TOKEN}` });
+    expect(await auditedCaller(byToken)).toMatch(/^token:[0-9a-f]{12}$/);
+    const byCookie = await connect(context, { cookie: 'session=admin' });
+    expect(await auditedCaller(byCookie)).toBe('session');
+    const wrongBearer = await connect(context, {
+      authorization: 'Bearer nope',
+      cookie: 'session=admin',
+    });
+    expect(await auditedCaller(wrongBearer)).toBe('session');
   });
 });
