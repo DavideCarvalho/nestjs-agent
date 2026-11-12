@@ -8,6 +8,7 @@ import { and, asc, eq, gt, inArray, lt, max, sql } from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   agentDialectOf,
@@ -24,9 +25,9 @@ export class DrizzleStreamFrameTable implements StreamFrameTable {
   private readonly dialect: AgentDialect;
   private readonly t: AgentTables;
 
-  constructor(db: AgentDrizzleDb) {
+  constructor(db: AgentDrizzleDb, options: AgentSchemaOptions = {}) {
     this.dialect = agentDialectOf(db);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(db);
   }
 
@@ -39,9 +40,9 @@ export class DrizzleStreamFrameTable implements StreamFrameTable {
     await runSql(
       this.db,
       this.dialect,
-      sql`INSERT INTO agent_stream_frame (run_id, seq, frame, error, created_at)
+      sql`INSERT INTO ${this.t.agentStreamFrame} (run_id, seq, frame, error, created_at)
           SELECT ${runId}, COALESCE(MAX(seq), 0) + 1, ${row.frame}, ${row.error}, ${row.createdAt}
-          FROM agent_stream_frame WHERE run_id = ${runId}`,
+          FROM ${this.t.agentStreamFrame} WHERE run_id = ${runId}`,
     );
   }
 
@@ -98,7 +99,13 @@ export class DrizzleStreamFrameTable implements StreamFrameTable {
  * ```
  */
 export class DrizzleTokenStreamSink extends SqlTokenStreamSink {
-  constructor(db: AgentDrizzleDb, options: SqlTokenStreamSinkOptions = {}) {
-    super(new DrizzleStreamFrameTable(db), options);
+  constructor(db: AgentDrizzleDb, options: SqlTokenStreamSinkOptions & AgentSchemaOptions = {}) {
+    super(
+      new DrizzleStreamFrameTable(
+        db,
+        options.schema !== undefined ? { schema: options.schema } : {},
+      ),
+      options,
+    );
   }
 }

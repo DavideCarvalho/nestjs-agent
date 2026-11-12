@@ -74,6 +74,7 @@ import {
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   agentDialectOf,
@@ -297,15 +298,16 @@ export class DrizzleGovernanceQueries implements AgentGovernanceQueries {
     private readonly source: AgentDrizzleDb,
     private readonly pricingStore: AgentPricingStore,
     private readonly tenant?: TenantRowFilter,
+    private readonly options: AgentSchemaOptions = {},
   ) {
     this.dialect = agentDialectOf(source);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(source);
   }
 
   /** These queries narrowed to the rows `filter` may see — the console's tenant scope. */
   forTenant(filter: TenantRowFilter): DrizzleGovernanceQueries {
-    return new DrizzleGovernanceQueries(this.source, this.pricingStore, filter);
+    return new DrizzleGovernanceQueries(this.source, this.pricingStore, filter, this.options);
   }
 
   /** The matching rule on a `tenant_ref` column; `undefined` (no condition) without a scope. */

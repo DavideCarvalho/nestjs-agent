@@ -7,6 +7,7 @@ import {
 } from '@mikro-orm/core';
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { RagIngestionLog, type RagIngestionStatus } from './entities/rag-ingestion-log.entity';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 
 /**
  * The `aviary:rag:*` payloads this recorder reads, re-declared here so it couples to the *wire
@@ -135,7 +136,15 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   private teardowns: (() => void)[] = [];
   private readonly inFlight = new Set<Promise<void>>();
 
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   onModuleInit(): void {
     for (const channel of CHANNELS) {
@@ -165,7 +174,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
 
   /** The latest recorded outcome per document, newest first. */
   async list(query: RagIngestionLogQuery = {}): Promise<RagIngestionLog[]> {
-    return this.em.fork().find(RagIngestionLog, this.where(query), {
+    return forkIn(this.em, this.schema).find(RagIngestionLog, this.where(query), {
       orderBy: RAG_INGESTION_LOG_PAGE_ORDER,
       limit: query.limit ?? 200,
       ...(query.offset !== undefined ? { offset: query.offset } : {}),
@@ -185,7 +194,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   async listPage(
     query: RagIngestionLogPageQuery = {},
   ): Promise<{ rows: RagIngestionLog[]; total: number }> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const [rows, total] = await em.findAndCount(RagIngestionLog, this.where(query), {
       orderBy: query.orderBy ?? RAG_INGESTION_LOG_PAGE_ORDER,
       limit: query.limit ?? 200,
@@ -288,18 +297,20 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
 
   /** The latest recorded outcome for one document, or null if it was never attempted. */
   async get(documentId: string): Promise<RagIngestionLog | null> {
-    return this.em.fork().findOne(RagIngestionLog, { documentId });
+    return forkIn(this.em, this.schema).findOne(RagIngestionLog, { documentId });
   }
 
   /** Forget one document's record. Returns whether a row was actually removed. */
   async remove(documentId: string): Promise<boolean> {
-    const deleted = await this.em.fork().nativeDelete(RagIngestionLog, { documentId });
+    const deleted = await forkIn(this.em, this.schema).nativeDelete(RagIngestionLog, {
+      documentId,
+    });
     return deleted > 0;
   }
 
   /** Forget every record for a collection — for when the collection itself is deleted. */
   async removeByCollection(collection: string): Promise<number> {
-    return this.em.fork().nativeDelete(RagIngestionLog, { collection });
+    return forkIn(this.em, this.schema).nativeDelete(RagIngestionLog, { collection });
   }
 
   /**
@@ -321,7 +332,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     let cursor = after;
     for (;;) {
       // A fresh fork per batch: see iterate()'s note on the identity map.
-      const rows = await page(this.em.fork(), this.keyset(where, cursor), batchSize);
+      const rows = await page(forkIn(this.em, this.schema), this.keyset(where, cursor), batchSize);
       if (rows.length === 0) {
         return;
       }
@@ -379,7 +390,7 @@ export class MikroOrmRagIngestionLog implements OnModuleInit, OnModuleDestroy {
     }
     try {
       // forked EM: this runs outside any request, so it must not touch the shared context.
-      const em = this.em.fork();
+      const em = forkIn(this.em, this.schema);
       const now = new Date();
       // Only include coordinates the payload actually carries. An omitted field is left out of the
       // conflict-merge set, so `em.upsert` leaves it untouched on update — a sparser later event

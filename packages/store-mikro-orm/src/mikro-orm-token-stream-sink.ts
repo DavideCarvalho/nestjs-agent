@@ -9,6 +9,7 @@ import {
   type EntityManager,
   UniqueConstraintViolationException,
 } from '@mikro-orm/core';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 
 /** The table {@link import('./entities/agent-stream-frame.entity').AgentStreamFrame} maps. */
 const TABLE = 'agent_stream_frame';
@@ -51,10 +52,23 @@ export function isUniqueViolation(error: unknown): boolean {
 
 /** {@link StreamFrameTable} over `agent_stream_frame`, through a MikroORM {@link EntityManager}. */
 export class MikroOrmStreamFrameTable implements StreamFrameTable {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  /** The table, qualified with the schema when one is set. */
+  private get table(): string {
+    return tableIn(this.em, TABLE, this.schema);
+  }
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   private get connection() {
-    return this.em.fork().getConnection();
+    return forkIn(this.em, this.schema).getConnection();
   }
 
   async append(
@@ -64,8 +78,8 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
     // The next number and the insert are one statement: the (run_id, seq) key settles a race.
     // MySQL takes an INSERT … SELECT from the table it inserts into (it materialises the read).
     await this.connection.execute(
-      `insert into ${TABLE} (run_id, seq, frame, error, created_at) ` +
-        `select ?, coalesce(max(seq), 0) + 1, ?, ?, ? from ${TABLE} where run_id = ?`,
+      `insert into ${this.table} (run_id, seq, frame, error, created_at) ` +
+        `select ?, coalesce(max(seq), 0) + 1, ?, ?, ? from ${this.table} where run_id = ?`,
       [runId, row.frame, row.error, row.createdAt, runId],
       'run',
     );
@@ -74,7 +88,7 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
   async read(runId: string, after: number, limit: number): Promise<StreamFrameRow[]> {
     const rows: { seq: unknown; frame: string | null; error: string | null }[] =
       await this.connection.execute(
-        `select seq, frame, error from ${TABLE} where run_id = ? and seq > ? order by seq asc limit ${Math.max(1, Math.floor(limit))}`,
+        `select seq, frame, error from ${this.table} where run_id = ? and seq > ? order by seq asc limit ${Math.max(1, Math.floor(limit))}`,
         [runId, after],
       );
     return rows.map((row) => ({ seq: toInt(row.seq), frame: row.frame, error: row.error }));
@@ -82,7 +96,7 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
 
   async has(runId: string): Promise<boolean> {
     const rows: unknown[] = await this.connection.execute(
-      `select 1 as found from ${TABLE} where run_id = ? limit 1`,
+      `select 1 as found from ${this.table} where run_id = ? limit 1`,
       [runId],
     );
     return rows.length > 0;
@@ -91,7 +105,7 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
   async remove(runIds: readonly string[]): Promise<void> {
     if (runIds.length === 0) return;
     await this.connection.execute(
-      `delete from ${TABLE} where run_id in (${runIds.map(() => '?').join(', ')})`,
+      `delete from ${this.table} where run_id in (${runIds.map(() => '?').join(', ')})`,
       [...runIds],
       'run',
     );
@@ -101,7 +115,7 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
     // Two steps (here, then `remove`) rather than one DELETE … IN (SELECT … FROM the same table),
     // which MySQL refuses.
     const rows: { run_id: string }[] = await this.connection.execute(
-      `select run_id from ${TABLE} group by run_id having max(created_at) < ?`,
+      `select run_id from ${this.table} group by run_id having max(created_at) < ?`,
       [cutoff],
     );
     return rows.map((row) => String(row.run_id));
@@ -126,7 +140,13 @@ export class MikroOrmStreamFrameTable implements StreamFrameTable {
  * ```
  */
 export class MikroOrmTokenStreamSink extends SqlTokenStreamSink {
-  constructor(em: EntityManager, options: SqlTokenStreamSinkOptions = {}) {
-    super(new MikroOrmStreamFrameTable(em), options);
+  constructor(em: EntityManager, options: SqlTokenStreamSinkOptions & AgentSchemaOptions = {}) {
+    super(
+      new MikroOrmStreamFrameTable(
+        em,
+        options.schema !== undefined ? { schema: options.schema } : {},
+      ),
+      options,
+    );
   }
 }

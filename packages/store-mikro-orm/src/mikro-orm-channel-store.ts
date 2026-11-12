@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ChannelStore } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn } from './schema-name';
 
 /** How many rows a native write touched, whatever the driver reports it as. */
 function affected(result: unknown): number {
@@ -12,7 +13,7 @@ function affected(result: unknown): number {
 const storedKey = (key: string): string =>
   key.length <= 255 ? key : `sha256:${createHash('sha256').update(key).digest('hex')}`;
 
-export interface MikroOrmChannelStoreOptions {
+export interface MikroOrmChannelStoreOptions extends AgentSchemaOptions {
   /** How often a claim also deletes expired rows. Default 10 minutes; `0` → never (purge yourself). */
   purgeEveryMs?: number;
 }
@@ -29,6 +30,7 @@ export interface MikroOrmChannelStoreOptions {
  * rows are deleted as claims arrive (`purgeEveryMs`), or by {@link purgeExpired} from a job.
  */
 export class MikroOrmChannelStore implements ChannelStore {
+  private readonly schema: string | undefined;
   private readonly purgeEveryMs: number;
   private lastPurge = 0;
 
@@ -36,6 +38,8 @@ export class MikroOrmChannelStore implements ChannelStore {
     private readonly em: EntityManager,
     options: MikroOrmChannelStoreOptions = {},
   ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
     this.purgeEveryMs = options.purgeEveryMs ?? 10 * 60 * 1000;
   }
 
@@ -46,11 +50,17 @@ export class MikroOrmChannelStore implements ChannelStore {
 
   /** `sql` with `"identifiers"` quoted for the platform — `key` is reserved on MySQL. */
   private sql(statement: string): string {
-    return this.mysql ? statement.replaceAll('"', '`') : statement;
+    const qualified =
+      this.schema === undefined
+        ? statement
+        : statement.replaceAll('"agent_channel_state"', `"${this.schema}"."agent_channel_state"`);
+    return this.mysql ? qualified.replaceAll('"', '`') : qualified;
   }
 
   private execute(statement: string, params: unknown[], method: 'run' | 'all' = 'run') {
-    return this.em.fork().getConnection().execute(this.sql(statement), params, method);
+    return forkIn(this.em, this.schema)
+      .getConnection()
+      .execute(this.sql(statement), params, method);
   }
 
   async claim(key: string, ttlMs: number): Promise<boolean> {

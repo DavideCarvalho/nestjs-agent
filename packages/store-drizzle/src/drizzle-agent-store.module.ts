@@ -9,6 +9,7 @@ import {
   type AgentPricingStore,
 } from '@dudousxd/nestjs-agent-core';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { agentDialectOf, assertAgentSchema } from './dialect.js';
 import { DrizzleAgentStore } from './drizzle-agent-store.js';
 import { DrizzleChannelStore } from './drizzle-channel-store.js';
 import { DrizzleConfirmTokenStore } from './drizzle-confirm-token-store.js';
@@ -45,6 +46,12 @@ export interface DrizzleAgentStoreModuleOptions {
    * rather than a failed ingestion.
    */
   ragIngestionLog?: boolean;
+  /**
+   * The Postgres schema (or MySQL database) the agent tables live in; every statement the stores
+   * issue names it, and `ensureAgentSchema(db, { schema })` creates it. Never set through the
+   * connection's `search_path`. Omit → the connection's current schema. Not supported on SQLite.
+   */
+  schema?: string;
 }
 
 /**
@@ -71,13 +78,16 @@ export interface DrizzleAgentStoreModuleOptions {
 @Module({})
 export class DrizzleAgentStoreModule {
   static forRoot(options: DrizzleAgentStoreModuleOptions): DynamicModule {
+    // Validated here, so a bad name or a schema on SQLite fails the boot rather than the first query.
+    assertAgentSchema(agentDialectOf(options.db), options.schema);
+    const at = options.schema !== undefined ? { schema: options.schema } : {};
     const ragProviders: Provider[] =
       options.ragIngestionLog === false
         ? []
         : [
             {
               provide: DrizzleRagIngestionLog,
-              useFactory: () => new DrizzleRagIngestionLog(options.db),
+              useFactory: () => new DrizzleRagIngestionLog(options.db, at),
             },
           ];
     return {
@@ -85,15 +95,18 @@ export class DrizzleAgentStoreModule {
       global: true,
       providers: [
         ...ragProviders,
-        { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db) },
+        { provide: DrizzleAgentStore, useFactory: () => new DrizzleAgentStore(options.db, at) },
         { provide: AGENT_STORE, useExisting: DrizzleAgentStore },
         // Exported, never bound to AGENT_MEMORY: that token's PRESENCE is what turns memory on, so
         // binding it here would switch the feature on for every host that installs the store. A
         // host opts in by naming this provider in `AgentModule.forRoot({ memory: { provider } })`.
-        { provide: DrizzleMemoryProvider, useFactory: () => new DrizzleMemoryProvider(options.db) },
+        {
+          provide: DrizzleMemoryProvider,
+          useFactory: () => new DrizzleMemoryProvider(options.db, at),
+        },
         {
           provide: DrizzlePricingStore,
-          useFactory: () => new DrizzlePricingStore(options.db),
+          useFactory: () => new DrizzlePricingStore(options.db, at),
         },
         // AGENT_PRICING_STORE: the host's own store when supplied, else the default Drizzle one.
         // DrizzleGovernanceQueries prices usage against whatever is bound here.
@@ -103,25 +116,25 @@ export class DrizzleAgentStoreModule {
         {
           provide: DrizzleGovernanceQueries,
           useFactory: (pricingStore: AgentPricingStore) =>
-            new DrizzleGovernanceQueries(options.db, pricingStore),
+            new DrizzleGovernanceQueries(options.db, pricingStore, undefined, at),
           inject: [AGENT_PRICING_STORE],
         },
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: DrizzleGovernanceQueries },
         // What makes a `defineConfirmedTool` confirmation single use across replicas.
         {
           provide: DrizzleConfirmTokenStore,
-          useFactory: () => new DrizzleConfirmTokenStore(options.db),
+          useFactory: () => new DrizzleConfirmTokenStore(options.db, at),
         },
         { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: DrizzleConfirmTokenStore },
         // Text channels' state (`@dudousxd/nestjs-agent-channels`), shared by every replica.
-        { provide: DrizzleChannelStore, useFactory: () => new DrizzleChannelStore(options.db) },
+        { provide: DrizzleChannelStore, useFactory: () => new DrizzleChannelStore(options.db, at) },
         { provide: AGENT_CHANNEL_STORE, useExisting: DrizzleChannelStore },
         // Personal Agent Protocol (Poppy) conversations and connections, shared by every replica.
-        { provide: DrizzlePoppyStore, useFactory: () => new DrizzlePoppyStore(options.db) },
+        { provide: DrizzlePoppyStore, useFactory: () => new DrizzlePoppyStore(options.db, at) },
         { provide: AGENT_POPPY_STORE, useExisting: DrizzlePoppyStore },
         {
           provide: DrizzlePoppyConnectionStore,
-          useFactory: () => new DrizzlePoppyConnectionStore(options.db),
+          useFactory: () => new DrizzlePoppyConnectionStore(options.db, at),
         },
         { provide: AGENT_POPPY_CONNECTION_STORE, useExisting: DrizzlePoppyConnectionStore },
       ],

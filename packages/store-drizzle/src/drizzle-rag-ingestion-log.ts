@@ -4,6 +4,7 @@ import { type SQL, and, asc, count, desc, eq, gt, lt, or } from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   affectedRows,
@@ -149,9 +150,9 @@ export class DrizzleRagIngestionLog implements OnModuleInit, OnModuleDestroy {
   private readonly dialect: AgentDialect;
   private readonly t: AgentTables;
 
-  constructor(db: AgentDrizzleDb) {
+  constructor(db: AgentDrizzleDb, options: AgentSchemaOptions = {}) {
     this.dialect = agentDialectOf(db);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(db);
   }
 

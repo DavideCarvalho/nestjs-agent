@@ -1,5 +1,6 @@
 import type { ConfirmTokenClaim, ConfirmTokenStore } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 /** The table {@link import('./entities/agent-confirm-token.entity').AgentConfirmToken} maps. */
 const TABLE = 'agent_confirm_token';
 
@@ -22,7 +23,20 @@ function affected(result: unknown): number {
  * scheduled job to drop the dead rows.
  */
 export class MikroOrmConfirmTokenStore implements ConfirmTokenStore {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  /** The table, qualified with the schema when one is set. */
+  private get table(): string {
+    return tableIn(this.em, TABLE, this.schema);
+  }
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   private get mysql(): boolean {
     const platform = this.em.getPlatform().constructor.name.toLowerCase();
@@ -31,8 +45,8 @@ export class MikroOrmConfirmTokenStore implements ConfirmTokenStore {
 
   async claim(input: ConfirmTokenClaim): Promise<boolean> {
     const sql = this.mysql
-      ? `insert ignore into ${TABLE} (hash, actor_ref, tool, expires_at, created_at) values (?, ?, ?, ?, ?)`
-      : `insert into ${TABLE} (hash, actor_ref, tool, expires_at, created_at) values (?, ?, ?, ?, ?) on conflict (hash) do nothing`;
+      ? `insert ignore into ${this.table} (hash, actor_ref, tool, expires_at, created_at) values (?, ?, ?, ?, ?)`
+      : `insert into ${this.table} (hash, actor_ref, tool, expires_at, created_at) values (?, ?, ?, ?, ?) on conflict (hash) do nothing`;
     const result = await this.em
       .fork()
       .getConnection()
@@ -44,14 +58,14 @@ export class MikroOrmConfirmTokenStore implements ConfirmTokenStore {
     await this.em
       .fork()
       .getConnection()
-      .execute(`delete from ${TABLE} where hash = ?`, [hash], 'run');
+      .execute(`delete from ${this.table} where hash = ?`, [hash], 'run');
   }
 
   async purgeExpired(now: number = Date.now()): Promise<number> {
     const result = await this.em
       .fork()
       .getConnection()
-      .execute(`delete from ${TABLE} where expires_at < ?`, [now], 'run');
+      .execute(`delete from ${this.table} where expires_at < ?`, [now], 'run');
     return affected(result);
   }
 }

@@ -8,6 +8,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentMemory } from './entities/agent-memory.entity';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 
 /** One row as the library reads it. The origin travels so a person can ask "says who?". */
 function toRecord(row: AgentMemory): MemoryRecord {
@@ -46,7 +47,15 @@ function toRecord(row: AgentMemory): MemoryRecord {
  * its own index and passes it as the provider, or wraps this one.
  */
 export class MikroOrmMemoryProvider implements MemoryProvider {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   /**
    * Every memory visible at `scopes` — asked on EVERY turn, so it is one indexed `scope in (…)`
@@ -60,7 +69,7 @@ export class MikroOrmMemoryProvider implements MemoryProvider {
     if (scopes.length === 0) {
       return [];
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const rows = await em.find(AgentMemory, { scope: { $in: [...scopes] } });
     return rows.map(toRecord);
   }
@@ -76,7 +85,7 @@ export class MikroOrmMemoryProvider implements MemoryProvider {
    * answer cannot be used to find out which memories exist about other people.
    */
   async forget({ id, ctx }: ForgetMemoryInput): Promise<boolean> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const deleted = await em.nativeDelete(AgentMemory, { id, scope: actorScope(ctx.actor) });
     return deleted > 0;
   }
@@ -94,7 +103,7 @@ export class MikroOrmMemoryProvider implements MemoryProvider {
    */
   async write({ key, text, scope, origin, ctx }: StoreMemoryInput): Promise<MemoryRecord> {
     assertAuthorMayWriteScope({ scope, origin, ctx });
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const now = new Date();
     await em.upsert(
       AgentMemory,
@@ -131,7 +140,7 @@ export class MikroOrmMemoryProvider implements MemoryProvider {
    * `false` where there is no such id.
    */
   async pin({ id, pinned }: { id: string; pinned: boolean }): Promise<boolean> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const updated = await em.nativeUpdate(AgentMemory, { id }, { pinned, updatedAt: new Date() });
     return updated > 0;
   }

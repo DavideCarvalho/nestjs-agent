@@ -12,10 +12,11 @@ export * from './drizzle-poppy-store.js';
 export * from './drizzle-poppy-connection-store.js';
 export * from './drizzle-rag-ingestion-log.js';
 export * from './drizzle-agent-store.module.js';
-export { pgAgentSchema } from './schema-pg.js';
-export { mysqlAgentSchema } from './schema-mysql.js';
+export { pgAgentSchema, pgAgentTables } from './schema-pg.js';
+export { mysqlAgentSchema, mysqlAgentTables } from './schema-mysql.js';
 export {
   type AgentDialect,
+  type AgentSchemaOptions,
   type AgentMySqlDb,
   type AgentPgDb,
   type AgentSqliteDb,

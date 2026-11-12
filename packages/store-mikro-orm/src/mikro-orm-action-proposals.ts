@@ -42,6 +42,7 @@ import { AgentActionProposal } from './entities/agent-action-proposal.entity';
 import { AgentMessage } from './entities/agent-message.entity';
 import { AgentThread } from './entities/agent-thread.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 import { coordinateSqliteWrite } from './sqlite-write-coordinator';
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -67,11 +68,14 @@ export class MikroOrmActionProposals
     ActionProposalSupersessionStore
 {
   private readonly clock: () => number;
+  private readonly schema: string | undefined;
   constructor(
     private readonly em: EntityManager,
-    options: ActionProposalStoreOptions = {},
+    options: ActionProposalStoreOptions & AgentSchemaOptions = {},
   ) {
+    assertAgentSchema(em, options.schema);
     this.clock = options.clock ?? Date.now;
+    this.schema = options.schema;
   }
 
   async createActionProposal(input: CreateActionProposal): Promise<CreateActionProposalResult> {
@@ -98,11 +102,11 @@ export class MikroOrmActionProposals
       platform.includes('mysql') || platform.includes('maria')
         ? 'on duplicate key update id = id'
         : 'on conflict (id) do nothing';
-    const em = this.em.fork({ keepTransactionContext: true });
+    const em = forkIn(this.em, this.schema, { keepTransactionContext: true });
     await em
       .getConnection()
       .execute(
-        `insert into agent_action_proposal (id, scope_key, insertion_token, sort_key, payload, revision, decision, execution_status, lease_expires_at, proposal_expires_at, discovery_index_version, replacement_group_key, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${duplicate}`,
+        `insert into ${tableIn(this.em, 'agent_action_proposal', this.schema)} (id, scope_key, insertion_token, sort_key, payload, revision, decision, execution_status, lease_expires_at, proposal_expires_at, discovery_index_version, replacement_group_key, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${duplicate}`,
         [
           data.id,
           data.scopeKey,
@@ -145,7 +149,7 @@ export class MikroOrmActionProposals
     query: ListActionProposals = {},
   ): Promise<ActionProposal[]> {
     const limit = validateActionProposalListQuery(query);
-    const rows = await this.em.fork({ keepTransactionContext: true }).find(
+    const rows = await forkIn(this.em, this.schema, { keepTransactionContext: true }).find(
       AgentActionProposal,
       {
         scopeKey: scopeKey(scope),
@@ -202,7 +206,7 @@ export class MikroOrmActionProposals
   async claimNextActionProposal(command: ClaimActionProposal): Promise<ActionProposal | null> {
     const now = this.clock();
     validateActionProposalWorkerClaim(command, now);
-    const candidates = await this.em.fork({ keepTransactionContext: true }).find(
+    const candidates = await forkIn(this.em, this.schema, { keepTransactionContext: true }).find(
       AgentActionProposal,
       {
         discoveryIndexVersion: 1,
@@ -228,7 +232,7 @@ export class MikroOrmActionProposals
   async expireActionProposals(command: { limit: number }): Promise<number> {
     const now = this.clock();
     validateActionProposalExpiryBatch(command, now);
-    const candidates = await this.em.fork({ keepTransactionContext: true }).find(
+    const candidates = await forkIn(this.em, this.schema, { keepTransactionContext: true }).find(
       AgentActionProposal,
       {
         discoveryIndexVersion: 1,
@@ -261,7 +265,9 @@ export class MikroOrmActionProposals
       );
     let updated = 0;
     for (const candidate of candidates) {
-      const touched = await this.em.fork({ keepTransactionContext: true }).nativeUpdate(
+      const touched = await forkIn(this.em, this.schema, {
+        keepTransactionContext: true,
+      }).nativeUpdate(
         AgentActionProposal,
         {
           id: candidate.id,
@@ -277,11 +283,14 @@ export class MikroOrmActionProposals
   }
 
   async rememberedActionProposals(scope: ActionProposalScope): Promise<ActionProposal[]> {
-    const rows = await this.em.fork({ keepTransactionContext: true }).find(AgentActionProposal, {
-      scopeKey: scopeKey(scope),
-      decision: 'approved',
-      executionStatus: { $in: ['succeeded', 'failed'] },
-    });
+    const rows = await forkIn(this.em, this.schema, { keepTransactionContext: true }).find(
+      AgentActionProposal,
+      {
+        scopeKey: scopeKey(scope),
+        decision: 'approved',
+        executionStatus: { $in: ['succeeded', 'failed'] },
+      },
+    );
     return rows
       .map((row) => row.payload)
       .filter(
@@ -302,7 +311,7 @@ export class MikroOrmActionProposals
   ): ReturnType<ActionProposalOutcomeStore['claimNextActionProposalOutcome']> {
     const now = this.clock();
     validateActionProposalWorkerClaim(command, now);
-    const candidates = await this.em.fork({ keepTransactionContext: true }).find(
+    const candidates = await forkIn(this.em, this.schema, { keepTransactionContext: true }).find(
       AgentActionProposal,
       {
         deliveryStatus: 'pending',
@@ -348,7 +357,7 @@ export class MikroOrmActionProposals
   private async admitOutcomeAttempt(
     command: ActionProposalOutcomeLease,
   ): ReturnType<ActionProposalOutcomeStore['admitActionProposalOutcome']> {
-    const em = this.em.fork({ keepTransactionContext: true });
+    const em = forkIn(this.em, this.schema, { keepTransactionContext: true });
     return em.transactional(async (tx) => {
       const sqlite = tx.getPlatform().constructor.name.toLowerCase().includes('sqlite');
       if (sqlite)
@@ -449,7 +458,7 @@ export class MikroOrmActionProposals
   private async createReplacingAttempt(
     input: CreateActionProposal,
   ): Promise<CreateActionProposalResult> {
-    const em = this.em.fork({ keepTransactionContext: true });
+    const em = forkIn(this.em, this.schema, { keepTransactionContext: true });
     return em.transactional(async (tx) => {
       const sqlite = tx.getPlatform().constructor.name.toLowerCase().includes('sqlite');
       if (sqlite)
@@ -521,7 +530,7 @@ export class MikroOrmActionProposals
   private async settleToolCall(previous: ActionProposal, next: ActionProposal): Promise<void> {
     const update = toolCallUpdateForTransition(previous, next);
     if (update === null) return;
-    await this.em.fork({ keepTransactionContext: true }).nativeUpdate(
+    await forkIn(this.em, this.schema, { keepTransactionContext: true }).nativeUpdate(
       AgentToolCall,
       { id: update.toolCallId, proposalId: next.id },
       {
@@ -569,7 +578,9 @@ export class MikroOrmActionProposals
       const next = outcome.proposal;
       // Approval AND embedded queued work are one row update, fenced by the observed revision.
       // A competing writer wins only once; a loser reloads and rechecks the trusted clock/state.
-      const touched = await this.em.fork({ keepTransactionContext: true }).nativeUpdate(
+      const touched = await forkIn(this.em, this.schema, {
+        keepTransactionContext: true,
+      }).nativeUpdate(
         AgentActionProposal,
         { id: row.id, scopeKey: row.scopeKey, revision: row.revision },
         {

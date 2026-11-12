@@ -5,6 +5,7 @@ import {
   type PoppyPendingConnect,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn } from './schema-name';
 
 const nullable = (value: unknown): string | null => (value == null ? null : String(value));
 const toInt = (value: unknown): number => (typeof value === 'number' ? value : Number(value ?? 0));
@@ -23,7 +24,15 @@ const P = POPPY_CONNECTION_TABLES.pending;
  * @experimental Tracks Personal Agent Protocol Draft 0.1 (https://personalagentprotocol.org/docs/spec).
  */
 export class MikroOrmPoppyConnectionStore implements PoppyConnectionStore {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   private get mysql(): boolean {
     const platform = this.em.getPlatform().constructor.name.toLowerCase();
@@ -32,8 +41,14 @@ export class MikroOrmPoppyConnectionStore implements PoppyConnectionStore {
 
   /** `sql` with `"identifiers"` quoted for the platform — `owner`, `state`, `status`… */
   private execute(statement: string, params: unknown[], method: 'run' | 'all' = 'run') {
-    const sql = this.mysql ? statement.replaceAll('"', '`') : statement;
-    return this.em.fork().getConnection().execute(sql, params, method);
+    let qualified = statement;
+    if (this.schema !== undefined) {
+      for (const table of [T, P]) {
+        qualified = qualified.replaceAll(`"${table}"`, `"${this.schema}"."${table}"`);
+      }
+    }
+    const sql = this.mysql ? qualified.replaceAll('"', '`') : qualified;
+    return forkIn(this.em, this.schema).getConnection().execute(sql, params, method);
   }
 
   private async rows(statement: string, params: unknown[]): Promise<Record<string, unknown>[]> {

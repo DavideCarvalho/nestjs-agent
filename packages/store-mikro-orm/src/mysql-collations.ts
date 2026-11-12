@@ -79,6 +79,7 @@ export function declaredCollations(metadata: EntityMetadata[]): DeclaredCollatio
 export async function reconcileMySqlCollations(
   em: EntityManager,
   declared: DeclaredCollations,
+  schema?: string,
 ): Promise<string[]> {
   if (declared.size === 0) return [];
   for (const collation of declared.values()) {
@@ -89,10 +90,10 @@ export async function reconcileMySqlCollations(
     }
   }
   const tables = [...new Set([...declared.keys()].map((key) => key.split('.')[0] as string))];
-  const changes = await collationChanges(em, tables, declared);
+  const changes = await collationChanges(em, tables, declared, schema);
   if (changes.length === 0) return [];
 
-  await assertNoConflicts(em, changes, declared, tables);
+  await assertNoConflicts(em, changes, declared, tables, schema);
 
   const byTable = new Map<string, ColumnChange[]>();
   for (const change of changes) {
@@ -111,14 +112,14 @@ export async function reconcileMySqlCollations(
         const modifies = columns.map(
           (change) => `modify ${quote(change.column)} ${columnDefinition(change, platform)}`,
         );
-        await run(`alter table ${quote(table)} ${modifies.join(', ')}`);
+        await run(`alter table ${inSchema(table, schema)} ${modifies.join(', ')}`);
       }
     } finally {
       await run('set foreign_key_checks = 1');
     }
   });
 
-  const left = await collationChanges(em, tables, declared);
+  const left = await collationChanges(em, tables, declared, schema);
   if (left.length > 0) {
     throw new AgentSchemaCollationError(
       left.map((change) => `${change.table}.${change.column} is still ${change.from}`),
@@ -131,11 +132,12 @@ async function collationChanges(
   em: EntityManager,
   tables: string[],
   declared: DeclaredCollations,
+  schema?: string,
 ): Promise<ColumnChange[]> {
   const rows = await em
     .getConnection()
     .execute<ColumnRow[]>(
-      `select table_name as table_name, column_name as column_name, collation_name as collation_name, column_type as column_type, is_nullable as is_nullable, column_default as column_default, extra as extra, column_comment as column_comment from information_schema.columns where table_schema = database() and table_name in (${tables.map(() => '?').join(', ')}) order by table_name, ordinal_position`,
+      `select table_name as table_name, column_name as column_name, collation_name as collation_name, column_type as column_type, is_nullable as is_nullable, column_default as column_default, extra as extra, column_comment as column_comment from information_schema.columns where table_schema = ${schemaOf(schema)} and table_name in (${tables.map(() => '?').join(', ')}) order by table_name, ordinal_position`,
       tables,
     );
   const changes: ColumnChange[] = [];
@@ -167,6 +169,7 @@ async function assertNoConflicts(
   changes: ColumnChange[],
   declared: DeclaredCollations,
   tables: string[],
+  schema?: string,
 ): Promise<void> {
   const connection = em.getConnection();
   const changed = new Set(changes.map((change) => `${change.table}.${change.column}`));
@@ -176,7 +179,7 @@ async function assertNoConflicts(
   const uniqueRows = await connection.execute<
     { table_name: string; index_name: string; column_name: string }[]
   >(
-    `select table_name as table_name, index_name as index_name, column_name as column_name from information_schema.statistics where table_schema = database() and non_unique = 0 and table_name in (${placeholders}) order by table_name, index_name, seq_in_index`,
+    `select table_name as table_name, index_name as index_name, column_name as column_name from information_schema.statistics where table_schema = ${schemaOf(schema)} and non_unique = 0 and table_name in (${placeholders}) order by table_name, index_name, seq_in_index`,
     tables,
   );
   const uniques = new Map<string, { table: string; index: string; columns: string[] }>();
@@ -194,7 +197,7 @@ async function assertNoConflicts(
     if (!columns.some((column) => changed.has(`${table}.${column}`))) continue;
     const keys = columns.map((column) => compared(column, declared.get(`${table}.${column}`)));
     const rows = await connection.execute<{ sample: string; n: number | string }[]>(
-      `select min(${quote(columns[0] as string)}) as sample, count(*) as n from ${quote(table)} group by ${keys.join(', ')} having count(*) > 1 limit 5`,
+      `select min(${quote(columns[0] as string)}) as sample, count(*) as n from ${inSchema(table, schema)} group by ${keys.join(', ')} having count(*) > 1 limit 5`,
     );
     for (const row of rows) {
       conflicts.push(
@@ -212,7 +215,7 @@ async function assertNoConflicts(
       referenced_column_name: string;
     }[]
   >(
-    `select table_name as table_name, column_name as column_name, constraint_name as constraint_name, referenced_table_name as referenced_table_name, referenced_column_name as referenced_column_name from information_schema.key_column_usage where table_schema = database() and referenced_table_name is not null and table_name in (${placeholders})`,
+    `select table_name as table_name, column_name as column_name, constraint_name as constraint_name, referenced_table_name as referenced_table_name, referenced_column_name as referenced_column_name from information_schema.key_column_usage where table_schema = ${schemaOf(schema)} and referenced_table_name is not null and table_name in (${placeholders})`,
     tables,
   );
   for (const fk of foreignRows) {
@@ -222,7 +225,7 @@ async function assertNoConflicts(
     // Compared the way the key will compare once both sides carry the parent's declared collation.
     const collation = declared.get(parent) ?? declared.get(child);
     const rows = await connection.execute<{ sample: string; n: number | string }[]>(
-      `select min(c.${quote(fk.column_name)}) as sample, count(*) as n from ${quote(fk.table_name)} c where c.${quote(fk.column_name)} is not null and not exists (select 1 from ${quote(fk.referenced_table_name)} p where ${compared(`p.${quote(fk.referenced_column_name)}`, collation, true)} = ${compared(`c.${quote(fk.column_name)}`, collation, true)}) having count(*) > 0`,
+      `select min(c.${quote(fk.column_name)}) as sample, count(*) as n from ${inSchema(fk.table_name, schema)} c where c.${quote(fk.column_name)} is not null and not exists (select 1 from ${inSchema(fk.referenced_table_name, schema)} p where ${compared(`p.${quote(fk.referenced_column_name)}`, collation, true)} = ${compared(`c.${quote(fk.column_name)}`, collation, true)}) having count(*) > 0`,
     );
     for (const row of rows) {
       conflicts.push(
@@ -268,6 +271,17 @@ function columnDefinition(
 
 function charsetOf(collation: string): string {
   return collation.split('_')[0] as string;
+}
+
+/** The catalog filter for the agent tables' database: the configured one, else the current one. */
+function schemaOf(schema: string | undefined): string {
+  // A validated identifier (see `assertAgentSchema`), so it is safe as a literal.
+  return schema === undefined ? 'database()' : `'${schema}'`;
+}
+
+/** `table` in `schema` when set (`` `db`.`table` ``), else just quoted. */
+function inSchema(table: string, schema: string | undefined): string {
+  return schema === undefined ? quote(table) : `${quote(schema)}.${quote(table)}`;
 }
 
 function quote(identifier: string): string {
