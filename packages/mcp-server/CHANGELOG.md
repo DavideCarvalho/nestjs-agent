@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.9.0
+
+### Minor Changes
+
+- [#428](https://github.com/DavideCarvalho/nestjs-agent/pull/428) [`ff78ef4`](https://github.com/DavideCarvalho/nestjs-agent/commit/ff78ef4d39cc0c7496c650a9368afc5ecf4dbf11) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `devTools.authorize` gates the dev MCP endpoint's tools of libraries that have no console (resilience, authz, diagnostics, filter). It takes any console `authorize` form (function, class, lazy import, `{ policy, ability }`, gate name) and runs at most once per request; libraries with a console keep their own gate. Without it those libraries are open outside production and denied in production, with one boot warning naming them. A lib may now register without `authorize` when the slot `supports('endpoint-authorize')`, which the endpoint sets before any module registers. `@nestjs/authorization` is an optional peer (for the `{ policy, ability }` form).
+
 ## 0.8.0
 
 ### Minor Changes
