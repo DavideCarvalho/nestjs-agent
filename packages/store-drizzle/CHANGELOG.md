@@ -1,5 +1,12 @@
 # @dudousxd/nestjs-agent-store-drizzle
 
+## 0.39.1
+
+### Patch Changes
+
+- Updated dependencies [[`9a0bf06`](https://github.com/DavideCarvalho/nestjs-agent/commit/9a0bf06e0c54ca5246521809adb03c1a96dbc4a6)]:
+  - @dudousxd/nestjs-agent-core@0.65.0
+
 ## 0.39.0
 
 ### Minor Changes
