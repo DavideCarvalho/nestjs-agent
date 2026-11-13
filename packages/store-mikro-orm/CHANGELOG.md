@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-store-mikro-orm
 
+## 0.45.0
+
+### Minor Changes
+
+- [#430](https://github.com/DavideCarvalho/nestjs-agent/pull/430) [`2f8eb1c`](https://github.com/DavideCarvalho/nestjs-agent/commit/2f8eb1c100f3ed08879159fb80e3e4c40994825e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A `schema` option puts the agent tables in their own Postgres schema (or MySQL database): `DrizzleAgentStoreModule.forRoot({ db, schema })` / `MikroOrmAgentStoreModule.forFeature({ schema })`, and on every store, sink and governance class. Every statement the stores issue names the schema (Drizzle `pgSchema`/`mysqlSchema` tables, MikroORM `em.fork({ schema })`, qualified raw SQL); the connection's `search_path` is never touched. `ensureAgentSchema` creates the schema and heals the tables in it, with catalog lookups, the boot marker and the advisory lock scoped to it. `agentSchemaDdl` / `agentSchemaSql` render the qualified DDL. SQLite with `schema` fails at boot. Without `schema` nothing changes. Drizzle also exports `pgAgentTables(schema)` / `mysqlAgentTables(schema)`.
+
 ## 0.44.0
 
 ### Minor Changes
