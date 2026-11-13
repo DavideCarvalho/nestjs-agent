@@ -1,5 +1,6 @@
 import type { ResolveToolUiCatalog, ToolUiChannelGuide } from '@dudousxd/nestjs-agent-core';
 import type {
+  Actor,
   AgentIntake,
   AgentPricingStore,
   AgentStore,
@@ -39,6 +40,8 @@ export interface AgentDeps {
   sink: TokenStreamSink;
   /** Fallback accounting label; the provider's turn result overrides it when set. */
   modelId?: string;
+  /** The model a delegation to `target` runs on (its own resolution). See `AgentLoopDeps`. */
+  resolveDelegateModel?: (actor: Actor, target: string) => Promise<string | undefined>;
   systemPrompt: string | PromptBuilder;
   /** App-wide `@SystemPromptContributor()` sections appended after the agent's base prompt. */
   promptContributors: PromptContributor[];

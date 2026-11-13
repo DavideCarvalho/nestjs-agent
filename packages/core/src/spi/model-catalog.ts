@@ -49,6 +49,8 @@ export interface ModelCatalogQuery {
   actor: Actor;
   /** The agent the picker is for; omitted → the default agent. */
   agent?: string;
+  /** The persona the turn runs under (the send's, else the agent's default persona), when it has one. */
+  persona?: string;
 }
 
 /**
@@ -64,8 +66,24 @@ export interface ModelCatalog {
 }
 
 /** A catalog that answers the same view to everyone — for a fixed list of models. */
-export function staticModelCatalog(view: ModelCatalogView): ModelCatalog {
-  return { list: () => view };
+export function staticModelCatalog(view: ModelCatalogView): ModelCatalog & {
+  readonly view: ModelCatalogView;
+} {
+  return { list: () => view, view };
+}
+
+/**
+ * The fixed view of a catalog that answers the same to everyone ({@link staticModelCatalog}, the
+ * catalogs `aiSdkModels` and named models carry), or `undefined` for a per-caller catalog. What
+ * `AgentModule` checks an agent's or persona's `model` against at boot.
+ */
+export function staticCatalogView(catalog: ModelCatalog | undefined): ModelCatalogView | undefined {
+  const view = (catalog as { view?: unknown } | undefined)?.view;
+  return typeof view === 'object' &&
+    view !== null &&
+    Array.isArray((view as ModelCatalogView).providers)
+    ? (view as ModelCatalogView)
+    : undefined;
 }
 
 /** The entry `id` names in `view`, or `undefined`. */

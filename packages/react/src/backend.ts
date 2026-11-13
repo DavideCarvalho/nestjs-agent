@@ -226,8 +226,8 @@ export interface AgentBackend {
   listSkills?(threadId?: string): Promise<SkillCatalogEntry[]>;
   /** `GET <base>/quota` — every budget window, and which one blocks sends, if any. */
   getQuota?(): Promise<QuotaReport>;
-  /** `GET <base>/models?agent=` — what a model picker offers. */
-  listModels?(agent?: string): Promise<ModelCatalogView>;
+  /** `GET <base>/models?agent=&persona=` — what a model picker offers. */
+  listModels?(agent?: string, persona?: string): Promise<ModelCatalogView>;
   /** `GET <base>/agents` — what an agent picker offers. */
   listAgents?(): Promise<AgentCatalogEntry[]>;
   /** `GET <base>/config` — attachment limits and upload mode, and which features are on. */

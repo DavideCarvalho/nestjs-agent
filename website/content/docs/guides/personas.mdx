@@ -7,12 +7,32 @@ description: Named variants of one agent — their own prompt and a narrower too
 import { Callout } from 'fumadocs-ui/components/callout';
 
 A **persona** is a named variant of ONE agent: its own prompt and, optionally, a narrower tool
-allow-list. Everything else — the model, the access rules, the handoffs, the history window — stays
-the agent's. That is the line between a persona and another [`@Agent`](/docs/agent/guides/multi-agent):
-a variant that needs its own tools, its own access rules or its own model is a separate agent; one
-that only answers differently is a persona.
+allow-list and its own model. Everything else — the access rules, the handoffs, the history window —
+stays the agent's. That is the line between a persona and another [`@Agent`](/docs/agent/guides/multi-agent):
+a variant that needs its own tools or its own access rules is a separate agent; one that only answers
+differently, or on a different model, is a persona.
 
 No `personas` → nothing on this page happens, and a turn is identical to one before the feature.
+
+## A persona's model
+
+`model` on a persona names the model its turns run on — one of the models you configured (see
+[A model per agent and per persona](/docs/agent/guides/frontend#a-model-per-agent-and-per-persona)).
+It wins over the agent's `model`:
+
+```ts
+@Agent({
+  name: 'support',
+  model: 'smart',
+  personas: [
+    { id: 'triage', label: 'Triage', model: 'fast' },
+    { id: 'expert', label: 'Expert' }, // runs on the agent's `smart`
+  ],
+})
+```
+
+A name that matches no configured model is ignored, with a boot warning, and the agent's model
+applies.
 
 ## Declare them on the agent
 

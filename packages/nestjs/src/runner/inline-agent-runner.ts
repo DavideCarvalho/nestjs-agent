@@ -374,10 +374,11 @@ export class InlineAgentRunner implements AgentRunner {
       parallel: settleAll,
       cancelled: async () => this.cancelled.has(runId),
       abortSignal: this.abortSignalFor(runId),
-      runAgent: (agentName, task) =>
+      runAgent: (agentName, task, options) =>
         this.runNested({
           agentName,
           task,
+          ...(options?.model !== undefined ? { model: options.model } : {}),
           actor,
           day,
           depth: 1,
@@ -385,10 +386,11 @@ export class InlineAgentRunner implements AgentRunner {
           sinkRunId: runId,
           parentRunId: runId,
         }),
-      startAgent: ({ agentName, task, toolCallId }) =>
+      startAgent: ({ agentName, task, toolCallId, model }) =>
         this.startDetached({
           agentName,
           task,
+          ...(model !== undefined ? { model } : {}),
           actor,
           day,
           depth: 1,
@@ -411,6 +413,8 @@ export class InlineAgentRunner implements AgentRunner {
   private async startDetached(args: {
     agentName: string;
     task: string;
+    /** The model the delegate runs on — its own resolution. Absent → the provider's default. */
+    model?: string;
     actor: Actor;
     day: string;
     depth: number;
@@ -435,10 +439,11 @@ export class InlineAgentRunner implements AgentRunner {
       parallel: settleAll,
       cancelled: async () => this.cancelled.has(runId),
       abortSignal: this.abortSignalFor(runId),
-      runAgent: (childName, childTask) =>
+      runAgent: (childName, childTask, options) =>
         this.runNested({
           agentName: childName,
           task: childTask,
+          ...(options?.model !== undefined ? { model: options.model } : {}),
           actor,
           day,
           depth: depth + 1,
@@ -447,10 +452,11 @@ export class InlineAgentRunner implements AgentRunner {
           sinkRunId: runId,
           parentRunId: runId,
         }),
-      startAgent: ({ agentName: childName, task: childTask, toolCallId }) =>
+      startAgent: ({ agentName: childName, task: childTask, toolCallId, model }) =>
         this.startDetached({
           agentName: childName,
           task: childTask,
+          ...(model !== undefined ? { model } : {}),
           actor,
           day,
           depth: depth + 1,
@@ -469,6 +475,7 @@ export class InlineAgentRunner implements AgentRunner {
       delegationPath: path,
       parentRunId,
       deliverTo,
+      ...(args.model !== undefined ? { model: args.model } : {}),
     };
     void runAgentLoop({ ...deps, day }, childInput, hooks)
       .catch(async (error: unknown) => {
@@ -525,6 +532,8 @@ export class InlineAgentRunner implements AgentRunner {
   private async runNested(args: {
     agentName: string;
     task: string;
+    /** The model the delegate runs on — its own resolution. Absent → the provider's default. */
+    model?: string;
     actor: Actor;
     day: string;
     depth: number;
@@ -553,10 +562,11 @@ export class InlineAgentRunner implements AgentRunner {
       cancelled: async () => this.cancelled.has(runId) || this.cancelled.has(sinkRunId),
       // Aborted by a Stop on the run the human is watching, which is the id a canceller names.
       abortSignal: this.abortSignalFor(sinkRunId),
-      runAgent: (childName, childTask) =>
+      runAgent: (childName, childTask, options) =>
         this.runNested({
           agentName: childName,
           task: childTask,
+          ...(options?.model !== undefined ? { model: options.model } : {}),
           actor,
           day,
           depth: depth + 1,
@@ -564,10 +574,11 @@ export class InlineAgentRunner implements AgentRunner {
           sinkRunId,
           parentRunId: runId,
         }),
-      startAgent: ({ agentName: childName, task: childTask, toolCallId }) =>
+      startAgent: ({ agentName: childName, task: childTask, toolCallId, model }) =>
         this.startDetached({
           agentName: childName,
           task: childTask,
+          ...(model !== undefined ? { model } : {}),
           actor,
           day,
           depth: depth + 1,
@@ -589,6 +600,7 @@ export class InlineAgentRunner implements AgentRunner {
           delegationPath: path,
           parentRunId,
           sinkRunId,
+          ...(args.model !== undefined ? { model: args.model } : {}),
         },
         hooks,
       );

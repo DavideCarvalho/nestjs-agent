@@ -22,7 +22,10 @@ const runner: AgentRunner = {
   cancel: async () => undefined,
 };
 
-const deps = { forAgent: () => ({}) } as unknown as AgentDepsFactory;
+const deps = {
+  forAgent: () => ({}),
+  allConfiguredModels: () => [],
+} as unknown as AgentDepsFactory;
 
 /** A structural `@dudousxd/nestjs-context` accessor whose switch and filter a test can move. */
 function context(enabled = true) {

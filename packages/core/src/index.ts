@@ -3,6 +3,7 @@ export * from './tokens.js';
 export * from './spi/tool.js';
 export * from './spi/model-provider.js';
 export * from './spi/model-catalog.js';
+export * from './spi/named-models.js';
 export * from './spi/token-stream-sink.js';
 export * from './stream-events.js';
 export * from './turn-frames.js';

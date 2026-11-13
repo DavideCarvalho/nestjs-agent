@@ -15,6 +15,8 @@ const deps = {
   resolveAgent: (agentName: string) => ({ agentName }),
   personaCatalog: () => [],
   resolvePersona: () => undefined,
+  configuredModels: () => [],
+  warnModelLabel: () => undefined,
 } as unknown as AgentDepsFactory;
 
 function buildService(store: AgentStore): AgentService {

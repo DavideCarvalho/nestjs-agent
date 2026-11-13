@@ -52,6 +52,7 @@ import {
   readTenancy,
   recordAiUsage,
   settleDeadRun,
+  staticCatalogView,
   tenantRowFilter,
   tenantRowVisible,
   textActionProposalReply,
@@ -81,6 +82,7 @@ const usageLogger = new Logger('AgentService');
 import { utcDay } from './agent-deps.js';
 import type { AgentModuleOptions } from './agent.options.js';
 import { type AttachmentLimits, attachmentLimits } from './attachment-limits.js';
+import { ModelNotAllowedError, assertCatalogModel, resolveTurnModel } from './model-resolution.js';
 import { ActionProposalService } from './proposals/action-proposal.service.js';
 import { ChatQueueService } from './queue/chat-queue.service.js';
 import { publishQuotaBlocked } from './quota-exceeded.js';
@@ -242,6 +244,22 @@ export interface ThreadModelReader {
   modelForThread(threadId: string): Promise<string | null>;
 }
 
+/** Run `fn`, answering a {@link ModelNotAllowedError} as a `400`. */
+async function asBadRequest<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof ModelNotAllowedError) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'model_not_allowed',
+        message: error.message,
+      });
+    }
+    throw error;
+  }
+}
+
 /** The orchestration facade the controllers call. */
 @Injectable()
 export class AgentService implements OnApplicationBootstrap {
@@ -278,6 +296,27 @@ export class AgentService implements OnApplicationBootstrap {
    * context accessor to read the tenant from fails the boot too.
    */
   onApplicationBootstrap(): void {
+    this.warnUnconfiguredModels();
+    this.assertTenancyStore();
+  }
+
+  /**
+   * One boot warning for every agent or persona `model` that names no configured model, when the
+   * catalog is known up front (none, or a fixed one). A per-caller catalog is checked on each turn.
+   */
+  private warnUnconfiguredModels(): void {
+    const configured = this.deps.allConfiguredModels();
+    if (configured.length === 0) return;
+    const view = this.models === undefined ? undefined : staticCatalogView(this.models);
+    if (this.models !== undefined && view === undefined) return;
+    for (const entry of configured) {
+      if (view === undefined || findCatalogModel(view, entry.model) === undefined) {
+        this.deps.warnModelLabel(entry);
+      }
+    }
+  }
+
+  private assertTenancyStore(): void {
     if (!this.tenancy().enabled) {
       // `enabled: true` reads as off only when no context accessor answers: fail rather than run
       // every read unscoped behind an explicit opt-in.
@@ -498,67 +537,80 @@ export class AgentService implements OnApplicationBootstrap {
 
   /**
    * The models `actor` may pick for `agent` (`GET <base>/models`). An empty catalog when none is
-   * bound, so a picker simply has nothing to offer.
+   * bound, so a picker simply has nothing to offer. `default` is the model a turn of `agent` (under
+   * `persona`, else its default persona) runs on when nobody picks one: the persona's `model`, else
+   * the agent's, else the catalog's own default. A persona the agent does not declare reads as its
+   * default persona.
    */
-  async listModels(actor: Actor, agent?: string): Promise<ModelCatalogView> {
+  async listModels(actor: Actor, agent?: string, persona?: string): Promise<ModelCatalogView> {
     if (this.models === undefined) {
       return { providers: [], default: null };
     }
-    return this.models.list({ actor, ...(agent !== undefined ? { agent } : {}) });
+    const target = this.deps.resolveAgent(agent ?? this.deps.defaultAgentName());
+    const declared =
+      persona !== undefined &&
+      this.deps.personaCatalog(target.agentName).some((entry) => entry.id === persona)
+        ? persona
+        : undefined;
+    const effective = declared ?? target.persona ?? this.deps.defaultPersona(target.agentName);
+    const view = await this.models.list({
+      actor,
+      agent: target.agentName,
+      ...(effective !== undefined ? { persona: effective } : {}),
+    });
+    if (view.locked !== undefined) return view;
+    const configured = this.deps
+      .configuredModels(target.agentName, effective)
+      .find((entry) => findCatalogModel(view, entry.model) !== undefined);
+    return configured === undefined ? view : { ...view, default: configured.model };
   }
 
   /**
    * `model` if the catalog offers it to this actor and agent right now, else a 400 naming why. The
-   * one gate every model choice passes — a send's own, and a thread's pinned one at the moment it is
-   * pinned and again at every turn that runs on it (availability can change in between).
+   * one gate a thread's pinned model passes at the moment it is pinned (and again, through
+   * {@link resolveModel}, at every turn that runs on it: availability can change in between).
    */
   private async assertModelAllowed(actor: Actor, agent: string, model: string): Promise<string> {
-    if (this.models === undefined) {
-      throw new BadRequestException(
-        `model "${model}" cannot be selected: no ModelCatalog is configured (AgentModule.forRoot({ models }))`,
-      );
-    }
-    const entry = findCatalogModel(await this.models.list({ actor, agent }), model);
-    if (entry === undefined) {
-      throw new BadRequestException(`model "${model}" is not offered`);
-    }
-    if (!entry.available) {
-      throw new BadRequestException(
-        `model "${model}" is not available${entry.unavailableReason ? `: ${entry.unavailableReason}` : ''}`,
-      );
-    }
-    return entry.id;
+    const catalog = this.models;
+    return asBadRequest(async () => {
+      if (catalog === undefined) {
+        throw new ModelNotAllowedError(
+          `model "${model}" cannot be selected: no ModelCatalog is configured (AgentModule.forRoot({ models }))`,
+        );
+      }
+      return assertCatalogModel(await catalog.list({ actor, agent }), model);
+    });
   }
 
   /**
    * The model a turn runs on: the send's own (that turn only — it is never stored on the thread),
-   * else the thread's pinned one, else none. An agent the catalog locks to one model runs on it
-   * whatever was sent or pinned, and a send naming another model is refused.
+   * else the thread's pinned one, else the persona's `model`, else the agent's, else none (the
+   * catalog's default). An agent the catalog locks to one model runs on it whatever was sent or
+   * pinned, and a send naming another model is refused. Resolved here and carried on the run's
+   * input, so a durable replay, a resumed run or a queued message runs on the model this send chose.
    */
   private async resolveModel(
     actor: Actor,
     agent: string,
+    persona: string | undefined,
     requested: string | undefined,
     threadId: string | undefined,
     reads?: ThreadReads,
   ): Promise<string | undefined> {
-    const locked =
-      this.models !== undefined ? (await this.models.list({ actor, agent })).locked : undefined;
-    if (locked !== undefined) {
-      if (requested !== undefined && requested !== locked.model) {
-        throw new BadRequestException(
-          `model "${requested}" cannot be selected: ${locked.reason ?? `this agent always uses "${locked.model}"`}`,
-        );
-      }
-      return locked.model;
-    }
-    const model =
-      requested ??
-      (threadId !== undefined ? await (reads?.model() ?? this.threadModel(threadId)) : null);
-    if (model === null || model === undefined) {
-      return undefined;
-    }
-    return this.assertModelAllowed(actor, agent, model);
+    return asBadRequest(() =>
+      resolveTurnModel({
+        catalog: this.models,
+        actor,
+        agent,
+        ...(persona !== undefined ? { persona } : {}),
+        ...(requested !== undefined ? { requested } : {}),
+        ...(threadId !== undefined
+          ? { pinned: () => reads?.model() ?? this.threadModel(threadId) }
+          : {}),
+        configured: this.deps.configuredModels(agent, persona),
+        onLabel: this.deps.warnModelLabel,
+      }),
+    );
   }
 
   private async threadModel(threadId: string): Promise<string | null> {
@@ -641,6 +693,7 @@ export class AgentService implements OnApplicationBootstrap {
     const model = await this.resolveModel(
       params.actor,
       agentName,
+      persona,
       params.model,
       params.threadId,
       reads,

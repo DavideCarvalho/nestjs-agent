@@ -217,8 +217,17 @@ export interface AgentModuleOptions {
    * model's settings, `retry` / `timeout` / `resilience`, `fallback`, `pricing` and `onUsage`. Set
    * it to replace them — a `FakeModelProvider` in tests, `aiSdkModel(…)` outside `AiModule`. Not
    * needed when an `engine` runs the turns.
+   *
+   * Named providers (`{ fast: aiSdkModel(haiku), smart: aiSdkModel(opus) }`) give each agent and
+   * persona a model to run on: `@Agent({ model: 'fast' })`, `Persona.model`, a send's `model`. The
+   * picker lists the names, `defaultModel` first.
    */
-  model?: ModelProvider;
+  model?: ModelProvider | Record<string, ModelProvider>;
+  /**
+   * With named providers in `model`: the one a turn runs on when nothing picks one (no send `model`,
+   * no thread pin, no persona or agent `model`). Omit → the first name.
+   */
+  defaultModel?: string;
   /**
    * Offer the application's `@nestjs/ai` `@AgentFunction()` methods as agent tools (default), each
    * governed by this library's `@AgentFunction()` options and run through `AiTools.call`, so its guards, interceptors, pipes

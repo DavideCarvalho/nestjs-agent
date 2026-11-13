@@ -27,7 +27,12 @@ export interface AgentOptions {
   description?: string;
   /** A flat base prompt. For a dynamic prompt, add a `@SystemPrompt()` method instead. */
   systemPrompt?: string;
-  /** Accounting label for the model this agent uses (the model provider itself is shared). */
+  /**
+   * The model this agent's turns run on, by its configured name: a key of
+   * `AgentModule.forRoot({ model: { … } })`, an `aiSdkModels` id or an `AiModule` model name. A
+   * persona's `model`, a thread's pinned model and a send's `model` win over it. A name no configured
+   * model answers to is only the usage accounting label (with a boot warning).
+   */
   model?: string;
   /** Max model→tool iterations for this agent's turn. Default 8. */
   maxSteps?: number;
@@ -112,10 +117,10 @@ export interface AgentOptions {
    */
   ask?: boolean;
   /**
-   * Named variants of THIS agent — a prompt and, optionally, a narrower tool allow-list — that a
-   * caller picks per send (`POST <base>/chat { persona }`) and that pin onto the thread. Everything
-   * else (model, access rules, handoffs, history) stays this agent's; a variant that needs those to
-   * differ is another `@Agent`.
+   * Named variants of THIS agent — a prompt and, optionally, a narrower tool allow-list and its own
+   * `model` — that a caller picks per send (`POST <base>/chat { persona }`) and that pin onto the
+   * thread. Everything else (access rules, handoffs, history) stays this agent's; a variant that
+   * needs those to differ is another `@Agent`.
    *
    * A persona's `systemPrompt` is static data. For a prompt built from injected services, leave it
    * out and branch on `ctx.persona` in this class's `@SystemPrompt()` method instead.

@@ -1362,9 +1362,13 @@ export function useAgentChat<B extends AgentBackend = AgentBackend>(
   const [modelsWanted, setModelsWanted] = useState(false);
   const modelsWantedRef = useRef(modelsWanted);
   modelsWantedRef.current = modelsWanted;
+  // The chat's persona — the one it sends, else the thread's pinned one — decides which persona's
+  // (or agent's) `model` the picker's default is.
+  const modelsPersona = options.persona ?? threadPersona ?? undefined;
   const catalog = useModels({
     backend: client,
     ...(options.agent !== undefined ? { agent: options.agent } : {}),
+    ...(modelsPersona !== undefined ? { persona: modelsPersona } : {}),
     enabled: modelsWanted && typeof client.listModels === 'function',
   });
   const wantModels = useCallback(() => {

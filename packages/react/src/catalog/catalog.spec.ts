@@ -81,6 +81,17 @@ describe('useModels', () => {
     await waitFor(() => expect(api.listModels).toHaveBeenLastCalledWith('researcher'));
   });
 
+  it('re-asks for the persona, whose model is the default', async () => {
+    const api = backend();
+    const { rerender } = renderHook(
+      (props: { persona?: string }) => useModels({ backend: api, agent: 'writer', ...props }),
+      { initialProps: {} },
+    );
+    await waitFor(() => expect(api.listModels).toHaveBeenLastCalledWith('writer'));
+    rerender({ persona: 'quick' });
+    await waitFor(() => expect(api.listModels).toHaveBeenLastCalledWith('writer', 'quick'));
+  });
+
   it('reports a backend without listModels as an error', async () => {
     const { listModels: _omitted, ...api } = backend();
     const { result } = renderHook(() => useModels({ backend: api }));
@@ -256,7 +267,13 @@ describe('AgentClient catalogs', () => {
     const client = new AgentClient({ fetch });
     await client.listModels('a b');
     await client.listModels();
+    await client.listModels('w', 'q 1');
     await client.listAgents();
-    expect(urls).toEqual(['/agent/models?agent=a%20b', '/agent/models', '/agent/agents']);
+    expect(urls).toEqual([
+      '/agent/models?agent=a%20b',
+      '/agent/models',
+      '/agent/models?agent=w&persona=q%201',
+      '/agent/agents',
+    ]);
   });
 });

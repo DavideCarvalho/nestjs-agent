@@ -30,6 +30,7 @@ import {
   type QuotaProvider,
   type RolesPolicy,
   ToolRegistry,
+  namedModels,
   personalAgentGate,
   personalAgentScopes,
   withControllerDecorators,
@@ -202,6 +203,25 @@ function isQuotaProvider(quota: AgentModuleOptions['quota']): quota is QuotaProv
 }
 
 /**
+ * The `model` option as one provider: a map of named providers becomes {@link namedModels} over
+ * them, with `defaultModel` as the default. `defaultModel` without a map is a config mistake.
+ */
+function configuredModel(options: AgentModuleOptions): ModelProvider | undefined {
+  const { model, defaultModel } = options;
+  if (model === undefined || typeof (model as ModelProvider).runTurn === 'function') {
+    if (defaultModel !== undefined) {
+      throw new Error(
+        'AgentModule: `defaultModel` names one of several named models, so `model` must be a map of them (`model: { fast: provider, smart: provider }`).',
+      );
+    }
+    return model as ModelProvider | undefined;
+  }
+  return namedModels(model as Record<string, ModelProvider>, {
+    ...(defaultModel !== undefined ? { default: defaultModel } : {}),
+  });
+}
+
+/**
  * The model catalog: the `models` option, else the one the model provider carries (`aiSdkModels`, or
  * `AiModule`'s models when no `model` is configured).
  */
@@ -311,7 +331,7 @@ function sharedProviders(
     {
       provide: AGENT_MODEL,
       useFactory: (o: AgentModuleOptions, nestAi: NestAiModelsBinding) =>
-        o.model ?? (nestAi.active ? nestAi : undefined),
+        configuredModel(o) ?? (nestAi.active ? nestAi : undefined),
       inject: [AGENT_OPTIONS, NestAiModelsBinding],
     },
     {

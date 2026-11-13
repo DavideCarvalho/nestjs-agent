@@ -13,6 +13,11 @@ export interface UseModelsOptions {
   backend?: AgentBackend;
   /** The agent to list models for; omitted → the default agent. */
   agent?: string;
+  /**
+   * The persona the chat runs under; omitted → the agent's default persona. `defaultModel` is that
+   * persona's `model`, else the agent's, else the catalog's default.
+   */
+  persona?: string;
   /** `false` holds the request. Default `true`. */
   enabled?: boolean;
 }
@@ -49,11 +54,14 @@ export interface ModelsState {
  * pin it on the thread with `chat.models.pinToThread(id)`.
  */
 export function useModels(options: UseModelsOptions = {}): ModelsState {
-  const { agent, enabled = true } = options;
+  const { agent, persona, enabled = true } = options;
   const backend = useAgentBackend(options.backend);
   const { data, isLoading, error, refresh } = useResource<ModelCatalogView>(
-    () => requireBackendMethod(backend, 'listModels')(agent),
-    `${agent ?? ''}`,
+    () =>
+      persona === undefined
+        ? requireBackendMethod(backend, 'listModels')(agent)
+        : requireBackendMethod(backend, 'listModels')(agent, persona),
+    `${agent ?? ''}\u0000${persona ?? ''}`,
     enabled,
   );
   return useMemo(() => {
