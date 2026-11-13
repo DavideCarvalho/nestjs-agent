@@ -37,6 +37,7 @@ import {
   int,
   json,
   longtext,
+  mysqlSchema,
   mysqlTable,
   primaryKey,
   uniqueIndex,
@@ -58,532 +59,557 @@ const ts = (name: string) => datetime(name, { mode: 'date', fsp: 3 });
 /** A key or short label: bounded, so it can be indexed. */
 const key = (name: string) => varchar(name, { length: 255 });
 
-export const agentThread = mysqlTable(
-  'agent_thread',
-  {
-    id: key('id').primaryKey(),
-    actorRef: key('actor_ref').notNull(),
-    tenantRef: key('tenant_ref'),
-    title: key('title').notNull(),
-    transient: boolean('transient').notNull().default(false),
-    activeStreamId: key('active_stream_id'),
-    defaultAgent: key('default_agent'),
-    model: key('model'),
-    /** The persona a send on this thread runs under when it names none; `null` → the agent's default. */
-    persona: key('persona'),
-    queuePause: json('queue_pause').$type<QueuePause>(),
-    createdAt: ts('created_at').notNull(),
-    updatedAt: ts('updated_at').notNull(),
-    deletedAt: ts('deleted_at'),
-  },
-  (table) => [
-    index('agent_thread_actor_updated_idx').on(table.actorRef, table.updatedAt),
-    // `ownerOfActiveStream` reads by run id on every stream attach and reconnect.
-    index('agent_thread_active_stream_idx').on(table.activeStreamId),
-  ],
-);
+/**
+ * Every agent table, built with `mysqlTable`: `mysqlTable` itself (the connection's current database), or
+ * `mysqlSchema(name).table` for mysqlAgentTables's `schema`.
+ */
+function build(tableFn: typeof mysqlTable) {
+  const agentThread = tableFn(
+    'agent_thread',
+    {
+      id: key('id').primaryKey(),
+      actorRef: key('actor_ref').notNull(),
+      tenantRef: key('tenant_ref'),
+      title: key('title').notNull(),
+      transient: boolean('transient').notNull().default(false),
+      activeStreamId: key('active_stream_id'),
+      defaultAgent: key('default_agent'),
+      model: key('model'),
+      /** The persona a send on this thread runs under when it names none; `null` → the agent's default. */
+      persona: key('persona'),
+      queuePause: json('queue_pause').$type<QueuePause>(),
+      createdAt: ts('created_at').notNull(),
+      updatedAt: ts('updated_at').notNull(),
+      deletedAt: ts('deleted_at'),
+    },
+    (table) => [
+      index('agent_thread_actor_updated_idx').on(table.actorRef, table.updatedAt),
+      // `ownerOfActiveStream` reads by run id on every stream attach and reconnect.
+      index('agent_thread_active_stream_idx').on(table.activeStreamId),
+    ],
+  );
 
-export const agentMessage = mysqlTable(
-  'agent_message',
-  {
-    id: key('id').primaryKey(),
-    threadId: key('thread_id')
-      .notNull()
-      .references(() => agentThread.id, { onDelete: 'cascade' }),
-    role: key('role').$type<MessageRole>().notNull(),
-    actionProposalOutcome: longtext('action_proposal_outcome'),
-    content: longtext('content').notNull(),
-    toolCalls: json('tool_calls').$type<ToolCallRequest[]>(),
-    toolResults: json('tool_results').$type<ToolResult[]>(),
-    attachments: json('attachments').$type<MessageAttachment[]>(),
-    followUps: json('follow_ups').$type<string[]>(),
-    usage: json('usage').$type<MessageUsage>(),
-    agentName: key('agent_name'),
-    /** The persona the turn that wrote this message ran under; `null` → none. */
-    persona: key('persona'),
-    runId: key('run_id'),
-    reasoning: longtext('reasoning'),
-    reasoningMs: int('reasoning_ms'),
-    ui: json('ui').$type<AgentUiComponent[]>(),
-    feedback: json('feedback').$type<MessageFeedback>(),
-    seq: int('seq'),
-    createdAt: ts('created_at').notNull(),
-  },
-  (table) => [
-    index('agent_message_thread_created_idx').on(table.threadId, table.createdAt),
-    // Transcript reads order a thread's messages by `seq`.
-    index('agent_message_thread_seq_idx').on(table.threadId, table.seq),
-  ],
-);
+  const agentMessage = tableFn(
+    'agent_message',
+    {
+      id: key('id').primaryKey(),
+      threadId: key('thread_id')
+        .notNull()
+        .references(() => agentThread.id, { onDelete: 'cascade' }),
+      role: key('role').$type<MessageRole>().notNull(),
+      actionProposalOutcome: longtext('action_proposal_outcome'),
+      content: longtext('content').notNull(),
+      toolCalls: json('tool_calls').$type<ToolCallRequest[]>(),
+      toolResults: json('tool_results').$type<ToolResult[]>(),
+      attachments: json('attachments').$type<MessageAttachment[]>(),
+      followUps: json('follow_ups').$type<string[]>(),
+      usage: json('usage').$type<MessageUsage>(),
+      agentName: key('agent_name'),
+      /** The persona the turn that wrote this message ran under; `null` → none. */
+      persona: key('persona'),
+      runId: key('run_id'),
+      reasoning: longtext('reasoning'),
+      reasoningMs: int('reasoning_ms'),
+      ui: json('ui').$type<AgentUiComponent[]>(),
+      feedback: json('feedback').$type<MessageFeedback>(),
+      seq: int('seq'),
+      createdAt: ts('created_at').notNull(),
+    },
+    (table) => [
+      index('agent_message_thread_created_idx').on(table.threadId, table.createdAt),
+      // Transcript reads order a thread's messages by `seq`.
+      index('agent_message_thread_seq_idx').on(table.threadId, table.seq),
+    ],
+  );
 
-export const agentToolCall = mysqlTable(
-  'agent_tool_call',
-  {
-    proposalId: key('proposal_id'),
-    id: key('id').primaryKey(),
-    messageId: key('message_id')
-      .notNull()
-      .references(() => agentMessage.id, { onDelete: 'cascade' }),
-    toolName: key('tool_name').notNull(),
-    toolType: key('tool_type').$type<ToolKind>().notNull(),
-    input: json('input'),
-    output: json('output'),
-    status: key('status').$type<ToolCallStatus>().notNull(),
-    executedByRef: key('executed_by_ref'),
-    executionMs: int('execution_ms'),
-    error: longtext('error'),
-    createdAt: ts('created_at').notNull(),
-    executedAt: ts('executed_at'),
-    runId: key('run_id'),
-    confirmation: json('confirmation').$type<ToolConfirmation>(),
-    approver: key('approver'),
-    expiresAt: ts('expires_at'),
-    remember: boolean('remember'),
-    decidedVia: key('decided_via'),
-  },
-  (table) => [
-    index('agent_tool_call_message_idx').on(table.messageId),
-    // The approvals inbox: `pending_approval`, oldest first.
-    index('agent_tool_call_status_created_idx').on(table.status, table.createdAt),
-    index('agent_tool_call_run_idx').on(table.runId),
-    index('agent_tool_call_created_idx').on(table.createdAt),
-  ],
-);
+  const agentToolCall = tableFn(
+    'agent_tool_call',
+    {
+      proposalId: key('proposal_id'),
+      id: key('id').primaryKey(),
+      messageId: key('message_id')
+        .notNull()
+        .references(() => agentMessage.id, { onDelete: 'cascade' }),
+      toolName: key('tool_name').notNull(),
+      toolType: key('tool_type').$type<ToolKind>().notNull(),
+      input: json('input'),
+      output: json('output'),
+      status: key('status').$type<ToolCallStatus>().notNull(),
+      executedByRef: key('executed_by_ref'),
+      executionMs: int('execution_ms'),
+      error: longtext('error'),
+      createdAt: ts('created_at').notNull(),
+      executedAt: ts('executed_at'),
+      runId: key('run_id'),
+      confirmation: json('confirmation').$type<ToolConfirmation>(),
+      approver: key('approver'),
+      expiresAt: ts('expires_at'),
+      remember: boolean('remember'),
+      decidedVia: key('decided_via'),
+    },
+    (table) => [
+      index('agent_tool_call_message_idx').on(table.messageId),
+      // The approvals inbox: `pending_approval`, oldest first.
+      index('agent_tool_call_status_created_idx').on(table.status, table.createdAt),
+      index('agent_tool_call_run_idx').on(table.runId),
+      index('agent_tool_call_created_idx').on(table.createdAt),
+    ],
+  );
 
-export const agentQueuedMessage = mysqlTable(
-  'agent_queued_message',
-  {
-    uiCapabilities: json('ui_capabilities').$type<UiCapabilities>(),
-    hostContext: json('host_context').$type<AgentHostContext>(),
-    id: key('id').primaryKey(),
-    threadId: key('thread_id')
-      .notNull()
-      .references(() => agentThread.id, { onDelete: 'cascade' }),
-    actor: json('actor').$type<Actor>().notNull(),
-    content: longtext('content').notNull(),
-    attachments: json('attachments').$type<MessageAttachment[]>(),
-    agentName: key('agent_name'),
-    /** The persona the send resolved — what the message starts under. */
-    persona: key('persona'),
-    model: key('model'),
-    pageContext: json('page_context').$type<PageContext>(),
-    interrupt: boolean('interrupt').notNull().default(false),
-    position: int('position').notNull(),
-    createdAt: ts('created_at').notNull(),
-    updatedAt: ts('updated_at').notNull(),
-  },
-  (table) => [index('agent_queued_message_thread_position_idx').on(table.threadId, table.position)],
-);
+  const agentQueuedMessage = tableFn(
+    'agent_queued_message',
+    {
+      uiCapabilities: json('ui_capabilities').$type<UiCapabilities>(),
+      hostContext: json('host_context').$type<AgentHostContext>(),
+      id: key('id').primaryKey(),
+      threadId: key('thread_id')
+        .notNull()
+        .references(() => agentThread.id, { onDelete: 'cascade' }),
+      actor: json('actor').$type<Actor>().notNull(),
+      content: longtext('content').notNull(),
+      attachments: json('attachments').$type<MessageAttachment[]>(),
+      agentName: key('agent_name'),
+      /** The persona the send resolved — what the message starts under. */
+      persona: key('persona'),
+      model: key('model'),
+      pageContext: json('page_context').$type<PageContext>(),
+      interrupt: boolean('interrupt').notNull().default(false),
+      position: int('position').notNull(),
+      createdAt: ts('created_at').notNull(),
+      updatedAt: ts('updated_at').notNull(),
+    },
+    (table) => [
+      index('agent_queued_message_thread_position_idx').on(table.threadId, table.position),
+    ],
+  );
 
-export const agentTokenUsage = mysqlTable(
-  'agent_token_usage',
-  {
+  const agentTokenUsage = tableFn(
+    'agent_token_usage',
+    {
+      id: key('id').primaryKey(),
+      threadId: key('thread_id')
+        // NULL for usage recorded outside any conversation (`AgentService.recordUsage`).
+        .references(() => agentThread.id, { onDelete: 'cascade' }),
+      actorRef: key('actor_ref').notNull(),
+      messageId: key('message_id'),
+      modelId: key('model_id').notNull(),
+      purpose: key('purpose').$type<UsagePurpose>().notNull(),
+      inputTokens: int('input_tokens').notNull(),
+      outputTokens: int('output_tokens').notNull(),
+      cacheWriteTokens: int('cache_write_tokens'),
+      cacheReadTokens: int('cache_read_tokens'),
+      costUsd: double('cost_usd'),
+      /** Where `cost_usd` came from: `'provider'` (reported) or `'estimate'` (tokens × the price row); null on rows from before it existed (reported). */
+      costSource: key('cost_source').$type<CostSource>(),
+      /** The run the row belongs to. */
+      runId: key('run_id'),
+      /** What the spend was for: `agent:<name>` for an agent turn, the app's own otherwise; null → `agent`. */
+      feature: key('feature'),
+      provider: key('provider'),
+      tenantRef: key('tenant_ref'),
+      /** Units a row bills by when they are not tokens. */
+      audioSeconds: double('audio_seconds'),
+      characters: bigint('characters', { mode: 'number' }),
+      requests: int('requests'),
+      /** The caller's own JSON, never read by the library. */
+      metadata: json('metadata').$type<Record<string, unknown>>(),
+      /** `false` keeps the row out of the agent's quota windows (`recordUsage({ countsTowardsQuota: false })`). */
+      countsTowardsQuota: boolean('counts_towards_quota').notNull().default(true),
+      createdAt: ts('created_at').notNull(),
+    },
+    (table) => [
+      index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt),
+      index('agent_token_usage_created_idx').on(table.createdAt),
+      index('agent_token_usage_thread_idx').on(table.threadId),
+      index('agent_token_usage_feature_created_idx').on(table.feature, table.createdAt),
+      // `quota.per: 'tenant' | 'actor-in-tenant'` sums a tenant's window.
+      index('agent_token_usage_tenant_created_idx').on(table.tenantRef, table.createdAt),
+    ],
+  );
+
+  /**
+   * Generative-UI telemetry (`AgentStore.recordGenuiCalls`): one row per UI tool call, keyed by the
+   * tool call's id, so a replayed record replaces rather than duplicates. Metadata only — `payload`
+   * (the call's arguments) is filled solely when the tool samples payloads. `created_at` is epoch-ms.
+   */
+  const agentGenuiCall = tableFn(
+    'agent_genui_call',
+    {
+      id: key('id').primaryKey(),
+      runId: key('run_id').notNull(),
+      threadId: key('thread_id')
+        .notNull()
+        .references(() => agentThread.id, { onDelete: 'cascade' }),
+      actorRef: key('actor_ref').notNull(),
+      agentName: key('agent_name'),
+      step: int('step').notNull(),
+      toolName: key('tool_name').notNull(),
+      channel: key('channel').notNull(),
+      mode: key('mode').$type<GenuiToolMarker['mode']>().notNull(),
+      modelId: key('model_id').notNull(),
+      attempt: int('attempt').notNull(),
+      outcome: key('outcome').$type<RecordGenuiCallInput['outcome']>().notNull(),
+      validity: key('validity').$type<GenuiValidity>().notNull(),
+      errorCategory: key('error_category').$type<GenuiErrorCategory>(),
+      errorMessage: longtext('error_message'),
+      inputTokens: int('input_tokens').notNull(),
+      outputTokens: int('output_tokens').notNull(),
+      costUsd: double('cost_usd'),
+      costSource: varchar('cost_source', { length: 16 }).$type<CostSource>(),
+      firstFrameMs: bigint('first_frame_ms', { mode: 'number' }),
+      completeFrameMs: bigint('complete_frame_ms', { mode: 'number' }),
+      payloadBytes: int('payload_bytes').notNull(),
+      payload: longtext('payload'),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [
+      index('agent_genui_call_created_idx').on(table.createdAt),
+      index('agent_genui_call_run_idx').on(table.runId),
+    ],
+  );
+
+  const agentModelPricing = tableFn('agent_model_pricing', {
     id: key('id').primaryKey(),
-    threadId: key('thread_id')
-      // NULL for usage recorded outside any conversation (`AgentService.recordUsage`).
-      .references(() => agentThread.id, { onDelete: 'cascade' }),
-    actorRef: key('actor_ref').notNull(),
-    messageId: key('message_id'),
     modelId: key('model_id').notNull(),
-    purpose: key('purpose').$type<UsagePurpose>().notNull(),
-    inputTokens: int('input_tokens').notNull(),
-    outputTokens: int('output_tokens').notNull(),
-    cacheWriteTokens: int('cache_write_tokens'),
-    cacheReadTokens: int('cache_read_tokens'),
-    costUsd: double('cost_usd'),
-    /** Where `cost_usd` came from: `'provider'` (reported) or `'estimate'` (tokens × the price row); null on rows from before it existed (reported). */
-    costSource: key('cost_source').$type<CostSource>(),
-    /** The run the row belongs to. */
-    runId: key('run_id'),
-    /** What the spend was for: `agent:<name>` for an agent turn, the app's own otherwise; null → `agent`. */
-    feature: key('feature'),
-    provider: key('provider'),
-    tenantRef: key('tenant_ref'),
-    /** Units a row bills by when they are not tokens. */
-    audioSeconds: double('audio_seconds'),
-    characters: bigint('characters', { mode: 'number' }),
-    requests: int('requests'),
-    /** The caller's own JSON, never read by the library. */
-    metadata: json('metadata').$type<Record<string, unknown>>(),
-    /** `false` keeps the row out of the agent's quota windows (`recordUsage({ countsTowardsQuota: false })`). */
-    countsTowardsQuota: boolean('counts_towards_quota').notNull().default(true),
-    createdAt: ts('created_at').notNull(),
-  },
-  (table) => [
-    index('agent_token_usage_actor_created_idx').on(table.actorRef, table.createdAt),
-    index('agent_token_usage_created_idx').on(table.createdAt),
-    index('agent_token_usage_thread_idx').on(table.threadId),
-    index('agent_token_usage_feature_created_idx').on(table.feature, table.createdAt),
-    // `quota.per: 'tenant' | 'actor-in-tenant'` sums a tenant's window.
-    index('agent_token_usage_tenant_created_idx').on(table.tenantRef, table.createdAt),
-  ],
-);
+    inputPricePer1m: double('input_price_per_1m').notNull(),
+    outputPricePer1m: double('output_price_per_1m').notNull(),
+    cacheWritePricePer1m: double('cache_write_price_per_1m'),
+    cacheReadPricePer1m: double('cache_read_price_per_1m'),
+    effectiveFrom: ts('effective_from').notNull(),
+    isCurrent: boolean('is_current').notNull(),
+  });
 
-/**
- * Generative-UI telemetry (`AgentStore.recordGenuiCalls`): one row per UI tool call, keyed by the
- * tool call's id, so a replayed record replaces rather than duplicates. Metadata only — `payload`
- * (the call's arguments) is filled solely when the tool samples payloads. `created_at` is epoch-ms.
- */
-export const agentGenuiCall = mysqlTable(
-  'agent_genui_call',
-  {
+  const agentRun = tableFn(
+    'agent_run',
+    {
+      id: key('id').primaryKey(),
+      threadId: key('thread_id')
+        .notNull()
+        .references(() => agentThread.id, { onDelete: 'cascade' }),
+      actorRef: key('actor_ref').notNull(),
+      agentName: key('agent_name'),
+      status: key('status').$type<AgentRunStatus>().notNull(),
+      durationMs: int('duration_ms'),
+      /** Turn start to the first `text` frame; null for a run that streamed none or did not complete. */
+      ttftMs: int('ttft_ms'),
+      /** The run's known spend (the sum of its model calls with a known cost); null when none had one. */
+      costUsd: double('cost_usd'),
+      /** The model the run's last model call resolved to. */
+      modelId: key('model_id'),
+      errorCode: key('error_code'),
+      errorMessage: longtext('error_message'),
+      retries: int('retries').notNull().default(0),
+      startedAt: ts('started_at').notNull(),
+      settledAt: ts('settled_at'),
+      promptHash: key('prompt_hash'),
+      parentRunId: key('parent_run_id'),
+      /** Enqueue → body start (ms); null when not read. */
+      queueMs: int('queue_ms'),
+      /** Where the completed run's time went: model and tool totals, counts, and the per-step list. */
+      modelMs: int('model_ms'),
+      toolsMs: int('tools_ms'),
+      modelCalls: int('model_calls'),
+      toolCalls: int('tool_calls'),
+      timings: json('timings').$type<RunStepTiming[]>(),
+    },
+    (table) => [index('agent_run_started_idx').on(table.startedAt)],
+  );
+
+  const agentMemory = tableFn(
+    'agent_memory',
+    {
+      id: key('id').primaryKey(),
+      scope: key('scope').notNull(),
+      key: key('key').notNull(),
+      text: longtext('text').notNull(),
+      originAuthor: key('origin_author').$type<MemoryOrigin['author']>().notNull(),
+      originThreadId: key('origin_thread_id'),
+      originRunId: key('origin_run_id'),
+      originActorRef: key('origin_actor_ref'),
+      pinned: boolean('pinned').notNull().default(false),
+      createdAt: ts('created_at').notNull(),
+      updatedAt: ts('updated_at').notNull(),
+    },
+    (table) => [uniqueIndex('agent_memory_scope_key_uq').on(table.scope, table.key)],
+  );
+
+  const ragIngestionLog = tableFn(
+    'rag_ingestion_log',
+    {
+      documentId: key('document_id').primaryKey(),
+      status: key('status').$type<RagIngestionStatus>().notNull(),
+      collection: key('collection'),
+      ownerType: key('owner_type'),
+      ownerId: key('owner_id'),
+      source: longtext('source'),
+      mimeType: key('mime_type'),
+      size: bigint('size', { mode: 'number' }),
+      chunks: int('chunks'),
+      reason: key('reason'),
+      error: longtext('error'),
+      createdAt: ts('created_at').notNull(),
+      updatedAt: ts('updated_at').notNull(),
+    },
+    (table) => [index('rag_ingestion_log_collection_idx').on(table.collection, table.updatedAt)],
+  );
+
+  /**
+   * Text channels' short-lived state (`@dudousxd/nestjs-agent-channels`), one row per key: the provider
+   * message ids already answered, a question waiting for the person's answer, an outcome already
+   * relayed. The primary key is the lock a claim takes; `expires_at` is epoch-ms, and past it the row
+   * is free again and dead weight for `DrizzleChannelStore.purgeExpired`. Keys longer than 255
+   * characters are stored by their SHA-256.
+   */
+  const agentChannelState = tableFn(
+    'agent_channel_state',
+    {
+      key: key('key').primaryKey(),
+      value: longtext('value'),
+      expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [index('agent_channel_state_expires_idx').on(table.expiresAt)],
+  );
+
+  const agentConfirmToken = tableFn(
+    'agent_confirm_token',
+    {
+      hash: key('hash').primaryKey(),
+      actorRef: key('actor_ref').notNull(),
+      tool: key('tool').notNull(),
+      expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [index('agent_confirm_token_expires_idx').on(table.expiresAt)],
+  );
+
+  const agentStreamFrame = tableFn(
+    'agent_stream_frame',
+    {
+      runId: key('run_id').notNull(),
+      seq: int('seq').notNull(),
+      frame: longtext('frame'),
+      error: longtext('error'),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [primaryKey({ columns: [table.runId, table.seq] })],
+  );
+
+  /** JSON text preserves valid JSON strings that a native JSON column cannot represent. */
+  const proposalJson = customType<{ data: ActionProposal; driverData: string }>({
+    dataType: () => 'longtext',
+    toDriver: (value) => canonicalActionProposalJson(value),
+    fromDriver: (value) => JSON.parse(value) as ActionProposal,
+  });
+
+  /** Independent action proposals; decision and execution work commit in one fenced row. */
+  const agentActionProposal = tableFn(
+    'agent_action_proposal',
+    {
+      id: key('id').primaryKey(),
+      scopeKey: key('scope_key').notNull(),
+      decision: key('decision').$type<ActionProposal['decision']>().notNull(),
+      logicalSort: varchar('logical_sort', { length: 1020 }).notNull(),
+      createFingerprint: longtext('create_fingerprint').notNull(),
+      proposal: proposalJson('proposal').notNull(),
+      version: bigint('version', { mode: 'number' }).notNull().default(0),
+      executionStatus:
+        key('execution_status').$type<NonNullable<ActionProposal['execution']>['status']>(),
+      leaseExpiresAt: bigint('lease_expires_at', { mode: 'number' }),
+      deliveryStatus: key('delivery_status'),
+      deliveryLeaseExpiresAt: bigint('delivery_lease_expires_at', { mode: 'number' }),
+      replacementGroupKey: key('replacement_group_key'),
+      outcomeIdKey: key('outcome_id_key'),
+      proposalExpiresAt: bigint('proposal_expires_at', { mode: 'number' }),
+      discoveryIndexVersion: bigint('discovery_index_version', { mode: 'number' })
+        .notNull()
+        .default(0),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [
+      index('agent_action_proposal_execution_idx').on(
+        table.discoveryIndexVersion,
+        table.executionStatus,
+        table.leaseExpiresAt,
+        table.createdAt,
+      ),
+      index('agent_action_proposal_expiry_idx').on(
+        table.discoveryIndexVersion,
+        table.decision,
+        table.proposalExpiresAt,
+        table.createdAt,
+      ),
+      index('agent_action_proposal_replacement_idx').on(
+        table.scopeKey,
+        table.replacementGroupKey,
+        table.decision,
+      ),
+      index('agent_action_proposal_delivery_idx').on(
+        table.deliveryStatus,
+        table.deliveryLeaseExpiresAt,
+        table.createdAt,
+      ),
+      uniqueIndex('agent_action_proposal_outcome_idx').on(table.outcomeIdKey),
+      index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
+    ],
+  );
+
+  /**
+   * Personal Agent Protocol (Poppy) conversations (`DrizzlePoppyStore`): who it is with, its status,
+   * the User's context and the identity its turns run as (JSON text), and the reader lease
+   * (`reader_holder` until `reader_until`, epoch-ms) that lets one replica at a time write a reply.
+   * `pruned_seq`: events at or below it were pruned.
+   *
+   * @experimental Personal Agent Protocol Draft 0.1.
+   */
+  const agentPoppyConversation = tableFn('agent_poppy_conversation', {
     id: key('id').primaryKey(),
-    runId: key('run_id').notNull(),
-    threadId: key('thread_id')
-      .notNull()
-      .references(() => agentThread.id, { onDelete: 'cascade' }),
-    actorRef: key('actor_ref').notNull(),
-    agentName: key('agent_name'),
-    step: int('step').notNull(),
-    toolName: key('tool_name').notNull(),
-    channel: key('channel').notNull(),
-    mode: key('mode').$type<GenuiToolMarker['mode']>().notNull(),
-    modelId: key('model_id').notNull(),
-    attempt: int('attempt').notNull(),
-    outcome: key('outcome').$type<RecordGenuiCallInput['outcome']>().notNull(),
-    validity: key('validity').$type<GenuiValidity>().notNull(),
-    errorCategory: key('error_category').$type<GenuiErrorCategory>(),
-    errorMessage: longtext('error_message'),
-    inputTokens: int('input_tokens').notNull(),
-    outputTokens: int('output_tokens').notNull(),
-    costUsd: double('cost_usd'),
-    costSource: varchar('cost_source', { length: 16 }).$type<CostSource>(),
-    firstFrameMs: bigint('first_frame_ms', { mode: 'number' }),
-    completeFrameMs: bigint('complete_frame_ms', { mode: 'number' }),
-    payloadBytes: int('payload_bytes').notNull(),
-    payload: longtext('payload'),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [
-    index('agent_genui_call_created_idx').on(table.createdAt),
-    index('agent_genui_call_run_idx').on(table.runId),
-  ],
-);
-
-export const agentModelPricing = mysqlTable('agent_model_pricing', {
-  id: key('id').primaryKey(),
-  modelId: key('model_id').notNull(),
-  inputPricePer1m: double('input_price_per_1m').notNull(),
-  outputPricePer1m: double('output_price_per_1m').notNull(),
-  cacheWritePricePer1m: double('cache_write_price_per_1m'),
-  cacheReadPricePer1m: double('cache_read_price_per_1m'),
-  effectiveFrom: ts('effective_from').notNull(),
-  isCurrent: boolean('is_current').notNull(),
-});
-
-export const agentRun = mysqlTable(
-  'agent_run',
-  {
-    id: key('id').primaryKey(),
-    threadId: key('thread_id')
-      .notNull()
-      .references(() => agentThread.id, { onDelete: 'cascade' }),
-    actorRef: key('actor_ref').notNull(),
-    agentName: key('agent_name'),
-    status: key('status').$type<AgentRunStatus>().notNull(),
-    durationMs: int('duration_ms'),
-    /** Turn start to the first `text` frame; null for a run that streamed none or did not complete. */
-    ttftMs: int('ttft_ms'),
-    /** The run's known spend (the sum of its model calls with a known cost); null when none had one. */
-    costUsd: double('cost_usd'),
-    /** The model the run's last model call resolved to. */
-    modelId: key('model_id'),
-    errorCode: key('error_code'),
-    errorMessage: longtext('error_message'),
-    retries: int('retries').notNull().default(0),
-    startedAt: ts('started_at').notNull(),
-    settledAt: ts('settled_at'),
-    promptHash: key('prompt_hash'),
-    parentRunId: key('parent_run_id'),
-    /** Enqueue → body start (ms); null when not read. */
-    queueMs: int('queue_ms'),
-    /** Where the completed run's time went: model and tool totals, counts, and the per-step list. */
-    modelMs: int('model_ms'),
-    toolsMs: int('tools_ms'),
-    modelCalls: int('model_calls'),
-    toolCalls: int('tool_calls'),
-    timings: json('timings').$type<RunStepTiming[]>(),
-  },
-  (table) => [index('agent_run_started_idx').on(table.startedAt)],
-);
-
-export const agentMemory = mysqlTable(
-  'agent_memory',
-  {
-    id: key('id').primaryKey(),
-    scope: key('scope').notNull(),
-    key: key('key').notNull(),
-    text: longtext('text').notNull(),
-    originAuthor: key('origin_author').$type<MemoryOrigin['author']>().notNull(),
-    originThreadId: key('origin_thread_id'),
-    originRunId: key('origin_run_id'),
-    originActorRef: key('origin_actor_ref'),
-    pinned: boolean('pinned').notNull().default(false),
-    createdAt: ts('created_at').notNull(),
-    updatedAt: ts('updated_at').notNull(),
-  },
-  (table) => [uniqueIndex('agent_memory_scope_key_uq').on(table.scope, table.key)],
-);
-
-export const ragIngestionLog = mysqlTable(
-  'rag_ingestion_log',
-  {
-    documentId: key('document_id').primaryKey(),
-    status: key('status').$type<RagIngestionStatus>().notNull(),
-    collection: key('collection'),
-    ownerType: key('owner_type'),
-    ownerId: key('owner_id'),
-    source: longtext('source'),
-    mimeType: key('mime_type'),
-    size: bigint('size', { mode: 'number' }),
-    chunks: int('chunks'),
-    reason: key('reason'),
-    error: longtext('error'),
-    createdAt: ts('created_at').notNull(),
-    updatedAt: ts('updated_at').notNull(),
-  },
-  (table) => [index('rag_ingestion_log_collection_idx').on(table.collection, table.updatedAt)],
-);
-
-/**
- * Text channels' short-lived state (`@dudousxd/nestjs-agent-channels`), one row per key: the provider
- * message ids already answered, a question waiting for the person's answer, an outcome already
- * relayed. The primary key is the lock a claim takes; `expires_at` is epoch-ms, and past it the row
- * is free again and dead weight for `DrizzleChannelStore.purgeExpired`. Keys longer than 255
- * characters are stored by their SHA-256.
- */
-export const agentChannelState = mysqlTable(
-  'agent_channel_state',
-  {
-    key: key('key').primaryKey(),
-    value: longtext('value'),
-    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [index('agent_channel_state_expires_idx').on(table.expiresAt)],
-);
-
-export const agentConfirmToken = mysqlTable(
-  'agent_confirm_token',
-  {
-    hash: key('hash').primaryKey(),
-    actorRef: key('actor_ref').notNull(),
-    tool: key('tool').notNull(),
-    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [index('agent_confirm_token_expires_idx').on(table.expiresAt)],
-);
-
-export const agentStreamFrame = mysqlTable(
-  'agent_stream_frame',
-  {
-    runId: key('run_id').notNull(),
-    seq: int('seq').notNull(),
-    frame: longtext('frame'),
-    error: longtext('error'),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.runId, table.seq] })],
-);
-
-/** JSON text preserves valid JSON strings that a native JSON column cannot represent. */
-const proposalJson = customType<{ data: ActionProposal; driverData: string }>({
-  dataType: () => 'longtext',
-  toDriver: (value) => canonicalActionProposalJson(value),
-  fromDriver: (value) => JSON.parse(value) as ActionProposal,
-});
-
-/** Independent action proposals; decision and execution work commit in one fenced row. */
-export const agentActionProposal = mysqlTable(
-  'agent_action_proposal',
-  {
-    id: key('id').primaryKey(),
-    scopeKey: key('scope_key').notNull(),
-    decision: key('decision').$type<ActionProposal['decision']>().notNull(),
-    logicalSort: varchar('logical_sort', { length: 1020 }).notNull(),
-    createFingerprint: longtext('create_fingerprint').notNull(),
-    proposal: proposalJson('proposal').notNull(),
-    version: bigint('version', { mode: 'number' }).notNull().default(0),
-    executionStatus:
-      key('execution_status').$type<NonNullable<ActionProposal['execution']>['status']>(),
-    leaseExpiresAt: bigint('lease_expires_at', { mode: 'number' }),
-    deliveryStatus: key('delivery_status'),
-    deliveryLeaseExpiresAt: bigint('delivery_lease_expires_at', { mode: 'number' }),
-    replacementGroupKey: key('replacement_group_key'),
-    outcomeIdKey: key('outcome_id_key'),
-    proposalExpiresAt: bigint('proposal_expires_at', { mode: 'number' }),
-    discoveryIndexVersion: bigint('discovery_index_version', { mode: 'number' })
-      .notNull()
-      .default(0),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [
-    index('agent_action_proposal_execution_idx').on(
-      table.discoveryIndexVersion,
-      table.executionStatus,
-      table.leaseExpiresAt,
-      table.createdAt,
-    ),
-    index('agent_action_proposal_expiry_idx').on(
-      table.discoveryIndexVersion,
-      table.decision,
-      table.proposalExpiresAt,
-      table.createdAt,
-    ),
-    index('agent_action_proposal_replacement_idx').on(
-      table.scopeKey,
-      table.replacementGroupKey,
-      table.decision,
-    ),
-    index('agent_action_proposal_delivery_idx').on(
-      table.deliveryStatus,
-      table.deliveryLeaseExpiresAt,
-      table.createdAt,
-    ),
-    uniqueIndex('agent_action_proposal_outcome_idx').on(table.outcomeIdKey),
-    index('agent_action_proposal_scope_idx').on(table.scopeKey, table.createdAt, table.id),
-  ],
-);
-
-/**
- * Personal Agent Protocol (Poppy) conversations (`DrizzlePoppyStore`): who it is with, its status,
- * the User's context and the identity its turns run as (JSON text), and the reader lease
- * (`reader_holder` until `reader_until`, epoch-ms) that lets one replica at a time write a reply.
- * `pruned_seq`: events at or below it were pruned.
- *
- * @experimental Personal Agent Protocol Draft 0.1.
- */
-export const agentPoppyConversation = mysqlTable('agent_poppy_conversation', {
-  id: key('id').primaryKey(),
-  clientId: varchar('client_id', { length: 2048 }).notNull(),
-  userId: key('user_id').notNull(),
-  accountRef: key('account_ref'),
-  agentName: key('agent_name').notNull(),
-  threadId: key('thread_id'),
-  parentId: key('parent_id'),
-  openDirectId: key('open_direct_id'),
-  status: key('status').notNull(),
-  responder: key('responder').notNull(),
-  context: longtext('context'),
-  activeRunId: key('active_run_id'),
-  turnSeq: bigint('turn_seq', { mode: 'number' }).notNull(),
-  grantInfo: longtext('grant_info'),
-  readerHolder: key('reader_holder'),
-  readerUntil: bigint('reader_until', { mode: 'number' }),
-  prunedSeq: bigint('pruned_seq', { mode: 'number' }).notNull(),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
-});
-
-/**
- * A Poppy conversation's events, append-only, numbered per conversation. The primary key is the
- * position, so two appends racing for one cannot both win; `event_key` (unique per conversation)
- * is what keeps a re-read turn from writing its reply twice. `event` is the event as JSON text.
- *
- * @experimental Personal Agent Protocol Draft 0.1.
- */
-export const agentPoppyEvent = mysqlTable(
-  'agent_poppy_event',
-  {
-    conversationId: key('conversation_id').notNull(),
-    seq: bigint('seq', { mode: 'number' }).notNull(),
-    id: key('id').notNull(),
-    type: key('type').notNull(),
-    event: longtext('event').notNull(),
-    eventKey: key('event_key'),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.conversationId, table.seq] }),
-    uniqueIndex('agent_poppy_event_key_idx').on(table.conversationId, table.eventKey),
-    index('agent_poppy_event_id_idx').on(table.conversationId, table.id),
-  ],
-);
-
-/**
- * Accepted Poppy messages, one row per (owner, message id) — the primary key is the idempotency lock
- * that makes two deliveries of one message one (§7.3); `response` is what the first got, as JSON.
- *
- * @experimental Personal Agent Protocol Draft 0.1.
- */
-export const agentPoppyMessage = mysqlTable(
-  'agent_poppy_message',
-  {
-    owner: key('owner').notNull(),
-    messageId: key('message_id').notNull(),
-    fingerprint: key('fingerprint').notNull(),
-    conversationId: key('conversation_id').notNull(),
-    response: longtext('response').notNull(),
-    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.owner, table.messageId] })],
-);
-
-/**
- * This app's Poppy connections (`DrizzlePoppyConnectionStore`): one per (owner, Company issuer),
- * holding the client state SEALED by the caller — never a token in the clear.
- *
- * @experimental Personal Agent Protocol Draft 0.1.
- */
-export const agentPoppyConnection = mysqlTable(
-  'agent_poppy_connection',
-  {
-    owner: key('owner').notNull(),
-    issuer: varchar('issuer', { length: 512 }).notNull(),
-    domain: key('domain').notNull(),
-    organization: key('organization').notNull(),
-    scope: longtext('scope').notNull(),
+    clientId: varchar('client_id', { length: 2048 }).notNull(),
+    userId: key('user_id').notNull(),
+    accountRef: key('account_ref'),
+    agentName: key('agent_name').notNull(),
+    threadId: key('thread_id'),
+    parentId: key('parent_id'),
+    openDirectId: key('open_direct_id'),
     status: key('status').notNull(),
-    state: longtext('state').notNull(),
+    responder: key('responder').notNull(),
+    context: longtext('context'),
+    activeRunId: key('active_run_id'),
+    turnSeq: bigint('turn_seq', { mode: 'number' }).notNull(),
+    grantInfo: longtext('grant_info'),
+    readerHolder: key('reader_holder'),
+    readerUntil: bigint('reader_until', { mode: 'number' }),
+    prunedSeq: bigint('pruned_seq', { mode: 'number' }).notNull(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.owner, table.issuer] })],
-);
+  });
+
+  /**
+   * A Poppy conversation's events, append-only, numbered per conversation. The primary key is the
+   * position, so two appends racing for one cannot both win; `event_key` (unique per conversation)
+   * is what keeps a re-read turn from writing its reply twice. `event` is the event as JSON text.
+   *
+   * @experimental Personal Agent Protocol Draft 0.1.
+   */
+  const agentPoppyEvent = tableFn(
+    'agent_poppy_event',
+    {
+      conversationId: key('conversation_id').notNull(),
+      seq: bigint('seq', { mode: 'number' }).notNull(),
+      id: key('id').notNull(),
+      type: key('type').notNull(),
+      event: longtext('event').notNull(),
+      eventKey: key('event_key'),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [
+      primaryKey({ columns: [table.conversationId, table.seq] }),
+      uniqueIndex('agent_poppy_event_key_idx').on(table.conversationId, table.eventKey),
+      index('agent_poppy_event_id_idx').on(table.conversationId, table.id),
+    ],
+  );
+
+  /**
+   * Accepted Poppy messages, one row per (owner, message id) — the primary key is the idempotency lock
+   * that makes two deliveries of one message one (§7.3); `response` is what the first got, as JSON.
+   *
+   * @experimental Personal Agent Protocol Draft 0.1.
+   */
+  const agentPoppyMessage = tableFn(
+    'agent_poppy_message',
+    {
+      owner: key('owner').notNull(),
+      messageId: key('message_id').notNull(),
+      fingerprint: key('fingerprint').notNull(),
+      conversationId: key('conversation_id').notNull(),
+      response: longtext('response').notNull(),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [primaryKey({ columns: [table.owner, table.messageId] })],
+  );
+
+  /**
+   * This app's Poppy connections (`DrizzlePoppyConnectionStore`): one per (owner, Company issuer),
+   * holding the client state SEALED by the caller — never a token in the clear.
+   *
+   * @experimental Personal Agent Protocol Draft 0.1.
+   */
+  const agentPoppyConnection = tableFn(
+    'agent_poppy_connection',
+    {
+      owner: key('owner').notNull(),
+      issuer: varchar('issuer', { length: 512 }).notNull(),
+      domain: key('domain').notNull(),
+      organization: key('organization').notNull(),
+      scope: longtext('scope').notNull(),
+      status: key('status').notNull(),
+      state: longtext('state').notNull(),
+      createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+      updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+    },
+    (table) => [primaryKey({ columns: [table.owner, table.issuer] })],
+  );
+
+  /**
+   * Poppy sign-ins in flight, started by the `connect` tool and completed on the connect page. `actor`
+   * is JSON text; `flow` the sealed per-method state.
+   *
+   * @experimental Personal Agent Protocol Draft 0.1.
+   */
+  const agentPoppyConnect = tableFn('agent_poppy_connect', {
+    id: key('id').primaryKey(),
+    owner: key('owner').notNull(),
+    domain: key('domain').notNull(),
+    issuer: varchar('issuer', { length: 512 }).notNull(),
+    organization: key('organization').notNull(),
+    scope: longtext('scope').notNull(),
+    actor: longtext('actor'),
+    threadId: key('thread_id'),
+    runId: key('run_id'),
+    toolCallId: key('tool_call_id'),
+    flow: longtext('flow'),
+    status: key('status').notNull(),
+    expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  });
+  return {
+    agentActionProposal,
+    agentThread,
+    agentMessage,
+    agentQueuedMessage,
+    agentToolCall,
+    agentTokenUsage,
+    agentGenuiCall,
+    agentModelPricing,
+    agentRun,
+    agentMemory,
+    ragIngestionLog,
+    agentConfirmToken,
+    agentChannelState,
+    agentStreamFrame,
+    agentPoppyConversation,
+    agentPoppyEvent,
+    agentPoppyMessage,
+    agentPoppyConnection,
+    agentPoppyConnect,
+  };
+}
+
+/** Every agent table, for `drizzle(pool, { schema: mysqlAgentSchema })`, in the connection's current database. */
+export const mysqlAgentSchema = build(mysqlTable);
+
+const bySchema = new Map<string, typeof mysqlAgentSchema>();
 
 /**
- * Poppy sign-ins in flight, started by the `connect` tool and completed on the connect page. `actor`
- * is JSON text; `flow` the sealed per-method state.
- *
- * @experimental Personal Agent Protocol Draft 0.1.
+ * The agent tables in `schema` (database name), every statement qualified with it; `undefined` →
+ * {@link mysqlAgentSchema}, unqualified. One table set per name.
  */
-export const agentPoppyConnect = mysqlTable('agent_poppy_connect', {
-  id: key('id').primaryKey(),
-  owner: key('owner').notNull(),
-  domain: key('domain').notNull(),
-  issuer: varchar('issuer', { length: 512 }).notNull(),
-  organization: key('organization').notNull(),
-  scope: longtext('scope').notNull(),
-  actor: longtext('actor'),
-  threadId: key('thread_id'),
-  runId: key('run_id'),
-  toolCallId: key('tool_call_id'),
-  flow: longtext('flow'),
-  status: key('status').notNull(),
-  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-});
-
-/** Every agent table, for `drizzle(pool, { schema: mysqlAgentSchema, mode: 'default' })` on MySQL. */
-export const mysqlAgentSchema = {
-  agentActionProposal,
-  agentThread,
-  agentMessage,
-  agentQueuedMessage,
-  agentToolCall,
-  agentTokenUsage,
-  agentGenuiCall,
-  agentModelPricing,
-  agentRun,
-  agentMemory,
-  ragIngestionLog,
-  agentConfirmToken,
-  agentChannelState,
-  agentStreamFrame,
-  agentPoppyConversation,
-  agentPoppyEvent,
-  agentPoppyMessage,
-  agentPoppyConnection,
-  agentPoppyConnect,
-};
+export function mysqlAgentTables(schema?: string): typeof mysqlAgentSchema {
+  if (schema === undefined) return mysqlAgentSchema;
+  let tables = bySchema.get(schema);
+  if (tables === undefined) {
+    tables = build(mysqlSchema(schema).table as unknown as typeof mysqlTable);
+    bySchema.set(schema, tables);
+  }
+  return tables;
+}

@@ -4,6 +4,7 @@ import { and, eq, gt, lte } from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   affectedRows,
@@ -23,7 +24,7 @@ interface MySqlInsertIgnore<Row> {
 const channelStateKey = (key: string): string =>
   key.length <= 255 ? key : `sha256:${createHash('sha256').update(key).digest('hex')}`;
 
-export interface DrizzleChannelStoreOptions {
+export interface DrizzleChannelStoreOptions extends AgentSchemaOptions {
   /** How often a claim also deletes expired rows. Default 10 minutes; `0` → never (purge yourself). */
   purgeEveryMs?: number;
 }
@@ -47,7 +48,7 @@ export class DrizzleChannelStore implements ChannelStore {
 
   constructor(db: AgentDrizzleDb, options: DrizzleChannelStoreOptions = {}) {
     this.dialect = agentDialectOf(db);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(db);
     this.purgeEveryMs = options.purgeEveryMs ?? 10 * 60 * 1000;
   }

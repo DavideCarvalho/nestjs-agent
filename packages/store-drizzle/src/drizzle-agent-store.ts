@@ -61,6 +61,7 @@ import {
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   affectedRows,
@@ -106,6 +107,9 @@ function turnMessageColumns(message: AgentTables['agentMessage']) {
 
 type TurnMessageRow = { [K in keyof ReturnType<typeof turnMessageColumns>]: AgentMessageRow[K] };
 
+/** {@link DrizzleAgentStore}'s options: the action-proposal store's, and where its tables live. */
+export interface DrizzleAgentStoreOptions extends ActionProposalStoreOptions, AgentSchemaOptions {}
+
 /**
  * {@link AgentStore} backed by Drizzle ORM — a second adapter alongside the MikroORM one, proving
  * the store SPI is ORM-portable. A POJO receiving a Drizzle database handle — SQLite, Postgres or
@@ -129,10 +133,10 @@ export class DrizzleAgentStore
 
   private readonly proposals: DrizzleActionProposalStore;
 
-  constructor(db: AgentDrizzleDb, options: ActionProposalStoreOptions = {}) {
+  constructor(db: AgentDrizzleDb, options: DrizzleAgentStoreOptions = {}) {
     this.proposals = new DrizzleActionProposalStore(db, options);
     this.dialect = agentDialectOf(db);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(db);
   }
 

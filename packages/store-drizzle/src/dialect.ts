@@ -6,8 +6,8 @@ import {
 } from 'drizzle-orm/mysql-core';
 import { PgDatabase, type PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
-import { mysqlAgentSchema } from './schema-mysql.js';
-import { pgAgentSchema } from './schema-pg.js';
+import { mysqlAgentTables } from './schema-mysql.js';
+import { pgAgentTables } from './schema-pg.js';
 import { agentSchema } from './schema.js';
 
 /** The SQL dialects the stores in this package run on. */
@@ -62,10 +62,48 @@ export type AgentTables = typeof agentSchema;
  * places the dialects really differ — `RETURNING`, upserts, raw statements — go through the helpers
  * below instead.
  */
-export function agentTablesFor(dialect: AgentDialect): AgentTables {
-  if (dialect === 'postgres') return pgAgentSchema as unknown as AgentTables;
-  if (dialect === 'mysql') return mysqlAgentSchema as unknown as AgentTables;
+export function agentTablesFor(dialect: AgentDialect, schema?: string): AgentTables {
+  assertAgentSchema(dialect, schema);
+  if (dialect === 'postgres') return pgAgentTables(schema) as unknown as AgentTables;
+  if (dialect === 'mysql') return mysqlAgentTables(schema) as unknown as AgentTables;
   return agentSchema;
+}
+
+/** Where the stores' tables live: a database schema (Postgres) or database (MySQL) of their own. */
+export interface AgentSchemaOptions {
+  /**
+   * The schema (Postgres) or database (MySQL) holding the agent tables. Every statement the stores
+   * issue names it; the connection's `search_path` is never touched. Omit → the connection's
+   * current schema / database, unqualified. Not supported on SQLite (the boot fails).
+   */
+  schema?: string;
+}
+
+const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+/**
+ * Throws when `schema` is not a plain identifier of at most 63 characters, or is set on SQLite, which
+ * has no schemas. `undefined` always passes.
+ */
+export function assertAgentSchema(dialect: AgentDialect, schema: string | undefined): void {
+  if (schema === undefined) return;
+  if (typeof schema !== 'string' || !SCHEMA_NAME.test(schema) || schema.length > 63) {
+    throw new Error(
+      `nestjs-agent store: \`schema\` ${JSON.stringify(schema)} must match /^[A-Za-z_][A-Za-z0-9_$]*$/ and be at most 63 characters.`,
+    );
+  }
+  if (dialect === 'sqlite') {
+    throw new Error(
+      `nestjs-agent store: \`schema: '${schema}'\` is set, but SQLite has no schemas. Remove \`schema\`, or use Postgres or MySQL.`,
+    );
+  }
+}
+
+/** `table` as `dialect` names it in `schema`: `"schema"."table"`, `` `db`.`table` ``, or just quoted. */
+export function qualifiedTable(dialect: AgentDialect, table: string, schema?: string): string {
+  const quote = (identifier: string) =>
+    dialect === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`;
+  return schema === undefined ? quote(table) : `${quote(schema)}.${quote(table)}`;
 }
 
 /**

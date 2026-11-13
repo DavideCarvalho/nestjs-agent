@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Connection, EntityManager, EntityMetadata, MikroORM } from '@mikro-orm/core';
 import { declaredCollations, reconcileMySqlCollations } from './mysql-collations';
+import { type AgentSchemaOptions, assertAgentSchema, tableIn } from './schema-name';
 
 /**
  * The tables this store owns. The schema heal and fingerprint are scoped to exactly these, so
@@ -92,25 +93,54 @@ const SCHEMA_REVISION = 7;
  * {@link AgentSchemaHealError} — the fingerprint is written only on the way out, so a boot that
  * healed nothing cannot record itself as the applied schema and silence every boot after it.
  */
-export async function ensureAgentSchema(orm: MikroORM): Promise<void> {
+export async function ensureAgentSchema(
+  orm: MikroORM,
+  options: AgentSchemaOptions = {},
+): Promise<void> {
   const em = orm.em;
   const connection = em.getConnection();
   const dialect = detectDialect(em);
+  const schema = options.schema;
+  assertAgentSchema(em, schema);
+  const marker = new Marker(em, schema);
 
-  await createMarkerTable(em, dialect);
+  if (schema !== undefined) await createSchema(em, dialect, schema);
+  await createMarkerTable(em, dialect, marker);
   const expected = computeExpectedFingerprint(orm);
-  if ((await readStoredFingerprint(connection)) === expected) {
+  if ((await marker.read(connection)) === expected) {
     return;
   }
 
-  await withSchemaLock(em, dialect, async () => {
+  await withSchemaLock(em, dialect, schema, async () => {
     // Re-read under the lock: another replica may have healed while we waited.
-    if ((await readStoredFingerprint(connection)) === expected) {
+    if ((await marker.read(connection)) === expected) {
       return;
     }
-    await healAgentSchema(em, dialect);
-    await writeFingerprint(connection, dialect, expected);
+    await healAgentSchema(em, dialect, schema);
+    await marker.write(connection, dialect, expected);
   });
+}
+
+/**
+ * `create schema if not exists` (Postgres) or `create database if not exists` (MySQL). A role that may
+ * not create it fails with the grant it needs.
+ */
+async function createSchema(em: EntityManager, dialect: SqlDialect, schema: string): Promise<void> {
+  const statement =
+    dialect === 'mysql'
+      ? `create database if not exists \`${schema}\``
+      : `create schema if not exists "${schema}"`;
+  try {
+    await em.getConnection().execute(statement);
+  } catch (error) {
+    const grant =
+      dialect === 'mysql'
+        ? `GRANT CREATE ON \`${schema}\`.* TO <user>, or create the database yourself`
+        : 'GRANT CREATE ON DATABASE <db> TO <role>, or create the schema yourself';
+    throw new Error(
+      `[nestjs-agent-store-mikro-orm] could not create the ${dialect === 'mysql' ? 'database' : 'schema'} "${schema}" (${error instanceof Error ? error.message : String(error)}). ${grant}.`,
+    );
+  }
 }
 
 /**
@@ -127,18 +157,22 @@ export class AgentSchemaHealError extends Error {
   }
 }
 
-async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<void> {
+async function healAgentSchema(
+  em: EntityManager,
+  dialect: SqlDialect,
+  schema: string | undefined,
+): Promise<void> {
   const connection = em.getConnection();
   const collations =
     dialect === 'mysql' ? declaredCollations(agentMetadata(em)) : new Map<string, string>();
   // Existing columns first, so the diff below no longer asks for the bare `modify` MySQL refuses on
   // a key a foreign key points at; then again for whatever the diff just created without its collation.
-  await reconcileMySqlCollations(em, collations);
-  const statements = await agentUpdateStatements(em);
+  await reconcileMySqlCollations(em, collations, schema);
+  const statements = await agentUpdateStatements(em, schema);
   if (statements.length === 0) {
     // Nothing to apply — but a nullability change the safe diff does not emit still has to have
     // landed before this revision is recorded.
-    const unrelaxed = await unrelaxedColumns(em, dialect);
+    const unrelaxed = await unrelaxedColumns(em, dialect, schema);
     if (unrelaxed.length > 0) throw new AgentSchemaHealError(unrelaxed);
     return;
   }
@@ -161,12 +195,12 @@ async function healAgentSchema(em: EntityManager, dialect: SqlDialect): Promise<
   });
   // Ask the differ again rather than trust that every statement returning without an error means the
   // schema moved: a filtered, rewritten or silently-swallowed statement leaves no error to catch.
-  await reconcileMySqlCollations(em, collations);
-  const pending = (await agentUpdateStatements(em)).filter(isRequiredStructure);
+  await reconcileMySqlCollations(em, collations, schema);
+  const pending = (await agentUpdateStatements(em, schema)).filter(isRequiredStructure);
   // A nullability change is not "required structure" to the filter above (it is an alter), yet usage
   // recorded outside a conversation fails on every write without it — so it is checked by itself,
   // and an unrelaxed column keeps the fingerprint from being written.
-  pending.push(...(await unrelaxedColumns(em, dialect)));
+  pending.push(...(await unrelaxedColumns(em, dialect, schema)));
   if (pending.length > 0) {
     throw new AgentSchemaHealError(pending);
   }
@@ -178,10 +212,14 @@ const RELAXED_COLUMNS: readonly { table: string; column: string }[] = [
 ];
 
 /** Each {@link RELAXED_COLUMNS} entry the database still holds NOT NULL, as a pending statement. */
-async function unrelaxedColumns(em: EntityManager, dialect: SqlDialect): Promise<string[]> {
+async function unrelaxedColumns(
+  em: EntityManager,
+  dialect: SqlDialect,
+  schema: string | undefined,
+): Promise<string[]> {
   const pending: string[] = [];
   for (const { table, column } of RELAXED_COLUMNS) {
-    if (!(await columnIsNullable(em, dialect, table, column))) {
+    if (!(await columnIsNullable(em, dialect, table, column, schema))) {
       pending.push(`${table}.${column} must accept NULL`);
     }
   }
@@ -194,6 +232,7 @@ async function columnIsNullable(
   dialect: SqlDialect,
   table: string,
   column: string,
+  schema: string | undefined,
 ): Promise<boolean> {
   const connection = em.getConnection();
   if (dialect === 'sqlite') {
@@ -205,9 +244,11 @@ async function columnIsNullable(
     return row === undefined || Number(row.notnull) === 0;
   }
   if (dialect !== 'mysql' && dialect !== 'postgres') return true;
-  const schema = dialect === 'mysql' ? 'database()' : 'current_schema()';
+  // A configured schema is a validated identifier, so it is safe as a literal.
+  const current =
+    schema !== undefined ? `'${schema}'` : dialect === 'mysql' ? 'database()' : 'current_schema()';
   const rows = (await connection.execute(
-    `select is_nullable as nullable from information_schema.columns where table_schema = ${schema} and table_name = ? and column_name = ?`,
+    `select is_nullable as nullable from information_schema.columns where table_schema = ${current} and table_name = ? and column_name = ?`,
     [table, column],
   )) as { nullable?: string; NULLABLE?: string }[];
   const value = rows[0]?.nullable ?? rows[0]?.NULLABLE;
@@ -253,17 +294,109 @@ async function withoutForeignKeyEnforcement(
 }
 
 /** Additive update DDL for the agent tables, in the host's dialect, ignoring the host's skipTables. */
-async function agentUpdateStatements(em: EntityManager): Promise<string[]> {
+async function agentUpdateStatements(
+  em: EntityManager,
+  schema: string | undefined,
+): Promise<string[]> {
   // A generator built from the platform (not `orm.schema`) carries no `schemaGenerator.skipTables`,
   // so it sees the agent tables even when the host excludes `agent_` from its own snapshot diff.
-  const generator = em.getPlatform().getSchemaGenerator(em.getDriver(), em);
-  const sql = await generator.getUpdateSchemaSQL({ safe: true, wrap: false });
+  // With a schema, the generator is built from the driver view alone: given the EntityManager, it
+  // reads the host's own driver (and config) off it instead.
+  const generator =
+    schema === undefined
+      ? em.getPlatform().getSchemaGenerator(em.getDriver(), em)
+      : em.getPlatform().getSchemaGenerator(driverIn(em, schema));
+  const sql = await generator.getUpdateSchemaSQL({
+    safe: true,
+    wrap: false,
+    ...(schema !== undefined ? { schema } : {}),
+  });
   return sql
     .split(';')
     .map((statement) => statement.trim())
     .filter(
       (statement) => statement.length > 0 && belongsToAgent(statement) && !isDestructive(statement),
     );
+}
+
+/**
+ * The host's driver as the schema generator sees it, with `schema` as the configured default.
+ *
+ * MikroORM's generator places an entity without a schema of its own in `config.schema`, whatever
+ * schema the diff is asked for, so the agent tables would be diffed (and created) in the
+ * connection's default schema. This view answers `schema` for that one setting and leaves the host's
+ * configuration untouched: nothing else, and no other query, ever sees it.
+ */
+function driverIn(
+  em: EntityManager,
+  schema: string | undefined,
+): ReturnType<EntityManager['getDriver']> {
+  const driver = em.getDriver();
+  if (schema === undefined) return driver;
+  const config = new Proxy(driver.config, {
+    get(target, property) {
+      if (property === 'get') {
+        return (key: string, fallback?: unknown) =>
+          key === 'schema'
+            ? schema
+            : (target.get as (k: string, d?: unknown) => unknown)(key, fallback);
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const connection =
+    detectDialect(em) === 'mysql' ? catalogIn(driver.getConnection(), schema) : undefined;
+  return new Proxy(driver, {
+    get(target, property) {
+      if (property === 'config') return config;
+      if (property === 'getConnection' && connection !== undefined) return () => connection;
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/** The catalog filters MikroORM's MySQL introspection pins to the connection's current database. */
+const MYSQL_CATALOG_FILTER =
+  /\b(table_schema|constraint_schema|routine_schema|specific_schema|event_object_schema)\s*=\s*(?:database|schema)\(\)/gi;
+
+/**
+ * MikroORM introspects MySQL only in the connection's current database (`table_schema = database()`),
+ * so with a `schema` it would never see the agent tables. This connection view rewrites those
+ * catalog filters, in the introspection reads alone, to the configured database. Nothing switches
+ * the session's database (`USE`), which would leak to whoever gets the pooled connection next.
+ */
+function catalogIn(connection: Connection, schema: string): Connection {
+  return new Proxy(connection, {
+    get(target, property) {
+      if (property === 'execute') {
+        return (query: unknown, ...rest: unknown[]) => {
+          const rewritten =
+            typeof query === 'string' && /information_schema/i.test(query)
+              ? query
+                  .replace(
+                    MYSQL_CATALOG_FILTER,
+                    (_match, column: string) => `${column} = '${schema}'`,
+                  )
+                  // Its foreign-key read never selects the referenced table's database, so a key
+                  // into `schema` would always read as one into the current database.
+                  .replace(
+                    'k.referenced_table_name as referenced_table_name,',
+                    'k.referenced_table_name as referenced_table_name, nullif(k.referenced_table_schema, schema()) as referenced_schema_name,',
+                  )
+              : query;
+          return (target.execute as (...args: unknown[]) => unknown).call(
+            target,
+            rewritten,
+            ...rest,
+          );
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 /**
@@ -307,14 +440,17 @@ function isAgentTable(table: string): boolean {
 
 /** Every table a DDL or rebuild statement names, lowercased. Empty for anything else (`pragma`). */
 function namedTables(statement: string): string[] {
+  // A name may carry its schema (`"agent"."agent_thread"`, with `schema` set): the table is the last part.
+  const quote = '[`"\']?';
+  const name = `(?:${quote}[\\w$]+${quote}\\.)?${quote}([\\w$]+)`;
   const patterns = [
-    /^create\s+table\s+(?:if\s+not\s+exists\s+)?[`"']?([\w$]+)/i,
-    /^create\s+(?:unique\s+)?index\s+.+?\s+on\s+[`"']?([\w$]+)/i,
-    /^alter\s+table\s+[`"']?([\w$]+)/i,
-    /^drop\s+table\s+(?:if\s+exists\s+)?[`"']?([\w$]+)/i,
-    /^insert\s+into\s+[`"']?([\w$]+)/i,
-    /\brename\s+to\s+[`"']?([\w$]+)/i,
-    /\bfrom\s+[`"']?([\w$]+)/i,
+    new RegExp(String.raw`^create\s+table\s+(?:if\s+not\s+exists\s+)?${name}`, 'i'),
+    new RegExp(String.raw`^create\s+(?:unique\s+)?index\s+.+?\s+on\s+${name}`, 'i'),
+    new RegExp(String.raw`^alter\s+table\s+${name}`, 'i'),
+    new RegExp(String.raw`^drop\s+table\s+(?:if\s+exists\s+)?${name}`, 'i'),
+    new RegExp(String.raw`^insert\s+into\s+${name}`, 'i'),
+    new RegExp(String.raw`\brename\s+to\s+${name}`, 'i'),
+    new RegExp(String.raw`\bfrom\s+${name}`, 'i'),
   ];
   const tables: string[] = [];
   for (const pattern of patterns) {
@@ -401,39 +537,51 @@ function compareStrings(a: string, b: string): number {
  * both pass the existence check and the loser fails on `pg_type_typname_nsp_index`. So a failure is
  * retried once under the schema lock, by which time the winner's table is there and the guard holds.
  */
-async function createMarkerTable(em: EntityManager, dialect: SqlDialect): Promise<void> {
+async function createMarkerTable(
+  em: EntityManager,
+  dialect: SqlDialect,
+  marker: Marker,
+): Promise<void> {
   const connection = em.getConnection();
   try {
-    await connection.execute(createMarkerTableSql());
+    await connection.execute(marker.createSql());
   } catch {
-    await withSchemaLock(em, dialect, async () => {
-      await connection.execute(createMarkerTableSql());
+    await withSchemaLock(em, dialect, marker.schema, async () => {
+      await connection.execute(marker.createSql());
     });
   }
 }
 
-function createMarkerTableSql(): string {
-  return `create table if not exists ${MARKER_TABLE} (id varchar(32) not null primary key, fingerprint varchar(64) not null, applied_at bigint not null)`;
-}
+/** The fingerprint marker table, in the agent tables' schema when one is configured. */
+class Marker {
+  private readonly table: string;
 
-async function readStoredFingerprint(connection: Connection): Promise<string | undefined> {
-  const rows = await connection.execute<{ fingerprint: string }[]>(
-    `select fingerprint from ${MARKER_TABLE} where id = ?`,
-    [MARKER_ROW_ID],
-  );
-  return rows[0]?.fingerprint;
-}
+  constructor(
+    em: EntityManager,
+    readonly schema: string | undefined,
+  ) {
+    this.table = tableIn(em, MARKER_TABLE, schema);
+  }
 
-async function writeFingerprint(
-  connection: Connection,
-  dialect: SqlDialect,
-  fingerprint: string,
-): Promise<void> {
-  const upsert =
-    dialect === 'mysql'
-      ? `insert into ${MARKER_TABLE} (id, fingerprint, applied_at) values (?, ?, ?) on duplicate key update fingerprint = values(fingerprint), applied_at = values(applied_at)`
-      : `insert into ${MARKER_TABLE} (id, fingerprint, applied_at) values (?, ?, ?) on conflict (id) do update set fingerprint = excluded.fingerprint, applied_at = excluded.applied_at`;
-  await connection.execute(upsert, [MARKER_ROW_ID, fingerprint, Date.now()]);
+  createSql(): string {
+    return `create table if not exists ${this.table} (id varchar(32) not null primary key, fingerprint varchar(64) not null, applied_at bigint not null)`;
+  }
+
+  async read(connection: Connection): Promise<string | undefined> {
+    const rows = await connection.execute<{ fingerprint: string }[]>(
+      `select fingerprint from ${this.table} where id = ?`,
+      [MARKER_ROW_ID],
+    );
+    return rows[0]?.fingerprint;
+  }
+
+  async write(connection: Connection, dialect: SqlDialect, fingerprint: string): Promise<void> {
+    const upsert =
+      dialect === 'mysql'
+        ? `insert into ${this.table} (id, fingerprint, applied_at) values (?, ?, ?) on duplicate key update fingerprint = values(fingerprint), applied_at = values(applied_at)`
+        : `insert into ${this.table} (id, fingerprint, applied_at) values (?, ?, ?) on conflict (id) do update set fingerprint = excluded.fingerprint, applied_at = excluded.applied_at`;
+    await connection.execute(upsert, [MARKER_ROW_ID, fingerprint, Date.now()]);
+  }
 }
 
 /**
@@ -451,8 +599,11 @@ async function writeFingerprint(
 async function withSchemaLock(
   em: EntityManager,
   dialect: SqlDialect,
+  schema: string | undefined,
   work: () => Promise<void>,
 ): Promise<void> {
+  // The lock names the schema, so two installs in two schemas of one database heal independently.
+  const lockName = schema === undefined ? SCHEMA_LOCK_NAME : `${SCHEMA_LOCK_NAME}:${schema}`;
   if (dialect !== 'postgres' && dialect !== 'mysql') {
     await work();
     return;
@@ -464,8 +615,8 @@ async function withSchemaLock(
     try {
       await run(
         dialect === 'mysql'
-          ? `select get_lock('${SCHEMA_LOCK_NAME}', 30)`
-          : `select pg_advisory_xact_lock(hashtext('${SCHEMA_LOCK_NAME}'))`,
+          ? `select get_lock('${lockName}', 30)`
+          : `select pg_advisory_xact_lock(hashtext('${lockName}'))`,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -480,7 +631,7 @@ async function withSchemaLock(
     } finally {
       if (dialect === 'mysql') {
         // best-effort: a dropped connection frees the lock anyway
-        await run(`select release_lock('${SCHEMA_LOCK_NAME}')`).catch(() => undefined);
+        await run(`select release_lock('${lockName}')`).catch(() => undefined);
       }
     }
   });

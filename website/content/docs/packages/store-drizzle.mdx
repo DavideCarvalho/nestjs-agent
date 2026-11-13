@@ -151,6 +151,39 @@ Whole tables added since (`agent_queued_message`, `agent_stream_frame`, `agent_c
 JSON columns are `jsonb`, on MySQL `json`.
 </Callout>
 
+## Database schema
+
+By default the agent tables live in the connection's current schema (Postgres) or database (MySQL).
+To keep them apart from your app's tables, set `schema`:
+
+```ts
+DrizzleAgentStoreModule.forRoot({ db, schema: 'agent' });
+
+// Creates the schema too (`CREATE SCHEMA IF NOT EXISTS "agent"`), then its tables.
+await ensureAgentSchema(db, { schema: 'agent' });
+```
+
+Every statement the stores issue then names it (`"agent"."agent_thread"`), whatever the connection's
+default is, so it works on a pooled connection and inside your own transactions. If you build a
+store yourself, pass the same option: `new DrizzleAgentStore(db, { schema: 'agent' })`,
+`new DrizzleTokenStreamSink(db, { schema: 'agent' })`, and so on. Your migrations can take the
+qualified DDL from `agentSchemaDdl('postgres', { schema: 'agent' })`. For your own Drizzle
+queries over these tables, `pgAgentTables('agent')` and `mysqlAgentTables('agent')` return the
+qualified table set.
+
+<Callout type="warn">
+Don't put the agent tables in another schema through the connection's `search_path` (or a
+`SET search_path` in a pool hook). Behind PgBouncer in transaction mode that setting leaks to other
+clients' connections. The `schema` option names the schema in every statement instead.
+</Callout>
+
+- **MySQL:** `schema` is a database name. `ensureAgentSchema` creates it with
+  `CREATE DATABASE IF NOT EXISTS`. The connection's user needs privileges on it.
+- **SQLite:** has no schemas. Setting `schema` fails at boot.
+- **Name:** letters, digits, `_` and `$`, starting with a letter or `_`, at most 63 characters.
+- **Permissions:** when the role cannot create the schema, the error names the grant it needs. You
+  can also create the schema yourself.
+
 ## Exports
 
 | Export | Kind | Purpose |

@@ -5,6 +5,7 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
 import { AgentModelPricing } from './entities/agent-model-pricing.entity';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn, tableIn } from './schema-name';
 
 /**
  * {@link AgentPricingStore} backed by MikroORM. A POJO receiving an {@link EntityManager}; each
@@ -12,10 +13,18 @@ import { AgentModelPricing } from './entities/agent-model-pricing.entity';
  * `AgentModelPricing.isCurrent` never has more than one live row per model.
  */
 export class MikroOrmPricingStore implements AgentPricingStore {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   async upsertModelPrice(input: ModelPriceInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     await em.nativeUpdate(
       AgentModelPricing,
       { modelId: input.modelId, isCurrent: true },
@@ -36,7 +45,7 @@ export class MikroOrmPricingStore implements AgentPricingStore {
   }
 
   async listCurrentPrices(): Promise<CurrentModelPrice[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const rows = await em.find(AgentModelPricing, { isCurrent: true });
     return rows.map((row) => ({
       modelId: row.modelId,

@@ -1,7 +1,13 @@
 import { type Configuration, EntitySchema, MikroORM } from '@mikro-orm/core';
 import { agentEntities } from './entities';
+import { assertAgentSchema, platformOf } from './schema-name';
 
 export interface AgentSchemaSqlOptions {
+  /**
+   * Render every table in this schema (Postgres) or database (MySQL), preceded by its
+   * `create schema` / `create database`. Omit → unqualified, the connection's current one.
+   */
+  schema?: string;
   /**
    * Emit `create table if not exists` so re-running the DDL against a database that already has
    * some agent tables is a no-op for those tables. Default `true`. Applies to `create table` only —
@@ -70,10 +76,27 @@ export async function agentSchemaSql(
     dbName: config.get('dbName'),
     entities: agentEntities(collation !== undefined ? { collation } : {}),
     allowGlobalContext: true,
+    // The generator places the agent entities (they name no schema) in the configured default.
+    ...(options?.schema !== undefined ? { schema: options.schema } : {}),
   });
   try {
-    const sql = await isolated.schema.getCreateSchemaSQL({ wrap: false });
-    return toStatements(sql, options?.ifNotExists ?? true);
+    const schema = options?.schema;
+    assertAgentSchema(isolated.em, schema);
+    const sql = await isolated.schema.getCreateSchemaSQL({
+      wrap: false,
+      ...(schema !== undefined ? { schema } : {}),
+    });
+    const statements = toStatements(sql, options?.ifNotExists ?? true);
+    if (schema === undefined) return statements;
+    const mysql = platformOf(isolated.em) === 'mysql';
+    const create = mysql
+      ? `create database if not exists \`${schema}\``
+      : `create schema if not exists "${schema}"`;
+    // The generator may emit its own `create schema`; keep one, first.
+    return [
+      create,
+      ...statements.filter((statement) => !/^create\s+(schema|database)\b/i.test(statement)),
+    ];
   } finally {
     await isolated.close(true);
   }

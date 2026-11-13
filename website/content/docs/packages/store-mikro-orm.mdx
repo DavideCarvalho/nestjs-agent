@@ -154,6 +154,36 @@ It binds `AGENT_STORE`, `AGENT_GOVERNANCE_QUERIES`, `AGENT_PRICING_STORE` and
 no re-binding. Do not import it more than once expecting scoped behavior.
 </Callout>
 
+## Database schema
+
+By default the agent tables live in the connection's current schema (Postgres) or database (MySQL).
+To keep them apart from your app's tables, set `schema`:
+
+```ts
+MikroOrmAgentStoreModule.forFeature({ schema: 'agent' });
+```
+
+With `autoSchema` on (the default), the boot creates the schema
+(`create schema if not exists "agent"`) and heals the agent tables in it. The fingerprint marker
+table lives there too. Every query the stores issue names the schema: their forks are
+`em.fork({ schema })`, and their raw SQL is qualified. Your entities and your own queries are not
+affected, and the stores work inside your own transactions. If you build a store yourself, pass the
+same option: `new MikroOrmAgentStore(em, { schema: 'agent' })`. When you own the tables through
+migrations, render them with `agentSchemaSql(this.config, { schema: 'agent' })`.
+
+<Callout type="warn">
+Don't put the agent tables in another schema through the connection's `search_path` (or a
+`SET search_path` in a pool hook). Behind PgBouncer in transaction mode that setting leaks to other
+clients' connections. The `schema` option names the schema in every statement instead.
+</Callout>
+
+- **MySQL:** `schema` is a database name. The boot creates it with `create database if not exists`.
+  The connection's user needs privileges on it.
+- **SQLite:** has no schemas. Setting `schema` fails at boot.
+- **Name:** letters, digits, `_` and `$`, starting with a letter or `_`, at most 63 characters.
+- **Permissions:** when the role cannot create the schema, the error names the grant it needs. You
+  can also create the schema yourself.
+
 ## Exports
 
 | Export | Kind | Purpose |

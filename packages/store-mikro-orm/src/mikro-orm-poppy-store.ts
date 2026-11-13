@@ -15,6 +15,7 @@ import {
   newEventId,
 } from '@dudousxd/nestjs-agent-core';
 import type { EntityManager } from '@mikro-orm/core';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn } from './schema-name';
 
 /** How many rows a native write touched, whatever the driver reports it as. */
 function affected(result: unknown): number {
@@ -92,7 +93,15 @@ const M = POPPY_TABLES.messages;
  * @experimental Tracks Personal Agent Protocol Draft 0.1 (https://personalagentprotocol.org/docs/spec).
  */
 export class MikroOrmPoppyStore implements PoppyStore {
-  constructor(private readonly em: EntityManager) {}
+  private readonly schema: string | undefined;
+
+  constructor(
+    private readonly em: EntityManager,
+    options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+    this.schema = options.schema;
+  }
 
   private get mysql(): boolean {
     const platform = this.em.getPlatform().constructor.name.toLowerCase();
@@ -101,8 +110,14 @@ export class MikroOrmPoppyStore implements PoppyStore {
 
   /** `sql` with `"identifiers"` quoted for the platform — `type`, `event`, `owner`… */
   private execute(statement: string, params: unknown[], method: 'run' | 'all' = 'run') {
-    const sql = this.mysql ? statement.replaceAll('"', '`') : statement;
-    return this.em.fork().getConnection().execute(sql, params, method);
+    let qualified = statement;
+    if (this.schema !== undefined) {
+      for (const table of [C, E, M]) {
+        qualified = qualified.replaceAll(`"${table}"`, `"${this.schema}"."${table}"`);
+      }
+    }
+    const sql = this.mysql ? qualified.replaceAll('"', '`') : qualified;
+    return forkIn(this.em, this.schema).getConnection().execute(sql, params, method);
   }
 
   private async rows(statement: string, params: unknown[]): Promise<Record<string, unknown>[]> {

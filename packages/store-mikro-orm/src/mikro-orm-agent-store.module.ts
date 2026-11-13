@@ -48,14 +48,24 @@ export interface MikroOrmAgentStoreOptions {
    * concerned. Set `false` if you don't ingest media into RAG, or record outcomes yourself.
    */
   ragIngestionLog?: boolean;
+  /**
+   * The Postgres schema (or MySQL database) the agent tables live in. Every statement the stores
+   * issue names it (`em.fork({ schema })` and qualified raw SQL), and `autoSchema` creates it. Never
+   * set through the connection's `search_path`. Omit → the connection's current schema. Not
+   * supported on SQLite (the boot fails).
+   */
+  schema?: string;
 }
 
 /** Runs {@link ensureAgentSchema} once the app is up. Registered only when `autoSchema` is on. */
 class AgentSchemaInitializer implements OnApplicationBootstrap {
-  constructor(private readonly orm: MikroORM) {}
+  constructor(
+    private readonly orm: MikroORM,
+    private readonly schema: string | undefined,
+  ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    await ensureAgentSchema(this.orm);
+    await ensureAgentSchema(this.orm, this.schema !== undefined ? { schema: this.schema } : {});
   }
 }
 
@@ -90,13 +100,14 @@ class AgentSchemaInitializer implements OnApplicationBootstrap {
 @Module({})
 export class MikroOrmAgentStoreModule {
   static forFeature(options: MikroOrmAgentStoreOptions = {}): DynamicModule {
+    const at = options.schema !== undefined ? { schema: options.schema } : {};
     const schemaProviders: Provider[] =
       options.autoSchema === false
         ? []
         : [
             {
               provide: AgentSchemaInitializer,
-              useFactory: (orm: MikroORM) => new AgentSchemaInitializer(orm),
+              useFactory: (orm: MikroORM) => new AgentSchemaInitializer(orm, options.schema),
               inject: [MikroORM],
             },
           ];
@@ -106,7 +117,7 @@ export class MikroOrmAgentStoreModule {
         : [
             {
               provide: MikroOrmRagIngestionLog,
-              useFactory: (em: EntityManager) => new MikroOrmRagIngestionLog(em),
+              useFactory: (em: EntityManager) => new MikroOrmRagIngestionLog(em, at),
               inject: [EntityManager],
             },
           ];
@@ -118,7 +129,7 @@ export class MikroOrmAgentStoreModule {
         ...ragProviders,
         {
           provide: MikroOrmAgentStore,
-          useFactory: (em: EntityManager) => new MikroOrmAgentStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmAgentStore(em, at),
           inject: [EntityManager],
         },
         { provide: AGENT_STORE, useExisting: MikroOrmAgentStore },
@@ -127,12 +138,12 @@ export class MikroOrmAgentStoreModule {
         // host opts in by naming this provider in `AgentModule.forRoot({ memory: { provider } })`.
         {
           provide: MikroOrmMemoryProvider,
-          useFactory: (em: EntityManager) => new MikroOrmMemoryProvider(em),
+          useFactory: (em: EntityManager) => new MikroOrmMemoryProvider(em, at),
           inject: [EntityManager],
         },
         {
           provide: MikroOrmPricingStore,
-          useFactory: (em: EntityManager) => new MikroOrmPricingStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmPricingStore(em, at),
           inject: [EntityManager],
         },
         // AGENT_PRICING_STORE: the host's own store when supplied, else the default MikroOrm one.
@@ -143,34 +154,34 @@ export class MikroOrmAgentStoreModule {
         {
           provide: MikroOrmGovernanceQueries,
           useFactory: (em: EntityManager, pricingStore: AgentPricingStore) =>
-            new MikroOrmGovernanceQueries(em, pricingStore),
+            new MikroOrmGovernanceQueries(em, pricingStore, undefined, at),
           inject: [EntityManager, AGENT_PRICING_STORE],
         },
         { provide: AGENT_GOVERNANCE_QUERIES, useExisting: MikroOrmGovernanceQueries },
         // What makes a `defineConfirmedTool` confirmation single use across replicas.
         {
           provide: MikroOrmConfirmTokenStore,
-          useFactory: (em: EntityManager) => new MikroOrmConfirmTokenStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmConfirmTokenStore(em, at),
           inject: [EntityManager],
         },
         { provide: AGENT_CONFIRM_TOKEN_STORE, useExisting: MikroOrmConfirmTokenStore },
         // Text channels' state (`@dudousxd/nestjs-agent-channels`), shared by every replica.
         {
           provide: MikroOrmChannelStore,
-          useFactory: (em: EntityManager) => new MikroOrmChannelStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmChannelStore(em, at),
           inject: [EntityManager],
         },
         { provide: AGENT_CHANNEL_STORE, useExisting: MikroOrmChannelStore },
         // Personal Agent Protocol (Poppy) conversations and connections, shared by every replica.
         {
           provide: MikroOrmPoppyStore,
-          useFactory: (em: EntityManager) => new MikroOrmPoppyStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmPoppyStore(em, at),
           inject: [EntityManager],
         },
         { provide: AGENT_POPPY_STORE, useExisting: MikroOrmPoppyStore },
         {
           provide: MikroOrmPoppyConnectionStore,
-          useFactory: (em: EntityManager) => new MikroOrmPoppyConnectionStore(em),
+          useFactory: (em: EntityManager) => new MikroOrmPoppyConnectionStore(em, at),
           inject: [EntityManager],
         },
         { provide: AGENT_POPPY_CONNECTION_STORE, useExisting: MikroOrmPoppyConnectionStore },

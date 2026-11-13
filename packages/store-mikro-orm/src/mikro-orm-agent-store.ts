@@ -58,6 +58,7 @@ import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MESSAGE_ORDER, MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
 import { MikroOrmActionProposals } from './mikro-orm-action-proposals';
+import { type AgentSchemaOptions, forkIn, tableIn } from './schema-name';
 import { coordinateSqliteWrite } from './sqlite-write-coordinator';
 
 /**
@@ -110,11 +111,14 @@ export class MikroOrmAgentStore
     ActionProposalSupersessionStore
 {
   private readonly proposals: MikroOrmActionProposals;
+  private readonly schema: string | undefined;
+
   constructor(
     private readonly em: EntityManager,
-    options: ActionProposalStoreOptions = {},
+    options: ActionProposalStoreOptions & AgentSchemaOptions = {},
   ) {
     this.proposals = new MikroOrmActionProposals(em, options);
+    this.schema = options.schema;
   }
   getThreadActionProposalScope(
     ...args: Parameters<ActionProposalOutcomeStore['getThreadActionProposalScope']>
@@ -177,7 +181,7 @@ export class MikroOrmAgentStore
   }
 
   async createThread(input: CreateThreadInput): Promise<ThreadSummary> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const now = new Date();
     const thread = em.create(AgentThread, {
       id: input.id ?? crypto.randomUUID(),
@@ -195,7 +199,7 @@ export class MikroOrmAgentStore
   }
 
   async getThread(threadId: string): Promise<ThreadDetail | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId, deletedAt: null });
     if (thread === null) {
       return null;
@@ -236,7 +240,7 @@ export class MikroOrmAgentStore
    * soft-deleted, same as {@link getThread}.
    */
   async loadThreadForTurn(query: ThreadTurnQuery): Promise<ThreadTurnPage | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: query.threadId, deletedAt: null },
@@ -360,7 +364,7 @@ export class MikroOrmAgentStore
 
   /** Tools whose approval someone asked to remember in this thread. */
   async rememberedApprovals(threadId: string): Promise<string[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const calls = await em.find(
       AgentToolCall,
       { message: { thread: threadId }, remember: true },
@@ -379,13 +383,13 @@ export class MikroOrmAgentStore
   }
 
   async toolCallInput(toolCallId: string): Promise<unknown> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const call = await em.findOne(AgentToolCall, { id: toolCallId }, { fields: ['input'] });
     return call?.input ?? null;
   }
 
   async toolCallApproval(toolCallId: string): Promise<ToolCallApprovalState | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const call = await em.findOne(AgentToolCall, { id: toolCallId });
     if (call === null) {
       return null;
@@ -420,7 +424,7 @@ export class MikroOrmAgentStore
     tenant: FilterQuery<AgentThread>,
     limit: number,
   ): Promise<ThreadSummary[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const threads = await em.find(
       AgentThread,
       { $and: [{ actorRef, transient: false, deletedAt: null }, tenant] },
@@ -449,7 +453,7 @@ export class MikroOrmAgentStore
     const highest = (await em
       .getConnection()
       .execute(
-        `select thread_id, max(seq) as seq from agent_message where thread_id in (${threadIds.map(() => '?').join(', ')}) group by thread_id`,
+        `select thread_id, max(seq) as seq from ${tableIn(this.em, 'agent_message', this.schema)} where thread_id in (${threadIds.map(() => '?').join(', ')}) group by thread_id`,
         [...threadIds],
         'all',
       )) as { thread_id: string; seq: number | string | null }[];
@@ -482,7 +486,7 @@ export class MikroOrmAgentStore
   }
 
   async softDeleteThread(threadId: string): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread !== null) {
       thread.deletedAt = new Date();
@@ -495,7 +499,7 @@ export class MikroOrmAgentStore
     fromMessageId: string,
     options: ForkThreadOptions = {},
   ): Promise<ThreadSummary> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const source = await em.findOne(AgentThread, { id: threadId });
     if (source === null) {
       throw new Error(`thread ${threadId} not found`);
@@ -553,7 +557,7 @@ export class MikroOrmAgentStore
   }
 
   async ownerOfThread(threadId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -563,7 +567,7 @@ export class MikroOrmAgentStore
   }
 
   async ownerOfToolCall(toolCallId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const toolCall = await em.findOne(
       AgentToolCall,
       { id: toolCallId },
@@ -576,7 +580,7 @@ export class MikroOrmAgentStore
   }
 
   async runForToolCall(toolCallId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const toolCall = await em.findOne(
       AgentToolCall,
       { id: toolCallId },
@@ -586,7 +590,7 @@ export class MikroOrmAgentStore
   }
 
   async tenantOf(target: TenantTarget): Promise<{ tenantRef: string | null } | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     if ('toolCallId' in target) {
       const toolCall = await em.findOne(
         AgentToolCall,
@@ -606,7 +610,7 @@ export class MikroOrmAgentStore
   }
 
   async ownerOfActiveStream(runId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { activeStreamId: runId, deletedAt: null },
@@ -616,7 +620,7 @@ export class MikroOrmAgentStore
   }
 
   async setTitle(threadId: string, title: string): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread !== null) {
       thread.title = title;
@@ -626,7 +630,7 @@ export class MikroOrmAgentStore
   }
 
   async promoteThread(threadId: string): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread?.transient) {
       thread.transient = false;
@@ -645,7 +649,7 @@ export class MikroOrmAgentStore
     options: { replacing?: string } = {},
   ): Promise<boolean> {
     return coordinateSqliteWrite(this.em, async () => {
-      const em = this.em.fork({ keepTransactionContext: true });
+      const em = forkIn(this.em, this.schema, { keepTransactionContext: true });
       const holders: Array<{ activeStreamId: string | null }> = [
         { activeStreamId: null },
         { activeStreamId: runId },
@@ -672,7 +676,7 @@ export class MikroOrmAgentStore
 
   async releaseActiveStream(threadId: string, runId: string): Promise<boolean> {
     return coordinateSqliteWrite(this.em, async () => {
-      const em = this.em.fork({ keepTransactionContext: true });
+      const em = forkIn(this.em, this.schema, { keepTransactionContext: true });
       const changed = await em.nativeUpdate(
         AgentThread,
         { id: threadId, activeStreamId: runId },
@@ -683,7 +687,7 @@ export class MikroOrmAgentStore
   }
 
   async enqueueMessage(input: EnqueueMessageInput): Promise<QueuedMessage> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const existing = await em.find(
       AgentQueuedMessage,
       { thread: input.threadId },
@@ -716,7 +720,7 @@ export class MikroOrmAgentStore
   }
 
   async listQueue(threadId: string): Promise<QueuedMessage[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const rows = await em.find(
       AgentQueuedMessage,
       { thread: threadId },
@@ -726,13 +730,13 @@ export class MikroOrmAgentStore
   }
 
   async getQueuedMessage(id: string): Promise<QueuedMessage | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const row = await em.findOne(AgentQueuedMessage, { id });
     return row === null ? null : this.toQueuedMessage(row, row.thread.id);
   }
 
   async updateQueuedMessage(id: string, patch: QueuedMessagePatch): Promise<QueuedMessage | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const row = await em.findOne(AgentQueuedMessage, { id });
     if (row === null) {
       return null;
@@ -754,7 +758,7 @@ export class MikroOrmAgentStore
 
   /** Rewrites the thread's positions as 0..n-1 in the new order — a queue is a handful of rows. */
   async moveQueuedMessage(id: string, index: number): Promise<boolean> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const moving = await em.findOne(AgentQueuedMessage, { id });
     if (moving === null) {
       return false;
@@ -776,23 +780,23 @@ export class MikroOrmAgentStore
   }
 
   async removeQueuedMessage(id: string): Promise<boolean> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     return (await em.nativeDelete(AgentQueuedMessage, { id })) > 0;
   }
 
   async clearQueue(threadId: string): Promise<number> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     return em.nativeDelete(AgentQueuedMessage, { thread: threadId });
   }
 
   async queuePause(threadId: string): Promise<QueuePause | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId }, { fields: ['queuePause'] });
     return thread?.queuePause ?? null;
   }
 
   async setQueuePause(threadId: string, pause: QueuePause | null): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread !== null) {
       thread.queuePause = pause;
@@ -822,7 +826,7 @@ export class MikroOrmAgentStore
   }
 
   async setActiveStream(threadId: string, runId: string | null): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread !== null) {
       thread.activeStreamId = runId;
@@ -837,7 +841,7 @@ export class MikroOrmAgentStore
    * thread doesn't exist or the patch is empty.
    */
   async updateThread(threadId: string, patch: UpdateThreadInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread === null) {
       return;
@@ -873,7 +877,7 @@ export class MikroOrmAgentStore
    */
   /** The thread's pinned model, projected like {@link defaultAgentForThread}. */
   async modelForThread(threadId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -884,7 +888,7 @@ export class MikroOrmAgentStore
 
   /** The thread's pinned persona, projected like {@link defaultAgentForThread}. */
   async personaForThread(threadId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -894,7 +898,7 @@ export class MikroOrmAgentStore
   }
 
   async threadSettings(threadId: string): Promise<ThreadSettings | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -912,7 +916,7 @@ export class MikroOrmAgentStore
   }
 
   async defaultAgentForThread(threadId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -928,7 +932,7 @@ export class MikroOrmAgentStore
    * lookup, keyed by threadId.
    */
   async activeRunForThread(threadId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(
       AgentThread,
       { id: threadId, deletedAt: null },
@@ -944,7 +948,7 @@ export class MikroOrmAgentStore
    * to the input is otherwise accepted and dropped, silently, by every adapter that re-declares it.
    */
   async recordRunStart(run: RecordRunStartInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runRow = em.create(AgentRun, {
       id: run.runId,
       thread: em.getReference(AgentThread, run.threadId),
@@ -963,7 +967,7 @@ export class MikroOrmAgentStore
 
   /** Settle a run's outcome. A no-op when the run is unknown (mirrors `setTitle`/`updateThread`). */
   async recordRunEnd(end: RecordRunEndInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runRow = await em.findOne(AgentRun, { id: end.runId });
     if (runRow === null) {
       return;
@@ -1000,12 +1004,12 @@ export class MikroOrmAgentStore
 
   /** Bump the run's llm-step retry counter. Atomic `retries = retries + 1`, no read-modify-write. */
   async bumpRunRetries(runId: string): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     await em.nativeUpdate(AgentRun, { id: runId }, { retries: raw<number>('retries + 1') });
   }
 
   async appendMessage(input: AppendMessageInput): Promise<StoredMessage> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: input.threadId });
     if (thread === null) {
       throw new Error(`thread ${input.threadId} not found`);
@@ -1059,21 +1063,25 @@ export class MikroOrmAgentStore
   }
 
   async threadOfMessage(messageId: string): Promise<string | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const message = await em.findOne(AgentMessage, { id: messageId }, { fields: ['thread'] });
     return message?.thread.id ?? null;
   }
 
   async setMessageFeedback(messageId: string, feedback: MessageFeedback | null): Promise<void> {
-    await this.em.fork().nativeUpdate(AgentMessage, { id: messageId }, { feedback });
+    await forkIn(this.em, this.schema).nativeUpdate(AgentMessage, { id: messageId }, { feedback });
   }
 
   async setMessageToolResults(messageId: string, results: ToolResult[]): Promise<void> {
-    await this.em.fork().nativeUpdate(AgentMessage, { id: messageId }, { toolResults: results });
+    await forkIn(this.em, this.schema).nativeUpdate(
+      AgentMessage,
+      { id: messageId },
+      { toolResults: results },
+    );
   }
 
   async truncateFrom(threadId: string, messageId: string): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, { id: threadId });
     if (thread === null) {
       return;
@@ -1089,7 +1097,7 @@ export class MikroOrmAgentStore
   }
 
   async recordToolCall(input: RecordToolCallInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const toolCall = em.create(AgentToolCall, {
       id: input.toolCallId,
       message: em.getReference(AgentMessage, input.messageId),
@@ -1109,7 +1117,7 @@ export class MikroOrmAgentStore
   }
 
   async updateToolCall(input: UpdateToolCallInput): Promise<void> {
-    await this.em.fork().nativeUpdate(
+    await forkIn(this.em, this.schema).nativeUpdate(
       AgentToolCall,
       { id: input.toolCallId },
       {
@@ -1131,7 +1139,7 @@ export class MikroOrmAgentStore
     if (toolCallIds.length === 0) {
       return [];
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const calls = await em.find(
       AgentToolCall,
       { id: { $in: [...toolCallIds] } },
@@ -1146,7 +1154,7 @@ export class MikroOrmAgentStore
   }
 
   async failUnsettledToolCalls(runId: string, error: string): Promise<number> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     return em.nativeUpdate(
       AgentToolCall,
       { runId, status: 'pending_approval' },
@@ -1171,7 +1179,7 @@ export class MikroOrmAgentStore
     if (mediaIds.length === 0) {
       return [];
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const messages = await em.find(
       AgentMessage,
       { thread: { actorRef }, attachments: { $ne: null } },
@@ -1201,7 +1209,7 @@ export class MikroOrmAgentStore
    */
   async recordGenuiCalls(rows: readonly RecordGenuiCallInput[]): Promise<void> {
     if (rows.length === 0) return;
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     for (const row of rows) {
       await em.upsert(
         AgentGenuiCall,
@@ -1237,7 +1245,7 @@ export class MikroOrmAgentStore
   }
 
   async recordUsage(input: RecordUsageInput): Promise<void> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const usage = em.create(AgentTokenUsage, {
       id: crypto.randomUUID(),
       thread: input.threadId !== undefined ? em.getReference(AgentThread, input.threadId) : null,
@@ -1315,7 +1323,7 @@ export class MikroOrmAgentStore
     if (ranges.length === 0) {
       return [];
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const platform = em.getPlatform();
     const bounds = ranges.map(({ fromDay, toDay }) => ({
       start: new Date(`${fromDay}T00:00:00.000Z`),
@@ -1340,7 +1348,7 @@ export class MikroOrmAgentStore
     const [row] = (await em.getConnection().execute(
       // The rows a quota window counts: a filter on the rows the (actor_ref, created_at) or
       // (tenant_ref, created_at) index already narrows to one owner's window.
-      `select ${columns.join(', ')} from agent_token_usage where ${owner} and created_at >= ? and created_at <= ? and counts_towards_quota = true`,
+      `select ${columns.join(', ')} from ${tableIn(this.em, 'agent_token_usage', this.schema)} where ${owner} and created_at >= ? and created_at <= ? and counts_towards_quota = true`,
       params,
       'all',
     )) as Record<string, unknown>[];

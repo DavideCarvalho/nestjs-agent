@@ -17,6 +17,7 @@ import { and, desc, eq, gt, isNull, lt, lte, or } from 'drizzle-orm';
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   affectedRows,
@@ -78,9 +79,9 @@ export class DrizzlePoppyStore implements PoppyStore {
   private readonly dialect: AgentDialect;
   private readonly t: AgentTables;
 
-  constructor(db: AgentDrizzleDb) {
+  constructor(db: AgentDrizzleDb, options: AgentSchemaOptions = {}) {
     this.dialect = agentDialectOf(db);
-    this.t = agentTablesFor(this.dialect);
+    this.t = agentTablesFor(this.dialect, options.schema);
     this.db = asBuilder(db);
   }
 

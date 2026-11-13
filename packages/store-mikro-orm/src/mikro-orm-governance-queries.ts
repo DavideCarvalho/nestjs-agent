@@ -62,6 +62,7 @@ import { AgentThread } from './entities/agent-thread.entity';
 import { AgentTokenUsage } from './entities/agent-token-usage.entity';
 import { AgentToolCall } from './entities/agent-tool-call.entity';
 import { MESSAGE_ORDER_NEWEST_FIRST } from './message-order';
+import { type AgentSchemaOptions, assertAgentSchema, forkIn } from './schema-name';
 
 /** No error code recorded on a failed run (the caller didn't classify it). Groups those together. */
 const UNCLASSIFIED_ERROR_CODE = 'unknown';
@@ -277,11 +278,18 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     private readonly em: EntityManager,
     private readonly pricingStore: AgentPricingStore,
     private readonly tenant?: TenantRowFilter,
-  ) {}
+    private readonly options: AgentSchemaOptions = {},
+  ) {
+    assertAgentSchema(em, options.schema);
+  }
+
+  private get schema(): string | undefined {
+    return this.options.schema;
+  }
 
   /** These queries narrowed to the rows `filter` may see — the console's tenant scope. */
   forTenant(filter: TenantRowFilter): MikroOrmGovernanceQueries {
-    return new MikroOrmGovernanceQueries(this.em, this.pricingStore, filter);
+    return new MikroOrmGovernanceQueries(this.em, this.pricingStore, filter, this.options);
   }
 
   /**
@@ -336,7 +344,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
 
   /** Generative-UI stats over the `agent_genui_call` rows created in the (UTC, inclusive) day range. */
   async genuiStats(range: GovernanceRange): Promise<GenuiStats> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const { start, end } = dayBoundsUtc(range);
     const rows = await em.find(
       AgentGenuiCall,
@@ -346,13 +354,13 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async spendByModel(range: GovernanceRange): Promise<ModelSpendRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     return bucketByModel(await this.usageInRange(em, range), pricing);
   }
 
   async spendByFeature(range: GovernanceRange): Promise<FeatureSpendRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     return bucketByFeature(await this.usageInRange(em, range, true), pricing);
   }
@@ -361,13 +369,13 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     range: GovernanceRange | TimestampRange,
     filter?: UsageBreakdownFilter,
   ): Promise<UsageBreakdownRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     return bucketUsageBreakdown(await this.usageInRange(em, range, true), pricing, filter);
   }
 
   async spendByActor(range: GovernanceRange): Promise<ActorSpendRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     return bucketByActor(await this.usageInRange(em, range), pricing);
   }
@@ -378,7 +386,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    * governance target even though its ledger rows survive.
    */
   async spendByThread(range: GovernanceRange, limit: number): Promise<ThreadSpendRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     const rows = await this.usageInRange(em, range);
     const threadIds = [...new Set(rows.map((row) => row.threadId))];
@@ -397,13 +405,13 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async usageTrend(range: GovernanceRange): Promise<UsageTrendPoint[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const pricing = await this.loadPricing();
     return bucketUsageTrend(await this.usageInRange(em, range), pricing);
   }
 
   async recentToolCalls(limit: number): Promise<ToolCallActivityRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const rows = await em.find(AgentToolCall, this.scoped({}, 'message.thread'), {
       orderBy: { createdAt: 'desc', id: 'desc' },
       limit,
@@ -488,7 +496,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async recentThreads(limit: number): Promise<ThreadActivityRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const threads = await em.find(AgentThread, this.scoped({ deletedAt: null }, 'self'), {
       orderBy: { updatedAt: 'desc', id: 'desc' },
       limit,
@@ -509,7 +517,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async runMetrics(range: GovernanceRange): Promise<RunMetrics> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runs = await this.runsInRange(em, range, [
       'status',
       'retries',
@@ -554,7 +562,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async runsByAgent(range: GovernanceRange): Promise<RunAgentBreakdownRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runs = await this.runsInRange(em, range, ['agentName', 'status', 'retries']);
     const byAgent = new Map<string, { runs: number; failed: number; retries: number }>();
     for (const run of runs) {
@@ -576,7 +584,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async runErrors(range: GovernanceRange): Promise<RunErrorBreakdownRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const { start, end } = dayBoundsUtc(range);
     const runs = await em.find(
       AgentRun,
@@ -599,7 +607,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async runTrend(range: GovernanceRange): Promise<RunTrendPoint[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runs = await this.runsInRange(em, range, ['startedAt', 'status']);
     const byDay = new Map<string, { runs: number; failed: number }>();
     for (const run of runs) {
@@ -618,7 +626,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
   }
 
   async recentRuns(limit: number): Promise<RecentRunRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const runs = await em.find(AgentRun, this.scoped({}, 'thread'), {
       orderBy: { startedAt: 'desc', id: 'desc' },
       limit,
@@ -632,7 +640,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    * `agentName` (null when the message carries none).
    */
   async pendingApprovals(limit: number): Promise<PendingApprovalRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const rows = await em.find(
       AgentToolCall,
       this.scoped({ status: 'pending_approval' as const }, 'message.thread'),
@@ -663,7 +671,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    * every dialect MikroORM does, so one portable implementation beats three dialect-specific ones.
    */
   async toolStats(range: GovernanceRange): Promise<ToolStatRow[]> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const { start, end } = dayBoundsUtc(range);
     const calls = await em.find(
       AgentToolCall,
@@ -734,7 +742,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     if (filters?.toolType !== undefined && !isToolKind(filters.toolType)) {
       return emptyPage(query);
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const where = {
       ...(filters?.toolName !== undefined ? { toolName: filters.toolName } : {}),
       ...(filters?.toolType !== undefined && isToolKind(filters.toolType)
@@ -789,7 +797,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     query: GovernancePageQuery<ThreadWhere>,
   ): Promise<GovernancePage<ThreadActivityRow>> {
     const filters = query.where;
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const where = {
       deletedAt: null,
       ...(filters?.actorRef !== undefined ? { actorRef: filters.actorRef } : {}),
@@ -823,7 +831,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
     if (filters?.status !== undefined && !isRunStatus(filters.status)) {
       return emptyPage(query);
     }
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const where = {
       ...(filters?.agentName !== undefined ? { agentName: filters.agentName } : {}),
       ...(filters?.status !== undefined && isRunStatus(filters.status)
@@ -870,7 +878,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
       ...(filters.agentName !== undefined ? { agentName: filters.agentName } : {}),
       ...(Object.keys(threadWhere).length > 0 ? { thread: threadWhere } : {}),
     };
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const where = {
       status: 'pending_approval' as const,
       ...(filters.toolName !== undefined ? { toolName: filters.toolName } : {}),
@@ -918,7 +926,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    * that column was written reports none.
    */
   async runDetail(runId: string): Promise<GovernanceRunDetail | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const run = await em.findOne(AgentRun, this.scoped({ id: runId }, 'thread'), {
       populate: ['thread'],
     });
@@ -950,7 +958,7 @@ export class MikroOrmGovernanceQueries implements AgentGovernanceQueries {
    * message. Soft-deleted threads are returned with `deleted: true`; an audit still needs them.
    */
   async threadDetail(query: GovernanceThreadDetailQuery): Promise<GovernanceThreadDetail | null> {
-    const em = this.em.fork();
+    const em = forkIn(this.em, this.schema);
     const thread = await em.findOne(AgentThread, this.scoped({ id: query.threadId }, 'self'));
     if (thread === null) {
       return null;

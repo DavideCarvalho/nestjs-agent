@@ -39,6 +39,7 @@ import { actionProposalTransactionMode } from './action-proposal-transaction-mod
 import {
   type AgentDialect,
   type AgentDrizzleDb,
+  type AgentSchemaOptions,
   type AgentSqliteDb,
   type AgentTables,
   affectedRows,
@@ -70,17 +71,19 @@ export class DrizzleActionProposalStore
   readonly actionProposalAdmissionSupported: boolean;
   private readonly synchronousSqlite: boolean;
   private readonly dialect: AgentDialect;
+  private readonly schema: string | undefined;
   private readonly table: AgentTables['agentActionProposal'];
   private readonly clock: () => number;
 
-  constructor(db: AgentDrizzleDb, options: ActionProposalStoreOptions = {}) {
+  constructor(db: AgentDrizzleDb, options: ActionProposalStoreOptions & AgentSchemaOptions = {}) {
     this.rawDb = db;
     const kind = (db.constructor as unknown as Record<symbol, string>)[entityKind];
     const transactionMode = actionProposalTransactionMode(kind);
     this.synchronousSqlite = transactionMode === 'sync';
     this.actionProposalAdmissionSupported = transactionMode !== 'unsupported';
     this.dialect = agentDialectOf(db);
-    this.table = agentTablesFor(this.dialect).agentActionProposal;
+    this.schema = options.schema;
+    this.table = agentTablesFor(this.dialect, this.schema).agentActionProposal;
     this.db = asBuilder(db);
     this.clock = options.clock ?? Date.now;
   }
@@ -139,7 +142,7 @@ export class DrizzleActionProposalStore
     proposal: ActionProposal,
   ): Generator<AdmissionQuery, CreateActionProposalResult, unknown> {
     const table = this.table;
-    const thread = agentTablesFor(this.dialect).agentThread;
+    const thread = agentTablesFor(this.dialect, this.schema).agentThread;
     // The shared conversation admission row serializes new replacements within this scope.
     if (this.dialect === 'sqlite')
       yield {
@@ -454,7 +457,7 @@ export class DrizzleActionProposalStore
   }
 
   async getThreadActionProposalScope(threadId: string) {
-    const thread = agentTablesFor(this.dialect).agentThread;
+    const thread = agentTablesFor(this.dialect, this.schema).agentThread;
     const [row] = await this.db
       .select()
       .from(thread)
@@ -547,7 +550,7 @@ export class DrizzleActionProposalStore
     )
       throw new TypeError('Invalid outcome fence');
     const table = this.table;
-    const tables = agentTablesFor(this.dialect);
+    const tables = agentTablesFor(this.dialect, this.schema);
     // Write first on asynchronous SQLite too; serialize before reading the proposal or thread.
     if (this.dialect === 'sqlite')
       yield {
@@ -669,7 +672,7 @@ export class DrizzleActionProposalStore
   private toolCallSettlement(db: AgentSqliteDb, previous: ActionProposal, next: ActionProposal) {
     const update = toolCallUpdateForTransition(previous, next);
     if (update === null) return undefined;
-    const toolCall = agentTablesFor(this.dialect).agentToolCall;
+    const toolCall = agentTablesFor(this.dialect, this.schema).agentToolCall;
     return db
       .update(toolCall)
       .set({
