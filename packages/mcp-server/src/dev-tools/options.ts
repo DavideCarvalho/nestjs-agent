@@ -1,3 +1,5 @@
+import type { ConsoleAuthorize } from './endpoint-authorize.js';
+
 /** What `actions` in `devTools` may say: none, all, or these lib ids / tool names. */
 export type DevToolsActions = 'refuse' | 'execute' | string[];
 
@@ -18,6 +20,14 @@ export interface AgentDevToolsOptions {
    * guard that sets `request.user`, or a rate limit. Static.
    */
   decorators?: ClassDecorator[];
+  /**
+   * The gate for libs that register dev tools WITHOUT a console of their own (resilience, authz,
+   * diagnostics, filter): any form a console's `authorize` takes (a function, a class, a lazy import,
+   * `{ policy, ability }` or a gate name), run at most once per request. Libs with a console keep
+   * their own gate; this never widens them. Omit → those libs are open outside production and
+   * denied in production, with one boot warning.
+   */
+  authorize?: ConsoleAuthorize;
 }
 
 /** The dev endpoint's options once defaults are applied. */
@@ -25,6 +35,8 @@ export interface ResolvedDevToolsOptions {
   path: string;
   exclude: ReadonlySet<string>;
   actions: DevToolsActions;
+  /** `devTools.authorize`, resolved by the endpoint at boot. */
+  authorize?: ConsoleAuthorize;
 }
 
 /** Default route of the dev endpoint. */
@@ -67,5 +79,10 @@ export function resolveDevToolsOptions(
       'AgentMcpServerModule: `devTools.actions` must be "refuse", "execute" or a list of lib ids / tool names.',
     );
   }
-  return { path, exclude: new Set(devTools?.exclude ?? []), actions };
+  return {
+    path,
+    exclude: new Set(devTools?.exclude ?? []),
+    actions,
+    ...(devTools?.authorize !== undefined ? { authorize: devTools.authorize } : {}),
+  };
 }

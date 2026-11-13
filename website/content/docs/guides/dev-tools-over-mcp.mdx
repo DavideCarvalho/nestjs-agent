@@ -52,6 +52,7 @@ Every request is authorized again, per library:
 - A `tools/call` runs only the `authorize` of the library that owns the tool.
 - When no library allows the caller, the endpoint answers like a console: `401 { error: 'unauthenticated' }` with `WWW-Authenticate: Bearer realm="aviary-dev"`, or `403 { error: 'forbidden' }`. The endpoint writes these itself, so your app's exception filters do not change them.
 - A console with no `authorize` follows its usual rule: open outside production, denied in production.
+- A library with no console at all (resilience, authz, diagnostics, filter) is gated by `devTools.authorize`. See [Libraries without a console](#libraries-without-a-console).
 
 The `authorize` runs with the MCP request's own `ExecutionContext`, so `authorizeByToken` reads the `Authorization` header the client sends. A rule that needs a signed-in session (`request.user`) needs a guard that sets it on this endpoint too. Pass that guard in `devTools.decorators`.
 
@@ -83,6 +84,7 @@ AgentMcpServerModule.forRoot({
     exclude: ['agent_get_spend'],           // lib ids or tool names
     actions: 'refuse',                      // default; 'execute' or ['durable'] to opt in
     decorators: [UseGuards(SessionGuard)],  // run before the per-lib authorize
+    authorize: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }), // libs without a console
   },
 });
 ```
@@ -93,6 +95,7 @@ AgentMcpServerModule.forRoot({
 | `exclude` | `[]` | Library ids or full tool names that are never served |
 | `actions` | `'refuse'` | Tools that change data are hidden and cannot be called. `'execute'` allows them all; a list allows the actions of these library ids or tool names |
 | `decorators` | `[]` | Class decorators on the endpoint, before the per-library check: an authentication guard, a rate limit |
+| `authorize` | open outside production, denied in production | The gate of libraries that have no console. Any `authorize` form. See [Libraries without a console](#libraries-without-a-console) |
 
 `devTools: false` mounts nothing. The dev endpoint shares nothing with the product endpoint: not its `auth`, its tools, its `allowedTools` nor its `actions`. A product key opens nothing here unless a console's `authorize` accepts it. It also inherits the product endpoint's `mcp.http` `allowedHosts` and `allowedOrigins` checks.
 
@@ -100,6 +103,32 @@ The boot log lists what is served:
 
 ```
 [AgentDevTools] dev tools at /mcp/aviary: agent (7), durable (8)
+```
+
+## Libraries without a console
+
+Some libraries register developer tools but have no console, so no `authorize` of their own:
+resilience, authz, diagnostics and filter. `devTools.authorize` gates their tools:
+
+```ts
+import { authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentMcpServerModule.forRoot({
+  // …
+  devTools: { authorize: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }) },
+});
+```
+
+It takes every form a console's `authorize` takes: a function, a class with `authorize()`, a lazy
+import, `{ policy, ability }` or a gate name. It runs at most once per request, whatever the number
+of libraries it gates. A library that has a console keeps its own `authorize`; `devTools.authorize`
+never opens it.
+
+Without `devTools.authorize`, those libraries follow the consoles' rule: open outside production,
+denied in production. The boot logs one warning naming them:
+
+```
+[@dudousxd/nestjs-agent-mcp-server] dev tools for resilience, authz have no authorize: open outside production, denied in production. Set devTools.authorize in AgentMcpServerModule.forRoot().
 ```
 
 To keep the agent dashboard's tools while mounting its routes yourself (`routes: false`), set `devTools: true` on `AgentDashboardModule.forRoot`. To turn off the dashboard's tools only, set `devTools: false`.

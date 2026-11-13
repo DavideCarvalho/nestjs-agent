@@ -4,6 +4,7 @@ export {
   devToolsSlot,
   registerDevTools,
   type DevTool,
+  type DevToolsFeature,
   type DevToolCall,
   type DevToolInputProperty,
   type DevToolInputSchema,
@@ -26,6 +27,12 @@ export {
   redactDevToolOutput,
   truncateText,
 } from './limits.js';
+export type {
+  ConsoleAuthorize as DevToolsAuthorize,
+  ConsoleAuthorizeResult as DevToolsAuthorizeResult,
+  ConsoleAuthorizer as DevToolsAuthorizer,
+  ConsolePolicyCheck as DevToolsPolicyCheck,
+} from './endpoint-authorize.js';
 export {
   DEFAULT_DEV_TOOLS_PATH,
   type AgentDevToolsOptions,
