@@ -31,7 +31,7 @@ Context.setTenant({ id: org.id, kind: 'organization' });
 ```ts
 AgentModule.forRoot({
   actorResolver: requestUserActorResolver(),
-  // 'inherit' (default) | false | { enabled?, kinds?, nullRows? }
+  // 'inherit' (default) | false | { enabled?, kinds?, family?, required?, nullRows? }
   tenancy: { nullRows: 'tenantless' },
 });
 ```
@@ -39,10 +39,48 @@ AgentModule.forRoot({
 | Field | Default | |
 |---|---|---|
 | `enabled` | `'inherit'` | `'inherit'` follows `ContextModule`'s `tenancy.enabled`. `true` / `false` override it for the agent. `true` without `ContextModule` (1.2.0 or later) fails the boot. |
-| `kinds` | the context's | Tenant kinds the agent honours. A tenant of another kind counts as no tenant. |
+| `kinds` | the context's | Tenant kinds the agent scopes by. With nested tenants, the level of the request's chain to use (see below). A tenant of another kind counts as no tenant. |
+| `family` | — | Scope by a secondary tenant the context carries (for example a patient's `account` next to the clinic) instead of the primary one. |
+| `required` | the context's | With no tenant, a thread or run read, a new thread and the console answer **403** (`E_TENANT_REQUIRED`) instead of running as tenantless. `false` keeps the agent lenient while other libraries require a tenant. |
 | `nullRows` | `'tenantless'` | Rows with no tenant (written before tenancy, or by a request without one). `'shared'` shows them to every tenant too. |
 
 `tenancy: false` keeps the agent out of tenancy even when the context turns it on.
+
+---
+
+## Nested tenants
+
+When the context sets a chain (a clinic and its units), `kinds` picks the level the agent scopes by.
+The agent stamps and reads that level, so every unit of a clinic shares the clinic's threads, runs,
+spend and quota:
+
+```ts
+// a request in unit U1 of clinic C1
+Context.setTenant({ id: 'U1', kind: 'unit', chain: [{ id: 'C1', kind: 'clinic' }] });
+
+AgentModule.forRoot({ tenancy: { kinds: ['clinic'] } }); // tenantRef 'C1': the clinic's data
+AgentModule.forRoot({ tenancy: { kinds: ['unit'] } });   // tenantRef 'U1': the unit's own data
+```
+
+Without `kinds`, the agent uses the most specific level (the unit). Nested tenants need
+`@dudousxd/nestjs-context` 2.1 or later; with an older context every tenant is flat.
+
+---
+
+## Require a tenant
+
+With `required` on (in the context, or `tenancy: { required: true }` on the agent), a request
+without a tenant can't read or create threads and runs. It gets a **403** with code
+`E_TENANT_REQUIRED` instead of seeing the rows that have no tenant. An actor whose `actorResolver`
+sets `tenantRef` already has a tenant and is never refused.
+
+Work outside a request never throws: `recordUsage`, the action-proposal worker, durable turns and
+scheduled runs run without a tenant when they have none. Endpoints that read no tenant data (models,
+config) keep answering.
+
+In the console, a viewer without a tenant gets a 403 on every page, and the global search finds
+nothing in the agent console. Run the console inside `Context.allTenants()` for operators who see
+every organization.
 
 ---
 
@@ -60,7 +98,8 @@ actorResolver: { resolve: (req) => ({ id: req.user.id, roles: req.user.roles }) 
 actorResolver: { resolve: (req) => ({ id: req.user.id, tenantRef: req.user.clinicId }) },
 ```
 
-A new thread belongs to its actor's tenant, and every usage row of its turns records it.
+A new thread belongs to its actor's tenant, and every usage row of its turns records it. With
+[nested tenants](#nested-tenants), the filled `tenantRef` is the level `kinds` matches.
 
 ---
 
@@ -85,8 +124,8 @@ This covers:
 - tool-call approve, reject, answer and skip, and action proposals;
 - the [governance dashboard](/docs/agent/guides/cost-and-governance#surfacing-it): spend, runs,
   tool calls, approvals, threads and their details show the viewer's context tenant. Approving or
-  rejecting from the console's inbox checks the tool call's tenant too. Code inside
-  `Context.allTenants()` sees every tenant.
+  rejecting from the console's inbox checks the tool call's tenant too. The global search stays
+  inside the same tenant. Code inside `Context.allTenants()` sees every tenant.
 
 `AgentService.listThreads(actor)` takes the actor, so a `tenantRef` your resolver set is the one
 used. A bare `actorRef` string uses the context tenant.
@@ -115,9 +154,32 @@ AgentModule.forRoot({
 | `'tenant'` | every actor's usage in the actor's tenant |
 | `'actor-in-tenant'` | the actor's own usage in that tenant |
 
-An actor without a `tenantRef` is counted per actor. `per` works whether tenancy is on or not; it
+With [nested tenants](#nested-tenants), the tenant is the level `kinds` matches: with
+`kinds: ['clinic']`, `per: 'tenant'` is one budget for the whole clinic. An actor without a
+`tenantRef` is counted per actor. `per` works whether tenancy is on or not; it
 reads `Actor.tenantRef`, which your resolver may set on its own. The ledger is indexed on
 `(tenant_ref, created_at)` for these reads; the Drizzle and MikroORM stores add the index on boot.
+
+---
+
+## The Organization in the console
+
+With tenancy on, the console header shows the Organization it is scoped to: the path down to the
+agent's level (`Clinic One › Unit One`), "All organizations" inside `Context.allTenants()`, or "No
+organization". The labels come from the context's `tenancy.label`:
+
+```ts
+ContextModule.forRoot({
+  tenancy: {
+    enabled: true,
+    label: async (tenant) => (await clinics.findById(tenant.id))?.name ?? tenant.id,
+  },
+});
+```
+
+Without a `label` resolver (or when it fails), the console shows the tenant's slug, then its id.
+`GET <api>/tenancy` returns the same data: `{ enabled, scope, tenant, chain }`, each level with its
+`id`, `kind` and `label`.
 
 ---
 

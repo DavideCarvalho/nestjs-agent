@@ -479,6 +479,23 @@ export interface GenuiStats {
   latency: { firstFrame: GenuiLatency; complete: GenuiLatency };
 }
 
+/** One level of the Organization the console is scoped to, labelled. */
+export interface ConsoleTenantLevel {
+  id: string;
+  kind: string;
+  label: string;
+}
+
+/** `GET <api>/tenancy`: the Organization the console is scoped to. */
+export interface ConsoleTenancy {
+  enabled: boolean;
+  /** `tenant`: one Organization. `tenantless`: rows with no tenant. `all`: every Organization. */
+  scope: 'tenant' | 'tenantless' | 'all';
+  tenant: ConsoleTenantLevel | null;
+  /** Root first, down to `tenant`. */
+  chain: ConsoleTenantLevel[];
+}
+
 /** One live agent event forwarded over SSE. */
 export interface LiveAgentEvent {
   event: string;
@@ -493,6 +510,11 @@ declare global {
     /** JSON API base (e.g. `/ai-gateway/api`) injected by the UI controller; falls back to `<base>/api`. */
     __AGENT_API__?: string;
   }
+}
+
+/** `GET <api>/consoles/search`: the global search across the Aviary consoles. */
+export function consoleSearchEndpoint(): string {
+  return `${apiBase()}/consoles/search`;
 }
 
 function apiBase(): string {
@@ -555,6 +577,10 @@ function pageQueryParams<TWhere extends object>(
 }
 
 export const agentClient = {
+  /** The Organization the console is scoped to, labelled (tenancy). */
+  tenancy(): Promise<ConsoleTenancy> {
+    return http<ConsoleTenancy>('/tenancy');
+  },
   /** Spend/usage overview for a day range: `{ byModel, byActor, trend }`. */
   spend(range: GovernanceRange): Promise<SpendOverview> {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });

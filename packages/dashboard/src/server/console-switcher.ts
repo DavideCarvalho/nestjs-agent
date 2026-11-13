@@ -9,9 +9,11 @@ import {
   Logger,
   type OnModuleDestroy,
   type OnModuleInit,
+  Query,
   createParamDecorator,
 } from '@nestjs/common';
 import { DashboardConsoleAccess } from './console-authorize.guard.js';
+import { DashboardService } from './dashboard.service.js';
 import { DASHBOARD_BASE_PATH } from './tokens.js';
 
 // ── the console registry (v1), re-declared: no Aviary console imports another ──────────────
@@ -49,6 +51,36 @@ export interface AviaryConsoleEntry {
   order: number;
   /** The console's resolved gate (what its own routes run). Never throws. */
   authorize(context: ExecutionContext): Promise<AviaryConsoleDecision>;
+  /**
+   * Global search: at most `limit` hits for `q` in this console, scoped like the console's own reads
+   * (tenancy included), each linking to a same-origin page of the console. Optional.
+   */
+  search?(context: ExecutionContext, q: string, limit: number): Promise<AviaryConsoleSearchHit[]>;
+}
+
+/** One global-search hit. `href` is a same-origin absolute path. */
+export interface AviaryConsoleSearchHit {
+  title: string;
+  subtitle?: string;
+  href: string;
+}
+
+/** One console's hits, as `GET <api>/consoles/search` returns them. */
+export interface AviaryConsoleSearchGroup {
+  id: string;
+  title: string;
+  icon: AviaryConsoleIcon;
+  hits: AviaryConsoleSearchHit[];
+}
+
+/** The answer of `GET <api>/consoles/search?q=`. */
+export interface AviaryConsoleSearchResult {
+  version: 1;
+  q: string;
+  /** The consoles that answered with at least one hit, by `order` then `id`. */
+  results: AviaryConsoleSearchGroup[];
+  /** `true` when a console that may be searched timed out or failed: the results may miss hits. */
+  partial: boolean;
 }
 
 /** The value at {@link AVIARY_CONSOLES_SLOT}. Data only, so every console's copy is identical. */
@@ -91,6 +123,152 @@ const ICONS = new Set<string>([
 
 /** How long another console's `authorize` may take before it is left out. */
 export const CONSOLE_PROBE_TIMEOUT_MS = 300;
+
+/** How long one console's `search` may take before it is left out (the result reads `partial`). */
+export const CONSOLE_SEARCH_TIMEOUT_MS = 300;
+
+/** Hits kept per console. */
+export const CONSOLE_SEARCH_LIMIT = 5;
+
+/** Longest query a search fans out (longer ones are cut). */
+const MAX_QUERY_LENGTH = 200;
+
+/**
+ * Runs `fn` with `request.aviaryProbe = true` on the request behind `context`: what the switcher
+ * sets while it runs ANOTHER console's `authorize` to list or search it, so an authorizer that writes
+ * an audit log line can tell a probe from a real visit and skip it. Structural: any console reads
+ * `request.aviaryProbe === true`.
+ */
+export async function withAviaryProbe<T>(
+  context: ExecutionContext,
+  fn: () => Promise<T>,
+): Promise<T> {
+  let request: { aviaryProbe?: boolean } | undefined;
+  try {
+    request = context.switchToHttp().getRequest<{ aviaryProbe?: boolean } | undefined>();
+  } catch {
+    request = undefined;
+  }
+  if (request === null || typeof request !== 'object' || request.aviaryProbe === true) return fn();
+  request.aviaryProbe = true;
+  try {
+    return await fn();
+  } finally {
+    Reflect.deleteProperty(request, 'aviaryProbe');
+  }
+}
+
+/** `promise`'s value within `ms`, else `timedOut`; a rejection is `failed`. */
+async function within<T>(
+  promise: () => Promise<T>,
+  ms: number,
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ ok: false }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false }), ms);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(promise)
+        .then(
+          (value) => ({ ok: true as const, value }),
+          () => ({ ok: false as const }),
+        ),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The usable hits of a search answer: same-origin `href`s, string titles, at most `limit`. */
+export function sanitizeSearchHits(value: unknown, limit: number): AviaryConsoleSearchHit[] {
+  if (!Array.isArray(value)) return [];
+  const hits: AviaryConsoleSearchHit[] = [];
+  for (const item of value) {
+    if (hits.length >= limit) break;
+    if (typeof item !== 'object' || item === null) continue;
+    const hit = item as Record<string, unknown>;
+    if (typeof hit.title !== 'string' || hit.title === '' || !isSameOriginPath(hit.href)) continue;
+    hits.push({
+      title: hit.title,
+      ...(typeof hit.subtitle === 'string' && hit.subtitle !== ''
+        ? { subtitle: hit.subtitle }
+        : {}),
+      href: hit.href,
+    });
+  }
+  return hits;
+}
+
+/**
+ * Global search: `selfId`'s own `search` (the viewer is already in this console) and every other
+ * console with a `search` whose `authorize` allows the viewer (run as a probe, see
+ * {@link withAviaryProbe}). Each console gets `timeoutMs` for its `authorize` and again for its
+ * `search`, and keeps `limit` hits; a console that times out or fails is left out and marks the
+ * answer `partial`. A denial is not partial: it is simply not searched. The gates run in parallel,
+ * then the searches in parallel, so no `search` ever runs while the request carries the probe.
+ */
+export async function searchConsoles(
+  registry: AviaryConsoleRegistry | undefined,
+  selfId: string,
+  context: ExecutionContext,
+  query: string,
+  options: { timeoutMs?: number; limit?: number } = {},
+): Promise<AviaryConsoleSearchResult> {
+  const q = query.trim().slice(0, MAX_QUERY_LENGTH);
+  const timeoutMs = options.timeoutMs ?? CONSOLE_SEARCH_TIMEOUT_MS;
+  const limit = options.limit ?? CONSOLE_SEARCH_LIMIT;
+  if (q === '') return { version: 1, q, results: [], partial: false };
+  const searchable = (registry?.entries ?? [])
+    .filter((entry) => typeof entry.search === 'function' && isSameOriginPath(entry.path))
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  // First every other console's gate, as a probe (in parallel, one budget each); then the searches,
+  // never under the probe marker: a search is a real use of the console, not a visibility check.
+  const gates = await withAviaryProbe(context, () =>
+    Promise.all(
+      searchable.map(async (entry) =>
+        entry.id === selfId
+          ? ('allowed' as const)
+          : await within(() => entry.authorize(context), timeoutMs).then((gate) =>
+              !gate.ok
+                ? ('late' as const)
+                : gate.value?.allowed === true
+                  ? ('allowed' as const)
+                  : ('denied' as const),
+            ),
+      ),
+    ),
+  );
+  const outcomes = await Promise.all(
+    searchable.map(async (entry, index) => {
+      const gate = gates[index];
+      if (gate === 'late') return { entry, hits: [], partial: true };
+      if (gate !== 'allowed') return { entry, hits: [], partial: false };
+      const found = await within(
+        () => (entry.search as NonNullable<AviaryConsoleEntry['search']>)(context, q, limit),
+        timeoutMs,
+      );
+      return found.ok
+        ? { entry, hits: sanitizeSearchHits(found.value, limit), partial: false }
+        : { entry, hits: [], partial: true };
+    }),
+  );
+  return {
+    version: 1,
+    q,
+    results: outcomes
+      .filter((outcome) => outcome.hits.length > 0)
+      .map(({ entry, hits }) => ({
+        id: entry.id,
+        title: entry.title,
+        icon: ICONS.has(entry.icon) ? entry.icon : 'generic',
+        hits,
+      })),
+    partial: outcomes.some((outcome) => outcome.partial),
+  };
+}
 
 /** Whether `path` is a same-origin absolute path (`/x`; never `//host` or a URL). */
 export function isSameOriginPath(path: unknown): path is string {
@@ -187,7 +365,10 @@ export async function listVisibleConsoles(
   const others = (registry?.entries ?? [])
     .filter((entry) => entry.id !== selfId && isSameOriginPath(entry.path))
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-  const verdicts = await Promise.all(others.map((entry) => allows(entry, context, timeoutMs)));
+  // A probe, not a visit: an authorizer that audits can skip it.
+  const verdicts = await withAviaryProbe(context, () =>
+    Promise.all(others.map((entry) => allows(entry, context, timeoutMs))),
+  );
   return {
     version: 1,
     current: selfId,
@@ -220,17 +401,20 @@ export class AgentConsoleRegistration implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(DASHBOARD_BASE_PATH) private readonly basePath: string,
     private readonly access: DashboardConsoleAccess,
+    private readonly dashboard: DashboardService,
   ) {}
 
   onModuleInit(): void {
+    const page = this.basePath === '' ? '/' : this.basePath;
     this.#unregister = registerAviaryConsole(
       {
         id: AGENT_CONSOLE_ID,
         title: 'Agents',
         icon: 'agent',
         order: 30,
-        path: this.basePath === '' ? '/' : this.basePath,
+        path: page,
         authorize: (context) => this.access.check(context),
+        search: (_context, q, limit) => this.dashboard.search(q, limit, page),
       },
       logger,
     );
@@ -262,5 +446,23 @@ export class AgentConsolesController {
   @Header('Cache-Control', 'private, no-store')
   consoles(@CurrentExecutionContext() current: CurrentContext): Promise<VisibleConsoles> {
     return listVisibleConsoles(readAviaryConsoles(), AGENT_CONSOLE_ID, current.context);
+  }
+
+  /**
+   * `GET <api>/consoles/search?q=`: this console's hits and those of every other console the viewer
+   * may open, 5 each, each console given 300 ms. `partial: true` when one did not answer in time.
+   */
+  @Get('consoles/search')
+  @Header('Cache-Control', 'private, no-store')
+  search(
+    @CurrentExecutionContext() current: CurrentContext,
+    @Query('q') q?: string,
+  ): Promise<AviaryConsoleSearchResult> {
+    return searchConsoles(
+      readAviaryConsoles(),
+      AGENT_CONSOLE_ID,
+      current.context,
+      typeof q === 'string' ? q : '',
+    );
   }
 }

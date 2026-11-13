@@ -310,6 +310,48 @@ time the page loads. With no other console, or none the viewer may open, the bra
 There is nothing to configure. The agent console is listed in the other consoles' menus while its
 routes are mounted.
 
+### Searching every console
+
+Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, use the **Search** button, or pick **Search all
+consoles** in the brand menu. One query searches:
+
+- this console: a run by its exact id, a thread by its exact id, threads whose title contains the
+  text, and the newest runs of an agent with that name;
+- every other Aviary console the viewer may open, for what each one searches (durable runs,
+  Telescope entries, Media files).
+
+Each console answers with up to 5 hits, grouped under its name, and gets 300 ms. A console that
+does not answer in time is left out, and the palette says some results are missing. Hits respect
+tenancy like the rest of the console. A hit opens the run or thread drill-down directly; the same
+links work by hand: `/ai-gateway#/runs?run=<runId>` and `/ai-gateway#/runs?thread=<threadId>`.
+
+The endpoint is `GET <apiBasePath>/consoles/search?q=`, behind the console's own `authorize`.
+
+### Telling a probe from a visit
+
+To list or search the other consoles, the switcher runs their `authorize` on the viewer's request.
+While it does, the request carries `aviaryProbe = true`. An `authorize` that writes an audit line
+for every visit can skip those:
+
+```ts
+authorize: (ctx) => {
+  const req = ctx.switchToHttp().getRequest();
+  if (req.aviaryProbe !== true) audit.log('console.open', req.user?.id);
+  return req.user?.isAdmin === true;
+},
+```
+
+## The Organization
+
+With the agent's [tenancy](/docs/agent/guides/tenancy) on, every read is scoped to the viewer's
+tenant, and the header shows that Organization with its labels (`Clinic One › Unit One`), "All
+organizations" inside `Context.allTenants()`, or "No organization". The labels come from the
+context's `tenancy.label`, else the tenant's slug, else its id. See
+[The Organization in the console](/docs/agent/guides/tenancy#the-organization-in-the-console).
+
+With a tenant `required`, a viewer without one gets a 403 on the console's reads, and the search
+finds nothing here.
+
 ## When to use it
 
 Reach for `-dashboard` when you want a governance console but aren't running Telescope, or want the

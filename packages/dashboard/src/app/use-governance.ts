@@ -206,6 +206,16 @@ export function useApprovalsPage(page: number, pageSize: number, where: Approval
  * interval used to drive, and 20 seconds of latency on a queue that waits for a human to walk over
  * and read it is not the bottleneck.
  */
+/** The Organization the console is scoped to (tenancy), for the header chip. Never suspends. */
+export function useConsoleTenancy() {
+  return useQuery({
+    queryKey: ['tenancy'],
+    queryFn: () => agentClient.tenancy(),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+}
+
 export function useApprovalsCount() {
   return useQuery({
     queryKey: ['approvals-count'],

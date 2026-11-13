@@ -85,10 +85,13 @@ export function ConsoleSwitcher({
   brand,
   current,
   config,
+  onSearch,
 }: {
   brand: ReactNode;
   current: { title: string; icon: ConsoleIconKey };
   config: SwitcherConfig | undefined;
+  /** Opens the global search; adds a "Search all consoles" item to the menu. */
+  onSearch?: () => void;
 }) {
   const [consoles, setConsoles] = useState<SwitcherConsole[]>([]);
   const [open, setOpen] = useState(false);
@@ -217,6 +220,34 @@ export function ConsoleSwitcher({
               <path d="m5 12 5 5 9-10" />
             </svg>
           </div>
+          {onSearch !== undefined && (
+            <button
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className={`${item} w-full hover:bg-panel`}
+              onClick={() => {
+                close(false);
+                onSearch();
+              }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width={14}
+                height={14}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                className="text-muted-foreground"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+              <span className="truncate">Search all consoles…</span>
+              <kbd className="mono ml-auto text-[10px] text-muted-foreground">⌘K</kbd>
+            </button>
+          )}
           {consoles.map((c) => (
             <a
               key={c.id}

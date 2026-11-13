@@ -34,8 +34,15 @@ export {
   AgentConsoleRegistration,
   AgentConsolesController,
   CONSOLE_PROBE_TIMEOUT_MS,
+  CONSOLE_SEARCH_LIMIT,
+  CONSOLE_SEARCH_TIMEOUT_MS,
   listVisibleConsoles,
   registerAviaryConsole,
+  searchConsoles,
+  withAviaryProbe,
+  type AviaryConsoleSearchGroup,
+  type AviaryConsoleSearchHit,
+  type AviaryConsoleSearchResult,
   type AviaryConsoleDecision,
   type AviaryConsoleEntry,
   type AviaryConsoleIcon,
@@ -47,3 +54,4 @@ export * from './dashboard.service.js';
 export { AgentDevToolsRegistration, agentDevTools, type AgentDevTool } from './dev-tools.js';
 export * from './parse-price-input.js';
 export * from './tokens.js';
+export type { ConsoleTenancy, ConsoleTenantLevel } from './tenancy.js';

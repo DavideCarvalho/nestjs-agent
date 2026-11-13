@@ -317,6 +317,11 @@ export interface AgentModuleOptions {
    * `recordUsage` records it when the input names none, and thread and run reads (and the governance
    * dashboard) see only the request tenant's rows: another tenant's thread or run answers `404`.
    * A `tenantRef` your resolver sets always wins. `false` keeps the agent out of tenancy.
+   *
+   * The object form adds `kinds` (scope by that level of the request's tenant chain, e.g.
+   * `['clinic']` for every unit of a clinic), `family` (a secondary tenant), `required` (with no
+   * tenant, a thread or run read and a new thread answer `403`; defaults to the context's) and
+   * `nullRows`.
    */
   tenancy?: TenancyOption;
   /**
