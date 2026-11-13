@@ -152,6 +152,25 @@ describe('limits and redaction', () => {
     });
   });
 
+  it('prints a value shared by two fields twice and marks only a real cycle', () => {
+    const definition = { key: 'beta', rules: [{ on: true }] };
+    expect(
+      redactDevToolOutput({ stored: definition, definition, list: [definition, definition] }),
+    ).toEqual({
+      stored: definition,
+      definition,
+      list: [definition, definition],
+    });
+    const loop: Record<string, unknown> = { name: 'loop' };
+    loop.self = loop;
+    const items: unknown[] = [];
+    items.push(items);
+    expect(redactDevToolOutput({ loop, items })).toEqual({
+      loop: { name: 'loop', self: '[circular]' },
+      items: ['[circular]'],
+    });
+  });
+
   it('caps a list result at 48 KB with truncated and next', () => {
     const items = Array.from({ length: 500 }, (_, i) => ({ id: i, text: 'x'.repeat(200) }));
     const text = capDevToolResult({ items, next: 2 });
