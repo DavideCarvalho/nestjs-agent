@@ -1,5 +1,18 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.25.0
+
+### Minor Changes
+
+- [#429](https://github.com/DavideCarvalho/nestjs-agent/pull/429) [`14fd457`](https://github.com/DavideCarvalho/nestjs-agent/commit/14fd457b94578fbb443e5575456d078575f8e405) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Global search across the Aviary consoles. A console entry may expose `search(context, q, limit)`; `GET <api>/consoles/search?q=` fans out to this console and every other console the viewer may open (300 ms and 5 hits each, `partial: true` when one did not answer). The agent console searches runs and threads (exact ids, thread titles, agent names), scoped by tenancy like its other reads. The console gets a Ctrl/Cmd-K search palette, a Search button and a "Search all consoles" item in the switcher menu; hits open the run or thread drill-down (`#/runs?run=<id>`, `#/runs?thread=<id>`). While the switcher runs another console's `authorize`, the request carries `aviaryProbe = true`, so an auditing authorizer can skip it.
+
+- [#429](https://github.com/DavideCarvalho/nestjs-agent/pull/429) [`14fd457`](https://github.com/DavideCarvalho/nestjs-agent/commit/14fd457b94578fbb443e5575456d078575f8e405) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Tenancy follows the full `@dudousxd/nestjs-context` contract (2.1+), and still works with older contexts.
+
+  - **Nested tenants.** `tenancy: { kinds }` picks the level of the request's tenant chain. With `kinds: ['clinic']`, a request in a unit gets its clinic as `tenantRef`, so every unit of a clinic shares its threads, runs, the console and `quota.per: 'tenant' | 'actor-in-tenant'`. `family` scopes by a secondary tenant.
+  - **`required`.** From the agent's `tenancy.required`, else the context's. With no tenant, thread and run reads, a new thread and the console answer 403 (`E_TENANT_REQUIRED`) instead of running tenantless. An actor whose resolver sets `tenantRef` is never refused. Work outside a request never throws: `recordUsage` (workers, durable turns, schedules) and the actor resolver read with `required: false`, and the console search answers no hits.
+  - **Organization labels.** `GET <api>/tenancy` returns the Organization the console is scoped to, each level labelled by the context's `tenancy.label` (else slug, else id). The console header shows it.
+  - Core exports `tenantLabels`, `ContextTenantLevel` and `ReadTenancyOverrides`. `readTenancy` takes an optional third argument, `{ required }`.
+
 ## 0.24.0
 
 ### Minor Changes
