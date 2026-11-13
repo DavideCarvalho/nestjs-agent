@@ -314,9 +314,28 @@ export class AgentService implements OnApplicationBootstrap {
     }
   }
 
-  /** The agent's tenancy, read per call: the context's switch can be flipped at any time. */
-  private tenancy(): Tenancy {
-    return readTenancy(this.options?.tenancy ?? 'inherit', this.contextAccessor);
+  /**
+   * The agent's tenancy, read per call: the context's switch can be flipped at any time. An actor
+   * whose `tenantRef` is set already names its tenant, so a `required` tenant never throws for it;
+   * `lenient` reads never throw either (usage recording, which may run outside any request).
+   */
+  private tenancy(actor?: Actor | string, lenient = false): Tenancy {
+    const named =
+      typeof actor === 'object' && actor !== null && typeof actor.tenantRef === 'string';
+    return readTenancy(
+      this.options?.tenancy ?? 'inherit',
+      this.contextAccessor,
+      lenient || named ? { required: false } : {},
+    );
+  }
+
+  /**
+   * Before a write stamps `actor`'s tenant: with tenancy on and a tenant `required`, an actor with
+   * no `tenantRef` and no context tenant is refused with the context's `TenantRequiredError` (403)
+   * instead of writing a row with no tenant.
+   */
+  private assertTenantForWrite(actor: Actor): void {
+    tenantRowFilter(this.tenancy(actor));
   }
 
   /**
@@ -329,7 +348,7 @@ export class AgentService implements OnApplicationBootstrap {
     target: TenantTarget,
     notFound: () => Error,
   ): Promise<void> {
-    const filter = tenantRowFilter(this.tenancy(), actor.tenantRef);
+    const filter = tenantRowFilter(this.tenancy(actor), actor.tenantRef);
     if (filter === undefined) return;
     const row =
       typeof this.store.tenantOf === 'function' ? await this.store.tenantOf(target) : null;
@@ -622,6 +641,9 @@ export class AgentService implements OnApplicationBootstrap {
       );
       if ('proposalDecision' in decision) return decision;
     }
+    // A new thread needs a tenant to stamp where one is `required`: refuse before the quota or the
+    // model is touched. A send onto an existing thread is checked by the ownership read below.
+    if (params.threadId === undefined) this.assertTenantForWrite(params.actor);
     // Precedence: explicit agentName > the thread's own defaultAgent (set via updateThread) > the
     // module's configured default. Resolved up front (before thread creation) so a brand-new thread
     // — which has no defaultAgent yet — falls straight through to the module default.
@@ -1162,7 +1184,7 @@ export class AgentService implements OnApplicationBootstrap {
   async listThreads(actor: Actor | string): Promise<ThreadSummary[]> {
     const actorRef = typeof actor === 'string' ? actor : actor.id;
     const filter = tenantRowFilter(
-      this.tenancy(),
+      this.tenancy(actor),
       typeof actor === 'string' ? undefined : actor.tenantRef,
     );
     const threads =
@@ -1715,8 +1737,9 @@ export class AgentService implements OnApplicationBootstrap {
    * against nobody.
    */
   recordUsage(input: AiUsageInput, options: AiUsageOptions = {}): Promise<AiUsageResult> {
-    // With tenancy on, a row that names no tenant is the context tenant's.
-    const tenantRef = input.tenantRef ?? contextTenantRef(this.tenancy());
+    // With tenancy on, a row that names no tenant is the context tenant's. Never `required`: usage is
+    // recorded from workers, durable turns and schedules too, and recording must not fail the caller.
+    const tenantRef = input.tenantRef ?? contextTenantRef(this.tenancy(undefined, true));
     return recordAiUsage({
       store: this.store,
       quota: this.deps.forAgent().quota,

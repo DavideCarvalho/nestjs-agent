@@ -54,3 +54,4 @@ export * from './dashboard.service.js';
 export { AgentDevToolsRegistration, agentDevTools, type AgentDevTool } from './dev-tools.js';
 export * from './parse-price-input.js';
 export * from './tokens.js';
+export type { ConsoleTenancy, ConsoleTenantLevel } from './tenancy.js';

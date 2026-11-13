@@ -43,7 +43,12 @@ import { Observable } from 'rxjs';
 import type { ActorDirectory } from './actor-directory.js';
 import { parseApprovalDecision } from './parse-approval-decision.js';
 import { parsePriceInput } from './parse-price-input.js';
-import { type AgentTenancyOption, consoleTenantFilter } from './tenancy.js';
+import {
+  type AgentTenancyOption,
+  type ConsoleTenancy,
+  consoleTenancy,
+  consoleTenantFilter,
+} from './tenancy.js';
 import {
   AGENT_ACTOR_DIRECTORY,
   AGENT_APPROVAL_PORT,
@@ -108,6 +113,15 @@ const APPROVAL_PORT_UNBOUND_MESSAGE =
   'read-only until then.';
 
 /** The message returned as a 501 when the bound read-model does not implement `genuiStats`. */
+/** The context's `TenantRequiredError` (403, `E_TENANT_REQUIRED`), read structurally. */
+function isTenantRequired(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'E_TENANT_REQUIRED'
+  );
+}
+
 const TENANT_SCOPE_UNSUPPORTED_MESSAGE =
   'The agent console is tenant-scoped (AgentModule tenancy is on), and the bound ' +
   'AGENT_GOVERNANCE_QUERIES store does not implement forTenant. Use a store adapter that does ' +
@@ -262,7 +276,6 @@ export class DashboardService {
     return this.scoped().toolCallsPage(query);
   }
 
-  /** Paged, filterable runs for the Reliability recent-runs table. */
   /**
    * Global search (the console switcher's): runs and threads matching `q`, scoped like every other
    * read (tenancy included). An exact run id, an exact thread id, threads whose title contains `q`,
@@ -274,7 +287,14 @@ export class DashboardService {
     limit: number,
     page: string,
   ): Promise<Array<{ title: string; subtitle?: string; href: string }>> {
-    const queries = this.scoped();
+    let queries: AgentGovernanceQueries;
+    try {
+      queries = this.scoped();
+    } catch (error) {
+      // A viewer with no tenant where one is `required`: nothing of this console to find.
+      if (isTenantRequired(error)) return [];
+      throw error;
+    }
     const quiet = <T>(read: () => Promise<T>, fallback: T): Promise<T> =>
       Promise.resolve()
         .then(read)
@@ -313,6 +333,15 @@ export class DashboardService {
       .slice(0, limit);
   }
 
+  /**
+   * The Organization the console is scoped to, labelled (the app's `tenancy.label`, else slug, else
+   * id), for the header chip. Never throws, even when a tenant is required and missing.
+   */
+  tenancy(): Promise<ConsoleTenancy> {
+    return consoleTenancy(this.agentOptions?.tenancy ?? 'inherit', this.contextAccessor);
+  }
+
+  /** Paged, filterable runs for the Reliability recent-runs table. */
   runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
     return this.scoped().runsPage(query);
   }
