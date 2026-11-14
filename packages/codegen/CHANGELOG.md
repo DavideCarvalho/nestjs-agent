@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-codegen
 
+## 0.17.0
+
+### Minor Changes
+
+- [#437](https://github.com/DavideCarvalho/nestjs-agent/pull/437) [`e1ebb04`](https://github.com/DavideCarvalho/nestjs-agent/commit/e1ebb04160bd78fec2f71e77213d0687bfe4f666) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The injected agent routes follow the agent's new list wire (`@dudousxd/nestjs-agent` 4.0). `agents`, `threads`, `skills`, `tools`, `memories` and `attachments` `.list` respond `{ data }`, and `models.list` responds `{ data, default, locked? }`. Filters are flat `filter[...]` query keys (`{ 'filter[agent]': 'support' }`), and `threads` / `attachments` take `size`. `actionProposals.list` takes `after` / `first` and responds with one cursor page, `{ data, meta: { nextCursor, prevCursor, hasNext, hasPrev } }`.
+
 ## 0.16.0
 
 ### Minor Changes

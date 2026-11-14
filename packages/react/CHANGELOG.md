@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-react
 
+## 0.46.0
+
+### Minor Changes
+
+- [#437](https://github.com/DavideCarvalho/nestjs-agent/pull/437) [`e1ebb04`](https://github.com/DavideCarvalho/nestjs-agent/commit/e1ebb04160bd78fec2f71e77213d0687bfe4f666) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `AgentClient` speaks the agent's new list wire (`@dudousxd/nestjs-agent` 4.0): `listThreads`, `listSkills`, `listTools`, `listModels` and `listAgents` read `{ data }` answers and send `filter[threadId]` / `filter[agent]` / `filter[persona]` instead of the flat params. `listActionProposals` follows `meta.nextCursor` across cursor pages instead of the `X-Action-Proposals-Next` header. `listThreads({ size })` can size the list. Method signatures and return types are unchanged, so hooks and components need no change. This client needs `@dudousxd/nestjs-agent` 4.0 or later on the server.
+
 ## 0.45.1
 
 ### Patch Changes
