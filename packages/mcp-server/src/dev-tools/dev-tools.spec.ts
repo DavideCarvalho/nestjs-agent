@@ -288,6 +288,23 @@ describe('actions gate', () => {
   });
 });
 
+describe('actions map at boot', () => {
+  it('names the map key whose authorize cannot resolve', async () => {
+    const moduleRef = {
+      get: () => {
+        throw new Error('no console gate');
+      },
+    } as unknown as ModuleRef;
+    await expect(
+      resolveActionsMap(
+        { durable: () => true, 'flags.save': 'flags.admin' },
+        moduleRef,
+        new Logger('spec'),
+      ),
+    ).rejects.toThrow(/devTools\.actions\['flags\.save'\]/);
+  });
+});
+
 describe('caller id', () => {
   it('is the caller the allowing decision named (a token form, hashed)', () => {
     const decisions = [

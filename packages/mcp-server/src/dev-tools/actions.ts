@@ -83,18 +83,26 @@ export async function resolveActionsMap(
 ): Promise<ResolvedActionsMap> {
   const resolved = new Map<ConsoleAuthorize, ConsoleDecide>();
   if (!isActionsMap(actions)) return resolved;
-  const values = Object.keys(actions).map((key) => actions[key] as ConsoleAuthorize);
-  if (values.length > 0 && moduleRef === undefined) {
+  const keys = Object.keys(actions);
+  if (keys.length > 0 && moduleRef === undefined) {
     throw new Error('AgentMcpServerModule: `devTools.actions` needs ModuleRef to resolve.');
   }
   // A refused action logs at debug, a throwing `authorize` included.
   const quiet = { warn: (message: string) => logger.debug(message) } as unknown as Logger;
-  for (const authorize of values) {
+  for (const key of keys) {
+    const authorize = actions[key] as ConsoleAuthorize;
     if (resolved.has(authorize)) continue;
-    resolved.set(
-      authorize,
-      await resolveDevToolsAuthorize(authorize, moduleRef as ModuleRef, { logger: quiet }),
-    );
+    try {
+      resolved.set(
+        authorize,
+        await resolveDevToolsAuthorize(authorize, moduleRef as ModuleRef, { logger: quiet }),
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`AgentMcpServerModule: \`devTools.actions['${key}']\`: ${reason}`, {
+        cause: error,
+      });
+    }
   }
   return resolved;
 }

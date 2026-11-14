@@ -292,6 +292,8 @@ export class AgentDevToolsEndpoint
     let servesActions = false;
     for (const lib of admission.allowed) {
       for (const tool of lib.tools) {
+        // Availability first: an unavailable tool is hidden anyway, so its authorize never runs.
+        if (!(await isAvailable(tool))) continue;
         if (tool.kind === 'action') {
           const decision = await gate.decide({
             lib: lib.lib,
@@ -303,7 +305,6 @@ export class AgentDevToolsEndpoint
             continue;
           }
         }
-        if (!(await isAvailable(tool))) continue;
         if (tool.kind === 'action') servesActions = true;
         served.push({ lib, tool });
       }
