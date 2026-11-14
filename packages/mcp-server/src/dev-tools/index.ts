@@ -36,6 +36,9 @@ export type {
 export {
   DEFAULT_DEV_TOOLS_PATH,
   type AgentDevToolsOptions,
+  type DevToolsActionRequest,
   type DevToolsActions,
+  type DevToolsActionsAuthorizer,
+  type DevToolsActionsMap,
 } from './options.js';
 export { validateDevToolInput } from './schema.js';

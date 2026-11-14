@@ -82,7 +82,7 @@ AgentMcpServerModule.forRoot({
   devTools: {
     path: 'mcp/aviary',                     // default
     exclude: ['agent_get_spend'],           // lib ids or tool names
-    actions: 'refuse',                      // default; 'execute' or ['durable'] to opt in
+    actions: 'refuse',                      // default; see Actions below
     decorators: [UseGuards(SessionGuard)],  // run before the per-lib authorize
     authorize: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }), // libs without a console
   },
@@ -93,7 +93,7 @@ AgentMcpServerModule.forRoot({
 |---|---|---|
 | `path` | `'mcp/aviary'` | Where the endpoint mounts. It must differ from the product endpoint's `path`, or the boot fails |
 | `exclude` | `[]` | Library ids or full tool names that are never served |
-| `actions` | `'refuse'` | Tools that change data are hidden and cannot be called. `'execute'` allows them all; a list allows the actions of these library ids or tool names |
+| `actions` | `'refuse'` | Which tools that change data each caller gets. `'execute'` allows them all; a list allows the actions of these library ids or tool names; a map or a function decides per caller. See [Actions](#actions) |
 | `decorators` | `[]` | Class decorators on the endpoint, before the per-library check: an authentication guard, a rate limit |
 | `authorize` | open outside production, denied in production | The gate of libraries that have no console. Any `authorize` form. See [Libraries without a console](#libraries-without-a-console) |
 
@@ -104,6 +104,61 @@ The boot log lists what is served:
 ```
 [AgentDevTools] dev tools at /mcp/aviary: agent (7), durable (8)
 ```
+
+## Actions
+
+Tools that change data (retry, cancel, refund…) are hidden by default. `devTools.actions` decides
+which ones each caller gets. An action it refuses is not listed in `tools/list` and cannot be
+called. The library's console `authorize` still runs first: `actions` only narrows what a library
+already lets the caller see.
+
+Give each library, or each tool, its own `authorize`. These take the same forms as a console's
+`authorize`: a function, a class with `authorize()`, a lazy import, `{ policy, ability }` or a gate
+name.
+
+```ts
+import { authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentMcpServerModule.forRoot({
+  // …
+  devTools: {
+    actions: {
+      durable: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }),
+      durable_cancel_run: (ctx) => ctx.switchToHttp().getRequest().user?.role === 'owner',
+      payments_refund_payment: () => false,
+    },
+  },
+});
+```
+
+- A tool-name key (`durable_cancel_run`) wins over its library's key (`durable`).
+- An action that matches neither key is refused.
+- An `authorize` that throws, or answers `{ redirectTo }` or `unauthenticated`, refuses.
+- Each `authorize` runs once per request, however many tools point at it.
+
+For full control, pass a function. It gets the Nest request (Express's, or Fastify's request) and is
+asked once per action tool, per request:
+
+```ts
+devTools: {
+  actions: async (req, { lib, tool, destructive, caller }) => {
+    const user = req.user;
+    if (!user) return false;
+    return destructive ? user.role === 'owner' : user.role === 'admin';
+  },
+},
+```
+
+Anything but `true` (a `false`, a truthy non-boolean) or a throw refuses. A refused action is logged
+at `debug` level only. The endpoint's instructions tell the client it is read-only unless this request
+is actually served at least one action.
+
+The shorthands still work: `'refuse'` (the default), `'execute'` (every action of every library the
+caller gets in), or a list of library ids and tool names (`['durable', 'payments_refund_payment']`).
+The product endpoint's `actions: 'execute'` does not apply here.
+
+The types are exported from `@dudousxd/nestjs-agent-mcp-server`: `DevToolsActions`,
+`DevToolsActionsMap`, `DevToolsActionsAuthorizer` and `DevToolsActionRequest`.
 
 ## Libraries without a console
 

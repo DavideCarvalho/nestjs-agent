@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import type { ExecutionContext } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
+import type { ModuleRef } from '@nestjs/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type DevToolsActions, DevToolsActionsGate, resolveActionsMap } from './actions.js';
 import { libProblem, snapshot } from './catalog.js';
 import {
   DEV_TOOLS_SLOT,
@@ -9,7 +13,7 @@ import {
 } from './contract.js';
 import { callerOf } from './endpoint.js';
 import { capDevToolResult, redactDevToolOutput, truncateText } from './limits.js';
-import { actionAllowed, resolveDevToolsOptions } from './options.js';
+import { resolveDevToolsOptions } from './options.js';
 import { schemaProblem, validateDevToolInput } from './schema.js';
 
 const tool = (overrides: Partial<DevTool> = {}): DevTool => ({
@@ -182,11 +186,105 @@ describe('options', () => {
     expect(resolveDevToolsOptions({ path: 'mcp' }, false)?.path).toBe('mcp');
   });
 
-  it('opts actions in by lib id or tool name', () => {
-    expect(actionAllowed('refuse', 'durable', 'durable_retry_run')).toBe(false);
-    expect(actionAllowed('execute', 'durable', 'durable_retry_run')).toBe(true);
-    expect(actionAllowed(['durable'], 'durable', 'durable_retry_run')).toBe(true);
-    expect(actionAllowed(['media_abort_upload'], 'durable', 'durable_retry_run')).toBe(false);
+  it('accepts the map and function forms of actions, and refuses anything else', () => {
+    const map = { durable: () => true };
+    expect(resolveDevToolsOptions({ actions: map }, 'mcp')?.actions).toBe(map);
+    const fn = () => true;
+    expect(resolveDevToolsOptions({ actions: fn }, 'mcp')?.actions).toBe(fn);
+    expect(() => resolveDevToolsOptions({ actions: 42 as never }, 'mcp')).toThrow(
+      /devTools.actions/,
+    );
+    expect(() => resolveDevToolsOptions({ actions: [1] as never }, 'mcp')).toThrow(
+      /devTools.actions/,
+    );
+  });
+});
+
+describe('actions gate', () => {
+  const retry = { lib: 'durable', tool: 'durable_retry_run', destructive: false };
+  const cancel = { lib: 'durable', tool: 'durable_cancel_run', destructive: true };
+  const refund = { lib: 'payments', tool: 'payments_refund_payment', destructive: true };
+  const request = { user: { id: 7 } };
+  const context = {
+    switchToHttp: () => ({ getRequest: () => request }),
+  } as unknown as ExecutionContext;
+  const caller = { id: 'user:7', via: 'session' } as const;
+
+  async function gate(actions: DevToolsActions): Promise<DevToolsActionsGate> {
+    const resolved = await resolveActionsMap(actions, {} as ModuleRef, new Logger('spec'));
+    return new DevToolsActionsGate(actions, resolved, context, caller);
+  }
+
+  it('keeps the static forms: refuse, execute, a list of lib ids or tool names', async () => {
+    expect(await (await gate('refuse')).decide(retry)).toEqual({ reason: 'not-configured' });
+    expect(await (await gate('execute')).decide(retry)).toBe(true);
+    expect(await (await gate(['durable'])).decide(retry)).toBe(true);
+    expect(await (await gate(['media_abort_upload'])).decide(retry)).toEqual({
+      reason: 'not-configured',
+    });
+    expect(await (await gate(null as never)).decide(retry)).toEqual({ reason: 'not-configured' });
+    expect((await gate(['durable'])).dynamic).toBe(false);
+  });
+
+  it('map: a tool key wins over its lib key, and an action in neither is refused', async () => {
+    const g = await gate({ durable: () => true, durable_cancel_run: () => false });
+    expect(g.dynamic).toBe(true);
+    expect(await g.decide(retry)).toBe(true);
+    expect(await g.decide(cancel)).toEqual({ reason: 'denied' });
+    expect(await g.decide(refund)).toEqual({ reason: 'not-configured' });
+  });
+
+  it('map: a throw, a redirectTo or unauthenticated refuses', async () => {
+    const g = await gate({
+      durable_retry_run: () => {
+        throw new Error('boom');
+      },
+      durable_cancel_run: () => ({ redirectTo: '/login' }),
+      payments: () => ({ allowed: false, reason: 'unauthenticated' }) as const,
+    });
+    expect(await g.decide(retry)).toEqual({ reason: 'denied' });
+    expect(await g.decide(cancel)).toEqual({ reason: 'denied' });
+    expect(await g.decide(refund)).toEqual({ reason: 'denied' });
+  });
+
+  it('map: never reads an inherited key', async () => {
+    const g = await gate({ durable: () => true });
+    expect(await g.decide({ ...retry, lib: 'constructor', tool: 'toString' })).toEqual({
+      reason: 'not-configured',
+    });
+  });
+
+  it('map: each distinct authorize runs once per request', async () => {
+    const admins = vi.fn(() => true);
+    const actions = { durable: admins, payments: admins };
+    const resolved = await resolveActionsMap(actions, {} as ModuleRef, new Logger('spec'));
+    const first = new DevToolsActionsGate(actions, resolved, context, caller);
+    await Promise.all([first.decide(retry), first.decide(cancel), first.decide(refund)]);
+    expect(admins).toHaveBeenCalledTimes(1);
+    const second = new DevToolsActionsGate(actions, resolved, context, caller);
+    await second.decide(retry);
+    expect(admins).toHaveBeenCalledTimes(2);
+  });
+
+  it('function: gets the request and the action; only true serves, a throw refuses', async () => {
+    const decide = vi.fn((_req: unknown, action: { destructive: boolean }) => !action.destructive);
+    const g = await gate(decide);
+    expect(await g.decide(retry)).toBe(true);
+    expect(await g.decide(cancel)).toEqual({ reason: 'denied' });
+    expect(decide).toHaveBeenCalledWith(request, { ...retry, caller });
+    expect(await (await gate((() => 'yes') as never)).decide(retry)).toEqual({ reason: 'denied' });
+    const error = new Error('boom');
+    expect(
+      await (
+        await gate(() => {
+          throw error;
+        })
+      ).decide(retry),
+    ).toEqual({ reason: 'threw', error });
+  });
+
+  it('fails the boot on an authorize form it cannot resolve', async () => {
+    await expect(gate({ durable: 42 as never })).rejects.toThrow(/authorize/);
   });
 });
 
