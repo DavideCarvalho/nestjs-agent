@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-mcp-server
 
+## 0.9.1
+
+### Patch Changes
+
+- [#433](https://github.com/DavideCarvalho/nestjs-agent/pull/433) [`11be0dd`](https://github.com/DavideCarvalho/nestjs-agent/commit/11be0dd3c156bf39e940107571e7e09a51d5cee5) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Dev MCP tools no longer print `[circular]` for a value that appears twice in a result (the same object under two fields, or twice in a list). Only a real cycle is marked `[circular]` now.
+
 ## 0.9.0
 
 ### Minor Changes
