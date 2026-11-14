@@ -122,7 +122,8 @@ async function boot(model = new FakeModel([])) {
   return testApp;
 }
 
-const names = (res: { body: unknown }) => (res.body as ToolCatalogEntry[]).map((tool) => tool.name);
+const names = (res: { body: { data: unknown } }) =>
+  (res.body.data as ToolCatalogEntry[]).map((tool) => tool.name);
 
 describe("@nestjs/authorization's @Can() on agent tools", () => {
   it('offers a tool only to an actor its abilities allow, static arguments included', async () => {
@@ -294,6 +295,6 @@ describe('AgentModule({ routes: false }) — the routes on controllers of the ap
       .get('/ops/agent/threads')
       .set({ 'x-actor-id': 'a1', 'x-actor-role': 'ADMIN' })
       .expect(200);
-    expect(admin.body).toEqual([]);
+    expect(admin.body).toEqual({ data: [] });
   });
 });

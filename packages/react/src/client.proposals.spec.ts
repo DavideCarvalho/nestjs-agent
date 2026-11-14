@@ -4,7 +4,14 @@ it('uses scoped proposal endpoints and sends only decision body fields', async (
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _options?: RequestInit) =>
       new Response(
-        JSON.stringify(String(_url).endsWith('/action-proposals') ? [] : { status: 'applied' }),
+        JSON.stringify(
+          String(_url).includes('/action-proposals?')
+            ? {
+                data: [],
+                meta: { nextCursor: null, prevCursor: null, hasNext: false, hasPrev: false },
+              }
+            : { status: 'applied' },
+        ),
         {
           headers: { 'content-type': 'application/json' },
         },
@@ -35,56 +42,42 @@ it('recognizes safe text decision JSON without treating it as a streaming run', 
   expect(result.runId).toBeUndefined();
 });
 
+const page = (data: unknown[], nextCursor: string | null) =>
+  new Response(
+    JSON.stringify({
+      data,
+      meta: { nextCursor, prevCursor: null, hasNext: nextCursor !== null, hasPrev: false },
+    }),
+    { headers: { 'content-type': 'application/json' } },
+  );
+
 it('traverses scoped pages even when the authorized first page is empty', async () => {
-  const cursor = { createdAt: 10, id: 'old\u0000row' };
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL) =>
-      new Response(JSON.stringify(fetch.mock.calls.length === 1 ? [] : [{ id: 'latest' }]), {
-        headers: {
-          'content-type': 'application/json',
-          ...(fetch.mock.calls.length === 1
-            ? { 'X-Action-Proposals-Next': encodeURIComponent(JSON.stringify(cursor)) }
-            : {}),
-        },
-      }),
+  const fetch = vi.fn(async (_url: RequestInfo | URL) =>
+    fetch.mock.calls.length === 1 ? page([], 'opaque-1') : page([{ id: 'latest' }], null),
   );
   const client = new AgentClient({ fetch });
   expect(await client.listActionProposals({ threadId: 'thread/a' })).toEqual([{ id: 'latest' }]);
   expect(fetch).toHaveBeenCalledTimes(2);
+  const first = new URL(String(fetch.mock.calls[0]?.[0]), 'https://test.invalid');
+  expect(first.searchParams.get('after')).toBeNull();
+  expect(first.searchParams.get('first')).toBe('1000');
   const next = new URL(String(fetch.mock.calls[1]?.[0]), 'https://test.invalid');
-  expect(JSON.parse(next.searchParams.get('after') ?? '{}')).toEqual(cursor);
+  expect(next.searchParams.get('after')).toBe('opaque-1');
 });
 
 it('rejects a repeated pagination cursor instead of looping or hiding later proposals', async () => {
-  const fetch = vi.fn(
-    async () =>
-      new Response('[]', {
-        headers: {
-          'X-Action-Proposals-Next': encodeURIComponent(JSON.stringify({ createdAt: 10, id: 'a' })),
-        },
-      }),
-  );
+  const fetch = vi.fn(async () => page([], 'same'));
   await expect(
     new AgentClient({ fetch }).listActionProposals({ threadId: 'thread' }),
   ).rejects.toThrow('cursor');
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-it('accepts safe integer clocks on either side of the epoch like the proposal store', async () => {
-  let page = 0;
-  const fetch = vi.fn(async () => {
-    page++;
-    return new Response('[]', {
-      headers:
-        page === 1
-          ? {
-              'X-Action-Proposals-Next': encodeURIComponent(
-                JSON.stringify({ createdAt: -1, id: 'first' }),
-              ),
-            }
-          : {},
-    });
-  });
-  expect(await new AgentClient({ fetch }).listActionProposals({ threadId: 'thread' })).toEqual([]);
-  expect(fetch).toHaveBeenCalledTimes(2);
+it('rejects an answer that is not a cursor page, such as a pre-4.0 bare array', async () => {
+  const fetch = vi.fn(
+    async () => new Response('[]', { headers: { 'content-type': 'application/json' } }),
+  );
+  await expect(
+    new AgentClient({ fetch }).listActionProposals({ threadId: 'thread' }),
+  ).rejects.toThrow('Invalid action proposal page');
 });

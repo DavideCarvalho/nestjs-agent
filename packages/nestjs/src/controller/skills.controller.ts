@@ -9,6 +9,7 @@ import {
 } from '@dudousxd/nestjs-agent-core';
 import { Controller, Get, Inject, Optional, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
+import { parseFilterParams, rejectUnknownParams } from '../list-api/list-api.js';
 
 /**
  * Lists the skills available to THIS caller right now, scope-resolved — so a composer can offer them
@@ -20,7 +21,7 @@ import type { Request } from 'express';
  * first time either was edited, and the drift would read to a user as a skill they can invoke that
  * the agent then says it has never heard of.
  *
- * Ownership posture mirrors `GET /agent/agents`: a plain array, no envelope, and nothing the caller
+ * Ownership posture mirrors `GET /agent/agents`: a `{ data }` list, unpaged, and nothing the caller
  * can pass to widen it — the actor comes from the resolver, never from a parameter.
  */
 @CanAnyone()
@@ -37,17 +38,21 @@ export class SkillsController {
   async list(
     @Req() req: Request,
     /**
-     * The thread this list is for. Only ever handed to the host's own resolver and provider, which
+     * `filter[threadId]=` — the thread this list is for. Only ever handed to the host's own resolver and provider, which
      * may scope a skill to a conversation; nothing here reads the thread, so an unknown id widens
      * nothing. Omitted → the empty string, the same value a turn on a brand-new thread carries.
      */
-    @Query('threadId') threadId?: string,
-  ): Promise<SkillCatalogEntry[]> {
+    @Query() query: Record<string, unknown>,
+  ): Promise<{ data: SkillCatalogEntry[] }> {
+    rejectUnknownParams(query, ['filter']);
+    const threadId = parseFilterParams(query, { fields: { threadId: ['eq'] } })[0]?.value as
+      | string
+      | undefined;
     if (this.skills === undefined) {
-      return [];
+      return { data: [] };
     }
     const actor = await this.actorResolver.resolve(req);
     const offer = await offerSkills(this.skills, { actor, threadId: threadId ?? '' });
-    return offer.entries;
+    return { data: offer.entries };
   }
 }

@@ -20,7 +20,7 @@ describe('AgentClient', () => {
       ['/api/agent/', 'https://api.example.com/api/agent/threads'],
       ['', 'https://api.example.com/threads'],
     ])('path %j hangs every route off %s', async (path, expected) => {
-      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse([]));
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [] }));
       const client = new AgentClient({
         baseUrl: 'https://api.example.com/',
         fetch: fetchMock,
@@ -28,6 +28,19 @@ describe('AgentClient', () => {
       });
       await client.listThreads();
       expect(fetchCall(fetchMock)[0]).toBe(expected);
+    });
+  });
+
+  describe('listThreads', () => {
+    it('unwraps `{ data }` and sends `size` when given', async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [{ id: 't1' }] }));
+      const client = new AgentClient({ fetch: fetchMock });
+      expect(await client.listThreads()).toEqual([{ id: 't1' }]);
+      await client.listThreads({ size: 10 });
+      expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+        '/agent/threads',
+        '/agent/threads?size=10',
+      ]);
     });
   });
 

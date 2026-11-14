@@ -21,6 +21,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { parseFilterParams, rejectUnknownParams } from '../list-api/list-api.js';
 
 /**
  * What the assistant believes about THIS caller — and how they take one of those beliefs back.
@@ -54,14 +55,21 @@ export class MemoriesController {
   @Get()
   async list(
     @Req() req: Request,
-    /** Only ever handed to the host's own resolver and provider; nothing here reads the thread. */
-    @Query('threadId') threadId?: string,
-  ): Promise<MemoryDigestEntry[]> {
+    /**
+     * `filter[threadId]=` — only ever handed to the host's own resolver and provider; nothing here
+     * reads the thread.
+     */
+    @Query() query: Record<string, unknown>,
+  ): Promise<{ data: MemoryDigestEntry[] }> {
+    rejectUnknownParams(query, ['filter']);
+    const threadId = parseFilterParams(query, { fields: { threadId: ['eq'] } })[0]?.value as
+      | string
+      | undefined;
     if (this.memory === undefined) {
-      return [];
+      return { data: [] };
     }
     const actor = await this.actorResolver.resolve(req);
-    return (await this.unbounded(threadId ?? '', actor)).entries;
+    return { data: (await this.unbounded(threadId ?? '', actor)).entries };
   }
 
   /**

@@ -116,15 +116,17 @@ re-checks the requester's tool permissions.
 
 | Method | Path | Body |
 | --- | --- | --- |
-| `GET` | `/agent/threads/:threadId/action-proposals` | `?after=<cursor>` |
+| `GET` | `/agent/threads/:threadId/action-proposals` | `?after=<cursor>&first=<n>` |
 | `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/approve` | `{ remember?: boolean }` |
 | `POST` | `/agent/threads/:threadId/action-proposals/:proposalId/reject` | `{ reason?: string }` |
 
 Any other body field is a `400`. The list returns the proposals the caller may see: the thread owner
-sees all of them, anyone else only the ones the approval policy lets them decide. It pages 1000 at a
-time. When there is more, the response carries `X-Action-Proposals-Next`: `decodeURIComponent` it and
-send the JSON string as the next `after`. The route adds that header to
-`Access-Control-Expose-Headers`. The React client follows the pages for you.
+sees all of them, anyone else only the ones the approval policy lets them decide. It is a cursor
+list in creation order: `first` proposals per page (default 100, at most 1000), answered as
+`{ data, meta: { nextCursor, prevCursor, hasNext, hasPrev } }`. Pass `meta.nextCursor` back as
+`after` until it is `null`. The cursor is opaque, and a malformed one is a `400`. A page can be
+shorter than `first`, even empty, and still have a next page, since rows the caller may not see are
+dropped after the read. The React client follows the pages for you.
 
 Who may decide is the [approval policy](/docs/agent/guides/human-in-the-loop-and-durability#who-approves-and-for-how-long):
 `approver: 'requester'` means the thread's owner, any other string is a role, and

@@ -289,7 +289,7 @@ Every pick goes through the `ModelCatalog` for the caller. When the catalog list
 persona's model but not as available to this caller, the send gets `400 model_not_allowed`, and the
 message names the agent or persona. A send that names a model the caller can use still goes through.
 
-`GET /agent/models?agent=&persona=` answers that agent's model (under that persona, else its default
+`GET /agent/models?filter[agent]=&filter[persona]=` answers that agent's model (under that persona, else its default
 persona) as `default`, so `models.selected` and `useModels({ agent, persona })` show the model the
 chat will run on.
 

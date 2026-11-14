@@ -158,7 +158,7 @@ sentence that mentions it:
 | `confirm` | `{ title, verb, detail? }` — the approval prompt for an `action` tool, templated over the input. Filled on the server (`fillToolConfirmation`, the React package's `fillTemplate`), so every approval frame carries the resolved `confirmation` and AG-UI, A2UI, OpenUI and A2A clients word the prompt as the native page does. A [preflight](#preflight-checking-an-action-before-and-after-approval) can replace it for one call. |
 | `result` | How the output reads as content: `{ kind: 'metrics', fields }`, `{ kind: 'table', rows, columns, empty? }`, `{ kind: 'log', lines }`, `{ kind: 'note', text }`, or `{ kind: 'elsewhere' }` when it is drawn somewhere else already. Every variant names dotted paths, never shapes. |
 
-`GET /agent/tools?agent=<name>` serves `{ name, kind, presentation? }` for the tools the caller can
+`GET /agent/tools?filter[agent]=<name>` serves `{ data }` of `{ name, kind, presentation? }` for the tools the caller can
 reach through that agent — the same gates the model is offered tools through — and the React
 package's [`useToolCatalog`](/docs/agent/guides/bring-your-own-ui#talking-about-tool-calls) reads it.
 A tool with no `presentation` is narrated generically ("Working" / "Done"), never by its name.

@@ -165,19 +165,21 @@ const verdict = skillWriteVerdict({
 ## Listing them for a UI
 
 ```http
-GET /agent/skills?threadId=<optional>
+GET /agent/skills?filter[threadId]=<optional>
 ```
 
 ```json
-[
-  {
-    "name": "label-pallet",
-    "description": "Label a pallet for outbound freight.",
-    "scope": "tenant:berlin",
-    "shadows": ["global"]
-  },
-  { "name": "work-order", "description": "Open and route a work order.", "scope": "global" }
-]
+{
+  "data": [
+    {
+      "name": "label-pallet",
+      "description": "Label a pallet for outbound freight.",
+      "scope": "tenant:berlin",
+      "shadows": ["global"]
+    },
+    { "name": "work-order", "description": "Open and route a work order.", "scope": "global" }
+  ]
+}
 ```
 
 Most specific first, then alphabetical. `shadows` is omitted when nothing was overridden, so a client

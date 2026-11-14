@@ -77,7 +77,8 @@ async function listSkills(
   }
   const res = await req;
   expect(res.status).toBe(200);
-  return res.body as SkillCatalogEntry[];
+  expect(Object.keys(res.body)).toEqual(['data']);
+  return res.body.data as SkillCatalogEntry[];
 }
 
 afterEach(async () => {
@@ -88,6 +89,17 @@ afterEach(async () => {
 describe('GET /agent/skills', () => {
   it('answers with an empty list when the host configured no skills, decorated classes or not', async () => {
     expect(await listSkills(await boot(), { 'x-actor-id': 'u1' })).toEqual([]);
+  });
+
+  it('takes the thread as filter[threadId] and refuses the old flat ?threadId=', async () => {
+    const server = (await boot({})).getHttpServer();
+    await request(server)
+      .get('/agent/skills?filter[threadId]=t1')
+      .set('x-actor-id', 'u1')
+      .expect(200);
+    const old = await request(server).get('/agent/skills?threadId=t1').set('x-actor-id', 'u1');
+    expect(old.status).toBe(400);
+    expect(old.body.message).toContain('filter[threadId]');
   });
 
   it('lists a discovered @Skill with its name, description and scope', async () => {

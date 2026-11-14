@@ -113,7 +113,8 @@ way. Refusals throw `MediaUploadError` with the HTTP `status` (`413`, `415`, …
 
 The resumable routes are **the** upload path with this module. The buffered multipart
 `POST /agent/attachments` still stages into the same store (its `stage()` writes a media record too),
-but it is not the documented path here. `GET /agent/attachments` lists attachments from either.
+but it is not the documented path here. `GET /agent/attachments` lists attachments from either, as
+`{ data }`: the caller's `size` most recent uploads (default 50, at most 200).
 
 ### What the model receives
 

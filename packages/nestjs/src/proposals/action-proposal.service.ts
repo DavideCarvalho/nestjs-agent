@@ -105,11 +105,12 @@ export class ActionProposalService {
   async listPage(
     threadId: string,
     actor: Actor,
-    query: Pick<ListActionProposals, 'after'> = {},
+    query: Pick<ListActionProposals, 'after' | 'limit'> = {},
   ): Promise<{ items: ActionProposalView[]; next?: NonNullable<ListActionProposals['after']> }> {
     if (!this.hasCapability()) return { items: [] };
     const scope = await this.scope(threadId, actor);
-    const rows = await this.capability().listActionProposals(scope, { limit: 1000, ...query });
+    const limit = query.limit ?? 1000;
+    const rows = await this.capability().listActionProposals(scope, { ...query, limit });
     const visible = [];
     for (const row of rows)
       if (scope.actorRef === actor.id || (await this.mayDecide(actor, row))) visible.push(row);
@@ -117,7 +118,9 @@ export class ActionProposalService {
     return {
       // The public view: a row carries the worker's lease token and the tool's idempotency key.
       items: visible.map(toActionProposalView),
-      ...(rows.length === 1000 && last ? { next: { createdAt: last.createdAt, id: last.id } } : {}),
+      ...(rows.length === limit && last
+        ? { next: { createdAt: last.createdAt, id: last.id } }
+        : {}),
     };
   }
   async list(threadId: string, actor: Actor) {

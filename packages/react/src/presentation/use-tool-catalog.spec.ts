@@ -20,7 +20,7 @@ function clientWith(fetchImpl: typeof fetch): AgentClient {
 describe('useToolCatalog', () => {
   it('asks GET /agent/tools once per client and agent, however many components ask', async () => {
     const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response(JSON.stringify(entries), { status: 200 }),
+      async () => new Response(JSON.stringify({ data: entries }), { status: 200 }),
     );
     const client = clientWith(fetchMock);
     const first = renderHook(() => useToolCatalog({ backend: client, agent: 'support' }));
@@ -30,21 +30,21 @@ describe('useToolCatalog', () => {
     await waitFor(() => expect(second.result.current.isLoading).toBe(false));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?agent=support');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?filter[agent]=support');
     expect(first.result.current.catalog).toEqual({ query: entries[0]?.presentation });
     expect(second.result.current.entries).toHaveLength(2);
   });
 
   it("asks for every agent's tools with ALL_AGENTS, for a surface showing several agents", async () => {
     const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response(JSON.stringify(entries), { status: 200 }),
+      async () => new Response(JSON.stringify({ data: entries }), { status: 200 }),
     );
     const { result } = renderHook(() =>
       useToolCatalog({ backend: clientWith(fetchMock), agent: ALL_AGENTS }),
     );
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?agent=*');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/agent/tools?filter[agent]=*');
     expect(result.current.catalog).toEqual({ query: entries[0]?.presentation });
   });
 
@@ -54,7 +54,7 @@ describe('useToolCatalog', () => {
       attempt += 1;
       return attempt === 1
         ? new Response('nope', { status: 500, statusText: 'Server Error' })
-        : new Response(JSON.stringify(entries), { status: 200 });
+        : new Response(JSON.stringify({ data: entries }), { status: 200 });
     });
     const client = clientWith(fetchMock);
     const { result } = renderHook(() => useToolCatalog({ backend: client }));
