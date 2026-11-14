@@ -41,13 +41,18 @@ export function encodeActionProposalCursor(after: ActionProposalCursor): string 
 /** The keyset an {@link encodeActionProposalCursor} cursor carries; `null` when it is malformed. */
 export function decodeActionProposalCursor(cursor: string): ActionProposalCursor | null {
   if (!/^[A-Za-z0-9_-]+$/.test(cursor)) return null;
-  const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-  if (!Array.isArray(parsed) || parsed.length !== 2) return null;
-  const [createdAt, id] = parsed as [unknown, unknown];
-  if (typeof createdAt !== 'number' || typeof id !== 'string') return null;
-  const after = { createdAt, id };
-  validateActionProposalListQuery({ after });
-  return after;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    const [createdAt, id] = parsed as [unknown, unknown];
+    if (typeof createdAt !== 'number' || typeof id !== 'string') return null;
+    const after = { createdAt, id };
+    validateActionProposalListQuery({ after });
+    return after;
+  } catch {
+    // Not JSON, or a keyset the store would refuse (a clock that is not a safe integer, …).
+    return null;
+  }
 }
 function bodyFields(body: unknown, field: 'remember' | 'reason'): Record<string, unknown> {
   if (body === undefined) return {};

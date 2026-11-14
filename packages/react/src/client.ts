@@ -510,8 +510,9 @@ export class AgentClient implements AgentBackend {
         throw new TypeError('Invalid action proposal page');
       const { data, meta } = page as CursorPage<ActionProposalView>;
       for (const proposal of data) proposals.set(proposal.id, proposal);
+      if (!('nextCursor' in meta)) throw new TypeError('Invalid action proposal page');
       const next = meta.nextCursor;
-      if (next === null || next === undefined) return [...proposals.values()];
+      if (next === null) return [...proposals.values()];
       if (typeof next !== 'string' || next.length === 0 || seen.has(next))
         throw new TypeError('Invalid or non-advancing action proposal cursor');
       seen.add(next);

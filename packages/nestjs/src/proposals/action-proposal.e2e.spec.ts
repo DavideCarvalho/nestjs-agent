@@ -158,6 +158,8 @@ it('ends the origin SSE, accepts another turn, approves independently and persis
       JSON.stringify({ createdAt: 0, id: 'x' }),
       'not-a-cursor!',
       Buffer.from('[1]').toString('base64url'),
+      Buffer.from('not json').toString('base64url'),
+      Buffer.from(JSON.stringify([2 ** 60, 'x'])).toString('base64url'),
     ])
       await request(server).get(route).query({ after }).expect(400);
     // Removed and unsupported params answer 400 rather than being ignored.

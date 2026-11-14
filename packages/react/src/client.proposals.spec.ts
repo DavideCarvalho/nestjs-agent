@@ -81,3 +81,15 @@ it('rejects an answer that is not a cursor page, such as a pre-4.0 bare array', 
     new AgentClient({ fetch }).listActionProposals({ threadId: 'thread' }),
   ).rejects.toThrow('Invalid action proposal page');
 });
+
+it('rejects a page whose meta has no nextCursor instead of treating it as the last page', async () => {
+  const fetch = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ data: [], meta: { hasNext: false } }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+  );
+  await expect(
+    new AgentClient({ fetch }).listActionProposals({ threadId: 'thread' }),
+  ).rejects.toThrow('Invalid action proposal page');
+});

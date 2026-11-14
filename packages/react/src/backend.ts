@@ -161,7 +161,8 @@ export interface AgentBackend {
   /** Hard-stop a run server-side. */
   cancelStream(runId: string): Promise<unknown>;
 
-  listThreads(): Promise<ThreadSummary[]>;
+  /** `size` caps how many threads come back (the server's default and maximum apply). */
+  listThreads(options?: { size?: number }): Promise<ThreadSummary[]>;
   getThread(id: string): Promise<ThreadDetail>;
   updateThread(id: string, patch: ThreadPatch): Promise<unknown>;
   deleteThread(id: string): Promise<unknown>;
