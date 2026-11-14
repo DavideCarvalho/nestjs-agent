@@ -172,6 +172,45 @@ what it would have parsed on the wire.
 | `actions` | `'deny'` | `'execute'` lets `action` tools run with no human approval |
 | `allowedTools` | every exposable tool the actor may use | The names this surface exposes at all |
 | `routes.principal` | the actor on `request.user` | How the MCP actor becomes the dispatched request's principal |
+| `devTools` | on, at `mcp/aviary` | The dev endpoint serving the Aviary consoles' developer tools. `false` mounts nothing |
+
+## Developer tools: actions
+
+The dev endpoint (`devTools`) hides tools that change data (retry, cancel, refund…) by default.
+`devTools.actions` decides which ones each caller gets. An action it refuses is neither listed nor
+callable. A lib's console `authorize` still runs first, so `actions` only narrows what a lib already
+lets the caller see. The product endpoint's `actions` never applies here.
+
+```ts
+import { authorizeByToken } from '@dudousxd/nestjs-agent-dashboard';
+
+AgentMcpServerModule.forRoot({
+  // …
+  devTools: {
+    actions: {
+      durable: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }),
+      durable_cancel_run: (ctx) => ctx.switchToHttp().getRequest().user?.role === 'owner',
+      payments_refund_payment: () => false,
+    },
+  },
+});
+```
+
+- Each value takes any console `authorize` form: a function, a class with `authorize()`, a lazy
+  import, `{ policy, ability }` or a gate name.
+- A tool-name key wins over its lib's key. An action that matches neither is refused.
+- An `authorize` that throws, answers `{ redirectTo }` or `unauthenticated` refuses.
+- Each distinct `authorize` runs at most once per request, however many tools point at it.
+
+For full control, pass a function `(request, { lib, tool, destructive, caller }) => boolean`. It gets
+the Nest request and is asked once per action tool, per request. Anything but `true`, or a throw,
+refuses. Refusals by the map or the function are logged at `debug` only.
+
+The shorthands still work: `'refuse'` (the default), `'execute'` (every action of every lib the caller
+gets in) and a list of lib ids or tool names (`['durable', 'payments_refund_payment']`). The endpoint's
+instructions say it is read-only unless the request is actually served an action. The types are
+exported as `DevToolsActions`, `DevToolsActionsMap`, `DevToolsActionsAuthorizer` and
+`DevToolsActionRequest`.
 
 ## Authenticating callers
 
