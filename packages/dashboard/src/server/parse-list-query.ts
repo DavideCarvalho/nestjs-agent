@@ -12,13 +12,16 @@ import {
   offsetPage,
   parseFilterParams,
   parsePageParams,
+  rejectUnknownParams,
   resolveSort,
 } from './list-api.js';
 
 /**
  * The console's governance lists (`GET runs`, `tool-calls`, `threads`, `approvals`) on the Aviary
  * list wire: `filter[field]=value`, `page` (1-based) + `size` (default 25, clamped to 200), and a
- * `sort` that only names the store's one fixed order. They answer `{ data, meta }`.
+ * `sort` that only names the store's one fixed order. They answer `{ data, meta }`. Any other
+ * query param (the removed `limit` / `where[...]`, a bare `?status=`) is a 400 naming its
+ * replacement, never silently ignored.
  *
  * The store SPI (`GovernancePageQuery` → `GovernancePage`) is unchanged; this module translates
  * between the wire and it.
@@ -76,8 +79,12 @@ function assertFixedSort(raw: unknown, order: string): void {
   }
 }
 
+/** The params every governance list reads. */
+const LIST_PARAMS = ['page', 'size', 'sort', 'filter'] as const;
+
 /** A list endpoint's parsed request, ready for the governance SPI. */
 function pageQuery<W>(query: Query, where: W | undefined, order: string): GovernancePageQuery<W> {
+  rejectUnknownParams(query, LIST_PARAMS);
   assertFixedSort(query.sort, order);
   const { page, size } = parsePageParams(query, SIZE);
   return { page, pageSize: size, ...(where !== undefined ? { where } : {}) };
@@ -146,8 +153,14 @@ export function toListPage<TRow>(page: GovernancePage<TRow>): OffsetPage<TRow> {
 
 /**
  * `size` for a top-N widget (`GET top-threads`): default `fallback`, clamped to 200; anything but a
- * whole number of at least 1 → 400.
+ * whole number of at least 1 → 400. A widget is not a list, so `page`, `filter`, `sort` or any
+ * param outside `size` and the widget's own `params` (e.g. its `from` / `to` window) is a 400.
  */
-export function parseTopSize(query: Query, fallback: number): number {
+export function parseTopSize(
+  query: Query,
+  fallback: number,
+  params: readonly string[] = [],
+): number {
+  rejectUnknownParams(query, ['size', ...params]);
   return parsePageParams({ size: query.size }, { defaultSize: fallback, maxSize: 200 }).size;
 }
