@@ -12,19 +12,23 @@ import { Card } from './ui/card';
 
 /** Axis ticks: muted, mono, small — the same voice as the tabular numbers elsewhere in the console. */
 export const AXIS_TICK = {
-  fill: 'var(--muted)',
+  fill: 'var(--aviary-muted)',
   fontSize: 10,
   fontFamily: '"JetBrains Mono", ui-monospace, monospace',
 } as const;
 
 /** Axis rule + tick marks. The console draws hairlines, never full-weight rules. */
-export const AXIS_LINE = { stroke: 'var(--line)' } as const;
+export const AXIS_LINE = { stroke: 'var(--aviary-line)' } as const;
 
 /** The vertical guide recharts draws under the pointer (and under keyboard focus). */
-export const CURSOR = { stroke: 'var(--line)', strokeWidth: 1, strokeDasharray: '3 3' } as const;
+export const CURSOR = {
+  stroke: 'var(--aviary-line)',
+  strokeWidth: 1,
+  strokeDasharray: '3 3',
+} as const;
 
 /** Grid: horizontal hairlines only — vertical ones fight the page's blueprint background. */
-export const GRID = { stroke: 'var(--line-soft)', vertical: false } as const;
+export const GRID = { stroke: 'var(--aviary-line-soft)', vertical: false } as const;
 
 /**
  * Tooltip surface. Reuses the `.panel` treatment so a tooltip looks like a small piece of the

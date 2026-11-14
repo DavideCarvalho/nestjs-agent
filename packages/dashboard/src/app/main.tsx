@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App';
+import '../aviary-kit/fonts';
+import { ThemeProvider } from '../aviary-kit/theme';
+import { AGENT_ACCENT, App } from './App';
 import './index.css';
 
 /**
@@ -25,9 +27,11 @@ const container = document.getElementById('root');
 if (container) {
   createRoot(container).render(
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
+      <ThemeProvider storageKey="aviary-agent-theme" accent={AGENT_ACCENT}>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </ThemeProvider>
     </StrictMode>,
   );
 }

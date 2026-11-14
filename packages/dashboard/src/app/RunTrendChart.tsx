@@ -52,8 +52,8 @@ export function RunTrendChart({
           <ComposedChart data={points} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+                <stop offset="0%" stopColor="var(--aviary-accent)" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="var(--aviary-accent)" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid {...GRID} />
@@ -84,12 +84,12 @@ export function RunTrendChart({
                 return (
                   <TooltipCard title={formatDayLabel(point.day)}>
                     <TooltipRow
-                      color="var(--accent)"
+                      color="var(--aviary-accent)"
                       label="runs"
                       value={formatCount(point.runs)}
                     />
                     <TooltipRow
-                      color="var(--bad)"
+                      color="var(--aviary-bad)"
                       label="failed"
                       value={`${formatCount(point.failed)} · ${formatPercent(rate)}`}
                     />
@@ -101,21 +101,21 @@ export function RunTrendChart({
               type="monotone"
               dataKey="runs"
               name="runs"
-              stroke="var(--accent)"
+              stroke="var(--aviary-accent)"
               strokeWidth={1.8}
               fill={`url(#${gradientId})`}
               dot={false}
-              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--accent)' }}
+              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--aviary-accent)' }}
               isAnimationActive={false}
             />
             <Line
               type="monotone"
               dataKey="failed"
               name="failed"
-              stroke="var(--bad)"
+              stroke="var(--aviary-bad)"
               strokeWidth={1.8}
               dot={false}
-              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--bad)' }}
+              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--aviary-bad)' }}
               isAnimationActive={false}
             />
           </ComposedChart>
@@ -128,8 +128,8 @@ export function RunTrendChart({
           here — which also keeps them in the same caption line as the range and peak.
         */}
         <span className="flex items-center gap-3">
-          <SeriesKey color="var(--accent)" label="runs" />
-          <SeriesKey color="var(--bad)" label="failed" />
+          <SeriesKey color="var(--aviary-accent)" label="runs" />
+          <SeriesKey color="var(--aviary-bad)" label="failed" />
         </span>
         <span>
           {formatDayLabel(runs.first)} – {formatDayLabel(runs.last)}

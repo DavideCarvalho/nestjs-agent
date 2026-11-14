@@ -22,13 +22,13 @@ function fakeReqRes(headers: Record<string, string | undefined>, originalUrl: st
 describe('AgentUiController Inertia bounce (X-Inertia visits are full-page apps, not Inertia pages)', () => {
   const controller = new AgentUiController('/ai-gateway', '/ai-gateway/api');
 
-  it('answers an X-Inertia visit with 409 + X-Inertia-Location echoing the original URL, no HTML', () => {
+  it('answers an X-Inertia visit with 409 + X-Inertia-Location echoing the original URL, no HTML', async () => {
     const { req, res, statuses, headersSet } = fakeReqRes(
       { 'x-inertia': 'true' },
       '/ai-gateway?tab=approvals',
     );
 
-    const body = controller.index(req, res);
+    const body = await controller.index(req, res);
 
     expect(statuses).toEqual([409]);
     // Path + query preserved — the client's full window.location visit lands on the same view.
@@ -36,12 +36,12 @@ describe('AgentUiController Inertia bounce (X-Inertia visits are full-page apps,
     expect(body).toBe('');
   });
 
-  it('a plain browser GET goes down the HTML-serving path untouched', () => {
+  it('a plain browser GET goes down the HTML-serving path untouched', async () => {
     const { req, res, statuses, headersSet } = fakeReqRes({}, '/ai-gateway');
 
     // The SPA bundle is not built in the unit-test env, so "today's behavior" past the bounce is
     // the not-built 404 — the point is the bounce did not fire: no status/headers were written.
-    expect(() => controller.index(req, res)).toThrow(NotFoundException);
+    await expect(controller.index(req, res)).rejects.toThrow(NotFoundException);
     expect(statuses).toEqual([]);
     expect(headersSet).toEqual({});
   });

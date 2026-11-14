@@ -57,6 +57,10 @@
   },
   "overrides": [
     {
+      "include": ["**/aviary-kit/ui/**", "**/aviary-kit/hooks/**"],
+      "linter": { "enabled": false }
+    },
+    {
       "include": [
         "packages/poppy/src/client/**"
       ],

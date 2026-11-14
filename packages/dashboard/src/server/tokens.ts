@@ -76,3 +76,6 @@ export const DASHBOARD_CONSOLE_OPTIONS = Symbol.for(
 
 /** DI token: whether the agent's dev tools register into the dev-tools slot. */
 export const DASHBOARD_DEV_TOOLS = Symbol.for('@dudousxd/nestjs-agent-dashboard:dev-tools');
+
+/** DI token carrying the console shell's `viewer` / `signOut` options (see `console-shell.ts`). */
+export const DASHBOARD_SHELL = Symbol.for('@dudousxd/nestjs-agent-dashboard:shell');

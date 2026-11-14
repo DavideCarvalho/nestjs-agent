@@ -64,8 +64,8 @@ export function TrendChart({
           <AreaChart data={points} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.38} />
-                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+                <stop offset="0%" stopColor="var(--aviary-accent)" stopOpacity={0.38} />
+                <stop offset="100%" stopColor="var(--aviary-accent)" stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid {...GRID} />
@@ -93,7 +93,11 @@ export function TrendChart({
                 if (!props.active || !point) return null;
                 return (
                   <TooltipCard title={formatDayLabel(point.day)}>
-                    <TooltipRow color="var(--accent)" label={label} value={format(point[metric])} />
+                    <TooltipRow
+                      color="var(--aviary-accent)"
+                      label={label}
+                      value={format(point[metric])}
+                    />
                   </TooltipCard>
                 );
               }}
@@ -102,11 +106,11 @@ export function TrendChart({
               type="monotone"
               dataKey={metric}
               name={label}
-              stroke="var(--accent)"
+              stroke="var(--aviary-accent)"
               strokeWidth={1.8}
               fill={`url(#${gradientId})`}
               dot={false}
-              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--accent)' }}
+              activeDot={{ r: 3.5, strokeWidth: 0, fill: 'var(--aviary-accent)' }}
               isAnimationActive={false}
             />
           </AreaChart>

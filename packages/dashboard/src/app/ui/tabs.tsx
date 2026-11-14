@@ -14,7 +14,10 @@ export const Tabs = TabsPrimitive.Root;
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={cn('inline-flex items-center gap-1 rounded-md', className)}
+      className={cn(
+        'inline-flex items-center gap-0.5 rounded-md border border-border bg-panel-2 p-0.5',
+        className,
+      )}
       {...props}
     />
   );
@@ -24,11 +27,11 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   return (
     <TabsPrimitive.Tab
       className={cn(
-        'rounded-md border border-transparent px-2 py-1 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50',
+        'rounded-[5px] border border-transparent px-2 py-0.5 text-[11px] text-dim outline-none transition-colors hover:text-fg focus-visible:ring-2 focus-visible:ring-ring/50',
         // `data-active`, not `data-selected`: Base UI's Tab exposes the active tab as
         // `data-active` (`data-selected` belongs to Select's items). The wrong one compiles
         // fine and silently never matches.
-        'data-[active]:border-brand data-[active]:bg-brand/10 data-[active]:text-foreground',
+        'data-[active]:border-brand-border data-[active]:bg-brand-soft data-[active]:text-fg',
         className,
       )}
       {...props}
