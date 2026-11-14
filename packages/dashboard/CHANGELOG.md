@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.25.1
+
+### Patch Changes
+
+- [#432](https://github.com/DavideCarvalho/nestjs-agent/pull/432) [`3bf0692`](https://github.com/DavideCarvalho/nestjs-agent/commit/3bf0692f2180cd78befa45fd000885b686b00567) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `anyAuthorize` keeps a `redirectTo` from any form. Before, when an earlier form answered `unauthenticated` without one (a guest with no token, in `anyAuthorize(authorizeByToken(...), SessionAuthorizer)`), the console answered a bare 401 and ignored a later form's redirect to the sign-in page.
+
 ## 0.25.0
 
 ### Minor Changes
