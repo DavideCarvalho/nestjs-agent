@@ -347,12 +347,12 @@ contract):
 
 ## Tool catalog
 
-`GET <base>/tools?agent=<name>` returns `{ name, kind, presentation? }[]` for the tools the caller can
+`GET <base>/tools?filter[agent]=<name>` returns `{ data: { name, kind, presentation? }[] }` for the tools the caller can
 reach — what `useToolCatalog` reads to narrate calls by the tool's declared words instead of its
 name. `presentation` is `{ label, running, done, icon?, detail?, tone?, confirm?: { title, verb,
 detail? }, result? }` (`running`/`done`/`confirm` are `{dotted.path}` templates over the call's input;
 `result` is a view over its output — see `ToolPresentation` in `packages/core/src/tool-presentation.ts`).
-`?agent=*` answers the union across every agent — each tool the caller reaches through any of them,
+`filter[agent]=*` answers the union across every agent — each tool the caller reaches through any of them,
 once — for a surface that shows several agents' conversations (`useToolCatalog({ agent:
 ALL_AGENTS })`). A runner that serves these routes can answer it from its own tool list; a tool with no entry is
 narrated generically.
@@ -553,7 +553,7 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 | `POST <base>/chat` | `{ message, threadId?, agent?, persona?, model?, attachments?: { mediaId }[], pageContext?, regenerate?: true, transient?, mode?: 'auto' \| 'queue' \| 'interrupt' }` | the SSE stream above — or `202 { queued: true, … }` JSON when the message waits in the thread's queue (see *Message queue*); `400` for a `model` the catalog does not offer as available, `400 { code: 'persona_not_found' }` for a `persona` the agent does not declare (see *Personas*). `model` is that turn's only (see *Models*); `regenerate` see *Regenerating an answer* (`409 run_active` while a turn runs) |
 | `GET <base>/chat/:runId/stream` | `?after=<seq>` or `Last-Event-ID` | the SSE stream, from after the cursor; `404` when nothing streams under that id |
 | `POST <base>/chat/:runId/cancel` | — | `{ aborted: boolean }` |
-| `GET <base>/threads` | — | `ThreadSummary[]` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model?, persona? }`) |
+| `GET <base>/threads` | `?size=` (default 50, max 200) | `{ data: ThreadSummary[] }` (`{ id, title, transient, createdAt, updatedAt, lastMessagePreview?, defaultAgent?, activeRunId?, model?, persona? }`) |
 | `GET <base>/threads/:id` | — | `ThreadDetail` (a summary plus `messages: StoredMessage[]`, and `queue?: ChatQueueState` when the server queues); `activeRunId` is the run streaming right now, the one to resume |
 | `PATCH <base>/threads/:id` | `{ title?, defaultAgent?: string \| null, model?: string \| null, persona?: string \| null }` | `{ ok: true }`; `model` pins a catalog model on the thread (`null` unpins); `persona` pins one of the agent's personas (`null` clears; `400 persona_not_found` for one it does not declare) |
 | `DELETE <base>/threads/:id` | — | `{ ok: true }` |
@@ -569,10 +569,10 @@ reactions such as "401 → sign in again"; a resume's `404` is not an error and 
 | `POST <base>/messages/:id/feedback` | `{ value: 'up' \| 'down' \| null, comment? }` | `{ feedback: { value, comment?, updatedAt } \| null }` — `null` clears; `403` for another actor's message, `404` unknown, `400` a bad value |
 | `POST <base>/tool-call/approve` / `reject` / `answer` / `skip` | see *Tool kinds and approvals* and *Asking the user* | `2xx`; `409 { code: 'run_not_active' }` when the run that asked has ended |
 | `POST <base>/attachments` | multipart, field `file` | `MessageAttachment` (`{ mediaId, url, contentType, name }`); `413` too large, `415` a type it refuses |
-| `GET <base>/tools?agent=` | — | see *Tool catalog* |
-| `GET <base>/skills?threadId=` | — | `SkillCatalogEntry[]` |
-| `GET <base>/models?agent=` | — | `{ providers: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null, locked?: { model, reason? } }` |
-| `GET <base>/agents` | — | `{ name, description, isDefault?, lockedModel?, personas?: { id, label, description? }[], defaultPersona? }[]` |
+| `GET <base>/tools` | `?filter[agent]=` | see *Tool catalog* |
+| `GET <base>/skills` | `?filter[threadId]=` | `{ data: SkillCatalogEntry[] }` |
+| `GET <base>/models` | `?filter[agent]=&filter[persona]=` | `{ data: [{ id, label, models: [{ id, label, description?, badges?: string[], available, unavailableReason?, contextWindow? }] }], default: string \| null, locked?: { model, reason? } }` |
+| `GET <base>/agents` | — | `{ data: { name, description, isDefault?, lockedModel?, personas?: { id, label, description? }[], defaultPersona? }[] }` |
 | `GET <base>/quota` | — | `{ windows: [{ period: 'day' \| 'month', usedTokens?, limitTokens?, usedUsd, limitUsd?, resetsAt?, warnAt? }], blocked?: { period, reason? }, warning?: { period, ratio, reason? } }` |
 | `GET <base>/config` | — | `{ attachments: { enabled, upload: 'multipart' \| 'resumable' \| null, maxBytes, allowedContentTypes, maxPerMessage }, models: { enabled }, quota: { enforced }, identity: { anonymous } }` — server facts a client would otherwise repeat; `useAttachments` takes its defaults from it |
 

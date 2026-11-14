@@ -163,9 +163,9 @@ describe('AgentMediaAttachmentsModule (e2e)', () => {
       .attach('file', Buffer.from('hello'), { filename: 'note.txt', contentType: 'text/plain' });
     expect(posted.status).toBe(201);
     const listed = await request(server).get('/agent/attachments').set('x-actor-id', 'alice');
-    expect(listed.body).toEqual([
-      expect.objectContaining({ mediaId: posted.body.mediaId, name: 'note.txt' }),
-    ]);
+    expect(listed.body).toEqual({
+      data: [expect.objectContaining({ mediaId: posted.body.mediaId, name: 'note.txt' })],
+    });
   });
 });
 

@@ -5,8 +5,9 @@ import {
   AgentRegistry,
   CanAnyone,
 } from '@dudousxd/nestjs-agent-core';
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, Inject, Query } from '@nestjs/common';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
+import { rejectUnknownParams } from '../list-api/list-api.js';
 
 /**
  * Lists the registered `@Agent`s — and each one's personas — so a host can render an agent or
@@ -20,10 +21,12 @@ export class AgentsController {
     @Inject(AGENT_DEPS_FACTORY) private readonly depsFactory: AgentDepsFactory,
   ) {}
 
+  /** `{ data }`: every registered agent, unpaged. Takes no query params. */
   @Get()
-  list(): AgentCatalogEntry[] {
+  list(@Query() query: Record<string, unknown>): { data: AgentCatalogEntry[] } {
+    rejectUnknownParams(query, []);
     const defaultAgentName = this.depsFactory.defaultAgentName();
-    return this.agents.list().map((definition) => {
+    const data = this.agents.list().map((definition) => {
       const personas = this.depsFactory.personaCatalog(definition.name);
       return {
         name: definition.name,
@@ -35,5 +38,6 @@ export class AgentsController {
           : {}),
       };
     });
+    return { data };
   }
 }

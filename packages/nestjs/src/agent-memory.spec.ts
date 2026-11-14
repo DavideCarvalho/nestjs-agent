@@ -81,7 +81,18 @@ describe('GET /agent/memories', () => {
       .get('/agent/memories')
       .set('x-actor-id', 'u1');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body).toEqual({ data: [] });
+  });
+
+  it('takes the thread as filter[threadId] and refuses the old flat ?threadId= with a hint', async () => {
+    const server = (await boot({ provider: hostProvider() })).getHttpServer();
+    await request(server)
+      .get('/agent/memories?filter[threadId]=t1')
+      .set('x-actor-id', 'u1')
+      .expect(200);
+    const old = await request(server).get('/agent/memories?threadId=t1').set('x-actor-id', 'u1');
+    expect(old.status).toBe(400);
+    expect(old.body.message).toContain('filter[threadId]');
   });
 
   it('shows a person their own and their org’s memories, with the beaten value carried', async () => {
@@ -92,7 +103,7 @@ describe('GET /agent/memories', () => {
     const res = await request((await boot({ provider: hostProvider() })).getHttpServer())
       .get('/agent/memories')
       .set('x-actor-id', 'u1');
-    const entries = res.body as MemoryDigestEntry[];
+    const entries = res.body.data as MemoryDigestEntry[];
     expect(entries).toHaveLength(1);
     expect(entries[0]?.text).toBe('they use the calendar year');
     expect(entries[0]?.overrides).toEqual([
@@ -118,7 +129,7 @@ describe('GET /agent/memories', () => {
     )
       .get('/agent/memories')
       .set('x-actor-id', 'u1');
-    expect((res.body as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['a', 'b']);
+    expect((res.body.data as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['a', 'b']);
   });
 
   it('never ranks, however large the host’s index — a person is shown every belief, not a turn’s', async () => {
@@ -136,7 +147,7 @@ describe('GET /agent/memories', () => {
       .get('/agent/memories')
       .set('x-actor-id', 'u1');
     expect(res.status).toBe(200);
-    expect((res.body as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['a', 'b']);
+    expect((res.body.data as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['a', 'b']);
   });
 
   it('never shows one actor another actor’s memories', async () => {
@@ -144,7 +155,7 @@ describe('GET /agent/memories', () => {
     const res = await request((await boot({ provider: hostProvider() })).getHttpServer())
       .get('/agent/memories')
       .set('x-actor-id', 'u1');
-    expect((res.body as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['mine']);
+    expect((res.body.data as MemoryDigestEntry[]).map((entry) => entry.key)).toEqual(['mine']);
   });
 });
 

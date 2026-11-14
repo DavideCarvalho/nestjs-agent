@@ -446,7 +446,8 @@ export class AgentService implements OnApplicationBootstrap {
 
   /**
    * The proposals of a thread this actor may see — the thread's own actor, or one the policy lets
-   * decide them; what `GET <base>/threads/:threadId/action-proposals` serves (its first page).
+   * decide them, the first 1000 in creation order; `GET <base>/threads/:threadId/action-proposals`
+   * serves the same rows as cursor pages.
    * Without independent approvals (the default blocking mode) there are none, so the read answers an
    * empty list rather than refusing; deciding one still refuses.
    */
@@ -1234,7 +1235,10 @@ export class AgentService implements OnApplicationBootstrap {
    * {@link Actor} so a `tenantRef` its resolver set is the tenant; a bare `actorRef` uses the
    * context's.
    */
-  async listThreads(actor: Actor | string): Promise<ThreadSummary[]> {
+  async listThreads(
+    actor: Actor | string,
+    options: { limit?: number } = {},
+  ): Promise<ThreadSummary[]> {
     const actorRef = typeof actor === 'string' ? actor : actor.id;
     const filter = tenantRowFilter(
       this.tenancy(actor),
@@ -1242,9 +1246,9 @@ export class AgentService implements OnApplicationBootstrap {
     );
     const threads =
       filter === undefined
-        ? await this.store.listThreads(actorRef)
+        ? await this.store.listThreads(actorRef, options.limit)
         : typeof this.store.listThreadsForTenant === 'function'
-          ? await this.store.listThreadsForTenant(actorRef, filter)
+          ? await this.store.listThreadsForTenant(actorRef, filter, options.limit)
           : [];
     return Promise.all(threads.map((thread) => this.toSummaryView(thread)));
   }

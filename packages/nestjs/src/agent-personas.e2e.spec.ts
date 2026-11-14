@@ -180,14 +180,14 @@ describe('GET agents — the persona catalog', () => {
     const booted = await boot();
     const res = await request(booted.server).get('/agent/agents').set('x-actor-id', 'u1');
     expect(res.status).toBe(200);
-    const assistant = res.body.find((entry: { name: string }) => entry.name === 'assistant');
+    const assistant = res.body.data.find((entry: { name: string }) => entry.name === 'assistant');
     expect(assistant).toMatchObject({ isDefault: true, defaultPersona: 'general' });
     expect(assistant.personas).toEqual([
       { id: 'general', label: 'General' },
       { id: 'sql', label: 'SQL focused', description: 'Writes the query first' },
       { id: 'weather', label: 'Weather only' },
     ]);
-    const matcher = res.body.find((entry: { name: string }) => entry.name === 'matcher');
+    const matcher = res.body.data.find((entry: { name: string }) => entry.name === 'matcher');
     expect(matcher.personas).toBeUndefined();
     expect(matcher.defaultPersona).toBeUndefined();
   });

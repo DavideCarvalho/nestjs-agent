@@ -77,25 +77,35 @@ describe('AgentModule with nothing but a model', () => {
 
     const mine = await request(server).get('/agent/threads').set('Cookie', alice);
     expect(mine.status).toBe(200);
-    expect(mine.body).toHaveLength(1);
+    expect(mine.body.data).toHaveLength(1);
     // The same browser keeps its identity: no new cookie on the way back.
     expect(mine.headers['set-cookie']).toBeUndefined();
 
     // Another browser (no cookie) sees none of it — and gets an identity of its own.
     const theirs = await request(server).get('/agent/threads');
-    expect(theirs.body).toEqual([]);
+    expect(theirs.body).toEqual({ data: [] });
     const bob = cookieOf(theirs);
     expect(bob).not.toBe(alice);
     const threadId = first.headers['x-agent-thread-id'] as string;
     const peek = await request(server).get(`/agent/threads/${threadId}`).set('Cookie', bob);
     expect([403, 404]).toContain(peek.status);
+
+    // A sized list, not a paged one: `size` caps it, the old `limit` is refused.
+    const sized = await request(server).get('/agent/threads?size=1').set('Cookie', alice);
+    expect(sized.body.data).toHaveLength(1);
+    expect((await request(server).get('/agent/threads?limit=1').set('Cookie', alice)).status).toBe(
+      400,
+    );
+    expect((await request(server).get('/agent/threads?page=2').set('Cookie', alice)).status).toBe(
+      400,
+    );
   });
 
   it('offers every tool to an anonymous actor, named and kinded by default', async () => {
     const { server } = await boot();
     const res = await request(server).get('/agent/tools');
     expect(res.status).toBe(200);
-    expect(res.body as ToolCatalogEntry[]).toEqual([
+    expect(res.body.data as ToolCatalogEntry[]).toEqual([
       expect.objectContaining({ name: 'getWeather', kind: 'read' }),
     ]);
   });

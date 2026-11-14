@@ -558,7 +558,7 @@ the same data grouped for layout.
 
 ### Files the user uploaded but never sent
 
-`GET /agent/attachments` returns the caller's own staged files as metadata (`mediaId`, `name`,
+`GET /agent/attachments` returns `{ data }`: the caller's own staged files as metadata (`mediaId`, `name`,
 `contentType`, `sizeBytes`, `createdAt`) — including uploads that belong to no thread because they
 were never sent, which is the one thing walking `messages[].attachments` cannot show you. It carries
 no urls: `resolve` mints those per turn so they can be short-lived.

@@ -53,4 +53,24 @@ describe('nestjsAgentCodegen', () => {
     expect(out.some((route) => route.path.endsWith('/agent/chat'))).toBe(false);
     expect(out.some((route) => route.path.endsWith('/stream'))).toBe(false);
   });
+
+  it('types the list routes with the Aviary list wire: `{ data }`, filter[...], size, cursors', () => {
+    const out = nestjsAgentCodegen().transformRoutes([]);
+    const contract = (name: string) =>
+      (
+        out.find((route) => route.name === name)?.contract as
+          | { contractSource: { query: string | null; response: string } }
+          | undefined
+      )?.contractSource;
+    for (const name of ['agents', 'threads', 'skills', 'tools', 'memories', 'attachments'])
+      expect(contract(`agent.${name}.list`)?.response).toMatch(/^\{ data: /);
+    expect(contract('agent.models.list')?.response).toContain('data: { id: string');
+    expect(contract('agent.models.list')?.query).toContain("'filter[persona]'?: string");
+    expect(contract('agent.tools.list')?.query).toBe("{ 'filter[agent]'?: string }");
+    expect(contract('agent.skills.list')?.query).toBe("{ 'filter[threadId]'?: string }");
+    expect(contract('agent.threads.list')?.query).toBe('{ size?: number }');
+    const proposals = contract('agent.actionProposals.list');
+    expect(proposals?.query).toBe('{ after?: string; first?: number }');
+    expect(proposals?.response).toContain('meta: { nextCursor: string | null');
+  });
 });

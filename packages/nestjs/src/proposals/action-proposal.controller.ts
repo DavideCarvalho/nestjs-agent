@@ -1,5 +1,6 @@
 import {
   AGENT_ACTOR_RESOLVER,
+  type ActionProposalView,
   type ActorResolver,
   CanAnyone,
   type ListActionProposals,
@@ -15,10 +16,44 @@ import {
   Post,
   Query,
   Req,
-  Res,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
+import {
+  type CursorPageResponse,
+  cursorPage,
+  parseCursorParams,
+  rejectUnknownParams,
+} from '../list-api/list-api.js';
 import { ActionProposalService } from './action-proposal.service.js';
+
+/** Proposals per page when the request sends no `first`. */
+export const ACTION_PROPOSAL_PAGE_SIZE = 100;
+/** The largest `first` honoured (the store's own ceiling); bigger values are clamped. */
+export const ACTION_PROPOSAL_MAX_PAGE_SIZE = 1000;
+
+type ActionProposalCursor = NonNullable<ListActionProposals['after']>;
+
+/** The keyset `{ createdAt, id }` as an opaque, URL-safe cursor. */
+export function encodeActionProposalCursor(after: ActionProposalCursor): string {
+  return Buffer.from(JSON.stringify([after.createdAt, after.id]), 'utf8').toString('base64url');
+}
+
+/** The keyset an {@link encodeActionProposalCursor} cursor carries; `null` when it is malformed. */
+export function decodeActionProposalCursor(cursor: string): ActionProposalCursor | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) return null;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    const [createdAt, id] = parsed as [unknown, unknown];
+    if (typeof createdAt !== 'number' || typeof id !== 'string') return null;
+    const after = { createdAt, id };
+    validateActionProposalListQuery({ after });
+    return after;
+  } catch {
+    // Not JSON, or a keyset the store would refuse (a clock that is not a safe integer, …).
+    return null;
+  }
+}
 function bodyFields(body: unknown, field: 'remember' | 'reason'): Record<string, unknown> {
   if (body === undefined) return {};
   if (
@@ -44,32 +79,32 @@ export class ActionProposalController {
     private readonly proposals: ActionProposalService,
     @Inject(AGENT_ACTOR_RESOLVER) private readonly actors: ActorResolver,
   ) {}
+  /**
+   * `GET <base>/threads/:threadId/action-proposals?after=&first=` — a cursor list in creation order:
+   * `{ data, meta: { nextCursor, prevCursor, hasNext, hasPrev } }`. `first` defaults to
+   * {@link ACTION_PROPOSAL_PAGE_SIZE} and is capped at {@link ACTION_PROPOSAL_MAX_PAGE_SIZE}. A page
+   * holds only the proposals this actor may see, so it can be shorter than `first` and still have a
+   * next page: follow `meta.nextCursor` until it is `null`. Forward only — there is no `before`.
+   */
   @Get() async list(
     @Param('threadId') threadId: string,
     @Req() request: Request,
-    @Query('after') cursor: unknown,
-    @Res({ passthrough: true }) response: Response,
-  ) {
-    let query: Pick<ListActionProposals, 'after'> = {};
-    if (cursor !== undefined) {
-      try {
-        if (typeof cursor !== 'string') throw new Error('Invalid cursor');
-        query = { after: JSON.parse(cursor) };
-        validateActionProposalListQuery(query);
-      } catch {
-        throw new BadRequestException('Invalid action proposal cursor');
-      }
-    }
-    const page = await this.proposals.listPage(threadId, await this.actors.resolve(request), query);
-    if (page.next) {
-      response.setHeader('X-Action-Proposals-Next', encodeURIComponent(JSON.stringify(page.next)));
-      const exposed = response.getHeader('Access-Control-Expose-Headers');
-      response.setHeader(
-        'Access-Control-Expose-Headers',
-        `${exposed === undefined ? '' : `${String(exposed)}, `}X-Action-Proposals-Next`,
-      );
-    }
-    return page.items;
+    @Query() query: Record<string, unknown>,
+  ): Promise<CursorPageResponse<ActionProposalView>> {
+    rejectUnknownParams(query, ['after', 'first']);
+    const { size, decoded } = parseCursorParams(query, {
+      defaultSize: ACTION_PROPOSAL_PAGE_SIZE,
+      maxSize: ACTION_PROPOSAL_MAX_PAGE_SIZE,
+      decode: decodeActionProposalCursor,
+    });
+    const page = await this.proposals.listPage(threadId, await this.actors.resolve(request), {
+      limit: size,
+      ...(decoded !== undefined ? { after: decoded } : {}),
+    });
+    return cursorPage(page.items, {
+      nextCursor: page.next === undefined ? null : encodeActionProposalCursor(page.next),
+      prevCursor: null,
+    });
   }
   @Post(':proposalId/approve') async approve(
     @Param('threadId') threadId: string,

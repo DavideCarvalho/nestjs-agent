@@ -155,11 +155,11 @@ describe('named models (model: { fast, smart })', () => {
     const { server } = await boot(named([]), [WriterAgent, BareAgent]);
     const get = async (query: string) =>
       (await request(server).get(`/agent/models${query}`).set('x-actor-id', 'u1')).body;
-    expect((await get('?agent=writer')).default).toBe('smart');
-    expect((await get('?agent=writer&persona=quick')).default).toBe('fast');
-    expect((await get('?agent=writer&persona=nope')).default).toBe('smart');
-    expect((await get('?agent=bare')).default).toBe('fast');
-    expect((await get('')).providers[0].models.map((m: { id: string }) => m.id)).toEqual([
+    expect((await get('?filter[agent]=writer')).default).toBe('smart');
+    expect((await get('?filter[agent]=writer&filter[persona]=quick')).default).toBe('fast');
+    expect((await get('?filter[agent]=writer&filter[persona]=nope')).default).toBe('smart');
+    expect((await get('?filter[agent]=bare')).default).toBe('fast');
+    expect((await get('')).data[0].models.map((m: { id: string }) => m.id)).toEqual([
       'fast',
       'smart',
     ]);

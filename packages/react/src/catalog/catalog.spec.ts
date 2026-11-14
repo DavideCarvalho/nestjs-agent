@@ -258,21 +258,27 @@ describe('useModels — a locked catalog', () => {
 });
 
 describe('AgentClient catalogs', () => {
-  it('asks GET /agent/models?agent= and GET /agent/agents', async () => {
+  it('asks GET /agent/models?filter[agent]= and GET /agent/agents, unwrapping `{ data }`', async () => {
     const urls: string[] = [];
     const fetch = (async (url: string) => {
       urls.push(url);
-      return { ok: true, status: 200, statusText: 'OK', text: async () => '[]' };
+      const body = url.startsWith('/agent/models')
+        ? { data: [{ id: 'p', label: 'P', models: [] }], default: 'fast' }
+        : { data: [{ name: 'default', description: '' }] };
+      return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify(body) };
     }) as unknown as typeof globalThis.fetch;
     const client = new AgentClient({ fetch });
-    await client.listModels('a b');
+    expect(await client.listModels('a b')).toEqual({
+      providers: [{ id: 'p', label: 'P', models: [] }],
+      default: 'fast',
+    });
     await client.listModels();
     await client.listModels('w', 'q 1');
-    await client.listAgents();
+    expect(await client.listAgents()).toEqual([{ name: 'default', description: '' }]);
     expect(urls).toEqual([
-      '/agent/models?agent=a%20b',
+      '/agent/models?filter[agent]=a%20b',
       '/agent/models',
-      '/agent/models?agent=w&persona=q%201',
+      '/agent/models?filter[agent]=w&filter[persona]=q%201',
       '/agent/agents',
     ]);
   });

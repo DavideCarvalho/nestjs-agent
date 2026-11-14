@@ -85,9 +85,9 @@ client.
 
 | Method & path | Generated name |
 |---|---|
-| `GET /agent/agents` | `agent.agents.list` |
-| `GET /agent/models` | `agent.models.list` |
-| `GET /agent/threads` | `agent.threads.list` |
+| `GET /agent/agents` | `agent.agents.list` → `{ data }` |
+| `GET /agent/models` | `agent.models.list` (query: `filter[agent]`, `filter[persona]`) → `{ data, default, locked? }` |
+| `GET /agent/threads` | `agent.threads.list` (query: `size`) → `{ data }` |
 | `GET /agent/threads/:id` | `agent.threads.get` |
 | `DELETE /agent/threads/:id` | `agent.threads.remove` |
 | `POST /agent/threads/:id/fork-from/:messageId` | `agent.threads.fork` |
@@ -98,11 +98,11 @@ client.
 | `POST /agent/tool-call/reject` | `agent.toolCall.reject` |
 | `POST /agent/tool-call/answer` | `agent.toolCall.answer` |
 | `POST /agent/tool-call/skip` | `agent.toolCall.skip` |
-| `GET /agent/skills` | `agent.skills.list` |
-| `GET /agent/tools` | `agent.tools.list` |
-| `GET /agent/memories` | `agent.memories.list` |
+| `GET /agent/skills` | `agent.skills.list` (query: `filter[threadId]`) → `{ data }` |
+| `GET /agent/tools` | `agent.tools.list` (query: `filter[agent]`) → `{ data }` |
+| `GET /agent/memories` | `agent.memories.list` (query: `filter[threadId]`) → `{ data }` |
 | `DELETE /agent/memories/:id` | `agent.memories.forget` |
-| `GET /agent/attachments` | `agent.attachments.list` |
+| `GET /agent/attachments` | `agent.attachments.list` (query: `size`) → `{ data }` |
 | `POST /agent/messages/:id/feedback` | `agent.messages.feedback` |
 | `GET /agent/quota` | `agent.quota.report` |
 | `GET /agent/config` | `agent.config` |
@@ -113,12 +113,17 @@ client.
 | `POST /agent/queue/:messageId/interrupt` | `agent.queue.interrupt` |
 | `DELETE /agent/queue/:messageId` | `agent.queue.remove` |
 | `POST /agent/chat/:runId/cancel` | `agent.chat.cancel` |
-| `GET /agent/threads/:threadId/action-proposals` | `agent.actionProposals.list` |
+| `GET /agent/threads/:threadId/action-proposals` | `agent.actionProposals.list` (query: `after`, `first`) → `{ data, meta }`, one cursor page |
 | `POST /agent/threads/:threadId/action-proposals/:proposalId/approve` | `agent.actionProposals.approve` (body: `remember?`) |
 | `POST /agent/threads/:threadId/action-proposals/:proposalId/reject` | `agent.actionProposals.reject` (body: `reason?`) |
 
 Response and body types are hand-mirrored from `@dudousxd/nestjs-agent-core` (dates are ISO
 strings); deeply nested tool-call payloads are typed loosely as `Record<string, unknown>[]`.
+
+Filter params are flat query keys, so the generated client's query serializer sends them as is:
+`api.agent.tools.list({ query: { 'filter[agent]': 'support' } })`. For action proposals, pass
+`meta.nextCursor` back as `after` until it is `null`; the React `AgentClient.listActionProposals`
+follows every page for you.
 
 ## Peer dependencies
 
