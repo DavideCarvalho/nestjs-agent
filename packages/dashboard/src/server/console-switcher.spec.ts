@@ -8,13 +8,14 @@ import { NestFactory } from '@nestjs/core';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentDashboardModule } from './agent-dashboard.module.js';
-import { AgentUiController } from './agent-ui.controller.js';
+import { type AgentShellOptions, AgentUiController } from './agent-ui.controller.js';
 import { type ConsoleDecision, authorizeByToken } from './console-authorize.js';
 import {
   AVIARY_CONSOLES_SLOT,
   type AviaryConsoleEntry,
   type AviaryConsoleRegistry,
   consoleSwitcherConfig,
+  isSameOriginPath,
   listVisibleConsoles,
   readAviaryConsoles,
   registerAviaryConsole,
@@ -89,6 +90,24 @@ describe('registerAviaryConsole', () => {
     expect(() => registerAviaryConsole(entry({ id: 'agent', path: 'https://x.test' }))).toThrow(
       /path/,
     );
+  });
+});
+
+describe('isSameOriginPath', () => {
+  it('accepts a plain absolute path, rejects other origins, backslashes and control characters', () => {
+    expect(isSameOriginPath('/agent#/threads/1')).toBe(true);
+    for (const bad of [
+      '//evil.test',
+      'https://evil.test',
+      '/\\evil.test',
+      '/a\u0007b',
+      '/a\nb',
+      '/a\u007fb',
+      'x',
+      1,
+    ]) {
+      expect(isSameOriginPath(bad)).toBe(false);
+    }
   });
 });
 
@@ -169,6 +188,8 @@ describe('listVisibleConsoles', () => {
       registry(
         entry({ id: 'odd', icon: 'rocket' as never }),
         entry({ id: 'evil', path: '//evil.test' }),
+        entry({ id: 'slash', path: '/\\evil.test' }),
+        entry({ id: 'ctl', path: '/ctl\u0007x' }),
       ),
       'agent',
       context,
@@ -342,12 +363,15 @@ describe('the shell’s config block', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function shell(): { html: string; config: Record<string, unknown> } {
-    const controller = Object.assign(new AgentUiController('/agents', '/api/agents'), {
+  async function shell(
+    options: AgentShellOptions = {},
+    request: Record<string, unknown> = {},
+  ): Promise<{ html: string; config: Record<string, unknown> }> {
+    const controller = Object.assign(new AgentUiController('/agents', '/api/agents', options), {
       dir,
     }) as unknown as AgentUiController;
-    const html = controller.index(
-      { headers: {}, originalUrl: '/agents' },
+    const html = await controller.index(
+      { headers: {}, originalUrl: '/agents', ...request },
       {
         status: () => undefined,
         setHeader: () => undefined,
@@ -360,22 +384,60 @@ describe('the shell’s config block', () => {
     return { html, config: JSON.parse(match[1]) as Record<string, unknown> };
   }
 
-  it('has no switcher while the agent console is alone', () => {
+  const search = { endpoint: '/api/agents/consoles/search', self: 'agent' };
+
+  it('has no switcher while the agent console is alone, but still its own ⌘K search', async () => {
     registerAviaryConsole(entry({ id: 'agent', path: '/agents' }));
-    expect(shell().config).toEqual({ apiBase: '/api/agents' });
+    expect((await shell()).config).toEqual({ apiBase: '/api/agents', search });
   });
 
-  it('carries the endpoint and how many others are registered, as data (CSP-safe)', () => {
+  it('has neither switcher nor search when the console is not registered', async () => {
+    expect((await shell()).config).toEqual({ apiBase: '/api/agents' });
+  });
+
+  it('carries the endpoint and how many others are registered, as data (CSP-safe)', async () => {
     registerAviaryConsole(entry({ id: 'agent', path: '/agents' }));
     registerAviaryConsole(entry({ id: 'durable' }));
     registerAviaryConsole(entry({ id: 'media' }));
-    const { html, config } = shell();
+    const { html, config } = await shell();
     expect(config).toEqual({
       apiBase: '/api/agents',
       switcher: { endpoint: '/api/agents/consoles', others: 2 },
+      search,
     });
     // The block is JSON data, not script: a `script-src 'self' 'nonce-x'` page still parses it.
     expect(html).toContain('<script type="application/json" id="agent-dashboard-config">');
     expect(html).toContain('src="/agents/assets/app.js"');
+  });
+
+  it('reads the viewer from request.user, and signOut from the option, escaped like the rest', async () => {
+    const { html, config } = await shell(
+      { signOut: { action: '/logout', csrfToken: () => 'tok' } },
+      { user: { fullName: '</script><b>', email: 'ann@x.test', roles: [{ name: 'admin' }] } },
+    );
+    expect(html.split('</script>').length).toBe(4);
+    expect(config).toEqual({
+      apiBase: '/api/agents',
+      viewer: { label: '</script><b>', email: 'ann@x.test', role: 'admin' },
+      signOut: { action: '/logout', csrfToken: 'tok' },
+    });
+  });
+
+  it('uses the viewer option over request.user, and an announced sign-out as a fallback', async () => {
+    (globalThis as Record<symbol, unknown>)[AVIARY_CONSOLES_SLOT] = {
+      version: 1,
+      entries: [],
+      account: { signOut: { href: '/account/logout' } },
+    };
+    const { config } = await shell(
+      { viewer: async () => ({ label: 'Ops', role: 'support' }) },
+      { user: { email: 'ignored@x.test' } },
+    );
+    expect(config).toEqual({
+      apiBase: '/api/agents',
+      viewer: { label: 'Ops', role: 'support' },
+      signOut: { href: '/account/logout' },
+    });
+    expect((await shell({ signOut: false })).config).toEqual({ apiBase: '/api/agents' });
   });
 });

@@ -46,8 +46,19 @@ AgentDashboardModule.forRoot({
   routes?: boolean;              // false: mount it yourself
   imports?: DynamicModule['imports'];
   approvalActorRef?: (req) => string | undefined;
+  devTools?: boolean;            // the console's reads as MCP dev tools
+  viewer?: (req) => { label: string; email?: string; role?: string } | null | undefined; // sync or async
+  signOut?: string | { href: string } | { action: string; csrfToken?: (req) => string | undefined } | false;
 });
 ```
+
+`viewer` and `signOut` feed the sidebar footer. `viewer` defaults to `request.user`, read
+structurally (`fullName` → `name` → `email` for the label; `role` or the first of `roles`), and
+never triggers an authentication; a throw or an empty answer shows no user row. `signOut`: `'/logout'`
+is a POST form (with `_csrf` when the request has `req.csrfToken()`), `{ href }` a link,
+`{ action, csrfToken }` a POST form with your token, `false` none; omitted, the console uses the
+`account.signOut` an account console announced on the Aviary consoles registry, else none. Only
+same-origin paths reach the page.
 
 ## Protecting the console
 
@@ -195,6 +206,11 @@ Mounted at `apiBasePath`:
 
 ## SPA sections
 
+The console runs on the shared Aviary console kit (`src/aviary-kit/`, see `docs/AVIARY-UI.md`): a
+sidebar with the console switcher, the pages under MONITOR · ACTIVITY · GOVERNANCE · CONFIG, the
+signed-in user, a light/dark toggle and sign-out; a topbar with the organization, the day range,
+the live indicator and ⌘K. It collapses to a drawer below 768px.
+
 - **Spend & usage** — headline $ + tokens, by-model donut + legend, daily trend (cost/tokens toggle), top threads by cost.
 - **Models** — per-model requests / in+out tokens / cost / share.
 - **Actors & budgets** — spend per acting ref; usage-vs-budget bar when a daily limit is known.
@@ -230,7 +246,7 @@ const overview = await agentClient.spend({ fromDay: '2026-06-01', toDay: '2026-0
 
 `vite build && tsup && tsc -p tsconfig.client.json` — the SPA compiles to `dist/spa`, the NestJS server to `dist/server` (dual ESM + CJS with decorator metadata + `import.meta.url` shim), and the client types to `dist/client`. The bundled SPA ships in the package, so the UI controller serves it with no extra assets.
 
-`preview.html` renders every section against mock data (no backend) for visual verification — including the drill-down drawers and the failure/loading states, which are otherwise the states a backend-less check can never reach.
+`preview.html` renders every section against mock data (no backend) for visual verification — including the drill-down drawers and the failure/loading states, which are otherwise the states a backend-less check can never reach. `preview.html?view=console` renders the whole console (shell, switcher, ⌘K, footer) against a stubbed `fetch` (`src/app/mock-console.ts`).
 
 ### Charts
 

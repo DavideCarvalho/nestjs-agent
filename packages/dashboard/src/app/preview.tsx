@@ -1,6 +1,10 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type ReactNode, StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import '../aviary-kit/fonts';
+import { ThemeProvider } from '../aviary-kit/theme';
 import { ActorsSection } from './ActorsSection';
+import { AGENT_ACCENT, App } from './App';
 import { ApprovalsSection } from './ApprovalsSection';
 import { DetailDrawer } from './DetailDrawer';
 import { GenuiSection } from './GenuiSection';
@@ -15,6 +19,7 @@ import { SpendSection } from './SpendSection';
 import { ThreadDetailPanel } from './ThreadDetailPanel';
 import { ToolsSection } from './ToolsSection';
 import { LogoMark } from './icons';
+import { installMockConsoleApi } from './mock-console';
 import {
   MOCK_APPROVALS_PAGE,
   MOCK_BUDGETS,
@@ -52,7 +57,13 @@ function failed<TRow>(page: PagedTable<TRow>['page'], error: unknown): PagedTabl
 type OpenDetail = 'run' | 'thread' | null;
 
 /**
- * Standalone mock-data entry — no backend, no react-query. Renders every section stacked so the
+ * Standalone mock-data entry, two views:
+ *
+ *  - default — every section stacked, no backend, no react-query (below);
+ *  - `?view=console` — the WHOLE `App` (shell, switcher, ⌘K, footer) against a stubbed `fetch`
+ *    (see `mock-console.ts`); deep-link a page as usual: `?view=console#/reliability`.
+ *
+ * The stacked view: no backend, no react-query. Renders every section stacked so the
  * full console can be visually verified with `vite dev`/`vite preview` against `preview.html`.
  *
  * It also renders the states that only exist when something goes wrong (a failed section, a failed
@@ -65,15 +76,17 @@ function Preview() {
   return (
     <TooltipProvider delay={400} closeDelay={0} timeout={300}>
       <div className="relative min-h-full">
-        <div className="app-bg" />
+        <div className="aviary-glow" aria-hidden />
         <div className="relative z-10 mx-auto max-w-[1180px] space-y-6 px-5 py-6">
           <header className="flex items-center gap-2.5">
-            <div className="grid h-8 w-8 place-items-center rounded-lg border border-brand/40 bg-brand/10">
-              <LogoMark className="h-4 w-4 text-brand" />
+            <div className="grid size-8 place-items-center rounded-md border border-brand-border bg-brand-soft text-brand">
+              <LogoMark className="size-4" />
             </div>
             <div className="leading-none">
-              <div className="text-sm font-semibold tracking-tight">AI gateway — preview</div>
-              <div className="mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              <div className="text-sm font-bold tracking-[0.03em] text-fg">
+                AI gateway — preview
+              </div>
+              <div className="mono text-[10px] uppercase tracking-[0.2em] text-faint">
                 mock data · no backend
               </div>
             </div>
@@ -220,17 +233,30 @@ function Preview() {
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-2">
-      <h2 className="mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">{label}</h2>
+      <h2 className="mono text-[11px] uppercase tracking-[0.2em] text-faint">{label}</h2>
       {children}
     </div>
   );
 }
 
+const isConsole = new URLSearchParams(window.location.search).get('view') === 'console';
+if (isConsole) installMockConsoleApi();
+
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 const container = document.getElementById('root');
 if (container) {
   createRoot(container).render(
     <StrictMode>
-      <Preview />
+      <ThemeProvider storageKey="aviary-agent-theme" accent={AGENT_ACCENT}>
+        {isConsole ? (
+          <QueryClientProvider client={queryClient}>
+            <App />
+          </QueryClientProvider>
+        ) : (
+          <Preview />
+        )}
+      </ThemeProvider>
     </StrictMode>,
   );
 }

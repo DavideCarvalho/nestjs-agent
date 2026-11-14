@@ -12,7 +12,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   return (
     <input
       className={cn(
-        'mono rounded-md border border-input bg-panel px-2 py-1 text-[11px] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-brand/50 disabled:opacity-50',
+        'mono h-[26px] rounded-md border border-border bg-panel-2 px-2 text-[11px] text-fg outline-none transition-colors placeholder:text-faint hover:border-line-strong focus:border-brand-border focus:ring-3 focus:ring-ring/30 disabled:opacity-50',
         className,
       )}
       {...props}
@@ -27,10 +27,7 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 export function BareInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
-      className={cn(
-        'mono bg-transparent text-foreground outline-none placeholder:text-muted-foreground',
-        className,
-      )}
+      className={cn('mono bg-transparent text-fg outline-none placeholder:text-faint', className)}
       {...props}
     />
   );

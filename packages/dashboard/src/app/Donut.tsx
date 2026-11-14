@@ -68,7 +68,7 @@ export function Donut({
       {/* The unfilled track, as a plain CSS ring — cheaper and crisper than a background arc. */}
       <div
         className="pointer-events-none absolute inset-[3px] rounded-full"
-        style={{ border: `${thickness}px solid var(--line)` }}
+        style={{ border: `${thickness}px solid var(--aviary-line)` }}
       />
       {/*
         The hole's label is painted BEFORE the chart on purpose. Both are positioned, so DOM order

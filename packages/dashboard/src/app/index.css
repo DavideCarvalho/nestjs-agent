@@ -1,105 +1,31 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+/* The Aviary console kit: tokens (dark + light), shadcn variable mapping, Tailwind theme. */
+@import "../aviary-kit/tokens.css";
 
-/*
- * ─────────────────────────────────────────────────────────────────────────────────────────────
- * Aviary console tokens. SOURCE OF TRUTH: ../../../../AVIARY-UI.md (repo-sibling `nestjs/` root).
- *
- * The neutrals below are shared, byte-for-byte, with the durable / media / telescope consoles. Do
- * not tune them here — a value that moves in one console and not the others is invisible until
- * someone puts two screenshots side by side, which is exactly the drift this file just came out of
- * (`#08080b` vs `#09090b`, `#e8e8ee` vs `#e7e7ea`, and four more nobody had chosen).
- *
- * `--accent` is the ONE line that differs per console. Violet is the agent console's signature.
- * ─────────────────────────────────────────────────────────────────────────────────────────────
- */
-:root {
-  /* ── Shared. Identical in all four consoles. Do not tune per console. ── */
-  --bg: #09090b;
-  --panel: #0c0c0f;
-  --panel-2: #101017; /* elevated surface: modal/dialog, drawer, popover, menu */
-  --line: #1c1c22;
-  --line-soft: #16161a;
-  --text: #e7e7ea;
-  --muted: #76767f;
+/* Tailwind 4 scans the package directory by default; pin the sources explicitly. */
+@source "../../index.html";
+@source "../../preview.html";
+@source "./";
+@source "../aviary-kit";
 
-  /* Status. Semantic, never decorative. */
-  --good: #34d399;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --live: #60a5fa; /* in flight: a run executing, a tool call awaiting a decision */
-
-  /* ── Per console. This is the ONLY line that differs between them. ── */
-  --accent: #a78bfa; /* agent: violet */
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-/*
- * Faint blueprint grid + accent top glow — atmosphere, not noise. The glows are mixed FROM the
- * accent tokens rather than repeating their hex, so a console that copies this block gets its own
- * accent in the glow instead of inheriting agent's violet by accident.
- */
-.app-bg {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background-image: radial-gradient(
-      900px 420px at 82% -10%,
-      color-mix(in srgb, var(--accent) 10%, transparent),
-      transparent 70%
-    ),
-    radial-gradient(
-      700px 360px at 8% -12%,
-      color-mix(in srgb, var(--live) 6%, transparent),
-      transparent 70%
-    ), linear-gradient(to right, var(--line-soft) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--line-soft) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 46px 46px, 46px 46px;
-  mask-image: linear-gradient(to bottom, black, black 62%, transparent);
-  opacity: 0.55;
-}
-
-.mono {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-}
-
-.tnum {
-  font-variant-numeric: tabular-nums;
-}
+/* ── Agent-only styles. Everything shared lives in `aviary-kit/tokens.css` (see
+   docs/AVIARY-UI.md). ─────────────────────────────────────────────────────────────────────────── */
 
 /* A status dot: takes its hue from `currentColor` and haloes itself with a soft ring of the same. */
 .dot {
+  display: inline-block;
+  flex-shrink: 0;
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: currentColor;
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
-  display: inline-block;
 }
 
 /*
  * Named `live-pulse`, not `pulse`: Tailwind ships its own `@keyframes pulse` for `animate-pulse`,
- * and a second rule with the same name in this file silently redefined it for the whole console —
- * every skeleton was breathing on the live-indicator's curve.
+ * and a second rule with the same name would redefine it for every skeleton.
  */
 .live-pulse {
   animation: live-pulse 1.6s ease-in-out infinite;
@@ -114,32 +40,14 @@ body {
   }
 }
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+/* Old name for the kit's entrance animation, used by the section panels. */
 .rise {
-  animation: rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: aviary-rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse,
+  .rise {
+    animation: none;
+  }
 }
-::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--line) 70%, var(--muted));
-  border: 3px solid var(--bg);
-  border-radius: 999px;
-}
-
-/*
- * The drill-down drawer used to be a native <dialog> with a `.drawer` rule and a `::backdrop`. It is
- * now the vendored Base UI Dialog (`src/app/ui/dialog.tsx`) like every other overlay in the console,
- * so its geometry lives with the component in Tailwind utilities instead of here.
- */

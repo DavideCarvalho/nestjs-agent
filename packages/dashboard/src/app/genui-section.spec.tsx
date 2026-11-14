@@ -44,9 +44,9 @@ function renderSection(ui: ReactElement) {
 
 /** The Stat tile carrying `label`, so its value can be read without matching a sibling tile. */
 function tile(label: string): HTMLElement {
-  const labelNode = screen.getByText(label, { selector: 'div' });
-  const card = labelNode.parentElement;
-  if (card === null) throw new Error(`no tile for ${label}`);
+  // The kit's MetricCard: the label (icon + text) sits in a span inside the card.
+  const card = screen.getByText(label, { selector: 'span' }).closest('[data-slot="card"]');
+  if (!(card instanceof HTMLElement)) throw new Error(`no tile for ${label}`);
   return card;
 }
 
@@ -76,7 +76,9 @@ describe('GenuiSection', () => {
   it('lists first-try success per tool and model, with an unpriced cost as a dash', () => {
     renderSection(<GenuiSection stats={MOCK_GENUI_STATS} />);
 
-    const panel = screen.getByText('First-try success by tool and model').closest('.rise');
+    const panel = screen
+      .getByText('First-try success by tool and model')
+      .closest('[data-slot="card"]');
     if (!(panel instanceof HTMLElement)) throw new Error('no tool/model panel');
     const rows = within(panel).getAllByRole('row');
     // Header + one row per tool/model.
@@ -103,7 +105,7 @@ describe('GenuiSection', () => {
   it('lists the common errors with their category, tool, message and count', () => {
     renderSection(<GenuiSection stats={MOCK_GENUI_STATS} />);
 
-    const panel = screen.getByText('Common errors').closest('.rise');
+    const panel = screen.getByText('Common errors').closest('[data-slot="card"]');
     if (!(panel instanceof HTMLElement)) throw new Error('no errors panel');
     const rows = within(panel).getAllByRole('row');
     expect(rows).toHaveLength(1 + MOCK_GENUI_STATS.errors.length);

@@ -3,6 +3,7 @@ export * from './agent-api.controller.js';
 export * from './agent-dashboard-mount-paths.js';
 export * from './agent-dashboard.module.js';
 export * from './agent-ui.controller.js';
+export * from './console-shell.js';
 export {
   CONSOLE_PAGE_METADATA,
   ConsoleAccessDenied,

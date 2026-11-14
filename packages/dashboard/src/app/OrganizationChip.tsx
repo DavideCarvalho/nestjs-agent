@@ -19,12 +19,12 @@ export function OrganizationChip() {
       : undefined;
   return (
     <span
-      className="flex max-w-[22rem] items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px]"
+      className="flex h-[26px] max-w-[22rem] min-w-0 items-center gap-1.5 rounded-md border border-border bg-panel-2 px-2.5 text-[11px]"
       title={title}
       data-testid="organization-chip"
     >
-      <span className="text-muted-foreground">Organization</span>
-      <span className="truncate font-medium">{text}</span>
+      <span className="hidden text-faint sm:inline">Organization</span>
+      <span className="truncate font-medium text-fg-2">{text}</span>
     </span>
   );
 }

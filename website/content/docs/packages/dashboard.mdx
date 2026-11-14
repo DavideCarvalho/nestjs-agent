@@ -49,6 +49,8 @@ export class AppModule {}
 | `imports` | none | Extra module imports so a guard's own dependencies (e.g. your `AuthModule`) resolve — the dashboard has no application context of its own to pull them from. |
 | `approvalActorRef` | the configured `ActorResolver` | `(req) => string \| undefined` — override for WHO is recorded as deciding a HITL approval (`Decision.executedByRef`). Default: the `AgentModule`-configured actor resolver (`AGENT_ACTOR_RESOLVER`) is consulted, same identity seam chat uses. Set this only when console auth differs from chat auth. |
 | `devTools` | on when `routes` is not `false` | Register the console's reads as [MCP tools](#mcp-tools) on `/mcp/aviary` |
+| `viewer` | `request.user`, read structurally | `(request) => ({ label, email?, role? })`, sync or async — who the sidebar footer says is signed in. See [Signed-in user and sign-out](#signed-in-user-and-sign-out) |
+| `signOut` | the `account.signOut` an account console announced, else none | `'/logout'` \| `{ href }` \| `{ action, csrfToken? }` \| `false` — the sidebar footer's sign-out |
 
 It requires `AGENT_GOVERNANCE_QUERIES` to already be bound — import it alongside your
 `AgentModule.forRoot(...)` and a store adapter (MikroORM or Drizzle) that provides the read-model.
@@ -312,8 +314,9 @@ routes are mounted.
 
 ### Searching every console
 
-Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, use the **Search** button, or pick **Search all
-consoles** in the brand menu. One query searches:
+Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>, use the **Search** button in the topbar, or pick
+**Search all consoles** in the brand menu. The console's own pages are listed first. One query
+searches:
 
 - this console: a run by its exact id, a thread by its exact id, threads whose title contains the
   text, and the newest runs of an agent with that name;
@@ -326,6 +329,34 @@ tenancy like the rest of the console. A hit opens the run or thread drill-down d
 links work by hand: `/ai-gateway#/runs?run=<runId>` and `/ai-gateway#/runs?thread=<threadId>`.
 
 The endpoint is `GET <apiBasePath>/consoles/search?q=`, behind the console's own `authorize`.
+`&console=<id>` answers for that one console only (still behind its own `authorize`): the palette
+asks this console and each console in the switcher on its own, and shows each group as it answers.
+
+## Signed-in user and sign-out
+
+The console's sidebar footer shows who is signed in, a light/dark toggle and a sign-out. Both come
+from the server, in the page's config block; neither is required.
+
+```ts
+AgentDashboardModule.forRoot({
+  authorize: ConsoleAccess,
+  decorators: [UseGuards(AuthenticationGuard)],
+  // Default: request.user, read structurally (fullName → name → email; role or the first of roles).
+  viewer: (req) => ({ label: req.user.displayName, email: req.user.email, role: 'admin' }),
+  // A POST form to /logout, with the token as `_csrf`:
+  signOut: { action: '/logout', csrfToken: (req) => req.csrfToken() },
+});
+```
+
+- **`viewer`** — `(request) => ({ label, email?, role? })`, sync or async. `null`, `undefined` or a
+  throw shows no user row. Omitted, `request.user` is read structurally: whatever your guards
+  (`decorators`) already put there. Reading it never triggers an authentication.
+- **`signOut`** — `'/logout'` (a POST form, with `_csrf` when the request has `req.csrfToken()`),
+  `{ href: '/logout' }` (a link), `{ action, csrfToken: (request) => token }` (a POST form with your
+  token), or `false` (none). Omitted, the console uses the sign-out an account console announced on
+  the Aviary consoles registry (`account.signOut`), else shows none.
+
+Only same-origin paths (`/x`) are sent to the page.
 
 ### Telling a probe from a visit
 

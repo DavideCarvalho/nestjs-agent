@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useState } from 'react';
-import { Button } from './button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './card';
+import { EmptyState } from '../../aviary-kit/blocks/empty-state';
+import { MetricCard } from '../../aviary-kit/blocks/metric-card';
+import { Pager } from '../../aviary-kit/blocks/pager';
+import { Panel as KitPanel } from '../../aviary-kit/blocks/panel';
 import { cn } from './cn';
 import { Input } from './input';
 import { Tooltip } from './tooltip';
@@ -13,7 +15,10 @@ import { Tooltip } from './tooltip';
  * Popover) lives in a sibling file and is imported directly; nothing is re-exported through here.
  */
 
-/** A titled surface with an optional right-aligned control and subtitle. */
+/**
+ * A titled surface with an optional right-aligned control and subtitle — the kit's `Panel` (authkit
+ * `.panel`) under the props this console's sections already pass.
+ */
 export function Panel({
   title,
   subtitle,
@@ -28,22 +33,18 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <Card className={cn('rise p-4', className)}>
-      {(title || right) && (
-        <CardHeader className="mb-3">
-          <div>
-            {title && <CardTitle>{title}</CardTitle>}
-            {subtitle && <CardDescription>{subtitle}</CardDescription>}
-          </div>
-          {right}
-        </CardHeader>
-      )}
-      <CardContent>{children}</CardContent>
-    </Card>
+    <KitPanel
+      title={title ?? ''}
+      {...(subtitle ? { description: subtitle } : {})}
+      {...(right ? { action: right } : {})}
+      {...(className ? { className } : {})}
+    >
+      {children}
+    </KitPanel>
   );
 }
 
-/** A headline number with a label and optional sub-line. */
+/** A headline number with a label and optional sub-line — the kit's `MetricCard`. */
 export function Stat({
   label,
   value,
@@ -57,23 +58,18 @@ export function Stat({
   icon?: ReactNode;
   tone?: 'accent' | 'good' | 'warn' | 'bad';
 }) {
-  const toneColor =
-    tone === 'good'
-      ? 'text-good'
-      : tone === 'warn'
-        ? 'text-warn'
-        : tone === 'bad'
-          ? 'text-bad'
-          : 'text-foreground';
   return (
-    <Card className="p-4">
-      <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className={cn('mono tnum text-2xl font-semibold', toneColor)}>{value}</div>
-      {sub && <div className="mono mt-1 text-[11px] text-muted-foreground">{sub}</div>}
-    </Card>
+    <MetricCard
+      label={
+        <span className="flex items-center gap-1.5 [&_svg]:size-3 [&_svg]:text-faint">
+          {icon}
+          {label}
+        </span>
+      }
+      value={value}
+      {...(sub ? { caption: sub } : {})}
+      tone={tone === undefined ? 'default' : tone === 'accent' ? 'brand' : tone}
+    />
   );
 }
 
@@ -89,10 +85,10 @@ export function BarMeter({
 }) {
   const pct = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0)) * 100;
   return (
-    <div className={cn('h-2 overflow-hidden rounded-full bg-line', className)}>
+    <div className={cn('h-1.5 overflow-hidden rounded-full bg-line', className)}>
       <div
         className={cn(
-          'h-full rounded-full bg-gradient-to-r',
+          'h-full rounded-full bg-linear-to-r',
           over ? 'from-bad to-warn' : 'from-brand to-live',
         )}
         style={{ width: `${pct}%` }}
@@ -189,16 +185,18 @@ export function OpenCell({
   );
 }
 
-/** An empty-state row for a section that has no data yet. */
-export function Empty({ label }: { label: string }) {
+/** The empty state for a section or table that has no data yet — the kit's `EmptyState`. */
+export function Empty({ label, description }: { label: string; description?: string }) {
   return (
-    <div className="grid place-items-center rounded-lg border border-dashed border-line py-10 text-xs text-muted-foreground">
-      {label}
-    </div>
+    <EmptyState
+      title={label}
+      {...(description ? { description } : {})}
+      className="rounded-lg border border-dashed border-border py-8"
+    />
   );
 }
 
-/** Prev/next pager with "page X of Y" (derived from `total`/`pageSize`) — disables at either bound. */
+/** The kit's offset `Pager` ("1–25 of 80", previous / next), from `page`/`pageSize`/`total`. */
 export function Pagination({
   page,
   pageSize,
@@ -210,19 +208,13 @@ export function Pagination({
   total: number;
   onPage: (page: number) => void;
 }) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
   return (
-    <div className="mono mt-3 flex items-center justify-end gap-2 text-[11px] text-muted-foreground">
-      <Button size="xs" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-        Prev
-      </Button>
-      <span className="tnum">
-        page {page} of {pageCount}
-      </span>
-      <Button size="xs" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>
-        Next
-      </Button>
-    </div>
+    <Pager
+      className="mt-2 border-t border-line-soft pt-2"
+      meta={{ total, perPage: pageSize, currentPage: page, lastPage }}
+      onPage={onPage}
+    />
   );
 }
 
