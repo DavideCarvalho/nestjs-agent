@@ -209,20 +209,28 @@ export function sanitizeSearchHits(value: unknown, limit: number): AviaryConsole
  * `search`, and keeps `limit` hits; a console that times out or fails is left out and marks the
  * answer `partial`. A denial is not partial: it is simply not searched. The gates run in parallel,
  * then the searches in parallel, so no `search` ever runs while the request carries the probe.
+ * `only` (a console id) limits the search to that one console, still behind its own `authorize`.
  */
 export async function searchConsoles(
   registry: AviaryConsoleRegistry | undefined,
   selfId: string,
   context: ExecutionContext,
   query: string,
-  options: { timeoutMs?: number; limit?: number } = {},
+  options: { timeoutMs?: number; limit?: number; only?: unknown } = {},
 ): Promise<AviaryConsoleSearchResult> {
   const q = query.trim().slice(0, MAX_QUERY_LENGTH);
   const timeoutMs = options.timeoutMs ?? CONSOLE_SEARCH_TIMEOUT_MS;
   const limit = options.limit ?? CONSOLE_SEARCH_LIMIT;
   if (q === '') return { version: 1, q, results: [], partial: false };
+  // `only`: one console's hits (⌘K asks each console on its own and streams the groups in).
+  const one = typeof options.only === 'string' && options.only !== '' ? options.only : undefined;
   const searchable = (registry?.entries ?? [])
-    .filter((entry) => typeof entry.search === 'function' && isSameOriginPath(entry.path))
+    .filter(
+      (entry) =>
+        typeof entry.search === 'function' &&
+        isSameOriginPath(entry.path) &&
+        (one === undefined || entry.id === one),
+    )
     .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   // First every other console's gate, as a probe (in parallel, one budget each); then the searches,
   // never under the probe marker: a search is a real use of the console, not a visibility check.
@@ -451,18 +459,22 @@ export class AgentConsolesController {
   /**
    * `GET <api>/consoles/search?q=`: this console's hits and those of every other console the viewer
    * may open, 5 each, each console given 300 ms. `partial: true` when one did not answer in time.
+   * `&console=<id>` answers for that one console only, so the SPA can stream each console's group
+   * in as it arrives.
    */
   @Get('consoles/search')
   @Header('Cache-Control', 'private, no-store')
   search(
     @CurrentExecutionContext() current: CurrentContext,
     @Query('q') q?: string,
+    @Query('console') only?: unknown,
   ): Promise<AviaryConsoleSearchResult> {
     return searchConsoles(
       readAviaryConsoles(),
       AGENT_CONSOLE_ID,
       current.context,
       typeof q === 'string' ? q : '',
+      { only },
     );
   }
 }

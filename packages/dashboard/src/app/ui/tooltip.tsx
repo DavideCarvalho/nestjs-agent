@@ -37,7 +37,7 @@ export function Tooltip({
         <TooltipPrimitive.Positioner side={side} sideOffset={6} className="z-50">
           <TooltipPrimitive.Popup
             className={cn(
-              'mono max-w-[min(28rem,90vw)] origin-[var(--transform-origin)] break-words rounded-md border border-line bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-lg shadow-black/50',
+              'mono max-w-[min(28rem,90vw)] origin-[var(--transform-origin)] break-words rounded-md border border-line bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-(--aviary-shadow)',
               'transition-[opacity,transform] duration-150 ease-out',
               'data-[starting-style]:scale-95 data-[starting-style]:opacity-0',
               'data-[ending-style]:scale-95 data-[ending-style]:opacity-0',

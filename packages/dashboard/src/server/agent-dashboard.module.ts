@@ -11,6 +11,7 @@ import {
   type DashboardConsoleOptions,
 } from './console-authorize.guard.js';
 import type { ConsoleAuthorize } from './console-authorize.js';
+import type { ConsoleSignOutOption, ConsoleViewerResolver } from './console-shell.js';
 import { AgentConsoleRegistration, AgentConsolesController } from './console-switcher.js';
 import { DashboardService } from './dashboard.service.js';
 import { AgentDevToolsRegistration } from './dev-tools.js';
@@ -21,6 +22,7 @@ import {
   DASHBOARD_BASE_PATH,
   DASHBOARD_CONSOLE_OPTIONS,
   DASHBOARD_DEV_TOOLS,
+  DASHBOARD_SHELL,
 } from './tokens.js';
 
 /**
@@ -83,6 +85,28 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * mounted, off with `routes: false`.
    */
   devTools?: boolean;
+  /**
+   * Who the console's sidebar footer says is signed in: `(request) => ({ label, email?, role? })`,
+   * sync or async. `null`/`undefined` or a throw shows no user row.
+   *
+   * Omitted: `request.user` is read structurally — whatever your guards (`decorators`) already put
+   * there: `fullName` → `name` → `email` for the label, and `role` or the first of `roles` (a
+   * string or `{ name }`). Reading it never triggers an authentication.
+   */
+  viewer?: ConsoleViewerResolver;
+  /**
+   * The sidebar footer's sign-out. One of:
+   *
+   * - `'/logout'`: a POST form to that path (with `_csrf` when the request exposes
+   *   `req.csrfToken()`);
+   * - `{ href: '/logout' }`: a plain link;
+   * - `{ action: '/logout', csrfToken: (request) => token }`: a POST form with your token as `_csrf`;
+   * - `false`: none, even when an account console announced one.
+   *
+   * Omitted: the sign-out an account console announced on the Aviary consoles registry
+   * (`account.signOut`), else none. Only same-origin paths (`/x`) are ever sent to the page.
+   */
+  signOut?: ConsoleSignOutOption;
 }
 
 /** Leading slash, no trailing slash. */
@@ -180,12 +204,20 @@ export class AgentDashboardModule {
       providers: [
         { provide: DASHBOARD_BASE_PATH, useValue: basePath },
         { provide: DASHBOARD_API_PATH, useValue: apiBasePath },
+        {
+          provide: DASHBOARD_SHELL,
+          useValue: {
+            ...(options.viewer ? { viewer: options.viewer } : {}),
+            ...(options.signOut !== undefined ? { signOut: options.signOut } : {}),
+          },
+        },
         // The console switcher lists this console only where it serves its own page.
         ...(options.routes === false ? [] : [AgentConsoleRegistration]),
       ],
       // Re-export the API module so its DashboardService reaches importers (e.g. the host's own
-      // controllers), and the paths a self-mounted `AgentUiController` subclass injects.
-      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH],
+      // controllers), and the paths and shell options a self-mounted `AgentUiController` subclass
+      // injects.
+      exports: [AgentApiModule, DASHBOARD_BASE_PATH, DASHBOARD_API_PATH, DASHBOARD_SHELL],
     };
   }
 }

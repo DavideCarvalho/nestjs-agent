@@ -38,7 +38,7 @@ export function DialogDrawer({
     <DialogPrimitive.Portal>
       <DialogPrimitive.Backdrop
         className={cn(
-          'fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] transition-opacity duration-200',
+          'fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] transition-opacity duration-200 dark:bg-black/60',
           'data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
         )}
       />
@@ -46,7 +46,7 @@ export function DialogDrawer({
         className={cn(
           // `bg-panel-2`: AVIARY-UI.md calls --panel-2 the modal/dialog surface, so the drawer reads
           // as lifted off the page rather than as a second page pinned to the right edge.
-          'fixed inset-y-0 right-0 z-50 flex h-dvh w-full max-w-[720px] flex-col overflow-hidden border-l border-line bg-panel-2 text-foreground outline-none',
+          'fixed inset-y-0 right-0 z-50 flex h-dvh w-full max-w-[720px] flex-col overflow-hidden border-l border-border bg-popover text-fg shadow-(--aviary-shadow) outline-none',
           'transition-transform duration-200 ease-out',
           'data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full',
           className,

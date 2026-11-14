@@ -1,61 +1,73 @@
 import { useRender } from '@base-ui/react/use-render';
-import { type VariantProps, cva } from 'class-variance-authority';
 import type { ButtonHTMLAttributes } from 'react';
+import { buttonVariants as kitButtonVariants } from '../../aviary-kit/ui/button';
 import { cn } from './cn';
 
 /**
- * Every clickable affordance in the console, as one set of variants.
- *
- * The console used to hand-roll each one — nine near-identical `rounded-md border border-[var(--line)]
- * px-2 py-1 …` strings that had already diverged on padding, radius and hover. The variants below are
- * those strings, deduplicated and named after what they MEAN (`success` = approve, `danger` = reject)
- * rather than what they look like, so a status colour can move in AVIARY-UI.md without a grep.
+ * The console's button: the kit's shadcn `Button` look (authkit `.btn`), under the variant names
+ * this console's call sites already use. Variants are named after what they MEAN (`success` =
+ * approve, `danger` = reject), so a status colour can move in the kit without a grep.
  */
-const buttonVariants = cva(
-  'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:shrink-0',
-  {
-    variants: {
-      variant: {
-        /** The one affirmative action on a surface — "Save price". */
-        default: 'border-brand/50 bg-brand/10 text-foreground hover:bg-brand/20',
-        /** The console's workhorse: a quiet outlined control that warms on hover. */
-        outline: 'border-line text-muted-foreground hover:border-brand/50 hover:text-foreground',
-        /** No chrome until hovered — nav items, row buttons. */
-        ghost: 'border-transparent text-muted-foreground hover:bg-panel-2 hover:text-foreground',
-        /** Carries the accent as its TEXT, not just its tint — a removable filter chip. */
-        accent: 'border-brand/50 bg-brand/10 text-brand hover:bg-brand/20',
-        success: 'border-good/50 bg-good/10 text-good hover:bg-good/20',
-        danger: 'border-bad/50 bg-bad/10 text-bad hover:bg-bad/20',
-      },
-      size: {
-        xs: 'px-2 py-1 text-[10px]',
-        sm: 'px-2.5 py-1 text-[11px]',
-        md: 'px-3 py-1.5 text-xs',
-        icon: 'p-1.5',
-      },
-    },
-    defaultVariants: { variant: 'outline', size: 'sm' },
-  },
-);
+const VARIANT = {
+  /** The one affirmative action on a surface — "Save price". Solid accent. */
+  default: 'default',
+  /** The console's workhorse: a raised, hairline-bordered control. */
+  outline: 'outline',
+  /** No chrome until hovered — row buttons, close affordances. */
+  ghost: 'ghost',
+  /** Carries the accent as its text and tint — a removable filter chip. */
+  accent: 'brand',
+  /** Approve. The kit has no green button tint; it is the outline button tinted good. */
+  success: 'outline',
+  /** Reject / destructive. */
+  danger: 'destructive',
+} as const;
 
-export interface ButtonProps
-  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'className'>,
-    VariantProps<typeof buttonVariants> {
+const SIZE = {
+  xs: 'micro',
+  sm: 'sm',
+  md: 'default',
+  icon: 'icon-xs',
+} as const;
+
+export type ButtonVariant = keyof typeof VARIANT;
+export type ButtonSize = keyof typeof SIZE;
+
+export function buttonVariants({
+  variant = 'outline',
+  size = 'sm',
+}: {
+  variant?: ButtonVariant | null | undefined;
+  size?: ButtonSize | null | undefined;
+} = {}): string {
+  const v = variant ?? 'outline';
+  return cn(
+    kitButtonVariants({ variant: VARIANT[v], size: SIZE[size ?? 'sm'] }),
+    v === 'success' &&
+      'border-good/40 bg-good/10 text-good hover:border-good/50 hover:bg-good/20 hover:text-good',
+  );
+}
+
+export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'className'> {
+  variant?: ButtonVariant | null | undefined;
+  size?: ButtonSize | null | undefined;
   className?: string;
   /**
    * Render something else with this button's styling — Base UI's `render`, which is what replaces
-   * Radix's `asChild`. Pass an element (`render={<a href="…" />}`) and its props are merged in,
-   * rather than a wrapper being introduced around it.
+   * Radix's `asChild`. Pass an element (`render={<a href="…" />}`) and its props are merged in.
    */
   render?: useRender.RenderProp;
 }
 
-export function Button({ className, variant, size, render, ...props }: ButtonProps) {
+export function Button({ className, variant, size, render, type, ...props }: ButtonProps) {
   return useRender({
     defaultTagName: 'button',
     ...(render === undefined ? {} : { render }),
-    props: { ...props, className: cn(buttonVariants({ variant, size }), className) },
+    props: {
+      // Never submit a form by accident unless asked to (the pricing form's save sets `submit`).
+      ...(render === undefined ? { type: type ?? 'button' } : type ? { type } : {}),
+      ...props,
+      className: cn(buttonVariants({ variant, size }), className),
+    },
   });
 }
-
-export { buttonVariants };

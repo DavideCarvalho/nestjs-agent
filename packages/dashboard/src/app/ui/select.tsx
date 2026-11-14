@@ -24,7 +24,7 @@ export function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'mono flex items-center justify-between gap-1.5 rounded-md border border-input bg-panel px-2 py-1 text-[11px] text-foreground outline-none transition-colors focus-visible:border-brand/50 data-[popup-open]:border-brand/50',
+        'mono flex h-[26px] items-center justify-between gap-1.5 rounded-md border border-border bg-panel-2 px-2 text-[11px] text-fg outline-none transition-colors hover:border-line-strong focus-visible:border-brand-border data-[popup-open]:border-brand-border',
         className,
       )}
       {...props}
@@ -52,7 +52,7 @@ export function SelectContent({
       >
         <SelectPrimitive.Popup
           className={cn(
-            'min-w-[var(--anchor-width)] origin-[var(--transform-origin)] overflow-hidden rounded-md border border-line bg-popover p-1 text-popover-foreground shadow-lg shadow-black/50',
+            'min-w-[var(--anchor-width)] origin-[var(--transform-origin)] overflow-hidden rounded-md border border-line bg-popover p-1 text-popover-foreground shadow-(--aviary-shadow)',
             'transition-[opacity,transform] duration-150 ease-out',
             'data-[starting-style]:scale-95 data-[starting-style]:opacity-0',
             'data-[ending-style]:scale-95 data-[ending-style]:opacity-0',
@@ -75,7 +75,7 @@ export function SelectItem({
   return (
     <SelectPrimitive.Item
       className={cn(
-        'mono relative flex cursor-pointer select-none items-center gap-2 rounded-sm py-1 pl-6 pr-2 text-[11px] text-muted-foreground outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[selected]:text-foreground',
+        'mono relative flex cursor-pointer select-none items-center gap-2 rounded-sm py-1 pl-6 pr-2 text-[11px] text-muted-foreground outline-none data-[highlighted]:bg-hover data-[highlighted]:text-fg data-[selected]:text-foreground',
         className,
       )}
       {...props}

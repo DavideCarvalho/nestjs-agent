@@ -83,6 +83,38 @@ describe('searchConsoles', () => {
     });
   });
 
+  it('answers for one console only when asked (`console=<id>`), still behind its gate', async () => {
+    const asked: string[] = [];
+    const reg = registry(
+      entry({
+        id: 'agent',
+        search: async () => {
+          asked.push('agent');
+          return [hit('thread')];
+        },
+      }),
+      entry({
+        id: 'media',
+        search: async () => {
+          asked.push('media');
+          return [hit('a.png')];
+        },
+      }),
+      entry({ id: 'durable', authorize: deny, search: async () => [hit('run')] }),
+    );
+    const media = await searchConsoles(reg, 'agent', contextOver({}), 'x', { only: 'media' });
+    expect(media.results.map((r) => r.id)).toEqual(['media']);
+    expect(asked).toEqual(['media']);
+    const self = await searchConsoles(reg, 'agent', contextOver({}), 'x', { only: 'agent' });
+    expect(self.results.map((r) => r.id)).toEqual(['agent']);
+    expect(
+      (await searchConsoles(reg, 'agent', contextOver({}), 'x', { only: 'durable' })).results,
+    ).toEqual([]);
+    expect(
+      (await searchConsoles(reg, 'agent', contextOver({}), 'x', { only: 'nope' })).results,
+    ).toEqual([]);
+  });
+
   it('passes the query and the limit, keeps 5 hits, and drops unsafe ones', async () => {
     const search = vi.fn(async () => [
       { title: 'evil', href: '//evil.test' },
@@ -346,5 +378,30 @@ describe('GET <api>/consoles/search', () => {
         href: '/admin/agents#/runs?thread=th-9',
       },
     ]);
+  });
+
+  it('answers for one console with `console=<id>` (per-console streaming)', async () => {
+    registerAviaryConsole(
+      entry({
+        id: 'durable',
+        order: 10,
+        icon: 'workflow',
+        title: 'Workflows',
+        search: async (_ctx, q) => [{ title: `Run ${q}`, href: `/durable#/runs/${q}` }],
+      }),
+    );
+    const server = await boot(
+      AgentDashboardModule.forRoot({ authorize: authorizeByToken({ token: TOKEN }) }),
+    );
+    const durable = await request(server)
+      .get('/ai-gateway/api/consoles/search?q=run-1&console=durable')
+      .set(bearer)
+      .expect(200);
+    expect(durable.body.results.map((g: { id: string }) => g.id)).toEqual(['durable']);
+    const agent = await request(server)
+      .get('/ai-gateway/api/consoles/search?q=run-1&console=agent')
+      .set(bearer)
+      .expect(200);
+    expect(agent.body.results.map((g: { id: string }) => g.id)).toEqual(['agent']);
   });
 });

@@ -20,7 +20,7 @@ export function Table({ className, ...props }: HTMLAttributes<HTMLTableElement>)
 export function TableHeader({ className, ...props }: HTMLAttributes<HTMLTableSectionElement>) {
   return (
     <thead
-      className={cn('text-[10px] uppercase tracking-wider text-muted-foreground', className)}
+      className={cn('text-[10px] font-semibold uppercase tracking-[0.12em] text-faint', className)}
       {...props}
     />
   );
@@ -31,7 +31,12 @@ export function TableBody({ className, ...props }: HTMLAttributes<HTMLTableSecti
 }
 
 export function TableRow({ className, ...props }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={cn('border-b border-line-soft', className)} {...props} />;
+  return (
+    <tr
+      className={cn('border-b border-line-soft transition-colors hover:bg-hover', className)}
+      {...props}
+    />
+  );
 }
 
 /** The header row itself — a full-weight hairline under it, unlike the soft rules between rows. */
@@ -44,5 +49,5 @@ export function TableHead({ className, ...props }: ThHTMLAttributes<HTMLTableCel
 }
 
 export function TableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn('py-2.5 text-muted-foreground', className)} {...props} />;
+  return <td className={cn('py-2.5 text-dim', className)} {...props} />;
 }

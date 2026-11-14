@@ -1,9 +1,12 @@
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { Component, type ErrorInfo, type ReactNode, Suspense } from 'react';
+import { MetricGridSkeleton } from '../aviary-kit/blocks/metric-card';
+import { Skeleton } from '../aviary-kit/ui/skeleton';
 import { describeError } from '../client/describe-error';
 import { AlertIcon, RetryIcon } from './icons';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
+import { cn } from './ui/cn';
 
 /**
  * Error isolation for one console section.
@@ -14,7 +17,16 @@ import { Card } from './ui/card';
  * boundary per section means a failing read blanks its own panel, names itself, and offers a retry,
  * while the other eight sections keep working.
  */
-export function SectionBoundary({ label, children }: { label: string; children: ReactNode }) {
+export function SectionBoundary({
+  label,
+  children,
+  metrics,
+}: {
+  label: string;
+  children: ReactNode;
+  /** Metric cards in the loading skeleton (default 4; 0 for a page that opens on a table). */
+  metrics?: number;
+}) {
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
@@ -24,7 +36,13 @@ export function SectionBoundary({ label, children }: { label: string; children: 
             <SectionErrorPanel label={label} error={error} onRetry={retry} />
           )}
         >
-          <Suspense fallback={<SectionSkeleton label={label} />}>{children}</Suspense>
+          <Suspense
+            fallback={
+              <SectionSkeleton label={label} {...(metrics !== undefined ? { metrics } : {})} />
+            }
+          >
+            {children}
+          </Suspense>
         </ErrorBoundary>
       )}
     </QueryErrorResetBoundary>
@@ -101,7 +119,7 @@ export function SectionErrorPanel({
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight text-bad">{label} failed to load</h2>
-          <p className="mono mt-1 break-words text-[11px] text-foreground">{described.message}</p>
+          <p className="mono mt-1 break-words text-[11px] text-fg-2">{described.message}</p>
           {described.hint !== '' && (
             <p className="mt-1.5 text-xs text-muted-foreground">{described.hint}</p>
           )}
@@ -156,11 +174,33 @@ function RetryButton({ onRetry, small }: { onRetry: () => void; small?: boolean 
   );
 }
 
-/** The Suspense fallback a section shows while its own reads are in flight. */
-export function SectionSkeleton({ label }: { label: string }) {
+/**
+ * The Suspense fallback a section shows while its own reads are in flight: skeletons shaped like a
+ * section (a row of metric cards, then two panels), never a bare spinner. The label stays for
+ * screen readers as a polite status.
+ */
+export function SectionSkeleton({ label, metrics = 4 }: { label: string; metrics?: number }) {
   return (
-    <Card className="animate-pulse p-6 text-sm text-muted-foreground" aria-busy="true">
-      Loading {label.toLowerCase()}…
+    <div className="flex flex-col gap-4" aria-busy="true">
+      <output className="sr-only">Loading {label.toLowerCase()}…</output>
+      {metrics > 0 && <MetricGridSkeleton count={metrics} />}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3" aria-hidden>
+        <PanelSkeleton rows={4} />
+        <PanelSkeleton rows={4} className="lg:col-span-2" />
+      </div>
+    </div>
+  );
+}
+
+function PanelSkeleton({ rows, className }: { rows: number; className?: string }) {
+  return (
+    <Card className={cn('flex flex-col gap-3 px-4 pt-3 pb-4', className)}>
+      <Skeleton className="h-3 w-32" />
+      <div className="mt-1 flex flex-col gap-2.5 border-t border-border pt-3">
+        {Array.from({ length: rows }, (_, i) => `row-${i}`).map((key) => (
+          <Skeleton key={key} className="h-3.5 w-full" />
+        ))}
+      </div>
     </Card>
   );
 }
