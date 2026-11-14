@@ -1,8 +1,8 @@
 import type {
   ThreadActivityRow,
-  ThreadWhere,
+  ThreadFilter,
   ToolCallActivityRow,
-  ToolCallWhere,
+  ToolCallFilter,
 } from '../client/agent-client';
 import { formatCount } from '../client/format-usd';
 import { InlineError } from './SectionBoundary';
@@ -25,12 +25,12 @@ function isDenied(status: string): boolean {
 export function RunsToolsSection({
   toolCalls,
   toolCallsTable,
-  toolCallsWhere,
+  toolCallsFilter,
   onToolCallsToolNameChange,
   onToolCallsStatusChange,
   onToolCallsPageChange,
   threadsTable,
-  threadsWhere,
+  threadsFilter,
   onThreadsTitleChange,
   onThreadsPageChange,
   onOpenRun,
@@ -39,12 +39,12 @@ export function RunsToolsSection({
   /** Latest tool calls (unpaged, latest-N) — feeds the denied/forbidden banner. */
   toolCalls: ToolCallActivityRow[];
   toolCallsTable: PagedTable<ToolCallActivityRow>;
-  toolCallsWhere: ToolCallWhere;
+  toolCallsFilter: ToolCallFilter;
   onToolCallsToolNameChange: (value: string) => void;
   onToolCallsStatusChange: (value: string) => void;
   onToolCallsPageChange: (page: number) => void;
   threadsTable: PagedTable<ThreadActivityRow>;
-  threadsWhere: ThreadWhere;
+  threadsFilter: ThreadFilter;
   onThreadsTitleChange: (value: string) => void;
   onThreadsPageChange: (page: number) => void;
   onOpenRun?: ((runId: string) => void) | undefined;
@@ -72,12 +72,12 @@ export function RunsToolsSection({
           right={
             <div className="flex items-center gap-1.5">
               <FilterInput
-                value={toolCallsWhere.toolName ?? ''}
+                value={toolCallsFilter.toolName ?? ''}
                 placeholder="tool name"
                 onChange={onToolCallsToolNameChange}
               />
               <FilterInput
-                value={toolCallsWhere.status ?? ''}
+                value={toolCallsFilter.status ?? ''}
                 placeholder="status"
                 onChange={onToolCallsStatusChange}
               />
@@ -93,12 +93,12 @@ export function RunsToolsSection({
               />
             </div>
           )}
-          {toolCallsPage.rows.length === 0 ? (
+          {toolCallsPage.data.length === 0 ? (
             <Empty label="No tool calls yet" />
           ) : (
             <>
               <ul className="space-y-1">
-                {toolCallsPage.rows.map((call) => {
+                {toolCallsPage.data.map((call) => {
                   // Bound out of the row so the null check narrows inside the click handler; a
                   // pre-rollout call has no run and must render as text, not a dead button.
                   const runId = call.runId;
@@ -128,9 +128,9 @@ export function RunsToolsSection({
                 })}
               </ul>
               <Pagination
-                page={toolCallsPage.page}
-                pageSize={toolCallsPage.pageSize}
-                total={toolCallsPage.total}
+                page={toolCallsPage.meta.currentPage}
+                pageSize={toolCallsPage.meta.perPage}
+                total={toolCallsPage.meta.total}
                 onPage={onToolCallsPageChange}
               />
             </>
@@ -142,7 +142,7 @@ export function RunsToolsSection({
           subtitle="Latest conversations with rolled-up usage"
           right={
             <FilterInput
-              value={threadsWhere.title ?? ''}
+              value={threadsFilter.title ?? ''}
               placeholder="title"
               onChange={onThreadsTitleChange}
             />
@@ -157,12 +157,12 @@ export function RunsToolsSection({
               />
             </div>
           )}
-          {threadsPage.rows.length === 0 ? (
+          {threadsPage.data.length === 0 ? (
             <Empty label="No threads yet" />
           ) : (
             <>
               <ul className="space-y-1">
-                {threadsPage.rows.map((thread) => (
+                {threadsPage.data.map((thread) => (
                   <li
                     key={thread.threadId}
                     className="flex items-center gap-3 rounded-md px-2 py-1.5 text-xs hover:bg-panel-2"
@@ -188,9 +188,9 @@ export function RunsToolsSection({
                 ))}
               </ul>
               <Pagination
-                page={threadsPage.page}
-                pageSize={threadsPage.pageSize}
-                total={threadsPage.total}
+                page={threadsPage.meta.currentPage}
+                pageSize={threadsPage.meta.perPage}
+                total={threadsPage.meta.total}
                 onPage={onThreadsPageChange}
               />
             </>

@@ -147,10 +147,10 @@ describe('dev MCP endpoint with the agent dashboard', () => {
     const result = await client.callTool({ name: 'agent_list_runs', arguments: { limit: 5 } });
     const text = (result.content as Array<{ text: string }>)[0]?.text ?? '';
     const api = await request(context.getHttpServer())
-      .get('/ai-gateway/api/runs-page?limit=5')
+      .get('/ai-gateway/api/runs?size=5')
       .set('authorization', `Bearer ${CONSOLE_TOKEN}`)
       .expect(200);
-    expect(JSON.parse(text)).toEqual({ items: api.body.rows, next: null, total: 1 });
+    expect(JSON.parse(text)).toEqual({ items: api.body.data, next: null, total: 1 });
   });
 
   it('answers 401 without the console token, like the console', async () => {
@@ -160,7 +160,7 @@ describe('dev MCP endpoint with the agent dashboard', () => {
       .set('accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
     expect(res.status).toBe(401);
-    await request(context.getHttpServer()).get('/ai-gateway/api/runs-page').expect(401);
+    await request(context.getHttpServer()).get('/ai-gateway/api/runs').expect(401);
   });
 
   it('answers agent_get_run for an unknown id with an isError result', async () => {

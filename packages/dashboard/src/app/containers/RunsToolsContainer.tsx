@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ThreadWhere, ToolCallWhere } from '../../client/agent-client';
+import type { ThreadFilter, ToolCallFilter } from '../../client/agent-client';
 import { RunsToolsSection } from '../RunsToolsSection';
 import { useDrillDown } from '../drill-down';
 import { PAGE_SIZE, pagedTable } from '../paged-table';
@@ -20,24 +20,24 @@ export function RunsToolsContainer() {
   const [toolCallsPageNum, setToolCallsPageNum] = useState(1);
   const [toolCallsToolName, setToolCallsToolName] = useState('');
   const [toolCallsStatus, setToolCallsStatus] = useState('');
-  const toolCallsWhere: ToolCallWhere = {
+  const toolCallsFilter: ToolCallFilter = {
     ...(toolCallsToolName !== '' ? { toolName: toolCallsToolName } : {}),
     ...(toolCallsStatus !== '' ? { status: toolCallsStatus } : {}),
   };
-  const toolCallsQuery = useToolCallsPage(toolCallsPageNum, PAGE_SIZE, toolCallsWhere);
+  const toolCallsQuery = useToolCallsPage(toolCallsPageNum, PAGE_SIZE, toolCallsFilter);
 
   const [threadsPageNum, setThreadsPageNum] = useState(1);
   const [threadsTitle, setThreadsTitle] = useState('');
-  const threadsWhere: ThreadWhere = {
+  const threadsFilter: ThreadFilter = {
     ...(threadsTitle !== '' ? { title: threadsTitle } : {}),
   };
-  const threadsQuery = useThreadsPage(threadsPageNum, PAGE_SIZE, threadsWhere);
+  const threadsQuery = useThreadsPage(threadsPageNum, PAGE_SIZE, threadsFilter);
 
   return (
     <RunsToolsSection
       toolCalls={toolCalls.data}
       toolCallsTable={pagedTable(toolCallsQuery, toolCallsPageNum, PAGE_SIZE)}
-      toolCallsWhere={toolCallsWhere}
+      toolCallsFilter={toolCallsFilter}
       onToolCallsToolNameChange={(value) => {
         setToolCallsToolName(value);
         setToolCallsPageNum(1);
@@ -48,7 +48,7 @@ export function RunsToolsContainer() {
       }}
       onToolCallsPageChange={setToolCallsPageNum}
       threadsTable={pagedTable(threadsQuery, threadsPageNum, PAGE_SIZE)}
-      threadsWhere={threadsWhere}
+      threadsFilter={threadsFilter}
       onThreadsTitleChange={(value) => {
         setThreadsTitle(value);
         setThreadsPageNum(1);

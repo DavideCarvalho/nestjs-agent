@@ -1,5 +1,5 @@
 import type { RecordRunEndInput } from '@dudousxd/nestjs-agent-core';
-import type { RecentRunRow, ReliabilityOverview, RunWhere } from '../client/agent-client';
+import type { RecentRunRow, ReliabilityOverview, RunFilter } from '../client/agent-client';
 import { errorSegments } from '../client/error-breakdown';
 import { formatDurationMs, formatPercent } from '../client/format-usd';
 import { Donut, colorAt } from './Donut';
@@ -52,7 +52,7 @@ export const RUN_STATUS_OPTIONS: readonly { value: string; label: string }[] = [
 export function ReliabilitySection({
   overview,
   runsTable,
-  runsWhere,
+  runsFilter,
   onRunsStatusChange,
   onRunsAgentNameChange,
   onRunsThreadIdClear,
@@ -61,7 +61,7 @@ export function ReliabilitySection({
 }: {
   overview: ReliabilityOverview;
   runsTable: PagedTable<RecentRunRow>;
-  runsWhere: RunWhere;
+  runsFilter: RunFilter;
   onRunsStatusChange: (value: string) => void;
   onRunsAgentNameChange: (value: string) => void;
   /** Drops the `threadId` filter a thread drill-down deep-linked in. */
@@ -187,7 +187,7 @@ export function ReliabilitySection({
                 // `items` is not optional decoration: without it the trigger can only read a label
                 // off a MOUNTED item, so a closed select renders blank on first paint.
                 items={RUN_STATUS_OPTIONS}
-                value={runsWhere.status ?? ''}
+                value={runsFilter.status ?? ''}
                 onValueChange={(value) => onRunsStatusChange(String(value ?? ''))}
               >
                 <SelectTrigger aria-label="Filter by run status" className="w-28">
@@ -204,7 +204,7 @@ export function ReliabilitySection({
                 </SelectContent>
               </Select>
               <FilterInput
-                value={runsWhere.agentName ?? ''}
+                value={runsFilter.agentName ?? ''}
                 placeholder="agent"
                 onChange={onRunsAgentNameChange}
               />
@@ -213,9 +213,9 @@ export function ReliabilitySection({
         >
           {/* A thread drill-down links in here with `?threadId=…`. Shown as a removable chip rather
               than a silent filter — a table quietly showing one thread's runs looks like an outage. */}
-          {runsWhere.threadId !== undefined && (
+          {runsFilter.threadId !== undefined && (
             <Button variant="accent" size="xs" onClick={onRunsThreadIdClear} className="mono mb-3">
-              thread {runsWhere.threadId}
+              thread {runsFilter.threadId}
               <XIcon />
             </Button>
           )}
@@ -224,7 +224,7 @@ export function ReliabilitySection({
               <InlineError label="Runs" error={runsTable.error} onRetry={runsTable.retry} />
             </div>
           )}
-          {runsPage.rows.length === 0 ? (
+          {runsPage.data.length === 0 ? (
             <Empty label="No runs yet" />
           ) : (
             <>
@@ -240,7 +240,7 @@ export function ReliabilitySection({
                   </TableHeadRow>
                 </TableHeader>
                 <TableBody>
-                  {runsPage.rows.map((run) => (
+                  {runsPage.data.map((run) => (
                     <TableRow key={run.runId} className="hover:bg-panel-2">
                       {/* The status pill is the row's handle: it is the first thing an operator
                           reads and the reason they want the run open. */}
@@ -291,9 +291,9 @@ export function ReliabilitySection({
                 </TableBody>
               </Table>
               <Pagination
-                page={runsPage.page}
-                pageSize={runsPage.pageSize}
-                total={runsPage.total}
+                page={runsPage.meta.currentPage}
+                pageSize={runsPage.meta.perPage}
+                total={runsPage.meta.total}
                 onPage={onRunsPageChange}
               />
             </>

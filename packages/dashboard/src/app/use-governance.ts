@@ -9,11 +9,11 @@ import {
 } from '@tanstack/react-query';
 import {
   type ApprovalDecisionInput,
-  type ApprovalWhere,
+  type ApprovalFilter,
   type GovernanceRange,
-  type RunWhere,
-  type ThreadWhere,
-  type ToolCallWhere,
+  type RunFilter,
+  type ThreadFilter,
+  type ToolCallFilter,
   type UpsertModelPriceInput,
   agentClient,
 } from '../client/agent-client';
@@ -90,13 +90,13 @@ export function useSpend(range: GovernanceRange) {
  * The Spend section's two reads, issued together. See the waterfall note above — this exists
  * because calling `useSpend` and a second suspense hook side by side silently serialises them.
  */
-export function useSpendSection(range: GovernanceRange, topThreadsLimit = 10) {
+export function useSpendSection(range: GovernanceRange, topThreadsSize = 10) {
   const [spend, topThreads] = useSuspenseQueries({
     queries: [
       spendQuery(range),
       {
-        queryKey: ['top-threads', range.fromDay, range.toDay, topThreadsLimit],
-        queryFn: () => agentClient.topThreads(range, topThreadsLimit),
+        queryKey: ['top-threads', range.fromDay, range.toDay, topThreadsSize],
+        queryFn: async () => (await agentClient.topThreads(range, topThreadsSize)).data,
         staleTime: STALE.aggregate,
       },
     ],
@@ -122,11 +122,14 @@ export function useToolStats(range: GovernanceRange) {
   });
 }
 
-/** The recent tool-calls feed that backs the denied/forbidden banner. Suspends. */
-export function useToolCalls(limit = 50) {
+/**
+ * The recent tool-calls feed that backs the denied/forbidden banner: the first `size` rows of
+ * `GET tool-calls`, newest first. Suspends.
+ */
+export function useToolCalls(size = 50) {
   return useSuspenseQuery({
-    queryKey: ['tool-calls', limit],
-    queryFn: () => agentClient.toolCalls(limit),
+    queryKey: ['tool-calls', size],
+    queryFn: async () => (await agentClient.toolCalls({ size })).data,
     staleTime: STALE.activity,
   });
 }
@@ -134,49 +137,58 @@ export function useToolCalls(limit = 50) {
 // ─── Paged tables (plain useQuery + keepPreviousData) ───────────────────────
 
 /**
- * A page of the recent-runs table, filtered by `where`. `page`/`where` drive the query key, so a
+ * A page of the recent-runs table, filtered by `filter`. `page`/`filter` drive the query key, so a
  * page change or a filter change refetches; `keepPreviousData` avoids a loading flash between pages.
  */
-export function useRunsPage(page: number, pageSize: number, where: RunWhere) {
+export function useRunsPage(page: number, size: number, filter: RunFilter) {
   return useQuery({
-    queryKey: ['runs-page', page, pageSize, where],
-    queryFn: () => agentClient.runsPage({ page, pageSize, where }),
+    queryKey: ['runs-page', page, size, filter],
+    queryFn: () => agentClient.runs({ page, size, filter }),
     placeholderData: keepPreviousData,
     staleTime: STALE.activity,
   });
 }
 
-/** A page of the tool-calls table, filtered by `where`. See {@link useRunsPage}. */
-export function useToolCallsPage(page: number, pageSize: number, where: ToolCallWhere) {
+/** A page of the tool-calls table, filtered by `filter`. See {@link useRunsPage}. */
+export function useToolCallsPage(page: number, size: number, filter: ToolCallFilter) {
   return useQuery({
-    queryKey: ['tool-calls-page', page, pageSize, where],
-    queryFn: () => agentClient.toolCallsPage({ page, pageSize, where }),
+    queryKey: ['tool-calls-page', page, size, filter],
+    queryFn: () => agentClient.toolCalls({ page, size, filter }),
     placeholderData: keepPreviousData,
     staleTime: STALE.activity,
   });
 }
 
-/** A page of the threads table, filtered by `where`. See {@link useRunsPage}. */
-export function useThreadsPage(page: number, pageSize: number, where: ThreadWhere) {
+/** A page of the threads table, filtered by `filter`. See {@link useRunsPage}. */
+export function useThreadsPage(page: number, size: number, filter: ThreadFilter) {
   return useQuery({
-    queryKey: ['threads-page', page, pageSize, where],
-    queryFn: () => agentClient.threadsPage({ page, pageSize, where }),
+    queryKey: ['threads-page', page, size, filter],
+    queryFn: () => agentClient.threads({ page, size, filter }),
     placeholderData: keepPreviousData,
     staleTime: STALE.activity,
   });
 }
 
 /**
- * A page of the cross-thread approvals inbox, with the backlog `total`. Replaces `GET approvals`
- * for the inbox itself: the unpaged read is capped at 50 with no total, so a 51st pending decision
- * was invisible and nothing on screen said so.
+ * A page of the cross-thread approvals inbox, with the backlog size in `meta.total` — a 51st pending
+ * decision is a second page, never an invisible one.
  */
-export function useApprovalsPage(page: number, pageSize: number, where: ApprovalWhere) {
+export function useApprovalsPage(page: number, size: number, filter: ApprovalFilter) {
   return useQuery({
-    queryKey: ['approvals-page', page, pageSize, where],
-    queryFn: () => agentClient.approvalsPage({ page, pageSize, where }),
+    queryKey: ['approvals-page', page, size, filter],
+    queryFn: () => agentClient.approvals({ page, size, filter }),
     placeholderData: keepPreviousData,
     staleTime: STALE.queue,
+  });
+}
+
+/** The Organization the console is scoped to (tenancy), for the header chip. Never suspends. */
+export function useConsoleTenancy() {
+  return useQuery({
+    queryKey: ['tenancy'],
+    queryFn: () => agentClient.tenancy(),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
   });
 }
 
@@ -184,7 +196,7 @@ export function useApprovalsPage(page: number, pageSize: number, where: Approval
  * The pending-approval backlog SIZE, for the nav badge — the one number that has to be true while
  * the operator is looking at some other section, so it is the one query the shell keeps mounted.
  *
- * `pageSize: 1` because only `total` is read; the single row that comes back is the price of the
+ * `size: 1` because only `meta.total` is read; the single row that comes back is the price of the
  * endpoint not having a count-only form. Its key is deliberately NOT a prefix of `approvals-page`,
  * so paging the inbox never evicts the badge and vice versa.
  *
@@ -206,20 +218,10 @@ export function useApprovalsPage(page: number, pageSize: number, where: Approval
  * interval used to drive, and 20 seconds of latency on a queue that waits for a human to walk over
  * and read it is not the bottleneck.
  */
-/** The Organization the console is scoped to (tenancy), for the header chip. Never suspends. */
-export function useConsoleTenancy() {
-  return useQuery({
-    queryKey: ['tenancy'],
-    queryFn: () => agentClient.tenancy(),
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: false,
-  });
-}
-
 export function useApprovalsCount() {
   return useQuery({
     queryKey: ['approvals-count'],
-    queryFn: async () => (await agentClient.approvalsPage({ page: 1, pageSize: 1 })).total,
+    queryFn: async () => (await agentClient.approvals({ page: 1, size: 1 })).meta.total,
     staleTime: STALE.queue,
     refetchInterval: 20_000,
     // Keep counting while the operator is in another tab — that is the entire point of this query.

@@ -329,11 +329,12 @@ the inbox read-only rather than pretending decisions are being applied.
 ## Paginated, filterable lists
 
 `toolCallsPage`, `threadsPage`, and `runsPage` back the console's list views with real pagination
-instead of a latest-N cap: a neutral `GovernancePageQuery<TWhere>` (`page`, `limit`, a typed `where`)
+instead of a latest-N cap: a neutral `GovernancePageQuery<TWhere>` (`page`, `pageSize`, a typed `where`)
 returns a `GovernancePage` with a real `COUNT`, offset paging, deterministic id tiebreaks, and
-case-insensitive title search where relevant. The dashboard's HTTP surface speaks the same wire
-grammar the rest of the ecosystem uses — `page`, `limit`, `where[field]=value`, with an unknown
-field 400ing — so the SPA's tables get prev/next paging with per-table debounced filters. The
+case-insensitive title search where relevant. The dashboard's HTTP surface speaks the Aviary list
+wire the rest of the ecosystem uses — `page`, `size`, `filter[field]=value`, answering
+`{ data, meta }`, with an unknown filter field 400ing — so the SPA's tables get prev/next paging
+with per-table filters. The
 latest-N reads (`recentToolCalls`, `recentThreads`, `recentRuns`) remain for the Telescope bridge,
 which doesn't need pagination.
 
