@@ -40,7 +40,7 @@ function renderReliability(overview = MOCK_RELIABILITY) {
       <ReliabilitySection
         overview={overview}
         runsTable={{ page: MOCK_RUNS_PAGE, error: null, retry: () => {} }}
-        runsWhere={{}}
+        runsFilter={{}}
         onRunsStatusChange={() => {}}
         onRunsAgentNameChange={() => {}}
         onRunsThreadIdClear={() => {}}

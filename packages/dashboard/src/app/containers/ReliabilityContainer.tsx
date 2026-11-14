@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { GovernanceRange, RunWhere } from '../../client/agent-client';
+import type { GovernanceRange, RunFilter } from '../../client/agent-client';
 import { ReliabilitySection } from '../ReliabilitySection';
 import { useDrillDown } from '../drill-down';
 import { hashForSection } from '../hash-section';
@@ -10,8 +10,8 @@ import { useReliability, useRunsPage } from '../use-governance';
  * Reliability. Owns the reliability overview and the paged recent-runs table.
  *
  * `threadId` comes from the hash (`#/reliability?threadId=…`), which is how a thread drill-down
- * says "show me everything this thread ran". `where[threadId]` on `runs-page` used to 400 with
- * "Unknown where field"; it works now, so the link is real rather than a plan.
+ * says "show me everything this thread ran" — `filter[threadId]` on `GET runs`. The thread filter
+ * once 400'd as an unknown field; it works now, so the link is real rather than a plan.
  *
  * Dismissing that filter navigates rather than setting local state, so the address bar never
  * disagrees with the table — a URL that still says `?threadId=th2` next to an unfiltered table is
@@ -31,7 +31,7 @@ export function ReliabilityContainer({
   const [status, setStatus] = useState('');
   const [agentName, setAgentName] = useState('');
 
-  const where: RunWhere = {
+  const where: RunFilter = {
     ...(status !== '' ? { status } : {}),
     ...(agentName !== '' ? { agentName } : {}),
     ...(threadId !== undefined && threadId !== '' ? { threadId } : {}),
@@ -42,7 +42,7 @@ export function ReliabilityContainer({
     <ReliabilitySection
       overview={reliability.data}
       runsTable={pagedTable(runsQuery, pageNum, PAGE_SIZE)}
-      runsWhere={where}
+      runsFilter={where}
       onRunsStatusChange={(value) => {
         setStatus(value);
         setPageNum(1);

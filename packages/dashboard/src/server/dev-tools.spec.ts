@@ -166,17 +166,18 @@ describe('agent dev tools registration', () => {
 });
 
 describe('agent dev tools', () => {
-  it('agent_list_runs reads what GET runs-page serves, as { items, next, total }', async () => {
+  it('agent_list_runs reads what GET runs serves, as { items, next, total }', async () => {
     const server = await boot(AgentDashboardModule.forRoot({ authorize: () => true }));
     const api = await request(server)
-      .get('/ai-gateway/api/runs-page?page=1&limit=1&where[status]=failed')
+      .get('/ai-gateway/api/runs?page=1&size=1&filter[status]=failed')
       .expect(200);
     const result = (await tool('agent_list_runs').run({ status: 'failed', limit: 1 })) as {
       items: unknown[];
       next: number | null;
       total: number;
     };
-    expect(result.items).toEqual(api.body.rows);
+    expect(result.items).toEqual(api.body.data);
+    expect(api.body.meta.total).toBe(3);
     expect(result.next).toBe(2);
     expect(result.total).toBe(3);
     expect(queries.runsPage).toHaveBeenLastCalledWith({

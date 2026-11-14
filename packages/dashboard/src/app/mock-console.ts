@@ -1,7 +1,6 @@
 import {
   MOCK_APPROVALS_PAGE,
   MOCK_GENUI_STATS,
-  MOCK_PENDING_APPROVALS,
   MOCK_PRICES,
   MOCK_RELIABILITY,
   MOCK_RUNS,
@@ -11,7 +10,6 @@ import {
   MOCK_THREADS,
   MOCK_THREADS_PAGE,
   MOCK_THREAD_DETAIL,
-  MOCK_TOOL_CALLS,
   MOCK_TOOL_CALLS_PAGE,
   MOCK_TOOL_STATS,
   MOCK_TOP_THREADS,
@@ -101,24 +99,16 @@ function body(path: string): unknown {
     case '/spend':
       return MOCK_SPEND;
     case '/top-threads':
-      return MOCK_TOP_THREADS;
+      return { data: MOCK_TOP_THREADS };
     case '/reliability':
       return MOCK_RELIABILITY;
     case '/runs':
-      return MOCK_RUNS;
-    case '/runs-page':
       return MOCK_RUNS_PAGE;
     case '/tool-calls':
-      return MOCK_TOOL_CALLS;
-    case '/tool-calls-page':
       return MOCK_TOOL_CALLS_PAGE;
     case '/threads':
-      return MOCK_THREADS;
-    case '/threads-page':
       return MOCK_THREADS_PAGE;
     case '/approvals':
-      return MOCK_PENDING_APPROVALS;
-    case '/approvals-page':
       return MOCK_APPROVALS_PAGE;
     case '/tools':
       return MOCK_TOOL_STATS;

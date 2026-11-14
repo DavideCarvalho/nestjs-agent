@@ -708,16 +708,12 @@ function governanceLimitProvider<TRow>(
 
 // ─── Paged-table providers (tool calls / threads / runs) ─────────────────────
 //
-// Pinned against wave-polish-CONTRACTS.md §A1 (the ext-dashboard paged-table convention: a table
-// panel opts in with `paged: true`, the UI then re-resolves with `query.page`/`query.limit` and
-// expects `{ rows, total, page, limit }` back instead of a bare rows array). The convention is
-// implemented here at the DATA layer — these three providers already read `query.page`/`query.limit`
-// and return the paged shape — but the three list-table panels in `agent-dashboard.spec-data.ts`
-// don't yet set `paged: true`: the installed `@dudousxd/nestjs-telescope` (1.15.0) predates that
-// field on the table `Panel` variant, so setting it would fail typecheck (excess-property error on
-// the discriminated union). Once nestjs-agent bumps its `@dudousxd/nestjs-telescope` dependency to a
-// version that publishes `paged`, flip the three panels below to `paged: true` — no other change
-// needed, the provider side is already ready.
+// The ext-dashboard paged-table convention: a table panel opts in with `paged: true`, the UI then
+// re-resolves with `query.page`/`query.limit` and expects `{ rows, total, page, limit }` back
+// instead of a bare rows array. The three list-table panels in `agent-dashboard.spec-data.ts` set
+// `paged: true` (telescope >= 1.18) and read these providers. This is telescope's extension
+// data-provider SPI, not an HTTP list wire, so it keeps its own `{ rows, total, page, limit }`
+// shape; the wire its UI sees is telescope's own concern.
 
 /**
  * Clamp a panel-supplied `page` to `[1, Infinity)`, defaulting to 1 when absent/invalid.

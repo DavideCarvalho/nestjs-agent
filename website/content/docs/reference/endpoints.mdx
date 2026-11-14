@@ -251,22 +251,20 @@ defaults from it.
 
 Mounted by `AgentDashboardModule.forRoot({ apiBasePath })` (default `/ai-gateway/api`, i.e. `<basePath>/api` under the default `/ai-gateway` UI base). Requires `AGENT_GOVERNANCE_QUERIES` to be bound by a store adapter (e.g. `MikroOrmAgentStoreModule`). The console's sections now live on hash routes (`/ai-gateway#/reliability`, `#/approvals`, …), deep-linkable on full page load.
 
+List endpoints (`runs`, `tool-calls`, `threads`, `approvals`) use the Aviary list wire: `page` (1-based, default 1), `size` (default 25, clamped to 200), `filter[field]=value`, and a `sort` that accepts only the list's one fixed order. They answer `{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`. An unknown filter field, an unsupported operator, a malformed `page`/`size` or any other `sort` is a `400`.
+
 | Method | Path | Query / Body | Returns |
 |---|---|---|---|
 | `GET` | `/ai-gateway/api/spend` | `from?`, `to?` (`YYYY-MM-DD`, default last 30 days) | `SpendOverview` — `{ byModel: ModelSpendRow[]; byActor: ActorSpendRow[]; trend: UsageTrendPoint[] }` |
-| `GET` | `/ai-gateway/api/top-threads` | `from?`, `to?`, `limit?` (default 10, max 200) | `ThreadSpendRowWithLabel[]` — top threads by cost |
+| `GET` | `/ai-gateway/api/top-threads` | `from?`, `to?`, `size?` (default 10, max 200) | `{ data: ThreadSpendRowWithLabel[] }` — top threads by cost (a top-N widget, not a paged list) |
 | `GET` | `/ai-gateway/api/reliability` | `from?`, `to?` | `ReliabilityOverview` — `{ metrics, byAgent, errors, trend }` (success/error rate, retries, p95 duration, run/failure trend, failure breakdown by error code) |
-| `GET` | `/ai-gateway/api/runs` | `limit?` (default 50, max 200) | `RecentRunRow[]` — latest-N reads, feeds the telescope bridge |
-| `GET` | `/ai-gateway/api/runs-page` | `page?` (default 1), `limit?` (default 25, max 200), `where[agentName\|status\|errorCode\|fromDay\|toDay]` | `GovernancePage<RecentRunRow>` — paginated, filterable runs for the Reliability table |
+| `GET` | `/ai-gateway/api/runs` | `page?`, `size?`, `filter[agentName\|status\|errorCode\|threadId\|fromDay\|toDay]`, `sort?` (only `-startedAt`) | `{ data: RecentRunRow[], meta }` — runs, newest first, for the Reliability table |
 | `GET` | `/ai-gateway/api/runs/:runId` | — | `RunDetailWithLabel` — the run, its thread's headline (actor-labeled) and its tool calls; `404` on an unknown run |
-| `GET` | `/ai-gateway/api/tool-calls` | `limit?` (default 50, max 200) | `ToolCallActivityRow[]` |
-| `GET` | `/ai-gateway/api/tool-calls-page` | `page?`, `limit?` (default 25, max 200), `where[toolName\|toolType\|status\|threadId\|fromDay\|toDay]` | `GovernancePage<ToolCallActivityRow>` — paginated, filterable tool-call activity |
+| `GET` | `/ai-gateway/api/tool-calls` | `page?`, `size?`, `filter[toolName\|toolType\|status\|threadId\|fromDay\|toDay]`, `sort?` (only `-createdAt`) | `{ data: ToolCallActivityRow[], meta }` — tool-call activity, newest first |
 | `GET` | `/ai-gateway/api/tools` | `from?`, `to?` | `ToolStatRow[]` — per-tool calls/failed/rejected + p95 executionMs |
-| `GET` | `/ai-gateway/api/threads` | `limit?` (default 50, max 200) | `ThreadActivityRowWithLabel[]` |
+| `GET` | `/ai-gateway/api/threads` | `page?`, `size?`, `filter[actorRef\|fromDay\|toDay]`, `filter[title][contains]` (case-insensitive substring), `sort?` (only `-lastActivityAt`) | `{ data: ThreadActivityRowWithLabel[], meta }` — threads, newest activity first |
 | `GET` | `/ai-gateway/api/threads/:threadId` | `messages?` (default 50, max 200), `runs?` (default 25, max 200) | `ThreadDetailWithLabel` — the thread, its runs and newest messages, with `runTotal` / `thread.messageCount` for what the caps hid; a soft-deleted thread comes back flagged `deleted: true`; `404` on an unknown thread |
-| `GET` | `/ai-gateway/api/threads-page` | `page?`, `limit?` (default 25, max 200), `where[actorRef\|title\|fromDay\|toDay]` (`title` is a case-insensitive substring match) | `GovernancePage<ThreadActivityRowWithLabel>` |
-| `GET` | `/ai-gateway/api/approvals` | `limit?` (default 50, max 200) | `PendingApprovalRow[]` — tool calls sitting `pending_approval`, oldest first |
-| `GET` | `/ai-gateway/api/approvals-page` | `page?`, `limit?` (default 25, max 200), `where[toolName\|threadId\|actorRef\|agentName\|fromDay\|toDay]` | `GovernancePage<PendingApprovalRow>` — the inbox with a `total`, oldest first |
+| `GET` | `/ai-gateway/api/approvals` | `page?`, `size?`, `filter[toolName\|threadId\|actorRef\|agentName\|fromDay\|toDay]`, `sort?` (only `requestedAt`) | `{ data: PendingApprovalRow[], meta }` — tool calls sitting `pending_approval`, oldest first; `meta.total` is the backlog |
 | `POST` | `/ai-gateway/api/approvals/:toolCallId` | `{ approved: boolean; reason?: string }` | `204 No Content` — decides a pending HITL tool call, attributed to the resolved decider (see below) |
 | `GET` | `/ai-gateway/api/pricing` | — | `CurrentModelPrice[]` |
 | `POST` | `/ai-gateway/api/pricing` | `{ modelId; inputPricePer1m; outputPricePer1m; cacheWritePricePer1m?; cacheReadPricePer1m? }` | sets a model's current price; `400` on a malformed body |
@@ -278,7 +276,7 @@ thread's action-proposal routes or `AGENT_APPROVAL_PORT.approveActionProposal`.
 
 The dashboard mounts no sign-in routes of its own: say who reaches it with `authorize` — see [Protecting the console](/docs/agent/packages/dashboard#protecting-the-console).
 
-`GovernancePage<T>` is `{ rows: T[]; page: number; pageSize: number; total: number }` (real `COUNT` + offset, deterministic id tiebreaks); an unknown `where` field `400`s naming it. `LiveAgentEvent` is `{ event: string; ts: number; payload: Record<string, unknown> }` — see [Diagnostics events](/docs/agent/reference/diagnostics-events) for the `event` names and `payload` shapes.
+`meta` on the list endpoints is `{ total, perPage, currentPage, lastPage, firstPage }` (real `COUNT` + offset, deterministic id tiebreaks); an unknown `filter` field `400`s naming it. `LiveAgentEvent` is `{ event: string; ts: number; payload: Record<string, unknown> }` — see [Diagnostics events](/docs/agent/reference/diagnostics-events) for the `event` names and `payload` shapes.
 
 <Callout type="warn" title="Two surfaces degrade to 501 / read-only when their port isn't bound">
   `POST /ai-gateway/api/approvals/:toolCallId` returns `501` — and the SPA's Approvals section renders read-only — when no `AGENT_APPROVAL_PORT` is bound (see [DI tokens](/docs/agent/reference/di-tokens)). Likewise, `GET`/`POST /ai-gateway/api/pricing` 501 when no `AGENT_PRICING_STORE` is bound. Every other route above only needs `AGENT_GOVERNANCE_QUERIES`.
