@@ -1,7 +1,7 @@
 import type { UseQueryResult } from '@tanstack/react-query';
-import type { GovernancePage } from '../client/agent-client';
+import type { OffsetPage } from '../client/agent-client';
 
-/** The page size every paged table opens on — no pageSize selector, matching the API's default. */
+/** The page size every paged table opens on — no size selector, matching the API's default. */
 export const PAGE_SIZE = 25;
 
 /**
@@ -15,7 +15,7 @@ export const PAGE_SIZE = 25;
  */
 export interface PagedTable<TRow> {
   /** The newest page that loaded. Falls back to an empty page before the first one arrives. */
-  page: GovernancePage<TRow>;
+  page: OffsetPage<TRow>;
   /** Non-null when the LAST fetch failed. `page` may still hold the previous page's rows. */
   error: unknown;
   retry: () => void;
@@ -23,12 +23,15 @@ export interface PagedTable<TRow> {
 
 /** Adapt a paged react-query result into the shape the table components render from. */
 export function pagedTable<TRow>(
-  query: UseQueryResult<GovernancePage<TRow>, Error>,
+  query: UseQueryResult<OffsetPage<TRow>, Error>,
   page: number,
   pageSize: number,
 ): PagedTable<TRow> {
   return {
-    page: query.data ?? { rows: [], total: 0, page, pageSize },
+    page: query.data ?? {
+      data: [],
+      meta: { total: 0, perPage: pageSize, currentPage: page, lastPage: 1, firstPage: 1 },
+    },
     error: query.isError ? query.error : null,
     retry: () => void query.refetch(),
   };

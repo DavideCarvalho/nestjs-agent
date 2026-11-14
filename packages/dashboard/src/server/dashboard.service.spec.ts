@@ -998,7 +998,7 @@ describe('DashboardService approvals inbox + drill-downs', () => {
 });
 
 describe('AgentApiController approvals inbox + drill-downs', () => {
-  it('approvals-page parses page/limit/where and clamps the page size', () => {
+  it('GET approvals parses page/size/filter, clamps the size and answers { data, meta }', async () => {
     const seen: unknown[] = [];
     const queries = fakeQueries({});
     const service = new DashboardService({
@@ -1010,18 +1010,41 @@ describe('AgentApiController approvals inbox + drill-downs', () => {
     });
     const controller = new AgentApiController(service, undefined);
 
-    void controller.approvalsPage('2', '9999', { toolName: 'deploy', actorRef: 'ops' });
+    const result = await controller.approvals({
+      page: '2',
+      size: '9999',
+      filter: { toolName: 'deploy', actorRef: 'ops' },
+    });
 
     expect(seen).toEqual([
       { page: 2, pageSize: 200, where: { toolName: 'deploy', actorRef: 'ops' } },
     ]);
+    expect(result).toEqual({
+      data: [],
+      meta: { total: 0, perPage: 200, currentPage: 2, lastPage: 1, firstPage: 1 },
+    });
   });
 
-  it('approvals-page 400s on an unknown where field, naming it', () => {
+  it('GET approvals 400s on an unknown filter field, naming it', async () => {
     const controller = new AgentApiController(new DashboardService(fakeQueries({})), undefined);
-    expect(() => controller.approvalsPage('1', '25', { nonsense: 'x' })).toThrow(
-      /Unknown where field "nonsense"/,
+    await expect(controller.approvals({ filter: { nonsense: 'x' } })).rejects.toThrow(
+      /unknown field "nonsense"/,
     );
+  });
+
+  it('GET top-threads takes size and answers { data }', async () => {
+    const seen: number[] = [];
+    const service = new DashboardService({
+      ...fakeQueries({}),
+      async spendByThread(_range, limit) {
+        seen.push(limit);
+        return [];
+      },
+    });
+    const controller = new AgentApiController(service, undefined);
+    await expect(controller.topThreads({ size: '3' })).resolves.toEqual({ data: [] });
+    await expect(controller.topThreads({})).resolves.toEqual({ data: [] });
+    expect(seen).toEqual([3, 10]);
   });
 
   it('thread detail defaults and clamps the two row caps independently', async () => {

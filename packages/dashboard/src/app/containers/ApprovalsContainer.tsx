@@ -7,9 +7,9 @@ import { useApprovalsPage, useDecideApproval } from '../use-governance';
 /**
  * Approvals. Owns the paged inbox and the decide mutation.
  *
- * The inbox reads `approvals-page`, not the capped `approvals` this console used to call: a queue
- * that silently truncates at 50 is the one table here where being wrong costs someone a decision
- * nobody made.
+ * The inbox reads `GET approvals` as a paged list with a total, not the capped array it once was:
+ * a queue that silently truncates at 50 is the one table here where being wrong costs someone a
+ * decision nobody made.
  */
 export function ApprovalsContainer() {
   const { open } = useDrillDown();
