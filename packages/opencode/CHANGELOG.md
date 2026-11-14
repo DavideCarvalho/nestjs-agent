@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-opencode
 
+## 2.0.1
+
+### Patch Changes
+
+- [#438](https://github.com/DavideCarvalho/nestjs-agent/pull/438) [`742a8f2`](https://github.com/DavideCarvalho/nestjs-agent/commit/742a8f2a8580e60985c8847454a607d89598381a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - A turn's `wallClockMs` limit no longer stops a turn a millisecond or so early. Timers can fire slightly before `Date.now()` says the time is up, so the stop could land (and `onStop` report an `elapsedMs`) just under the limit; an early timer now waits out the rest.
+
 ## 2.0.0
 
 ### Major Changes
