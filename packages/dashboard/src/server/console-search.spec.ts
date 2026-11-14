@@ -238,6 +238,8 @@ describe('sanitizeSearchHits', () => {
           { title: 'a', subtitle: 's', href: '/a' },
           { title: '', href: '/b' },
           { title: 'c', href: 'javascript:alert(1)' },
+          { title: 'd', href: '/\\evil.test' },
+          { title: 'e', href: '/e\u0000x' },
           'junk',
         ],
         5,
