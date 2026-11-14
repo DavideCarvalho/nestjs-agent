@@ -21,7 +21,11 @@ export const AXIS_TICK = {
 export const AXIS_LINE = { stroke: 'var(--aviary-line)' } as const;
 
 /** The vertical guide recharts draws under the pointer (and under keyboard focus). */
-export const CURSOR = { stroke: 'var(--aviary-line)', strokeWidth: 1, strokeDasharray: '3 3' } as const;
+export const CURSOR = {
+  stroke: 'var(--aviary-line)',
+  strokeWidth: 1,
+  strokeDasharray: '3 3',
+} as const;
 
 /** Grid: horizontal hairlines only — vertical ones fight the page's blueprint background. */
 export const GRID = { stroke: 'var(--aviary-line-soft)', vertical: false } as const;

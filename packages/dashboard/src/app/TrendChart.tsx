@@ -93,7 +93,11 @@ export function TrendChart({
                 if (!props.active || !point) return null;
                 return (
                   <TooltipCard title={formatDayLabel(point.day)}>
-                    <TooltipRow color="var(--aviary-accent)" label={label} value={format(point[metric])} />
+                    <TooltipRow
+                      color="var(--aviary-accent)"
+                      label={label}
+                      value={format(point[metric])}
+                    />
                   </TooltipCard>
                 );
               }}
