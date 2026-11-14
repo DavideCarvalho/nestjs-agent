@@ -18,16 +18,22 @@ const REDACTED = '[redacted]';
  * the numbers of token-count keys (`inputTokens`, `tokenCount`).
  */
 export function redactDevToolOutput(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return '[circular]';
-    seen.add(value);
-    return value.map((item) => redactDevToolOutput(item, seen));
-  }
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'bigint') return value.toString();
   if (typeof value !== 'object' || value === null) return value;
+  // `seen` holds the objects on the current path only, so a value shared by two fields (the same
+  // definition under `stored` and `definition`) is printed twice; only a real cycle is `[circular]`.
   if (seen.has(value)) return '[circular]';
   seen.add(value);
+  try {
+    return redactObject(value, seen);
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function redactObject(value: object, seen: WeakSet<object>): unknown {
+  if (Array.isArray(value)) return value.map((item) => redactDevToolOutput(item, seen));
   const source =
     typeof (value as { toJSON?: unknown }).toJSON === 'function'
       ? (value as { toJSON(): unknown }).toJSON()
