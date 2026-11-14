@@ -989,7 +989,7 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       return milestone;
     } finally {
       watch.observing = false;
-      if (wall !== undefined) clearTimeout(wall);
+      wall?.();
     }
   }
 
@@ -1666,18 +1666,31 @@ export class OpenCodeTurns implements OnApplicationShutdown {
       this.logger.warn(`run ${runId}: passed its ${reason} limit, but its owner could not be read`);
   }
 
-  /** The wall-clock bound of an observation: a timer for what is left of it, if anything. */
-  private watchClock(watch: TurnWatch): ReturnType<typeof setTimeout> | undefined {
+  /**
+   * The wall-clock bound of an observation: a timer for what is left of it, if anything, and how to
+   * cancel it. A timer may fire a millisecond or so before `Date.now()` says the time is up (timers
+   * run on a monotonic clock, rounded): one that fires early waits out the rest, so a turn is never
+   * stopped before its limit and its `elapsedMs` never reads under it.
+   */
+  private watchClock(watch: TurnWatch): (() => void) | undefined {
     const max = watch.limits.wallClockMs;
     if (max === undefined) return undefined;
-    const left = watch.startedAt + max - Date.now();
-    if (left <= 0) {
+    const left = () => watch.startedAt + max - Date.now();
+    if (left() <= 0) {
       watch.pending ??= 'wall-clock';
       return undefined;
     }
-    const timer = setTimeout(() => void this.limitStop(watch.runId, 'wall-clock'), left);
-    timer.unref?.();
-    return timer;
+    let timer: ReturnType<typeof setTimeout>;
+    const arm = (ms: number): void => {
+      timer = setTimeout(() => {
+        const rest = left();
+        if (rest > 0) arm(rest);
+        else void this.limitStop(watch.runId, 'wall-clock');
+      }, ms);
+      timer.unref?.();
+    };
+    arm(left());
+    return () => clearTimeout(timer);
   }
 
   private counts(watch: TurnWatch): OpenCodeTurnCounts {

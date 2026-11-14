@@ -72,6 +72,10 @@ async function buildApp(store: AgentStore, chosen: FakeScript = script) {
       DurableModule.forRoot({
         store: new InMemoryStateStore(),
         transport: new EventEmitterTransport(new EventEmitter2()),
+        // A failing model step's retries (`@Step({ retries: 3 })`) each wait for the next timer
+        // poll. At its 1 s default a detached run that dies takes 2 s or more to settle, as long as
+        // `eventually` polls for its failure.
+        timerPollMs: 20,
       }),
       AgentModule.forRoot({
         model: new FakeModelProvider(chosen),
