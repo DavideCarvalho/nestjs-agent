@@ -29,6 +29,12 @@ import {
 import { ApplicationConfig, ModuleRef } from '@nestjs/core';
 import type { AgentMcpServerModuleOptions } from '../agent-mcp-server.options.js';
 import { AGENT_MCP_SERVER_OPTIONS } from '../tokens.js';
+import {
+  type DevToolsActionRefusal,
+  DevToolsActionsGate,
+  type ResolvedActionsMap,
+  resolveActionsMap,
+} from './actions.js';
 import { type DevToolsSnapshot, type ServedDevToolsLib, servedLibs, snapshot } from './catalog.js';
 import {
   type DevTool,
@@ -44,7 +50,7 @@ import {
   redactDevToolOutput,
   truncateText,
 } from './limits.js';
-import { type DevToolsActions, type ResolvedDevToolsOptions, actionAllowed } from './options.js';
+import type { ResolvedDevToolsOptions } from './options.js';
 import { devToolStandardSchema, validateDevToolInput } from './schema.js';
 
 /** DI token: the dev endpoint's resolved options. */
@@ -110,6 +116,8 @@ export class AgentDevToolsEndpoint
   readonly #allowedOrigins: string[] | undefined;
   /** `devTools.authorize`, resolved at `onModuleInit`: the gate of libs without a console. */
   #endpointGate: ConsoleDecide | undefined;
+  /** The map form of `devTools.actions`, each `authorize` resolved at `onModuleInit`. */
+  #actionGates: ResolvedActionsMap = new Map();
 
   constructor(
     @Inject(AGENT_DEV_TOOLS_OPTIONS) readonly options: ResolvedDevToolsOptions,
@@ -154,6 +162,7 @@ export class AgentDevToolsEndpoint
       this.moduleRef as ModuleRef,
       { logger },
     );
+    this.#actionGates = await resolveActionsMap(this.options.actions, this.moduleRef, logger);
   }
 
   /**
@@ -267,30 +276,59 @@ export class AgentDevToolsEndpoint
     await writeWebResponse(response, res);
   }
 
-  /** The SDK server for one request: the allowed libs' tools, available, actions as opted in. */
+  /**
+   * The SDK server for one request: the allowed libs' tools that are available, minus the action
+   * tools `devTools.actions` does not grant this caller, so a refused action is neither listed nor
+   * callable.
+   */
   async #serverFor(admission: Admission): Promise<McpServer> {
-    const actions = this.options.actions;
-    const server = new McpServer(
-      { name: `${this.server.name} dev tools`, version: this.server.version },
-      { capabilities: { tools: {} }, instructions: instructionsFor(admission.allowed, actions) },
+    const gate = new DevToolsActionsGate(
+      this.options.actions,
+      this.#actionGates,
+      admission.context,
+      admission.caller,
     );
+    const served: Array<{ lib: ServedDevToolsLib; tool: DevTool }> = [];
+    let servesActions = false;
     for (const lib of admission.allowed) {
       for (const tool of lib.tools) {
-        if (tool.kind === 'action' && !actionAllowed(actions, lib.lib, tool.name)) continue;
+        // Availability first: an unavailable tool is hidden anyway, so its authorize never runs.
         if (!(await isAvailable(tool))) continue;
-        server.registerTool(
-          tool.name,
-          {
-            description: tool.description,
-            inputSchema: devToolStandardSchema(tool.input),
-            annotations: {
-              readOnlyHint: tool.kind === 'read',
-              ...(tool.kind === 'action' ? { destructiveHint: tool.destructive === true } : {}),
-            },
-          },
-          (args: unknown) => this.#run(admission, lib, tool, args),
-        );
+        if (tool.kind === 'action') {
+          const decision = await gate.decide({
+            lib: lib.lib,
+            tool: tool.name,
+            destructive: tool.destructive === true,
+          });
+          if (decision !== true) {
+            if (gate.dynamic) logActionRefused(admission.caller, lib, tool, decision);
+            continue;
+          }
+        }
+        if (tool.kind === 'action') servesActions = true;
+        served.push({ lib, tool });
       }
+    }
+    const server = new McpServer(
+      { name: `${this.server.name} dev tools`, version: this.server.version },
+      {
+        capabilities: { tools: {} },
+        instructions: instructionsFor(admission.allowed, servesActions),
+      },
+    );
+    for (const { lib, tool } of served) {
+      server.registerTool(
+        tool.name,
+        {
+          description: tool.description,
+          inputSchema: devToolStandardSchema(tool.input),
+          annotations: {
+            readOnlyHint: tool.kind === 'read',
+            ...(tool.kind === 'action' ? { destructiveHint: tool.destructive === true } : {}),
+          },
+        },
+        (args: unknown) => this.#run(admission, lib, tool, args),
+      );
     }
     return server;
   }
@@ -492,14 +530,32 @@ async function safeAuthorize(
   }
 }
 
-function instructionsFor(libs: ServedDevToolsLib[], actions: DevToolsActions): string {
+/** One debug line for an action tool the map or function form of `devTools.actions` refused. */
+function logActionRefused(
+  caller: DevToolsCaller,
+  lib: ServedDevToolsLib,
+  tool: DevTool,
+  refusal: DevToolsActionRefusal,
+): void {
+  logger.debug({
+    devTool: tool.name,
+    lib: lib.lib,
+    caller: caller.id,
+    served: false,
+    reason: refusal.reason,
+    ...(refusal.error !== undefined
+      ? { error: refusal.error instanceof Error ? refusal.error.message : String(refusal.error) }
+      : {}),
+  });
+}
+
+function instructionsFor(libs: ServedDevToolsLib[], servesActions: boolean): string {
   const titles = libs.map((lib) => lib.title);
   const what =
     titles.length > 0 ? `Tools for: ${titles.join(', ')}.` : 'No tools are available to you.';
-  const acts =
-    actions === 'refuse'
-      ? ' Read-only: nothing here changes data.'
-      : ' Some tools are actions that change data: confirm with the person first.';
+  const acts = servesActions
+    ? ' Some tools are actions that change data: confirm with the person first.'
+    : ' Read-only: nothing here changes data.';
   return `Developer tools of this app's Aviary libraries, as their consoles show them. ${what}${acts} List tools return { items, next }; pass next back to page.`;
 }
 

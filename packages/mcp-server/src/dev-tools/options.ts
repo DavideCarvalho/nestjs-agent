@@ -1,7 +1,12 @@
+import { type DevToolsActions, isActionsMap } from './actions.js';
 import type { ConsoleAuthorize } from './endpoint-authorize.js';
 
-/** What `actions` in `devTools` may say: none, all, or these lib ids / tool names. */
-export type DevToolsActions = 'refuse' | 'execute' | string[];
+export type {
+  DevToolsActionRequest,
+  DevToolsActions,
+  DevToolsActionsAuthorizer,
+  DevToolsActionsMap,
+} from './actions.js';
 
 /** The dev MCP endpoint's settings (`AgentMcpServerModule.forRoot({ devTools })`). */
 export interface AgentDevToolsOptions {
@@ -10,9 +15,24 @@ export interface AgentDevToolsOptions {
   /** Lib ids or full tool names left out: `['durable', 'agent_get_spend']`. */
   exclude?: string[];
   /**
-   * Which `action` tools are listed and callable. `'refuse'` (default): none. `'execute'`: all. A
-   * list: the actions of these lib ids, or these tool names. The product endpoint's `actions` never
-   * applies here.
+   * Which `action` tools (retry, cancel, refund…) each request gets, decided per request: a refused
+   * action is neither listed nor callable, and a lib's own console `authorize` still gates the lib
+   * first. The product endpoint's `actions` never applies here.
+   * - `'refuse'` (default): none; `'execute'`: all; `['durable', 'payments_refund_payment']`: those.
+   * - a map of lib ids / tool names to a console `authorize` (a function, a class, a lazy import,
+   *   `{ policy, ability }` or a gate name). A tool-name key wins over its lib's; an action in
+   *   neither is refused; a throw, `{ redirectTo }` or `unauthenticated` refuses. Each distinct
+   *   `authorize` runs once per request.
+   * - a function `(request, { lib, tool, destructive, caller }) => boolean`. Anything but `true`, or
+   *   a throw, refuses.
+   *
+   * ```ts
+   * actions: {
+   *   durable: authorizeByToken({ token: process.env.DEV_TOOLS_TOKEN }),
+   *   durable_cancel_run: (ctx) => ctx.switchToHttp().getRequest().user?.role === 'owner',
+   *   payments_refund_payment: () => false,
+   * },
+   * ```
    */
   actions?: DevToolsActions;
   /**
@@ -46,13 +66,6 @@ export function trimPath(path: string): string {
   return path.replace(/^\/+|\/+$/g, '');
 }
 
-/** Whether `actions` lets this action tool be listed and called. */
-export function actionAllowed(actions: DevToolsActions, lib: string, tool: string): boolean {
-  if (actions === 'execute') return true;
-  if (actions === 'refuse') return false;
-  return actions.includes(lib) || actions.includes(tool);
-}
-
 /**
  * The dev endpoint's resolved options, or `undefined` for `devTools: false`. Throws when its path is
  * the product endpoint's: the two must never share a route.
@@ -73,10 +86,12 @@ export function resolveDevToolsOptions(
   if (
     actions !== 'refuse' &&
     actions !== 'execute' &&
+    typeof actions !== 'function' &&
+    !isActionsMap(actions) &&
     !(Array.isArray(actions) && actions.every((entry) => typeof entry === 'string'))
   ) {
     throw new Error(
-      'AgentMcpServerModule: `devTools.actions` must be "refuse", "execute" or a list of lib ids / tool names.',
+      'AgentMcpServerModule: `devTools.actions` must be "refuse", "execute", a list of lib ids / tool names, a map of lib ids / tool names to an `authorize`, or a function.',
     );
   }
   return {

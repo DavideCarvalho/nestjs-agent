@@ -504,6 +504,140 @@ describe('dev MCP endpoint: actions', () => {
   });
 });
 
+/** A lib with two actions (one destructive), open to every caller. */
+function flagsLib(): DevToolsLib {
+  const action = (name: string, destructive: boolean): DevTool => ({
+    name,
+    kind: 'action',
+    description: `${name}.`,
+    destructive,
+    input: { type: 'object', properties: {} },
+    run: async () => {
+      retried(name);
+      return { ok: true };
+    },
+  });
+  return {
+    lib: 'flags',
+    title: 'Flags',
+    authorize: async () => ({ allowed: true }),
+    tools: [
+      readTool('flags_list_flags'),
+      action('flags_save_flag', false),
+      action('flags_delete_flag', true),
+    ],
+  };
+}
+
+const isAdmin = (context: ExecutionContext) =>
+  context.switchToHttp().getRequest<{ headers: Record<string, string | undefined> }>().headers[
+    'x-role'
+  ] === 'admin';
+
+describe('dev MCP endpoint: actions per caller', () => {
+  it('map: serves the actions each caller is authorized for, a tool key over its lib key', async () => {
+    register(flagsLib());
+    const admins = vi.fn(isAdmin);
+    const context = await boot({
+      devTools: { actions: { flags: admins, flags_delete_flag: () => false } },
+    });
+
+    const admin = await connect(context, { 'x-role': 'admin' });
+    expect(await toolNames(admin)).toEqual(['flags_list_flags', 'flags_save_flag']);
+    expect(admin.getInstructions()).toContain('Some tools are actions');
+    await admin.callTool({ name: 'flags_save_flag', arguments: {} });
+    expect(retried).toHaveBeenCalledWith('flags_save_flag');
+    await expect(admin.callTool({ name: 'flags_delete_flag', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
+
+    const guest = await connect(context, {});
+    expect(await toolNames(guest)).toEqual(['flags_list_flags']);
+    expect(guest.getInstructions()).toContain('Read-only');
+    await expect(guest.callTool({ name: 'flags_save_flag', arguments: {} })).rejects.toThrow(
+      /not found/,
+    );
+    expect(retried).toHaveBeenCalledTimes(1);
+  });
+
+  it('map: runs each authorize once per request, however many tools point at it', async () => {
+    register(flagsLib());
+    const admins = vi.fn(isAdmin);
+    const context = await boot({
+      devTools: { actions: { flags_save_flag: admins, flags_delete_flag: admins } },
+    });
+    const response = await post(context, rpc('tools/list'));
+    expect(response.status).toBe(200);
+    expect(admins).toHaveBeenCalledTimes(1);
+  });
+
+  it('map: an action that matches no key is refused, and logged at debug', async () => {
+    register(flagsLib(), durableLib());
+    const debug = vi.spyOn(Logger.prototype, 'debug');
+    const context = await boot({ devTools: { actions: { flags: () => true } } });
+    const client = await connect(context, { authorization: `Bearer ${ALL}` });
+    expect(await toolNames(client)).not.toContain('durable_retry_run');
+    expect(await toolNames(client)).toContain('flags_delete_flag');
+    expect(debug.mock.calls.map(([line]) => line)).toContainEqual(
+      expect.objectContaining({
+        devTool: 'durable_retry_run',
+        lib: 'durable',
+        reason: 'not-configured',
+      }),
+    );
+  });
+
+  it('map: a throw or a redirectTo refuses', async () => {
+    register(flagsLib());
+    const context = await boot({
+      devTools: {
+        actions: {
+          flags_save_flag: () => {
+            throw new Error('boom');
+          },
+          flags_delete_flag: () => ({ redirectTo: '/login' }),
+        },
+      },
+    });
+    const client = await connect(context, {});
+    expect(await toolNames(client)).toEqual(['flags_list_flags']);
+  });
+
+  it('function: decides each action with the request and the action', async () => {
+    register(flagsLib());
+    const decide = vi.fn(
+      (req: { headers: Record<string, string | undefined> }, action: { destructive: boolean }) =>
+        req.headers['x-role'] === 'admin' && !action.destructive,
+    );
+    const context = await boot({ devTools: { actions: decide } });
+    const admin = await connect(context, { 'x-role': 'admin' });
+    expect(await toolNames(admin)).toEqual(['flags_list_flags', 'flags_save_flag']);
+    expect(decide).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: expect.objectContaining({ 'x-role': 'admin' }) }),
+      {
+        lib: 'flags',
+        tool: 'flags_delete_flag',
+        destructive: true,
+        caller: { id: 'session', via: 'session' },
+      },
+    );
+    const guest = await connect(context, {});
+    expect(await toolNames(guest)).toEqual(['flags_list_flags']);
+  });
+
+  it('function: a throw refuses', async () => {
+    register(flagsLib());
+    const context = await boot({
+      devTools: {
+        actions: () => {
+          throw new Error('boom');
+        },
+      },
+    });
+    expect(await toolNames(await connect(context, {}))).toEqual(['flags_list_flags']);
+  });
+});
+
 describe('dev MCP endpoint: isolation and options', () => {
   it('keeps dev tools off the product endpoint, and product tools off the dev one', async () => {
     register(durableLib());
