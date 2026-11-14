@@ -478,7 +478,7 @@ Most specific wins, and the entry records what it **shadowed**, so the agent can
 depot's version, which differs from the tenant default" instead of choosing silently.
 
 ```http
-GET /agent/skills → [{ name, description, scope, shadows? }]
+GET /agent/skills → { data: [{ name, description, scope, shadows? }] }
 ```
 
 The same list the model is offered, from the same call — so a `/`-autocomplete can never offer a skill

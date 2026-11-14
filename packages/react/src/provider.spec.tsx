@@ -42,7 +42,7 @@ function fakeBackend(): AgentBackend {
 
 describe('AgentProvider', () => {
   it('builds one AgentClient from the connection props and hands it to every hook', async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json([]));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => json({ data: [] }));
     const wrapper = ({ children }: { children: ReactNode }) => (
       <AgentProvider
         baseUrl="https://api.example.com/"
@@ -150,7 +150,7 @@ describe('AgentProvider', () => {
 
 describe('without a provider', () => {
   it('every hook shares one same-origin client on `/agent`', async () => {
-    const fetchMock = vi.fn(async () => json([]));
+    const fetchMock = vi.fn(async () => json({ data: [] }));
     const original = globalThis.fetch;
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {

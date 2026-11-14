@@ -321,7 +321,7 @@ and is stored as an assistant message.
 
 ## Tool catalog
 
-`GET /agent/tools?agent=<name>` returns `{ name, kind, presentation? }[]` for the tools the caller can
+`GET /agent/tools?filter[agent]=<name>` returns `{ data: { name, kind, presentation? }[] }` for the tools the caller can
 reach — what `useToolCatalog` reads to narrate calls by each tool's declared words instead of its
 name (see [How a chat talks about a tool](/docs/agent/guides/tools#how-a-chat-talks-about-a-tool)).
 A runner that serves these routes can answer it from its own tool list; a tool with no entry is

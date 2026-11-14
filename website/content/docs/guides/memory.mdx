@@ -239,22 +239,24 @@ fills up.
 ## Forgetting
 
 ```http
-GET    /agent/memories?threadId=<optional>
+GET    /agent/memories?filter[threadId]=<optional>
 DELETE /agent/memories/:id
 ```
 
 ```json
-[
-  {
-    "id": "mem_01H…",
-    "key": "fiscal-year",
-    "text": "they report on the calendar year",
-    "scope": "actor:u1",
-    "origin": { "author": "agent", "threadId": "thr_…", "runId": "run_…", "actorRef": "u1" },
-    "updatedAt": "2026-09-01T09:12:44.000Z",
-    "overrides": [{ "scope": "global", "text": "the fiscal year starts in October" }]
-  }
-]
+{
+  "data": [
+    {
+      "id": "mem_01H…",
+      "key": "fiscal-year",
+      "text": "they report on the calendar year",
+      "scope": "actor:u1",
+      "origin": { "author": "agent", "threadId": "thr_…", "runId": "run_…", "actorRef": "u1" },
+      "updatedAt": "2026-09-01T09:12:44.000Z",
+      "overrides": [{ "scope": "global", "text": "the fiscal year starts in October" }]
+    }
+  ]
+}
 ```
 
 Three decisions worth naming:

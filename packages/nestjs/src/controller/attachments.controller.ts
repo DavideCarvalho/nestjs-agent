@@ -17,6 +17,7 @@ import {
   Optional,
   PayloadTooLargeException,
   Post,
+  Query,
   Req,
   UnsupportedMediaTypeException,
   UploadedFile,
@@ -27,6 +28,7 @@ import type { Request } from 'express';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { AgentService } from '../agent.service.js';
 import { attachmentLimits } from '../attachment-limits.js';
+import { parsePageParams, rejectUnknownParams } from '../list-api/list-api.js';
 
 /**
  * The most this route will ever read into memory, enforced by multer while the body streams (32
@@ -37,11 +39,15 @@ import { attachmentLimits } from '../attachment-limits.js';
 export const HARD_MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 
 /**
- * How many entries `GET /agent/attachments` returns. Fixed rather than caller-supplied: this route
- * exists so a composer can show the files someone has uploaded, and a host that needs real paging
- * over a large inventory has `AgentService.listAttachments` and its own store's `list` to page with.
+ * How many entries `GET /agent/attachments` returns when the request sends no `size`. The route is
+ * a "most recent uploads" list rather than a paged one: `AttachmentStagingStore.list` takes only a
+ * cap and an exclusive `stagedBefore` instant (no id tiebreak, and a store may ignore it), so it can
+ * neither count nor resume from a keyset. A host that needs real paging over a large inventory has
+ * `AgentService.listAttachments` and its own store to page with.
  */
 export const ATTACHMENT_PAGE_SIZE = 50;
+/** The largest `size` `GET /agent/attachments` honours; bigger values are clamped. */
+export const ATTACHMENT_MAX_PAGE_SIZE = 200;
 
 /**
  * `POST <base>/attachments` — the multipart upload route, live whenever an
@@ -69,7 +75,7 @@ export class AttachmentsController {
   ) {}
 
   /**
-   * The caller's own staged files, newest first — the one question `GET /agent/threads/:id` cannot
+   * `{ data }`: the caller's `size` most recent staged files, newest first — the one question `GET /agent/threads/:id` cannot
    * answer, since an upload that was never sent belongs to no thread.
    *
    * Scoped by the RESOLVED actor and nothing else. There is deliberately no `threadId` filter: a
@@ -78,9 +84,17 @@ export class AttachmentsController {
    * holds. Metadata only — see {@link StagedAttachment}.
    */
   @Get()
-  async list(@Req() req: Request): Promise<StagedAttachment[]> {
+  async list(
+    @Req() req: Request,
+    @Query() query: Record<string, unknown>,
+  ): Promise<{ data: StagedAttachment[] }> {
+    rejectUnknownParams(query, ['size']);
+    const { size } = parsePageParams(query, {
+      defaultSize: ATTACHMENT_PAGE_SIZE,
+      maxSize: ATTACHMENT_MAX_PAGE_SIZE,
+    });
     const actor = await this.actorResolver.resolve(req);
-    return this.agents.listAttachments(actor, { limit: ATTACHMENT_PAGE_SIZE });
+    return { data: await this.agents.listAttachments(actor, { limit: size }) };
   }
 
   @Post()

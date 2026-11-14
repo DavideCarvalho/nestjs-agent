@@ -38,7 +38,7 @@ describe('AgentsController', () => {
 
     const controller = new AgentsController(agents, buildDepsFactory(agents, 'support'));
 
-    expect(controller.list()).toEqual([
+    expect(controller.list({}).data).toEqual([
       { name: 'support', description: 'Handles support tickets.', isDefault: true },
       { name: 'billing', description: 'Answers billing questions.' },
     ]);
@@ -50,7 +50,9 @@ describe('AgentsController', () => {
 
     const controller = new AgentsController(agents, buildDepsFactory(agents));
 
-    expect(controller.list()).toEqual([{ name: 'default', description: '', isDefault: true }]);
+    expect(controller.list({})).toEqual({
+      data: [{ name: 'default', description: '', isDefault: true }],
+    });
   });
 
   it('omits isDefault for every entry when the default agent is not among them', () => {
@@ -59,8 +61,14 @@ describe('AgentsController', () => {
 
     const controller = new AgentsController(agents, buildDepsFactory(agents, 'ghost'));
 
-    expect(controller.list()).toEqual([
+    expect(controller.list({}).data).toEqual([
       { name: 'support', description: 'Handles support tickets.' },
     ]);
+  });
+
+  it('takes no query params: anything sent answers 400', () => {
+    const agents = new AgentRegistry();
+    const controller = new AgentsController(agents, buildDepsFactory(agents));
+    expect(() => controller.list({ limit: '5' })).toThrow(/"limit" was removed/);
   });
 });

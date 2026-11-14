@@ -14,7 +14,11 @@ import { AgentModule } from '../agent.module.js';
 import type { AgentModuleOptions } from '../agent.options.js';
 import { Agent } from '../decorator/agent.decorator.js';
 import { HeaderActorResolver } from '../resolver/header-actor-resolver.js';
-import { ATTACHMENT_PAGE_SIZE, HARD_MAX_ATTACHMENT_BYTES } from './attachments.controller.js';
+import {
+  ATTACHMENT_MAX_PAGE_SIZE,
+  ATTACHMENT_PAGE_SIZE,
+  HARD_MAX_ATTACHMENT_BYTES,
+} from './attachments.controller.js';
 
 /**
  * `AGENT_ATTACHMENT_STAGING` is bound externally (like `AGENT_PRICING_STORE`) — a provider on the
@@ -204,5 +208,35 @@ describe('AttachmentsController', () => {
       allowedContentTypes: ['text/plain'],
       maxPerMessage: 10,
     });
+  });
+
+  it('GET lists `{ data }` sized by `size` (default and cap), and refuses the old params', async () => {
+    const staging = new FakeStagingStore();
+    const limits: (number | undefined)[] = [];
+    Object.assign(staging, {
+      list: async (input: { actor: { id: string }; limit?: number }) => {
+        limits.push(input.limit);
+        return [
+          {
+            mediaId: 'm1',
+            name: 'a.txt',
+            contentType: 'text/plain',
+            sizeBytes: 5,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ];
+      },
+    });
+    const server = (await boot({}, staging)).getHttpServer();
+    const listed = await request(server).get('/agent/attachments').set('x-actor-id', 'u1');
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual({ data: [expect.objectContaining({ mediaId: 'm1' })] });
+    await request(server).get('/agent/attachments?size=3').set('x-actor-id', 'u1').expect(200);
+    await request(server).get('/agent/attachments?size=100000').set('x-actor-id', 'u1').expect(200);
+    expect(limits).toEqual([ATTACHMENT_PAGE_SIZE, 3, ATTACHMENT_MAX_PAGE_SIZE]);
+    const old = await request(server).get('/agent/attachments?limit=5').set('x-actor-id', 'u1');
+    expect(old.status).toBe(400);
+    expect(old.body.message).toContain('"size"');
+    await request(server).get('/agent/attachments?size=0').set('x-actor-id', 'u1').expect(400);
   });
 });

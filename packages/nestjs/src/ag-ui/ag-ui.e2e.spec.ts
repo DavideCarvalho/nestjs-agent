@@ -314,9 +314,9 @@ describe('POST /agent/ag-ui', () => {
     expect(await service.threadOwner(body.threadId)).toBe('alice');
     const threads = await fetch(`${url}/agent/threads`, { headers: { 'x-session': 'alice' } });
     expect(threads.status).toBe(200);
-    expect(((await threads.json()) as { id: string }[]).map((thread) => thread.id)).toEqual([
-      body.threadId,
-    ]);
+    expect(
+      ((await threads.json()) as { data: { id: string }[] }).data.map((thread) => thread.id),
+    ).toEqual([body.threadId]);
     expect((await post(url, input(), null)).status).toBe(403);
   });
 

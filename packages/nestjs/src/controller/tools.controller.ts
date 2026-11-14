@@ -11,6 +11,7 @@ import {
 import { Controller, Get, Inject, NotFoundException, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import type { AgentDepsFactory } from '../agent-deps.factory.js';
+import { parseFilterParams, rejectUnknownParams } from '../list-api/list-api.js';
 
 /**
  * The tools THIS caller can reach through an agent, with how a chat surface should talk about each
@@ -23,7 +24,7 @@ import type { AgentDepsFactory } from '../agent-deps.factory.js';
  * `isEnabled`/`canUse`. Built-in tools the loop serves itself (`ask`, `skill`, `remember`) are not
  * registry tools and are not listed.
  *
- * Posture mirrors `GET /agent/skills`: a plain array, and nothing the caller can pass to widen it —
+ * Posture mirrors `GET /agent/skills`: a `{ data }` list, and nothing the caller can pass to widen it —
  * the actor comes from the resolver, and `agent` only ever narrows to that agent's allow-list.
  */
 @CanAnyone()
@@ -39,12 +40,16 @@ export class ToolsController {
   async list(
     @Req() req: Request,
     /**
-     * The agent whose tools to list. Omitted → the default agent, the one a turn naming none uses.
+     * `filter[agent]=` — the agent whose tools to list. Omitted → the default agent, the one a turn naming none uses.
      * `*` → every agent's: the union of what this actor reaches through any of them, each tool once
      * — for a surface that shows several agents' conversations.
      */
-    @Query('agent') agent?: string,
-  ): Promise<ToolCatalogEntry[]> {
+    @Query() query: Record<string, unknown>,
+  ): Promise<{ data: ToolCatalogEntry[] }> {
+    rejectUnknownParams(query, ['filter']);
+    const agent = parseFilterParams(query, { fields: { agent: ['eq'] } })[0]?.value as
+      | string
+      | undefined;
     // An unknown name would otherwise resolve to NO allow-list — every tool — which is the widest
     // answer this endpoint can give, for a typo.
     if (agent !== undefined && agent !== ALL_AGENTS && this.agents.get(agent) === undefined) {
@@ -68,6 +73,6 @@ export class ToolsController {
         });
       }
     }
-    return [...entries.values()];
+    return { data: [...entries.values()] };
   }
 }

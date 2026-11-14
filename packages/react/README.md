@@ -179,7 +179,7 @@ catalog to the transcript and every tool call carries a `description`, and every
 const chat = useAgentChat();
 const { catalog } = useToolCatalog(); // the provider's backend; `{ backend, agent }` to override
 // Several agents on one surface: every tool the actor reaches through any of them.
-const all = useToolCatalog({ agent: ALL_AGENTS }); // GET /agent/tools?agent=*
+const all = useToolCatalog({ agent: ALL_AGENTS }); // GET /agent/tools?filter[agent]=*
 const transcript = useChatTranscript({ messages: chat.messages, status: chat.status, toolCatalog: catalog });
 
 // in a `tools` block:
@@ -774,7 +774,7 @@ const { providers, selected, select } = chat.models; // loaded on first read
 </select>
 ```
 
-`chat.models` reads `GET <base>/models?agent=` (models grouped by provider, with badges and
+`chat.models` reads `GET <base>/models?filter[agent]=` (models grouped by provider, with badges and
 availability; `list` is the same flattened) the first time `list`/`providers` is read. `select(id)`
 runs this chat's following sends on it (sent as the body's `model`, which the server applies to
 that turn only; switching threads drops the pick); `selected` is the pick, else the thread's pin

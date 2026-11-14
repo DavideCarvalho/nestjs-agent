@@ -106,18 +106,18 @@ describe('@nestjs/ai agent functions as agent tools', () => {
     const server = await boot(new FakeModel([]));
 
     const user = await request(server).get('/agent/tools').set(asUser);
-    expect(user.body as ToolCatalogEntry[]).toEqual(
+    expect(user.body.data as ToolCatalogEntry[]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'weather', kind: 'read' }),
         expect.objectContaining({ name: 'evacuate', kind: 'action' }),
       ]),
     );
-    expect((user.body as ToolCatalogEntry[]).map((tool) => tool.name)).not.toContain('launch');
+    expect((user.body.data as ToolCatalogEntry[]).map((tool) => tool.name)).not.toContain('launch');
 
     const admin = await request(server)
       .get('/agent/tools')
       .set({ 'x-actor-id': 'a1', 'x-actor-role': 'ADMIN' });
-    expect((admin.body as ToolCatalogEntry[]).map((tool) => tool.name)).toContain('launch');
+    expect((admin.body.data as ToolCatalogEntry[]).map((tool) => tool.name)).toContain('launch');
   });
 
   it("runs a call through the method's guards, as the turn's actor", async () => {
@@ -180,6 +180,6 @@ describe('@nestjs/ai agent functions as agent tools', () => {
   it('`agentFunctions: false` leaves them to @nestjs/ai', async () => {
     const server = await boot(new FakeModel([]), { agentFunctions: false });
     const res = await request(server).get('/agent/tools').set(asUser);
-    expect((res.body as ToolCatalogEntry[]).map((tool) => tool.name)).not.toContain('weather');
+    expect((res.body.data as ToolCatalogEntry[]).map((tool) => tool.name)).not.toContain('weather');
   });
 });

@@ -31,9 +31,15 @@ export default defineConfig({
 
 Generates `api.agent.threads.list()`, `api.agent.threads.fork()`, `api.agent.toolCall.approve()`,
 `api.agent.actionProposals.approve()`, `api.agent.quota.report()`, `api.agent.config()`, etc.
-`api.agent.actionProposals.list()` returns one page; the next page's cursor is in the
-`X-Action-Proposals-Next` response header (the React `AgentClient.listActionProposals` follows it). Options: `basePath` (controller mount prefix) and `name` (client namespace,
-default `agent`).
+
+List routes answer the Aviary list wire: `{ data }` (`agents`, `threads`, `skills`, `tools`,
+`memories`, `attachments`; `models` adds `default`/`locked` beside `data`), filtered with flat
+`filter[...]` query keys (`{ 'filter[agent]': 'support' }`) and sized with `size` where they take one.
+`api.agent.actionProposals.list()` returns one cursor page, `{ data, meta: { nextCursor, … } }`: pass
+`meta.nextCursor` back as `after` until it is `null` (the React `AgentClient.listActionProposals`
+does this for you).
+
+Options: `basePath` (controller mount prefix) and `name` (client namespace, default `agent`).
 
 ## License
 

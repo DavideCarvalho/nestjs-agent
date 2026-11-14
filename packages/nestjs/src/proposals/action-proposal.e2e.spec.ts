@@ -126,24 +126,46 @@ it('ends the origin SSE, accepts another turn, approves independently and persis
         expiresAt: null,
         idempotencyKey: `page-${index}`,
       });
-    const firstPage = await request(server)
-      .get(`/agent/threads/${thread.id}/action-proposals`)
-      .expect(200);
-    expect(firstPage.body).toHaveLength(1000);
-    const next = firstPage.headers['x-action-proposals-next'];
+    const route = `/agent/threads/${thread.id}/action-proposals`;
+    // Default page: ACTION_PROPOSAL_PAGE_SIZE rows and a next cursor, nothing in a header.
+    const byDefault = await request(server).get(route).expect(200);
+    expect(byDefault.body.data).toHaveLength(100);
+    expect(byDefault.body.meta).toMatchObject({ hasNext: true, hasPrev: false, prevCursor: null });
+    expect(byDefault.headers['x-action-proposals-next']).toBeUndefined();
+    // `first` over the cap is clamped to it.
+    const firstPage = await request(server).get(route).query({ first: 5000 }).expect(200);
+    expect(firstPage.body.data).toHaveLength(1000);
+    const next = firstPage.body.meta.nextCursor;
     expect(typeof next).toBe('string');
-    if (typeof next !== 'string') throw new Error('Missing next-page header');
-    const after = decodeURIComponent(next);
     const secondPage = await request(server)
-      .get(`/agent/threads/${thread.id}/action-proposals`)
-      .query({ after })
+      .get(route)
+      .query({ after: next, first: 1000 })
       .expect(200);
-    expect(secondPage.body).toHaveLength(2);
-    expect(secondPage.headers['x-action-proposals-next']).toBeUndefined();
-    await request(server)
-      .get(`/agent/threads/${thread.id}/action-proposals`)
-      .query({ after: '{"createdAt":0,"id":"","forged":true}' })
-      .expect(400);
+    expect(secondPage.body.data).toHaveLength(2);
+    expect(secondPage.body.meta).toEqual({
+      nextCursor: null,
+      prevCursor: null,
+      hasNext: false,
+      hasPrev: false,
+    });
+    const ids = new Set(
+      [...firstPage.body.data, ...secondPage.body.data].map((row: { id: string }) => row.id),
+    );
+    expect(ids.size).toBe(1002);
+    // The old JSON keyset, a forged cursor and junk are all malformed cursors.
+    for (const after of [
+      '{"createdAt":0,"id":"","forged":true}',
+      JSON.stringify({ createdAt: 0, id: 'x' }),
+      'not-a-cursor!',
+      Buffer.from('[1]').toString('base64url'),
+      Buffer.from('not json').toString('base64url'),
+      Buffer.from(JSON.stringify([2 ** 60, 'x'])).toString('base64url'),
+    ])
+      await request(server).get(route).query({ after }).expect(400);
+    // Removed and unsupported params answer 400 rather than being ignored.
+    const limited = await request(server).get(route).query({ limit: 5 }).expect(400);
+    expect(limited.body.message).toContain('"first"');
+    await request(server).get(route).query({ before: next }).expect(400);
   } finally {
     await app.close();
   }
@@ -213,8 +235,13 @@ it('never lets a lease token, idempotency key or execution address leave over HT
     const list = await request(server)
       .get(`/agent/threads/${thread.id}/action-proposals`)
       .expect(200);
-    expect(list.body.map((row: { id: string }) => row.id).sort()).toEqual(['leased', 'pending']);
-    expect(list.body.find((row: { id: string }) => row.id === 'leased').execution).toMatchObject({
+    expect(list.body.data.map((row: { id: string }) => row.id).sort()).toEqual([
+      'leased',
+      'pending',
+    ]);
+    expect(
+      list.body.data.find((row: { id: string }) => row.id === 'leased').execution,
+    ).toMatchObject({
       status: 'executing',
     });
     const decided = await request(server)
@@ -232,7 +259,7 @@ it('never lets a lease token, idempotency key or execution address leave over HT
   }
 });
 
-it('lists no proposals (200, []) in blocking mode where the store keeps none, and still refuses a decision (501)', async () => {
+it('lists no proposals (200, empty page) in blocking mode where the store keeps none, and still refuses a decision (501)', async () => {
   const actor = { id: 'a' };
   const inner = new InMemoryAgentStore();
   // A custom store without the proposal capability: it can only ever run blocking approvals.
@@ -254,8 +281,10 @@ it('lists no proposals (200, []) in blocking mode where the store keeps none, an
   try {
     const server = app.getHttpServer();
     const list = await request(server).get('/agent/threads/t1/action-proposals').expect(200);
-    expect(list.body).toEqual([]);
-    expect(list.headers['x-action-proposals-next']).toBeUndefined();
+    expect(list.body).toEqual({
+      data: [],
+      meta: { nextCursor: null, prevCursor: null, hasNext: false, hasPrev: false },
+    });
     await request(server)
       .post('/agent/threads/t1/action-proposals/p1/approve')
       .send({})

@@ -39,6 +39,33 @@ import {
 export type { ThreadPatch } from './backend.js';
 export type { AgentRequestError, HttpErrorListener } from './http-error.js';
 
+/** An unpaged list answer: `{ data }`. */
+interface ListResponse<T> {
+  data: T[];
+}
+
+/** A cursor list answer: `{ data, meta: { nextCursor, prevCursor, hasNext, hasPrev } }`. */
+interface CursorPage<T> {
+  data: T[];
+  meta: {
+    nextCursor: string | null;
+    prevCursor: string | null;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+/** Page size `listActionProposals` asks for: the server's cap, so a thread takes few round trips. */
+const ACTION_PROPOSAL_PAGE_SIZE = 1000;
+
+/** `?filter[k]=v&…` for each defined value; `''` when there is none. */
+function filterQuery(filters: Record<string, string | undefined>): string {
+  const parts = Object.entries(filters)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([key, value]) => `filter[${key}]=${encodeURIComponent(value)}`);
+  return parts.length === 0 ? '' : `?${parts.join('&')}`;
+}
+
 /**
  * Thrown by {@link AgentClient} on a non-2xx response. Carries the HTTP `status` so callers can
  * branch (e.g. 403 → "not your thread", 429 → quota) instead of string-matching a generic Error,
@@ -270,8 +297,13 @@ export class AgentClient implements AgentBackend {
     );
   }
 
-  listThreads(): Promise<ThreadSummary[]> {
-    return this.request<ThreadSummary[]>('GET', '/threads');
+  /**
+   * `GET <path>/threads?size=` — the caller's most recently updated threads, unwrapped from the
+   * server's `{ data }`. `size` omitted → the server's default (50); it caps at 200.
+   */
+  async listThreads(options: { size?: number } = {}): Promise<ThreadSummary[]> {
+    const query = options.size === undefined ? '' : `?size=${encodeURIComponent(options.size)}`;
+    return (await this.request<ListResponse<ThreadSummary>>('GET', `/threads${query}`)).data;
   }
 
   /**
@@ -280,9 +312,9 @@ export class AgentClient implements AgentBackend {
    * reach cannot drift apart. `threadId` reaches the host's own resolver, which may scope a skill to
    * one conversation; omitted, the server reads it as a brand-new thread.
    */
-  listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
-    const query = threadId === undefined ? '' : `?threadId=${encodeURIComponent(threadId)}`;
-    return this.request<SkillCatalogEntry[]>('GET', `/skills${query}`);
+  async listSkills(threadId?: string): Promise<SkillCatalogEntry[]> {
+    const query = filterQuery({ threadId });
+    return (await this.request<ListResponse<SkillCatalogEntry>>('GET', `/skills${query}`)).data;
   }
 
   /**
@@ -290,9 +322,9 @@ export class AgentClient implements AgentBackend {
    * server-declared `presentation` a chat narrates it by — the same list the model is offered.
    * Prefer {@link useToolCatalog}, which fetches it once and shares it.
    */
-  listTools(agent?: string): Promise<ToolCatalogEntry[]> {
-    const query = agent === undefined ? '' : `?agent=${encodeURIComponent(agent)}`;
-    return this.request<ToolCatalogEntry[]>('GET', `/tools${query}`);
+  async listTools(agent?: string): Promise<ToolCatalogEntry[]> {
+    const query = filterQuery({ agent });
+    return (await this.request<ListResponse<ToolCatalogEntry>>('GET', `/tools${query}`)).data;
   }
 
   getThread(id: string): Promise<ThreadDetail> {
@@ -419,21 +451,20 @@ export class AgentClient implements AgentBackend {
   }
 
   /**
-   * `GET <path>/models?agent=&persona=` — the models this caller may pick, grouped by provider, with
-   * `default` the model that agent (under that persona) runs on.
+   * `GET <path>/models?filter[agent]=&filter[persona]=` — the models this caller may pick, grouped by
+   * provider, with `default` the model that agent (under that persona) runs on. The server answers
+   * `{ data: providers, default, locked? }`; this returns it as a {@link ModelCatalogView}.
    */
-  listModels(agent?: string, persona?: string): Promise<ModelCatalogView> {
-    const params = [
-      ...(agent !== undefined ? [`agent=${encodeURIComponent(agent)}`] : []),
-      ...(persona !== undefined ? [`persona=${encodeURIComponent(persona)}`] : []),
-    ];
-    const query = params.length === 0 ? '' : `?${params.join('&')}`;
-    return this.request<ModelCatalogView>('GET', `/models${query}`);
+  async listModels(agent?: string, persona?: string): Promise<ModelCatalogView> {
+    const { data, ...rest } = await this.request<
+      Omit<ModelCatalogView, 'providers'> & { data: ModelCatalogView['providers'] }
+    >('GET', `/models${filterQuery({ agent, persona })}`);
+    return { providers: data, ...rest };
   }
 
   /** `GET <path>/agents` — the registered agents, the default one flagged. */
-  listAgents(): Promise<AgentCatalogEntry[]> {
-    return this.request<AgentCatalogEntry[]>('GET', '/agents');
+  async listAgents(): Promise<AgentCatalogEntry[]> {
+    return (await this.request<ListResponse<AgentCatalogEntry>>('GET', '/agents')).data;
   }
 
   /** `GET <path>/config` — attachment limits and upload mode, and which features are on. */
@@ -454,45 +485,38 @@ export class AgentClient implements AgentBackend {
    * `remember` approves later calls of the same tool in the same thread; `via` names the surface
    * the decision came through (the server records `'web'` when omitted).
    */
+  /**
+   * Every proposal on the thread this caller may see: follows the server's cursor list
+   * (`?after=&first=`, `{ data, meta: { nextCursor } }`) until `nextCursor` is `null`.
+   */
   async listActionProposals({ threadId }: { threadId: string }): Promise<ActionProposalView[]> {
     const proposals = new Map<string, ActionProposalView>();
-    let after: { createdAt: number; id: string } | undefined;
+    const seen = new Set<string>();
+    let after: string | null = null;
     for (;;) {
-      const route = `/threads/${encodeURIComponent(threadId)}/action-proposals${
-        after === undefined ? '' : `?after=${encodeURIComponent(JSON.stringify(after))}`
-      }`;
-      const response = await this.requestResponse('GET', route);
-      const page = await this.handleResponse<unknown>(
-        response,
+      const params = new URLSearchParams({ first: String(ACTION_PROPOSAL_PAGE_SIZE) });
+      if (after !== null) params.set('after', after);
+      const page = await this.request<unknown>(
         'GET',
-        `${this.agentPath()}${route}`,
+        `/threads/${encodeURIComponent(threadId)}/action-proposals?${params.toString()}`,
       );
-      if (!Array.isArray(page)) throw new TypeError('Invalid action proposal page');
-      for (const proposal of page) proposals.set(proposal.id, proposal);
-      const header = response.headers.get('X-Action-Proposals-Next');
-      if (header === null) return [...proposals.values()];
-      let next: unknown;
-      try {
-        next = JSON.parse(decodeURIComponent(header));
-      } catch {
-        throw new TypeError('Invalid action proposal cursor');
-      }
       if (
-        typeof next !== 'object' ||
-        next === null ||
-        !('createdAt' in next) ||
-        typeof next.createdAt !== 'number' ||
-        !Number.isSafeInteger(next.createdAt) ||
-        !('id' in next) ||
-        typeof next.id !== 'string' ||
-        next.id.length === 0 ||
-        next.id.length > 255 ||
-        (after !== undefined &&
-          (next.createdAt < after.createdAt ||
-            (next.createdAt === after.createdAt && next.id <= after.id)))
+        typeof page !== 'object' ||
+        page === null ||
+        !Array.isArray((page as { data?: unknown }).data) ||
+        typeof (page as { meta?: unknown }).meta !== 'object' ||
+        (page as { meta?: unknown }).meta === null
       )
+        throw new TypeError('Invalid action proposal page');
+      const { data, meta } = page as CursorPage<ActionProposalView>;
+      for (const proposal of data) proposals.set(proposal.id, proposal);
+      if (!('nextCursor' in meta)) throw new TypeError('Invalid action proposal page');
+      const next = meta.nextCursor;
+      if (next === null) return [...proposals.values()];
+      if (typeof next !== 'string' || next.length === 0 || seen.has(next))
         throw new TypeError('Invalid or non-advancing action proposal cursor');
-      after = { createdAt: next.createdAt, id: next.id };
+      seen.add(next);
+      after = next;
     }
   }
   approveActionProposal({

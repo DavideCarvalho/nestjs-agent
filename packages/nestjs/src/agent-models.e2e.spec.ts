@@ -122,24 +122,34 @@ describe('GET /agent/models', () => {
     const { server } = await boot();
     const res = await request(server).get('/agent/models').set('x-actor-id', 'u1');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ providers: [], default: null });
+    expect(res.body).toEqual({ data: [], default: null });
   });
 
   it('answers the catalog for the caller and the agent it names', async () => {
     const catalog = new RoleCatalog();
     const { server } = await boot(catalog);
     const res = await request(server)
-      .get('/agent/models?agent=default')
+      .get('/agent/models?filter[agent]=default')
       .set('x-actor-id', 'u1')
       .set('x-actor-role', 'USER');
     expect(res.status).toBe(200);
     expect(res.body.default).toBe('fast');
-    expect(res.body.providers[0].models[1]).toMatchObject({
+    expect(res.body.data[0].models[1]).toMatchObject({
       id: 'pro',
       available: false,
       unavailableReason: 'upgrade your plan',
     });
     expect(catalog.queries[0]).toMatchObject({ actor: { id: 'u1' }, agent: 'default' });
+  });
+
+  it('refuses the old flat ?agent= / ?persona= params with a filter[] hint', async () => {
+    const { server } = await boot();
+    const res = await request(server).get('/agent/models?agent=default').set('x-actor-id', 'u1');
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('filter[agent]');
+    const persona = await request(server).get('/agent/models?persona=x').set('x-actor-id', 'u1');
+    expect(persona.status).toBe(400);
+    expect(persona.body.message).toContain('filter[persona]');
   });
 });
 

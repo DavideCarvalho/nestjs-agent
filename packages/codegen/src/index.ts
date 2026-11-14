@@ -57,11 +57,20 @@ const QUOTA_REPORT =
   "{ windows: { period: 'day' | 'month'; usedTokens?: number; limitTokens?: number; usedUsd: number; " +
   "limitUsd?: number; resetsAt?: string; warnAt?: number }[]; blocked?: { period: 'day' | 'month'; reason?: string }; " +
   "warning?: { period: 'day' | 'month'; ratio: number; reason?: string } }";
-/** `GET /agent/models` — mirrors `ModelCatalogView` in core/src/spi/model-catalog.ts. */
-const MODEL_CATALOG_VIEW =
-  '{ default: string | null; providers: { id: string; label: string; models: { id: string; ' +
+/**
+ * `GET /agent/models` — `ModelCatalogView` (core/src/spi/model-catalog.ts) with its `providers`
+ * served as `data`: `{ data, default, locked? }`.
+ */
+const MODEL_CATALOG_LIST =
+  '{ default: string | null; data: { id: string; label: string; models: { id: string; ' +
   'label: string; description?: string; badges?: string[]; available: boolean; ' +
   'unavailableReason?: string; contextWindow?: number }[] }[]; locked?: { model: string; reason?: string } }';
+
+/** An unpaged list answer: `{ data }`. */
+const list = (item: string): string => `{ data: ${item}[] }`;
+/** A cursor list answer: `{ data, meta }`. */
+const cursorList = (item: string): string =>
+  `{ data: ${item}[]; meta: { nextCursor: string | null; prevCursor: string | null; hasNext: boolean; hasPrev: boolean } }`;
 /** The `GET /agent/agents` catalog entry — mirrors `AgentCatalogEntry` in core/src/types.ts. */
 const AGENT_CATALOG_ENTRY =
   '{ name: string; description: string; isDefault?: boolean; lockedModel?: string; ' +
@@ -114,20 +123,29 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
     route('GET', `${root}/agents`, `${ns}.agents.list`, {
       query: null,
       body: null,
-      response: `${AGENT_CATALOG_ENTRY}[]`,
+      response: list(AGENT_CATALOG_ENTRY),
     }),
     route(
       'GET',
       `${root}/models`,
       `${ns}.models.list`,
-      { query: '{ agent?: string }', body: null, response: MODEL_CATALOG_VIEW },
-      [{ name: 'agent', source: 'query' }],
+      {
+        query: "{ 'filter[agent]'?: string; 'filter[persona]'?: string }",
+        body: null,
+        response: MODEL_CATALOG_LIST,
+      },
+      [
+        { name: 'filter[agent]', source: 'query' },
+        { name: 'filter[persona]', source: 'query' },
+      ],
     ),
-    route('GET', `${root}/threads`, `${ns}.threads.list`, {
-      query: null,
-      body: null,
-      response: `${THREAD_SUMMARY}[]`,
-    }),
+    route(
+      'GET',
+      `${root}/threads`,
+      `${ns}.threads.list`,
+      { query: '{ size?: number }', body: null, response: list(THREAD_SUMMARY) },
+      [{ name: 'size', source: 'query' }],
+    ),
     route(
       'GET',
       `${root}/threads/:id`,
@@ -195,33 +213,33 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       `${root}/skills`,
       `${ns}.skills.list`,
       {
-        query: '{ threadId?: string }',
+        query: "{ 'filter[threadId]'?: string }",
         body: null,
-        response: `${SKILL_CATALOG_ENTRY}[]`,
+        response: list(SKILL_CATALOG_ENTRY),
       },
-      [{ name: 'threadId', source: 'query' }],
+      [{ name: 'filter[threadId]', source: 'query' }],
     ),
     route(
       'GET',
       `${root}/tools`,
       `${ns}.tools.list`,
       {
-        query: '{ agent?: string }',
+        query: "{ 'filter[agent]'?: string }",
         body: null,
-        response: `${TOOL_CATALOG_ENTRY}[]`,
+        response: list(TOOL_CATALOG_ENTRY),
       },
-      [{ name: 'agent', source: 'query' }],
+      [{ name: 'filter[agent]', source: 'query' }],
     ),
     route(
       'GET',
       `${root}/memories`,
       `${ns}.memories.list`,
       {
-        query: '{ threadId?: string }',
+        query: "{ 'filter[threadId]'?: string }",
         body: null,
-        response: `${MEMORY_ENTRY}[]`,
+        response: list(MEMORY_ENTRY),
       },
-      [{ name: 'threadId', source: 'query' }],
+      [{ name: 'filter[threadId]', source: 'query' }],
     ),
     route(
       'DELETE',
@@ -240,11 +258,13 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       body: '{ toolCallId: string }',
       response: '{ ok: boolean }',
     }),
-    route('GET', `${root}/attachments`, `${ns}.attachments.list`, {
-      query: null,
-      body: null,
-      response: `${STAGED_ATTACHMENT}[]`,
-    }),
+    route(
+      'GET',
+      `${root}/attachments`,
+      `${ns}.attachments.list`,
+      { query: '{ size?: number }', body: null, response: list(STAGED_ATTACHMENT) },
+      [{ name: 'size', source: 'query' }],
+    ),
     route(
       'POST',
       `${root}/messages/:id/feedback`,
@@ -316,16 +336,20 @@ function agentRoutes(base: string, ns: string): RouteDescriptor[] {
       { query: null, body: null, response: CHAT_QUEUE_STATE },
       [{ name: 'messageId', source: 'path' }],
     ),
-    // One page per call: the next page's cursor travels in the `X-Action-Proposals-Next` response
-    // header, which a generated client does not surface — `AgentClient.listActionProposals` follows it.
+    // One page per call: pass `meta.nextCursor` back as `after` for the next one, until it is null.
     route(
       'GET',
       `${root}/threads/:threadId/action-proposals`,
       `${ns}.actionProposals.list`,
-      { query: '{ after?: string }', body: null, response: `${ACTION_PROPOSAL}[]` },
+      {
+        query: '{ after?: string; first?: number }',
+        body: null,
+        response: cursorList(ACTION_PROPOSAL),
+      },
       [
         { name: 'threadId', source: 'path' },
         { name: 'after', source: 'query' },
+        { name: 'first', source: 'query' },
       ],
     ),
     route(

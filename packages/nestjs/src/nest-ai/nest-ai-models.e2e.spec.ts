@@ -151,8 +151,8 @@ describe('AgentModule on @nestjs/ai models (no `model` configured)', () => {
     const listed = await request(server).get('/agent/models');
     expect(listed.status).toBe(200);
     expect(listed.body.default).toBe('default');
-    const ids = (listed.body.providers as Array<{ models: Array<{ id: string }> }>).flatMap(
-      (group) => group.models.map((entry) => entry.id),
+    const ids = (listed.body.data as Array<{ models: Array<{ id: string }> }>).flatMap((group) =>
+      group.models.map((entry) => entry.id),
     );
     expect(ids.sort()).toEqual(['default', 'smart']);
 

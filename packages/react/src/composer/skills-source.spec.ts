@@ -17,7 +17,7 @@ const CATALOG = [
 function clientReturning(entries: unknown = CATALOG) {
   const fetchMock = vi.fn<typeof fetch>(
     async () =>
-      new Response(JSON.stringify(entries), {
+      new Response(JSON.stringify({ data: entries }), {
         headers: { 'content-type': 'application/json' },
       }),
   );
@@ -106,7 +106,7 @@ describe('createSkillsSource', () => {
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       '/agent/skills',
-      '/agent/skills?threadId=thr-1',
+      '/agent/skills?filter[threadId]=thr-1',
     ]);
   });
 
@@ -115,7 +115,7 @@ describe('createSkillsSource', () => {
       .fn<typeof fetch>()
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValue(
-        new Response(JSON.stringify(CATALOG), {
+        new Response(JSON.stringify({ data: CATALOG }), {
           headers: { 'content-type': 'application/json' },
         }),
       );

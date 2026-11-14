@@ -48,7 +48,7 @@ export interface ModelsState {
 }
 
 /**
- * The models this caller may pick (`GET <base>/models?agent=`), with badges and availability — the
+ * The models this caller may pick (`GET <base>/models?filter[agent]=`), with badges and availability — the
  * data behind a model picker. Headless: render the options however you like, then send the pick
  * as `useAgentChat({ model })` or `sendMessage(msg, { body: { model } })` (that turn only), or
  * pin it on the thread with `chat.models.pinToThread(id)`.

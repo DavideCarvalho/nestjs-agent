@@ -40,6 +40,7 @@ export {
 export { type ThreadPersonaReader, threadPersona } from './thread-persona.js';
 export {
   AttachmentsController,
+  ATTACHMENT_MAX_PAGE_SIZE,
   ATTACHMENT_PAGE_SIZE,
 } from './controller/attachments.controller.js';
 export {
@@ -86,7 +87,7 @@ export {
 } from './discovery/skill-discovery.service.js';
 export { SkillsController } from './controller/skills.controller.js';
 export { MessagesController } from './controller/messages.controller.js';
-export { ModelsController } from './controller/models.controller.js';
+export { type ModelCatalogListResponse, ModelsController } from './controller/models.controller.js';
 export { ToolsController } from './controller/tools.controller.js';
 export { MemoriesController } from './controller/memories.controller.js';
 export { declaredSkillProvider, resolveSkillsConfig } from './skills-config.js';
@@ -132,7 +133,13 @@ export {
 export * from '@dudousxd/nestjs-agent-core';
 export { RunNotActiveException } from './run-not-active.exception.js';
 export { ActionProposalService } from './proposals/action-proposal.service.js';
-export { ActionProposalController } from './proposals/action-proposal.controller.js';
+export {
+  ACTION_PROPOSAL_MAX_PAGE_SIZE,
+  ACTION_PROPOSAL_PAGE_SIZE,
+  ActionProposalController,
+  decodeActionProposalCursor,
+  encodeActionProposalCursor,
+} from './proposals/action-proposal.controller.js';
 export {
   type ActionProposalAdmittedListener,
   type ActionProposalSettledListener,
@@ -140,7 +147,11 @@ export {
 } from './proposals/action-proposal-worker.service.js';
 // The agent's controllers, for an app that mounts the routes itself (`routes: false`).
 export { ChatController } from './controller/chat.controller.js';
-export { ThreadsController } from './controller/threads.controller.js';
+export {
+  THREAD_LIST_MAX_SIZE,
+  THREAD_LIST_SIZE,
+  ThreadsController,
+} from './controller/threads.controller.js';
 export { ToolCallController } from './controller/tool-call.controller.js';
 export { QuotaController } from './controller/quota.controller.js';
 export { AgentsController } from './controller/agents.controller.js';

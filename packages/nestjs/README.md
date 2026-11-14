@@ -91,7 +91,7 @@ it:
 })
 ```
 
-`GET /agent/tools?agent=<name>` returns `ToolCatalogEntry[]` — `{ name, kind, presentation? }` for the
+`GET /agent/tools?filter[agent]=<name>` returns `{ data: ToolCatalogEntry[] }` — `{ name, kind, presentation? }` for the
 tools THIS actor can reach through that agent (the default agent when omitted; `404` for an unknown
 one), built by `ToolRegistry.visibleSpecs`, the same gates the model is offered tools through. The
 React package's `useToolCatalog` reads it. The model never sees `presentation`.
@@ -190,8 +190,8 @@ References are re-derived on every call rather than latched, because `truncateFr
 regenerating a turn does — deletes messages and frees their media again. If either method is
 missing the call raises `501` rather than reporting everything as collectable.
 
-`GET /agent/attachments` returns the caller's own staged files as metadata (no urls — those are
-minted per turn by `resolve`), bounded to `ATTACHMENT_PAGE_SIZE`. It takes no `threadId` filter: a thread's attachments already
+`GET /agent/attachments` returns `{ data }`: the caller's own staged files as metadata (no urls — those are
+minted per turn by `resolve`), bounded by `?size=` (default `ATTACHMENT_PAGE_SIZE`, 50; at most 200). It takes no `threadId` filter: a thread's attachments already
 ride on its messages in `GET /agent/threads/:id`.
 
 ### Attachments on nestjs-media (`@dudousxd/nestjs-agent/media`)
@@ -391,7 +391,7 @@ models: {
 },
 ```
 
-`GET /agent/models?agent=` answers the catalog for the caller (empty without one). A turn runs on
+`GET /agent/models?filter[agent]=` answers the catalog (`{ data: providers, default, locked? }`) for the caller (empty without one). A turn runs on
 the send's `model`, else the thread's pinned one (`PATCH /agent/threads/:id { model }`), else the
 provider's default; the id reaches the provider as `ModelTurnArgs.model` for every call of the turn.
 A model the catalog does not list as available for that actor and agent is refused with `400` —
