@@ -24,8 +24,14 @@ describe('paging', () => {
     expect(() => parseRunsQuery({ size: '-5' })).toThrow(BadRequestException);
   });
 
-  it('ignores the removed limit param rather than aliasing it', () => {
-    expect(parseRunsQuery({ limit: '5' })).toEqual({ page: 1, pageSize: 25 });
+  it('400s on the removed limit param, naming size, rather than ignoring it', () => {
+    expect(() => parseRunsQuery({ limit: '5' })).toThrow(BadRequestException);
+    expect(() => parseRunsQuery({ limit: '5' })).toThrow(/"size"/);
+    expect(() => parseRunsQuery({ perPage: '5' })).toThrow(/"size"/);
+  });
+
+  it('400s on a bare filter field, naming filter[field]', () => {
+    expect(() => parseRunsQuery({ status: 'failed' })).toThrow(/filter\[status\]/);
   });
 });
 
@@ -80,8 +86,9 @@ describe('parseToolCallsQuery', () => {
     );
   });
 
-  it('does not read the removed where[...] form', () => {
-    expect(parseToolCallsQuery({ where: { status: 'ok' } })).toEqual({ page: 1, pageSize: 25 });
+  it('400s on the removed where[...] form, naming filter', () => {
+    expect(() => parseToolCallsQuery({ where: { status: 'ok' } })).toThrow(BadRequestException);
+    expect(() => parseToolCallsQuery({ 'where[status]': 'ok' })).toThrow(/"filter"/);
   });
 });
 
@@ -165,5 +172,15 @@ describe('parseTopSize', () => {
     expect(parseTopSize({ size: '5' }, 10)).toBe(5);
     expect(parseTopSize({ size: '9999' }, 10)).toBe(200);
     expect(() => parseTopSize({ size: 'x' }, 10)).toThrow(BadRequestException);
+  });
+
+  it('400s on list params a widget does not take, but keeps its own window params', () => {
+    expect(() => parseTopSize({ page: '2' }, 10)).toThrow(BadRequestException);
+    expect(() => parseTopSize({ filter: { a: 'b' } }, 10)).toThrow(BadRequestException);
+    expect(() => parseTopSize({ sort: '-cost' }, 10)).toThrow(BadRequestException);
+    expect(() => parseTopSize({ limit: '5' }, 10)).toThrow(/"size"/);
+    expect(
+      parseTopSize({ from: '2026-01-01', to: '2026-01-31', size: '3' }, 10, ['from', 'to']),
+    ).toBe(3);
   });
 });

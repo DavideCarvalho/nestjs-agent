@@ -128,7 +128,7 @@ export class AgentApiController {
     @Query('from') from?: string,
     @Query('to') to?: string,
   ): Promise<{ data: ThreadSpendRowWithLabel[] }> {
-    const size = parseTopSize(query, 10);
+    const size = parseTopSize(query, 10, ['from', 'to']);
     return { data: await this.dashboard.topThreads(resolveRange(from, to), size) };
   }
 
