@@ -1,5 +1,13 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.26.0
+
+### Minor Changes
+
+- [#434](https://github.com/DavideCarvalho/nestjs-agent/pull/434) [`c62c0ee`](https://github.com/DavideCarvalho/nestjs-agent/commit/c62c0ee0addbdba73ba503ca29f10703db83dc3b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The console moves onto the shared Aviary console kit: a sidebar shell (console switcher, MONITOR · Spend & usage / Models / Reliability / Live, ACTIVITY · Runs & tools / Generative UI, GOVERNANCE · Approvals / Actors & budgets, CONFIG · Tools / Pricing, signed-in user, light/dark toggle, sign-out), a topbar with the organization, the day range, the live indicator and ⌘K, bundled Sora + JetBrains Mono, Tailwind 4 + React 19, shaped skeletons, error boundaries and empty states, light mode, and a phone-width drawer. Every page, route, drill-down and the access-denied page are kept.
+
+  ⌘K lists the console's pages first and searches each console on its own, streaming the groups in as they answer (`GET <api>/consoles/search?q=&console=<id>` answers for one console). New `AgentDashboardModule.forRoot` options feed the sidebar footer: `viewer: (request) => ({ label, email?, role? })` (default: `request.user` read structurally) and `signOut: '/path' | { href } | { action, csrfToken? } | false` (default: the `account.signOut` an account console announces on the Aviary consoles registry). `AgentUiController.index()` is now async: a host subclass that overrides `index()` must make its override async too (`async index(request?): Promise<string>`).
+
 ## 0.25.1
 
 ### Patch Changes
