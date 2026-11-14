@@ -31,7 +31,7 @@ function InputPreview({ input }: { input: unknown }) {
  * host. `onDecide` rejecting with a `501 ...` message (the shape `agentClient.decideApproval` throws)
  * flips this section READ-ONLY for the rest of the session — the host hasn't bound the port yet.
  *
- * PAGED, over `approvals-page`. The unpaged read this used to call is capped at 50 with no total,
+ * PAGED, over `GET approvals`. The unpaged read this used to call is capped at 50 with no total,
  * so the 51st person waiting on a decision was invisible and nothing on screen admitted it. A queue
  * that hides its own backlog is the worst failure mode a human-in-the-loop surface has, so the
  * header states the backlog outright — "N of M" — even on page one.
@@ -50,7 +50,10 @@ export function ApprovalsSection({
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readOnly, setReadOnly] = useState(false);
-  const { rows, total, page, pageSize } = table.page;
+  const {
+    data: rows,
+    meta: { total, currentPage: page, perPage: pageSize },
+  } = table.page;
 
   async function decide(toolCallId: string, approved: boolean) {
     let reason: string | undefined;

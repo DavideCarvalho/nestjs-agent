@@ -189,26 +189,36 @@ export interface ApprovalDecisionInput {
   reason?: string;
 }
 
-/** Neutral paged query for the governance list reads (mirrors core's `GovernancePageQuery`). */
-export interface GovernancePageQuery<TWhere> {
-  /** 1-based. */
-  page: number;
-  /** Rows per page, clamped server-side to 1..200. */
-  pageSize: number;
-  /** Equality/range filters; absent field = no constraint. */
-  where?: TWhere;
+/**
+ * A governance list request on the Aviary list wire: `page` (1-based, default 1), `size` (default
+ * 25, clamped server-side to 200) and `filter[field]=value`.
+ */
+export interface ListQuery<TFilter> {
+  /** 1-based. Default 1. */
+  page?: number;
+  /** Rows per page. Default 25, clamped server-side to 200. */
+  size?: number;
+  /** Filters; an absent or empty field is no constraint. */
+  filter?: TFilter;
 }
 
-/** One page of a governance list read (mirrors core's `GovernancePage`). */
-export interface GovernancePage<TRow> {
-  rows: TRow[];
+/** The `meta` of an offset list response. Pages are 1-based. */
+export interface OffsetPageMeta {
   total: number;
-  page: number;
-  pageSize: number;
+  perPage: number;
+  currentPage: number;
+  lastPage: number;
+  firstPage: number;
 }
 
-/** Filters for `GET tool-calls-page` (the Runs & tools tool-calls table). */
-export interface ToolCallWhere {
+/** An offset list response: `{ data, meta }`. */
+export interface OffsetPage<TRow> {
+  data: TRow[];
+  meta: OffsetPageMeta;
+}
+
+/** Filters for `GET tool-calls` (the Runs & tools tool-calls table). */
+export interface ToolCallFilter {
   toolName?: string;
   toolType?: string;
   status?: string;
@@ -218,17 +228,17 @@ export interface ToolCallWhere {
   toDay?: string;
 }
 
-/** Filters for `GET threads-page` (the Runs & tools threads table). */
-export interface ThreadWhere {
+/** Filters for `GET threads` (the Runs & tools threads table). */
+export interface ThreadFilter {
   actorRef?: string;
-  /** Substring match on the title (case-insensitive). */
+  /** Substring match on the title (case-insensitive); sent as `filter[title][contains]`. */
   title?: string;
   fromDay?: string;
   toDay?: string;
 }
 
-/** Filters for `GET runs-page` (the Reliability recent-runs table). */
-export interface RunWhere {
+/** Filters for `GET runs` (the Reliability recent-runs table). */
+export interface RunFilter {
   agentName?: string;
   status?: string;
   errorCode?: string;
@@ -238,8 +248,8 @@ export interface RunWhere {
   toDay?: string;
 }
 
-/** Filters for `GET approvals-page` (the paged approvals inbox). */
-export interface ApprovalWhere {
+/** Filters for `GET approvals` (the paged approvals inbox). */
+export interface ApprovalFilter {
   toolName?: string;
   threadId?: string;
   /** The requesting thread's owner. */
@@ -563,17 +573,23 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** `page`/`limit`/`where[field]=value` query params for a paged governance read. */
-function pageQueryParams<TWhere extends object>(
-  query: GovernancePageQuery<TWhere>,
-): URLSearchParams {
-  const params = new URLSearchParams({ page: `${query.page}`, limit: `${query.pageSize}` });
-  if (query.where !== undefined) {
-    for (const [field, value] of Object.entries(query.where)) {
-      if (typeof value === 'string' && value !== '') params.set(`where[${field}]`, value);
+/** Filter fields whose operator is not equality: `filter[<field>][<op>]=value`. */
+const FILTER_OPERATORS: Readonly<Record<string, string>> = { title: 'contains' };
+
+/** `page`/`size`/`filter[field]=value` query params for a governance list read. */
+function pageQueryParams<TFilter extends object>(query: ListQuery<TFilter>): string {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set('page', `${query.page}`);
+  if (query.size !== undefined) params.set('size', `${query.size}`);
+  if (query.filter !== undefined) {
+    for (const [field, value] of Object.entries(query.filter)) {
+      if (typeof value !== 'string' || value === '') continue;
+      const op = FILTER_OPERATORS[field];
+      params.set(op === undefined ? `filter[${field}]` : `filter[${field}][${op}]`, value);
     }
   }
-  return params;
+  const text = params.toString();
+  return text === '' ? '' : `?${text}`;
 }
 
 export const agentClient = {
@@ -586,44 +602,30 @@ export const agentClient = {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
     return http<SpendOverview>(`/spend?${q.toString()}`);
   },
-  /** Top threads by cost for a day range (default 10). */
-  topThreads(range: GovernanceRange, limit = 10): Promise<ThreadSpendRow[]> {
-    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay, limit: `${limit}` });
-    return http<ThreadSpendRow[]>(`/top-threads?${q.toString()}`);
+  /** Top threads by cost for a day range (default 10) — a top-N widget answering `{ data }`. */
+  topThreads(range: GovernanceRange, size = 10): Promise<{ data: ThreadSpendRow[] }> {
+    const q = new URLSearchParams({ from: range.fromDay, to: range.toDay, size: `${size}` });
+    return http<{ data: ThreadSpendRow[] }>(`/top-threads?${q.toString()}`);
   },
   /** Run reliability for a day range: `{ metrics, byAgent, errors, trend }`. */
   reliability(range: GovernanceRange): Promise<ReliabilityOverview> {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
     return http<ReliabilityOverview>(`/reliability?${q.toString()}`);
   },
-  /** Most recent runs (default 50). */
-  runs(limit = 50): Promise<RecentRunRow[]> {
-    return http<RecentRunRow[]>(`/runs?limit=${limit}`);
+  /** A page of runs, newest first — the Reliability recent-runs table. */
+  runs(query: ListQuery<RunFilter> = {}): Promise<OffsetPage<RecentRunRow>> {
+    return http<OffsetPage<RecentRunRow>>(`/runs${pageQueryParams(query)}`);
   },
-  /** Most recent tool calls (default 50). */
-  toolCalls(limit = 50): Promise<ToolCallActivityRow[]> {
-    return http<ToolCallActivityRow[]>(`/tool-calls?limit=${limit}`);
-  },
-  /** A page of tool calls, filtered by `where` — the Runs & tools tool-calls table. */
-  toolCallsPage(
-    query: GovernancePageQuery<ToolCallWhere>,
-  ): Promise<GovernancePage<ToolCallActivityRow>> {
-    return http<GovernancePage<ToolCallActivityRow>>(`/tool-calls-page?${pageQueryParams(query)}`);
+  /** A page of tool calls, newest first — the activity feed and the Runs & tools table. */
+  toolCalls(query: ListQuery<ToolCallFilter> = {}): Promise<OffsetPage<ToolCallActivityRow>> {
+    return http<OffsetPage<ToolCallActivityRow>>(`/tool-calls${pageQueryParams(query)}`);
   },
   /**
-   * Tool calls sitting `pending_approval`, oldest first (default 50) — the approvals inbox.
-   *
-   * Capped with NO total: a backlog past `limit` is invisible in this response. Prefer
-   * {@link agentClient.approvalsPage}, which reports how many are off-screen.
+   * A page of the approvals inbox (tool calls sitting `pending_approval`), oldest first.
+   * `meta.total` is the backlog size.
    */
-  approvals(limit = 50): Promise<PendingApprovalRow[]> {
-    return http<PendingApprovalRow[]>(`/approvals?limit=${limit}`);
-  },
-  /** A page of the approvals inbox with the backlog `total` — oldest first, filtered by `where`. */
-  approvalsPage(
-    query: GovernancePageQuery<ApprovalWhere>,
-  ): Promise<GovernancePage<PendingApprovalRow>> {
-    return http<GovernancePage<PendingApprovalRow>>(`/approvals-page?${pageQueryParams(query)}`);
+  approvals(query: ListQuery<ApprovalFilter> = {}): Promise<OffsetPage<PendingApprovalRow>> {
+    return http<OffsetPage<PendingApprovalRow>>(`/approvals${pageQueryParams(query)}`);
   },
   /** One run with its thread and its tool calls, in one request. Rejects with `404 …` if unknown. */
   runDetail(runId: string): Promise<RunDetail> {
@@ -669,17 +671,9 @@ export const agentClient = {
     const q = new URLSearchParams({ from: range.fromDay, to: range.toDay });
     return http<GenuiStats>(`/genui?${q.toString()}`);
   },
-  /** Most recent threads (default 50). */
-  threads(limit = 50): Promise<ThreadActivityRow[]> {
-    return http<ThreadActivityRow[]>(`/threads?limit=${limit}`);
-  },
-  /** A page of threads, filtered by `where` — the Runs & tools threads table. */
-  threadsPage(query: GovernancePageQuery<ThreadWhere>): Promise<GovernancePage<ThreadActivityRow>> {
-    return http<GovernancePage<ThreadActivityRow>>(`/threads-page?${pageQueryParams(query)}`);
-  },
-  /** A page of runs, filtered by `where` — the Reliability recent-runs table. */
-  runsPage(query: GovernancePageQuery<RunWhere>): Promise<GovernancePage<RecentRunRow>> {
-    return http<GovernancePage<RecentRunRow>>(`/runs-page?${pageQueryParams(query)}`);
+  /** A page of threads, newest activity first — the Runs & tools threads table. */
+  threads(query: ListQuery<ThreadFilter> = {}): Promise<OffsetPage<ThreadActivityRow>> {
+    return http<OffsetPage<ThreadActivityRow>>(`/threads${pageQueryParams(query)}`);
   },
   /** Current price row per model. 501s if the host has no pricing store bound. */
   pricing(): Promise<ModelPrice[]> {

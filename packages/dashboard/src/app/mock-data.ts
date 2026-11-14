@@ -2,9 +2,9 @@ import type {
   ActorSpendRow,
   GenuiDayRow,
   GenuiStats,
-  GovernancePage,
   ModelPrice,
   ModelSpendRow,
+  OffsetPage,
   PendingApprovalRow,
   RecentRunRow,
   ReliabilityOverview,
@@ -417,39 +417,31 @@ export const MOCK_TOP_THREADS: ThreadSpendRow[] = [
   },
 ];
 
-/** Page 1 (of several — `total` exceeds `rows.length`) of the paged tool-calls table for the preview. */
-export const MOCK_TOOL_CALLS_PAGE: GovernancePage<ToolCallActivityRow> = {
-  rows: MOCK_TOOL_CALLS,
-  total: 137,
-  page: 1,
-  pageSize: 25,
+/** Page 1 (of several — `meta.total` exceeds `data.length`) of the paged tool-calls table for the preview. */
+export const MOCK_TOOL_CALLS_PAGE: OffsetPage<ToolCallActivityRow> = {
+  data: MOCK_TOOL_CALLS,
+  meta: { total: 137, perPage: 25, currentPage: 1, lastPage: 6, firstPage: 1 },
 };
 
 /** Page 1 (of several) of the paged threads table for the preview. */
-export const MOCK_THREADS_PAGE: GovernancePage<ThreadActivityRow> = {
-  rows: MOCK_THREADS,
-  total: 46,
-  page: 1,
-  pageSize: 25,
+export const MOCK_THREADS_PAGE: OffsetPage<ThreadActivityRow> = {
+  data: MOCK_THREADS,
+  meta: { total: 46, perPage: 25, currentPage: 1, lastPage: 2, firstPage: 1 },
 };
 
 /** Page 1 (of several) of the paged recent-runs table for the preview. */
-export const MOCK_RUNS_PAGE: GovernancePage<RecentRunRow> = {
-  rows: MOCK_RUNS,
-  total: 482,
-  page: 1,
-  pageSize: 25,
+export const MOCK_RUNS_PAGE: OffsetPage<RecentRunRow> = {
+  data: MOCK_RUNS,
+  meta: { total: 482, perPage: 25, currentPage: 1, lastPage: 20, firstPage: 1 },
 };
 
 /**
- * Page 1 of the paged approvals inbox. `total` deliberately exceeds `rows.length` so the preview
+ * Page 1 of the paged approvals inbox. `meta.total` deliberately exceeds `data.length` so the preview
  * shows the "N of M" line the unpaged inbox could never say.
  */
-export const MOCK_APPROVALS_PAGE: GovernancePage<PendingApprovalRow> = {
-  rows: MOCK_PENDING_APPROVALS,
-  total: 7,
-  page: 1,
-  pageSize: 25,
+export const MOCK_APPROVALS_PAGE: OffsetPage<PendingApprovalRow> = {
+  data: MOCK_PENDING_APPROVALS,
+  meta: { total: 7, perPage: 25, currentPage: 1, lastPage: 1, firstPage: 1 },
 };
 
 /** A failed run's drill-down — the case the console had no way to open. */

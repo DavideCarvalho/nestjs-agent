@@ -223,8 +223,8 @@ import { agentClient } from '@dudousxd/nestjs-agent-dashboard/client';
 const overview = await agentClient.spend({ fromDay: '2026-06-01', toDay: '2026-06-30' });
 // overview.byModel / overview.byActor / overview.trend
 
-const calls = await agentClient.toolCalls(50);
-const threads = await agentClient.threads(50);
+const calls = await agentClient.toolCalls({ size: 50 }); // { data, meta }
+const threads = await agentClient.threads({ page: 2, filter: { title: 'refund' } });
 
 const stop = agentClient.streamEvents((event) => console.log(event.event, event.payload));
 // stop() closes the SSE connection
@@ -235,18 +235,19 @@ Range reads take `{ fromDay, toDay }` (`YYYY-MM-DD`, inclusive UTC).
 | Method | Returns |
 |---|---|
 | `agentClient.spend(range: GovernanceRange)` | `{ byModel, byActor, trend }` for the day range — `byModel`/`byActor` rows carry an `actorLabel: string \| null` when an `ActorDirectory` (`AGENT_ACTOR_DIRECTORY`) is bound server-side. |
-| `agentClient.toolCalls(limit = 50)` | Most recent tool-call activity rows. |
-| `agentClient.threads(limit = 50)` | Most recent thread activity rows. |
-| `agentClient.topThreads(range, limit = 10)` | Top threads by cost. |
+| `agentClient.toolCalls(query?)` | A page of tool-call activity, newest first. |
+| `agentClient.threads(query?)` | A page of thread activity, newest activity first. |
+| `agentClient.topThreads(range, size = 10)` | Top threads by cost, as `{ data }`. |
 | `agentClient.reliability(range)` | `{ metrics, byAgent, errors, trend }`. |
-| `agentClient.runs(limit = 50)` / `runsPage(query)` | Recent runs / a filtered page. |
-| `agentClient.toolCallsPage(query)` / `threadsPage(query)` | Filtered pages (`{ page, pageSize, where? }` → `{ rows, total, … }`). |
-| `agentClient.approvals(limit = 50)` / `approvalsPage(query)` | Pending HITL approvals, oldest first; the paged variant reports `total`. |
+| `agentClient.runs(query?)` | A page of runs, newest first. |
+| `agentClient.approvals(query?)` | A page of pending HITL approvals, oldest first; `meta.total` is the backlog. |
 | `agentClient.runDetail(runId)` / `threadDetail(threadId, { messages?, runs? })` | Drill-downs; reject with a `404 …` error if unknown. |
 | `agentClient.toolStats(range)` | Per-tool governance rollup. |
 | `agentClient.decideApproval(toolCallId, { approved, reason? })` | Decide a pending approval. |
 | `agentClient.pricing()` / `upsertPrice(input)` | Read / upsert model prices. |
 | `agentClient.streamEvents(onEvent)` | Live-tails `aviary:agent:*` over SSE; returns a function that closes the stream. |
+
+The list reads take `{ page?, size?, filter? }` and resolve to `{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`.
 
 ## Reliability, approvals, and tool governance
 
@@ -260,9 +261,9 @@ Beyond spend/usage, the console has three more sections, all fed by the same
   terminal the dropdown omits is one a server-side filter cannot be asked for. A run's drill-down names
   its `parentRunId` when it has one, which for a detached child is the only link back to the turn that
   started it. Backed by `GET
-  <api>/reliability?from&to` and `GET <api>/runs?limit` (paginated variant: `GET <api>/runs-page`).
+  <api>/reliability?from&to` and the paged `GET <api>/runs`.
 - **Approvals** (`#/approvals`) — the cross-thread HITL inbox: every tool call sitting
-  `pending_approval`, oldest first, paged over `GET <api>/approvals-page` with the backlog total, and a
+  `pending_approval`, oldest first, paged over `GET <api>/approvals` with the backlog total, and a
   nav badge showing the pending count. Approve/reject posts
   `POST <api>/approvals/:toolCallId` (`{ approved, reason? }`), which routes through the same decision
   path chat approvals use — **without** re-running chat's own thread-ownership check, since a console
@@ -288,11 +289,14 @@ Both cases are logged 501s, not crashes — the rest of the console keeps workin
 
 Tool calls, threads, runs, and pending approvals are each backed by a paged read (`toolCallsPage` /
 `threadsPage` / `runsPage` / `approvalsPage` on `AgentGovernanceQueries`) exposed over HTTP as `GET
-<api>/tool-calls-page`, `GET <api>/threads-page`, `GET <api>/runs-page`, `GET <api>/approvals-page`. The wire grammar mirrors the rest of the ecosystem: `page`
-(1-based), `limit` (clamped to 200 server-side), and `where[field]=value` filters (an unknown field
-400s). The SPA's list sections use these for prev/next pagination with debounced per-column filters;
-the older `recentToolCalls`/`recentThreads`/`recentRuns` latest-N reads remain in place for the
-Telescope bridge, which only needs the tail.
+<api>/tool-calls`, `GET <api>/threads`, `GET <api>/runs`, `GET <api>/approvals`. They speak the
+Aviary list wire: `page` (1-based), `size` (default 25, clamped to 200), `filter[field]=value`
+(`filter[title][contains]=…` for the thread title search), and a `sort` that accepts only the
+list's fixed order (newest first; approvals oldest first). Responses are
+`{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`. An unknown filter field, an
+unsupported operator or another sort is a `400`. The SPA's list sections use these for prev/next
+pagination with per-column filters; the latest-N `recentToolCalls`/`recentThreads`/`recentRuns`
+SPI reads remain for the Telescope bridge, which only needs the tail.
 
 ## MCP tools
 

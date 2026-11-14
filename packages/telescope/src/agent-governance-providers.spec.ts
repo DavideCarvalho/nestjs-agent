@@ -643,9 +643,8 @@ describe('reliability + tools + approvals providers', () => {
 
 // The three paged-table providers (A1's convention): each reads `query.page`/`query.limit` and
 // returns `{ rows, total, page, limit }` via the paged SPI reads (toolCallsPage/threadsPage/
-// runsPage), NOT the capped `recentX` reads. Pinned against wave-polish-CONTRACTS.md §A1 — see the
-// "Paged-table providers" comment in agent-governance-providers.ts for why the shipped dashboard
-// panels don't set `paged: true` yet.
+// runsPage), NOT the capped `recentX` reads. The shipped dashboard panels set `paged: true` — see
+// the "Paged-table providers" comment in agent-governance-providers.ts.
 describe('paged-table providers (A1)', () => {
   it('passes query.page/query.limit through to toolCallsPage and returns the paged shape', async () => {
     const ctx = contextWith(stubQueries());

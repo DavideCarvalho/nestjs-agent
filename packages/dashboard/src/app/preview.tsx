@@ -109,12 +109,12 @@ function Preview() {
             <RunsToolsSection
               toolCalls={MOCK_TOOL_CALLS}
               toolCallsTable={ok(MOCK_TOOL_CALLS_PAGE)}
-              toolCallsWhere={{}}
+              toolCallsFilter={{}}
               onToolCallsToolNameChange={() => {}}
               onToolCallsStatusChange={() => {}}
               onToolCallsPageChange={() => {}}
               threadsTable={ok(MOCK_THREADS_PAGE)}
-              threadsWhere={{}}
+              threadsFilter={{}}
               onThreadsTitleChange={() => {}}
               onThreadsPageChange={() => {}}
               onOpenRun={() => setOpen('run')}
@@ -125,7 +125,7 @@ function Preview() {
             <ReliabilitySection
               overview={MOCK_RELIABILITY}
               runsTable={ok(MOCK_RUNS_PAGE)}
-              runsWhere={{ threadId: 'th2' }}
+              runsFilter={{ threadId: 'th2' }}
               onRunsStatusChange={() => {}}
               onRunsAgentNameChange={() => {}}
               onRunsThreadIdClear={() => {}}
@@ -181,12 +181,12 @@ function Preview() {
                   MOCK_TOOL_CALLS_PAGE,
                   new Error('500 Internal Server Error'),
                 )}
-                toolCallsWhere={{}}
+                toolCallsFilter={{}}
                 onToolCallsToolNameChange={() => {}}
                 onToolCallsStatusChange={() => {}}
                 onToolCallsPageChange={() => {}}
                 threadsTable={ok(MOCK_THREADS_PAGE)}
-                threadsWhere={{}}
+                threadsFilter={{}}
                 onThreadsTitleChange={() => {}}
                 onThreadsPageChange={() => {}}
               />

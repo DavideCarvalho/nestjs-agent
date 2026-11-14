@@ -197,9 +197,8 @@ Mounted at `apiBasePath`:
 | Method | Path | Response |
 | ------ | ---- | -------- |
 | `GET` | `/spend?from=YYYY-MM-DD&to=YYYY-MM-DD` | `{ byModel: ModelSpendRow[], byActor: ActorSpendRow[], trend: UsageTrendPoint[] }` (defaults to the last 30 days) |
-| `GET` | `/tool-calls?limit=` | `ToolCallActivityRow[]` (default 50, max 200) |
-| `GET` | `/threads?limit=` | `ThreadActivityRow[]` (default 50, max 200) |
-| `GET` | `/<runs\|threads\|tool-calls\|approvals>-page?page=&limit=&where[…]=` | `GovernancePage<Row>` — `{ rows, total, page, pageSize }` |
+| `GET` | `/top-threads?from=&to=&size=` | `{ data: ThreadSpendRow[] }` — top threads by cost (default 10, max 200) |
+| `GET` | `/<runs\|tool-calls\|threads\|approvals>?page=&size=&filter[…]=&sort=` | `{ data: Row[], meta: { total, perPage, currentPage, lastPage, firstPage } }` — `size` default 25, max 200; `sort` accepts only the list's fixed order |
 | `GET` | `/runs/:runId` | `RunDetail` — the run, its thread's headline and its tool calls. `404`s on an unknown id |
 | `GET` | `/threads/:threadId?messages=&runs=` | `ThreadDetail` — the thread, its lifetime usage rollup, newest runs and newest messages |
 | `GET` | `/stream` | SSE of live `aviary:agent:*` events (`{ event, ts, payload }`) |
@@ -234,7 +233,7 @@ Worth knowing before changing it, because two of these are the reason the consol
 
 ## Typed client
 
-For your own front-end, `@dudousxd/nestjs-agent-dashboard/client` exports `agentClient` (`spend`, `toolCalls`, `threads`, the `*Page` reads, `runDetail`, `threadDetail`, `streamEvents`) with the response types — dependency-free.
+For your own front-end, `@dudousxd/nestjs-agent-dashboard/client` exports `agentClient` (`spend`, `runs`, `toolCalls`, `threads`, `approvals`, `runDetail`, `threadDetail`, `streamEvents`) with the response types — dependency-free.
 
 ```ts
 import { agentClient } from '@dudousxd/nestjs-agent-dashboard/client';
