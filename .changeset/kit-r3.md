@@ -1,5 +1,0 @@
----
-'@dudousxd/nestjs-agent-dashboard': minor
----
-
-Console kit r3. Charts move from recharts to the console kit's charts on TanStack Charts: the usage trend (Spend and Generative UI), Reliability's runs vs failed trend (with the failure rate in the tooltip) and the share donuts (spend by model, failures by error code) keep their captions and legends, show a themed tooltip on hover and keyboard focus, and follow the light/dark theme. `recharts` and `react-is` are no longer dependencies of this package. ⌘K now navigates: it lists every page of the sidebar (also found by words such as "cost", "errors", "threads") and every other Aviary console you can open ("Go to Workflows", found by "durable" too), matched case- and accent-insensitively and forgiving plural endings, before the cross-console search hits; it keeps working for pages and consoles when the app doesn't serve `/consoles/search`. The sidebar spacing matches the authkit admin console (32px nav rows, 69px brand header, left-aligned theme toggle).
