@@ -25,17 +25,32 @@ export default defineConfig({
         preview: resolve(__dirname, 'preview.html'),
       },
       output: {
-        // Recharts (with its d3 scales/shapes) is by far the heaviest thing in the bundle, and Base
-        // UI is the second. Both get their own chunk so the console's own code — which changes every
-        // release — does not invalidate ~600 kB of dependencies in every browser cache on every
-        // deploy.
+        // TanStack Charts (with its d3 scales/shapes) and Base UI are the heaviest dependencies in
+        // the bundle. Both get their own chunk so the console's own code — which changes every
+        // release — does not invalidate them in every browser cache on every deploy.
         //
-        // Base UI is listed as the SUBPATHS this console imports rather than the package root: the
+        // Both are listed as the SUBPATHS this console imports (TanStack Charts: the ones
+        // `src/aviary-kit/charts/` imports). Base UI is listed as the SUBPATHS this console imports rather than the package root: the
         // root barrel reaches every primitive in the library, so naming it here would pull the
         // accordion, the menubar and thirty others into the chunk that tree-shaking had correctly
         // left out. Add a line when a new primitive is vendored under `src/app/ui/` or `src/aviary-kit/ui/`.
         manualChunks: {
-          recharts: ['recharts'],
+          charts: [
+            '@tanstack/charts/area',
+            '@tanstack/charts/bar',
+            '@tanstack/charts/group',
+            '@tanstack/charts/line',
+            '@tanstack/charts/mark/decorative',
+            '@tanstack/charts/polar',
+            '@tanstack/charts/react',
+            '@tanstack/charts/scales/band',
+            '@tanstack/charts/scales/linear',
+            '@tanstack/charts/scales/point',
+            '@tanstack/charts/scene',
+            '@tanstack/charts/stack',
+            '@tanstack/charts/tooltip',
+            '@tanstack/charts/tooltip/portal',
+          ],
           'base-ui': [
             '@base-ui/react/avatar',
             '@base-ui/react/button',

@@ -14,7 +14,7 @@ import { TooltipProvider } from './ui/tooltip';
  */
 
 beforeAll(() => {
-  // Recharts' ResponsiveContainer measures with ResizeObserver, which jsdom does not provide.
+  // The charts measure their container with ResizeObserver, which jsdom does not provide.
   if (!('ResizeObserver' in globalThis)) {
     globalThis.ResizeObserver = class {
       observe() {}
@@ -25,7 +25,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  // Recharts warns that a jsdom container measures 0×0 — true, and not what is under test.
+  // A chart in a jsdom container measures 0×0 and may warn — true, and not what is under test.
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 

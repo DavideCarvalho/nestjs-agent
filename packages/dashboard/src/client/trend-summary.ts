@@ -2,7 +2,7 @@
  * Summary statistics for a daily trend series. Pure; unit-tested.
  *
  * This replaced `trend-path.ts` / `run-trend-path.ts`, which existed only to project a series into
- * SVG path strings. Recharts owns that projection now, so the geometry went away — but the numbers a
+ * SVG path strings. The chart library owns that projection now, so the geometry went away — but the numbers a
  * reader still wants at a glance (the range it covers, where it peaked) are not something a chart
  * library computes for you, and they stay worth testing.
  */
