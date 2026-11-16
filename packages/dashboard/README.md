@@ -249,10 +249,11 @@ const overview = await agentClient.spend({ fromDay: '2026-06-01', toDay: '2026-0
 
 ### Charts
 
-The trend charts and share donuts are [recharts](https://recharts.org), themed against the console's CSS
-custom properties in `src/app/chart-ui.tsx`. Recharts is a real dependency of this package and is bundled
-into `dist/spa` (its own `recharts-*.js` chunk); it is not reachable from the `./client` entry, so
-a frontend that imports the typed client never pulls a charting library into its build.
+The trend charts and share donuts are the console kit's charts (`src/aviary-kit/charts/`, on
+[TanStack Charts](https://tanstack.com/charts)), themed by the kit's `--aviary-*` tokens, with a tooltip on
+hover and keyboard focus. TanStack Charts is bundled into `dist/spa` (its own `charts-*.js` chunk); it is
+not reachable from the `./client` entry, so a frontend that imports the typed client never pulls a
+charting library into its build.
 
 ## License
 

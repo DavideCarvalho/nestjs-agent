@@ -2,7 +2,6 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../aviary-kit/blocks/page-header';
 import { readShellConfig } from '../aviary-kit/shell-config';
 import { AppShell, type NavSection, PageBody } from '../aviary-kit/shell/app-shell';
-import type { SearchCommand } from '../aviary-kit/shell/console-search';
 import type { GovernanceRange } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
@@ -56,6 +55,8 @@ interface Page {
   description: string;
   /** Metric cards in this page's loading skeleton (0: none). */
   metrics: number;
+  /** More words ⌘K finds this page by. */
+  keywords?: string[];
 }
 
 /** Every page, by sidebar section. The hash routes (`#/spend`, …) are unchanged. */
@@ -65,6 +66,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
     pages: [
       {
         key: 'spend',
+        keywords: ['cost', 'usage', 'tokens', 'budget'],
         label: 'Spend & usage',
         icon: <DollarIcon />,
         description: 'What the gateway spent, on which models, and the daily trend.',
@@ -72,6 +74,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'models',
+        keywords: ['llm', 'providers'],
         label: 'Models',
         icon: <ChipIcon />,
         description: 'Requests, tokens and cost per model over the range.',
@@ -79,6 +82,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'reliability',
+        keywords: ['errors', 'failures', 'retries'],
         label: 'Reliability',
         icon: <ShieldIcon />,
         description: 'Success and error rates, failures by code, retries and recent runs.',
@@ -86,6 +90,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'live',
+        keywords: ['events', 'stream', 'feed'],
         label: 'Live',
         icon: <ActivityIcon />,
         description: 'Agent events as they happen, streamed from the gateway.',
@@ -98,6 +103,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
     pages: [
       {
         key: 'runs',
+        keywords: ['tool calls', 'threads', 'conversations'],
         label: 'Runs & tools',
         icon: <WrenchIcon />,
         description: 'Recent tool calls and threads; open a row for its run or conversation.',
@@ -105,6 +111,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'genui',
+        keywords: ['generative ui', 'components'],
         label: 'Generative UI',
         icon: <LayoutIcon />,
         description: 'Whether the model gets UI right on the first try, and what breaks.',
@@ -117,6 +124,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
     pages: [
       {
         key: 'approvals',
+        keywords: ['human in the loop', 'pending'],
         label: 'Approvals',
         icon: <InboxIcon />,
         description: 'Action tool calls waiting for a human decision.',
@@ -124,6 +132,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'actors',
+        keywords: ['users', 'budgets', 'quota'],
         label: 'Actors & budgets',
         icon: <UsersIcon />,
         description: 'Who is spending, against which budget.',
@@ -136,6 +145,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
     pages: [
       {
         key: 'tools',
+        keywords: ['functions'],
         label: 'Tools',
         icon: <WrenchIcon />,
         description: 'Every tool the agents called: volume, failures and latency.',
@@ -143,6 +153,7 @@ const SECTIONS: { section: string; pages: Page[] }[] = [
       },
       {
         key: 'pricing',
+        keywords: ['rates', 'prices'],
         label: 'Pricing',
         icon: <TagIcon />,
         description: 'The per-model rates cost is priced against.',
@@ -222,27 +233,12 @@ export function App() {
             icon: page.icon,
             href: hashForSection(page.key),
             onSelect: () => go(page.key),
+            ...(page.keywords ? { keywords: page.keywords } : {}),
             ...(badge !== undefined ? { badge } : {}),
           };
         }),
       })),
     [approvals, liveCount],
-  );
-
-  // ⌘K: this console's pages, listed above the cross-console hits.
-  const commands = useMemo<SearchCommand[]>(
-    () =>
-      SECTIONS.flatMap(({ section: name, pages }) =>
-        pages.map((page) => ({
-          id: `page:${page.key}`,
-          label: page.label,
-          group: 'Pages',
-          icon: page.icon,
-          keywords: [name],
-          onSelect: () => go(page.key),
-        })),
-      ),
-    [],
   );
 
   if (access.denied) return <AccessDenied />;
@@ -261,7 +257,6 @@ export function App() {
         activeId={section}
         shell={shell}
         title={page.label}
-        commands={commands}
         searchPlaceholder="Search runs, threads, workflows, media…"
         actions={
           <>

@@ -66,6 +66,7 @@ export function SpendSection({
                 segments={segments}
                 centerLabel={formatUsd(totals.costUsd)}
                 centerSub="total"
+                valueLabel="cost"
                 formatValue={formatUsd}
               />
               <ul className="flex-1 space-y-1.5">

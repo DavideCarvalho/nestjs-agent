@@ -1,7 +1,7 @@
 import type { RecordRunEndInput } from '@dudousxd/nestjs-agent-core';
 import type { RecentRunRow, ReliabilityOverview, RunFilter } from '../client/agent-client';
 import { errorSegments } from '../client/error-breakdown';
-import { formatDurationMs, formatPercent } from '../client/format-usd';
+import { formatCount, formatDurationMs, formatPercent } from '../client/format-usd';
 import { Donut, colorAt } from './Donut';
 import { RunTrendChart } from './RunTrendChart';
 import { InlineError } from './SectionBoundary';
@@ -122,7 +122,8 @@ export function ReliabilitySection({
                 centerLabel={`${metrics.failed}`}
                 centerSub="failed"
                 label="failures by error code"
-                formatValue={(value) => `${value} runs`}
+                valueLabel="failed runs"
+                formatValue={formatCount}
               />
               <ul className="flex-1 space-y-1.5">
                 {errors.map((row, index) => (
