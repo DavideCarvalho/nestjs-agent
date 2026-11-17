@@ -22,7 +22,7 @@ import { RunsToolsContainer } from './containers/RunsToolsContainer';
 import { SpendContainer } from './containers/SpendContainer';
 import { ToolsContainer } from './containers/ToolsContainer';
 import { DrillDownProvider } from './drill-down';
-import { DEFAULT_SECTION, type SectionKey, hashForSection, routeFromHash } from './hash-section';
+import { DEFAULT_SECTION, type SectionKey, routeFromHash } from './hash-section';
 import {
   ActivityIcon,
   CalendarIcon,
@@ -40,7 +40,7 @@ import { Button } from './ui/button';
 import { BareInput } from './ui/input';
 import { StatusDot } from './ui/kit';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
-import { rangeParams, sharedSearch } from './url-state';
+import { rangeParams, sectionHref, sharedSearch } from './url-state';
 import { useConsoleAccess } from './use-console-access';
 import { useApprovalsCount } from './use-governance';
 import { useLiveEvents } from './use-live-events';
@@ -192,12 +192,14 @@ function useHashSection(): SectionKey {
  * picked on Spend still holds on Models. A hash write, so the drill-down drawer closes as before.
  */
 function go(section: SectionKey): void {
-  const shared = sharedSearch(window.location.hash);
-  window.location.hash = shared === '' ? hashForSection(section) : `#/${section}?${shared}`;
+  window.location.hash = sectionHref(section, sharedSearch(window.location.hash));
 }
 
-/** The day range, in the hash's query (`?from=…&to=…`), kept across sections. */
-function useRangeParam(): [GovernanceRange, (next: GovernanceRange) => void] {
+/**
+ * The day range, in the hash's query (`?from=…&to=…`), kept across sections. Also returns those
+ * params as a query string (empty at the default), for the nav's hrefs.
+ */
+function useRangeParam(): [GovernanceRange, (next: GovernanceRange) => void, string] {
   const [query, setQuery] = useQueryStates(rangeParams, { history: 'push' });
   const range = useMemo<GovernanceRange>(() => {
     const fallback = defaultRange();
@@ -214,7 +216,11 @@ function useRangeParam(): [GovernanceRange, (next: GovernanceRange) => void] {
       to: next.toDay === fallback.toDay ? null : next.toDay,
     });
   };
-  return [range, setRange];
+  const shared = new URLSearchParams({
+    ...(query.from !== null ? { from: query.from } : {}),
+    ...(query.to !== null ? { to: query.to } : {}),
+  }).toString();
+  return [range, setRange, shared];
 }
 
 /**
@@ -239,7 +245,7 @@ export function App() {
 function Console() {
   // What the server put in the page: switcher, ⌘K search, viewer, sign-out (all optional).
   const shell = useMemo(() => readShellConfig(CONFIG_ELEMENT_ID), []);
-  const [range, setRange] = useRangeParam();
+  const [range, setRange, shared] = useRangeParam();
   const section = useHashSection();
   const live = useLiveEvents();
   const approvalsCount = useApprovalsCount();
@@ -262,14 +268,15 @@ function Console() {
             id: page.key,
             label: page.label,
             icon: page.icon,
-            href: hashForSection(page.key),
+            // Carries the day range, so open-in-new-tab and copy-link keep it as a click does.
+            href: sectionHref(page.key, shared),
             onSelect: () => go(page.key),
             ...(page.keywords ? { keywords: page.keywords } : {}),
             ...(badge !== undefined ? { badge } : {}),
           };
         }),
       })),
-    [approvals, liveCount],
+    [approvals, liveCount, shared],
   );
 
   if (access.denied) return <AccessDenied />;

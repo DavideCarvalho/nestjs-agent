@@ -1,4 +1,4 @@
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
+import { createParser, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { splitHash } from '../aviary-kit/url-state/hash-url';
 import type { TrendMetric } from '../client/trend-summary';
 
@@ -28,8 +28,22 @@ export function sharedSearch(hash: string): string {
 /** A free-text filter (`?agent=`, `?tool=` …); typing rewrites the current history entry. */
 export const textParam = parseAsString.withDefault('');
 
-/** A 1-based table page (`?page=3`); page 1 has no param. Paging adds a history entry. */
-export const pageParam = parseAsInteger.withDefault(1).withOptions({ history: 'push' });
+/**
+ * A 1-based table page (`?page=3`); page 1 has no param. Paging adds a history entry. Anything but
+ * a whole number from 1 up (`?page=0`, `?page=-2`, `?page=x`) is ignored, so a hand-edited link
+ * lands on page 1 rather than on a read the API rejects.
+ */
+export const pageParam = createParser({
+  parse: (value: string) => (/^[1-9]\d*$/.test(value) ? Number(value) : null),
+  serialize: (page: number) => String(page),
+})
+  .withDefault(1)
+  .withOptions({ history: 'push' });
+
+/** `#/<section>`, with the shared params (the day range) when there are any. */
+export function sectionHref(section: string, shared: string): string {
+  return shared === '' ? `#/${section}` : `#/${section}?${shared}`;
+}
 
 /** The chart's metric (`?metric=totalTokens`); cost is the default. Picking one adds a history entry. */
 export function useMetricParam() {

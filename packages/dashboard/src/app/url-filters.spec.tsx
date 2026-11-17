@@ -9,7 +9,7 @@ import { App } from './App';
 import { ReliabilityContainer } from './containers/ReliabilityContainer';
 import { MOCK_RELIABILITY, MOCK_RUNS_PAGE } from './mock-data';
 import { TooltipProvider } from './ui/tooltip';
-import { sharedSearch } from './url-state';
+import { pageParam, sharedSearch } from './url-state';
 
 class NoopResizeObserver {
   observe() {}
@@ -113,6 +113,9 @@ describe('App: the day range lives in the URL and follows the operator across se
       ).toBeGreaterThan(0),
     );
 
+    // Every nav link carries the range, so open-in-new-tab and copy-link keep it too.
+    const models = screen.getAllByText('Models')[0]?.closest('a');
+    expect(models?.getAttribute('href')).toBe('#/models?from=2026-07-01&to=2026-07-10');
     // happy-dom follows an anchor's href before React's (delegated) click handler can cancel it,
     // which a browser does not: cancel the default up front so the nav's own handler runs, as in a
     // browser.
@@ -123,6 +126,16 @@ describe('App: the day range lives in the URL and follows the operator across se
     await waitFor(() =>
       expect(window.location.hash).toBe('#/models?from=2026-07-01&to=2026-07-10'),
     );
+  });
+});
+
+describe('pageParam', () => {
+  it('takes a whole page from 1 up and ignores anything else', () => {
+    expect(pageParam.parse('3')).toBe(3);
+    expect(pageParam.parse('0')).toBeNull();
+    expect(pageParam.parse('-2')).toBeNull();
+    expect(pageParam.parse('2.5')).toBeNull();
+    expect(pageParam.parse('x')).toBeNull();
   });
 });
 
