@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NuqsHashAdapter } from '../aviary-kit/url-state/nuqs-hash-adapter';
 import { formatCount } from '../client/format-usd';
 import { GenuiSection } from './GenuiSection';
 import { GenuiContainer } from './containers/GenuiContainer';
@@ -39,7 +40,11 @@ afterEach(() => {
 });
 
 function renderSection(ui: ReactElement) {
-  return render(<TooltipProvider>{ui}</TooltipProvider>);
+  return render(
+    <NuqsHashAdapter>
+      <TooltipProvider>{ui}</TooltipProvider>
+    </NuqsHashAdapter>,
+  );
 }
 
 /** The Stat tile carrying `label`, so its value can be read without matching a sibling tile. */
@@ -159,9 +164,11 @@ describe('GenuiContainer', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <GenuiContainer range={{ fromDay: '2026-07-01', toDay: '2026-07-30' }} />
-        </TooltipProvider>
+        <NuqsHashAdapter>
+          <TooltipProvider>
+            <GenuiContainer range={{ fromDay: '2026-07-01', toDay: '2026-07-30' }} />
+          </TooltipProvider>
+        </NuqsHashAdapter>
       </QueryClientProvider>,
     );
   }

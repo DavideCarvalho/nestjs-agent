@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useQueryState } from 'nuqs';
 import { ApprovalsSection } from '../ApprovalsSection';
 import { useDrillDown } from '../drill-down';
 import { PAGE_SIZE, pagedTable } from '../paged-table';
+import { pageParam } from '../url-state';
 import { useApprovalsPage, useDecideApproval } from '../use-governance';
 
 /**
@@ -13,14 +14,15 @@ import { useApprovalsPage, useDecideApproval } from '../use-governance';
  */
 export function ApprovalsContainer() {
   const { open } = useDrillDown();
-  const [page, setPage] = useState(1);
+  // `?page=2`; page 1 has no param. Paging adds a history entry.
+  const [page, setPage] = useQueryState('page', pageParam);
   const approvals = useApprovalsPage(page, PAGE_SIZE, {});
   const decide = useDecideApproval();
 
   return (
     <ApprovalsSection
       table={pagedTable(approvals, page, PAGE_SIZE)}
-      onPageChange={setPage}
+      onPageChange={(next) => void setPage(next)}
       onDecide={(toolCallId, input) => decide.mutateAsync({ toolCallId, input })}
       onOpenRun={(runId) => open({ kind: 'run', runId })}
     />

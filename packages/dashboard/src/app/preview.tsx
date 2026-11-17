@@ -43,6 +43,7 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { TooltipProvider } from './ui/tooltip';
 import './index.css';
+import { NuqsHashAdapter } from '../aviary-kit/url-state/nuqs-hash-adapter';
 
 /** Wrap a mock page in the `PagedTable` shape the section components render from. */
 function ok<TRow>(page: PagedTable<TRow>['page']): PagedTable<TRow> {
@@ -254,7 +255,10 @@ if (container) {
             <App />
           </QueryClientProvider>
         ) : (
-          <Preview />
+          // The sections read their chart metric from the URL, as in the console.
+          <NuqsHashAdapter>
+            <Preview />
+          </NuqsHashAdapter>
         )}
       </ThemeProvider>
     </StrictMode>,

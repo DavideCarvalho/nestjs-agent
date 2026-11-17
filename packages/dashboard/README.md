@@ -222,6 +222,8 @@ the live indicator and ⌘K. It collapses to a drawer below 768px.
 
 Rows are not dead ends: a run, a tool call, a thread and an approval all open a drill-down drawer over the table, and a thread's drawer deep-links to `#/reliability?threadId=…` for every run it made.
 
+Filters live in the URL, in the hash's query, so a filtered view can be shared, bookmarked and reloaded, and Back/Forward step through it: the day range (`from`, `to`, kept when you move between pages), the chart metric on Spend and Generative UI (`metric`), the Reliability runs table (`status`, `agent`, `threadId`, `page`), the Runs & tools tables (`tool`, `toolStatus`, `toolPage`, `threadTitle`, `threadPage`) and the Approvals page (`page`). For example `#/reliability?status=failed&agent=support&from=2026-07-01`. A value at its default is left out, so existing `#/<page>` links open as before. Typing a filter rewrites the current history entry; picking a status, page or metric adds one.
+
 ### How the SPA is wired
 
 Worth knowing before changing it, because two of these are the reason the console behaves the way it does:

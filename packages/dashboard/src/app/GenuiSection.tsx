@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { GenuiErrorRow, GenuiStats, UsageTrendPoint } from '../client/agent-client';
 import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatDurationMs, formatPercent, formatUsd } from '../client/format-usd';
@@ -28,6 +28,7 @@ import {
 } from './ui/table';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 import { Tooltip } from './ui/tooltip';
+import { useMetricParam } from './url-state';
 
 /** A cost the store may not know (no price for the model): `—` rather than a misleading `$0.00`. */
 function usdOrDash(amount: number | null): string {
@@ -300,7 +301,8 @@ function ErrorsTable({ rows }: { rows: GenuiErrorRow[] }) {
 
 /** UI cost (or tokens) per day, drawn with the same trend chart the Spend section uses. */
 function CostPerDay({ stats }: { stats: GenuiStats }) {
-  const [metric, setMetric] = useState<TrendMetric>('costUsd');
+  // `?metric=totalTokens`; cost is the default.
+  const [metric, setMetric] = useMetricParam();
   const points = useMemo<UsageTrendPoint[]>(
     () =>
       stats.byDay.map((day) => ({
@@ -317,7 +319,7 @@ function CostPerDay({ stats }: { stats: GenuiStats }) {
       right={
         <Tabs
           value={metric}
-          onValueChange={(value) => setMetric(value as TrendMetric)}
+          onValueChange={(value) => void setMetric(value as TrendMetric)}
           aria-label="UI trend metric"
         >
           <TabsList>
