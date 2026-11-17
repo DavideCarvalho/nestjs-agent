@@ -250,8 +250,14 @@ export class RedisTokenStreamSink implements TokenStreamSink {
       }
     }
     this.armedAt.set(runId, now);
-    // Overshoot by one period: the next write may come just before the next re-arm is due.
-    await this.expire([this.chunksKey(runId)], this.ttlSeconds + Math.ceil(period / 1000));
+    try {
+      // Overshoot by one period: the next write may come just before the next re-arm is due.
+      await this.expire([this.chunksKey(runId)], this.ttlSeconds + Math.ceil(period / 1000));
+    } catch (error) {
+      // Not armed after all: the next write tries again instead of waiting out a period.
+      if (this.armedAt.get(runId) === now) this.armedAt.delete(runId);
+      throw error;
+    }
   }
 
   /** Queue a send of the gathered text, unless one is already queued and has not started. */

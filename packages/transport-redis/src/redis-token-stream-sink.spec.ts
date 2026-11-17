@@ -160,6 +160,25 @@ describe('RedisTokenStreamSink — per-frame cost', () => {
     expect(redis.ttls.get('agent:stream:run-long:state')).toBe(3600);
   });
 
+  it('re-arms on the next write when an EXPIRE fails, not a period later', async () => {
+    const redis = new CountingRedis();
+    let failNext = true;
+    const expire = redis.expire.bind(redis);
+    Object.defineProperty(redis, 'expire', {
+      value: async (key: string, seconds: number) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('expire failed');
+        }
+        await expire(key, seconds);
+      },
+    });
+    const writer = new RedisTokenStreamSink(redis).open('run-retry');
+    await expect(writer.write(encode('a'))).rejects.toThrow('expire failed');
+    await writer.write(encode('b'));
+    expect(redis.ttls.get('agent:stream:run-retry:chunks')).toBe(3660);
+  });
+
   it('publishes a bare wake through an adapter whose rpush resolves to nothing', async () => {
     const redis = new CountingRedis();
     Object.defineProperty(redis, 'rpush', {

@@ -236,6 +236,39 @@ describe('RedisTokenStreamSink', () => {
     expect(ttls.get('agent:sink:run-c')).toBe(60);
   });
 
+  it('re-arms on the next send when the EXPIRE fails, not a period later', async () => {
+    const fake = fakeRedisWith();
+    const expiresPerSend: number[] = [];
+    let failNext = true;
+    const pipeline = fake.redis.pipeline.bind(fake.redis);
+    Object.assign(fake.redis, {
+      pipeline: () => {
+        const inner = pipeline();
+        let expires = 0;
+        const expire = inner.expire.bind(inner);
+        inner.expire = (key: string, seconds: number) => {
+          expires += 1;
+          return expire(key, seconds);
+        };
+        const exec = inner.exec.bind(inner);
+        inner.exec = async () => {
+          expiresPerSend.push(expires);
+          const results = (await exec()) ?? [];
+          if (expires > 0 && failNext) {
+            failNext = false;
+            return [...results.slice(0, -1), [new Error('expire failed'), null]];
+          }
+          return results;
+        };
+        return inner;
+      },
+    });
+    const writer = new RedisTokenStreamSink(fake.redis).open('run-retry');
+    await expect(writer.write(new TextEncoder().encode('a'))).rejects.toThrow('expire failed');
+    await writer.write(new TextEncoder().encode('b'));
+    expect(expiresPerSend).toEqual([1, 1]);
+  });
+
   it('re-arms the TTL of a running stream once a minute, not on every write', async () => {
     vi.useFakeTimers();
     try {

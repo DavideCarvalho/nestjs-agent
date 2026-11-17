@@ -166,9 +166,18 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     }
     const ttl = this.dueTtl(runId, entries);
     if (ttl !== null) pipeline.expire(key, ttl);
-    const results = (await pipeline.exec()) ?? [];
-    for (const [error] of results) {
-      if (error) throw error;
+    const armedAt = this.armedAt.get(runId);
+    try {
+      const results = (await pipeline.exec()) ?? [];
+      for (const [error] of results) {
+        if (error) throw error;
+      }
+    } catch (error) {
+      // A re-arm that did not land is not one: the next send tries again instead of waiting a period.
+      if (ttl !== null && armedAt !== undefined && this.armedAt.get(runId) === armedAt) {
+        this.armedAt.delete(runId);
+      }
+      throw error;
     }
   }
 
