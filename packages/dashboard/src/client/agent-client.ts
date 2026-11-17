@@ -626,9 +626,15 @@ function pageQueryParams<TFilter extends object>(query: ListQuery<TFilter>): str
 }
 
 export const agentClient = {
-  /** A federated console's app switcher; `null` on a console without federation. */
-  federation(): Promise<ConsoleFederation | null> {
-    return http<ConsoleFederation | null>('/federation');
+  /**
+   * A federated console's app switcher; `null` on a console without federation. Asked WITHOUT the
+   * selected app: it is console metadata, and a stale or ungranted `?app=` (a 404 for every app
+   * read) must not hide the switcher that gets the viewer out of it.
+   */
+  async federation(): Promise<ConsoleFederation | null> {
+    const res = await fetch(`${apiBase()}/federation`);
+    if (!res.ok) return fail(res);
+    return (await res.json()) as ConsoleFederation | null;
   },
   /** The Organization the console is scoped to, labelled (tenancy). */
   tenancy(): Promise<ConsoleTenancy> {

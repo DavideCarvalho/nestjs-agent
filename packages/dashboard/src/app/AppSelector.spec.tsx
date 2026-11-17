@@ -76,6 +76,15 @@ describe('AppSelector', () => {
     expect(select.value).toBe('orders');
   });
 
+  it('still lists the apps under a stale `?app=`: the switcher is asked without it', async () => {
+    const fetchMock = stubFetch(FEDERATION);
+    window.history.replaceState(null, '', '/ai-gateway?app=removed');
+    withClient(<AppSelector />);
+    await screen.findByTestId('app-selector');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/federation$/);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('x-agent-app')).toBeNull();
+  });
+
   it('renders nothing without federation', async () => {
     const fetchMock = stubFetch(null);
     const view = withClient(<AppSelector />);
