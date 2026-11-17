@@ -14,10 +14,11 @@ class FakeRedis implements RedisStreamClient {
   private readonly values = new Map<string, string>();
   private readonly subs = new Map<string, Set<(message: string) => void>>();
 
-  async rpush(key: string, value: string): Promise<void> {
+  async rpush(key: string, value: string): Promise<number> {
     const list = this.lists.get(key) ?? [];
     list.push(value);
     this.lists.set(key, list);
+    return list.length;
   }
 
   async lrange(key: string, start: number, stop: number): Promise<string[]> {
@@ -80,12 +81,14 @@ async function collect(iterable: AsyncIterable<Uint8Array>): Promise<string> {
 }
 
 describe('RedisTokenStreamSink — key expiry', () => {
-  it('arms a TTL on the chunks on every write, and on both keys when the run ends', async () => {
+  it('arms a TTL on the chunks while running, and on both keys when the run ends', async () => {
     const redis = new FakeRedis();
     const writer = new RedisTokenStreamSink(redis).open('run-1');
     await writer.write(encode('hi'));
-    expect(redis.ttls.get('agent:stream:run-1:chunks')).toBe(3600);
+    // The TTL plus one refresh period, so the keys outlive the last write by a whole TTL.
+    expect(redis.ttls.get('agent:stream:run-1:chunks')).toBe(3660);
     await writer.end();
+    expect(redis.ttls.get('agent:stream:run-1:chunks')).toBe(3600);
     expect(redis.ttls.get('agent:stream:run-1:state')).toBe(3600);
   });
 
@@ -115,6 +118,107 @@ describe('RedisTokenStreamSink — key expiry', () => {
     await writer.write(encode('ok'));
     await writer.end();
     expect(await collect(sink.subscribe('run-1'))).toBe('ok');
+  });
+});
+
+describe('RedisTokenStreamSink — per-frame cost', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('carries the frames in the PUBLISH, so a live subscriber reads the list only on attach and end', async () => {
+    const redis = new CountingRedis();
+    const sink = new RedisTokenStreamSink(redis);
+    const collected = collect(sink.subscribe('run-carry'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const writer = sink.open('run-carry');
+    for (let i = 0; i < 30; i++) await writer.write(encode(`f${i}\n`));
+    await writer.end();
+    expect((await collected).split('\n').filter(Boolean)).toHaveLength(30);
+    expect(redis.calls.lrange).toBe(2);
+    expect(JSON.parse(redis.published[0] as string)).toEqual({
+      seq: 0,
+      frames: [Buffer.from('f0\n').toString('base64')],
+    });
+  });
+
+  it('re-arms the TTL of a running stream once a minute, not on every write', async () => {
+    vi.useFakeTimers();
+    const redis = new CountingRedis();
+    const writer = new RedisTokenStreamSink(redis).open('run-long');
+    // Three minutes of a frame every 10 s.
+    for (let i = 0; i < 18; i++) {
+      const written = writer.write(encode(`f${i}`));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await written;
+    }
+    expect(redis.calls.expire).toBeGreaterThanOrEqual(3);
+    expect(redis.calls.expire).toBeLessThanOrEqual(4);
+    const ended = writer.end();
+    await vi.advanceTimersByTimeAsync(10);
+    await ended;
+    expect(redis.ttls.get('agent:stream:run-long:state')).toBe(3600);
+  });
+
+  it('re-arms on the next write when an EXPIRE fails, not a period later', async () => {
+    const redis = new CountingRedis();
+    let failNext = true;
+    const expire = redis.expire.bind(redis);
+    Object.defineProperty(redis, 'expire', {
+      value: async (key: string, seconds: number) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('expire failed');
+        }
+        await expire(key, seconds);
+      },
+    });
+    const writer = new RedisTokenStreamSink(redis).open('run-retry');
+    await expect(writer.write(encode('a'))).rejects.toThrow('expire failed');
+    await writer.write(encode('b'));
+    expect(redis.ttls.get('agent:stream:run-retry:chunks')).toBe(3660);
+  });
+
+  it('publishes a bare wake through an adapter whose rpush resolves to nothing', async () => {
+    const redis = new CountingRedis();
+    Object.defineProperty(redis, 'rpush', {
+      value: async (key: string, value: string) => {
+        await CountingRedis.prototype.rpush.call(redis, key, value);
+      },
+    });
+    const sink = new RedisTokenStreamSink(redis);
+    const collected = collect(sink.subscribe('run-void'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const writer = sink.open('run-void');
+    for (const part of ['a', 'b', 'c']) await writer.write(encode(part));
+    await writer.end();
+    expect(await collected).toBe('abc');
+    expect(redis.published.slice(0, 3)).toEqual(['chunk', 'chunk', 'chunk']);
+  });
+
+  it('publishes frames too big to carry as a bare wake, read back from the list', async () => {
+    const redis = new CountingRedis();
+    const sink = new RedisTokenStreamSink(redis);
+    const collected = collect(sink.subscribe('run-big'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const big = 'x'.repeat(100 * 1024);
+    await sink.open('run-big').write(encode(big));
+    await sink.open('run-big').end();
+    expect(await collected).toBe(big);
+    expect(redis.published[0]).toBe('chunk');
+  });
+
+  it('skips frames it already read from the list when their PUBLISH arrives after', async () => {
+    const redis = new FakeRedis();
+    const sink = new RedisTokenStreamSink(redis);
+    await sink.open('run-dup').write(encode('a'));
+    const collected = collect(sink.subscribe('run-dup'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // A late duplicate of frame 0, then frame 1.
+    await redis.publish('agent:stream:run-dup', JSON.stringify({ seq: 0, frames: ['YQ=='] }));
+    await sink.open('run-dup').write(encode('b'));
+    await sink.open('run-dup').end();
+    expect(await collected).toBe('ab');
   });
 });
 
@@ -348,18 +452,25 @@ describe('RedisTokenStreamSink — a run that is gone', () => {
 
 /** {@link FakeRedis} with a round trip's worth of latency per command, counting each. */
 class CountingRedis extends FakeRedis {
-  readonly calls = { rpush: 0, publish: 0, get: 0, lrange: 0 };
+  readonly calls = { rpush: 0, publish: 0, get: 0, lrange: 0, expire: 0 };
+  readonly published: string[] = [];
   private live = 0;
   private readonly tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  override async rpush(key: string, value: string): Promise<void> {
+  override async rpush(key: string, value: string): Promise<number> {
     this.calls.rpush += 1;
     await this.tick();
-    await super.rpush(key, value);
+    return super.rpush(key, value);
+  }
+
+  override async expire(key: string, seconds: number): Promise<void> {
+    this.calls.expire += 1;
+    await super.expire(key, seconds);
   }
 
   override async publish(channel: string, message: string): Promise<void> {
     this.calls.publish += 1;
+    this.published.push(message);
     await this.tick();
     await super.publish(channel, message);
   }

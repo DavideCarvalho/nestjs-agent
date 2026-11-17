@@ -226,11 +226,78 @@ describe('RedisTokenStreamSink', () => {
     expect(await collect(sink.subscribe('run-b'))).toEqual(['BBB']);
   });
 
-  it('arms the TTL with every write, so a run that never ends still expires', async () => {
+  it('arms the TTL on the first write, so a run that never ends still expires', async () => {
     const ttls = new Map<string, number>();
     const writer = new RedisTokenStreamSink(fakeRedis(ttls), { ttlSeconds: 60 }).open('run-c');
     await writer.write(new TextEncoder().encode('x'));
+    // The TTL plus one refresh period (a quarter of it), so the stream outlives the last write.
+    expect(ttls.get('agent:sink:run-c')).toBe(75);
+    await writer.end();
     expect(ttls.get('agent:sink:run-c')).toBe(60);
+  });
+
+  it('re-arms on the next send when the EXPIRE fails, not a period later', async () => {
+    const fake = fakeRedisWith();
+    const expiresPerSend: number[] = [];
+    let failNext = true;
+    const pipeline = fake.redis.pipeline.bind(fake.redis);
+    Object.assign(fake.redis, {
+      pipeline: () => {
+        const inner = pipeline();
+        let expires = 0;
+        const expire = inner.expire.bind(inner);
+        inner.expire = (key: string, seconds: number) => {
+          expires += 1;
+          return expire(key, seconds);
+        };
+        const exec = inner.exec.bind(inner);
+        inner.exec = async () => {
+          expiresPerSend.push(expires);
+          const results = (await exec()) ?? [];
+          if (expires > 0 && failNext) {
+            failNext = false;
+            return [...results.slice(0, -1), [new Error('expire failed'), null]];
+          }
+          return results;
+        };
+        return inner;
+      },
+    });
+    const writer = new RedisTokenStreamSink(fake.redis).open('run-retry');
+    await expect(writer.write(new TextEncoder().encode('a'))).rejects.toThrow('expire failed');
+    await writer.write(new TextEncoder().encode('b'));
+    expect(expiresPerSend).toEqual([1, 1]);
+  });
+
+  it('re-arms the TTL of a running stream once a minute, not on every write', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeRedisWith();
+      let expires = 0;
+      const pipeline = fake.redis.pipeline.bind(fake.redis);
+      Object.assign(fake.redis, {
+        pipeline: () => {
+          const inner = pipeline();
+          const expire = inner.expire.bind(inner);
+          inner.expire = (key: string, seconds: number) => {
+            expires += 1;
+            return expire(key, seconds);
+          };
+          return inner;
+        },
+      });
+      const writer = new RedisTokenStreamSink(fake.redis).open('run-long');
+      // Three minutes of a frame every 10 s.
+      for (let i = 0; i < 18; i++) {
+        const written = writer.write(new TextEncoder().encode(`f${i}`));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await written;
+      }
+      expect(expires).toBeGreaterThanOrEqual(3);
+      expect(expires).toBeLessThanOrEqual(4);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sets no TTL under ttlSeconds: 0 — EXPIRE 0 would delete the stream outright', async () => {

@@ -17,14 +17,66 @@ export interface RedisTokenStreamSinkOptions {
   /**
    * How long (seconds) a run's keys outlive its last write, so streams self-expire instead of
    * accumulating in Redis — ended runs past their replay window and runs that crashed without
-   * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the
-   * window still replays; a subscriber of a run that writes nothing for the whole window stops
-   * following it. Default 3600 (1h). `0` keeps the keys until `close()`.
+   * ending alike (nothing calls `close()` on its own). While the run writes, the TTL is armed on its
+   * first write and re-armed at most once a minute (every quarter TTL, if that is shorter), each time
+   * for `ttlSeconds` plus that period; when the run ends or fails both keys get exactly `ttlSeconds`.
+   * So the keys outlive the last write by at least `ttlSeconds`, and a run that dies mid-stream is
+   * gone at most one refresh period after that. A subscriber that
+   * reconnects within the window still replays; a subscriber of a run that writes nothing for the
+   * whole window stops following it. Default 3600 (1h). `0` keeps the keys until `close()`.
    */
   ttlSeconds?: number;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
+
+/** The longest a running stream goes between TTL re-arms. */
+const MAX_TTL_REFRESH_MS = 60_000;
+
+/**
+ * Frames whose base64 adds up to more than this go out as a bare wake instead of inside the
+ * `PUBLISH`, and subscribers read them back with `LRANGE` — big frames are not copied into every
+ * subscriber's pub/sub buffer.
+ */
+const MAX_PUBLISHED_BYTES = 64 * 1024;
+
+/** The bare wake: something was appended, read the list. What every writer before 0.9 published. */
+const WAKE = 'chunk';
+
+/**
+ * A `PUBLISH` that carries the frames it announces: `seq` is the list index of `frames[0]`, the
+ * frames are base64 like the list elements. Subscribers that know it append the frames directly; a
+ * subscriber that predates it sees an unknown message, which wakes it to `LRANGE` as before.
+ */
+interface PublishedFrames {
+  seq: number;
+  frames: string[];
+}
+
+function encodePublished(published: PublishedFrames): string {
+  return JSON.stringify(published);
+}
+
+/** The frames a `PUBLISH` carries, or `null` for a bare wake (or any message that carries none). */
+function decodePublished(message: string): PublishedFrames | null {
+  if (!message.startsWith('{')) return null;
+  try {
+    const parsed: unknown = JSON.parse(message);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Number.isSafeInteger((parsed as { seq?: unknown }).seq) &&
+      (parsed as { seq: number }).seq >= 0 &&
+      Array.isArray((parsed as { frames?: unknown }).frames) &&
+      (parsed as { frames: unknown[] }).frames.every((frame) => typeof frame === 'string')
+    ) {
+      return parsed as PublishedFrames;
+    }
+  } catch {
+    /* not ours: treated as a bare wake */
+  }
+  return null;
+}
 
 /** The longest delay `setTimeout` honours; longer ones fire at once. */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -83,6 +135,8 @@ export class RedisTokenStreamSink implements TokenStreamSink {
   private readonly keyPrefix: string;
   private readonly ttlSeconds: number;
   private readonly writes = new Map<string, RunWrites>();
+  /** When this process last armed each running stream's TTL (epoch ms). */
+  private readonly armedAt = new Map<string, number>();
 
   constructor(
     private readonly client: RedisStreamClient,
@@ -156,18 +210,54 @@ export class RedisTokenStreamSink implements TokenStreamSink {
   }
 
   /**
-   * Append `chunks` in order, then wake subscribers. The wake waits for the append, so a woken
-   * subscriber always finds what it was woken for; the TTL re-arm rides alongside the wake.
+   * Append `chunks` in order, then publish them. The `PUBLISH` waits for the append and carries the
+   * frames with their list index, so a live subscriber appends them without reading the list, and
+   * a woken subscriber that reads it anyway finds what it was woken for. The TTL is armed on the
+   * run's first append and re-armed only now and then, alongside the publish.
    */
   private async append(runId: string, chunks: readonly Uint8Array[]): Promise<void> {
     if (chunks.length === 0) return;
-    for (const chunk of chunks) {
-      await this.client.rpush(this.chunksKey(runId), toBase64(chunk));
+    const frames = chunks.map(toBase64);
+    let seq: number | null = null;
+    for (const [i, frame] of frames.entries()) {
+      const length = await this.client.rpush(this.chunksKey(runId), frame);
+      // An adapter that does not resolve to the length: publish a bare wake, subscribers LRANGE.
+      if (typeof length !== 'number') seq = null;
+      else if (i === 0) seq = length - 1;
+      else if (seq !== null && length - 1 !== seq + i) seq = null;
     }
+    const message =
+      seq !== null && frames.reduce((size, frame) => size + frame.length, 0) <= MAX_PUBLISHED_BYTES
+        ? encodePublished({ seq, frames })
+        : WAKE;
     await Promise.all([
-      this.expire(this.chunksKey(runId)),
-      this.client.publish(this.channel(runId), 'chunk'),
+      this.refreshExpiry(runId),
+      this.client.publish(this.channel(runId), message),
     ]);
+  }
+
+  /** Arm the running stream's TTL on its first append here, then at most once per refresh period. */
+  private async refreshExpiry(runId: string): Promise<void> {
+    if (this.ttlSeconds <= 0) return;
+    const now = Date.now();
+    const last = this.armedAt.get(runId);
+    const period = Math.min(MAX_TTL_REFRESH_MS, (this.ttlSeconds * 1000) / 4);
+    if (last !== undefined && now - last < period) return;
+    // A run that died without ending leaves an entry behind: drop the ones whose keys are gone.
+    if (last === undefined) {
+      for (const [other, at] of this.armedAt) {
+        if (now - at >= this.ttlSeconds * 1000) this.armedAt.delete(other);
+      }
+    }
+    this.armedAt.set(runId, now);
+    try {
+      // Overshoot by one period: the next write may come just before the next re-arm is due.
+      await this.expire([this.chunksKey(runId)], this.ttlSeconds + Math.ceil(period / 1000));
+    } catch (error) {
+      // Not armed after all: the next write tries again instead of waiting out a period.
+      if (this.armedAt.get(runId) === now) this.armedAt.delete(runId);
+      throw error;
+    }
   }
 
   /** Queue a send of the gathered text, unless one is already queued and has not started. */
@@ -209,7 +299,8 @@ export class RedisTokenStreamSink implements TokenStreamSink {
         await this.client.rpush(this.chunksKey(runId), toBase64(chunk));
       }
       await this.client.set(this.stateKey(runId), JSON.stringify(terminal));
-      await this.expire(this.chunksKey(runId), this.stateKey(runId));
+      this.armedAt.delete(runId);
+      await this.expire([this.chunksKey(runId), this.stateKey(runId)], this.ttlSeconds);
       await this.client.publish(this.channel(runId), 'end');
     });
   }
@@ -244,57 +335,89 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     };
   }
 
-  /** (Re)arm the TTL on `keys` — sliding from the run's last write. */
-  private async expire(...keys: string[]): Promise<void> {
+  /** (Re)arm the TTL on `keys`. */
+  private async expire(keys: readonly string[], seconds: number): Promise<void> {
     // An adapter written against the interface before `expire` existed: keep streaming, unexpired.
     if (this.ttlSeconds <= 0 || typeof this.client.expire !== 'function') return;
-    for (const key of keys) await this.client.expire(key, this.ttlSeconds);
+    for (const key of keys) await this.client.expire(key, seconds);
   }
 
   /**
    * Follows the run until its terminal, an abort, or the run is gone. Gone means its keys no longer
    * exist: `close()` deleted them, or a full TTL passed with nothing written — the window after which
    * the run's keys expire — so a run silent for less than its TTL is still followed.
+   *
+   * The list is read on attach (catch-up), and live frames come in their `PUBLISH`. The list is read
+   * again only when a published frame skips past what this subscriber has (a gap), when a message
+   * carries no frames (a writer before 0.9, or frames too big to publish), when the run ends, and
+   * before deciding the run is gone.
    */
   async *subscribe(runId: string, options: SubscribeOptions = {}): AsyncIterable<Uint8Array> {
     const { signal } = options;
     if (signal?.aborted) return;
-    // Notify bridge: the pub/sub handler resolves the current `wake` promise so the drain loop
-    // re-reads. A promise is armed BEFORE each drain, so a publish arriving mid-drain is never lost.
+    // Notify bridge: the pub/sub handler queues the message and resolves the current `wake` promise
+    // so the loop handles it. A promise is armed BEFORE each pass, so nothing arriving mid-pass is
+    // lost.
     let resolveWake: (() => void) | null = null;
+    const inbox: string[] = [];
     // The terminal marker is only read when it can have changed: on attach (the run may already be
     // over), once an `end` arrives, and before deciding the run is gone.
     let checkTerminal = true;
     let closed = false;
-    const onMessage = (message: string) => {
-      if (message === 'end') checkTerminal = true;
-      if (message === 'close') closed = true;
+    const wakeUp = () => {
       const resolve = resolveWake;
       resolveWake = null;
       resolve?.();
     };
-    const onAbort = () => onMessage('abort');
-    signal?.addEventListener('abort', onAbort, { once: true });
+    const onMessage = (message: string) => {
+      if (message === 'end') checkTerminal = true;
+      else if (message === 'close') closed = true;
+      else inbox.push(message);
+      wakeUp();
+    };
+    signal?.addEventListener('abort', wakeUp, { once: true });
     const unsubscribe = await this.client.subscribe(this.channel(runId), onMessage);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       let index = 0;
       let silent = false;
+      // Subscribed before this first read, so whatever is published from here on is in the inbox.
+      let catchUp = true;
       while (signal?.aborted !== true) {
         const wake = new Promise<void>((resolve) => {
           resolveWake = resolve;
         });
         const gone = closed || silent;
-        const chunks = await this.client.lrange(this.chunksKey(runId), index, -1);
-        for (const encoded of chunks) {
-          index += 1;
-          yield fromBase64(encoded);
+        let received = 0;
+        while (catchUp || gone || inbox.length > 0) {
+          if (catchUp || gone) {
+            catchUp = false;
+            for (const encoded of await this.client.lrange(this.chunksKey(runId), index, -1)) {
+              index += 1;
+              received += 1;
+              yield fromBase64(encoded);
+            }
+            if (gone) break;
+            continue;
+          }
+          const published = decodePublished(inbox.shift() as string);
+          if (published === null || published.seq > index) {
+            // A bare wake, or frames past a gap: what is missing is in the list.
+            catchUp = true;
+            continue;
+          }
+          // Frames already read (from the list, or an earlier publish) are skipped.
+          for (const encoded of published.frames.slice(index - published.seq)) {
+            index += 1;
+            received += 1;
+            yield fromBase64(encoded);
+          }
         }
         if (checkTerminal || gone) {
           checkTerminal = false;
           const terminal = await this.readTerminal(runId);
           if (terminal !== null) {
-            // Chunks the run appended before its terminal, read after this drain's LRANGE.
+            // Chunks the run appended before its terminal, read after the last frame handled.
             for (const encoded of await this.client.lrange(this.chunksKey(runId), index, -1)) {
               index += 1;
               yield fromBase64(encoded);
@@ -306,7 +429,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
           }
         }
         // A wake lost in transit shows up as chunks here, and the run is followed on.
-        if (gone && chunks.length === 0) return;
+        if (gone && received === 0) return;
         silent = false;
         if (this.ttlSeconds > 0) {
           const deadline = Date.now() + this.ttlSeconds * 1000;
@@ -317,21 +440,22 @@ export class RedisTokenStreamSink implements TokenStreamSink {
               return;
             }
             silent = true;
-            onMessage('silent');
+            wakeUp();
           };
           arm();
         }
-        await wake;
+        if (inbox.length === 0 && !checkTerminal && !closed && !silent) await wake;
         clearTimeout(timer);
       }
     } finally {
       clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
+      signal?.removeEventListener('abort', wakeUp);
       await unsubscribe();
     }
   }
 
   async close(runId: string): Promise<void> {
+    this.armedAt.delete(runId);
     await this.client.del(this.chunksKey(runId), this.stateKey(runId));
     await this.client.publish(this.channel(runId), 'close');
   }

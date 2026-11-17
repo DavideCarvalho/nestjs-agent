@@ -216,13 +216,15 @@ the store packages ship (`DrizzleTokenStreamSink`, `MikroOrmTokenStreamSink`). T
 logs a warning at boot when it is handed the default in-process sink.
 
 `new RedisTokenStreamSink(redis, { keyPrefix?, ttlSeconds?, blockMs? })` takes an ioredis client and
-keeps each run in a Redis Stream. `ttlSeconds` (default `3600`) is re-armed on every write and set when
-the run ends or fails, so a run whose process crashed still expires; `0` keeps the stream until
-`close()`.
+keeps each run in a Redis Stream. `ttlSeconds` (default `3600`) is armed on the run's first write,
+re-armed at most once a minute while it streams (each time for `ttlSeconds` plus that minute, so the
+stream outlives the last write by at least `ttlSeconds`), and set to exactly `ttlSeconds` when the run
+ends or fails, so a run whose process crashed still expires; `0` keeps the stream until `close()`.
 
 Consecutive `text` frames are gathered while the previous send is on the wire and go out as one
-`text` entry, with `XADD` and the `EXPIRE` re-arm in one pipeline: a model streaming faster than a
-Redis round trip costs one round trip per burst, and a slow stream still goes out a token at a time
+`text` entry, one `XADD` per send (with the occasional `EXPIRE` re-arm in the same pipeline), and each
+subscriber's `XREAD` returns it — about 2 commands per frame with one subscriber, against 3 when every
+send re-armed the TTL. A model streaming faster than a Redis round trip costs one round trip per burst, and a slow stream still goes out a token at a time
 with no added latency. Writers for the same run in one process share what they gather, so frame
 order holds across a delegated run's child writer, and `flush()` sends the gathered text without
 ending the stream. A gathered send that fails is raised by the writer's next call. Every subscriber

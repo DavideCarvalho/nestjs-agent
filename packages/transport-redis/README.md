@@ -35,7 +35,10 @@ export class AppModule {}
 ```
 
 A subscribed Redis connection can't run other commands, so most drivers need a dedicated connection
-for `subscribe`. A run's keys expire `ttlSeconds` (default `3600`) after its last write.
+for `subscribe`. A run's keys expire `ttlSeconds` (default `3600`) after its last write (plus at most
+a minute while it is still streaming). Each streamed frame costs one `RPUSH` and one `PUBLISH` that
+carries the frame, so live subscribers read the list only to catch up. `rpush` should resolve to the
+list length, as `ioredis` and `node-redis` do.
 
 ## Exports
 
