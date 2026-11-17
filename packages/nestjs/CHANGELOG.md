@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent
 
+## 4.0.1
+
+### Patch Changes
+
+- [#443](https://github.com/DavideCarvalho/nestjs-agent/pull/443) [`9eb3a92`](https://github.com/DavideCarvalho/nestjs-agent/commit/9eb3a92dd30da60f98085de23c284a76e79bd486) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - The Redis Streams `RedisTokenStreamSink` arms the stream's TTL on the first write and re-arms it at most once a minute (for `ttlSeconds` plus that minute) instead of sending `EXPIRE` with every frame, and sets exactly `ttlSeconds` with the `end`/`fail` entry: 3 → 2 commands per frame with one subscriber.
+
 ## 4.0.0
 
 ### Major Changes
