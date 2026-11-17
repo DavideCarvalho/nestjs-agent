@@ -9,6 +9,7 @@ import type { GovernanceRange } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
 import { AccessDenied } from './AccessDenied';
+import { AppSelector, FederatedAppNotice } from './AppSelector';
 import { LiveSection } from './LiveSection';
 import { OrganizationChip } from './OrganizationChip';
 import { SectionBoundary } from './SectionBoundary';
@@ -298,6 +299,7 @@ function Console() {
         searchPlaceholder="Search runs, threads, workflows, media…"
         actions={
           <>
+            <AppSelector />
             <OrganizationChip />
             <RangePicker range={range} onRange={setRange} />
             <LiveIndicator connected={live.connected} />
@@ -306,6 +308,7 @@ function Console() {
       >
         <PageBody>
           <PageHeader title={page.label} description={page.description} />
+          <FederatedAppNotice section={section} />
           {/* Keyed on the section so a nav discards the failed boundary of the page being left,
               instead of carrying its error state onto the one being opened. */}
           <SectionBoundary key={section} label={page.label} metrics={page.metrics}>

@@ -18,3 +18,12 @@ export {
   RedisPoppyConnectionStore,
   type RedisPoppyConnectionStoreOptions,
 } from './redis-poppy-connection-store.js';
+export {
+  ConsoleActionError,
+  RedisConsoleActionResponder,
+  RedisConsoleApprovalClient,
+  type RedisConsoleActionsOptions,
+  type RedisConsoleApprovalClientOptions,
+  type RedisConsolePubSub,
+  type RedisConsoleResponderClient,
+} from './redis-console-actions.js';

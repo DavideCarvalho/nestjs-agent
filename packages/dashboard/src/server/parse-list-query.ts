@@ -79,8 +79,11 @@ function assertFixedSort(raw: unknown, order: string): void {
   }
 }
 
-/** The params every governance list reads. */
-const LIST_PARAMS = ['page', 'size', 'sort', 'filter'] as const;
+/**
+ * The params every governance list reads, plus `app`: a federated console's app selection
+ * (`?app=`, read by its interceptor), which every console route accepts.
+ */
+const LIST_PARAMS = ['page', 'size', 'sort', 'filter', 'app'] as const;
 
 /** A list endpoint's parsed request, ready for the governance SPI. */
 function pageQuery<W>(query: Query, where: W | undefined, order: string): GovernancePageQuery<W> {
@@ -161,6 +164,6 @@ export function parseTopSize(
   fallback: number,
   params: readonly string[] = [],
 ): number {
-  rejectUnknownParams(query, ['size', ...params]);
+  rejectUnknownParams(query, ['size', 'app', ...params]);
   return parsePageParams({ size: query.size }, { defaultSize: fallback, maxSize: 200 }).size;
 }

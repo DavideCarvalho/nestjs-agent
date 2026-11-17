@@ -1,0 +1,172 @@
+---
+title: Federated console
+icon: Network
+description: One agent console on a central app that shows the threads, runs, tool calls and approvals of several apps, reading each app's own store and sending its approvals back to that app.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A federated console is one agent dashboard, on a central "hub" app, that also shows other apps.
+Each app keeps its agent data in its own database and runs its agents in its own process. The hub's
+console:
+
+- **reads** each app's store directly, through that app's governance read-model. Read access to the
+  app's database is enough.
+- **sends approvals** (approve or reject a pending tool call) to the app over the app's Redis. The
+  app's own process executes them, through the same approval port its own console uses, so the run
+  resumes and the model and tools run on the app. The hub never decides another app's tool call
+  itself.
+
+The viewer picks the app with the switcher in the header. The selected app goes in the page URL as
+`?app=<name>`, and every API call of the page names it in the `x-agent-app` header. Section filters
+stay in the hash, so switching apps keeps the page and its filters.
+
+## Set up the hub
+
+Give `AgentDashboardModule.forRoot` a `federation`. Each app, keyed by its name, gets its
+read-model (`queries`) and, to decide its approvals, a `RedisConsoleApprovalClient` from
+`@dudousxd/nestjs-agent-transport-redis`:
+
+```ts
+import { AgentDashboardModule } from '@dudousxd/nestjs-agent-dashboard';
+import {
+  DrizzleGovernanceQueries,
+  DrizzlePricingStore,
+} from '@dudousxd/nestjs-agent-store-drizzle';
+import { RedisConsoleApprovalClient } from '@dudousxd/nestjs-agent-transport-redis';
+
+// A read-only connection to the orders app's database, and a client on the orders app's Redis.
+const ordersDb = drizzle(ordersReadOnlyPool);
+const ordersPricing = new DrizzlePricingStore(ordersDb);
+
+@Module({
+  imports: [
+    AgentModule.forRoot({ /* the hub's own agents, as before */ }),
+    AgentDashboardModule.forRoot({
+      authorize,
+      federation: {
+        localLabel: 'Hub',
+        apps: {
+          orders: {
+            label: 'Orders',
+            queries: new DrizzleGovernanceQueries(ordersDb, ordersPricing),
+            approvals: new RedisConsoleApprovalClient(ordersRedis, { keyPrefix: 'orders:agent:console' }),
+            pricing: ordersPricing,
+          },
+        },
+      },
+    }),
+  ],
+})
+export class HubModule {}
+```
+
+With MikroORM, pass `new MikroOrmGovernanceQueries(em, new MikroOrmPricingStore(em))` over an
+`EntityManager` of the app's database.
+
+| `apps[name]` field | Required | Purpose |
+|---|---|---|
+| `queries` | yes | The app's `AgentGovernanceQueries`: spend, runs, threads, tool calls and the approvals inbox are read from it. |
+| `approvals` | no | An `AgentApprovalPort` that executes on the app. Omitted, the app's approvals inbox is read-only here (`501`). |
+| `pricing` | no | The app's price table, for the Pricing page (read-only). Omitted, `501`. |
+| `label` | no | Shown in the switcher. Default: the name. |
+
+`localLabel` (default `'this app'`) names the hub's own app in the switcher. No app selected is the
+hub's own app, served exactly as before.
+
+`ordersRedis` implements `RedisConsolePubSub` (`publish`, `subscribe`), the same two methods of the
+[`RedisStreamClient`](/docs/packages/transport-redis#redisstreamclient--bring-your-own-driver)
+adapter.
+
+## Set up each app
+
+The app answers the hub's requests with a `RedisConsoleActionResponder` over its own Redis and its
+own approval port (`AGENT_APPROVAL_PORT`, bound by `AgentModule`). Register it as a provider; Nest
+starts and stops it:
+
+```ts
+import { AGENT_APPROVAL_PORT, type AgentApprovalPort } from '@dudousxd/nestjs-agent-core';
+import { RedisConsoleActionResponder } from '@dudousxd/nestjs-agent-transport-redis';
+
+@Module({
+  providers: [
+    {
+      provide: RedisConsoleActionResponder,
+      inject: [AGENT_APPROVAL_PORT],
+      useFactory: (approvals: AgentApprovalPort) =>
+        new RedisConsoleActionResponder(redisClient, approvals, { keyPrefix: 'orders:agent:console' }),
+    },
+  ],
+})
+export class ConsoleActionsModule {}
+```
+
+Use the same `keyPrefix` on both ends, and a different one for each app sharing a Redis. Every
+replica of the app may run the responder: each request is claimed by one replica
+(`SET … NX EX`), which executes it and answers. The responder's client adds that `claim` to the
+pub/sub methods:
+
+```ts
+const redisClient = {
+  ...pubSub, // publish + subscribe, as for RedisStreamClient
+  claim: async (key: string, ttlSeconds: number) =>
+    (await redis.set(key, '1', 'EX', ttlSeconds, 'NX')) === 'OK',
+};
+```
+
+The app's answer comes back to the console as is: `404` for an unknown tool call, `409` for a run
+that is no longer waiting, and so on. With no answer within `timeoutMs` (default 15 s, set on the
+`RedisConsoleApprovalClient`), the console answers `504`. That is what you see when the responder
+is not running or the app is down.
+
+<Callout type="warn" title="Who can publish on the app's Redis can decide its approvals">
+The responder executes what arrives on `<keyPrefix>:requests`. Keep that Redis private to the app
+and its hub, as you would for its token streams.
+</Callout>
+
+## Read-only database access
+
+The hub only runs `SELECT`s against an app's database. Give it a role with read access to the
+agent tables and nothing else. On Postgres, with the agent tables in the schema `agent`:
+
+```sql
+CREATE ROLE agent_console_hub LOGIN PASSWORD '…';
+GRANT USAGE ON SCHEMA agent TO agent_console_hub;
+GRANT SELECT ON ALL TABLES IN SCHEMA agent TO agent_console_hub;
+-- Tables created by later migrations, too:
+ALTER DEFAULT PRIVILEGES IN SCHEMA agent GRANT SELECT ON TABLES TO agent_console_hub;
+```
+
+On MySQL: `GRANT SELECT ON orders_db.* TO 'agent_console_hub'@'%';`.
+
+## Who sees which app
+
+`authorize` can answer `{ allowed: true, apps: ['orders'] }`: the viewer may then select only the
+listed apps. An app outside the grant answers `404`, the same as an app that is not configured, and
+the switcher does not list it. Without `apps`, the viewer may select every configured app. The grant
+only covers federated apps: anyone `authorize` lets in sees the hub's own app.
+
+A selected app is not narrowed by the hub's tenancy: the hub's request context says nothing about
+another app's tenants, so the grant covers the app as a whole. The responder runs outside any
+request, so on an app with tenancy on and a `required` tenant, a console decision is refused like
+any other background work without a tenant.
+
+## On the wire
+
+- `x-agent-app: <name>` on any API call, or `?app=<name>` on the page, the SSE stream and any API
+  call, selects the app. The header wins over the query.
+- `GET <api>/federation` answers `{ local: { label }, apps: [{ name, label }], current? }` with the
+  apps the viewer may select, or `null` on a console without `federation`.
+
+## What stays on the hub
+
+Some pages are served by the console's own process. For a federated app they answer `501`, and the
+console says so on the page:
+
+- **Live feed** (`GET <api>/stream`): it tails the hub's in-process agent events. Open the app's own
+  console to watch it live.
+- **Setting a price** (`POST <api>/pricing`): the hub only reads the app's store.
+- **Developer tools over MCP** and the console switcher's global search read the hub's own app.
+
+Spend, models, actors, runs, threads, tool calls, reliability, generative-UI telemetry and the
+approvals inbox all work for a federated app.
