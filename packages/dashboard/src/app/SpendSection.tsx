@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { FeatureSpendRow, SpendOverview, ThreadSpendRow } from '../client/agent-client';
 import { formatModelLabel } from '../client/format-model';
 import { formatCount, formatUsd } from '../client/format-usd';
@@ -10,6 +9,7 @@ import { TrendChart } from './TrendChart';
 import { ActivityIcon, ChipIcon, DollarIcon, TrendIcon } from './icons';
 import { Empty, Panel, Stat } from './ui/kit';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
+import { useMetricParam } from './url-state';
 
 /** The headline governance section: total spend + usage, the by-model donut, and the daily trend. */
 export function SpendSection({
@@ -21,7 +21,8 @@ export function SpendSection({
   topThreads: ThreadSpendRow[];
   onOpenThread?: ((threadId: string) => void) | undefined;
 }) {
-  const [metric, setMetric] = useState<TrendMetric>('costUsd');
+  // `?metric=totalTokens`; cost is the default.
+  const [metric, setMetric] = useMetricParam();
   const totals = summarizeSpend(overview.byModel);
   const shares = withShares(overview.byModel);
   const segments = donutSegments(shares);
@@ -104,7 +105,7 @@ export function SpendSection({
             // traversal rather than two separate buttons that merely look like a pair.
             <Tabs
               value={metric}
-              onValueChange={(value) => setMetric(value as TrendMetric)}
+              onValueChange={(value) => void setMetric(value as TrendMetric)}
               aria-label="Trend metric"
             >
               <TabsList>

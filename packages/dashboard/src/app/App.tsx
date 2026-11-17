@@ -1,7 +1,10 @@
+import { useQueryStates } from 'nuqs';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../aviary-kit/blocks/page-header';
 import { readShellConfig } from '../aviary-kit/shell-config';
 import { AppShell, type NavSection, PageBody } from '../aviary-kit/shell/app-shell';
+import { subscribeHashUrl } from '../aviary-kit/url-state/hash-url';
+import { NuqsHashAdapter } from '../aviary-kit/url-state/nuqs-hash-adapter';
 import type { GovernanceRange } from '../client/agent-client';
 import { defaultRange, isIsoDay } from '../client/default-range';
 import type { FeedEvent } from '../client/merge-live-events';
@@ -37,6 +40,7 @@ import { Button } from './ui/button';
 import { BareInput } from './ui/input';
 import { StatusDot } from './ui/kit';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { rangeParams, sharedSearch } from './url-state';
 import { useConsoleAccess } from './use-console-access';
 import { useApprovalsCount } from './use-governance';
 import { useLiveEvents } from './use-live-events';
@@ -168,30 +172,49 @@ const PAGES: Record<SectionKey, Page> = Object.fromEntries(
 ) as Record<SectionKey, Page>;
 
 /**
- * The active hash route (`#/reliability?threadId=th2`, see `hash-section.ts`) — read on mount for a
- * working deep link, kept in sync via the `hashchange` listener. Nav items are real anchors, so
- * clicking one is a normal hash navigation; no router dependency.
+ * The active section (`#/reliability`, see `hash-section.ts`) — read on mount for a working deep
+ * link, kept in sync with links, back/forward and the sections' own query-only filter writes
+ * (`history.replaceState`, no `hashchange`). The query is each section's view state, read with nuqs.
  */
-function useHashRoute(): { section: SectionKey; params: URLSearchParams } {
-  const [route, setRoute] = useState(() =>
-    typeof window === 'undefined'
-      ? { section: DEFAULT_SECTION, params: new URLSearchParams() }
-      : routeFromHash(window.location.hash),
+function useHashSection(): SectionKey {
+  const [section, setSection] = useState<SectionKey>(() =>
+    typeof window === 'undefined' ? DEFAULT_SECTION : routeFromHash(window.location.hash).section,
   );
-
-  useEffect(() => {
-    function onHashChange() {
-      setRoute(routeFromHash(window.location.hash));
-    }
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
-
-  return route;
+  useEffect(
+    () => subscribeHashUrl(() => setSection(routeFromHash(window.location.hash).section)),
+    [],
+  );
+  return section;
 }
 
+/**
+ * Open another section. Its filters start fresh, but the topbar's day range comes along: a range
+ * picked on Spend still holds on Models. A hash write, so the drill-down drawer closes as before.
+ */
 function go(section: SectionKey): void {
-  window.location.hash = hashForSection(section);
+  const shared = sharedSearch(window.location.hash);
+  window.location.hash = shared === '' ? hashForSection(section) : `#/${section}?${shared}`;
+}
+
+/** The day range, in the hash's query (`?from=…&to=…`), kept across sections. */
+function useRangeParam(): [GovernanceRange, (next: GovernanceRange) => void] {
+  const [query, setQuery] = useQueryStates(rangeParams, { history: 'push' });
+  const range = useMemo<GovernanceRange>(() => {
+    const fallback = defaultRange();
+    return {
+      fromDay: query.from !== null && isIsoDay(query.from) ? query.from : fallback.fromDay,
+      toDay: query.to !== null && isIsoDay(query.to) ? query.to : fallback.toDay,
+    };
+  }, [query.from, query.to]);
+  const setRange = (next: GovernanceRange) => {
+    const fallback = defaultRange();
+    // A day equal to the default's leaves the URL, so the default range keeps following today.
+    void setQuery({
+      from: next.fromDay === fallback.fromDay ? null : next.fromDay,
+      to: next.toDay === fallback.toDay ? null : next.toDay,
+    });
+  };
+  return [range, setRange];
 }
 
 /**
@@ -206,10 +229,18 @@ function go(section: SectionKey): void {
  * that renders it — see `./containers`.
  */
 export function App() {
+  return (
+    <NuqsHashAdapter>
+      <Console />
+    </NuqsHashAdapter>
+  );
+}
+
+function Console() {
   // What the server put in the page: switcher, ⌘K search, viewer, sign-out (all optional).
   const shell = useMemo(() => readShellConfig(CONFIG_ELEMENT_ID), []);
-  const [range, setRange] = useState<GovernanceRange>(defaultRange());
-  const { section, params } = useHashRoute();
+  const [range, setRange] = useRangeParam();
+  const section = useHashSection();
   const live = useLiveEvents();
   const approvalsCount = useApprovalsCount();
   const access = useConsoleAccess();
@@ -274,7 +305,6 @@ export function App() {
             <ActiveSection
               section={section}
               range={range}
-              params={params}
               liveEvents={live.events}
               connected={live.connected}
             />
@@ -291,13 +321,11 @@ export function App() {
 function ActiveSection({
   section,
   range,
-  params,
   liveEvents,
   connected,
 }: {
   section: SectionKey;
   range: GovernanceRange;
-  params: URLSearchParams;
   liveEvents: FeedEvent[];
   connected: boolean;
 }) {
@@ -311,7 +339,7 @@ function ActiveSection({
     case 'runs':
       return <RunsToolsContainer />;
     case 'reliability':
-      return <ReliabilityContainer range={range} threadId={params.get('threadId') ?? undefined} />;
+      return <ReliabilityContainer range={range} />;
     case 'approvals':
       return <ApprovalsContainer />;
     case 'tools':
