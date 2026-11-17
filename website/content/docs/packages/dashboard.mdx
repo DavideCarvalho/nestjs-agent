@@ -51,6 +51,7 @@ export class AppModule {}
 | `devTools` | on when `routes` is not `false` | Register the console's reads as [MCP tools](#mcp-tools) on `/mcp/aviary` |
 | `viewer` | `request.user`, read structurally | `(request) => ({ label, email?, role? })`, sync or async — who the sidebar footer says is signed in. See [Signed-in user and sign-out](#signed-in-user-and-sign-out) |
 | `signOut` | the `account.signOut` an account console announced, else none | `'/logout'` \| `{ href }` \| `{ action, csrfToken? }` \| `false` — the sidebar footer's sign-out |
+| `federation` | none | `{ apps: { [name]: { queries, approvals?, pricing?, label? } }, localLabel? }` — also show other apps, each read from its own store, with an app switcher. See [Federated console](/docs/guides/federated-console) |
 
 It requires `AGENT_GOVERNANCE_QUERIES` to already be bound — import it alongside your
 `AgentModule.forRoot(...)` and a store adapter (MikroORM or Drizzle) that provides the read-model.
@@ -306,6 +307,13 @@ When `AgentMcpServerModule` is imported, the console's reads are also served as 
 and `agent_list_recent_tool_calls`. They are registered while the console's routes are mounted.
 `devTools: true` keeps them with `routes: false`, and `devTools: false` turns them off. See
 [Developer tools over MCP](/docs/guides/dev-tools-over-mcp).
+
+## Several apps in one console
+
+`federation` turns the console into a federated one: it also shows the threads, runs, tool calls
+and approvals of other apps, read from each app's own store, with an app switcher in the header
+(`?app=<name>`). Approvals of a federated app are executed by that app, sent over its Redis. See
+[Federated console](/docs/guides/federated-console).
 
 ## Switching between consoles
 

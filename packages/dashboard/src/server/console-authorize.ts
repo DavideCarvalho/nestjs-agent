@@ -5,11 +5,12 @@ import { ModuleRef } from '@nestjs/core';
 /**
  * What an `authorize` check answers. An allow may name who it let in (`caller`, for example
  * `'user:42'`): the dev MCP endpoint logs it as the caller of a developer tool. Never put a secret
- * in it.
+ * in it. On a federated console, `apps` names the federated apps the viewer may select (absent:
+ * every configured app); the console's own app is not affected by it.
  */
 export type ConsoleAuthorizeResult =
   | boolean
-  | { allowed: true; caller?: string }
+  | { allowed: true; caller?: string; apps?: readonly string[] }
   | { allowed: false; reason?: 'unauthenticated' | 'forbidden' }
   | { redirectTo: string };
 
@@ -35,7 +36,7 @@ export type ConsoleAuthorize =
 
 /** A normalized `authorize` answer. */
 export type ConsoleDecision =
-  | { allowed: true; caller?: string }
+  | { allowed: true; caller?: string; apps?: readonly string[] }
   | { allowed: false; reason: 'unauthenticated' | 'forbidden'; redirectTo?: string };
 
 /** What a resolved `authorize` is: called once per request, never throws. */
@@ -58,9 +59,18 @@ const logger = new Logger(MODULE);
 /** The one boot warning for a console with no `authorize`. Same wording in every Aviary console. */
 export const CONSOLE_AUTHORIZE_MISSING_WARNING = `[${PACKAGE}] console has no \`authorize\` configured: it is open outside production and denies every request in production. Set \`authorize\` in ${MODULE}.forRoot().`;
 
+/**
+ * Where the console guard leaves an allowed viewer's `apps` grant on the request (read by the
+ * federated console to pick which apps the viewer may select).
+ */
+export const CONSOLE_APPS = Symbol.for('@dudousxd/nestjs-agent-dashboard:console-apps');
+
 // Fresh objects on every call: a decision is never a shared, mutable singleton.
-const allow = (caller?: string): ConsoleDecision =>
-  caller !== undefined && caller !== '' ? { allowed: true, caller } : { allowed: true };
+const allow = (caller?: string, apps?: readonly string[]): ConsoleDecision => ({
+  allowed: true,
+  ...(caller !== undefined && caller !== '' ? { caller } : {}),
+  ...(apps !== undefined ? { apps: [...apps] } : {}),
+});
 const forbidden = (): ConsoleDecision => ({ allowed: false, reason: 'forbidden' });
 const unauthenticated = (): ConsoleDecision => ({ allowed: false, reason: 'unauthenticated' });
 
@@ -77,12 +87,16 @@ export function normalizeConsoleResult(result: unknown): ConsoleDecision {
     reason?: unknown;
     redirectTo?: unknown;
     caller?: unknown;
+    apps?: unknown;
   };
   if (typeof value.redirectTo === 'string' && value.redirectTo !== '' && value.allowed !== true) {
     return { allowed: false, reason: 'unauthenticated', redirectTo: value.redirectTo };
   }
   if (value.allowed === true) {
-    return allow(typeof value.caller === 'string' ? value.caller : undefined);
+    const apps = Array.isArray(value.apps)
+      ? value.apps.filter((app): app is string => typeof app === 'string')
+      : undefined;
+    return allow(typeof value.caller === 'string' ? value.caller : undefined, apps);
   }
   return value.reason === 'unauthenticated' ? unauthenticated() : forbidden();
 }

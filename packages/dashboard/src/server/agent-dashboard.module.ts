@@ -15,6 +15,11 @@ import type { ConsoleSignOutOption, ConsoleViewerResolver } from './console-shel
 import { AgentConsoleRegistration, AgentConsolesController } from './console-switcher.js';
 import { DashboardService } from './dashboard.service.js';
 import { AgentDevToolsRegistration } from './dev-tools.js';
+import {
+  type AgentConsoleFederation,
+  DASHBOARD_FEDERATION,
+  assertValidFederation,
+} from './federation.js';
 import { normalizeDashboardPath } from './normalize-path.js';
 import {
   DASHBOARD_API_PATH,
@@ -107,6 +112,15 @@ export interface AgentDashboardOptions<TReq = unknown> {
    * (`account.signOut`), else none. Only same-origin paths (`/x`) are ever sent to the page.
    */
   signOut?: ConsoleSignOutOption;
+  /**
+   * Make this a federated console: it also shows the agent activity of other apps, each read from
+   * that app's own store (`queries`, read access is enough), with its approve/reject executed on
+   * that app (`approvals`, e.g. `RedisConsoleApprovalClient` from
+   * `@dudousxd/nestjs-agent-transport-redis`). The console gets an app switcher and the selected app
+   * goes in the URL (`?app=<name>`). An `authorize` `apps` grant names the federated apps a viewer
+   * may select. Omitted: the console shows its own app only, as before.
+   */
+  federation?: AgentConsoleFederation;
 }
 
 /** Leading slash, no trailing slash. */
@@ -133,6 +147,7 @@ export class AgentApiModule {
     approvalActorRef?: (req: TReq) => string | undefined;
     authorize?: ConsoleAuthorize;
     devTools?: boolean;
+    federation?: AgentConsoleFederation;
   }): DynamicModule {
     // The warning for an omitted `authorize` logs with `routes: false` too: the exported guard still
     // answers 403 in production.
@@ -151,6 +166,7 @@ export class AgentApiModule {
             ),
       providers: [
         DashboardService,
+        { provide: DASHBOARD_FEDERATION, useValue: options.federation ?? null },
         // `useValue` even when `options.approvalActorRef` is `undefined` — AgentApiController
         // injects this WITHOUT `@Optional()`.
         { provide: DASHBOARD_APPROVAL_ACTOR_REF, useValue: options.approvalActorRef },
@@ -159,9 +175,14 @@ export class AgentApiModule {
         { provide: DASHBOARD_DEV_TOOLS, useValue: options.devTools ?? options.routes !== false },
         AgentDevToolsRegistration,
       ],
-      // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`), and the
-      // access check `UseConsoleAuthorize()` runs.
-      exports: [DashboardService, DASHBOARD_APPROVAL_ACTOR_REF, DashboardConsoleAccess],
+      // What a self-mounted `AgentApiController` subclass injects, too (`routes: false`), the access
+      // check `UseConsoleAuthorize()` runs, and the federation its interceptor reads.
+      exports: [
+        DashboardService,
+        DASHBOARD_APPROVAL_ACTOR_REF,
+        DashboardConsoleAccess,
+        DASHBOARD_FEDERATION,
+      ],
     };
   }
 }
@@ -173,6 +194,7 @@ export class AgentApiModule {
 @Module({})
 export class AgentDashboardModule {
   static forRoot<TReq = unknown>(options: AgentDashboardOptions<TReq> = {}): DynamicModule {
+    assertValidFederation(options.federation);
     const basePath = normalize(options.basePath ?? '/ai-gateway');
     const apiBasePath = normalize(options.apiBasePath ?? `${basePath}/api`);
     return {
@@ -187,6 +209,7 @@ export class AgentDashboardModule {
           ...(options.approvalActorRef ? { approvalActorRef: options.approvalActorRef } : {}),
           ...(options.authorize !== undefined ? { authorize: options.authorize } : {}),
           ...(options.devTools !== undefined ? { devTools: options.devTools } : {}),
+          ...(options.federation !== undefined ? { federation: options.federation } : {}),
         }),
         ...(options.routes === false
           ? []

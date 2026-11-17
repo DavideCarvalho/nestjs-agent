@@ -20,6 +20,7 @@ import {
   Query,
   Req,
   Sse,
+  UseInterceptors,
 } from '@nestjs/common';
 import type { Observable } from 'rxjs';
 import {
@@ -32,6 +33,11 @@ import {
   type ThreadDetailWithLabel,
   type ThreadSpendRowWithLabel,
 } from './dashboard.service.js';
+import {
+  type ConsoleFederationView,
+  FederatedAppInterceptor,
+  consoleAppsGrant,
+} from './federation.js';
 import type { OffsetPage } from './list-api.js';
 import {
   parseApprovalsQuery,
@@ -88,6 +94,7 @@ function parseCap(value: string | undefined, fallback: number): number {
  */
 @CanAnyone()
 @Controller()
+@UseInterceptors(FederatedAppInterceptor)
 export class AgentApiController {
   constructor(
     private readonly dashboard: DashboardService,
@@ -107,6 +114,15 @@ export class AgentApiController {
    * The Organization the console is scoped to: `{ enabled, scope, tenant, chain }`, each level with
    * its `label` (the app's `tenancy.label`, else slug, else id).
    */
+  /**
+   * A federated console's app switcher: `{ local, apps, current? }` — the apps this viewer's
+   * `authorize` `apps` grant lets it select. `null` on a console without `federation`.
+   */
+  @Get('federation')
+  federation(@Req() req: unknown): ConsoleFederationView | null {
+    return this.dashboard.federationView(consoleAppsGrant(req));
+  }
+
   @Get('tenancy')
   tenancy(): Promise<ConsoleTenancy> {
     return this.dashboard.tenancy();

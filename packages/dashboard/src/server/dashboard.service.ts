@@ -33,6 +33,7 @@ import type {
 } from '@dudousxd/nestjs-agent-core';
 import { channelName } from '@dudousxd/nestjs-diagnostics';
 import {
+  HttpException,
   Inject,
   Injectable,
   NotFoundException,
@@ -41,6 +42,13 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import type { ActorDirectory } from './actor-directory.js';
+import {
+  type AgentConsoleFederation,
+  type ConsoleFederationView,
+  DASHBOARD_FEDERATION,
+  currentFederatedApp,
+  describeFederation,
+} from './federation.js';
 import { parseApprovalDecision } from './parse-approval-decision.js';
 import { parsePriceInput } from './parse-price-input.js';
 import {
@@ -132,6 +140,26 @@ const GENUI_STATS_UNSUPPORTED_MESSAGE =
   'implement genuiStats. Use a store adapter that records generative-UI calls (recordGenuiCalls) ' +
   'to enable it.';
 
+/** The 501 for an operation the console's own process serves, asked for a federated app. */
+function notForFederatedApp(name: string, what: string, hint: string): NotImplementedException {
+  return new NotImplementedException(
+    `${what} is not available for the federated app "${name}": ${hint}`,
+  );
+}
+
+/**
+ * A federated app's action error as the HTTP answer the app gave: `status` from the transport's
+ * error (`ConsoleActionError`, read structurally), else rethrown as is.
+ */
+function asHttpError(error: unknown): unknown {
+  if (error instanceof HttpException) return error;
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === 'number' && status >= 400 && status < 600) {
+    return new HttpException(error instanceof Error ? error.message : String(error), status);
+  }
+  return error;
+}
+
 /** One live agent event forwarded over SSE, flattened from the `aviary:agent:*` diagnostics envelope. */
 export interface LiveAgentEvent {
   /** The event name, e.g. `run.started` / `tool-call` / `quota.exceeded`. */
@@ -209,7 +237,20 @@ export class DashboardService {
     @Optional()
     @Inject(CONTEXT_ACCESSOR)
     private readonly contextAccessor?: unknown,
+    @Optional()
+    @Inject(DASHBOARD_FEDERATION)
+    private readonly federation?: AgentConsoleFederation | null,
   ) {}
+
+  /**
+   * The app switcher's view (`GET <api>/federation`): the console's own app, the federated apps the
+   * viewer's `apps` grant lets it select, and the app this request is for. `null` without
+   * federation.
+   */
+  federationView(grant: readonly string[] | undefined): ConsoleFederationView | null {
+    if (!this.federation) return null;
+    return describeFederation(this.federation, grant, currentFederatedApp()?.name);
+  }
 
   /**
    * The read-model for this request: with the agent's tenancy on, narrowed to the viewer's context
@@ -217,6 +258,10 @@ export class DashboardService {
    * narrowed, so the console refuses (`501`) rather than show every tenant's rows.
    */
   private scoped(): AgentGovernanceQueries {
+    // A federated app's own store: the viewer's grant admitted the whole app, and this console's
+    // tenancy (its own request context) says nothing about another app's tenants.
+    const federated = currentFederatedApp();
+    if (federated !== undefined) return federated.app.queries;
     const filter = consoleTenantFilter(
       this.agentOptions?.tenancy ?? 'inherit',
       this.contextAccessor,
@@ -338,6 +383,9 @@ export class DashboardService {
    * id), for the header chip. Never throws, even when a tenant is required and missing.
    */
   tenancy(): Promise<ConsoleTenancy> {
+    if (currentFederatedApp() !== undefined) {
+      return Promise.resolve({ enabled: false, scope: 'all', tenant: null, chain: [] });
+    }
     return consoleTenancy(this.agentOptions?.tenancy ?? 'inherit', this.contextAccessor);
   }
 
@@ -419,19 +467,33 @@ export class DashboardService {
     body: unknown,
     executedByRef: string | undefined,
   ): Promise<void> {
-    if (this.approvalPort === undefined) {
-      throw new NotImplementedException(APPROVAL_PORT_UNBOUND_MESSAGE);
+    const federated = currentFederatedApp();
+    // A federated app's decisions run on that app (its `approvals` sends them there), never on this
+    // process's own approval port.
+    const port = federated !== undefined ? federated.app.approvals : this.approvalPort;
+    if (port === undefined) {
+      throw federated !== undefined
+        ? notForFederatedApp(
+            federated.name,
+            'Approve/reject',
+            'its `approvals` is not configured, so its approvals inbox is read-only here.',
+          )
+        : new NotImplementedException(APPROVAL_PORT_UNBOUND_MESSAGE);
     }
     const decision = parseApprovalDecision(body);
     const opts = executedByRef !== undefined ? { executedByRef } : {};
-    if (decision.approved) {
-      await this.approvalPort.approve(toolCallId, opts);
-      return;
+    try {
+      if (decision.approved) {
+        await port.approve(toolCallId, opts);
+        return;
+      }
+      await port.reject(toolCallId, {
+        ...opts,
+        ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+      });
+    } catch (error) {
+      throw federated !== undefined ? asHttpError(error) : error;
     }
-    await this.approvalPort.reject(toolCallId, {
-      ...opts,
-      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
-    });
   }
 
   /** Most recent threads with rolled-up message/token counts. */
@@ -473,6 +535,13 @@ export class DashboardService {
 
   /** Current price row per model, for the pricing tab. 501s when no `AGENT_PRICING_STORE` is bound. */
   async listPrices(): Promise<CurrentModelPrice[]> {
+    const federated = currentFederatedApp();
+    if (federated !== undefined) {
+      if (federated.app.pricing === undefined) {
+        throw notForFederatedApp(federated.name, 'Pricing', 'its `pricing` is not configured.');
+      }
+      return federated.app.pricing.listCurrentPrices();
+    }
     if (this.pricingStore === undefined) {
       throw new NotImplementedException(PRICING_STORE_UNBOUND_MESSAGE);
     }
@@ -485,6 +554,14 @@ export class DashboardService {
    * than as a validation error); otherwise the body is minimally validated via {@link parsePriceInput}.
    */
   async upsertPrice(body: unknown): Promise<void> {
+    const federated = currentFederatedApp();
+    if (federated !== undefined) {
+      throw notForFederatedApp(
+        federated.name,
+        'Setting a price',
+        "the console only reads another app's store. Set it in that app's own console.",
+      );
+    }
     if (this.pricingStore === undefined) {
       throw new NotImplementedException(PRICING_STORE_UNBOUND_MESSAGE);
     }
@@ -497,6 +574,15 @@ export class DashboardService {
    * the client disconnects (or the observable is otherwise unsubscribed).
    */
   streamEvents(): Observable<{ data: LiveAgentEvent }> {
+    const federated = currentFederatedApp();
+    if (federated !== undefined) {
+      // The live feed is this process's diagnostics channel: another app's events never reach it.
+      throw notForFederatedApp(
+        federated.name,
+        'The live feed',
+        "it tails this process's own agent events. Open that app's own console to watch it live.",
+      );
+    }
     return new Observable<{ data: LiveAgentEvent }>((subscriber) => {
       const bindings = AGENT_EVENTS.map((event) => {
         const name = channelName('agent', event);

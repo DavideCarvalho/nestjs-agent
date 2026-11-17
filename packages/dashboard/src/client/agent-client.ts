@@ -533,6 +533,39 @@ function apiBase(): string {
   return `${base}/api`;
 }
 
+/** The query parameter a federated console names the selected app in (see {@link selectedApp}). */
+export const APP_PARAM = 'app';
+/** The request header every API call names the selected app in. */
+export const APP_HEADER = 'x-agent-app';
+
+/**
+ * The app a federated console shows, from the page URL (`?app=<name>`), or `undefined` for the
+ * console's own app. Every API call names it in the `x-agent-app` header (the SSE stream, which
+ * can't send headers, as `?app=`), and the server serves the call from that app.
+ */
+export function selectedApp(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const app = new URLSearchParams(window.location.search).get(APP_PARAM);
+  return app ? app : undefined;
+}
+
+/** `init` with the selected app's header added (unchanged when no app is selected). */
+function withApp(init: RequestInit | undefined): RequestInit | undefined {
+  const app = selectedApp();
+  if (app === undefined) return init;
+  const headers = new Headers(init?.headers);
+  headers.set(APP_HEADER, app);
+  return { ...init, headers };
+}
+
+/** A federated console's app switcher (`GET <api>/federation`); `null` without federation. */
+export interface ConsoleFederation {
+  local: { label: string };
+  apps: Array<{ name: string; label: string }>;
+  /** The app the request was for; absent for the console's own app. */
+  current?: string;
+}
+
 /** What the console's access check answered, for a non-2xx API response that carries one. */
 export type ConsoleAccessEvent = { kind: 'forbidden' } | { kind: 'redirect'; redirectTo: string };
 
@@ -568,7 +601,7 @@ async function fail(res: Response): Promise<never> {
 }
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiBase() + path, init);
+  const res = await fetch(apiBase() + path, withApp(init));
   if (!res.ok) return fail(res);
   return (await res.json()) as T;
 }
@@ -593,6 +626,16 @@ function pageQueryParams<TFilter extends object>(query: ListQuery<TFilter>): str
 }
 
 export const agentClient = {
+  /**
+   * A federated console's app switcher; `null` on a console without federation. Asked WITHOUT the
+   * selected app: it is console metadata, and a stale or ungranted `?app=` (a 404 for every app
+   * read) must not hide the switcher that gets the viewer out of it.
+   */
+  async federation(): Promise<ConsoleFederation | null> {
+    const res = await fetch(`${apiBase()}/federation`);
+    if (!res.ok) return fail(res);
+    return (await res.json()) as ConsoleFederation | null;
+  },
   /** The Organization the console is scoped to, labelled (tenancy). */
   tenancy(): Promise<ConsoleTenancy> {
     return http<ConsoleTenancy>('/tenancy');
@@ -651,11 +694,14 @@ export const agentClient = {
    * that as "render read-only".
    */
   async decideApproval(toolCallId: string, input: ApprovalDecisionInput): Promise<void> {
-    const res = await fetch(`${apiBase()}/approvals/${encodeURIComponent(toolCallId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
+    const res = await fetch(
+      `${apiBase()}/approvals/${encodeURIComponent(toolCallId)}`,
+      withApp({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
     if (!res.ok) await fail(res);
   },
   /** Per-tool call/failure/rejection/latency rollup for a day range (the Tools section). */
@@ -681,11 +727,14 @@ export const agentClient = {
   },
   /** Set a model's current price. 501s if the host has no pricing store bound. */
   async upsertPrice(input: UpsertModelPriceInput): Promise<void> {
-    const res = await fetch(`${apiBase()}/pricing`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
+    const res = await fetch(
+      `${apiBase()}/pricing`,
+      withApp({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
     if (!res.ok) await fail(res);
   },
   /**
@@ -693,7 +742,10 @@ export const agentClient = {
    * closes the stream.
    */
   streamEvents(onEvent: (event: LiveAgentEvent) => void): () => void {
-    const source = new EventSource(`${apiBase()}/stream`);
+    const app = selectedApp();
+    const source = new EventSource(
+      `${apiBase()}/stream${app !== undefined ? `?${APP_PARAM}=${encodeURIComponent(app)}` : ''}`,
+    );
     source.onmessage = (msg) => {
       try {
         onEvent(JSON.parse(msg.data) as LiveAgentEvent);

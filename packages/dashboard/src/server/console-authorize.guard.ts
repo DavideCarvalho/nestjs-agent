@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { HttpAdapterHost, ModuleRef } from '@nestjs/core';
 import {
+  CONSOLE_APPS,
   type ConsoleAuthorize,
   type ConsoleDecide,
   type ConsoleDecision,
@@ -109,7 +110,13 @@ export class ConsoleAuthorizeGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const decision = await this.access.check(context);
-    if (decision.allowed) return true;
+    if (decision.allowed) {
+      if (decision.apps !== undefined && context.getType() === 'http') {
+        const request = context.switchToHttp().getRequest<Record<symbol, unknown> | undefined>();
+        if (request) request[CONSOLE_APPS] = decision.apps;
+      }
+      return true;
+    }
     throw new ConsoleAccessDenied(decision, isPageNavigation(context));
   }
 }

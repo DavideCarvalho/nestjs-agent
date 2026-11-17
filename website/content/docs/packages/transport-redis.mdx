@@ -162,6 +162,10 @@ from "the run failed" the same way it would against the in-process sink.
 | `RedisStreamClient` | type | The eight-method seam your app implements over its own Redis driver |
 | `RedisChannelStore` | class (`ChannelStore`) | `new RedisChannelStore(client, { prefix? })` — the state of [text channels](/docs/agent/guides/channels) (message ids, questions, relayed outcomes) shared by every replica: `SET … PX … NX` claims, `GET`, `DEL`. Pass it as `AgentChannelsModule.forRoot({ store })` |
 | `RedisChannelClient` | type | The three commands it uses (`set` with `PX`/`NX`, `get`, `del`) — an `ioredis` client has them as is |
+| `RedisConsoleApprovalClient` | class (`AgentApprovalPort`) | `new RedisConsoleApprovalClient(client, { keyPrefix?, timeoutMs? })` — on a [federated console](/docs/guides/federated-console)'s hub: sends approve/reject to an app over its Redis and waits for the app's answer |
+| `RedisConsoleActionResponder` | class | `new RedisConsoleActionResponder(client, approvals, { keyPrefix? })` — on the app: executes those requests through the app's own approval port, one replica per request |
+| `ConsoleActionError` | class | What the client rejects with: the app's `status` (`404`, `409`, …), or `504` without an answer |
+| `RedisConsolePubSub` / `RedisConsoleResponderClient` | types | `publish` + `subscribe`; the responder's adds `claim` (`SET … NX EX`) |
 
 ## When to use it
 

@@ -14,6 +14,7 @@ export {
   UseConsoleAuthorize,
 } from './console-authorize.guard.js';
 export {
+  CONSOLE_APPS,
   CONSOLE_AUTHORIZE_MISSING_WARNING,
   CONSOLE_GATE,
   anyAuthorize,
@@ -52,6 +53,17 @@ export {
   type VisibleConsoles,
 } from './console-switcher.js';
 export * from './dashboard.service.js';
+export {
+  DASHBOARD_FEDERATION,
+  FEDERATED_APP_HEADER,
+  FEDERATED_APP_PARAM,
+  FederatedAppInterceptor,
+  currentFederatedApp,
+  type AgentConsoleFederation,
+  type ConsoleFederationView,
+  type FederatedAgentApp,
+  type FederatedAppScope,
+} from './federation.js';
 export { AgentDevToolsRegistration, agentDevTools, type AgentDevTool } from './dev-tools.js';
 export * from './parse-price-input.js';
 export * from './tokens.js';
