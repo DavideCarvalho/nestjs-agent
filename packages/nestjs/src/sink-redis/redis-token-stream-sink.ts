@@ -14,8 +14,12 @@ export interface RedisTokenStreamSinkOptions {
   /**
    * How long (seconds) a run's stream outlives its last write, so streams self-expire instead of
    * accumulating in Redis — ended runs past their replay window and runs that crashed without
-   * ending alike (nothing calls `close()` on its own). A subscriber that reconnects within the window
-   * still replays; a subscriber of a run that never writes within the window stops following it.
+   * ending alike (nothing calls `close()` on its own). While the run writes, the TTL is armed on its
+   * first write and re-armed at most once a minute (every quarter TTL, if that is shorter), each time
+   * for `ttlSeconds` plus that period; the `end`/`fail` write arms exactly `ttlSeconds`. So the stream
+   * outlives the last write by at least `ttlSeconds`, and one whose run died mid-stream is gone at
+   * most one refresh period after that. A subscriber that reconnects within the window still
+   * replays; a subscriber of a run that never writes within the window stops following it.
    * Default 3600 (1h). `0` keeps the stream until `close()`.
    */
   ttlSeconds?: number;
@@ -27,6 +31,9 @@ export interface RedisTokenStreamSinkOptions {
 const CHUNK_FIELD = 'c';
 const END_FIELD = 'e';
 const FAIL_FIELD = 'f';
+
+/** The longest a running stream goes between TTL re-arms. */
+const MAX_TTL_REFRESH_MS = 60_000;
 
 const decoder = new TextDecoder();
 
@@ -85,6 +92,8 @@ export class RedisTokenStreamSink implements TokenStreamSink {
   private readonly ttlSeconds: number;
   private readonly blockMs: number;
   private readonly writes = new Map<string, RunWrites>();
+  /** When this process last armed each running stream's TTL (epoch ms). */
+  private readonly armedAt = new Map<string, number>();
 
   constructor(
     private readonly redis: Redis,
@@ -143,8 +152,8 @@ export class RedisTokenStreamSink implements TokenStreamSink {
   }
 
   /**
-   * One round trip: the entries, in order, then the TTL re-armed — sliding from the run's last
-   * write. `EXPIRE 0` would delete, so 0 skips it.
+   * One round trip: the entries, in order, then — when due — the TTL. `EXPIRE 0` would delete, so 0
+   * skips it.
    */
   private async send(
     runId: string,
@@ -155,11 +164,40 @@ export class RedisTokenStreamSink implements TokenStreamSink {
     for (const [field, value] of entries) {
       pipeline.xadd(key, '*', field, value);
     }
-    if (this.ttlSeconds > 0) pipeline.expire(key, this.ttlSeconds);
+    const ttl = this.dueTtl(runId, entries);
+    if (ttl !== null) pipeline.expire(key, ttl);
     const results = (await pipeline.exec()) ?? [];
     for (const [error] of results) {
       if (error) throw error;
     }
+  }
+
+  /**
+   * The TTL this send arms, or `null` when it arms none: exactly `ttlSeconds` on the terminal entry;
+   * while running, `ttlSeconds` plus one refresh period on the run's first send here and then at most
+   * once per period — the overshoot covers a write that lands just before the next re-arm is due.
+   */
+  private dueTtl(
+    runId: string,
+    entries: ReadonlyArray<readonly [string, string | Buffer]>,
+  ): number | null {
+    if (this.ttlSeconds <= 0) return null;
+    if (entries.some(([field]) => field === END_FIELD || field === FAIL_FIELD)) {
+      this.armedAt.delete(runId);
+      return this.ttlSeconds;
+    }
+    const now = Date.now();
+    const last = this.armedAt.get(runId);
+    const period = Math.min(MAX_TTL_REFRESH_MS, (this.ttlSeconds * 1000) / 4);
+    if (last !== undefined && now - last < period) return null;
+    // A run that died without ending leaves an entry behind: drop the ones whose streams are gone.
+    if (last === undefined) {
+      for (const [other, at] of this.armedAt) {
+        if (now - at >= this.ttlSeconds * 1000) this.armedAt.delete(other);
+      }
+    }
+    this.armedAt.set(runId, now);
+    return this.ttlSeconds + Math.ceil(period / 1000);
   }
 
   /** The gathered text as one entry (nothing if there is none), followed by `entries`. */
@@ -279,6 +317,7 @@ export class RedisTokenStreamSink implements TokenStreamSink {
   }
 
   async close(runId: string): Promise<void> {
+    this.armedAt.delete(runId);
     await this.redis.del(this.key(runId));
   }
 }

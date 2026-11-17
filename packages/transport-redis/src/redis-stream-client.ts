@@ -8,8 +8,15 @@
  * `subscribe` if your driver enforces it — the sink only calls `subscribe` from `subscribe()`.
  */
 export interface RedisStreamClient {
-  /** Append `value` to the list at `key` (RPUSH). */
-  rpush(key: string, value: string): Promise<void>;
+  /**
+   * Append `value` to the list at `key` (RPUSH), resolving to the list's new length — what RPUSH
+   * replies, and what `ioredis` / `node-redis` resolve to as is. The length numbers each frame, so
+   * the sink can carry frames in their `PUBLISH` and live subscribers skip the `LRANGE`. An adapter
+   * that resolves to nothing still works: its frames are published as a bare wake and read back
+   * with `LRANGE`, the way they were before.
+   */
+  // biome-ignore lint/suspicious/noConfusingVoidType: adapters typed `Promise<void>` must still type-check.
+  rpush(key: string, value: string): Promise<number | void>;
   /** The list elements at `key` from `start` to `stop` inclusive; negative indices count from the end (LRANGE). */
   lrange(key: string, start: number, stop: number): Promise<string[]>;
   /** Set `key` to `value` (SET) — used for the terminal marker. */

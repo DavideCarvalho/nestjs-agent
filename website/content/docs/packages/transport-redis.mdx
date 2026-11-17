@@ -55,7 +55,7 @@ The package takes zero dependency on `ioredis` or `node-redis` — it depends on
 
 ```ts
 interface RedisStreamClient {
-  rpush(key: string, value: string): Promise<void>;
+  rpush(key: string, value: string): Promise<number | void>; // resolve to the new length (RPUSH's reply)
   lrange(key: string, start: number, stop: number): Promise<string[]>;
   set(key: string, value: string): Promise<void>;
   get(key: string): Promise<string | null>;
@@ -66,9 +66,17 @@ interface RedisStreamClient {
 }
 ```
 
-A run's `:chunks` and `:state` keys expire `ttlSeconds` (default `3600`) after the run's last write;
-the TTL slides with each write and is set on both keys when the run ends or fails. `ttlSeconds: 0`
-keeps them until `close()`. An adapter without `expire` still streams, but its keys never expire.
+`rpush` should resolve to the list's new length, which is what `RPUSH` replies and what `ioredis` and
+`node-redis` resolve to as is. The sink numbers frames with it so it can carry them in the `PUBLISH`
+(see [What a token costs](#what-a-token-costs)). An adapter whose `rpush` resolves to nothing still
+works: it publishes bare wakes and subscribers read the list on each one, at the cost from before.
+
+A run's `:chunks` and `:state` keys expire `ttlSeconds` (default `3600`) after the run's last write.
+While the run streams, the TTL is armed on its first write and re-armed at most once a minute (every
+quarter TTL, if that is shorter), each time for `ttlSeconds` plus that period, so the keys outlive the
+last write by at least `ttlSeconds` and a run whose writer died is gone at most a minute later. When
+the run ends or fails, both keys get exactly `ttlSeconds`. `ttlSeconds: 0` keeps them until
+`close()`. An adapter without `expire` still streams, but its keys never expire.
 
 A subscribed Redis connection can't run other commands, so most drivers need a **dedicated**
 connection for `subscribe` — the sink only calls it from `subscribe()`:
@@ -80,7 +88,7 @@ import type { RedisStreamClient } from '@dudousxd/nestjs-agent-transport-redis';
 
 function ioredisStreamClient(redis: Redis, sub: Redis): RedisStreamClient {
   return {
-    rpush: async (key, value) => { await redis.rpush(key, value); },
+    rpush: (key, value) => redis.rpush(key, value), // resolves to the length
     lrange: (key, start, stop) => redis.lrange(key, start, stop),
     set: async (key, value) => { await redis.set(key, value); },
     get: (key) => redis.get(key),
@@ -114,7 +122,7 @@ Per run (`keyPrefix` defaults to `agent:stream`):
 | Structure | Key | Purpose |
 |---|---|---|
 | LIST | `<prefix>:<runId>:chunks` | Every chunk (base64) appended in order — what a late subscriber replays before following live. |
-| pub/sub channel | `<prefix>:<runId>` | A wake-up published after each append, on end and on `close()`, for subscribers already caught up. |
+| pub/sub channel | `<prefix>:<runId>` | Each append's frames with their list index (`{"seq":n,"frames":[…]}`), published after the append, plus `end` and `close` — what live subscribers follow. |
 | terminal marker | `<prefix>:<runId>:state` | `{ t: 'end' }` or `{ t: 'fail', error }`, set when the run ends — a reconnect after completion sees the ending instead of hanging on an empty subscribe. |
 
 Both keys expire `ttlSeconds` after the run's last write (see above); `close(runId)` deletes them
@@ -123,21 +131,36 @@ at once.
 ## What a token costs
 
 Consecutive `text` frames are gathered while the previous send is still on the wire and go out as
-one `text` chunk: one `RPUSH`, then the `PUBLISH` wake with the TTL re-arm alongside it. No timer is
-involved, so a model streaming faster than a Redis round trip costs one send per burst, and a slow
+one `text` chunk: one `RPUSH`, then one `PUBLISH` that carries the chunk and its list index. No timer
+is involved, so a model streaming faster than a Redis round trip costs one send per burst, and a slow
 stream still goes out a token at a time with no added latency. The `PUBLISH` waits for the `RPUSH`,
-so a woken subscriber always finds the chunk it was woken for. Non-text frames keep their place
-between the gathered text around them. Writers opened for the same run in one process share what
+so the list always holds what was published. Non-text frames keep their place between the gathered
+text around them.
+
+That is about 2 commands per streamed frame, whatever the number of subscribers: measured with a
+real Redis at 400 tokens 20 ms apart, 2.02 per frame with one subscriber and 2.04 with three, where
+re-arming the TTL on every frame and having each subscriber `LRANGE` on every wake cost 4.02 and 6.04.
+Chunks over 64 KiB are published as a bare wake instead, and subscribers read them from the list. Writers opened for the same run in one process share what
 they gather, so a delegated run's text and its parent's next frame keep the order they were written
 in, and `flush()` writes whatever is gathered without ending the stream.
 
 A gathered send that fails is raised by the writer's next `write`, `flush`, `end` or `fail`, not by
 the `write` that gathered it.
 
-A subscriber reads the list with `LRANGE` from its cursor on every wake, and reads the terminal
-marker only when it attaches and once an `end` wake arrives; after seeing the ending it reads the
-list once more, so chunks appended just before the marker are not lost. Every subscriber reads the
-same stored list, so SSE frame ids and `?after=` cursors are the same on every replica.
+A subscriber subscribes first, then reads the list with `LRANGE` to catch up — so a late subscriber
+or a reconnect gets the whole history — and from there appends the frames each `PUBLISH` carries.
+Frames it already has (published while it was catching up) are skipped by their index. It goes back
+to `LRANGE` only when a published index skips past what it has (a gap: another writer's append
+published out of order, or a lost message), when a message carries no frames, and when the run ends.
+It reads the terminal marker only when it attaches and once an `end` message arrives; after seeing
+the ending it reads the list once more, so chunks appended just before the marker are not lost.
+Every subscriber numbers frames by their place in the same stored list, so SSE frame ids and
+`?after=` cursors are the same on every replica.
+
+During a rolling deploy the two versions mix: a subscriber from before this scheme treats the
+frame-carrying `PUBLISH` as a wake and reads the list as it always did, and a subscriber of this
+version treats the old writer's bare `chunk` wake as a gap and reads the list. Both see every frame,
+in order, once.
 
 A subscription passed `{ signal }` (the chat routes pass one that aborts when the client
 disconnects) unsubscribes from the channel as soon as it aborts, even on a run that never writes
