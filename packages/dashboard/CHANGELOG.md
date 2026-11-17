@@ -1,5 +1,11 @@
 # @dudousxd/nestjs-agent-dashboard
 
+## 0.29.0
+
+### Minor Changes
+
+- [#441](https://github.com/DavideCarvalho/nestjs-agent/pull/441) [`7084fab`](https://github.com/DavideCarvalho/nestjs-agent/commit/7084fabc955abfb6aa52b4a7a32ca46dffb2f1bb) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Console filters now live in the URL, so a filtered view can be shared, bookmarked and reloaded, and Back/Forward step through it: the day range (kept across pages), the chart metric on Spend and Generative UI, the Reliability runs table's status, agent, thread and page, the Runs & tools tables' filters and pages, and the Approvals page. They sit in the hash's query (`#/reliability?status=failed&agent=support`), read and written with nuqs through the console kit's hash adapter; a value at its default is left out, so existing `#/<page>` and `?threadId=` links open as before.
+
 ## 0.28.0
 
 ### Minor Changes
